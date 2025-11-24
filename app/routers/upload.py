@@ -98,6 +98,43 @@ async def upload_images(
     
     return {"images": uploaded_images, "count": len(uploaded_images)}
 
+@router.post("/profile-picture")
+async def upload_profile_picture(
+    file: UploadFile = File(...),
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """Upload a profile picture"""
+    # Validate file extension
+    if not is_allowed_file(file.filename):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+    
+    # Read file content
+    contents = await file.read()
+    
+    # Validate file size (smaller for profile pictures - 2MB)
+    max_profile_size = 2 * 1024 * 1024  # 2MB
+    if len(contents) > max_profile_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size is {max_profile_size / 1024 / 1024}MB"
+        )
+    
+    # Generate unique filename
+    file_extension = Path(file.filename).suffix.lower()
+    unique_filename = f"profile_{current_user.id}_{uuid.uuid4()}{file_extension}"
+    file_path = UPLOAD_DIR / unique_filename
+    
+    # Save file
+    with open(file_path, "wb") as f:
+        f.write(contents)
+    
+    # Return the URL path
+    image_url = f"/uploads/images/{unique_filename}"
+    return {"url": image_url, "filename": unique_filename}
+
 @router.get("/images/{filename}")
 async def get_image(filename: str):
     """Serve uploaded images"""

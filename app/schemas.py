@@ -8,9 +8,16 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     university: Optional[str] = None
     phone: Optional[str] = None
+    profile_picture: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    university: Optional[str] = None
+    phone: Optional[str] = None
+    profile_picture: Optional[str] = None
 
 class UserResponse(UserBase):
     id: int
@@ -76,6 +83,34 @@ class ItemResponse(ItemBase):
     images: List[ItemImageResponse] = []
     created_at: datetime
     updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+class MessageCreate(BaseModel):
+    item_id: int
+    receiver_id: int
+    content: str
+
+class MessageResponse(BaseModel):
+    id: int
+    item_id: int
+    sender_id: int
+    receiver_id: int
+    content: str
+    is_read: bool
+    created_at: datetime
+    sender: UserResponse
+    receiver: UserResponse
+    
+    class Config:
+        from_attributes = True
+
+class ConversationResponse(BaseModel):
+    other_user: UserResponse
+    item: ItemResponse
+    last_message: Optional[MessageResponse] = None
+    unread_count: int = 0
     
     class Config:
         from_attributes = True

@@ -1,4 +1,4 @@
-# Student Marketplace
+# Rilono
 
 A beautiful and modern marketplace platform built with FastAPI and Python, designed specifically for student communities. Students can create accounts, list items for sale, and browse items from other students.
 
@@ -11,7 +11,7 @@ A beautiful and modern marketplace platform built with FastAPI and Python, desig
 - 🔍 **Search & Filter**: Search items by title/description, filter by category and price range
 - 👤 **User Profiles**: View your own listings and manage your items
 - 🎨 **Modern UI**: Beautiful, responsive design with smooth animations
-- 🏷️ **Categories**: Organize items by category (Textbooks, Electronics, Furniture, Clothing, Sports, Other)
+- 🏷️ **Categories**: Organize items by category (Textbooks, Electronics, Furniture, Clothing, Sports, Sublease, Other)
 - ✅ **Sold Status**: Mark items as sold when they're purchased
 
 ## Tech Stack
@@ -96,7 +96,7 @@ A beautiful and modern marketplace platform built with FastAPI and Python, desig
    - Click "Sell Item" in the navigation bar
    - Fill in the item details (title, description, price, category, etc.)
    - Click "List Item"
-   - Your item will appear in the marketplace
+   - Your item will appear in Rilono
 
 4. **Browse Items**:
    - Use the search bar to search by keywords
@@ -126,7 +126,7 @@ A beautiful and modern marketplace platform built with FastAPI and Python, desig
 
 ## Database
 
-The application uses SQLite by default, which creates a `student_marketplace.db` file in the project root. The database is automatically created when you first run the application.
+The application uses SQLite by default, which creates a `student_marketplace.db` file in the project root. The database is automatically created when you first run the application. (Note: The database filename can be customized in the database configuration.)
 
 To use PostgreSQL instead:
 1. Update `DATABASE_URL` in `.env` to your PostgreSQL connection string

@@ -13,6 +13,7 @@ class User(Base):
     full_name = Column(String, nullable=True)
     university = Column(String, nullable=True)
     phone = Column(String, nullable=True)
+    profile_picture = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
@@ -52,4 +53,19 @@ class ItemImage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     item = relationship("Item", back_populates="images")
+
+class Message(Base):
+    __tablename__ = "messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    content = Column(Text, nullable=False)
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    item = relationship("Item")
+    sender = relationship("User", foreign_keys=[sender_id])
+    receiver = relationship("User", foreign_keys=[receiver_id])
 

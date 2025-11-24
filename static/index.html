@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Marketplace</title>
+    <title>Rilono</title>
     <link rel="stylesheet" href="/static/styles.css">
     <!-- Google Places API - Replace YOUR_GOOGLE_API_KEY with your actual API key -->
     <!-- Get your API key from: https://console.cloud.google.com/google/maps-apis -->
@@ -23,16 +23,32 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
-                <h1>📚 Student Marketplace</h1>
+                <h1>Rilono</h1>
             </div>
             <div class="nav-links" id="navLinks">
-                <a href="#" onclick="showHome(); return false;">Home</a>
+                <a href="#" onclick="showHome(); return false;">Marketplace</a>
                 <a href="#" onclick="showCreateItem(); return false;" id="createLink" style="display: none;">Sell Item</a>
-                <a href="#" onclick="showMyListings(); return false;" id="myListingsLink" style="display: none;">My Listings</a>
                 <a href="#" onclick="showLogin(); return false;" id="loginLink">Login</a>
                 <a href="#" onclick="showRegister(); return false;" id="registerLink">Register</a>
-                <a href="#" onclick="logout(); return false;" id="logoutLink" style="display: none;">Logout</a>
-                <span id="userInfo" style="display: none;"></span>
+                <div class="user-menu" id="userMenu" style="display: none; position: relative;">
+                    <div class="user-menu-trigger" onclick="toggleUserMenu()" id="userInfo">
+                        <!-- User info will be inserted here -->
+                    </div>
+                    <div class="user-menu-dropdown" id="userMenuDropdown" style="display: none;">
+                        <a href="#" onclick="showProfile(); toggleUserMenu(); return false;">
+                            <span>👤</span> Profile
+                        </a>
+                        <a href="#" onclick="showMyListings(); toggleUserMenu(); return false;">
+                            <span>📦</span> My Listings
+                        </a>
+                        <a href="#" onclick="showMessages(); toggleUserMenu(); return false;">
+                            <span>💬</span> Messages <span id="unreadBadge" style="display: none; background: var(--danger-color); color: white; padding: 0.125rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; margin-left: 0.5rem;">0</span>
+                        </a>
+                        <a href="#" onclick="logout(); toggleUserMenu(); return false;">
+                            <span>🚪</span> Logout
+                        </a>
+                    </div>
+                </div>
             </div>
         </div>
     </nav>
@@ -93,7 +109,7 @@
         </div>
 
         <!-- Home / Browse Items -->
-        <div id="homeSection" class="section">
+        <div id="homeSection" class="section" style="display: none;">
             <div class="search-bar">
                 <input type="text" id="searchInput" placeholder="Search items...">
                 <select id="categoryFilter">
@@ -103,6 +119,7 @@
                     <option value="furniture">Furniture</option>
                     <option value="clothing">Clothing</option>
                     <option value="sports">Sports</option>
+                    <option value="sublease">Sublease</option>
                     <option value="other">Other</option>
                 </select>
                 <div class="price-filter">
@@ -143,6 +160,7 @@
                                 <option value="furniture">Furniture</option>
                                 <option value="clothing">Clothing</option>
                                 <option value="sports">Sports</option>
+                                <option value="sublease">Sublease</option>
                                 <option value="other">Other</option>
                             </select>
                         </div>
@@ -201,6 +219,88 @@
             <h2>My Listings</h2>
             <div id="myItemsGrid" class="items-grid">
                 <!-- User's items will be loaded here -->
+            </div>
+        </div>
+
+        <!-- Profile Section -->
+        <div id="profileSection" class="section" style="display: none;">
+            <div class="form-card">
+                <h2>My Profile</h2>
+                <div class="profile-header">
+                    <div class="profile-picture-container">
+                        <img id="profilePicturePreview" src="" alt="Profile Picture" style="display: none; width: 150px; height: 150px; border-radius: 50%; object-fit: cover; border: 4px solid var(--primary-color);">
+                        <div id="profilePicturePlaceholder" style="width: 150px; height: 150px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 3rem; font-weight: 600; border: 4px solid var(--primary-color);"></div>
+                    </div>
+                    <div>
+                        <input type="file" id="profilePictureInput" accept="image/*" style="display: none;">
+                        <button type="button" onclick="document.getElementById('profilePictureInput').click()" class="btn btn-primary" style="width: auto; margin-top: 1rem;">Change Profile Picture</button>
+                    </div>
+                </div>
+                <form id="profileForm">
+                    <div class="form-group">
+                        <label for="profileEmail">Email</label>
+                        <input type="email" id="profileEmail" readonly style="background: var(--bg-color);">
+                        <small style="color: var(--text-secondary);">Email cannot be changed</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="profileUsername">Username</label>
+                        <input type="text" id="profileUsername" readonly style="background: var(--bg-color);">
+                        <small style="color: var(--text-secondary);">Username cannot be changed</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="profileFullName">Full Name</label>
+                        <input type="text" id="profileFullName">
+                    </div>
+                    <div class="form-group">
+                        <label for="profileUniversity">University</label>
+                        <input type="text" id="profileUniversity">
+                    </div>
+                    <div class="form-group">
+                        <label for="profilePhone">Phone</label>
+                        <input type="tel" id="profilePhone">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Update Profile</button>
+                </form>
+                <div class="danger-zone">
+                    <h3>Danger Zone</h3>
+                    <p>Once you delete your account, there is no going back. Please be certain.</p>
+                    <button type="button" onclick="handleDeleteAccount()" class="btn" style="background: var(--danger-color); color: white;">Delete Account</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Messages Section -->
+        <div id="messagesSection" class="section" style="display: none;">
+            <div class="messages-container">
+                <div class="conversations-list">
+                    <h2>Conversations</h2>
+                    <div id="conversationsList">
+                        <!-- Conversations will be loaded here -->
+                    </div>
+                </div>
+                <div class="chat-container" id="chatContainer" style="display: none;">
+                    <div class="chat-header">
+                        <div style="display: flex; align-items: center; gap: 1rem; flex: 1;">
+                            <button onclick="closeChat()" class="btn-back">← Back</button>
+                            <div id="chatHeaderInfo"></div>
+                        </div>
+                        <button onclick="handleDeleteConversation()" class="btn-delete-chat" id="deleteChatBtn" style="display: none;" title="Delete conversation">
+                            🗑️
+                        </button>
+                    </div>
+                    <div class="chat-messages" id="chatMessages">
+                        <!-- Messages will be loaded here -->
+                    </div>
+                    <div class="chat-input-container">
+                        <form id="messageForm" onsubmit="sendMessage(event)">
+                            <input type="text" id="messageInput" placeholder="Type a message..." required>
+                            <button type="submit" class="btn btn-primary">Send</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="no-chat-selected" id="noChatSelected">
+                    <p>Select a conversation to start messaging</p>
+                </div>
             </div>
         </div>
     </div>

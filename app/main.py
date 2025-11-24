@@ -3,14 +3,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
-from app.routers import auth, items, upload
+from app.routers import auth, items, upload, messages, profile
 import os
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
-    title="Student Marketplace",
+    title="Rilono",
     description="A marketplace for students to buy and sell items",
     version="1.0.0"
 )
@@ -28,6 +28,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(items.router)
 app.include_router(upload.router)
+app.include_router(messages.router)
+app.include_router(profile.router)
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -45,7 +47,7 @@ async def read_root():
     html_path = os.path.join(os.path.dirname(__file__), "..", "static", "index.html")
     if os.path.exists(html_path):
         return FileResponse(html_path)
-    return {"message": "Student Marketplace API", "docs": "/docs"}
+    return {"message": "Rilono API", "docs": "/docs"}
 
 @app.get("/health")
 def health_check():
