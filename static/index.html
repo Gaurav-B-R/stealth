@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Marketplace</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>📚 Student Marketplace</h1>
+            </div>
+            <div class="nav-links" id="navLinks">
+                <a href="#" onclick="showHome(); return false;">Home</a>
+                <a href="#" onclick="showCreateItem(); return false;" id="createLink" style="display: none;">Sell Item</a>
+                <a href="#" onclick="showMyListings(); return false;" id="myListingsLink" style="display: none;">My Listings</a>
+                <a href="#" onclick="showLogin(); return false;" id="loginLink">Login</a>
+                <a href="#" onclick="showRegister(); return false;" id="registerLink">Register</a>
+                <a href="#" onclick="logout(); return false;" id="logoutLink" style="display: none;">Logout</a>
+                <span id="userInfo" style="display: none;"></span>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Login Form -->
+        <div id="loginSection" class="section" style="display: none;">
+            <div class="auth-card">
+                <h2>Login</h2>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="loginUsername">Username</label>
+                        <input type="text" id="loginUsername" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="loginPassword">Password</label>
+                        <input type="password" id="loginPassword" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Login</button>
+                </form>
+                <p class="auth-switch">Don't have an account? <a href="#" onclick="showRegister(); return false;">Register here</a></p>
+            </div>
+        </div>
+
+        <!-- Register Form -->
+        <div id="registerSection" class="section" style="display: none;">
+            <div class="auth-card">
+                <h2>Create Account</h2>
+                <form id="registerForm">
+                    <div class="form-group">
+                        <label for="registerEmail">Email</label>
+                        <input type="email" id="registerEmail" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="registerUsername">Username</label>
+                        <input type="text" id="registerUsername" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="registerPassword">Password</label>
+                        <input type="password" id="registerPassword" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="registerFullName">Full Name</label>
+                        <input type="text" id="registerFullName">
+                    </div>
+                    <div class="form-group">
+                        <label for="registerUniversity">University</label>
+                        <input type="text" id="registerUniversity">
+                    </div>
+                    <div class="form-group">
+                        <label for="registerPhone">Phone</label>
+                        <input type="tel" id="registerPhone">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Register</button>
+                </form>
+                <p class="auth-switch">Already have an account? <a href="#" onclick="showLogin(); return false;">Login here</a></p>
+            </div>
+        </div>
+
+        <!-- Home / Browse Items -->
+        <div id="homeSection" class="section">
+            <div class="search-bar">
+                <input type="text" id="searchInput" placeholder="Search items...">
+                <select id="categoryFilter">
+                    <option value="">All Categories</option>
+                    <option value="textbooks">Textbooks</option>
+                    <option value="electronics">Electronics</option>
+                    <option value="furniture">Furniture</option>
+                    <option value="clothing">Clothing</option>
+                    <option value="sports">Sports</option>
+                    <option value="other">Other</option>
+                </select>
+                <div class="price-filter">
+                    <input type="number" id="minPrice" placeholder="Min $" step="0.01">
+                    <input type="number" id="maxPrice" placeholder="Max $" step="0.01">
+                </div>
+                <button onclick="loadItems()" class="btn btn-primary">Search</button>
+            </div>
+            <div id="itemsGrid" class="items-grid">
+                <!-- Items will be loaded here -->
+            </div>
+        </div>
+
+        <!-- Create Item Form -->
+        <div id="createItemSection" class="section" style="display: none;">
+            <div class="form-card">
+                <h2>List an Item for Sale</h2>
+                <form id="createItemForm">
+                    <div class="form-group">
+                        <label for="itemTitle">Title *</label>
+                        <input type="text" id="itemTitle" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="itemDescription">Description</label>
+                        <textarea id="itemDescription" rows="4"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="itemPrice">Price ($) *</label>
+                            <input type="number" id="itemPrice" step="0.01" min="0" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="itemCategory">Category</label>
+                            <select id="itemCategory">
+                                <option value="">Select Category</option>
+                                <option value="textbooks">Textbooks</option>
+                                <option value="electronics">Electronics</option>
+                                <option value="furniture">Furniture</option>
+                                <option value="clothing">Clothing</option>
+                                <option value="sports">Sports</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="itemCondition">Condition</label>
+                        <select id="itemCondition">
+                            <option value="">Select Condition</option>
+                            <option value="new">New</option>
+                            <option value="like_new">Like New</option>
+                            <option value="good">Good</option>
+                            <option value="fair">Fair</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="itemImageUrl">Image URL</label>
+                        <input type="url" id="itemImageUrl" placeholder="https://example.com/image.jpg">
+                    </div>
+                    <button type="submit" class="btn btn-primary">List Item</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- My Listings -->
+        <div id="myListingsSection" class="section" style="display: none;">
+            <h2>My Listings</h2>
+            <div id="myItemsGrid" class="items-grid">
+                <!-- User's items will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <div id="message" class="message"></div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
+
