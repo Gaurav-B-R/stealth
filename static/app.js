@@ -29,9 +29,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         } else if (lastSection === 'messages' && currentUser) {
             showMessages();
             sectionRestored = true;
-        } else if (lastSection === 'profile' && currentUser) {
-            showProfile();
-            sectionRestored = true;
+            } else if (lastSection === 'dashboard' && currentUser) {
+                showDashboard();
+                sectionRestored = true;
+            } else if (lastSection === 'profile' && currentUser) {
+                // Legacy support - redirect to dashboard
+                showDashboard();
+                sectionRestored = true;
         } else if (lastSection === 'login' && !currentUser) {
             showLogin();
             sectionRestored = true;
@@ -172,10 +176,11 @@ function updateUIForAuth() {
             userInfoEl.innerHTML = `<div style="width: 2rem; height: 2rem; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-weight: 600;">${(currentUser.full_name || currentUser.username).charAt(0).toUpperCase()}</div> <span>${currentUser.username}</span>`;
         }
         checkUnreadMessages();
-        // Only load profile data if we're on the profile section
+        // Only load profile data if we're on the dashboard section
         const currentSection = sessionStorage.getItem('currentSection');
-        if (currentSection === 'profile') {
+        if (currentSection === 'dashboard' || currentSection === 'profile') {
             loadProfile();
+            loadDashboardStats();
         }
     } else {
         document.getElementById('loginLink').style.display = 'block';
@@ -268,16 +273,17 @@ function showMessages() {
     sessionStorage.setItem('currentSection', 'messages');
 }
 
-function showProfile() {
+function showDashboard() {
     if (!currentUser) {
-        showMessage('Please login to view profile', 'error');
+        showMessage('Please login to view dashboard', 'error');
         showLogin();
         return;
     }
     hideAllSections();
-    document.getElementById('profileSection').style.display = 'block';
+    document.getElementById('dashboardSection').style.display = 'block';
     loadProfile();
-    sessionStorage.setItem('currentSection', 'profile');
+    loadDashboardStats();
+    sessionStorage.setItem('currentSection', 'dashboard');
 }
 
 function hideAllSections() {
@@ -1481,6 +1487,53 @@ function displayProfile(profile) {
     }
 }
 
+async function loadDashboardStats() {
+    if (!authToken) return;
+    
+    try {
+        // Load user's items to count active and sold
+        const itemsResponse = await fetch(`${API_BASE}/api/items/my/listings`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (itemsResponse.ok) {
+            const items = await itemsResponse.json();
+            const activeCount = items.filter(item => !item.is_sold).length;
+            const soldCount = items.filter(item => item.is_sold).length;
+            
+            document.getElementById('activeListingsCount').textContent = activeCount;
+            document.getElementById('soldItemsCount').textContent = soldCount;
+        }
+        
+        // Load unread messages count
+        const messagesResponse = await fetch(`${API_BASE}/api/messages/unread-count`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (messagesResponse.ok) {
+            const data = await messagesResponse.json();
+            document.getElementById('unreadCount').textContent = data.unread_count || 0;
+            
+            // Get total conversations count
+            const convResponse = await fetch(`${API_BASE}/api/messages/conversations`, {
+                headers: {
+                    'Authorization': `Bearer ${authToken}`
+                }
+            });
+            if (convResponse.ok) {
+                const conversations = await convResponse.json();
+                document.getElementById('messagesCount').textContent = conversations.length || 0;
+            }
+        }
+    } catch (error) {
+        console.error('Load dashboard stats error:', error);
+    }
+}
+
 function handleProfilePicturePreview(e) {
     const file = e.target.files[0];
     const preview = document.getElementById('profilePicturePreview');
@@ -1588,6 +1641,8 @@ async function handleUpdateProfile(e) {
             } else {
                 userInfoEl.innerHTML = `<div style="width: 2rem; height: 2rem; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-weight: 600;">${(currentUser.full_name || currentUser.username).charAt(0).toUpperCase()}</div> <span>${currentUser.username}</span>`;
             }
+            // Reload profile display if on dashboard
+            displayProfile(data);
         } else {
             let errorMessage = 'Failed to update profile';
             if (data.detail) {
