@@ -237,6 +237,11 @@ function showCreateItem() {
     hideAllSections();
     document.getElementById('createItemSection').style.display = 'block';
     sessionStorage.setItem('currentSection', 'createItem');
+    
+    // Reset form if not editing
+    if (!document.getElementById('editingItemId').value) {
+        resetItemForm();
+    }
 }
 
 function showMyListings() {
@@ -508,6 +513,7 @@ function displayItems(items, containerId, showActions = false) {
                 <div class="item-seller">Seller: ${escapeHtml(item.seller.username)}</div>
                 ${showActions && !item.is_sold ? `
                     <div class="item-actions">
+                        <button class="btn btn-primary" onclick="editItem(${item.id})">Edit</button>
                         <button class="btn btn-primary" onclick="markAsSold(${item.id})">Mark as Sold</button>
                         <button class="btn btn-danger" onclick="deleteItem(${item.id})">Delete</button>
                     </div>
@@ -716,6 +722,91 @@ async function uploadImages(files) {
     return data.images.map(img => img.url);
 }
 
+async function editItem(itemId) {
+    if (!authToken) {
+        showMessage('Please login to edit items', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/items/${itemId}`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to load item');
+        }
+
+        const item = await response.json();
+
+        // Set editing mode
+        document.getElementById('editingItemId').value = itemId;
+        document.getElementById('itemFormTitle').textContent = 'Edit Item';
+        document.getElementById('itemSubmitButton').textContent = 'Update Item';
+
+        // Populate form fields
+        document.getElementById('itemTitle').value = item.title || '';
+        document.getElementById('itemDescription').value = item.description || '';
+        document.getElementById('itemPrice').value = item.price || '';
+        document.getElementById('itemCategory').value = item.category || '';
+        document.getElementById('itemCondition').value = item.condition || '';
+        document.getElementById('itemAddress').value = item.address || '';
+        document.getElementById('itemCity').value = item.city || '';
+        document.getElementById('itemState').value = item.state || '';
+        document.getElementById('itemZipCode').value = item.zip_code || '';
+        document.getElementById('itemLatitude').value = item.latitude || '';
+        document.getElementById('itemLongitude').value = item.longitude || '';
+
+        // Show address details if address exists
+        if (item.address) {
+            document.getElementById('addressDetails').style.display = 'grid';
+        }
+
+        // Update price label based on category
+        updatePriceLabel();
+
+        // Load existing images
+        selectedImages = [];
+        const images = item.images && item.images.length > 0 
+            ? item.images.map(img => img.image_url)
+            : (item.image_url ? [item.image_url] : []);
+
+        const previewsContainer = document.getElementById('imagePreviews');
+        previewsContainer.innerHTML = '';
+        
+        if (images.length > 0) {
+            previewsContainer.style.display = 'grid';
+            images.forEach((imageUrl, index) => {
+                const imageId = `existing_${itemId}_${index}`;
+                selectedImages.push({ id: imageId, src: imageUrl, type: 'url' });
+                addImagePreview(imageId, imageUrl, 'url');
+            });
+        } else {
+            previewsContainer.style.display = 'none';
+        }
+
+        // Show the create/edit form
+        showCreateItem();
+    } catch (error) {
+        console.error('Edit item error:', error);
+        showMessage('Failed to load item for editing', 'error');
+    }
+}
+
+function resetItemForm() {
+    document.getElementById('editingItemId').value = '';
+    document.getElementById('itemFormTitle').textContent = 'List an Item for Sale';
+    document.getElementById('itemSubmitButton').textContent = 'List Item';
+    document.getElementById('createItemForm').reset();
+    document.getElementById('imagePreviews').innerHTML = '';
+    document.getElementById('imagePreviews').style.display = 'none';
+    document.getElementById('addressDetails').style.display = 'none';
+    selectedImages = [];
+    updatePriceLabel();
+}
+
 async function handleCreateItem(e) {
     e.preventDefault();
     if (!authToken) {
@@ -730,6 +821,7 @@ async function handleCreateItem(e) {
 
     const title = getValue('itemTitle');
     const price = parseFloat(document.getElementById('itemPrice').value);
+    const editingItemId = document.getElementById('editingItemId').value;
 
     if (!title || isNaN(price) || price < 0) {
         showMessage('Please fill in title and a valid price', 'error');
@@ -739,10 +831,14 @@ async function handleCreateItem(e) {
     // Collect all image URLs
     let imageUrls = [];
     
+    // Keep existing images (from URLs)
+    const existingImages = selectedImages.filter(img => img.type === 'url').map(img => img.src);
+    imageUrls.push(...existingImages);
+    
     // Get files to upload
     const filesToUpload = selectedImages.filter(img => img.type === 'file').map(img => img.file);
     
-    // Upload files if any
+    // Upload new files if any
     if (filesToUpload.length > 0) {
         try {
             showMessage(`Uploading ${filesToUpload.length} image(s)...`, 'success');
@@ -762,11 +858,6 @@ async function handleCreateItem(e) {
     const latitude = document.getElementById('itemLatitude').value ? parseFloat(document.getElementById('itemLatitude').value) : null;
     const longitude = document.getElementById('itemLongitude').value ? parseFloat(document.getElementById('itemLongitude').value) : null;
 
-    if (!address) {
-        showMessage('Please enter a pickup location', 'error');
-        return;
-    }
-
     const itemData = {
         title: title,
         description: getValue('itemDescription'),
@@ -784,8 +875,13 @@ async function handleCreateItem(e) {
     };
 
     try {
-        const response = await fetch(`${API_BASE}/api/items/`, {
-            method: 'POST',
+        const url = editingItemId 
+            ? `${API_BASE}/api/items/${editingItemId}`
+            : `${API_BASE}/api/items/`;
+        const method = editingItemId ? 'PUT' : 'POST';
+
+        const response = await fetch(url, {
+            method: method,
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
@@ -796,16 +892,12 @@ async function handleCreateItem(e) {
         const data = await response.json();
 
         if (response.ok) {
-            showMessage('Item listed successfully!', 'success');
-            document.getElementById('createItemForm').reset();
-            document.getElementById('imagePreviews').innerHTML = '';
-            document.getElementById('imagePreviews').style.display = 'none';
-            document.getElementById('addressDetails').style.display = 'none';
-            selectedImages = [];
-            showHome();
-            loadItems();
+            showMessage(editingItemId ? 'Item updated successfully!' : 'Item listed successfully!', 'success');
+            resetItemForm();
+            showMyListings();
+            loadMyItems();
         } else {
-            let errorMessage = 'Failed to create item';
+            let errorMessage = editingItemId ? 'Failed to update item' : 'Failed to create item';
             if (data.detail) {
                 if (Array.isArray(data.detail)) {
                     errorMessage = data.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join(', ');
@@ -816,7 +908,7 @@ async function handleCreateItem(e) {
             showMessage(errorMessage, 'error');
         }
     } catch (error) {
-        console.error('Create item error:', error);
+        console.error('Create/Update item error:', error);
         showMessage('An error occurred. Please check your connection and try again.', 'error');
     }
 }
@@ -1150,6 +1242,32 @@ function displayMessages(messages) {
     scrollChatToBottom();
 }
 
+function toggleEmojiPicker() {
+    const picker = document.getElementById('emojiPicker');
+    picker.style.display = picker.style.display === 'none' ? 'block' : 'none';
+}
+
+function insertEmoji(emoji) {
+    const input = document.getElementById('messageInput');
+    const cursorPos = input.selectionStart || input.value.length;
+    const textBefore = input.value.substring(0, cursorPos);
+    const textAfter = input.value.substring(input.selectionEnd || cursorPos);
+    input.value = textBefore + emoji + textAfter;
+    input.focus();
+    input.setSelectionRange(cursorPos + emoji.length, cursorPos + emoji.length);
+    // Close emoji picker after selection
+    document.getElementById('emojiPicker').style.display = 'none';
+}
+
+// Close emoji picker when clicking outside
+document.addEventListener('click', (e) => {
+    const picker = document.getElementById('emojiPicker');
+    const emojiBtn = document.querySelector('.btn-emoji');
+    if (picker && emojiBtn && !picker.contains(e.target) && !emojiBtn.contains(e.target)) {
+        picker.style.display = 'none';
+    }
+});
+
 async function sendMessage(e) {
     e.preventDefault();
     if (!authToken || !currentConversation) return;
@@ -1238,17 +1356,21 @@ function scrollChatToBottom() {
 function formatTime(dateString) {
     if (!dateString) return 'Just now';
     
-    // Parse the date string - handle ISO 8601 format with timezone
+    // Parse the date string - FastAPI returns ISO 8601 format
     let date;
     try {
-        // Try parsing as-is first (handles ISO 8601 strings)
+        // If date has no timezone info, JavaScript will parse it as local time
+        // This is usually correct for server times stored in local timezone
         date = new Date(dateString);
         
-        // If that fails, try parsing without timezone (some APIs send dates without TZ)
+        // If parsing failed, try adding UTC timezone
         if (isNaN(date.getTime())) {
-            // Try adding Z if it's missing (assume UTC)
-            if (!dateString.includes('Z') && !dateString.includes('+') && !dateString.includes('-', 10)) {
+            // Try treating as UTC if no timezone specified
+            if (!dateString.includes('Z') && !dateString.match(/[+-]\d{2}:?\d{2}$/)) {
                 date = new Date(dateString + 'Z');
+            } else {
+                // Try parsing as-is one more time
+                date = new Date(dateString);
             }
         }
     } catch (e) {
@@ -1258,23 +1380,36 @@ function formatTime(dateString) {
     
     // Check if date is valid
     if (isNaN(date.getTime())) {
-        console.error('Invalid date string:', dateString);
+        console.error('Invalid date string:', dateString, 'Type:', typeof dateString);
         return 'Just now';
     }
     
     const now = new Date();
-    const diff = now.getTime() - date.getTime();
+    let diff = now.getTime() - date.getTime();
     
-    // If diff is negative or very small (less than 1 second), it's likely a parsing issue
-    if (diff < 0) {
-        // Date appears to be in the future - might be timezone issue
-        // Try to handle it by checking if it's within a reasonable range
-        const absDiff = Math.abs(diff);
-        if (absDiff < 86400000) { // Less than 1 day difference
-            // Likely timezone issue, show as "Just now" or recalculate
-            return 'Just now';
+    // If date appears to be in the future (more than 1 hour), likely timezone issue
+    // Try parsing as local time without timezone
+    if (diff < -3600000) { // More than 1 hour in the future
+        try {
+            // Remove timezone info and parse as local
+            const localStr = dateString.replace(/Z$/, '').replace(/[+-]\d{2}:?\d{2}$/, '');
+            const localDate = new Date(localStr);
+            if (!isNaN(localDate.getTime())) {
+                const localDiff = now.getTime() - localDate.getTime();
+                if (localDiff >= 0) {
+                    // Use the local time parsing
+                    date = localDate;
+                    diff = localDiff;
+                }
+            }
+        } catch (e) {
+            // Keep original date
         }
-        console.warn('Date is in the future:', dateString, 'Current:', now.toISOString(), 'Parsed:', date.toISOString());
+    }
+    
+    // If still in the future after correction, show as "Just now" to avoid confusion
+    if (diff < 0) {
+        console.warn('Date in future after parsing:', dateString, 'Parsed:', date.toISOString(), 'Now:', now.toISOString());
         return 'Just now';
     }
     

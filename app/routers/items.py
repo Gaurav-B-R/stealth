@@ -108,9 +108,29 @@ def update_item(
     if db_item.seller_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to update this item")
     
-    update_data = item_update.dict(exclude_unset=True)
+    # Handle image_urls separately if provided
+    update_data = item_update.dict(exclude_unset=True, exclude={'image_urls'})
+    image_urls = item_update.image_urls if hasattr(item_update, 'image_urls') and item_update.image_urls is not None else None
+    
+    # Update item fields
     for field, value in update_data.items():
-        setattr(db_item, field, value)
+        if field != 'image_urls':  # Skip image_urls as we handle it separately
+            setattr(db_item, field, value)
+    
+    # Update images if provided
+    if image_urls is not None:
+        # Delete existing images
+        db.query(models.ItemImage).filter(models.ItemImage.item_id == item_id).delete()
+        
+        # Add new images
+        for idx, image_url in enumerate(image_urls):
+            if image_url:  # Only add non-empty URLs
+                db_image = models.ItemImage(
+                    item_id=db_item.id,
+                    image_url=image_url,
+                    order=idx
+                )
+                db.add(db_image)
     
     db.commit()
     db.refresh(db_item)

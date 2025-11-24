@@ -67,6 +67,7 @@ class ItemUpdate(BaseModel):
     category: Optional[str] = None
     condition: Optional[str] = None
     image_url: Optional[str] = None
+    image_urls: Optional[List[str]] = None
     address: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None

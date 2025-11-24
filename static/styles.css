@@ -780,6 +780,61 @@ body {
     font-size: 1rem;
 }
 
+.btn-emoji {
+    background: none;
+    border: 2px solid var(--border-color);
+    border-radius: 0.5rem;
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.5rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.btn-emoji:hover {
+    background: var(--bg-color);
+    border-color: var(--primary-color);
+}
+
+.emoji-picker {
+    position: absolute;
+    bottom: calc(100% + 0.5rem);
+    left: 0;
+    background: white;
+    border: 2px solid var(--border-color);
+    border-radius: 0.5rem;
+    box-shadow: var(--shadow-lg);
+    padding: 0.75rem;
+    z-index: 1000;
+    min-width: 200px;
+}
+
+.emoji-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.5rem;
+}
+
+.emoji-grid span {
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0.25rem;
+    text-align: center;
+    border-radius: 0.25rem;
+    transition: background 0.2s;
+    user-select: none;
+}
+
+.emoji-grid span:hover {
+    background: var(--bg-color);
+    transform: scale(1.2);
+}
+
 .chat-input-container button {
     padding: 0.75rem 1.5rem;
     width: auto;
