@@ -117,6 +117,7 @@ body {
 
 .form-group {
     margin-bottom: 1.5rem;
+    position: relative;
 }
 
 .form-row {
@@ -141,6 +142,64 @@ body {
     border-radius: 0.5rem;
     font-size: 1rem;
     transition: border-color 0.2s;
+}
+
+.form-group input[type="file"] {
+    padding: 0.5rem;
+    cursor: pointer;
+    background: var(--bg-color);
+}
+
+.form-group input[type="file"]:hover {
+    background: #f0f0f0;
+}
+
+#imagePreviews {
+    margin-top: 1rem;
+}
+
+#imagePreviews > div {
+    position: relative;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: 0.5rem;
+    border: 2px solid var(--border-color);
+    transition: transform 0.2s;
+}
+
+#imagePreviews > div:hover {
+    transform: scale(1.05);
+    border-color: var(--primary-color);
+}
+
+#imagePreviews > div button {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    border: none;
+    background: var(--danger-color);
+    color: white;
+    cursor: pointer;
+    font-size: 1.25rem;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+#imagePreviews > div button:hover {
+    background: #dc2626;
+}
+
+.form-group small {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
 }
 
 .form-group input:focus,

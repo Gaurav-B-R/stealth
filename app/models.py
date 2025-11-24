@@ -27,11 +27,29 @@ class Item(Base):
     price = Column(Float, nullable=False)
     category = Column(String, nullable=True, index=True)
     condition = Column(String, nullable=True)  # new, like_new, good, fair
-    image_url = Column(String, nullable=True)
+    image_url = Column(String, nullable=True)  # Deprecated: kept for backward compatibility
+    address = Column(String, nullable=True)
+    city = Column(String, nullable=True, index=True)
+    state = Column(String, nullable=True, index=True)
+    zip_code = Column(String, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     seller_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     is_sold = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     seller = relationship("User", back_populates="items")
+    images = relationship("ItemImage", back_populates="item", cascade="all, delete-orphan", order_by="ItemImage.order")
+
+class ItemImage(Base):
+    __tablename__ = "item_images"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("items.id"), nullable=False)
+    image_url = Column(String, nullable=False)
+    order = Column(Integer, default=0)  # Order of image display
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    item = relationship("Item", back_populates="images")
 

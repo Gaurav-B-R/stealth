@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class UserBase(BaseModel):
@@ -27,13 +27,28 @@ class Token(BaseModel):
 class TokenData(BaseModel):
     username: Optional[str] = None
 
+class ItemImageResponse(BaseModel):
+    id: int
+    image_url: str
+    order: int
+    
+    class Config:
+        from_attributes = True
+
 class ItemBase(BaseModel):
     title: str
     description: Optional[str] = None
     price: float
     category: Optional[str] = None
     condition: Optional[str] = None
-    image_url: Optional[str] = None
+    image_url: Optional[str] = None  # Deprecated: kept for backward compatibility
+    image_urls: Optional[List[str]] = None  # For creating items with multiple images
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class ItemCreate(ItemBase):
     pass
@@ -45,6 +60,12 @@ class ItemUpdate(BaseModel):
     category: Optional[str] = None
     condition: Optional[str] = None
     image_url: Optional[str] = None
+    address: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    zip_code: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     is_sold: Optional[bool] = None
 
 class ItemResponse(ItemBase):
@@ -52,6 +73,7 @@ class ItemResponse(ItemBase):
     seller_id: int
     seller: UserResponse
     is_sold: bool
+    images: List[ItemImageResponse] = []
     created_at: datetime
     updated_at: Optional[datetime] = None
     

@@ -14,6 +14,10 @@ ENV/
 *.sqlite
 *.sqlite3
 
+# Uploads
+uploads/
+!uploads/.gitkeep
+
 # Environment variables
 .env
 

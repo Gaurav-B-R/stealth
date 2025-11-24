@@ -15,8 +15,32 @@ def create_item(
     db: Session = Depends(get_db)
 ):
     """Create a new item listing"""
-    db_item = models.Item(**item.dict(), seller_id=current_user.id)
+    item_data = item.dict(exclude={'image_urls'})
+    image_urls = item.image_urls or []
+    
+    # Handle backward compatibility: if image_url is provided, add it to image_urls
+    if item_data.get('image_url') and not image_urls:
+        image_urls = [item_data['image_url']]
+    
+    # Remove image_url from item_data if we have image_urls (use new system)
+    if image_urls:
+        item_data.pop('image_url', None)
+    
+    # Create item
+    db_item = models.Item(**item_data, seller_id=current_user.id)
     db.add(db_item)
+    db.flush()  # Flush to get the item ID
+    
+    # Add images
+    for idx, image_url in enumerate(image_urls):
+        if image_url:  # Only add non-empty URLs
+            db_image = models.ItemImage(
+                item_id=db_item.id,
+                image_url=image_url,
+                order=idx
+            )
+            db.add(db_image)
+    
     db.commit()
     db.refresh(db_item)
     return db_item

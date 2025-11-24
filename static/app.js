@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     checkAuth();
     setupEventListeners();
     loadItems();
+    initializeAddressAutocomplete();
 });
 
 function setupEventListeners() {
@@ -16,6 +17,12 @@ function setupEventListeners() {
     document.getElementById('searchInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') loadItems();
     });
+    
+    // Image preview for multiple file upload
+    const imageFileInput = document.getElementById('itemImageFiles');
+    if (imageFileInput) {
+        imageFileInput.addEventListener('change', handleMultipleImagePreview);
+    }
 }
 
 async function checkAuth() {
@@ -301,6 +308,14 @@ async function loadMyItems() {
     }
 }
 
+function getImageUrl(imageUrl) {
+    if (!imageUrl) return null;
+    if (imageUrl.startsWith('http') || imageUrl.startsWith('/')) {
+        return imageUrl;
+    }
+    return API_BASE + (imageUrl.startsWith('/') ? '' : '/') + imageUrl;
+}
+
 function displayItems(items, containerId, showActions = false) {
     const container = document.getElementById(containerId);
     if (items.length === 0) {
@@ -308,10 +323,21 @@ function displayItems(items, containerId, showActions = false) {
         return;
     }
 
-    container.innerHTML = items.map(item => `
+    container.innerHTML = items.map(item => {
+        // Get images - prefer new images array, fallback to image_url
+        const images = item.images && item.images.length > 0 
+            ? item.images.map(img => img.image_url)
+            : (item.image_url ? [item.image_url] : []);
+        
+        const firstImage = images.length > 0 ? images[0] : null;
+        const imageUrl = firstImage ? getImageUrl(firstImage) : null;
+        const imageCount = images.length;
+        
+        return `
         <div class="item-card">
-            <div class="item-image">
-                ${item.image_url ? `<img src="${item.image_url}" alt="${item.title}" style="width: 100%; height: 100%; object-fit: cover;">` : '📦'}
+            <div class="item-image" style="position: relative;">
+                ${imageUrl ? `<img src="${imageUrl}" alt="${item.title}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.parentElement.innerHTML='📦';">` : '📦'}
+                ${imageCount > 1 ? `<div style="position: absolute; bottom: 0.5rem; right: 0.5rem; background: rgba(0,0,0,0.7); color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.875rem;">${imageCount} photos</div>` : ''}
             </div>
             <div class="item-content">
                 ${item.is_sold ? '<span class="sold-badge">SOLD</span>' : ''}
@@ -319,6 +345,7 @@ function displayItems(items, containerId, showActions = false) {
                 <div class="item-price">$${item.price.toFixed(2)}</div>
                 ${item.category ? `<span class="item-category">${escapeHtml(item.category)}</span>` : ''}
                 ${item.description ? `<div class="item-description">${escapeHtml(item.description)}</div>` : ''}
+                ${item.address ? `<div class="item-location" style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem;">📍 ${escapeHtml(item.address)}</div>` : ''}
                 <div class="item-seller">Seller: ${escapeHtml(item.seller.username)}</div>
                 ${showActions && !item.is_sold ? `
                     <div class="item-actions">
@@ -328,7 +355,202 @@ function displayItems(items, containerId, showActions = false) {
                 ` : ''}
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
+}
+
+// Store selected images (files and URLs)
+let selectedImages = [];
+
+function handleMultipleImagePreview(e) {
+    const files = Array.from(e.target.files);
+    const previewsContainer = document.getElementById('imagePreviews');
+    
+    if (files.length === 0) {
+        return;
+    }
+    
+    // Limit to 10 images
+    if (files.length > 10) {
+        showMessage('Maximum 10 images allowed', 'error');
+        e.target.value = '';
+        return;
+    }
+    
+    // Validate and add files
+    files.forEach((file, index) => {
+        // Validate file type
+        if (!file.type.startsWith('image/')) {
+            showMessage(`File ${index + 1} is not an image`, 'error');
+            return;
+        }
+        
+        // Validate file size (5MB)
+        if (file.size > 5 * 1024 * 1024) {
+            showMessage(`Image ${index + 1} is too large (max 5MB)`, 'error');
+            return;
+        }
+        
+        // Add to selected images
+        const imageId = `img_${Date.now()}_${index}`;
+        selectedImages.push({
+            id: imageId,
+            file: file,
+            type: 'file',
+            url: null
+        });
+        
+        // Show preview
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            addImagePreview(imageId, e.target.result, 'file');
+        };
+        reader.readAsDataURL(file);
+    });
+    
+    previewsContainer.style.display = 'grid';
+}
+
+
+function addImagePreview(imageId, src, type) {
+    const previewsContainer = document.getElementById('imagePreviews');
+    const previewDiv = document.createElement('div');
+    previewDiv.id = `preview_${imageId}`;
+    previewDiv.style.position = 'relative';
+    previewDiv.style.aspectRatio = '1';
+    previewDiv.style.overflow = 'hidden';
+    previewDiv.style.borderRadius = '0.5rem';
+    previewDiv.style.border = '2px solid var(--border-color)';
+    
+    const img = document.createElement('img');
+    img.src = src;
+    img.style.width = '100%';
+    img.style.height = '100%';
+    img.style.objectFit = 'cover';
+    img.onerror = () => {
+        previewDiv.remove();
+        selectedImages = selectedImages.filter(img => img.id !== imageId);
+        showMessage('Failed to load image', 'error');
+    };
+    
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = '×';
+    removeBtn.type = 'button';
+    removeBtn.style.position = 'absolute';
+    removeBtn.style.top = '0.25rem';
+    removeBtn.style.right = '0.25rem';
+    removeBtn.style.width = '2rem';
+    removeBtn.style.height = '2rem';
+    removeBtn.style.borderRadius = '50%';
+    removeBtn.style.border = 'none';
+    removeBtn.style.background = 'var(--danger-color)';
+    removeBtn.style.color = 'white';
+    removeBtn.style.cursor = 'pointer';
+    removeBtn.style.fontSize = '1.25rem';
+    removeBtn.style.fontWeight = 'bold';
+    removeBtn.onclick = () => removeImage(imageId);
+    
+    previewDiv.appendChild(img);
+    previewDiv.appendChild(removeBtn);
+    previewsContainer.appendChild(previewDiv);
+}
+
+function removeImage(imageId) {
+    selectedImages = selectedImages.filter(img => img.id !== imageId);
+    const preview = document.getElementById(`preview_${imageId}`);
+    if (preview) {
+        preview.remove();
+    }
+    
+    const previewsContainer = document.getElementById('imagePreviews');
+    if (selectedImages.length === 0) {
+        previewsContainer.style.display = 'none';
+    }
+}
+
+let addressAutocomplete = null;
+
+function initializeAddressAutocomplete() {
+    const addressInput = document.getElementById('itemAddress');
+    if (!addressInput) return;
+    
+    // Check if Google Maps API is loaded
+    const checkGoogleMaps = () => {
+        if (typeof google !== 'undefined' && google.maps && google.maps.places) {
+            // Initialize Google Places Autocomplete
+            addressAutocomplete = new google.maps.places.Autocomplete(addressInput, {
+                types: ['address'],
+                fields: ['formatted_address', 'address_components', 'geometry']
+            });
+            
+            // Handle place selection
+            addressAutocomplete.addListener('place_changed', () => {
+                const place = addressAutocomplete.getPlace();
+                
+                if (!place.geometry) {
+                    showMessage('No details available for the selected address', 'error');
+                    return;
+                }
+                
+                // Extract address components
+                let city = '';
+                let state = '';
+                let zipCode = '';
+                
+                place.address_components.forEach(component => {
+                    const types = component.types;
+                    
+                    if (types.includes('locality')) {
+                        city = component.long_name;
+                    } else if (types.includes('administrative_area_level_1')) {
+                        state = component.short_name;
+                    } else if (types.includes('postal_code')) {
+                        zipCode = component.long_name;
+                    }
+                });
+                
+                // Update form fields
+                document.getElementById('itemAddress').value = place.formatted_address;
+                document.getElementById('itemCity').value = city;
+                document.getElementById('itemState').value = state;
+                document.getElementById('itemZipCode').value = zipCode;
+                document.getElementById('itemLatitude').value = place.geometry.location.lat();
+                document.getElementById('itemLongitude').value = place.geometry.location.lng();
+                
+                // Show address details
+                document.getElementById('addressDetails').style.display = 'grid';
+            });
+        } else {
+            // Fallback: Check again after a delay if API is still loading
+            setTimeout(checkGoogleMaps, 500);
+        }
+    };
+    
+    // Start checking for Google Maps API
+    checkGoogleMaps();
+}
+
+async function uploadImages(files) {
+    const formData = new FormData();
+    files.forEach(file => {
+        formData.append('files', file);
+    });
+    
+    const response = await fetch(`${API_BASE}/api/upload/images`, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${authToken}`
+        },
+        body: formData
+    });
+    
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || 'Failed to upload images');
+    }
+    
+    const data = await response.json();
+    return data.images.map(img => img.url);
 }
 
 async function handleCreateItem(e) {
@@ -351,13 +573,51 @@ async function handleCreateItem(e) {
         return;
     }
 
+    // Collect all image URLs
+    let imageUrls = [];
+    
+    // Get files to upload
+    const filesToUpload = selectedImages.filter(img => img.type === 'file').map(img => img.file);
+    
+    // Upload files if any
+    if (filesToUpload.length > 0) {
+        try {
+            showMessage(`Uploading ${filesToUpload.length} image(s)...`, 'success');
+            const uploadedUrls = await uploadImages(filesToUpload);
+            imageUrls.push(...uploadedUrls);
+        } catch (error) {
+            showMessage(error.message || 'Failed to upload images', 'error');
+            return;
+        }
+    }
+
+    // Get address data
+    const address = getValue('itemAddress');
+    const city = getValue('itemCity');
+    const state = getValue('itemState');
+    const zipCode = getValue('itemZipCode');
+    const latitude = document.getElementById('itemLatitude').value ? parseFloat(document.getElementById('itemLatitude').value) : null;
+    const longitude = document.getElementById('itemLongitude').value ? parseFloat(document.getElementById('itemLongitude').value) : null;
+
+    if (!address) {
+        showMessage('Please enter a pickup location', 'error');
+        return;
+    }
+
     const itemData = {
         title: title,
         description: getValue('itemDescription'),
         price: price,
         category: getValue('itemCategory'),
         condition: getValue('itemCondition'),
-        image_url: getValue('itemImageUrl')
+        image_urls: imageUrls.length > 0 ? imageUrls : null,
+        image_url: imageUrls.length > 0 ? imageUrls[0] : null,  // Backward compatibility
+        address: address,
+        city: city,
+        state: state,
+        zip_code: zipCode,
+        latitude: latitude,
+        longitude: longitude
     };
 
     try {
@@ -375,6 +635,10 @@ async function handleCreateItem(e) {
         if (response.ok) {
             showMessage('Item listed successfully!', 'success');
             document.getElementById('createItemForm').reset();
+            document.getElementById('imagePreviews').innerHTML = '';
+            document.getElementById('imagePreviews').style.display = 'none';
+            document.getElementById('addressDetails').style.display = 'none';
+            selectedImages = [];
             showHome();
             loadItems();
         } else {

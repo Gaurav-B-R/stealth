@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Student Marketplace</title>
     <link rel="stylesheet" href="/static/styles.css">
+    <!-- Google Places API - Replace YOUR_GOOGLE_API_KEY with your actual API key -->
+    <!-- Get your API key from: https://console.cloud.google.com/google/maps-apis -->
+    <script>
+        // You can set your Google API key here or use an environment variable
+        const GOOGLE_API_KEY = 'YOUR_GOOGLE_API_KEY';
+        if (GOOGLE_API_KEY !== 'YOUR_GOOGLE_API_KEY') {
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_API_KEY}&libraries=places`;
+            script.async = true;
+            script.defer = true;
+            document.head.appendChild(script);
+        }
+    </script>
 </head>
 <body>
     <nav class="navbar">
@@ -145,9 +158,39 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="itemImageUrl">Image URL</label>
-                        <input type="url" id="itemImageUrl" placeholder="https://example.com/image.jpg">
+                        <label for="itemImageFiles">Upload Images</label>
+                        <input type="file" id="itemImageFiles" accept="image/*" multiple>
+                        <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                            Select multiple images (max 10, 5MB each, formats: JPG, PNG, GIF, WebP)
+                        </small>
                     </div>
+                    <div id="imagePreviews" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                        <!-- Image previews will be added here -->
+                    </div>
+                    <div class="form-group">
+                        <label for="itemAddress">Pickup Location *</label>
+                        <input type="text" id="itemAddress" placeholder="Start typing your address..." autocomplete="off" required>
+                        <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                            Enter the address where buyers can pick up the item
+                        </small>
+                        <div id="addressAutocomplete" style="display: none; position: absolute; z-index: 1000; background: white; border: 1px solid var(--border-color); border-radius: 0.5rem; max-height: 200px; overflow-y: auto; width: 100%; box-shadow: var(--shadow-lg);"></div>
+                    </div>
+                    <div class="form-row" style="display: none;" id="addressDetails">
+                        <div class="form-group">
+                            <label for="itemCity">City</label>
+                            <input type="text" id="itemCity" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label for="itemState">State</label>
+                            <input type="text" id="itemState" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label for="itemZipCode">Zip Code</label>
+                            <input type="text" id="itemZipCode" readonly>
+                        </div>
+                    </div>
+                    <input type="hidden" id="itemLatitude">
+                    <input type="hidden" id="itemLongitude">
                     <button type="submit" class="btn btn-primary">List Item</button>
                 </form>
             </div>

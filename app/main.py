@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
-from app.routers import auth, items
+from app.routers import auth, items, upload
 import os
 
 # Create database tables
@@ -27,11 +27,17 @@ app.add_middleware(
 # Include routers
 app.include_router(auth.router)
 app.include_router(items.router)
+app.include_router(upload.router)
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Serve uploaded images
+uploads_dir = os.path.join(os.path.dirname(__file__), "..", "uploads")
+if os.path.exists(uploads_dir):
+    app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 @app.get("/")
 async def read_root():

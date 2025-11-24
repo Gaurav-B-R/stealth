@@ -6,6 +6,8 @@ A beautiful and modern marketplace platform built with FastAPI and Python, desig
 
 - 🔐 **User Authentication**: Secure registration and login with JWT tokens
 - 📦 **Item Listings**: Create, update, and delete item listings
+- 🖼️ **Multiple Images**: Upload up to 10 images per item listing
+- 📍 **Address Autocomplete**: Google Places integration for pickup location
 - 🔍 **Search & Filter**: Search items by title/description, filter by category and price range
 - 👤 **User Profiles**: View your own listings and manage your items
 - 🎨 **Modern UI**: Beautiful, responsive design with smooth animations
@@ -57,6 +59,14 @@ A beautiful and modern marketplace platform built with FastAPI and Python, desig
    import secrets
    print(secrets.token_urlsafe(32))
    ```
+
+5. **Set up Google Places API (Optional but recommended)**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project or select an existing one
+   - Enable the "Places API" and "Maps JavaScript API"
+   - Create an API key
+   - In `static/index.html`, replace `YOUR_GOOGLE_API_KEY` with your actual API key
+   - **Note**: Without the API key, address input will work as a basic text field (autocomplete will be disabled)
 
 5. **Run the application**:
    ```bash
