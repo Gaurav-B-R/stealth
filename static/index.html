@@ -399,6 +399,26 @@
     </div>
 
     <div id="message" class="message"></div>
+    
+    <!-- Image Gallery Modal -->
+    <div id="imageGalleryModal" class="image-gallery-modal" style="display: none;">
+        <div class="image-gallery-overlay" onclick="closeImageGallery()"></div>
+        <div class="image-gallery-container">
+            <button class="image-gallery-close" onclick="closeImageGallery()" aria-label="Close gallery">×</button>
+            <button class="image-gallery-nav image-gallery-prev" onclick="navigateGallery(-1)" aria-label="Previous image">‹</button>
+            <button class="image-gallery-nav image-gallery-next" onclick="navigateGallery(1)" aria-label="Next image">›</button>
+            <div class="image-gallery-main">
+                <img id="galleryMainImage" src="" alt="Item image">
+            </div>
+            <div class="image-gallery-info">
+                <span id="galleryImageCounter">1 / 1</span>
+            </div>
+            <div class="image-gallery-thumbnails" id="galleryThumbnails">
+                <!-- Thumbnails will be added here -->
+            </div>
+        </div>
+    </div>
+    
     <script src="/static/app.js"></script>
 </body>
 </html>

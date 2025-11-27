@@ -493,7 +493,7 @@ function displayItems(items, containerId, showActions = false) {
         return;
     }
 
-    container.innerHTML = items.map(item => {
+    container.innerHTML = items.map((item, itemIndex) => {
         // Get images - prefer new images array, fallback to image_url
         const images = item.images && item.images.length > 0 
             ? item.images.map(img => img.image_url)
@@ -503,11 +503,18 @@ function displayItems(items, containerId, showActions = false) {
         const imageUrl = firstImage ? getImageUrl(firstImage) : null;
         const imageCount = images.length;
         
+        // Store images in a global map for easy access
+        const imageKey = `item_${item.id}_${itemIndex}`;
+        if (!window.itemImagesMap) {
+            window.itemImagesMap = {};
+        }
+        window.itemImagesMap[imageKey] = images.map(img => getImageUrl(img));
+        
         return `
         <div class="item-card">
-            <div class="item-image" style="position: relative;">
-                ${imageUrl ? `<img src="${imageUrl}" alt="${item.title}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.parentElement.innerHTML='📦';">` : '📦'}
-                ${imageCount > 1 ? `<div style="position: absolute; bottom: 0.5rem; right: 0.5rem; background: rgba(0,0,0,0.7); color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.875rem;">${imageCount} photos</div>` : ''}
+            <div class="item-image" style="position: relative; cursor: ${imageCount > 0 ? 'pointer' : 'default'};" ${imageCount > 0 ? `data-image-key="${imageKey}" data-item-id="${item.id}" data-item-title="${escapeHtml(item.title)}" onclick="handleItemImageClick(this)"` : ''}>
+                ${imageUrl ? `<img src="${imageUrl}" alt="${item.title}" style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;" onerror="this.parentElement.innerHTML='📦';">` : '📦'}
+                ${imageCount > 1 ? `<div style="position: absolute; bottom: 0.5rem; right: 0.5rem; background: rgba(0,0,0,0.7); color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.875rem; pointer-events: none;">${imageCount} photos</div>` : ''}
             </div>
             <div class="item-content">
                 ${item.is_sold ? '<span class="sold-badge">SOLD</span>' : ''}
@@ -1709,6 +1716,140 @@ async function handleDeleteAccount() {
     } catch (error) {
         console.error('Delete account error:', error);
         showMessage(error.message || 'An error occurred while deleting your account. Please try again.', 'error');
+    }
+}
+
+// Image Gallery Functions
+let currentGalleryImages = [];
+let currentGalleryIndex = 0;
+let currentGalleryItemId = null;
+let currentGalleryItemTitle = '';
+
+function handleItemImageClick(element) {
+    const imageKey = element.getAttribute('data-image-key');
+    const itemId = element.getAttribute('data-item-id');
+    const itemTitle = element.getAttribute('data-item-title');
+    
+    if (!imageKey || !window.itemImagesMap || !window.itemImagesMap[imageKey]) {
+        return;
+    }
+    
+    openImageGallery(itemId, itemTitle, window.itemImagesMap[imageKey]);
+}
+
+function openImageGallery(itemId, itemTitle, images) {
+    try {
+        currentGalleryImages = Array.isArray(images) ? images : [];
+        currentGalleryItemId = itemId;
+        currentGalleryItemTitle = itemTitle;
+        currentGalleryIndex = 0;
+        
+        if (currentGalleryImages.length === 0) {
+            return;
+        }
+        
+        const modal = document.getElementById('imageGalleryModal');
+        modal.style.display = 'flex';
+        document.body.style.overflow = 'hidden'; // Prevent background scrolling
+        
+        updateGalleryDisplay();
+        setupGalleryKeyboardNavigation();
+    } catch (error) {
+        console.error('Error opening image gallery:', error);
+    }
+}
+
+function closeImageGallery() {
+    const modal = document.getElementById('imageGalleryModal');
+    modal.style.display = 'none';
+    document.body.style.overflow = ''; // Restore scrolling
+    removeGalleryKeyboardNavigation();
+}
+
+function navigateGallery(direction) {
+    if (currentGalleryImages.length === 0) return;
+    
+    currentGalleryIndex += direction;
+    
+    // Wrap around
+    if (currentGalleryIndex < 0) {
+        currentGalleryIndex = currentGalleryImages.length - 1;
+    } else if (currentGalleryIndex >= currentGalleryImages.length) {
+        currentGalleryIndex = 0;
+    }
+    
+    updateGalleryDisplay();
+}
+
+function updateGalleryDisplay() {
+    if (currentGalleryImages.length === 0) return;
+    
+    const mainImage = document.getElementById('galleryMainImage');
+    const counter = document.getElementById('galleryImageCounter');
+    const thumbnails = document.getElementById('galleryThumbnails');
+    
+    // Update main image
+    mainImage.src = currentGalleryImages[currentGalleryIndex];
+    mainImage.alt = `${currentGalleryItemTitle} - Image ${currentGalleryIndex + 1}`;
+    
+    // Update counter
+    counter.textContent = `${currentGalleryIndex + 1} / ${currentGalleryImages.length}`;
+    
+    // Update thumbnails
+    thumbnails.innerHTML = currentGalleryImages.map((img, index) => {
+        const isActive = index === currentGalleryIndex ? 'active' : '';
+        return `
+            <div class="gallery-thumbnail ${isActive}" onclick="jumpToGalleryImage(${index})">
+                <img src="${img}" alt="Thumbnail ${index + 1}">
+            </div>
+        `;
+    }).join('');
+    
+    // Show/hide navigation arrows
+    const prevBtn = document.querySelector('.image-gallery-prev');
+    const nextBtn = document.querySelector('.image-gallery-next');
+    
+    if (currentGalleryImages.length <= 1) {
+        prevBtn.style.display = 'none';
+        nextBtn.style.display = 'none';
+    } else {
+        prevBtn.style.display = 'flex';
+        nextBtn.style.display = 'flex';
+    }
+}
+
+function jumpToGalleryImage(index) {
+    if (index >= 0 && index < currentGalleryImages.length) {
+        currentGalleryIndex = index;
+        updateGalleryDisplay();
+    }
+}
+
+function setupGalleryKeyboardNavigation() {
+    document.addEventListener('keydown', handleGalleryKeyPress);
+}
+
+function removeGalleryKeyboardNavigation() {
+    document.removeEventListener('keydown', handleGalleryKeyPress);
+}
+
+function handleGalleryKeyPress(e) {
+    const modal = document.getElementById('imageGalleryModal');
+    if (modal.style.display === 'none') return;
+    
+    switch(e.key) {
+        case 'ArrowLeft':
+            e.preventDefault();
+            navigateGallery(-1);
+            break;
+        case 'ArrowRight':
+            e.preventDefault();
+            navigateGallery(1);
+            break;
+        case 'Escape':
+            e.preventDefault();
+            closeImageGallery();
+            break;
     }
 }
 
