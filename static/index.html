@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rilono</title>
     <link rel="stylesheet" href="/static/styles.css">
+    <!-- Favicons -->
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="apple-touch-icon" href="/static/logo.png">
     <!-- Google Places API - Replace YOUR_GOOGLE_API_KEY with your actual API key -->
     <!-- Get your API key from: https://console.cloud.google.com/google/maps-apis -->
     <script>
@@ -23,7 +26,10 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
-                <h1>Rilono</h1>
+                <a href="#" onclick="showHome(); return false;" style="display: flex; align-items: center; gap: 0.75rem; text-decoration: none; color: white;">
+                    <img src="/static/logo.png" alt="Rilono Logo" style="height: 40px; width: auto; object-fit: contain;">
+                    <h1 style="margin: 0;">Rilono</h1>
+                </a>
             </div>
             <div class="nav-links" id="navLinks">
                 <a href="#" onclick="showHome(); return false;">Marketplace</a>
