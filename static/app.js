@@ -2,6 +2,84 @@ const API_BASE = '';
 let currentUser = null;
 let authToken = null;
 
+// URL Routing System
+function updateURL(path, replace = false) {
+    const newURL = window.location.origin + path;
+    if (replace) {
+        window.history.replaceState({ path }, '', newURL);
+    } else {
+        window.history.pushState({ path }, '', newURL);
+    }
+}
+
+function getPathFromURL() {
+    return window.location.pathname;
+}
+
+function getQueryParams() {
+    const params = new URLSearchParams(window.location.search);
+    return {
+        search: params.get('q') || params.get('search') || '',
+        category: params.get('category') || '',
+        minPrice: params.get('minPrice') || params.get('min_price') || '',
+        maxPrice: params.get('maxPrice') || params.get('max_price') || '',
+        itemId: params.get('item') || null
+    };
+}
+
+function buildSearchURL(search, category, minPrice, maxPrice) {
+    const params = new URLSearchParams();
+    if (search) params.append('q', search);
+    if (category) params.append('category', category);
+    if (minPrice) params.append('minPrice', minPrice);
+    if (maxPrice) params.append('maxPrice', maxPrice);
+    const queryString = params.toString();
+    return '/' + (queryString ? `?${queryString}` : '');
+}
+
+function handleRoute() {
+    const path = getPathFromURL();
+    const queryParams = getQueryParams();
+    
+    // Handle routes
+    if (path === '/' || path === '') {
+        // Home page - check for search params
+        if (queryParams.search || queryParams.category || queryParams.minPrice || queryParams.maxPrice) {
+            showHomeWithFilters(queryParams);
+        } else {
+            showHome();
+        }
+    } else if (path === '/login') {
+        showLogin();
+    } else if (path === '/register') {
+        showRegister();
+    } else if (path === '/sell') {
+        showCreateItem();
+    } else if (path === '/listings') {
+        showMyListings();
+    } else if (path === '/messages') {
+        showMessages();
+    } else if (path === '/dashboard') {
+        showDashboard();
+    } else if (path.startsWith('/item/')) {
+        const itemId = path.split('/item/')[1];
+        if (itemId) {
+            showItemDetail(itemId);
+        } else {
+            showHome();
+        }
+    } else {
+        // Unknown route, redirect to home
+        updateURL('/', true);
+        showHome();
+    }
+}
+
+// Handle browser back/forward buttons
+window.addEventListener('popstate', () => {
+    handleRoute();
+});
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
@@ -10,56 +88,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Check authentication first
     await checkAuth();
     
-    // Try to restore the last section the user was on
-    const lastSection = sessionStorage.getItem('currentSection');
-    
-    if (lastSection) {
-        // Restore the last section if user has access
-        let sectionRestored = false;
-        
-        if (lastSection === 'home' && currentUser) {
-            showHome();
-            sectionRestored = true;
-        } else if (lastSection === 'createItem' && currentUser) {
-            showCreateItem();
-            sectionRestored = true;
-        } else if (lastSection === 'myListings' && currentUser) {
-            showMyListings();
-            sectionRestored = true;
-        } else if (lastSection === 'messages' && currentUser) {
-            showMessages();
-            sectionRestored = true;
-            } else if (lastSection === 'dashboard' && currentUser) {
-                showDashboard();
-                sectionRestored = true;
-            } else if (lastSection === 'profile' && currentUser) {
-                // Legacy support - redirect to dashboard
-                showDashboard();
-                sectionRestored = true;
-        } else if (lastSection === 'login' && !currentUser) {
-            showLogin();
-            sectionRestored = true;
-        } else if (lastSection === 'register' && !currentUser) {
-            showRegister();
-            sectionRestored = true;
-        }
-        
-        // If we couldn't restore (user logged out/in, or invalid section), show default
-        if (!sectionRestored) {
-            if (currentUser) {
-                showHome();
-            } else {
-                showLogin();
-            }
-        }
-    } else {
-        // No previous section, show appropriate default
-        if (currentUser) {
-            showHome();
-        } else {
-            showLogin();
-        }
-    }
+    // Handle initial route
+    handleRoute();
     
     checkUnreadMessages();
     // Check for unread messages every 30 seconds
@@ -217,20 +247,39 @@ function showMessage(text, type = 'success') {
 function showLogin() {
     hideAllSections();
     document.getElementById('loginSection').style.display = 'block';
-    sessionStorage.setItem('currentSection', 'login');
+    updateURL('/login', true);
 }
 
 function showRegister() {
     hideAllSections();
     document.getElementById('registerSection').style.display = 'block';
-    sessionStorage.setItem('currentSection', 'register');
+    updateURL('/register', true);
 }
 
 function showHome() {
     hideAllSections();
     document.getElementById('homeSection').style.display = 'block';
+    // Clear search filters
+    document.getElementById('searchInput').value = '';
+    document.getElementById('categoryFilter').value = '';
+    document.getElementById('minPrice').value = '';
+    document.getElementById('maxPrice').value = '';
     loadItems();
-    sessionStorage.setItem('currentSection', 'home');
+    updateURL('/', true);
+}
+
+function showHomeWithFilters(params) {
+    hideAllSections();
+    document.getElementById('homeSection').style.display = 'block';
+    // Set search filters from URL
+    if (document.getElementById('searchInput')) document.getElementById('searchInput').value = params.search || '';
+    if (document.getElementById('categoryFilter')) document.getElementById('categoryFilter').value = params.category || '';
+    if (document.getElementById('minPrice')) document.getElementById('minPrice').value = params.minPrice || '';
+    if (document.getElementById('maxPrice')) document.getElementById('maxPrice').value = params.maxPrice || '';
+    loadItems();
+    // Update URL with current filters
+    const searchURL = buildSearchURL(params.search, params.category, params.minPrice, params.maxPrice);
+    updateURL(searchURL, true);
 }
 
 function showCreateItem() {
@@ -241,7 +290,7 @@ function showCreateItem() {
     }
     hideAllSections();
     document.getElementById('createItemSection').style.display = 'block';
-    sessionStorage.setItem('currentSection', 'createItem');
+    updateURL('/sell', true);
     
     // Reset form if not editing
     if (!document.getElementById('editingItemId').value) {
@@ -258,7 +307,7 @@ function showMyListings() {
     hideAllSections();
     document.getElementById('myListingsSection').style.display = 'block';
     loadMyItems();
-    sessionStorage.setItem('currentSection', 'myListings');
+    updateURL('/listings', true);
 }
 
 function showMessages() {
@@ -270,7 +319,7 @@ function showMessages() {
     hideAllSections();
     document.getElementById('messagesSection').style.display = 'block';
     loadConversations();
-    sessionStorage.setItem('currentSection', 'messages');
+    updateURL('/messages', true);
 }
 
 function showDashboard() {
@@ -283,7 +332,42 @@ function showDashboard() {
     document.getElementById('dashboardSection').style.display = 'block';
     loadProfile();
     loadDashboardStats();
-    sessionStorage.setItem('currentSection', 'dashboard');
+    updateURL('/dashboard', true);
+}
+
+async function showItemDetail(itemId) {
+    hideAllSections();
+    document.getElementById('homeSection').style.display = 'block';
+    updateURL(`/item/${itemId}`, true);
+    
+    // Load and highlight the specific item
+    try {
+        const response = await fetch(`${API_BASE}/api/items/${itemId}`);
+        if (response.ok) {
+            const item = await response.json();
+            // Scroll to item if it's in the current view, or load items and scroll
+            loadItems();
+            setTimeout(() => {
+                const itemCard = document.querySelector(`[data-item-id="${itemId}"]`);
+                if (itemCard) {
+                    itemCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    itemCard.style.border = '3px solid var(--primary-color)';
+                    itemCard.style.boxShadow = '0 0 20px rgba(99, 102, 241, 0.5)';
+                    setTimeout(() => {
+                        itemCard.style.border = '';
+                        itemCard.style.boxShadow = '';
+                    }, 3000);
+                }
+            }, 500);
+        } else {
+            showMessage('Item not found', 'error');
+            showHome();
+        }
+    } catch (error) {
+        console.error('Error loading item:', error);
+        showMessage('Failed to load item', 'error');
+        showHome();
+    }
 }
 
 function hideAllSections() {
@@ -427,6 +511,10 @@ async function loadItems() {
     const minPrice = document.getElementById('minPrice')?.value || '';
     const maxPrice = document.getElementById('maxPrice')?.value || '';
 
+    // Update URL with current search filters
+    const searchURL = buildSearchURL(search.trim(), category, minPrice, maxPrice);
+    updateURL(searchURL, true);
+
     let url = `${API_BASE}/api/items/?`;
     const params = new URLSearchParams();
     if (search.trim()) params.append('search', search.trim());
@@ -511,8 +599,8 @@ function displayItems(items, containerId, showActions = false) {
         window.itemImagesMap[imageKey] = images.map(img => getImageUrl(img));
         
         return `
-        <div class="item-card">
-            <div class="item-image" style="position: relative; cursor: ${imageCount > 0 ? 'pointer' : 'default'};" ${imageCount > 0 ? `data-image-key="${imageKey}" data-item-id="${item.id}" data-item-title="${escapeHtml(item.title)}" onclick="handleItemImageClick(this)"` : ''}>
+        <div class="item-card" style="cursor: pointer;" onclick="showItemDetail(${item.id})" data-item-id="${item.id}">
+            <div class="item-image" style="position: relative; cursor: ${imageCount > 0 ? 'pointer' : 'default'};" ${imageCount > 0 ? `data-image-key="${imageKey}" data-item-id="${item.id}" data-item-title="${escapeHtml(item.title)}" onclick="event.stopPropagation(); handleItemImageClick(this)"` : ''}>
                 ${imageUrl ? `<img src="${imageUrl}" alt="${item.title}" style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;" onerror="this.parentElement.innerHTML='📦';">` : '📦'}
                 ${imageCount > 1 ? `<div style="position: absolute; bottom: 0.5rem; right: 0.5rem; background: rgba(0,0,0,0.7); color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.875rem; pointer-events: none;">${imageCount} photos</div>` : ''}
             </div>
@@ -525,13 +613,13 @@ function displayItems(items, containerId, showActions = false) {
                 ${item.address ? `<div class="item-location" style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem;">📍 ${escapeHtml(item.address)}</div>` : ''}
                 <div class="item-seller">Seller: ${escapeHtml(item.seller.username)}</div>
                 ${showActions && !item.is_sold ? `
-                    <div class="item-actions">
+                    <div class="item-actions" onclick="event.stopPropagation();">
                         <button class="btn btn-primary" onclick="editItem(${item.id})">Edit</button>
                         <button class="btn btn-primary" onclick="markAsSold(${item.id})">Mark as Sold</button>
                         <button class="btn btn-danger" onclick="deleteItem(${item.id})">Delete</button>
                     </div>
                 ` : !item.is_sold && (!currentUser || currentUser.id !== item.seller_id) ? `
-                    <div class="item-actions">
+                    <div class="item-actions" onclick="event.stopPropagation();">
                         <button class="btn btn-primary" onclick="startConversation(${item.id}, ${item.seller_id})">Message Seller</button>
                     </div>
                 ` : ''}

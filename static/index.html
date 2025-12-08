@@ -32,22 +32,22 @@
                 </a>
             </div>
             <div class="nav-links" id="navLinks">
-                <a href="#" onclick="showHome(); return false;">Marketplace</a>
-                <a href="#" onclick="showCreateItem(); return false;" id="createLink" style="display: none;">Sell Item</a>
-                <a href="#" onclick="showLogin(); return false;" id="loginLink">Login</a>
-                <a href="#" onclick="showRegister(); return false;" id="registerLink">Register</a>
+                <a href="/" onclick="event.preventDefault(); showHome(); return false;">Marketplace</a>
+                <a href="/sell" onclick="event.preventDefault(); showCreateItem(); return false;" id="createLink" style="display: none;">Sell Item</a>
+                <a href="/login" onclick="event.preventDefault(); showLogin(); return false;" id="loginLink">Login</a>
+                <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" id="registerLink">Register</a>
                 <div class="user-menu" id="userMenu" style="display: none; position: relative;">
                     <div class="user-menu-trigger" onclick="toggleUserMenu()" id="userInfo">
                         <!-- User info will be inserted here -->
                     </div>
                     <div class="user-menu-dropdown" id="userMenuDropdown" style="display: none;">
-                        <a href="#" onclick="showDashboard(); toggleUserMenu(); return false;">
+                        <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); toggleUserMenu(); return false;">
                             <span>📊</span> Dashboard
                         </a>
-                        <a href="#" onclick="showMyListings(); toggleUserMenu(); return false;">
+                        <a href="/listings" onclick="event.preventDefault(); showMyListings(); toggleUserMenu(); return false;">
                             <span>📦</span> My Listings
                         </a>
-                        <a href="#" onclick="showMessages(); toggleUserMenu(); return false;">
+                        <a href="/messages" onclick="event.preventDefault(); showMessages(); toggleUserMenu(); return false;">
                             <span>💬</span> Messages <span id="unreadBadge" style="display: none; background: var(--danger-color); color: white; padding: 0.125rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; margin-left: 0.5rem;">0</span>
                         </a>
                         <a href="#" onclick="logout(); toggleUserMenu(); return false;">
@@ -132,7 +132,7 @@
                     <input type="number" id="minPrice" placeholder="Min $" step="0.01">
                     <input type="number" id="maxPrice" placeholder="Max $" step="0.01">
                 </div>
-                <button onclick="loadItems()" class="btn btn-primary">Search</button>
+                <button onclick="loadItems(); return false;" class="btn btn-primary">Search</button>
             </div>
             <div id="itemsGrid" class="items-grid">
                 <!-- Items will be loaded here -->

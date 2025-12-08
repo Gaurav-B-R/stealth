@@ -53,3 +53,17 @@ async def read_root():
 def health_check():
     return {"status": "healthy"}
 
+# Catch-all route for client-side routing
+# This must be last to allow API routes to work
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    """Serve index.html for all non-API routes to support client-side routing"""
+    # Don't serve HTML for API routes, static files, or uploads
+    if full_path.startswith(("api/", "static/", "uploads/", "docs", "redoc", "openapi.json")):
+        return {"detail": "Not found"}
+    
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "index.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    return {"message": "Rilono API", "docs": "/docs"}
+
