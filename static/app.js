@@ -3,7 +3,10 @@ let currentUser = null;
 let authToken = null;
 
 // URL Routing System
+let isNavigating = false; // Flag to prevent recursive navigation
+
 function updateURL(path, replace = false) {
+    if (isNavigating) return; // Prevent recursive calls
     const newURL = window.location.origin + path;
     if (replace) {
         window.history.replaceState({ path }, '', newURL);
@@ -37,7 +40,8 @@ function buildSearchURL(search, category, minPrice, maxPrice) {
     return '/' + (queryString ? `?${queryString}` : '');
 }
 
-function handleRoute() {
+function handleRoute(skipURLUpdate = false) {
+    isNavigating = true; // Set flag to prevent URL updates during route handling
     const path = getPathFromURL();
     const queryParams = getQueryParams();
     
@@ -45,39 +49,42 @@ function handleRoute() {
     if (path === '/' || path === '') {
         // Home page - check for search params
         if (queryParams.search || queryParams.category || queryParams.minPrice || queryParams.maxPrice) {
-            showHomeWithFilters(queryParams);
+            showHomeWithFilters(queryParams, skipURLUpdate);
         } else {
-            showHome();
+            showHome(skipURLUpdate);
         }
     } else if (path === '/login') {
-        showLogin();
+        showLogin(skipURLUpdate);
     } else if (path === '/register') {
-        showRegister();
+        showRegister(skipURLUpdate);
     } else if (path === '/sell') {
-        showCreateItem();
+        showCreateItem(skipURLUpdate);
     } else if (path === '/listings') {
-        showMyListings();
+        showMyListings(skipURLUpdate);
     } else if (path === '/messages') {
-        showMessages();
+        showMessages(skipURLUpdate);
     } else if (path === '/dashboard') {
-        showDashboard();
+        showDashboard(skipURLUpdate);
     } else if (path.startsWith('/item/')) {
         const itemId = path.split('/item/')[1];
         if (itemId) {
-            showItemDetail(itemId);
+            showItemDetail(itemId, skipURLUpdate);
         } else {
-            showHome();
+            showHome(skipURLUpdate);
         }
     } else {
         // Unknown route, redirect to home
-        updateURL('/', true);
-        showHome();
+        if (!skipURLUpdate) {
+            updateURL('/', true);
+        }
+        showHome(skipURLUpdate);
     }
+    isNavigating = false; // Reset flag
 }
 
 // Handle browser back/forward buttons
-window.addEventListener('popstate', () => {
-    handleRoute();
+window.addEventListener('popstate', (e) => {
+    handleRoute(true); // Skip URL update when handling back/forward
 });
 
 // Initialize app
@@ -88,8 +95,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Check authentication first
     await checkAuth();
     
-    // Handle initial route
-    handleRoute();
+    // Handle initial route (use replaceState for initial load)
+    handleRoute(true);
+    // Update URL once after initial route is handled
+    const path = getPathFromURL();
+    const queryParams = getQueryParams();
+    if (path === '/' && (queryParams.search || queryParams.category || queryParams.minPrice || queryParams.maxPrice)) {
+        const searchURL = buildSearchURL(queryParams.search, queryParams.category, queryParams.minPrice, queryParams.maxPrice);
+        updateURL(searchURL, true);
+    } else {
+        updateURL(path || '/', true);
+    }
     
     checkUnreadMessages();
     // Check for unread messages every 30 seconds
@@ -244,19 +260,23 @@ function showMessage(text, type = 'success') {
 }
 
 // Navigation
-function showLogin() {
+function showLogin(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('loginSection').style.display = 'block';
-    updateURL('/login', true);
+    if (!skipURLUpdate) {
+        updateURL('/login', false); // Use pushState for navigation
+    }
 }
 
-function showRegister() {
+function showRegister(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('registerSection').style.display = 'block';
-    updateURL('/register', true);
+    if (!skipURLUpdate) {
+        updateURL('/register', false); // Use pushState for navigation
+    }
 }
 
-function showHome() {
+function showHome(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('homeSection').style.display = 'block';
     // Clear search filters
@@ -264,11 +284,13 @@ function showHome() {
     document.getElementById('categoryFilter').value = '';
     document.getElementById('minPrice').value = '';
     document.getElementById('maxPrice').value = '';
-    loadItems();
-    updateURL('/', true);
+    loadItems(skipURLUpdate);
+    if (!skipURLUpdate) {
+        updateURL('/', false); // Use pushState for navigation
+    }
 }
 
-function showHomeWithFilters(params) {
+function showHomeWithFilters(params, skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('homeSection').style.display = 'block';
     // Set search filters from URL
@@ -276,13 +298,12 @@ function showHomeWithFilters(params) {
     if (document.getElementById('categoryFilter')) document.getElementById('categoryFilter').value = params.category || '';
     if (document.getElementById('minPrice')) document.getElementById('minPrice').value = params.minPrice || '';
     if (document.getElementById('maxPrice')) document.getElementById('maxPrice').value = params.maxPrice || '';
-    loadItems();
-    // Update URL with current filters
-    const searchURL = buildSearchURL(params.search, params.category, params.minPrice, params.maxPrice);
-    updateURL(searchURL, true);
+    loadItems(skipURLUpdate);
+    // Don't update URL if we're handling a route (skipURLUpdate = true)
+    // This prevents overwriting the URL when back/forward is used
 }
 
-function showCreateItem() {
+function showCreateItem(skipURLUpdate = false) {
     if (!currentUser) {
         showMessage('Please login to list an item', 'error');
         showLogin();
@@ -290,7 +311,9 @@ function showCreateItem() {
     }
     hideAllSections();
     document.getElementById('createItemSection').style.display = 'block';
-    updateURL('/sell', true);
+    if (!skipURLUpdate) {
+        updateURL('/sell', false); // Use pushState for navigation
+    }
     
     // Reset form if not editing
     if (!document.getElementById('editingItemId').value) {
@@ -298,7 +321,7 @@ function showCreateItem() {
     }
 }
 
-function showMyListings() {
+function showMyListings(skipURLUpdate = false) {
     if (!currentUser) {
         showMessage('Please login to view your listings', 'error');
         showLogin();
@@ -307,10 +330,12 @@ function showMyListings() {
     hideAllSections();
     document.getElementById('myListingsSection').style.display = 'block';
     loadMyItems();
-    updateURL('/listings', true);
+    if (!skipURLUpdate) {
+        updateURL('/listings', false); // Use pushState for navigation
+    }
 }
 
-function showMessages() {
+function showMessages(skipURLUpdate = false) {
     if (!currentUser) {
         showMessage('Please login to view messages', 'error');
         showLogin();
@@ -319,10 +344,12 @@ function showMessages() {
     hideAllSections();
     document.getElementById('messagesSection').style.display = 'block';
     loadConversations();
-    updateURL('/messages', true);
+    if (!skipURLUpdate) {
+        updateURL('/messages', false); // Use pushState for navigation
+    }
 }
 
-function showDashboard() {
+function showDashboard(skipURLUpdate = false) {
     if (!currentUser) {
         showMessage('Please login to view dashboard', 'error');
         showLogin();
@@ -332,13 +359,17 @@ function showDashboard() {
     document.getElementById('dashboardSection').style.display = 'block';
     loadProfile();
     loadDashboardStats();
-    updateURL('/dashboard', true);
+    if (!skipURLUpdate) {
+        updateURL('/dashboard', false); // Use pushState for navigation
+    }
 }
 
-async function showItemDetail(itemId) {
+async function showItemDetail(itemId, skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('homeSection').style.display = 'block';
-    updateURL(`/item/${itemId}`, true);
+    if (!skipURLUpdate) {
+        updateURL(`/item/${itemId}`, false); // Use pushState for navigation
+    }
     
     // Load and highlight the specific item
     try {
@@ -346,7 +377,7 @@ async function showItemDetail(itemId) {
         if (response.ok) {
             const item = await response.json();
             // Scroll to item if it's in the current view, or load items and scroll
-            loadItems();
+            loadItems(skipURLUpdate);
             setTimeout(() => {
                 const itemCard = document.querySelector(`[data-item-id="${itemId}"]`);
                 if (itemCard) {
@@ -505,15 +536,17 @@ function logout() {
 }
 
 // Item functions
-async function loadItems() {
+async function loadItems(skipURLUpdate = false) {
     const search = document.getElementById('searchInput')?.value || '';
     const category = document.getElementById('categoryFilter')?.value || '';
     const minPrice = document.getElementById('minPrice')?.value || '';
     const maxPrice = document.getElementById('maxPrice')?.value || '';
 
-    // Update URL with current search filters
-    const searchURL = buildSearchURL(search.trim(), category, minPrice, maxPrice);
-    updateURL(searchURL, true);
+    // Update URL with current search filters (only if not handling back/forward)
+    if (!skipURLUpdate) {
+        const searchURL = buildSearchURL(search.trim(), category, minPrice, maxPrice);
+        updateURL(searchURL, false); // Use pushState when user actively searches
+    }
 
     let url = `${API_BASE}/api/items/?`;
     const params = new URLSearchParams();
