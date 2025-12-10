@@ -40,7 +40,7 @@
                 </a>
             </div>
             <div class="nav-links" id="navLinks">
-                <a href="/" onclick="event.preventDefault(); showHome(); return false;">Marketplace</a>
+                <a href="/marketplace" onclick="event.preventDefault(); showMarketplace(); return false;">Marketplace</a>
                 <a href="/sell" onclick="event.preventDefault(); showCreateItem(); return false;" id="createLink" style="display: none;">Sell Item</a>
                 <a href="/login" onclick="event.preventDefault(); showLogin(); return false;" id="loginLink">Login</a>
                 <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" id="registerLink">Register</a>
@@ -122,8 +122,56 @@
             </div>
         </div>
 
-        <!-- Home / Browse Items -->
-        <div id="homeSection" class="section" style="display: none;">
+        <!-- Homepage / Landing Page -->
+        <div id="homepageSection" class="section" style="display: none;">
+            <div class="homepage-hero">
+                <div class="hero-content">
+                    <h1 class="hero-title">Welcome to Rilono</h1>
+                    <p class="hero-subtitle">Your Student Marketplace - Buy, Sell, and Connect</p>
+                    <div class="hero-buttons">
+                        <a href="/marketplace" onclick="event.preventDefault(); showMarketplace(); return false;" class="btn btn-primary btn-large">Browse Marketplace</a>
+                        <a href="/sell" onclick="event.preventDefault(); showCreateItem(); return false;" class="btn btn-secondary btn-large" id="heroSellBtn" style="display: none;">Sell Your Item</a>
+                        <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" class="btn btn-secondary btn-large" id="heroRegisterBtn">Get Started</a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="homepage-features">
+                <div class="features-container">
+                    <div class="feature-card">
+                        <div class="feature-icon">📚</div>
+                        <h3>Textbooks & More</h3>
+                        <p>Find affordable textbooks, electronics, furniture, and everything students need.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🏠</div>
+                        <h3>Subleases</h3>
+                        <p>Find or list sublease opportunities perfect for student housing needs.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">💬</div>
+                        <h3>Direct Messaging</h3>
+                        <p>Connect directly with sellers and buyers through our built-in messaging system.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🔒</div>
+                        <h3>Secure & Safe</h3>
+                        <p>Verified student accounts ensure a trusted marketplace experience.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="homepage-cta">
+                <div class="cta-content">
+                    <h2>Ready to Start Trading?</h2>
+                    <p>Join thousands of students buying and selling on Rilono</p>
+                    <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" class="btn btn-primary btn-large" id="ctaRegisterBtn">Create Free Account</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Marketplace / Browse Items -->
+        <div id="marketplaceSection" class="section" style="display: none;">
             <div class="search-bar">
                 <input type="text" id="searchInput" placeholder="Search items...">
                 <select id="categoryFilter">

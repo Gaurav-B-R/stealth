@@ -37,7 +37,7 @@ function buildSearchURL(search, category, minPrice, maxPrice) {
     if (minPrice) params.append('minPrice', minPrice);
     if (maxPrice) params.append('maxPrice', maxPrice);
     const queryString = params.toString();
-    return '/' + (queryString ? `?${queryString}` : '');
+    return queryString ? `?${queryString}` : '';
 }
 
 function handleRoute(skipURLUpdate = false) {
@@ -47,11 +47,14 @@ function handleRoute(skipURLUpdate = false) {
     
     // Handle routes
     if (path === '/' || path === '') {
-        // Home page - check for search params
+        // Homepage - landing page
+        showHomepage(skipURLUpdate);
+    } else if (path === '/marketplace') {
+        // Marketplace - check for search params
         if (queryParams.search || queryParams.category || queryParams.minPrice || queryParams.maxPrice) {
-            showHomeWithFilters(queryParams, skipURLUpdate);
+            showMarketplaceWithFilters(queryParams, skipURLUpdate);
         } else {
-            showHome(skipURLUpdate);
+            showMarketplace(skipURLUpdate);
         }
     } else if (path === '/login') {
         showLogin(skipURLUpdate);
@@ -70,14 +73,14 @@ function handleRoute(skipURLUpdate = false) {
         if (itemId) {
             showItemDetail(itemId, skipURLUpdate);
         } else {
-            showHome(skipURLUpdate);
+            showMarketplace(skipURLUpdate);
         }
     } else {
-        // Unknown route, redirect to home
+        // Unknown route, redirect to homepage
         if (!skipURLUpdate) {
             updateURL('/', true);
         }
-        showHome(skipURLUpdate);
+        showHomepage(skipURLUpdate);
     }
     isNavigating = false; // Reset flag
 }
@@ -100,9 +103,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Update URL once after initial route is handled
     const path = getPathFromURL();
     const queryParams = getQueryParams();
-    if (path === '/' && (queryParams.search || queryParams.category || queryParams.minPrice || queryParams.maxPrice)) {
+    if (path === '/marketplace' && (queryParams.search || queryParams.category || queryParams.minPrice || queryParams.maxPrice)) {
         const searchURL = buildSearchURL(queryParams.search, queryParams.category, queryParams.minPrice, queryParams.maxPrice);
-        updateURL(searchURL, true);
+        updateURL('/marketplace' + (searchURL !== '/' ? searchURL.replace('/', '?') : ''), true);
     } else {
         updateURL(path || '/', true);
     }
@@ -214,6 +217,14 @@ function updateUIForAuth() {
         document.getElementById('createLink').style.display = 'block';
         document.getElementById('userMenu').style.display = 'block';
         
+        // Update homepage buttons
+        const heroSellBtn = document.getElementById('heroSellBtn');
+        const heroRegisterBtn = document.getElementById('heroRegisterBtn');
+        const ctaRegisterBtn = document.getElementById('ctaRegisterBtn');
+        if (heroSellBtn) heroSellBtn.style.display = 'inline-block';
+        if (heroRegisterBtn) heroRegisterBtn.style.display = 'none';
+        if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'none';
+        
         // Update user info with profile picture if available
         const userInfoEl = document.getElementById('userInfo');
         if (currentUser.profile_picture) {
@@ -233,6 +244,14 @@ function updateUIForAuth() {
         document.getElementById('registerLink').style.display = 'block';
         document.getElementById('createLink').style.display = 'none';
         document.getElementById('userMenu').style.display = 'none';
+        
+        // Update homepage buttons
+        const heroSellBtn = document.getElementById('heroSellBtn');
+        const heroRegisterBtn = document.getElementById('heroRegisterBtn');
+        const ctaRegisterBtn = document.getElementById('ctaRegisterBtn');
+        if (heroSellBtn) heroSellBtn.style.display = 'none';
+        if (heroRegisterBtn) heroRegisterBtn.style.display = 'inline-block';
+        if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'inline-block';
     }
 }
 
@@ -260,6 +279,29 @@ function showMessage(text, type = 'success') {
 }
 
 // Navigation
+function showHomepage(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('homepageSection').style.display = 'block';
+    // Update button visibility based on auth status
+    const heroSellBtn = document.getElementById('heroSellBtn');
+    const heroRegisterBtn = document.getElementById('heroRegisterBtn');
+    const ctaRegisterBtn = document.getElementById('ctaRegisterBtn');
+    
+    if (currentUser) {
+        if (heroSellBtn) heroSellBtn.style.display = 'inline-block';
+        if (heroRegisterBtn) heroRegisterBtn.style.display = 'none';
+        if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'none';
+    } else {
+        if (heroSellBtn) heroSellBtn.style.display = 'none';
+        if (heroRegisterBtn) heroRegisterBtn.style.display = 'inline-block';
+        if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'inline-block';
+    }
+    
+    if (!skipURLUpdate) {
+        updateURL('/', false); // Use pushState for navigation
+    }
+}
+
 function showLogin(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('loginSection').style.display = 'block';
@@ -276,9 +318,9 @@ function showRegister(skipURLUpdate = false) {
     }
 }
 
-function showHome(skipURLUpdate = false) {
+function showMarketplace(skipURLUpdate = false) {
     hideAllSections();
-    document.getElementById('homeSection').style.display = 'block';
+    document.getElementById('marketplaceSection').style.display = 'block';
     // Clear search filters
     document.getElementById('searchInput').value = '';
     document.getElementById('categoryFilter').value = '';
@@ -286,13 +328,13 @@ function showHome(skipURLUpdate = false) {
     document.getElementById('maxPrice').value = '';
     loadItems(skipURLUpdate);
     if (!skipURLUpdate) {
-        updateURL('/', false); // Use pushState for navigation
+        updateURL('/marketplace', false); // Use pushState for navigation
     }
 }
 
-function showHomeWithFilters(params, skipURLUpdate = false) {
+function showMarketplaceWithFilters(params, skipURLUpdate = false) {
     hideAllSections();
-    document.getElementById('homeSection').style.display = 'block';
+    document.getElementById('marketplaceSection').style.display = 'block';
     // Set search filters from URL
     if (document.getElementById('searchInput')) document.getElementById('searchInput').value = params.search || '';
     if (document.getElementById('categoryFilter')) document.getElementById('categoryFilter').value = params.category || '';
@@ -366,7 +408,7 @@ function showDashboard(skipURLUpdate = false) {
 
 async function showItemDetail(itemId, skipURLUpdate = false) {
     hideAllSections();
-    document.getElementById('homeSection').style.display = 'block';
+    document.getElementById('marketplaceSection').style.display = 'block';
     if (!skipURLUpdate) {
         updateURL(`/item/${itemId}`, false); // Use pushState for navigation
     }
@@ -392,12 +434,12 @@ async function showItemDetail(itemId, skipURLUpdate = false) {
             }, 500);
         } else {
             showMessage('Item not found', 'error');
-            showHome();
+            showMarketplace();
         }
     } catch (error) {
         console.error('Error loading item:', error);
         showMessage('Failed to load item', 'error');
-        showHome();
+        showMarketplace();
     }
 }
 
@@ -439,7 +481,7 @@ async function handleLogin(e) {
             await checkAuth();
             showMessage('Login successful!', 'success');
             document.getElementById('loginForm').reset();
-            showHome();
+            showMarketplace();
         } else {
             let errorMessage = 'Login failed';
             if (data.detail) {
@@ -532,7 +574,7 @@ function logout() {
     currentUser = null;
     updateUIForAuth();
     showMessage('Logged out successfully', 'success');
-    showHome();
+    showHomepage();
 }
 
 // Item functions
@@ -545,7 +587,7 @@ async function loadItems(skipURLUpdate = false) {
     // Update URL with current search filters (only if not handling back/forward)
     if (!skipURLUpdate) {
         const searchURL = buildSearchURL(search.trim(), category, minPrice, maxPrice);
-        updateURL(searchURL, false); // Use pushState when user actively searches
+        updateURL('/marketplace' + (searchURL ? '?' + searchURL : ''), false); // Use pushState when user actively searches
     }
 
     let url = `${API_BASE}/api/items/?`;
@@ -1825,7 +1867,7 @@ async function handleDeleteAccount() {
             authToken = null;
             currentUser = null;
             updateUIForAuth();
-            showHome();
+            showHomepage();
             // Redirect to home after a short delay
             setTimeout(() => {
                 window.location.reload();

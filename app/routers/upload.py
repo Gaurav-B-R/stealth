@@ -6,12 +6,34 @@ from typing import List
 import os
 import uuid
 from pathlib import Path
+import boto3
+from botocore.config import Config
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
 
-# Create uploads directory if it doesn't exist
-UPLOAD_DIR = Path(__file__).parent.parent.parent / "uploads" / "images"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# R2 Configuration from environment variables
+R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "1dfccbb465ae188db13dc9f92cc60b3b")
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME", "images")
+R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com")
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")  # Set this to your public URL (custom domain or pub-xxxxx.r2.dev)
+
+# Initialize R2 client (required)
+if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY:
+    raise ValueError("R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set in environment variables")
+
+r2_client = boto3.client(
+    's3',
+    endpoint_url=R2_ENDPOINT_URL,
+    aws_access_key_id=R2_ACCESS_KEY_ID,
+    aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+    region_name='auto',
+    config=Config(signature_version='s3v4')
+)
+
+if not R2_PUBLIC_URL:
+    raise ValueError("R2_PUBLIC_URL must be set in environment variables for image URLs to work")
 
 # Allowed image extensions
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -20,6 +42,30 @@ MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 def is_allowed_file(filename: str) -> bool:
     """Check if file extension is allowed"""
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+def upload_to_r2(file_contents: bytes, filename: str) -> str:
+    """Upload file to R2 and return public URL"""
+    try:
+        r2_client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=filename,
+            Body=file_contents,
+            ContentType='image/jpeg' if filename.endswith(('.jpg', '.jpeg')) else 
+                       'image/png' if filename.endswith('.png') else
+                       'image/gif' if filename.endswith('.gif') else
+                       'image/webp' if filename.endswith('.webp') else
+                       'application/octet-stream'
+        )
+        
+        # Return public URL
+        if R2_PUBLIC_URL:
+            # Custom domain or public development URL
+            return f"{R2_PUBLIC_URL.rstrip('/')}/{filename}"
+        else:
+            # Fallback to endpoint URL (may require authentication)
+            return f"{R2_ENDPOINT_URL}/{R2_BUCKET_NAME}/{filename}"
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload to R2: {str(e)}")
 
 @router.post("/image")
 async def upload_image(
@@ -47,14 +93,10 @@ async def upload_image(
     # Generate unique filename
     file_extension = Path(file.filename).suffix.lower()
     unique_filename = f"{uuid.uuid4()}{file_extension}"
-    file_path = UPLOAD_DIR / unique_filename
     
-    # Save file
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    # Upload to R2 (required)
+    image_url = upload_to_r2(contents, unique_filename)
     
-    # Return the URL path
-    image_url = f"/uploads/images/{unique_filename}"
     return {"url": image_url, "filename": unique_filename}
 
 @router.post("/images")
@@ -86,14 +128,10 @@ async def upload_images(
         # Generate unique filename
         file_extension = Path(file.filename).suffix.lower()
         unique_filename = f"{uuid.uuid4()}{file_extension}"
-        file_path = UPLOAD_DIR / unique_filename
         
-        # Save file
-        with open(file_path, "wb") as f:
-            f.write(contents)
+        # Upload to R2 (required)
+        image_url = upload_to_r2(contents, unique_filename)
         
-        # Add to uploaded images
-        image_url = f"/uploads/images/{unique_filename}"
         uploaded_images.append({"url": image_url, "filename": unique_filename})
     
     return {"images": uploaded_images, "count": len(uploaded_images)}
@@ -125,14 +163,10 @@ async def upload_profile_picture(
     # Generate unique filename
     file_extension = Path(file.filename).suffix.lower()
     unique_filename = f"profile_{current_user.id}_{uuid.uuid4()}{file_extension}"
-    file_path = UPLOAD_DIR / unique_filename
     
-    # Save file
-    with open(file_path, "wb") as f:
-        f.write(contents)
+    # Upload to R2 (required)
+    image_url = upload_to_r2(contents, unique_filename)
     
-    # Return the URL path
-    image_url = f"/uploads/images/{unique_filename}"
     return {"url": image_url, "filename": unique_filename}
 
 @router.get("/images/{filename}")
