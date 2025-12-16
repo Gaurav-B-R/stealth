@@ -68,6 +68,10 @@ function handleRoute(skipURLUpdate = false) {
         showMessages(skipURLUpdate);
     } else if (path === '/dashboard') {
         showDashboard(skipURLUpdate);
+    } else if (path === '/privacy') {
+        showPrivacy(skipURLUpdate);
+    } else if (path === '/terms') {
+        showTerms(skipURLUpdate);
     } else if (path.startsWith('/item/')) {
         const itemId = path.split('/item/')[1];
         if (itemId) {
@@ -94,6 +98,13 @@ window.addEventListener('popstate', (e) => {
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     initializeAddressAutocomplete();
+    
+    // Set last updated dates for legal pages
+    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const privacyLastUpdated = document.getElementById('privacyLastUpdated');
+    const termsLastUpdated = document.getElementById('termsLastUpdated');
+    if (privacyLastUpdated) privacyLastUpdated.textContent = today;
+    if (termsLastUpdated) termsLastUpdated.textContent = today;
     
     // Check authentication first
     await checkAuth();
@@ -403,6 +414,26 @@ function showDashboard(skipURLUpdate = false) {
     loadDashboardStats();
     if (!skipURLUpdate) {
         updateURL('/dashboard', false); // Use pushState for navigation
+    }
+}
+
+function showPrivacy(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('privacySection').style.display = 'block';
+    // Scroll to top
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!skipURLUpdate) {
+        updateURL('/privacy', false);
+    }
+}
+
+function showTerms(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('termsSection').style.display = 'block';
+    // Scroll to top
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!skipURLUpdate) {
+        updateURL('/terms', false);
     }
 }
 
