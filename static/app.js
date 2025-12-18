@@ -60,6 +60,12 @@ function handleRoute(skipURLUpdate = false) {
         showLogin(skipURLUpdate);
     } else if (path === '/register') {
         showRegister(skipURLUpdate);
+    } else if (path === '/verify-email') {
+        handleEmailVerification(skipURLUpdate);
+    } else if (path === '/forgot-password') {
+        showForgotPassword(skipURLUpdate);
+    } else if (path === '/reset-password') {
+        handleResetPasswordPage(skipURLUpdate);
     } else if (path === '/sell') {
         showCreateItem(skipURLUpdate);
     } else if (path === '/listings') {
@@ -129,6 +135,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 function setupEventListeners() {
     document.getElementById('loginForm').addEventListener('submit', handleLogin);
     document.getElementById('registerForm').addEventListener('submit', handleRegister);
+    document.getElementById('forgotPasswordForm').addEventListener('submit', handleForgotPassword);
+    document.getElementById('resetPasswordForm').addEventListener('submit', handleResetPassword);
     document.getElementById('createItemForm').addEventListener('submit', handleCreateItem);
     document.getElementById('profileForm').addEventListener('submit', handleUpdateProfile);
     document.getElementById('searchInput').addEventListener('keypress', (e) => {
@@ -379,6 +387,55 @@ function showLogin(skipURLUpdate = false) {
     }
 }
 
+function showForgotPassword(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('forgotPasswordSection').style.display = 'block';
+    if (!skipURLUpdate) {
+        updateURL('/forgot-password', false);
+    }
+}
+
+function showResetPassword(token, skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('resetPasswordSection').style.display = 'block';
+    document.getElementById('resetToken').value = token;
+    if (!skipURLUpdate) {
+        updateURL(`/reset-password?token=${encodeURIComponent(token)}`, false);
+    }
+}
+
+async function handleResetPasswordPage(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('resetPasswordSection').style.display = 'block';
+    
+    // Get token from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    
+    if (token) {
+        document.getElementById('resetToken').value = token;
+    } else {
+        // No token in URL, show error
+        document.getElementById('resetPasswordSection').innerHTML = `
+            <div class="auth-card">
+                <h2>Reset Password</h2>
+                <div style="text-align: center; padding: 2rem;">
+                    <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--danger-color);">✗</div>
+                    <h3 style="margin-bottom: 1rem; color: var(--danger-color);">Invalid Reset Link</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                        The password reset link is invalid or missing. Please request a new password reset.
+                    </p>
+                    <a href="#" onclick="showForgotPassword(); return false;" class="btn btn-primary">Request New Reset Link</a>
+                </div>
+            </div>
+        `;
+    }
+    
+    if (!skipURLUpdate) {
+        updateURL('/reset-password' + (token ? `?token=${encodeURIComponent(token)}` : ''), false);
+    }
+}
+
 function showRegister(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('registerSection').style.display = 'block';
@@ -391,6 +448,122 @@ function showRegister(skipURLUpdate = false) {
     
     if (!skipURLUpdate) {
         updateURL('/register', false); // Use pushState for navigation
+    }
+}
+
+function showVerification(email = null) {
+    hideAllSections();
+    document.getElementById('verificationSection').style.display = 'block';
+    const content = document.getElementById('verificationContent');
+    if (email) {
+        content.innerHTML = `
+            <div style="text-align: center; margin-bottom: 2rem;">
+                <div style="font-size: 3rem; margin-bottom: 1rem;">📧</div>
+                <h3 style="margin-bottom: 1rem;">Check Your Email</h3>
+                <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                    We've sent a verification email to <strong>${escapeHtml(email)}</strong>
+                </p>
+                <p style="color: var(--text-secondary); font-size: 0.875rem;">
+                    Click the link in the email to verify your account and start using Rilono.
+                </p>
+            </div>
+            <div style="text-align: center;">
+                <button onclick="resendVerificationEmail('${escapeHtml(email)}')" class="btn btn-primary">Resend Verification Email</button>
+                <p style="margin-top: 1rem;">
+                    <a href="#" onclick="showLogin(); return false;">Back to Login</a>
+                </p>
+            </div>
+        `;
+    }
+    updateURL('/verify-email', false);
+}
+
+async function handleEmailVerification(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('verificationSection').style.display = 'block';
+    
+    // Get token from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    
+    if (token) {
+        // Verify the token
+        try {
+            const response = await fetch(`${API_BASE}/api/auth/verify-email?token=${encodeURIComponent(token)}`);
+            const data = await response.json();
+            
+            if (response.ok) {
+                document.getElementById('verificationContent').innerHTML = `
+                    <div style="text-align: center;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--success-color);">✓</div>
+                        <h3 style="margin-bottom: 1rem; color: var(--success-color);">Email Verified!</h3>
+                        <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                            Your email has been successfully verified. You can now log in to your account.
+                        </p>
+                        <a href="#" onclick="showLogin(); return false;" class="btn btn-primary">Go to Login</a>
+                    </div>
+                `;
+            } else {
+                document.getElementById('verificationContent').innerHTML = `
+                    <div style="text-align: center;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--danger-color);">✗</div>
+                        <h3 style="margin-bottom: 1rem; color: var(--danger-color);">Verification Failed</h3>
+                        <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                            ${escapeHtml(data.detail || 'Invalid or expired verification token.')}
+                        </p>
+                        <button onclick="showLogin(); return false;" class="btn btn-primary">Go to Login</button>
+                    </div>
+                `;
+            }
+        } catch (error) {
+            console.error('Verification error:', error);
+            document.getElementById('verificationContent').innerHTML = `
+                <div style="text-align: center;">
+                    <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--danger-color);">✗</div>
+                    <h3 style="margin-bottom: 1rem; color: var(--danger-color);">Error</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                        An error occurred during verification. Please try again.
+                    </p>
+                    <button onclick="showLogin(); return false;" class="btn btn-primary">Go to Login</button>
+                </div>
+            `;
+        }
+    } else {
+        // No token, show resend option
+        showVerification();
+    }
+    
+    if (!skipURLUpdate) {
+        updateURL('/verify-email' + (token ? `?token=${token}` : ''), false);
+    }
+}
+
+async function resendVerificationEmail(email = null) {
+    if (!email) {
+        email = prompt('Please enter your email address:');
+        if (!email) return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/resend-verification`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email: email })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showMessage(data.message || 'Verification email sent successfully!', 'success');
+            showVerification(email);
+        } else {
+            showMessage(data.detail || 'Failed to send verification email', 'error');
+        }
+    } catch (error) {
+        console.error('Resend verification error:', error);
+        showMessage('An error occurred. Please try again.', 'error');
     }
 }
 
@@ -587,7 +760,20 @@ async function handleLogin(e) {
                     errorMessage = data.detail;
                 }
             }
-            showMessage(errorMessage, 'error');
+            
+            // Check if it's an email verification error
+            if (data.detail && data.detail.includes('verify your email')) {
+                const email = document.getElementById('loginEmail').value.trim();
+                showMessage(errorMessage, 'error');
+                // Show option to resend verification
+                setTimeout(() => {
+                    if (confirm('Would you like to resend the verification email?')) {
+                        resendVerificationEmail(email);
+                    }
+                }, 2000);
+            } else {
+                showMessage(errorMessage, 'error');
+            }
         }
     } catch (error) {
         console.error('Login error:', error);
@@ -651,9 +837,10 @@ async function handleRegister(e) {
         const data = await response.json();
 
         if (response.ok) {
-            showMessage('Registration successful! Please login.', 'success');
+            const email = userData.email;
+            showMessage('Registration successful! Please check your email to verify your account.', 'success');
             document.getElementById('registerForm').reset();
-            showLogin();
+            showVerification(email);
         } else {
             // Handle different error formats
             let errorMessage = 'Registration failed';
@@ -680,6 +867,121 @@ function logout() {
     updateUIForAuth();
     showMessage('Logged out successfully', 'success');
     showHomepage();
+}
+
+async function handleForgotPassword(e) {
+    e.preventDefault();
+    const email = document.getElementById('forgotPasswordEmail').value.trim();
+    
+    if (!email) {
+        showMessage('Please enter your email address', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email: email })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showMessage(data.message || 'If an account with this email exists, a password reset link has been sent to your email.', 'success');
+            // Show success message in the form
+            document.getElementById('forgotPasswordSection').innerHTML = `
+                <div class="auth-card">
+                    <div style="text-align: center;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--success-color);">✓</div>
+                        <h2 style="margin-bottom: 1rem;">Check Your Email</h2>
+                        <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                            If an account with <strong>${escapeHtml(email)}</strong> exists, 
+                            we've sent you a password reset link. Please check your inbox.
+                        </p>
+                        <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 2rem;">
+                            The link will expire in 1 hour.
+                        </p>
+                        <a href="#" onclick="showLogin(); return false;" class="btn btn-primary">Back to Login</a>
+                    </div>
+                </div>
+            `;
+        } else {
+            showMessage(data.detail || 'Failed to send password reset email', 'error');
+        }
+    } catch (error) {
+        console.error('Forgot password error:', error);
+        showMessage('An error occurred. Please try again.', 'error');
+    }
+}
+
+async function handleResetPassword(e) {
+    e.preventDefault();
+    const token = document.getElementById('resetToken').value;
+    const newPassword = document.getElementById('resetPasswordNew').value;
+    const confirmPassword = document.getElementById('resetPasswordConfirm').value;
+    
+    if (!token) {
+        showMessage('Invalid reset token', 'error');
+        return;
+    }
+    
+    if (!newPassword || newPassword.length < 6) {
+        showMessage('Password must be at least 6 characters long', 'error');
+        return;
+    }
+    
+    if (newPassword !== confirmPassword) {
+        showMessage('Passwords do not match', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                token: token,
+                new_password: newPassword
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showMessage(data.message || 'Password reset successfully! You can now log in.', 'success');
+            // Show success and redirect to login
+            document.getElementById('resetPasswordSection').innerHTML = `
+                <div class="auth-card">
+                    <div style="text-align: center;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--success-color);">✓</div>
+                        <h2 style="margin-bottom: 1rem; color: var(--success-color);">Password Reset Successful!</h2>
+                        <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                            Your password has been reset successfully. You can now log in with your new password.
+                        </p>
+                        <a href="#" onclick="showLogin(); return false;" class="btn btn-primary">Go to Login</a>
+                    </div>
+                </div>
+            `;
+            // Auto-redirect to login after 3 seconds
+            setTimeout(() => {
+                showLogin();
+            }, 3000);
+        } else {
+            let errorMessage = 'Failed to reset password';
+            if (data.detail) {
+                errorMessage = data.detail;
+            }
+            showMessage(errorMessage, 'error');
+        }
+    } catch (error) {
+        console.error('Reset password error:', error);
+        showMessage('An error occurred. Please try again.', 'error');
+    }
 }
 
 // Item functions

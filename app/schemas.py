@@ -22,6 +22,7 @@ class UserUpdate(BaseModel):
 class UserResponse(UserBase):
     id: int
     is_active: bool
+    email_verified: bool
     created_at: datetime
     
     class Config:
@@ -120,4 +121,14 @@ class UniversityInfo(BaseModel):
     university_name: Optional[str] = None
     email_domain: str
     is_valid: bool
+
+class ResendVerificationRequest(BaseModel):
+    email: str
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+class PasswordReset(BaseModel):
+    token: str
+    new_password: str
 

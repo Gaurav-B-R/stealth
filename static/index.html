@@ -81,9 +81,79 @@
                         <label for="loginPassword">Password</label>
                         <input type="password" id="loginPassword" required>
                     </div>
+                    <div style="text-align: right; margin-bottom: 1rem;">
+                        <a href="#" onclick="event.preventDefault(); showForgotPassword(); return false;" style="color: var(--primary-color); text-decoration: none; font-size: 0.875rem;">Forgot Password?</a>
+                    </div>
                     <button type="submit" class="btn btn-primary">Login</button>
                 </form>
                 <p class="auth-switch">Don't have an account? <a href="#" onclick="showRegister(); return false;">Register here</a></p>
+            </div>
+        </div>
+
+        <!-- Forgot Password Form -->
+        <div id="forgotPasswordSection" class="section" style="display: none;">
+            <div class="auth-card">
+                <h2>Forgot Password</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 1.5rem; text-align: center;">
+                    Enter your email address and we'll send you a link to reset your password.
+                </p>
+                <form id="forgotPasswordForm">
+                    <div class="form-group">
+                        <label for="forgotPasswordEmail">Email Address</label>
+                        <input type="email" id="forgotPasswordEmail" required placeholder="your.email@university.edu">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Send Reset Link</button>
+                </form>
+                <p class="auth-switch">
+                    <a href="#" onclick="showLogin(); return false;">Back to Login</a> | 
+                    <a href="#" onclick="showRegister(); return false;">Create Account</a>
+                </p>
+            </div>
+        </div>
+
+        <!-- Reset Password Form -->
+        <div id="resetPasswordSection" class="section" style="display: none;">
+            <div class="auth-card">
+                <h2>Reset Password</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 1.5rem; text-align: center;">
+                    Enter your new password below.
+                </p>
+                <form id="resetPasswordForm">
+                    <input type="hidden" id="resetToken" value="">
+                    <div class="form-group">
+                        <label for="resetPasswordNew">New Password</label>
+                        <input type="password" id="resetPasswordNew" required minlength="6">
+                        <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem; font-size: 0.875rem;">
+                            Password must be at least 6 characters long
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label for="resetPasswordConfirm">Confirm New Password</label>
+                        <input type="password" id="resetPasswordConfirm" required minlength="6">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Reset Password</button>
+                </form>
+                <p class="auth-switch">
+                    <a href="#" onclick="showLogin(); return false;">Back to Login</a>
+                </p>
+            </div>
+        </div>
+
+        <!-- Email Verification Section -->
+        <div id="verificationSection" class="section" style="display: none;">
+            <div class="auth-card">
+                <h2>Verify Your Email</h2>
+                <div id="verificationContent">
+                    <p style="text-align: center; color: var(--text-secondary); margin-bottom: 2rem;">
+                        Please check your email and click the verification link to activate your account.
+                    </p>
+                    <div style="text-align: center;">
+                        <button onclick="resendVerificationEmail()" class="btn btn-primary">Resend Verification Email</button>
+                        <p style="margin-top: 1rem;">
+                            <a href="#" onclick="showLogin(); return false;">Back to Login</a>
+                        </p>
+                    </div>
+                </div>
             </div>
         </div>
 

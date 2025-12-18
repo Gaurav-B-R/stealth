@@ -15,6 +15,11 @@ class User(Base):
     phone = Column(String, nullable=True)
     profile_picture = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
+    email_verified = Column(Boolean, default=False)
+    verification_token = Column(String, nullable=True, unique=True, index=True)
+    verification_token_expires = Column(DateTime(timezone=True), nullable=True)
+    password_reset_token = Column(String, nullable=True, unique=True, index=True)
+    password_reset_token_expires = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     items = relationship("Item", back_populates="seller", cascade="all, delete-orphan")
@@ -76,4 +81,11 @@ class USUniversity(Base):
     email_domain = Column(String, primary_key=True, nullable=False, index=True)
     university_name = Column(String, nullable=False, index=True)
     location = Column(String, nullable=True)
+
+class DeveloperEmail(Base):
+    __tablename__ = "developer_emails"
+    
+    email = Column(String, primary_key=True, nullable=False, index=True)
+    university_name = Column(String, nullable=False, default="Developer Account")
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
 
