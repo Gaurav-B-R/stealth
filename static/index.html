@@ -74,8 +74,8 @@
                 <h2>Login</h2>
                 <form id="loginForm">
                     <div class="form-group">
-                        <label for="loginUsername">Username</label>
-                        <input type="text" id="loginUsername" required>
+                        <label for="loginEmail">University Email</label>
+                        <input type="email" id="loginEmail" required placeholder="your.email@university.edu">
                     </div>
                     <div class="form-group">
                         <label for="loginPassword">Password</label>
@@ -93,15 +93,12 @@
                 <h2>Create Account</h2>
                 <form id="registerForm">
                     <div class="form-group">
-                        <label for="registerEmail">Email</label>
-                        <input type="email" id="registerEmail" required>
+                        <label for="registerEmail">University Email *</label>
+                        <input type="email" id="registerEmail" required placeholder="your.name@university.edu">
+                        <small id="emailValidationMessage" style="display: none; margin-top: 0.5rem; font-size: 0.875rem;"></small>
                     </div>
                     <div class="form-group">
-                        <label for="registerUsername">Username</label>
-                        <input type="text" id="registerUsername" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="registerPassword">Password</label>
+                        <label for="registerPassword">Password *</label>
                         <input type="password" id="registerPassword" required>
                     </div>
                     <div class="form-group">
@@ -110,7 +107,10 @@
                     </div>
                     <div class="form-group">
                         <label for="registerUniversity">University</label>
-                        <input type="text" id="registerUniversity">
+                        <input type="text" id="registerUniversity" readonly style="background-color: var(--bg-color); cursor: not-allowed;" placeholder="Auto-filled from your email domain">
+                        <small style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
+                            University is automatically detected from your email domain
+                        </small>
                     </div>
                     <div class="form-group">
                         <label for="registerPhone">Phone</label>

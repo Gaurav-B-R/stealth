@@ -8,7 +8,7 @@ class User(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
-    username = Column(String, unique=True, index=True, nullable=False)
+    username = Column(String, unique=True, index=True, nullable=True)  # Made nullable, will use email as username
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
     university = Column(String, nullable=True)
@@ -68,4 +68,12 @@ class Message(Base):
     item = relationship("Item")
     sender = relationship("User", foreign_keys=[sender_id])
     receiver = relationship("User", foreign_keys=[receiver_id])
+
+class USUniversity(Base):
+    __tablename__ = "us_universities"
+    
+    # Use email_domain as primary key since the table doesn't have an id column
+    email_domain = Column(String, primary_key=True, nullable=False, index=True)
+    university_name = Column(String, nullable=False, index=True)
+    location = Column(String, nullable=True)
 

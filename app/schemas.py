@@ -4,7 +4,7 @@ from datetime import datetime
 
 class UserBase(BaseModel):
     email: EmailStr
-    username: str
+    username: Optional[str] = None  # Optional, will be auto-generated from email if not provided
     full_name: Optional[str] = None
     university: Optional[str] = None
     phone: Optional[str] = None
@@ -115,4 +115,9 @@ class ConversationResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+class UniversityInfo(BaseModel):
+    university_name: Optional[str] = None
+    email_domain: str
+    is_valid: bool
 

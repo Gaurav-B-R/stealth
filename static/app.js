@@ -158,6 +158,28 @@ function setupEventListeners() {
     if (categoryFilter) {
         categoryFilter.addEventListener('change', updatePriceFilterPlaceholders);
     }
+    
+    // University email validation and autofill
+    const registerEmailInput = document.getElementById('registerEmail');
+    if (registerEmailInput) {
+        let emailCheckTimeout;
+        registerEmailInput.addEventListener('input', (e) => {
+            clearTimeout(emailCheckTimeout);
+            const email = e.target.value.trim();
+            
+            // Only check if email looks valid (contains @)
+            if (email && email.includes('@')) {
+                emailCheckTimeout = setTimeout(() => {
+                    checkUniversityByEmail(email);
+                }, 500); // Debounce for 500ms
+            } else {
+                // Clear university if email is invalid
+                document.getElementById('registerUniversity').value = '';
+                const messageEl = document.getElementById('emailValidationMessage');
+                messageEl.style.display = 'none';
+            }
+        });
+    }
 }
 
 function updatePriceLabel() {
@@ -189,6 +211,42 @@ function updatePriceFilterPlaceholders() {
             minPriceInput.placeholder = 'Min $';
             maxPriceInput.placeholder = 'Max $';
         }
+    }
+}
+
+async function checkUniversityByEmail(email) {
+    const universityInput = document.getElementById('registerUniversity');
+    const messageEl = document.getElementById('emailValidationMessage');
+    
+    if (!email || !email.includes('@')) {
+        universityInput.value = '';
+        messageEl.style.display = 'none';
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/university-by-email?email=${encodeURIComponent(email)}`);
+        const data = await response.json();
+        
+        if (data.is_valid && data.university_name) {
+            // Valid university email - autofill university
+            universityInput.value = data.university_name;
+            messageEl.textContent = `✓ Valid university email domain: ${data.email_domain}`;
+            messageEl.style.color = 'var(--success-color)';
+            messageEl.style.display = 'block';
+        } else {
+            // Invalid university email domain
+            universityInput.value = '';
+            messageEl.textContent = `✗ This email domain (${data.email_domain}) is not recognized. Please use your university email address.`;
+            messageEl.style.color = 'var(--danger-color)';
+            messageEl.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error checking university:', error);
+        universityInput.value = '';
+        messageEl.textContent = 'Unable to verify email domain. Please try again.';
+        messageEl.style.color = 'var(--text-secondary)';
+        messageEl.style.display = 'block';
     }
 }
 
@@ -324,6 +382,13 @@ function showLogin(skipURLUpdate = false) {
 function showRegister(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('registerSection').style.display = 'block';
+    
+    // Clear university field and validation message when showing register form
+    const universityInput = document.getElementById('registerUniversity');
+    const messageEl = document.getElementById('emailValidationMessage');
+    if (universityInput) universityInput.value = '';
+    if (messageEl) messageEl.style.display = 'none';
+    
     if (!skipURLUpdate) {
         updateURL('/register', false); // Use pushState for navigation
     }
@@ -483,17 +548,17 @@ function hideAllSections() {
 // Auth functions
 async function handleLogin(e) {
     e.preventDefault();
-    const username = document.getElementById('loginUsername').value.trim();
+    const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
 
-    if (!username || !password) {
-        showMessage('Please enter both username and password', 'error');
+    if (!email || !password) {
+        showMessage('Please enter both email and password', 'error');
         return;
     }
 
     try {
         const formData = new URLSearchParams();
-        formData.append('username', username);
+        formData.append('username', email);  // OAuth2PasswordRequestForm expects 'username' field, but we use it for email
         formData.append('password', password);
 
         const response = await fetch(`${API_BASE}/api/auth/login`, {
@@ -541,16 +606,25 @@ async function handleRegister(e) {
     
     const userData = {
         email: getValue('registerEmail'),
-        username: getValue('registerUsername'),
         password: getValue('registerPassword'),
         full_name: getValue('registerFullName'),
         university: getValue('registerUniversity'),
         phone: getValue('registerPhone')
+        // Username is optional - will be auto-generated from email on backend
     };
 
     // Validate required fields
-    if (!userData.email || !userData.username || !userData.password) {
-        showMessage('Please fill in all required fields (Email, Username, Password)', 'error');
+    if (!userData.email || !userData.password) {
+        showMessage('Please fill in all required fields (Email, Password)', 'error');
+        return;
+    }
+    
+    // Validate that university email domain is valid
+    const universityInput = document.getElementById('registerUniversity');
+    if (!universityInput.value.trim()) {
+        showMessage('Please use a valid university email address. The email domain must be from a recognized university.', 'error');
+        // Re-check the email to show validation message
+        await checkUniversityByEmail(userData.email);
         return;
     }
     
