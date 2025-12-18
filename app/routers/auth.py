@@ -209,12 +209,12 @@ def forgot_password(request: schemas.PasswordResetRequest, db: Session = Depends
     # Find user by email
     user = db.query(models.User).filter(models.User.email == email).first()
     
-    # Don't reveal if email exists or not (security best practice)
-    # Always return success message even if user doesn't exist
+    # Check if account exists
     if not user:
-        return {
-            "message": "If an account with this email exists, a password reset link has been sent."
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="No account found with this email address. Please create an account first."
+        )
     
     # Generate password reset token
     reset_token = generate_verification_token()
@@ -231,13 +231,13 @@ def forgot_password(request: schemas.PasswordResetRequest, db: Session = Depends
     
     if email_sent:
         return {
-            "message": "If an account with this email exists, a password reset link has been sent."
+            "message": "Password reset link has been sent to your email. Please check your inbox."
         }
     else:
-        # Still return success message for security (don't reveal email sending failure)
-        return {
-            "message": "If an account with this email exists, a password reset link has been sent."
-        }
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to send password reset email. Please try again later or contact support."
+        )
 
 @router.post("/reset-password")
 def reset_password(request: schemas.PasswordReset, db: Session = Depends(get_db)):

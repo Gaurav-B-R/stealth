@@ -890,7 +890,7 @@ async function handleForgotPassword(e) {
         const data = await response.json();
         
         if (response.ok) {
-            showMessage(data.message || 'If an account with this email exists, a password reset link has been sent to your email.', 'success');
+            showMessage(data.message || 'Password reset link has been sent to your email.', 'success');
             // Show success message in the form
             document.getElementById('forgotPasswordSection').innerHTML = `
                 <div class="auth-card">
@@ -898,8 +898,8 @@ async function handleForgotPassword(e) {
                         <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--success-color);">✓</div>
                         <h2 style="margin-bottom: 1rem;">Check Your Email</h2>
                         <p style="color: var(--text-secondary); margin-bottom: 2rem;">
-                            If an account with <strong>${escapeHtml(email)}</strong> exists, 
-                            we've sent you a password reset link. Please check your inbox.
+                            We've sent a password reset link to <strong>${escapeHtml(email)}</strong>. 
+                            Please check your inbox.
                         </p>
                         <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 2rem;">
                             The link will expire in 1 hour.
@@ -909,7 +909,30 @@ async function handleForgotPassword(e) {
                 </div>
             `;
         } else {
-            showMessage(data.detail || 'Failed to send password reset email', 'error');
+            let errorMessage = data.detail || 'Failed to send password reset email';
+            
+            // If account doesn't exist, show helpful message with link to register
+            if (response.status === 404) {
+                showMessage(errorMessage, 'error');
+                // Show option to create account
+                setTimeout(() => {
+                    const forgotSection = document.getElementById('forgotPasswordSection');
+                    if (forgotSection) {
+                        const errorDiv = document.createElement('div');
+                        errorDiv.style.marginTop = '1rem';
+                        errorDiv.style.textAlign = 'center';
+                        errorDiv.innerHTML = `
+                            <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                                Don't have an account?
+                            </p>
+                            <a href="#" onclick="showRegister(); return false;" class="btn btn-primary">Create Account</a>
+                        `;
+                        forgotSection.querySelector('.auth-card').appendChild(errorDiv);
+                    }
+                }, 100);
+            } else {
+                showMessage(errorMessage, 'error');
+            }
         }
     } catch (error) {
         console.error('Forgot password error:', error);
