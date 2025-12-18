@@ -87,5 +87,4 @@ class DeveloperEmail(Base):
     
     email = Column(String, primary_key=True, nullable=False, index=True)
     university_name = Column(String, nullable=False, default="Developer Account")
-    added_at = Column(DateTime(timezone=True), server_default=func.now())
 
