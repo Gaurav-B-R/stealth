@@ -126,13 +126,21 @@ def send_verification_email(email: str, verification_token: str, base_url: str =
         
         email_response = resend.Emails.send(params)
         
-        if email_response and hasattr(email_response, 'id'):
-            print(f"Verification email sent successfully to {email}")
+        # Check if email was sent successfully
+        # Resend response can be a dict with 'id' key or an object with 'id' attribute
+        email_id = None
+        if isinstance(email_response, dict):
+            email_id = email_response.get('id')
+        elif email_response and hasattr(email_response, 'id'):
+            email_id = email_response.id
+        
+        if email_id:
+            print(f"Verification email sent successfully to {email} (ID: {email_id})")
             if USE_TEST_EMAIL or DEV_MODE:
                 print(f"  NOTE: Using test email sender. Check Resend dashboard for email preview.")
             return True
         else:
-            print(f"Failed to send verification email to {email}")
+            print(f"Failed to send verification email to {email}. Response: {email_response}")
             return False
             
     except Exception as e:
@@ -254,11 +262,19 @@ def send_password_reset_email(email: str, reset_token: str, base_url: str = "htt
         
         email_response = resend.Emails.send(params)
         
-        if email_response and hasattr(email_response, 'id'):
-            print(f"Password reset email sent successfully to {email}")
+        # Check if email was sent successfully
+        # Resend response can be a dict with 'id' key or an object with 'id' attribute
+        email_id = None
+        if isinstance(email_response, dict):
+            email_id = email_response.get('id')
+        elif email_response and hasattr(email_response, 'id'):
+            email_id = email_response.id
+        
+        if email_id:
+            print(f"Password reset email sent successfully to {email} (ID: {email_id})")
             return True
         else:
-            print(f"Failed to send password reset email to {email}")
+            print(f"Failed to send password reset email to {email}. Response: {email_response}")
             return False
             
     except Exception as e:
