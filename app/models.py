@@ -20,9 +20,13 @@ class User(Base):
     verification_token_expires = Column(DateTime(timezone=True), nullable=True)
     password_reset_token = Column(String, nullable=True, unique=True, index=True)
     password_reset_token_expires = Column(DateTime(timezone=True), nullable=True)
+    is_admin = Column(Boolean, default=False)  # Admin/Developer access
+    is_developer = Column(Boolean, default=False)  # Developer team access
+    encryption_salt = Column(String, nullable=True)  # Salt for Zero-Knowledge encryption (base64 encoded)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     items = relationship("Item", back_populates="seller", cascade="all, delete-orphan")
+    documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
 
 class Item(Base):
     __tablename__ = "items"
@@ -87,4 +91,26 @@ class DeveloperEmail(Base):
     
     email = Column(String, primary_key=True, nullable=False, index=True)
     university_name = Column(String, nullable=False, default="Developer Account")
+
+class Document(Base):
+    __tablename__ = "documents"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    filename = Column(String, nullable=False)
+    original_filename = Column(String, nullable=False)
+    file_url = Column(String, nullable=False)  # R2 URL
+    file_size = Column(Integer, nullable=False)  # Size in bytes
+    file_type = Column(String, nullable=True)  # MIME type
+    document_type = Column(String, nullable=True)  # e.g., "passport", "visa", "transcript", etc.
+    country = Column(String, nullable=True)  # Country for documentation
+    intake = Column(String, nullable=True)  # Spring or Fall
+    year = Column(Integer, nullable=True)  # Year
+    description = Column(Text, nullable=True)  # Optional description
+    is_processed = Column(Boolean, default=False)  # Whether AI has processed it
+    encrypted_file_key = Column(Text, nullable=True)  # File encryption key encrypted with user password (base64)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    uploader = relationship("User", back_populates="documents")
 

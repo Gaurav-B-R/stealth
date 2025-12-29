@@ -167,6 +167,20 @@ function setupEventListeners() {
         categoryFilter.addEventListener('change', updatePriceFilterPlaceholders);
     }
     
+    // Documentation form
+    const documentationForm = document.getElementById('documentationForm');
+    if (documentationForm) {
+        documentationForm.addEventListener('submit', handleDocumentationForm);
+        initializeYearDropdown();
+        loadDocumentationPreferences();
+    }
+    
+    // Document upload form
+    const documentUploadForm = document.getElementById('documentUploadForm');
+    if (documentUploadForm) {
+        documentUploadForm.addEventListener('submit', handleDocumentUpload);
+    }
+    
     // University email validation and autofill
     const registerEmailInput = document.getElementById('registerEmail');
     if (registerEmailInput) {
@@ -650,6 +664,9 @@ function showDashboard(skipURLUpdate = false) {
     document.getElementById('dashboardSection').style.display = 'block';
     loadProfile();
     loadDashboardStats();
+    initializeYearDropdown();
+    loadDocumentationPreferences();
+    loadMyDocuments();
     if (!skipURLUpdate) {
         updateURL('/dashboard', false); // Use pushState for navigation
     }
@@ -2424,6 +2441,289 @@ function setupGalleryKeyboardNavigation() {
 
 function removeGalleryKeyboardNavigation() {
     document.removeEventListener('keydown', handleGalleryKeyPress);
+}
+
+// Documentation Agent functions
+function initializeYearDropdown() {
+    const yearSelect = document.getElementById('documentationYear');
+    if (!yearSelect) return;
+    
+    // Clear existing options except the first one
+    yearSelect.innerHTML = '<option value="">Select Year</option>';
+    
+    // Get current year
+    const currentYear = new Date().getFullYear();
+    
+    // Add years from current year to 5 years in the future
+    for (let i = 0; i <= 5; i++) {
+        const year = currentYear + i;
+        const option = document.createElement('option');
+        option.value = year;
+        option.textContent = year;
+        yearSelect.appendChild(option);
+    }
+}
+
+function loadDocumentationPreferences() {
+    // Load saved preferences from localStorage
+    const savedPreferences = localStorage.getItem('documentationPreferences');
+    if (savedPreferences) {
+        try {
+            const prefs = JSON.parse(savedPreferences);
+            const intakeSelect = document.getElementById('documentationIntake');
+            const yearSelect = document.getElementById('documentationYear');
+            
+            if (intakeSelect && prefs.intake) {
+                intakeSelect.value = prefs.intake;
+            }
+            if (yearSelect && prefs.year) {
+                yearSelect.value = prefs.year;
+            }
+        } catch (error) {
+            console.error('Error loading documentation preferences:', error);
+        }
+    }
+}
+
+async function handleDocumentationForm(e) {
+    e.preventDefault();
+    
+    const intake = document.getElementById('documentationIntake').value;
+    const year = document.getElementById('documentationYear').value;
+    const country = document.getElementById('documentationCountry').value;
+    
+    if (!intake || !year) {
+        showMessage('Please select both intake and year', 'error');
+        return;
+    }
+    
+    // Save preferences to localStorage
+    const preferences = {
+        country: country,
+        intake: intake,
+        year: year,
+        savedAt: new Date().toISOString()
+    };
+    
+    localStorage.setItem('documentationPreferences', JSON.stringify(preferences));
+    
+    showMessage(`Preferences saved: ${intake} ${year}`, 'success');
+    
+    // TODO: In the future, this will send data to the backend API
+    // For now, we're just storing it locally
+}
+
+async function handleDocumentUpload(e) {
+    e.preventDefault();
+    if (!authToken) {
+        showMessage('Please login to upload documents', 'error');
+        return;
+    }
+    
+    const fileInput = document.getElementById('documentFile');
+    const password = document.getElementById('documentPassword').value;
+    const documentType = document.getElementById('documentType').value;
+    const description = document.getElementById('documentDescription').value.trim();
+    const country = document.getElementById('documentationCountry').value;
+    const intake = document.getElementById('documentationIntake').value;
+    const year = document.getElementById('documentationYear').value ? parseInt(document.getElementById('documentationYear').value) : null;
+    
+    if (!fileInput.files || fileInput.files.length === 0) {
+        showMessage('Please select a file to upload', 'error');
+        return;
+    }
+    
+    if (!password) {
+        showMessage('Please enter your password to encrypt the document', 'error');
+        return;
+    }
+    
+    const file = fileInput.files[0];
+    
+    // Validate file size (50MB)
+    const maxSize = 50 * 1024 * 1024;
+    if (file.size > maxSize) {
+        showMessage('File is too large. Maximum size is 50MB', 'error');
+        return;
+    }
+    
+    try {
+        showMessage('Encrypting and uploading document...', 'success');
+        
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('password', password);  // Required for Zero-Knowledge encryption
+        if (documentType) formData.append('document_type', documentType);
+        if (country) formData.append('country', country);
+        if (intake) formData.append('intake', intake);
+        if (year) formData.append('year', year);
+        if (description) formData.append('description', description);
+        
+        const response = await fetch(`${API_BASE}/api/documents/upload`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showMessage('Document encrypted and uploaded successfully!', 'success');
+            document.getElementById('documentUploadForm').reset();
+            await loadMyDocuments();
+        } else {
+            let errorMessage = 'Failed to upload document';
+            if (data.detail) {
+                if (Array.isArray(data.detail)) {
+                    errorMessage = data.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join(', ');
+                } else {
+                    errorMessage = data.detail;
+                }
+            }
+            showMessage(errorMessage, 'error');
+        }
+    } catch (error) {
+        console.error('Document upload error:', error);
+        showMessage('An error occurred while uploading the document. Please try again.', 'error');
+    }
+}
+
+async function loadMyDocuments() {
+    if (!authToken) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/documents/my-documents`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            const documents = await response.json();
+            displayDocuments(documents);
+        } else {
+            const error = await response.json().catch(() => ({}));
+            if (response.status === 401) {
+                showMessage('Session expired. Please login again.', 'error');
+                logout();
+            } else {
+                console.error('Failed to load documents:', error);
+            }
+        }
+    } catch (error) {
+        console.error('Load documents error:', error);
+    }
+}
+
+function displayDocuments(documents) {
+    const container = document.getElementById('documentsContainer');
+    
+    if (!documents || documents.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet</p>';
+        return;
+    }
+    
+    container.innerHTML = documents.map(doc => {
+        const fileSizeMB = (doc.file_size / (1024 * 1024)).toFixed(2);
+        const uploadDate = new Date(doc.created_at).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric'
+        });
+        const isEncrypted = doc.encrypted_file_key || !doc.file_url; // New encrypted docs or legacy check
+        
+        return `
+            <div style="border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: var(--bg-color);">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                    <div style="flex: 1;">
+                        <div style="font-weight: 600; margin-bottom: 0.25rem;">
+                            ${escapeHtml(doc.original_filename)}
+                            ${isEncrypted ? '<span style="font-size: 0.75rem; color: #28a745; margin-left: 0.5rem;">🔒 Encrypted</span>' : ''}
+                        </div>
+                        <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                            ${doc.document_type ? `<span style="text-transform: capitalize;">${escapeHtml(doc.document_type)}</span> • ` : ''}
+                            ${fileSizeMB} MB • ${uploadDate}
+                        </div>
+                        ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                    ${isEncrypted ? `
+                        <button onclick="downloadEncryptedDocument(${doc.id})" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
+                    ` : `
+                        <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
+                        <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
+                    `}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+async function downloadEncryptedDocument(documentId) {
+    if (!authToken) {
+        showMessage('Please login to download documents', 'error');
+        return;
+    }
+    
+    const password = prompt('Enter your password to decrypt and download this document:');
+    if (!password) {
+        return; // User cancelled
+    }
+    
+    try {
+        showMessage('Decrypting document...', 'success');
+        
+        const formData = new FormData();
+        formData.append('password', password);
+        
+        const response = await fetch(`${API_BASE}/api/documents/${documentId}/download`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: formData
+        });
+        
+        if (response.ok) {
+            // Get the file blob
+            const blob = await response.blob();
+            
+            // Get filename from response headers or use default
+            const contentDisposition = response.headers.get('Content-Disposition');
+            let filename = 'document';
+            if (contentDisposition) {
+                const filenameMatch = contentDisposition.match(/filename="?(.+)"?/);
+                if (filenameMatch) {
+                    filename = filenameMatch[1];
+                }
+            }
+            
+            // Create download link
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            
+            showMessage('Document decrypted and downloaded successfully!', 'success');
+        } else {
+            const error = await response.json().catch(() => ({}));
+            let errorMessage = 'Failed to download document';
+            if (error.detail) {
+                errorMessage = error.detail;
+            }
+            showMessage(errorMessage, 'error');
+        }
+    } catch (error) {
+        console.error('Download error:', error);
+        showMessage('An error occurred while downloading the document. Please try again.', 'error');
+    }
 }
 
 function handleGalleryKeyPress(e) {

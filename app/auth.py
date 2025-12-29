@@ -88,3 +88,12 @@ def get_current_active_user(current_user: models.User = Depends(get_current_user
         raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
+def get_current_admin_user(current_user: models.User = Depends(get_current_active_user)):
+    """Require admin or developer access"""
+    if not (current_user.is_admin or current_user.is_developer):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin or developer access required"
+        )
+    return current_user
+

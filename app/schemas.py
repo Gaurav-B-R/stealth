@@ -132,3 +132,38 @@ class PasswordReset(BaseModel):
     token: str
     new_password: str
 
+class DocumentCreate(BaseModel):
+    document_type: Optional[str] = None
+    country: Optional[str] = None
+    intake: Optional[str] = None
+    year: Optional[int] = None
+    description: Optional[str] = None
+    password: str  # User's password for Zero-Knowledge encryption
+
+class DocumentResponse(BaseModel):
+    id: int
+    user_id: int
+    filename: str
+    original_filename: str
+    file_url: str
+    file_size: int
+    file_type: Optional[str] = None
+    document_type: Optional[str] = None
+    country: Optional[str] = None
+    intake: Optional[str] = None
+    year: Optional[int] = None
+    description: Optional[str] = None
+    is_processed: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    uploader: UserResponse
+    
+    class Config:
+        from_attributes = True
+
+class DocumentListResponse(BaseModel):
+    documents: List[DocumentResponse]
+    total: int
+    page: int
+    page_size: int
+

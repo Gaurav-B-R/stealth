@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
-from app.routers import auth, items, upload, messages, profile
+from app.routers import auth, items, upload, messages, profile, documents
 import os
 
 # Create database tables
@@ -30,6 +30,7 @@ app.include_router(items.router)
 app.include_router(upload.router)
 app.include_router(messages.router)
 app.include_router(profile.router)
+app.include_router(documents.router)
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

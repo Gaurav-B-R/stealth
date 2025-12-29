@@ -588,6 +588,93 @@
                     </div>
                 </div>
 
+                <!-- AI Documentation Agent Widget -->
+                <div class="dashboard-widget">
+                    <div class="widget-header">
+                        <h3>📄 AI Documentation Agent</h3>
+                    </div>
+                    <div class="widget-content">
+                        <form id="documentationForm">
+                            <div class="form-group">
+                                <label for="documentationCountry">Country</label>
+                                <input type="text" id="documentationCountry" value="United States" readonly style="background: var(--bg-color); cursor: not-allowed;">
+                                <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                    We are currently only serving the United States
+                                </small>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="documentationIntake">Intake *</label>
+                                    <select id="documentationIntake" required>
+                                        <option value="">Select Intake</option>
+                                        <option value="Spring">Spring</option>
+                                        <option value="Fall">Fall</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="documentationYear">Year *</label>
+                                    <select id="documentationYear" required>
+                                        <option value="">Select Year</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary" style="width: 100%;">Save Preferences</button>
+                        </form>
+                        
+                        <div style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border-color);">
+                            <h4 style="margin-bottom: 1rem; font-size: 1rem;">Upload Documents</h4>
+                            <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
+                                <strong style="color: #856404;">🔒 Zero-Knowledge Encryption</strong>
+                                <p style="color: #856404; margin: 0.5rem 0 0 0; font-size: 0.875rem;">
+                                    Your documents are encrypted with your password. Even we cannot read them. 
+                                    <strong>If you forget your password, your documents cannot be recovered.</strong>
+                                </p>
+                            </div>
+                            <form id="documentUploadForm">
+                                <div class="form-group">
+                                    <label for="documentFile">Select Document</label>
+                                    <input type="file" id="documentFile" accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.webp,.xls,.xlsx,.csv,.zip,.rar" required>
+                                    <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                        Supported formats: PDF, DOC, DOCX, TXT, Images, Excel, CSV, ZIP, RAR (Max 50MB)
+                                    </small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="documentPassword">Your Password *</label>
+                                    <input type="password" id="documentPassword" required placeholder="Enter your login password to encrypt">
+                                    <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                        Required to encrypt your document. We use Zero-Knowledge encryption - your password is never stored.
+                                    </small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="documentType">Document Type</label>
+                                    <select id="documentType">
+                                        <option value="">Select Type (Optional)</option>
+                                        <option value="passport">Passport</option>
+                                        <option value="visa">Visa</option>
+                                        <option value="transcript">Transcript</option>
+                                        <option value="diploma">Diploma</option>
+                                        <option value="financial">Financial Documents</option>
+                                        <option value="recommendation">Recommendation Letter</option>
+                                        <option value="other">Other</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="documentDescription">Description (Optional)</label>
+                                    <textarea id="documentDescription" rows="2" placeholder="Add any notes about this document..."></textarea>
+                                </div>
+                                <button type="submit" class="btn btn-primary" style="width: 100%;">Upload Document</button>
+                            </form>
+                        </div>
+                        
+                        <div id="myDocumentsList" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border-color);">
+                            <h4 style="margin-bottom: 1rem; font-size: 1rem;">My Documents</h4>
+                            <div id="documentsContainer">
+                                <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Quick Stats Widget -->
                 <div class="dashboard-widget">
                     <div class="widget-header">
