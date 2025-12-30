@@ -667,8 +667,52 @@ function showDashboard(skipURLUpdate = false) {
     initializeYearDropdown();
     loadDocumentationPreferences();
     loadMyDocuments();
+    
+    // Set default tab to overview if no tab is active
+    const activeTab = document.querySelector('.dashboard-tab.active');
+    if (!activeTab) {
+        switchDashboardTab('overview');
+    }
+    
     if (!skipURLUpdate) {
         updateURL('/dashboard', false); // Use pushState for navigation
+    }
+}
+
+function switchDashboardTab(tabName) {
+    // Hide all tabs
+    document.querySelectorAll('.dashboard-tab').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    // Remove active class from all nav items
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.remove('active');
+    });
+    
+    // Show selected tab
+    const selectedTab = document.getElementById(`dashboardTab-${tabName}`);
+    if (selectedTab) {
+        selectedTab.classList.add('active');
+    }
+    
+    // Activate corresponding nav item
+    const navItem = document.querySelector(`.nav-item[data-tab="${tabName}"]`);
+    if (navItem) {
+        navItem.classList.add('active');
+    }
+    
+    // Load data for specific tabs
+    if (tabName === 'documents') {
+        loadMyDocuments();
+    } else if (tabName === 'overview') {
+        loadDashboardStats();
+    }
+    
+    // Scroll to top of dashboard content
+    const dashboardContent = document.querySelector('.dashboard-content');
+    if (dashboardContent) {
+        dashboardContent.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 }
 

@@ -512,191 +512,299 @@
 
         <!-- Dashboard Section -->
         <div id="dashboardSection" class="section" style="display: none;">
-            <h2 style="margin-bottom: 2rem;">Dashboard</h2>
-            <div class="dashboard-grid">
-                <!-- Profile Widget -->
-                <div class="dashboard-widget">
-                    <div class="widget-header">
-                        <h3>👤 Profile</h3>
+            <div class="dashboard-container">
+                <!-- Dashboard Sidebar Navigation -->
+                <div class="dashboard-sidebar">
+                    <div class="sidebar-header">
+                        <h2>Dashboard</h2>
                     </div>
-                    <div class="widget-content">
-                        <div class="profile-header">
-                            <div class="profile-picture-container">
-                                <img id="profilePicturePreview" src="" alt="Profile Picture" style="display: none; width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 3px solid var(--primary-color);">
-                                <div id="profilePicturePlaceholder" style="width: 100px; height: 100px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 2rem; font-weight: 600; border: 3px solid var(--primary-color);"></div>
-                            </div>
-                            <div>
-                                <input type="file" id="profilePictureInput" accept="image/*" style="display: none;">
-                                <button type="button" onclick="document.getElementById('profilePictureInput').click()" class="btn btn-primary" style="width: auto; margin-top: 0.5rem; font-size: 0.875rem; padding: 0.5rem 1rem;">Change Picture</button>
-                            </div>
-                        </div>
-                        <form id="profileForm">
-                            <div class="form-group">
-                                <label for="profileEmail">Email</label>
-                                <input type="email" id="profileEmail" readonly style="background: var(--bg-color);">
-                            </div>
-                            <div class="form-group">
-                                <label for="profileUsername">Username</label>
-                                <input type="text" id="profileUsername" readonly style="background: var(--bg-color);">
-                            </div>
-                            <div class="form-group">
-                                <label for="profileFullName">Full Name</label>
-                                <input type="text" id="profileFullName">
-                            </div>
-                            <div class="form-group">
-                                <label for="profileUniversity">University</label>
-                                <input type="text" id="profileUniversity">
-                            </div>
-                            <div class="form-group">
-                                <label for="profilePhone">Phone</label>
-                                <input type="tel" id="profilePhone">
-                            </div>
-                            <button type="submit" class="btn btn-primary" style="width: 100%;">Update Profile</button>
-                        </form>
-                        <div class="danger-zone" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
-                            <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">Danger Zone</h4>
-                            <button type="button" onclick="handleDeleteAccount()" class="btn" style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete Account</button>
-                        </div>
-                    </div>
+                    <nav class="sidebar-nav">
+                        <a href="#" class="nav-item active" data-tab="overview" onclick="switchDashboardTab('overview'); return false;">
+                            <span class="nav-icon">📊</span>
+                            <span class="nav-label">Overview</span>
+                        </a>
+                        <a href="#" class="nav-item" data-tab="profile" onclick="switchDashboardTab('profile'); return false;">
+                            <span class="nav-icon">👤</span>
+                            <span class="nav-label">Profile</span>
+                        </a>
+                        <a href="#" class="nav-item" data-tab="documents" onclick="switchDashboardTab('documents'); return false;">
+                            <span class="nav-icon">📄</span>
+                            <span class="nav-label">Documents</span>
+                        </a>
+                        <a href="#" class="nav-item" data-tab="visa" onclick="switchDashboardTab('visa'); return false;">
+                            <span class="nav-icon">🛂</span>
+                            <span class="nav-label">Visa Status</span>
+                        </a>
+                        <a href="#" class="nav-item" data-tab="records" onclick="switchDashboardTab('records'); return false;">
+                            <span class="nav-icon">🤖</span>
+                            <span class="nav-label">AI Records</span>
+                        </a>
+                    </nav>
                 </div>
-
-                <!-- Visa Widget -->
-                <div class="dashboard-widget">
-                    <div class="widget-header">
-                        <h3>🛂 Visa Status</h3>
-                    </div>
-                    <div class="widget-content">
-                        <div style="text-align: center; padding: 2rem 1rem;">
-                            <div style="font-size: 3rem; margin-bottom: 1rem;">📋</div>
-                            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Manage your visa documents and status</p>
-                            <button class="btn btn-primary" onclick="showMessage('Visa feature coming soon!', 'success')">View Visa Info</button>
+                
+                <!-- Dashboard Content Area -->
+                <div class="dashboard-content">
+                    <!-- Overview Tab -->
+                    <div id="dashboardTab-overview" class="dashboard-tab active">
+                        <div class="tab-header">
+                            <h2>Overview</h2>
+                            <p class="tab-subtitle">Your dashboard at a glance</p>
                         </div>
-                    </div>
-                </div>
-
-                <!-- AI Records Keeper Widget -->
-                <div class="dashboard-widget">
-                    <div class="widget-header">
-                        <h3>🤖 AI Records Keeper</h3>
-                    </div>
-                    <div class="widget-content">
-                        <div style="text-align: center; padding: 2rem 1rem;">
-                            <div style="font-size: 3rem; margin-bottom: 1rem;">📚</div>
-                            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">AI-powered record keeping and organization</p>
-                            <button class="btn btn-primary" onclick="showMessage('AI Records Keeper coming soon!', 'success')">Open Records</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- AI Documentation Agent Widget -->
-                <div class="dashboard-widget">
-                    <div class="widget-header">
-                        <h3>📄 AI Documentation Agent</h3>
-                    </div>
-                    <div class="widget-content">
-                        <form id="documentationForm">
-                            <div class="form-group">
-                                <label for="documentationCountry">Country</label>
-                                <input type="text" id="documentationCountry" value="United States" readonly style="background: var(--bg-color); cursor: not-allowed;">
-                                <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                    We are currently only serving the United States
-                                </small>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="documentationIntake">Intake *</label>
-                                    <select id="documentationIntake" required>
-                                        <option value="">Select Intake</option>
-                                        <option value="Spring">Spring</option>
-                                        <option value="Fall">Fall</option>
-                                    </select>
+                        <div class="dashboard-grid">
+                            <!-- Quick Stats Widget -->
+                            <div class="dashboard-widget">
+                                <div class="widget-header">
+                                    <h3>📊 Quick Stats</h3>
                                 </div>
-                                <div class="form-group">
-                                    <label for="documentationYear">Year *</label>
-                                    <select id="documentationYear" required>
-                                        <option value="">Select Year</option>
-                                    </select>
+                                <div class="widget-content">
+                                    <div id="quickStatsContent" style="padding: 1rem;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
+                                            <span style="color: var(--text-secondary);">Active Listings</span>
+                                            <strong id="activeListingsCount">-</strong>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
+                                            <span style="color: var(--text-secondary);">Sold Items</span>
+                                            <strong id="soldItemsCount">-</strong>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
+                                            <span style="color: var(--text-secondary);">Messages</span>
+                                            <strong id="messagesCount">-</strong>
+                                        </div>
+                                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0;">
+                                            <span style="color: var(--text-secondary);">Unread</span>
+                                            <strong id="unreadCount">-</strong>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            <button type="submit" class="btn btn-primary" style="width: 100%;">Save Preferences</button>
-                        </form>
-                        
-                        <div style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border-color);">
-                            <h4 style="margin-bottom: 1rem; font-size: 1rem;">Upload Documents</h4>
-                            <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
-                                <strong style="color: #856404;">🔒 Zero-Knowledge Encryption</strong>
-                                <p style="color: #856404; margin: 0.5rem 0 0 0; font-size: 0.875rem;">
-                                    Your documents are encrypted with your password. Even we cannot read them. 
-                                    <strong>If you forget your password, your documents cannot be recovered.</strong>
-                                </p>
-                            </div>
-                            <form id="documentUploadForm">
-                                <div class="form-group">
-                                    <label for="documentFile">Select Document</label>
-                                    <input type="file" id="documentFile" accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.webp,.xls,.xlsx,.csv,.zip,.rar" required>
-                                    <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                        Supported formats: PDF, DOC, DOCX, TXT, Images, Excel, CSV, ZIP, RAR (Max 50MB)
-                                    </small>
+                            
+                            <!-- Quick Actions Widget -->
+                            <div class="dashboard-widget">
+                                <div class="widget-header">
+                                    <h3>⚡ Quick Actions</h3>
                                 </div>
-                                <div class="form-group">
-                                    <label for="documentPassword">Your Password *</label>
-                                    <input type="password" id="documentPassword" required placeholder="Enter your login password to encrypt">
-                                    <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                        Required to encrypt your document. We use Zero-Knowledge encryption - your password is never stored.
-                                    </small>
+                                <div class="widget-content">
+                                    <div style="padding: 1rem;">
+                                        <a href="#" onclick="event.preventDefault(); showCreateItem(); return false;" class="quick-action-btn">
+                                            <span class="action-icon">➕</span>
+                                            <span>List New Item</span>
+                                        </a>
+                                        <a href="#" onclick="event.preventDefault(); showMyListings(); return false;" class="quick-action-btn">
+                                            <span class="action-icon">📦</span>
+                                            <span>My Listings</span>
+                                        </a>
+                                        <a href="#" onclick="event.preventDefault(); showMessages(); return false;" class="quick-action-btn">
+                                            <span class="action-icon">💬</span>
+                                            <span>Messages</span>
+                                        </a>
+                                        <a href="#" onclick="event.preventDefault(); switchDashboardTab('documents'); return false;" class="quick-action-btn">
+                                            <span class="action-icon">📄</span>
+                                            <span>Upload Document</span>
+                                        </a>
+                                    </div>
                                 </div>
-                                <div class="form-group">
-                                    <label for="documentType">Document Type</label>
-                                    <select id="documentType">
-                                        <option value="">Select Type (Optional)</option>
-                                        <option value="passport">Passport</option>
-                                        <option value="visa">Visa</option>
-                                        <option value="transcript">Transcript</option>
-                                        <option value="diploma">Diploma</option>
-                                        <option value="financial">Financial Documents</option>
-                                        <option value="recommendation">Recommendation Letter</option>
-                                        <option value="other">Other</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="documentDescription">Description (Optional)</label>
-                                    <textarea id="documentDescription" rows="2" placeholder="Add any notes about this document..."></textarea>
-                                </div>
-                                <button type="submit" class="btn btn-primary" style="width: 100%;">Upload Document</button>
-                            </form>
-                        </div>
-                        
-                        <div id="myDocumentsList" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border-color);">
-                            <h4 style="margin-bottom: 1rem; font-size: 1rem;">My Documents</h4>
-                            <div id="documentsContainer">
-                                <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet</p>
                             </div>
                         </div>
                     </div>
-                </div>
-
-                <!-- Quick Stats Widget -->
-                <div class="dashboard-widget">
-                    <div class="widget-header">
-                        <h3>📊 Quick Stats</h3>
+                    
+                    <!-- Profile Tab -->
+                    <div id="dashboardTab-profile" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>Profile Settings</h2>
+                            <p class="tab-subtitle">Manage your account information</p>
+                        </div>
+                        <div style="max-width: 800px; margin: 0 auto;">
+                            <div class="dashboard-widget">
+                                <div class="widget-header">
+                                    <h3>👤 Profile</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div class="profile-header">
+                                        <div class="profile-picture-container">
+                                            <img id="profilePicturePreview" src="" alt="Profile Picture" style="display: none; width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 3px solid var(--primary-color);">
+                                            <div id="profilePicturePlaceholder" style="width: 100px; height: 100px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 2rem; font-weight: 600; border: 3px solid var(--primary-color);"></div>
+                                        </div>
+                                        <div>
+                                            <input type="file" id="profilePictureInput" accept="image/*" style="display: none;">
+                                            <button type="button" onclick="document.getElementById('profilePictureInput').click()" class="btn btn-primary" style="width: auto; margin-top: 0.5rem; font-size: 0.875rem; padding: 0.5rem 1rem;">Change Picture</button>
+                                        </div>
+                                    </div>
+                                    <form id="profileForm">
+                                        <div class="form-group">
+                                            <label for="profileEmail">Email</label>
+                                            <input type="email" id="profileEmail" readonly style="background: var(--bg-color);">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="profileUsername">Username</label>
+                                            <input type="text" id="profileUsername" readonly style="background: var(--bg-color);">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="profileFullName">Full Name</label>
+                                            <input type="text" id="profileFullName">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="profileUniversity">University</label>
+                                            <input type="text" id="profileUniversity">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="profilePhone">Phone</label>
+                                            <input type="tel" id="profilePhone">
+                                        </div>
+                                        <button type="submit" class="btn btn-primary" style="width: 100%;">Update Profile</button>
+                                    </form>
+                                    <div class="danger-zone" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                                        <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">Danger Zone</h4>
+                                        <button type="button" onclick="handleDeleteAccount()" class="btn" style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete Account</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="widget-content">
-                        <div id="quickStatsContent" style="padding: 1rem;">
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
-                                <span style="color: var(--text-secondary);">Active Listings</span>
-                                <strong id="activeListingsCount">-</strong>
+                    
+                    <!-- Documents Tab -->
+                    <div id="dashboardTab-documents" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>AI Documentation Agent</h2>
+                            <p class="tab-subtitle">Manage your documents and preferences</p>
+                        </div>
+                        <div class="dashboard-grid">
+                            <div class="dashboard-widget" style="grid-column: 1 / -1;">
+                                <div class="widget-header">
+                                    <h3>📄 Documentation Preferences</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <form id="documentationForm">
+                                        <div class="form-group">
+                                            <label for="documentationCountry">Country</label>
+                                            <input type="text" id="documentationCountry" value="United States" readonly style="background: var(--bg-color); cursor: not-allowed;">
+                                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                                We are currently only serving the United States
+                                            </small>
+                                        </div>
+                                        <div class="form-row">
+                                            <div class="form-group">
+                                                <label for="documentationIntake">Intake *</label>
+                                                <select id="documentationIntake" required>
+                                                    <option value="">Select Intake</option>
+                                                    <option value="Spring">Spring</option>
+                                                    <option value="Summer">Summer</option>
+                                                    <option value="Fall">Fall</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="documentationYear">Year *</label>
+                                                <select id="documentationYear" required>
+                                                    <option value="">Select Year</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <button type="submit" class="btn btn-primary" style="width: 100%;">Save Preferences</button>
+                                    </form>
+                                </div>
                             </div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
-                                <span style="color: var(--text-secondary);">Sold Items</span>
-                                <strong id="soldItemsCount">-</strong>
+                            
+                            <div class="dashboard-widget" style="grid-column: 1 / -1;">
+                                <div class="widget-header">
+                                    <h3>📤 Upload Documents</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
+                                        <strong style="color: #856404;">🔒 Zero-Knowledge Encryption</strong>
+                                        <p style="color: #856404; margin: 0.5rem 0 0 0; font-size: 0.875rem;">
+                                            Your documents are encrypted with your password. Even we cannot read them. 
+                                            <strong>If you forget your password, your documents cannot be recovered.</strong>
+                                        </p>
+                                    </div>
+                                    <form id="documentUploadForm">
+                                        <div class="form-group">
+                                            <label for="documentFile">Select Document</label>
+                                            <input type="file" id="documentFile" accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.webp,.xls,.xlsx,.csv,.zip,.rar" required>
+                                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                                Supported formats: PDF, DOC, DOCX, TXT, Images, Excel, CSV, ZIP, RAR (Max 50MB)
+                                            </small>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="documentPassword">Your Password *</label>
+                                            <input type="password" id="documentPassword" required placeholder="Enter your login password to encrypt">
+                                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                                Required to encrypt your document. We use Zero-Knowledge encryption - your password is never stored.
+                                            </small>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="documentType">Document Type</label>
+                                            <select id="documentType">
+                                                <option value="">Select Type (Optional)</option>
+                                                <option value="passport">Passport</option>
+                                                <option value="visa">Visa</option>
+                                                <option value="transcript">Transcript</option>
+                                                <option value="diploma">Diploma</option>
+                                                <option value="financial">Financial Documents</option>
+                                                <option value="recommendation">Recommendation Letter</option>
+                                                <option value="other">Other</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="documentDescription">Description (Optional)</label>
+                                            <textarea id="documentDescription" rows="2" placeholder="Add any notes about this document..."></textarea>
+                                        </div>
+                                        <button type="submit" class="btn btn-primary" style="width: 100%;">Upload Document</button>
+                                    </form>
+                                </div>
                             </div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
-                                <span style="color: var(--text-secondary);">Messages</span>
-                                <strong id="messagesCount">-</strong>
+                            
+                            <div class="dashboard-widget" style="grid-column: 1 / -1;">
+                                <div class="widget-header">
+                                    <h3>📁 My Documents</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div id="documentsContainer">
+                                        <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet</p>
+                                    </div>
+                                </div>
                             </div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0;">
-                                <span style="color: var(--text-secondary);">Unread</span>
-                                <strong id="unreadCount">-</strong>
+                        </div>
+                    </div>
+                    
+                    <!-- Visa Tab -->
+                    <div id="dashboardTab-visa" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>Visa Status</h2>
+                            <p class="tab-subtitle">Manage your visa documents and status</p>
+                        </div>
+                        <div class="dashboard-grid">
+                            <div class="dashboard-widget">
+                                <div class="widget-header">
+                                    <h3>🛂 Visa Status</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div style="text-align: center; padding: 2rem 1rem;">
+                                        <div style="font-size: 3rem; margin-bottom: 1rem;">📋</div>
+                                        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Manage your visa documents and status</p>
+                                        <button class="btn btn-primary" onclick="showMessage('Visa feature coming soon!', 'success')">View Visa Info</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- AI Records Tab -->
+                    <div id="dashboardTab-records" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>AI Records Keeper</h2>
+                            <p class="tab-subtitle">AI-powered record keeping and organization</p>
+                        </div>
+                        <div class="dashboard-grid">
+                            <div class="dashboard-widget">
+                                <div class="widget-header">
+                                    <h3>🤖 AI Records Keeper</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div style="text-align: center; padding: 2rem 1rem;">
+                                        <div style="font-size: 3rem; margin-bottom: 1rem;">📚</div>
+                                        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">AI-powered record keeping and organization</p>
+                                        <button class="btn btn-primary" onclick="showMessage('AI Records Keeper coming soon!', 'success')">Open Records</button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
