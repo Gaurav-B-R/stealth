@@ -442,6 +442,43 @@ async def download_document_admin(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to download document: {str(e)}")
 
+@router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_document(
+    document_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a document. Users can only delete their own documents.
+    This will delete the file from R2 and remove the database record.
+    """
+    document = db.query(models.Document).filter(models.Document.id == document_id).first()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Security: Users can only delete their own documents (unless admin)
+    if document.user_id != current_user.id and not (current_user.is_admin or current_user.is_developer):
+        raise HTTPException(status_code=403, detail="Access denied. You can only delete your own documents.")
+    
+    try:
+        # Delete from R2
+        try:
+            r2_client.delete_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.filename)
+        except Exception as r2_error:
+            # Log the error but continue with database deletion
+            # The file might already be deleted or not exist
+            print(f"Warning: Failed to delete file from R2: {str(r2_error)}")
+        
+        # Delete from database
+        db.delete(document)
+        db.commit()
+        
+        return None
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+
 @router.delete("/admin/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document_admin(
     document_id: int,

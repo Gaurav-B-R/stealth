@@ -2700,6 +2700,7 @@ function displayDocuments(documents) {
                         <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
                         <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
                     `}
+                    <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--danger-color); color: white; border: none;">Delete</button>
                 </div>
             </div>
         `;
@@ -2767,6 +2768,50 @@ async function downloadEncryptedDocument(documentId) {
     } catch (error) {
         console.error('Download error:', error);
         showMessage('An error occurred while downloading the document. Please try again.', 'error');
+    }
+}
+
+async function deleteDocument(documentId, filename) {
+    if (!authToken) {
+        showMessage('Please login to delete documents', 'error');
+        return;
+    }
+    
+    // Confirm deletion
+    const confirmed = confirm(`Are you sure you want to delete "${filename}"?\n\nThis action cannot be undone. The file will be permanently deleted from R2 storage.`);
+    if (!confirmed) {
+        return; // User cancelled
+    }
+    
+    try {
+        showMessage('Deleting document...', 'success');
+        
+        const response = await fetch(`${API_BASE}/api/documents/${documentId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok || response.status === 204) {
+            showMessage('Document deleted successfully', 'success');
+            // Reload documents list
+            await loadMyDocuments();
+        } else {
+            const error = await response.json().catch(() => ({}));
+            if (response.status === 403) {
+                showMessage('You do not have permission to delete this document', 'error');
+            } else if (response.status === 404) {
+                showMessage('Document not found', 'error');
+                // Reload documents list anyway
+                await loadMyDocuments();
+            } else {
+                showMessage(error.detail || 'Failed to delete document. Please try again.', 'error');
+            }
+        }
+    } catch (error) {
+        console.error('Delete error:', error);
+        showMessage('Failed to delete document. Please try again.', 'error');
     }
 }
 
