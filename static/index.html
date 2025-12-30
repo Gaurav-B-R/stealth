@@ -604,6 +604,38 @@
                                     </div>
                                 </div>
                             </div>
+                            
+                            <!-- Profile Completion Widget -->
+                            <div class="dashboard-widget" style="grid-column: 1 / -1;">
+                                <div class="widget-header">
+                                    <h3>📋 Profile Completion</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div style="padding: 1rem;">
+                                        <!-- Profile Completion Percentage -->
+                                        <div style="margin-bottom: 1.5rem;">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                                <span style="font-weight: 600; color: var(--text-primary);">Profile Completion</span>
+                                                <span id="profileCompletionPercent" style="font-weight: 700; font-size: 1.25rem; color: var(--primary-color);">-</span>
+                                            </div>
+                                            <div style="background: var(--bg-color); border-radius: 0.5rem; height: 12px; overflow: hidden; position: relative;">
+                                                <div id="profileCompletionBar" style="background: linear-gradient(90deg, var(--primary-color) 0%, var(--secondary-color) 100%); height: 100%; width: 0%; transition: width 0.5s ease; border-radius: 0.5rem;"></div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Pending Documents -->
+                                        <div>
+                                            <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.75rem;">Pending Documents</div>
+                                            <div id="pendingDocumentsList" style="min-height: 50px;">
+                                                <p style="color: var(--text-secondary); text-align: center; padding: 0.5rem; font-size: 0.875rem;">Loading...</p>
+                                            </div>
+                                            <div style="margin-top: 1rem;">
+                                                <a href="#" onclick="event.preventDefault(); switchDashboardTab('documents'); return false;" class="btn btn-primary" style="width: 100%; font-size: 0.875rem; padding: 0.75rem;">Upload Documents</a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     

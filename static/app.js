@@ -2190,8 +2190,175 @@ async function loadDashboardStats() {
                 document.getElementById('messagesCount').textContent = conversations.length || 0;
             }
         }
+        
+        // Load profile completion and pending documents
+        await loadProfileCompletion();
     } catch (error) {
         console.error('Load dashboard stats error:', error);
+    }
+}
+
+async function loadProfileCompletion() {
+    if (!authToken) return;
+    
+    try {
+        // Load profile data
+        const profileResponse = await fetch(`${API_BASE}/api/profile/`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        // Load documents
+        const documentsResponse = await fetch(`${API_BASE}/api/documents/my-documents`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        let profile = null;
+        let documents = [];
+        
+        if (profileResponse.ok) {
+            profile = await profileResponse.json();
+        }
+        
+        if (documentsResponse.ok) {
+            documents = await documentsResponse.json();
+        }
+        
+        // Calculate profile completion
+        const completionData = calculateProfileCompletion(profile, documents);
+        
+        // Update UI
+        updateProfileCompletionUI(completionData);
+    } catch (error) {
+        console.error('Load profile completion error:', error);
+    }
+}
+
+function calculateProfileCompletion(profile, documents) {
+    // Profile fields to check
+    const profileFields = {
+        'full_name': profile?.full_name,
+        'university': profile?.university,
+        'phone': profile?.phone,
+        'profile_picture': profile?.profile_picture
+    };
+    
+    // Required documents list (based on common visa requirements)
+    const requiredDocuments = [
+        'passport',
+        'ds-160-confirmation',
+        'ds-160-application',
+        'us-visa-appointment-letter',
+        'visa-fee-receipt',
+        'photograph-2x2',
+        'form-i20-signed',
+        'university-admission-letter',
+        'bank-balance-certificate',
+        'transcripts-marksheets',
+        'degree-certificates',
+        'i901-sevis-fee-confirmation'
+    ];
+    
+    // Count completed profile fields
+    let completedFields = 0;
+    const totalFields = Object.keys(profileFields).length;
+    
+    for (const field of Object.values(profileFields)) {
+        if (field && field.trim() !== '') {
+            completedFields++;
+        }
+    }
+    
+    // Get uploaded document types
+    const uploadedDocTypes = new Set(
+        documents.map(doc => doc.document_type).filter(type => type)
+    );
+    
+    // Find pending documents
+    const pendingDocuments = requiredDocuments.filter(docType => !uploadedDocTypes.has(docType));
+    
+    // Calculate completion percentage
+    // Profile fields: 40% weight, Documents: 60% weight
+    const profileCompletion = (completedFields / totalFields) * 100;
+    const documentsCompletion = ((requiredDocuments.length - pendingDocuments.length) / requiredDocuments.length) * 100;
+    const overallCompletion = Math.round((profileCompletion * 0.4) + (documentsCompletion * 0.6));
+    
+    return {
+        overallCompletion,
+        profileCompletion: Math.round(profileCompletion),
+        documentsCompletion: Math.round(documentsCompletion),
+        pendingDocuments,
+        uploadedCount: documents.length,
+        totalRequiredDocuments: requiredDocuments.length
+    };
+}
+
+function updateProfileCompletionUI(data) {
+    // Update completion percentage
+    const percentEl = document.getElementById('profileCompletionPercent');
+    const barEl = document.getElementById('profileCompletionBar');
+    const pendingListEl = document.getElementById('pendingDocumentsList');
+    
+    if (percentEl) {
+        percentEl.textContent = `${data.overallCompletion}%`;
+    }
+    
+    if (barEl) {
+        barEl.style.width = `${data.overallCompletion}%`;
+    }
+    
+    // Update pending documents list
+    if (pendingListEl) {
+        if (data.pendingDocuments.length === 0) {
+            pendingListEl.innerHTML = `
+                <div style="background: #d4edda; border: 1px solid #c3e6cb; border-radius: 0.5rem; padding: 0.75rem; text-align: center;">
+                    <span style="color: #155724; font-weight: 600;">✓ All required documents uploaded!</span>
+                </div>
+            `;
+        } else {
+            // Map document type values to display names
+            const docTypeNames = {
+                'passport': 'Passport',
+                'ds-160-confirmation': 'DS-160 Confirmation Page',
+                'ds-160-application': 'DS-160 Application',
+                'us-visa-appointment-letter': 'US Visa Appointment Letter',
+                'visa-fee-receipt': 'Visa Fee Receipt',
+                'photograph-2x2': 'Photograph (2x2 Inches)',
+                'form-i20-signed': 'Form I-20 (Signed)',
+                'university-admission-letter': 'University Admission Letter',
+                'bank-balance-certificate': 'Bank balance certificate',
+                'transcripts-marksheets': 'Transcripts / mark sheets',
+                'degree-certificates': 'Degree certificates',
+                'i901-sevis-fee-confirmation': 'I-901 SEVIS fee payment confirmation'
+            };
+            
+            const pendingList = data.pendingDocuments.slice(0, 5).map(docType => {
+                const displayName = docTypeNames[docType] || docType;
+                return `
+                    <div style="display: flex; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
+                        <span style="color: var(--danger-color); margin-right: 0.5rem;">○</span>
+                        <span style="color: var(--text-primary); font-size: 0.875rem;">${escapeHtml(displayName)}</span>
+                    </div>
+                `;
+            }).join('');
+            
+            const moreCount = data.pendingDocuments.length > 5 ? data.pendingDocuments.length - 5 : 0;
+            
+            pendingListEl.innerHTML = `
+                ${pendingList}
+                ${moreCount > 0 ? `
+                    <div style="padding: 0.5rem 0; text-align: center; color: var(--text-secondary); font-size: 0.875rem;">
+                        +${moreCount} more document${moreCount > 1 ? 's' : ''} pending
+                    </div>
+                ` : ''}
+                <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-color); font-size: 0.875rem; color: var(--text-secondary);">
+                    ${data.uploadedCount} of ${data.totalRequiredDocuments} required documents uploaded
+                </div>
+            `;
+        }
     }
 }
 
