@@ -707,6 +707,8 @@ function switchDashboardTab(tabName) {
         loadMyDocuments();
     } else if (tabName === 'overview') {
         loadDashboardStats();
+    } else if (tabName === 'records') {
+        initializeRilonoAiChat();
     }
     
     // Scroll to top of dashboard content
@@ -2831,47 +2833,157 @@ async function loadMyDocuments() {
 function displayDocuments(documents) {
     const container = document.getElementById('documentsContainer');
     
-    if (!documents || documents.length === 0) {
-        container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet</p>';
-        return;
-    }
+    // Required documents list (same as in profile completion)
+    const requiredDocuments = [
+        { value: 'passport', label: 'Passport' },
+        { value: 'ds-160-confirmation', label: 'DS-160 Confirmation Page' },
+        { value: 'ds-160-application', label: 'DS-160 Application' },
+        { value: 'us-visa-appointment-letter', label: 'US Visa Appointment Letter' },
+        { value: 'visa-fee-receipt', label: 'Visa Fee Receipt' },
+        { value: 'photograph-2x2', label: 'Photograph (2x2 Inches)' },
+        { value: 'form-i20-signed', label: 'Form I-20 (Signed)' },
+        { value: 'university-admission-letter', label: 'University Admission Letter' },
+        { value: 'bank-balance-certificate', label: 'Bank balance certificate' },
+        { value: 'transcripts-marksheets', label: 'Transcripts / mark sheets' },
+        { value: 'degree-certificates', label: 'Degree certificates' },
+        { value: 'i901-sevis-fee-confirmation', label: 'I-901 SEVIS fee payment confirmation' }
+    ];
     
-    container.innerHTML = documents.map(doc => {
-        const fileSizeMB = (doc.file_size / (1024 * 1024)).toFixed(2);
-        const uploadDate = new Date(doc.created_at).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric'
-        });
-        const isEncrypted = doc.encrypted_file_key || !doc.file_url; // New encrypted docs or legacy check
+    // Get uploaded document types
+    const uploadedDocTypes = new Set(
+        documents.map(doc => doc.document_type).filter(type => type)
+    );
+    
+    // Separate uploaded and pending documents
+    const uploadedDocs = documents.filter(doc => doc.document_type && requiredDocuments.some(req => req.value === doc.document_type));
+    const otherDocs = documents.filter(doc => !doc.document_type || !requiredDocuments.some(req => req.value === doc.document_type));
+    const pendingDocs = requiredDocuments.filter(req => !uploadedDocTypes.has(req.value));
+    
+    let html = '';
+    
+    // Show uploaded required documents with checkmarks
+    if (uploadedDocs.length > 0 || pendingDocs.length > 0) {
+        html += '<div style="margin-bottom: 2rem;">';
+        html += '<h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">Required Documents</h4>';
         
-        return `
-            <div style="border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: var(--bg-color);">
-                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
-                    <div style="flex: 1;">
-                        <div style="font-weight: 600; margin-bottom: 0.25rem;">
-                            ${escapeHtml(doc.original_filename)}
-                            ${isEncrypted ? '<span style="font-size: 0.75rem; color: #28a745; margin-left: 0.5rem;">🔒 Encrypted</span>' : ''}
+        // Show uploaded documents
+        uploadedDocs.forEach(doc => {
+            const fileSizeMB = (doc.file_size / (1024 * 1024)).toFixed(2);
+            const uploadDate = new Date(doc.created_at).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+            const isEncrypted = doc.encrypted_file_key || !doc.file_url;
+            const docTypeLabel = requiredDocuments.find(req => req.value === doc.document_type)?.label || doc.document_type;
+            
+            html += `
+                <div style="border: 1px solid #c3e6cb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: #d4edda;">
+                    <div style="display: flex; align-items: start; gap: 0.75rem;">
+                        <div style="color: #28a745; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">✓</div>
+                        <div style="flex: 1;">
+                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                                <div style="flex: 1;">
+                                    <div style="font-weight: 600; margin-bottom: 0.25rem; color: #155724;">
+                                        ${escapeHtml(docTypeLabel)}
+                                    </div>
+                                    <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                                        ${escapeHtml(doc.original_filename)} • ${fileSizeMB} MB • ${uploadDate}
+                                        ${isEncrypted ? ' • <span style="color: #28a745;">🔒 Encrypted</span>' : ''}
+                                    </div>
+                                    ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                                ${isEncrypted ? `
+                                    <button onclick="downloadEncryptedDocument(${doc.id})" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
+                                ` : `
+                                    <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
+                                    <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
+                                `}
+                                <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--danger-color); color: white; border: none;">Delete</button>
+                            </div>
                         </div>
-                        <div style="font-size: 0.875rem; color: var(--text-secondary);">
-                            ${doc.document_type ? `<span style="text-transform: capitalize;">${escapeHtml(doc.document_type)}</span> • ` : ''}
-                            ${fileSizeMB} MB • ${uploadDate}
-                        </div>
-                        ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
                     </div>
                 </div>
-                <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
-                    ${isEncrypted ? `
-                        <button onclick="downloadEncryptedDocument(${doc.id})" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
-                    ` : `
-                        <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
-                        <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
-                    `}
-                    <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--danger-color); color: white; border: none;">Delete</button>
+            `;
+        });
+        
+        // Show pending documents with crosses
+        pendingDocs.forEach(pendingDoc => {
+            html += `
+                <div style="border: 1px solid #f5c6cb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: #f8d7da;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <div style="color: #dc3545; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">✗</div>
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600; color: #721c24; margin-bottom: 0.25rem;">
+                                ${escapeHtml(pendingDoc.label)}
+                            </div>
+                            <div style="font-size: 0.875rem; color: #856404;">
+                                Pending upload
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            </div>
-        `;
-    }).join('');
+            `;
+        });
+        
+        html += '</div>';
+    }
+    
+    // Show other uploaded documents (non-required)
+    if (otherDocs.length > 0) {
+        html += '<div style="margin-top: 2rem; padding-top: 2rem; border-top: 2px solid var(--border-color);">';
+        html += '<h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">Other Documents</h4>';
+        
+        html += otherDocs.map(doc => {
+            const fileSizeMB = (doc.file_size / (1024 * 1024)).toFixed(2);
+            const uploadDate = new Date(doc.created_at).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+            const isEncrypted = doc.encrypted_file_key || !doc.file_url;
+            
+            return `
+                <div style="border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: var(--bg-color);">
+                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600; margin-bottom: 0.25rem;">
+                                ${escapeHtml(doc.original_filename)}
+                                ${isEncrypted ? '<span style="font-size: 0.75rem; color: #28a745; margin-left: 0.5rem;">🔒 Encrypted</span>' : ''}
+                            </div>
+                            <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                                ${doc.document_type ? `<span style="text-transform: capitalize;">${escapeHtml(doc.document_type)}</span> • ` : ''}
+                                ${fileSizeMB} MB • ${uploadDate}
+                            </div>
+                            ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                        ${isEncrypted ? `
+                            <button onclick="downloadEncryptedDocument(${doc.id})" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
+                        ` : `
+                            <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
+                            <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
+                        `}
+                        <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--danger-color); color: white; border: none;">Delete</button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        html += '</div>';
+    }
+    
+    // Show message if no documents at all
+    if (documents.length === 0 && pendingDocs.length === 0) {
+        html = '<p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet</p>';
+    } else if (documents.length === 0) {
+        html = '<p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet. Please upload the required documents above.</p>';
+    }
+    
+    container.innerHTML = html;
 }
 
 async function downloadEncryptedDocument(documentId) {
@@ -2979,6 +3091,207 @@ async function deleteDocument(documentId, filename) {
     } catch (error) {
         console.error('Delete error:', error);
         showMessage('Failed to delete document. Please try again.', 'error');
+    }
+}
+
+// Rilono AI Chat Functions
+function handleRilonoAiChatKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        document.getElementById('rilonoAiChatForm').dispatchEvent(new Event('submit'));
+    }
+}
+
+function autoResizeRilonoAiInput(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+}
+
+function sendQuickMessage(message) {
+    const input = document.getElementById('rilonoAiChatInput');
+    input.value = message;
+    autoResizeRilonoAiInput(input);
+    document.getElementById('rilonoAiChatForm').dispatchEvent(new Event('submit'));
+}
+
+function addMessageToRilonoAiChat(message, isUser = false) {
+    const messagesContainer = document.getElementById('rilonoAiChatMessages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = isUser ? 'user-message' : 'ai-message';
+    
+    if (isUser) {
+        messageDiv.style.alignSelf = 'flex-end';
+        messageDiv.style.maxWidth = '75%';
+        messageDiv.innerHTML = `
+            <div style="background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); color: white; padding: 0.875rem 1.25rem; border-radius: 1rem; box-shadow: var(--shadow); border-top-right-radius: 0.25rem;">
+                <p style="margin: 0; line-height: 1.6;">${escapeHtml(message)}</p>
+            </div>
+        `;
+    } else {
+        messageDiv.style.alignSelf = 'flex-start';
+        messageDiv.style.maxWidth = '75%';
+        messageDiv.innerHTML = `
+            <div style="display: flex; gap: 0.75rem; align-items: start;">
+                <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0;">🤖</div>
+                <div style="background: white; padding: 1rem; border-radius: 1rem; box-shadow: var(--shadow); border-top-left-radius: 0.25rem;">
+                    <p style="margin: 0; color: var(--text-primary); line-height: 1.6; white-space: pre-wrap;">${escapeHtml(message)}</p>
+                </div>
+            </div>
+        `;
+    }
+    
+    messagesContainer.appendChild(messageDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    // Add animation
+    messageDiv.style.opacity = '0';
+    messageDiv.style.transform = 'translateY(10px)';
+    setTimeout(() => {
+        messageDiv.style.transition = 'all 0.3s ease';
+        messageDiv.style.opacity = '1';
+        messageDiv.style.transform = 'translateY(0)';
+    }, 10);
+}
+
+function showRilonoAiTypingIndicator() {
+    const messagesContainer = document.getElementById('rilonoAiChatMessages');
+    const typingDiv = document.createElement('div');
+    typingDiv.id = 'rilonoAiTypingIndicator';
+    typingDiv.className = 'ai-message';
+    typingDiv.style.alignSelf = 'flex-start';
+    typingDiv.style.maxWidth = '75%';
+    typingDiv.innerHTML = `
+        <div style="display: flex; gap: 0.75rem; align-items: start;">
+            <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0;">🤖</div>
+            <div style="background: white; padding: 1rem; border-radius: 1rem; box-shadow: var(--shadow); border-top-left-radius: 0.25rem;">
+                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                    <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-secondary); animation: typingDot 1.4s infinite;"></div>
+                    <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-secondary); animation: typingDot 1.4s infinite; animation-delay: 0.2s;"></div>
+                    <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-secondary); animation: typingDot 1.4s infinite; animation-delay: 0.4s;"></div>
+                </div>
+            </div>
+        </div>
+    `;
+    messagesContainer.appendChild(typingDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function removeRilonoAiTypingIndicator() {
+    const typingIndicator = document.getElementById('rilonoAiTypingIndicator');
+    if (typingIndicator) {
+        typingIndicator.remove();
+    }
+}
+
+async function handleRilonoAiChatSubmit(e) {
+    e.preventDefault();
+    const input = document.getElementById('rilonoAiChatInput');
+    const message = input.value.trim();
+    
+    if (!message) return;
+    
+    // Add user message
+    addMessageToRilonoAiChat(message, true);
+    input.value = '';
+    autoResizeRilonoAiInput(input);
+    
+    // Show typing indicator
+    showRilonoAiTypingIndicator();
+    
+    // Simulate AI response (replace with actual API call later)
+    setTimeout(() => {
+        removeRilonoAiTypingIndicator();
+        
+        // Generate response based on message
+        let response = generateRilonoAiResponse(message);
+        addMessageToRilonoAiChat(response, false);
+    }, 1000 + Math.random() * 1000); // Random delay between 1-2 seconds
+}
+
+function generateRilonoAiResponse(userMessage) {
+    const message = userMessage.toLowerCase();
+    
+    if (message.includes('document') || message.includes('checklist') || message.includes('upload')) {
+        return `Here are the key documents you need to upload for your US visa application:
+
+📋 **Required Documents:**
+• Passport (valid for at least 6 months)
+• DS-160 Confirmation Page
+• DS-160 Application
+• US Visa Appointment Letter
+• Visa Fee Receipt
+• Photograph (2x2 Inches)
+• Form I-20 (Signed)
+• University Admission Letter
+• Bank balance certificate
+• Transcripts / mark sheets
+• Degree certificates
+• I-901 SEVIS fee payment confirmation
+
+You can check your profile completion status in the Overview tab to see which documents you've already uploaded and which are still pending.`;
+    } else if (message.includes('profile') || message.includes('status') || message.includes('complete')) {
+        return `I can help you check your profile completion! Here's what you can do:
+
+1. **Check Overview Tab**: Go to the Overview section to see your profile completion percentage and pending documents.
+
+2. **Profile Information**: Make sure you've filled out:
+   • Full Name
+   • University
+   • Phone Number
+   • Profile Picture
+
+3. **Documents**: Upload all required documents in the Documents tab.
+
+Would you like me to help you with any specific document or profile field?`;
+    } else if (message.includes('visa') || message.includes('application') || message.includes('process')) {
+        return `I'm here to help with your visa application process! Here's a general overview:
+
+🛂 **US Student Visa Process:**
+
+1. **Get I-20**: Receive your I-20 form from your university
+2. **Pay SEVIS Fee**: Pay the I-901 SEVIS fee and get confirmation
+3. **Complete DS-160**: Fill out the DS-160 application form online
+4. **Pay Visa Fee**: Pay the visa application fee
+5. **Schedule Interview**: Book your visa appointment
+6. **Prepare Documents**: Gather all required documents
+7. **Attend Interview**: Go to your visa interview
+
+For specific guidance on any step, feel free to ask! I can also help you track which documents you've uploaded and what's still pending.`;
+    } else if (message.includes('help') || message.includes('assist')) {
+        return `I'm Rilono AI, and I'm here to help you with:
+
+✅ Document requirements and checklists
+✅ Visa application guidance
+✅ Profile completion tracking
+✅ Answering questions about your uploaded documents
+✅ General visa process information
+
+You can ask me about:
+• What documents you need
+• Your profile completion status
+• Visa application steps
+• Document requirements
+• Any other questions about your visa journey
+
+What would you like to know?`;
+    } else {
+        return `I understand you're asking about "${userMessage}". 
+
+I'm here to help with your visa documentation and application process. I can assist with:
+• Document requirements and checklists
+• Profile completion status
+• Visa application guidance
+• Questions about your uploaded documents
+
+Could you be more specific about what you need help with? Or try one of the quick action buttons below!`;
+    }
+}
+
+// Initialize Rilono AI Chat when tab is shown
+function initializeRilonoAiChat() {
+    const chatForm = document.getElementById('rilonoAiChatForm');
+    if (chatForm) {
+        chatForm.addEventListener('submit', handleRilonoAiChatSubmit);
     }
 }
 

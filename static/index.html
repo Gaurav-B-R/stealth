@@ -537,7 +537,7 @@
                         </a>
                         <a href="#" class="nav-item" data-tab="records" onclick="switchDashboardTab('records'); return false;">
                             <span class="nav-icon">🤖</span>
-                            <span class="nav-label">AI Records</span>
+                            <span class="nav-label">Rilono AI</span>
                         </a>
                     </nav>
                 </div>
@@ -550,7 +550,7 @@
                             <h2>Overview</h2>
                             <p class="tab-subtitle">Your dashboard at a glance</p>
                         </div>
-                        <div class="dashboard-grid">
+            <div class="dashboard-grid">
                             <!-- Quick Stats Widget -->
                             <div class="dashboard-widget">
                                 <div class="widget-header">
@@ -646,51 +646,51 @@
                             <p class="tab-subtitle">Manage your account information</p>
                         </div>
                         <div style="max-width: 800px; margin: 0 auto;">
-                            <div class="dashboard-widget">
-                                <div class="widget-header">
-                                    <h3>👤 Profile</h3>
-                                </div>
-                                <div class="widget-content">
-                                    <div class="profile-header">
-                                        <div class="profile-picture-container">
-                                            <img id="profilePicturePreview" src="" alt="Profile Picture" style="display: none; width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 3px solid var(--primary-color);">
-                                            <div id="profilePicturePlaceholder" style="width: 100px; height: 100px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 2rem; font-weight: 600; border: 3px solid var(--primary-color);"></div>
-                                        </div>
-                                        <div>
-                                            <input type="file" id="profilePictureInput" accept="image/*" style="display: none;">
-                                            <button type="button" onclick="document.getElementById('profilePictureInput').click()" class="btn btn-primary" style="width: auto; margin-top: 0.5rem; font-size: 0.875rem; padding: 0.5rem 1rem;">Change Picture</button>
-                                        </div>
-                                    </div>
-                                    <form id="profileForm">
-                                        <div class="form-group">
-                                            <label for="profileEmail">Email</label>
-                                            <input type="email" id="profileEmail" readonly style="background: var(--bg-color);">
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="profileUsername">Username</label>
-                                            <input type="text" id="profileUsername" readonly style="background: var(--bg-color);">
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="profileFullName">Full Name</label>
-                                            <input type="text" id="profileFullName">
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="profileUniversity">University</label>
-                                            <input type="text" id="profileUniversity">
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="profilePhone">Phone</label>
-                                            <input type="tel" id="profilePhone">
-                                        </div>
-                                        <button type="submit" class="btn btn-primary" style="width: 100%;">Update Profile</button>
-                                    </form>
-                                    <div class="danger-zone" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
-                                        <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">Danger Zone</h4>
-                                        <button type="button" onclick="handleDeleteAccount()" class="btn" style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete Account</button>
-                                    </div>
-                                </div>
+                <div class="dashboard-widget">
+                    <div class="widget-header">
+                        <h3>👤 Profile</h3>
+                    </div>
+                    <div class="widget-content">
+                        <div class="profile-header">
+                            <div class="profile-picture-container">
+                                <img id="profilePicturePreview" src="" alt="Profile Picture" style="display: none; width: 100px; height: 100px; border-radius: 50%; object-fit: cover; border: 3px solid var(--primary-color);">
+                                <div id="profilePicturePlaceholder" style="width: 100px; height: 100px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; color: white; font-size: 2rem; font-weight: 600; border: 3px solid var(--primary-color);"></div>
                             </div>
-                            
+                            <div>
+                                <input type="file" id="profilePictureInput" accept="image/*" style="display: none;">
+                                <button type="button" onclick="document.getElementById('profilePictureInput').click()" class="btn btn-primary" style="width: auto; margin-top: 0.5rem; font-size: 0.875rem; padding: 0.5rem 1rem;">Change Picture</button>
+                            </div>
+                        </div>
+                        <form id="profileForm">
+                            <div class="form-group">
+                                <label for="profileEmail">Email</label>
+                                <input type="email" id="profileEmail" readonly style="background: var(--bg-color);">
+                            </div>
+                            <div class="form-group">
+                                <label for="profileUsername">Username</label>
+                                <input type="text" id="profileUsername" readonly style="background: var(--bg-color);">
+                            </div>
+                            <div class="form-group">
+                                <label for="profileFullName">Full Name</label>
+                                <input type="text" id="profileFullName">
+                            </div>
+                            <div class="form-group">
+                                <label for="profileUniversity">University</label>
+                                <input type="text" id="profileUniversity">
+                            </div>
+                            <div class="form-group">
+                                <label for="profilePhone">Phone</label>
+                                <input type="tel" id="profilePhone">
+                            </div>
+                            <button type="submit" class="btn btn-primary" style="width: 100%;">Update Profile</button>
+                        </form>
+                        <div class="danger-zone" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                            <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">Danger Zone</h4>
+                            <button type="button" onclick="handleDeleteAccount()" class="btn" style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete Account</button>
+                        </div>
+                    </div>
+                </div>
+
                             <!-- Documentation Preferences Widget -->
                             <div class="dashboard-widget" style="margin-top: 1.5rem;">
                                 <div class="widget-header">
@@ -809,7 +809,7 @@
                                 </div>
                                 <div class="widget-content">
                                     <div id="documentsContainer">
-                                        <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet</p>
+                                        <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">Loading documents...</p>
                                     </div>
                                 </div>
                             </div>
@@ -823,43 +823,126 @@
                             <p class="tab-subtitle">Manage your visa documents and status</p>
                         </div>
                         <div class="dashboard-grid">
-                            <div class="dashboard-widget">
-                                <div class="widget-header">
-                                    <h3>🛂 Visa Status</h3>
-                                </div>
-                                <div class="widget-content">
-                                    <div style="text-align: center; padding: 2rem 1rem;">
-                                        <div style="font-size: 3rem; margin-bottom: 1rem;">📋</div>
-                                        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Manage your visa documents and status</p>
-                                        <button class="btn btn-primary" onclick="showMessage('Visa feature coming soon!', 'success')">View Visa Info</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                <div class="dashboard-widget">
+                    <div class="widget-header">
+                        <h3>🛂 Visa Status</h3>
                     </div>
-                    
-                    <!-- AI Records Tab -->
-                    <div id="dashboardTab-records" class="dashboard-tab">
-                        <div class="tab-header">
-                            <h2>AI Records Keeper</h2>
-                            <p class="tab-subtitle">AI-powered record keeping and organization</p>
-                        </div>
-                        <div class="dashboard-grid">
-                            <div class="dashboard-widget">
-                                <div class="widget-header">
-                                    <h3>🤖 AI Records Keeper</h3>
-                                </div>
-                                <div class="widget-content">
-                                    <div style="text-align: center; padding: 2rem 1rem;">
-                                        <div style="font-size: 3rem; margin-bottom: 1rem;">📚</div>
-                                        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">AI-powered record keeping and organization</p>
-                                        <button class="btn btn-primary" onclick="showMessage('AI Records Keeper coming soon!', 'success')">Open Records</button>
+                    <div class="widget-content">
+                        <div style="text-align: center; padding: 2rem 1rem;">
+                            <div style="font-size: 3rem; margin-bottom: 1rem;">📋</div>
+                            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Manage your visa documents and status</p>
+                            <button class="btn btn-primary" onclick="showMessage('Visa feature coming soon!', 'success')">View Visa Info</button>
                                     </div>
                                 </div>
-                            </div>
                         </div>
                     </div>
                 </div>
+
+                    <!-- Rilono AI Tab -->
+                    <div id="dashboardTab-records" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>Rilono AI</h2>
+                            <p class="tab-subtitle">Your AI assistant for visa documentation and guidance</p>
+                        </div>
+                        <div style="max-width: 1000px; margin: 0 auto;">
+                            <div class="dashboard-widget" style="height: 600px; display: flex; flex-direction: column;">
+                                <div class="widget-header" style="border-radius: 1rem 1rem 0 0;">
+                                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                        <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(255, 255, 255, 0.2); display: flex; align-items: center; justify-content: center; font-size: 1.5rem;">🤖</div>
+                                        <div>
+                                            <h3 style="margin: 0; font-size: 1.25rem;">Rilono AI Assistant</h3>
+                                            <div style="font-size: 0.875rem; opacity: 0.9; display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
+                                                <span id="aiStatusIndicator" style="width: 8px; height: 8px; border-radius: 50%; background: #10b981; display: inline-block; animation: pulse 2s infinite;"></span>
+                                                <span>Online</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="widget-content" style="flex: 1; display: flex; flex-direction: column; padding: 0; overflow: hidden;">
+                                    <!-- Chat Messages Area -->
+                                    <div id="rilonoAiChatMessages" style="flex: 1; overflow-y: auto; padding: 1.5rem; background: var(--bg-color); display: flex; flex-direction: column; gap: 1rem;">
+                                        <!-- Welcome Message -->
+                                        <div class="ai-message" style="align-self: flex-start; max-width: 75%;">
+                                            <div style="display: flex; gap: 0.75rem; align-items: start;">
+                                                <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0;">🤖</div>
+                                                <div style="background: white; padding: 1rem; border-radius: 1rem; box-shadow: var(--shadow); border-top-left-radius: 0.25rem;">
+                                                    <p style="margin: 0; color: var(--text-primary); line-height: 1.6;">
+                                                        👋 Hello! I'm Rilono AI, your personal assistant for visa documentation and guidance. I can help you with:
+                                                    </p>
+                                                    <ul style="margin: 0.75rem 0 0 0; padding-left: 1.25rem; color: var(--text-primary);">
+                                                        <li>Document requirements and checklists</li>
+                                                        <li>Visa application guidance</li>
+                                                        <li>Profile completion status</li>
+                                                        <li>Answering questions about your documents</li>
+                                                    </ul>
+                                                    <p style="margin: 0.75rem 0 0 0; color: var(--text-primary);">
+                                                        How can I assist you today?
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Chat Input Area -->
+                                    <div style="padding: 1rem 1.5rem; background: white; border-top: 1px solid var(--border-color);">
+                                        <form id="rilonoAiChatForm" style="display: flex; gap: 0.75rem; align-items: flex-end;">
+                                            <div style="flex: 1; position: relative;">
+                                                <textarea 
+                                                    id="rilonoAiChatInput" 
+                                                    rows="1" 
+                                                    placeholder="Ask me anything about your visa documents or requirements..."
+                                                    style="width: 100%; padding: 0.875rem 3rem 0.875rem 1rem; border: 2px solid var(--border-color); border-radius: 1.5rem; font-size: 0.9375rem; resize: none; font-family: inherit; transition: border-color 0.2s; max-height: 120px;"
+                                                    onkeydown="handleRilonoAiChatKeyDown(event)"
+                                                    oninput="autoResizeRilonoAiInput(this)"
+                                                ></textarea>
+                                                <button 
+                                                    type="submit" 
+                                                    id="rilonoAiSendButton"
+                                                    style="position: absolute; right: 0.5rem; bottom: 0.5rem; width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.2s; font-size: 1.125rem;"
+                                                    onmouseover="this.style.transform='scale(1.1)'"
+                                                    onmouseout="this.style.transform='scale(1)'"
+                                                >
+                                                    ➤
+                                                </button>
+                                            </div>
+                                        </form>
+                                        <div style="margin-top: 0.75rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                            <button 
+                                                type="button" 
+                                                class="quick-chat-btn"
+                                                onclick="sendQuickMessage('What documents do I need to upload?')"
+                                                style="padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 1rem; font-size: 0.875rem; cursor: pointer; transition: all 0.2s; color: var(--text-primary);"
+                                                onmouseover="this.style.background='var(--primary-color)'; this.style.color='white'; this.style.borderColor='var(--primary-color)'"
+                                                onmouseout="this.style.background='var(--bg-color)'; this.style.color='var(--text-primary)'; this.style.borderColor='var(--border-color)'"
+                                            >
+                                                📋 Document Checklist
+                                            </button>
+                                            <button 
+                                                type="button" 
+                                                class="quick-chat-btn"
+                                                onclick="sendQuickMessage('What is my profile completion status?')"
+                                                style="padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 1rem; font-size: 0.875rem; cursor: pointer; transition: all 0.2s; color: var(--text-primary);"
+                                                onmouseover="this.style.background='var(--primary-color)'; this.style.color='white'; this.style.borderColor='var(--primary-color)'"
+                                                onmouseout="this.style.background='var(--bg-color)'; this.style.color='var(--text-primary)'; this.style.borderColor='var(--border-color)'"
+                                            >
+                                                📊 Profile Status
+                                            </button>
+                                            <button 
+                                                type="button" 
+                                                class="quick-chat-btn"
+                                                onclick="sendQuickMessage('Help me with visa application process')"
+                                                style="padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 1rem; font-size: 0.875rem; cursor: pointer; transition: all 0.2s; color: var(--text-primary);"
+                                                onmouseover="this.style.background='var(--primary-color)'; this.style.color='white'; this.style.borderColor='var(--primary-color)'"
+                                                onmouseout="this.style.background='var(--bg-color)'; this.style.color='var(--text-primary)'; this.style.borderColor='var(--border-color)'"
+                                            >
+                                                🛂 Visa Help
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
             </div>
         </div>
 
