@@ -54,6 +54,14 @@ async def read_root():
 def health_check():
     return {"status": "healthy"}
 
+@app.get("/messages")
+async def read_messages():
+    """Serve the messages HTML page"""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "pages", "messages.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    return {"detail": "Messages page not found"}
+
 # Catch-all route for client-side routing
 # This must be last to allow API routes to work
 @app.get("/{full_path:path}")

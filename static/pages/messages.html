@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-85F78RGWJQ"></script>
+    <script>
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){dataLayer.push(arguments);}
+        gtag('js', new Date());
+        gtag('config', 'G-85F78RGWJQ');
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Messages - Rilono</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <!-- Favicons -->
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="apple-touch-icon" href="/static/logo.png">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <a href="/" style="display: flex; align-items: center; gap: 0.75rem; text-decoration: none; color: white;">
+                    <img src="/static/logo.png" alt="Rilono Logo" style="height: 40px; width: auto; object-fit: contain;">
+                    <h1 style="margin: 0;">Rilono</h1>
+                </a>
+            </div>
+            <div class="nav-links" id="navLinks">
+                <a href="/marketplace">Marketplace</a>
+                <a href="/sell" id="createLink" style="display: none;">Sell Item</a>
+                <a href="/login" id="loginLink">Login</a>
+                <a href="/register" id="registerLink">Register</a>
+                <div class="user-menu" id="userMenu" style="display: none; position: relative;">
+                    <div class="user-menu-trigger" onclick="toggleUserMenu()" id="userInfo">
+                        <!-- User info will be inserted here -->
+                    </div>
+                    <div class="user-menu-dropdown" id="userMenuDropdown" style="display: none;">
+                        <a href="/dashboard">
+                            <span>📊</span> Dashboard
+                        </a>
+                        <a href="/listings">
+                            <span>📦</span> My Listings
+                        </a>
+                        <a href="/messages">
+                            <span>💬</span> Messages <span id="unreadBadge" style="display: none; background: var(--danger-color); color: white; padding: 0.125rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; margin-left: 0.5rem;">0</span>
+                        </a>
+                        <a href="#" onclick="logout(); toggleUserMenu(); return false;">
+                            <span>🚪</span> Logout
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <!-- Messages Section -->
+        <div id="messagesSection" class="section" style="display: block;">
+            <div class="messages-container">
+                <div class="conversations-list">
+                    <h2>Conversations</h2>
+                    <div id="conversationsList">
+                        <!-- Conversations will be loaded here -->
+                    </div>
+                </div>
+                <div class="chat-container" id="chatContainer" style="display: none;">
+                    <div class="chat-header">
+                        <div style="display: flex; align-items: center; gap: 1rem; flex: 1;">
+                            <button onclick="closeChat()" class="btn-back">← Back</button>
+                            <div id="chatHeaderInfo"></div>
+                        </div>
+                        <button onclick="handleDeleteConversation()" class="btn-delete-chat" id="deleteChatBtn" style="display: none;" title="Delete conversation">
+                            🗑️
+                        </button>
+                    </div>
+                    <div class="chat-messages" id="chatMessages">
+                        <!-- Messages will be loaded here -->
+                    </div>
+                    <div class="chat-input-container">
+                        <form id="messageForm" onsubmit="sendMessage(event)">
+                            <div style="position: relative; flex: 1; display: flex; gap: 0.5rem;">
+                                <button type="button" onclick="toggleEmojiPicker()" class="btn-emoji" title="Add emoji">😊</button>
+                                <div id="emojiPicker" class="emoji-picker" style="display: none;">
+                                    <div class="emoji-grid">
+                                        <span onclick="insertEmoji('😊')">😊</span>
+                                        <span onclick="insertEmoji('😂')">😂</span>
+                                        <span onclick="insertEmoji('❤️')">❤️</span>
+                                        <span onclick="insertEmoji('👍')">👍</span>
+                                        <span onclick="insertEmoji('👎')">👎</span>
+                                        <span onclick="insertEmoji('😍')">😍</span>
+                                        <span onclick="insertEmoji('😢')">😢</span>
+                                        <span onclick="insertEmoji('😮')">😮</span>
+                                        <span onclick="insertEmoji('😡')">😡</span>
+                                        <span onclick="insertEmoji('🤔')">🤔</span>
+                                        <span onclick="insertEmoji('🙌')">🙌</span>
+                                        <span onclick="insertEmoji('👏')">👏</span>
+                                        <span onclick="insertEmoji('🎉')">🎉</span>
+                                        <span onclick="insertEmoji('🔥')">🔥</span>
+                                        <span onclick="insertEmoji('💯')">💯</span>
+                                        <span onclick="insertEmoji('✅')">✅</span>
+                                        <span onclick="insertEmoji('❌')">❌</span>
+                                        <span onclick="insertEmoji('👍')">👍</span>
+                                        <span onclick="insertEmoji('👌')">👌</span>
+                                        <span onclick="insertEmoji('🙏')">🙏</span>
+                                        <span onclick="insertEmoji('😎')">😎</span>
+                                        <span onclick="insertEmoji('🤗')">🤗</span>
+                                        <span onclick="insertEmoji('😴')">😴</span>
+                                        <span onclick="insertEmoji('😋')">😋</span>
+                                        <span onclick="insertEmoji('🥳')">🥳</span>
+                                    </div>
+                                </div>
+                                <input type="text" id="messageInput" placeholder="Type a message..." required>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Send</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="no-chat-selected" id="noChatSelected">
+                    <p>Select a conversation to start messaging</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="message" class="message"></div>
+    
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-links">
+                <a href="/privacy">Privacy Policy</a>
+                <a href="/terms">Terms & Conditions</a>
+            </div>
+            <div class="footer-copyright">
+                © 2025 Rilono. All rights reserved.
+            </div>
+        </div>
+    </footer>
+    
+    <script src="/static/app.js"></script>
+    <script>
+        // Initialize messages page when loaded
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Check if user is logged in
+            await checkAuth();
+            if (currentUser) {
+                updateUIForAuth();
+                await loadConversations();
+                
+                // Check for query parameters to open a conversation
+                const urlParams = new URLSearchParams(window.location.search);
+                const itemId = urlParams.get('itemId');
+                const sellerId = urlParams.get('sellerId');
+                
+                if (itemId && sellerId) {
+                    // Small delay to ensure messages section is loaded
+                    setTimeout(() => {
+                        openConversation(itemId, sellerId, '', '');
+                        // Load item details to get seller info
+                        fetch(`${API_BASE}/api/items/${itemId}`)
+                            .then(res => res.json())
+                            .then(item => {
+                                if (currentConversation) {
+                                    currentConversation.itemTitle = item.title;
+                                    currentConversation.otherUsername = item.seller.username;
+                                    // Update header with seller details
+                                    const sellerName = item.seller.full_name || item.seller.username;
+                                    const sellerUniversity = item.seller.university || '';
+                                    const chatHeaderInfo = document.getElementById('chatHeaderInfo');
+                                    if (chatHeaderInfo) {
+                                        chatHeaderInfo.innerHTML = `
+                                            <div>
+                                                <strong>${escapeHtml(sellerName)}</strong>
+                                                ${sellerUniversity ? `<div style="font-size: 0.875rem; color: var(--text-secondary);">${escapeHtml(sellerUniversity)}</div>` : ''}
+                                                <div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem;">${escapeHtml(item.title)}</div>
+                                            </div>
+                                        `;
+                                    }
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error loading item details:', error);
+                            });
+                    }, 100);
+                }
+            } else {
+                // Redirect to login if not authenticated
+                window.location.href = '/login';
+            }
+        });
+    </script>
+</body>
+</html>
+

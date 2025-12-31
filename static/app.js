@@ -70,8 +70,6 @@ function handleRoute(skipURLUpdate = false) {
         showCreateItem(skipURLUpdate);
     } else if (path === '/listings') {
         showMyListings(skipURLUpdate);
-    } else if (path === '/messages') {
-        showMessages(skipURLUpdate);
     } else if (path === '/dashboard') {
         showDashboard(skipURLUpdate);
     } else if (path === '/privacy') {
@@ -641,17 +639,8 @@ function showMyListings(skipURLUpdate = false) {
 }
 
 function showMessages(skipURLUpdate = false) {
-    if (!currentUser) {
-        showMessage('Please login to view messages', 'error');
-        showLogin();
-        return;
-    }
-    hideAllSections();
-    document.getElementById('messagesSection').style.display = 'block';
-    loadConversations();
-    if (!skipURLUpdate) {
-        updateURL('/messages', false); // Use pushState for navigation
-    }
+    // Redirect to messages page since messages are now on a separate page
+    window.location.href = '/messages';
 }
 
 function showDashboard(skipURLUpdate = false) {
@@ -1988,33 +1977,8 @@ function startConversation(itemId, sellerId) {
         return;
     }
     
-    showMessages();
-    // Small delay to ensure messages section is loaded
-    setTimeout(() => {
-        openConversation(itemId, sellerId, '', '');
-        // Load item details to get seller info
-        fetch(`${API_BASE}/api/items/${itemId}`)
-            .then(res => res.json())
-            .then(item => {
-                if (currentConversation) {
-                    currentConversation.itemTitle = item.title;
-                    currentConversation.otherUsername = item.seller.username;
-                    // Update header with seller details
-                    const sellerName = item.seller.full_name || item.seller.username;
-                    const sellerUniversity = item.seller.university || '';
-                    document.getElementById('chatHeaderInfo').innerHTML = `
-                        <div>
-                            <strong>${escapeHtml(sellerName)}</strong>
-                            ${sellerUniversity ? `<div style="font-size: 0.875rem; color: var(--text-secondary);">${escapeHtml(sellerUniversity)}</div>` : ''}
-                            <div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.25rem;">${escapeHtml(item.title)}</div>
-                        </div>
-                    `;
-                }
-            })
-            .catch(err => {
-                console.error('Failed to load item:', err);
-            });
-    }, 100);
+    // Redirect to messages page with query parameters
+    window.location.href = `/messages?itemId=${itemId}&sellerId=${sellerId}`;
 }
 
 function scrollChatToBottom() {

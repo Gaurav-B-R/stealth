@@ -55,7 +55,7 @@
                         <a href="/listings" onclick="event.preventDefault(); showMyListings(); toggleUserMenu(); return false;">
                             <span>📦</span> My Listings
                         </a>
-                        <a href="/messages" onclick="event.preventDefault(); showMessages(); toggleUserMenu(); return false;">
+                        <a href="/messages" onclick="toggleUserMenu(); return true;">
                             <span>💬</span> Messages <span id="unreadBadge" style="display: none; background: var(--danger-color); color: white; padding: 0.125rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; margin-left: 0.5rem;">0</span>
                         </a>
                         <a href="#" onclick="logout(); toggleUserMenu(); return false;">
@@ -593,7 +593,7 @@
                                             <span class="action-icon">📦</span>
                                             <span>My Listings</span>
                                         </a>
-                                        <a href="#" onclick="event.preventDefault(); showMessages(); return false;" class="quick-action-btn">
+                                        <a href="/messages" class="quick-action-btn">
                                             <span class="action-icon">💬</span>
                                             <span>Messages</span>
                                         </a>
@@ -943,73 +943,6 @@
                             </div>
                         </div>
                     </div>
-            </div>
-        </div>
-
-        <!-- Messages Section -->
-        <div id="messagesSection" class="section" style="display: none;">
-            <div class="messages-container">
-                <div class="conversations-list">
-                    <h2>Conversations</h2>
-                    <div id="conversationsList">
-                        <!-- Conversations will be loaded here -->
-                    </div>
-                </div>
-                <div class="chat-container" id="chatContainer" style="display: none;">
-                    <div class="chat-header">
-                        <div style="display: flex; align-items: center; gap: 1rem; flex: 1;">
-                            <button onclick="closeChat()" class="btn-back">← Back</button>
-                            <div id="chatHeaderInfo"></div>
-                        </div>
-                        <button onclick="handleDeleteConversation()" class="btn-delete-chat" id="deleteChatBtn" style="display: none;" title="Delete conversation">
-                            🗑️
-                        </button>
-                    </div>
-                    <div class="chat-messages" id="chatMessages">
-                        <!-- Messages will be loaded here -->
-                    </div>
-                    <div class="chat-input-container">
-                        <form id="messageForm" onsubmit="sendMessage(event)">
-                            <div style="position: relative; flex: 1; display: flex; gap: 0.5rem;">
-                                <button type="button" onclick="toggleEmojiPicker()" class="btn-emoji" title="Add emoji">😊</button>
-                                <div id="emojiPicker" class="emoji-picker" style="display: none;">
-                                    <div class="emoji-grid">
-                                        <span onclick="insertEmoji('😊')">😊</span>
-                                        <span onclick="insertEmoji('😂')">😂</span>
-                                        <span onclick="insertEmoji('❤️')">❤️</span>
-                                        <span onclick="insertEmoji('👍')">👍</span>
-                                        <span onclick="insertEmoji('👎')">👎</span>
-                                        <span onclick="insertEmoji('😍')">😍</span>
-                                        <span onclick="insertEmoji('😢')">😢</span>
-                                        <span onclick="insertEmoji('😮')">😮</span>
-                                        <span onclick="insertEmoji('😡')">😡</span>
-                                        <span onclick="insertEmoji('🤔')">🤔</span>
-                                        <span onclick="insertEmoji('🙌')">🙌</span>
-                                        <span onclick="insertEmoji('👏')">👏</span>
-                                        <span onclick="insertEmoji('🎉')">🎉</span>
-                                        <span onclick="insertEmoji('🔥')">🔥</span>
-                                        <span onclick="insertEmoji('💯')">💯</span>
-                                        <span onclick="insertEmoji('✅')">✅</span>
-                                        <span onclick="insertEmoji('❌')">❌</span>
-                                        <span onclick="insertEmoji('👍')">👍</span>
-                                        <span onclick="insertEmoji('👌')">👌</span>
-                                        <span onclick="insertEmoji('🙏')">🙏</span>
-                                        <span onclick="insertEmoji('😎')">😎</span>
-                                        <span onclick="insertEmoji('🤗')">🤗</span>
-                                        <span onclick="insertEmoji('😴')">😴</span>
-                                        <span onclick="insertEmoji('😋')">😋</span>
-                                        <span onclick="insertEmoji('🥳')">🥳</span>
-                                    </div>
-                                </div>
-                                <input type="text" id="messageInput" placeholder="Type a message..." required>
-                            </div>
-                            <button type="submit" class="btn btn-primary">Send</button>
-                        </form>
-                    </div>
-                </div>
-                <div class="no-chat-selected" id="noChatSelected">
-                    <p>Select a conversation to start messaging</p>
-                </div>
             </div>
         </div>
     </div>
