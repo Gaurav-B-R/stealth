@@ -12,6 +12,7 @@ from app.utils.security import (
     encode_salt_for_storage,
     decode_salt_from_storage
 )
+from app.utils.gemini_service import extract_text_from_document, create_extracted_text_file
 from typing import Optional, List
 import os
 import uuid
@@ -180,6 +181,36 @@ async def upload_document(
     # Upload ENCRYPTED file to R2 (stored as encrypted blob)
     r2_key = upload_document_to_r2(encrypted_file_data, unique_filename, content_type)
     
+    # Process document with Gemini AI to extract text
+    extracted_text_file_url = None
+    is_processed = False
+    
+    try:
+        # Extract text from the original document (before encryption)
+        extracted_text = extract_text_from_document(contents, original_filename, content_type)
+        
+        if extracted_text:
+            # Create .txt file from extracted text
+            extracted_text_bytes = create_extracted_text_file(extracted_text, original_filename)
+            
+            # Generate unique filename for extracted text file
+            extracted_text_filename = f"user_{current_user.id}/{uuid.uuid4()}_extracted.txt"
+            
+            # Upload extracted text file to R2 (stored as plain text, not encrypted)
+            # This allows quick access to document information without decryption
+            extracted_text_r2_key = upload_document_to_r2(
+                extracted_text_bytes, 
+                extracted_text_filename, 
+                "text/plain"
+            )
+            
+            extracted_text_file_url = extracted_text_r2_key
+            is_processed = True
+    except Exception as e:
+        # Log error but don't fail the upload if Gemini processing fails
+        print(f"Warning: Failed to process document with Gemini: {str(e)}")
+        # Continue with document upload even if Gemini processing fails
+    
     # Create database record with encrypted key
     db_document = models.Document(
         user_id=current_user.id,
@@ -193,6 +224,8 @@ async def upload_document(
         intake=intake,
         year=year,
         description=description,
+        is_processed=is_processed,
+        extracted_text_file_url=extracted_text_file_url,  # R2 key for extracted text file
         encrypted_file_key=base64.b64encode(encrypted_file_key).decode('utf-8')  # Store encrypted key
     )
     
@@ -346,6 +379,48 @@ async def download_document(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to download document: {str(e)}")
 
+@router.get("/{document_id}/extracted-text")
+async def get_extracted_text(
+    document_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the extracted text file for a document.
+    This returns the Gemini-processed text file without requiring password.
+    Users can only access their own documents.
+    """
+    document = db.query(models.Document).filter(models.Document.id == document_id).first()
+    
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # Security: Users can only access their own documents (unless admin)
+    if document.user_id != current_user.id and not (current_user.is_admin or current_user.is_developer):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Check if document has been processed
+    if not document.extracted_text_file_url:
+        raise HTTPException(
+            status_code=404,
+            detail="Extracted text not available. Document may not have been processed yet."
+        )
+    
+    try:
+        # Get extracted text file from R2 (stored as plain text, not encrypted)
+        response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.extracted_text_file_url)
+        file_content = response['Body'].read()
+        
+        return StreamingResponse(
+            BytesIO(file_content),
+            media_type="text/plain",
+            headers={
+                "Content-Disposition": f'attachment; filename="{document.original_filename}_extracted.txt"'
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download extracted text: {str(e)}")
+
 # ========== ADMIN/DEVELOPER ENDPOINTS ==========
 
 @router.get("/admin/all", response_model=schemas.DocumentListResponse)
@@ -462,13 +537,21 @@ async def delete_document(
         raise HTTPException(status_code=403, detail="Access denied. You can only delete your own documents.")
     
     try:
-        # Delete from R2
+        # Delete original file from R2
         try:
             r2_client.delete_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.filename)
         except Exception as r2_error:
             # Log the error but continue with database deletion
             # The file might already be deleted or not exist
             print(f"Warning: Failed to delete file from R2: {str(r2_error)}")
+        
+        # Delete extracted text file from R2 if it exists
+        if document.extracted_text_file_url:
+            try:
+                r2_client.delete_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.extracted_text_file_url)
+            except Exception as r2_error:
+                # Log the error but continue with database deletion
+                print(f"Warning: Failed to delete extracted text file from R2: {str(r2_error)}")
         
         # Delete from database
         db.delete(document)
@@ -492,8 +575,16 @@ async def delete_document_admin(
         raise HTTPException(status_code=404, detail="Document not found")
     
     try:
-        # Delete from R2
+        # Delete original file from R2
         r2_client.delete_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.filename)
+        
+        # Delete extracted text file from R2 if it exists
+        if document.extracted_text_file_url:
+            try:
+                r2_client.delete_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.extracted_text_file_url)
+            except Exception as r2_error:
+                # Log the error but continue with database deletion
+                print(f"Warning: Failed to delete extracted text file from R2: {str(r2_error)}")
         
         # Delete from database
         db.delete(document)

@@ -21,6 +21,9 @@ uploads/
 # Environment variables
 .env
 
+# Service account credentials (GCP/Vertex AI)
+service_account.json
+
 # IDE
 .vscode/
 .idea/

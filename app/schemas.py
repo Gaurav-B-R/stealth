@@ -154,6 +154,7 @@ class DocumentResponse(BaseModel):
     year: Optional[int] = None
     description: Optional[str] = None
     is_processed: bool
+    extracted_text_file_url: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     uploader: UserResponse

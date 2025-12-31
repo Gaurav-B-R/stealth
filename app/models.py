@@ -108,6 +108,7 @@ class Document(Base):
     year = Column(Integer, nullable=True)  # Year
     description = Column(Text, nullable=True)  # Optional description
     is_processed = Column(Boolean, default=False)  # Whether AI has processed it
+    extracted_text_file_url = Column(String, nullable=True)  # R2 URL for Gemini-extracted text file
     encrypted_file_key = Column(Text, nullable=True)  # File encryption key encrypted with user password (base64)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
