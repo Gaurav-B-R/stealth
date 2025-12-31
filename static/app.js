@@ -417,12 +417,15 @@ function renderNotifications() {
         const icon = getNotificationIcon(notif.type);
         const readClass = notif.read ? 'read' : '';
         
+        // Format message with line breaks
+        const formattedMessage = escapeHtml(notif.message).replace(/\n/g, '<br>');
+        
         return `
             <div class="notification-item ${readClass}" onclick="markNotificationRead(${notif.id})">
                 <div class="notification-icon ${notif.type}">${icon}</div>
                 <div class="notification-content">
                     <div class="notification-title">${escapeHtml(notif.title)}</div>
-                    <div class="notification-message">${escapeHtml(notif.message)}</div>
+                    <div class="notification-message">${formattedMessage}</div>
                     <div class="notification-time">${timeAgo}</div>
                 </div>
                 ${!notif.read ? '<div class="notification-dot"></div>' : ''}
@@ -2891,14 +2894,20 @@ async function handleDocumentUpload(e) {
         const data = await response.json();
         
         if (response.ok) {
+            const documentName = file.name;
+            const docType = documentType || 'document';
+            
             // Check for validation results
             if (data.validation) {
                 const validation = data.validation;
                 if (!validation.is_valid) {
                     // Document validation failed
+                    const docTypeText = docType ? ` (${docType})` : '';
+                    const notificationMessage = `File: ${documentName}${docTypeText}\n\n${validation.message || 'The uploaded document does not match the specified type. Please verify and upload the correct document.'}`;
+                    
                     addNotification(
-                        'Document Validation Failed',
-                        validation.message || 'The uploaded document does not match the specified type. Please verify and upload the correct document.',
+                        'Rilono AI: Document Validation Failed',
+                        notificationMessage,
                         'error',
                         validation.details
                     );
@@ -2906,9 +2915,11 @@ async function handleDocumentUpload(e) {
                 } else {
                     // Document validation passed
                     const name = validation.details?.Name || '';
-                    const successMsg = name ? `Document validated successfully! Extracted name: ${name}` : 'Document validated and uploaded successfully!';
+                    const docTypeText = docType ? ` (${docType})` : '';
+                    const successMsg = `File: ${documentName}${docTypeText}\n\n${name ? `Extracted name: ${name}\n\n` : ''}Document validated successfully! All information has been extracted.`;
+                    
                     addNotification(
-                        'Document Validated',
+                        'Rilono AI: Document Validated',
                         successMsg,
                         'success',
                         validation.details
@@ -2917,6 +2928,13 @@ async function handleDocumentUpload(e) {
                 }
             } else {
                 // No validation data (legacy or processing failed)
+                const docTypeText = docType ? ` (${docType})` : '';
+                addNotification(
+                    'Rilono AI: Document Uploaded',
+                    `File: ${documentName}${docTypeText}\n\nDocument uploaded successfully. Processing may be in progress.`,
+                    'info',
+                    null
+                );
                 showMessage('Document encrypted and uploaded successfully!', 'success');
             }
             
