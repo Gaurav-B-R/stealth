@@ -12,7 +12,7 @@ from app.utils.security import (
     encode_salt_for_storage,
     decode_salt_from_storage
 )
-from app.utils.gemini_service import extract_text_from_document, create_extracted_text_file
+from app.utils.gemini_service import extract_text_from_document, create_extracted_text_file, validate_and_extract_document
 from typing import Optional, List
 import os
 import uuid
@@ -109,7 +109,7 @@ def get_presigned_url(r2_key: str, expiration: int = 3600) -> str:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate presigned URL: {str(e)}")
 
-@router.post("/upload", response_model=schemas.DocumentResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/upload", response_model=schemas.DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     file: UploadFile = File(...),
     password: str = Form(...),  # User's password for Zero-Knowledge encryption
@@ -181,23 +181,36 @@ async def upload_document(
     # Upload ENCRYPTED file to R2 (stored as encrypted blob)
     r2_key = upload_document_to_r2(encrypted_file_data, unique_filename, content_type)
     
-    # Process document with Gemini AI to extract text
+    # Process document with Gemini AI for validation and text extraction
     extracted_text_file_url = None
     is_processed = False
+    validation_result = None
+    validation_message = None
+    is_valid = True
     
     try:
-        # Extract text from the original document (before encryption)
-        extracted_text = extract_text_from_document(contents, original_filename, content_type)
+        # Validate document type and extract information
+        validation_result = validate_and_extract_document(
+            contents, 
+            original_filename, 
+            content_type,
+            document_type  # Pass the document type for validation
+        )
         
-        if extracted_text:
-            # Create .txt file from extracted text
-            extracted_text_bytes = create_extracted_text_file(extracted_text, original_filename)
+        if validation_result:
+            # Check validation result
+            is_valid = validation_result.get("Document Validation", "No").upper() == "YES"
+            validation_message = validation_result.get("Message", "")
+            
+            # Create JSON file with validation and extracted information
+            import json
+            validation_json = json.dumps(validation_result, indent=2)
+            extracted_text_bytes = validation_json.encode('utf-8')
             
             # Generate unique filename for extracted text file
             extracted_text_filename = f"user_{current_user.id}/{uuid.uuid4()}_extracted.txt"
             
             # Upload extracted text file to R2 (stored as plain text, not encrypted)
-            # This allows quick access to document information without decryption
             extracted_text_r2_key = upload_document_to_r2(
                 extracted_text_bytes, 
                 extracted_text_filename, 
@@ -209,6 +222,7 @@ async def upload_document(
     except Exception as e:
         # Log error but don't fail the upload if Gemini processing fails
         print(f"Warning: Failed to process document with Gemini: {str(e)}")
+        validation_message = "Document uploaded but validation failed. Please verify your document manually."
         # Continue with document upload even if Gemini processing fails
     
     # Create database record with encrypted key
@@ -237,7 +251,17 @@ async def upload_document(
     # Users will need to provide password to decrypt when viewing/downloading
     db_document.file_url = ""  # Empty URL - requires password to decrypt
     
-    return db_document
+    # Prepare response with validation information
+    response_data = schemas.DocumentUploadResponse(
+        document=db_document,
+        validation=schemas.DocumentValidationResponse(
+            is_valid=is_valid,
+            message=validation_message,
+            details=validation_result if validation_result else None
+        )
+    )
+    
+    return response_data
 
 @router.get("/my-documents", response_model=List[schemas.DocumentResponse])
 async def get_my_documents(

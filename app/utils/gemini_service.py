@@ -83,6 +83,223 @@ if not USE_VERTEX_AI:
 SUPPORTED_IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 SUPPORTED_DOCUMENT_TYPES = {".pdf", ".txt"}
 
+def validate_and_extract_document(file_contents: bytes, filename: str, mime_type: str, document_type: Optional[str] = None) -> Optional[dict]:
+    """
+    Validate document type and extract information using Gemini AI.
+    Returns a JSON dict with validation result and extracted information, or None if extraction fails.
+    
+    Response format:
+    {
+        "Document Validation": "Yes" or "No",
+        "Message": "Validation message",
+        "Name": "extracted name",
+        "Extracted Information": {...}
+    }
+    """
+    # Check if we have authentication configured
+    has_service_account = os.path.exists(SERVICE_ACCOUNT_PATH)
+    has_valid_api_key = GEMINI_API_KEY and GEMINI_API_KEY.startswith("AIza")
+    
+    if not has_service_account and not has_valid_api_key:
+        return None
+    
+    try:
+        file_extension = os.path.splitext(filename)[1].lower()
+        
+        # Initialize the model
+        if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+            model = GenerativeModel('gemini-2.0-flash-lite')
+        elif GENAI_AVAILABLE:
+            model = genai.GenerativeModel('gemini-2.0-flash-lite')
+        else:
+            print("Error: Neither Vertex AI nor standard Gemini API available")
+            return None
+        
+        # Build validation prompt based on document type
+        validation_prompt = ""
+        if document_type:
+            validation_prompt = f"""You are a document validation system. The user claims this document is a {document_type.upper()}.
+
+TASK:
+1. Carefully examine the document
+2. Determine if it actually matches a {document_type.upper()}
+3. If YES: Set "Document Validation" to "Yes" and extract all information
+4. If NO: Set "Document Validation" to "No", identify what document type it actually is, and provide a helpful message asking the user to upload the correct document
+
+REQUIREMENTS:
+- You MUST respond with ONLY valid JSON, no markdown, no code blocks, no explanations
+- Start your response directly with {{ and end with }}
+- Do NOT include ```json or ``` markers
+- Do NOT include any text before or after the JSON
+
+REQUIRED JSON FORMAT:
+{{
+    "Document Validation": "Yes" or "No",
+    "Message": "If 'No': Explain what the document actually looks like (e.g., 'This does not look like your passport page, it looks like your resume. Please cross check and upload the right passport'). If 'Yes': 'Document validated successfully'",
+    "Name": "extracted name or null",
+    "Date of Birth": "extracted date of birth or null",
+    "Document Number": "extracted document number/ID or null",
+    "Expiration Date": "extracted expiration date or null",
+    "Issue Date": "extracted issue date or null",
+    "Country": "extracted country or null",
+    "Other Information": "any other relevant extracted information or null"
+}}
+
+Remember: Output ONLY the JSON object, nothing else."""
+        else:
+            validation_prompt = """Extract all information from this document.
+
+REQUIREMENTS:
+- You MUST respond with ONLY valid JSON, no markdown, no code blocks, no explanations
+- Start your response directly with { and end with }
+- Do NOT include ```json or ``` markers
+- Do NOT include any text before or after the JSON
+
+REQUIRED JSON FORMAT:
+{
+    "Document Validation": "Yes",
+    "Message": "Document information extracted successfully",
+    "Name": "extracted name or null",
+    "Date of Birth": "extracted date of birth or null",
+    "Document Number": "extracted document number/ID or null",
+    "Expiration Date": "extracted expiration date or null",
+    "Issue Date": "extracted issue date or null",
+    "Country": "extracted country or null",
+    "Other Information": "any other relevant extracted information or null"
+}
+
+Remember: Output ONLY the JSON object, nothing else."""
+        
+        # Handle different file types
+        if file_extension in SUPPORTED_IMAGE_TYPES:
+            # For images, use vision model
+            image = Image.open(io.BytesIO(file_contents))
+            
+            if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+                img_bytes = io.BytesIO()
+                image.save(img_bytes, format='JPEG')
+                img_bytes.seek(0)
+                image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
+                response = model.generate_content([validation_prompt, image_part])
+            else:
+                response = model.generate_content([validation_prompt, image])
+            
+            response_text = response.text.strip()
+        
+        elif file_extension == ".pdf":
+            # For PDFs
+            import tempfile
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                tmp_file.write(file_contents)
+                tmp_path = tmp_file.name
+            
+            try:
+                if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+                    with open(tmp_path, 'rb') as f:
+                        pdf_data = f.read()
+                    pdf_part = Part.from_data(pdf_data, mime_type="application/pdf")
+                    response = model.generate_content([validation_prompt, pdf_part])
+                else:
+                    pdf_file = genai.upload_file(
+                        path=tmp_path,
+                        mime_type="application/pdf"
+                    )
+                    import time
+                    while pdf_file.state.name == "PROCESSING":
+                        time.sleep(2)
+                        pdf_file = genai.get_file(pdf_file.name)
+                    
+                    if pdf_file.state.name == "FAILED":
+                        raise Exception(f"File processing failed: {pdf_file.state}")
+                    
+                    response = model.generate_content([validation_prompt, pdf_file])
+                    
+                    try:
+                        genai.delete_file(pdf_file.name)
+                    except:
+                        pass
+                
+                response_text = response.text.strip()
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+        
+        elif file_extension == ".txt":
+            text_content = file_contents.decode('utf-8', errors='ignore')
+            prompt = validation_prompt + f"\n\nDocument content:\n{text_content[:50000]}"
+            response = model.generate_content(prompt)
+            response_text = response.text.strip()
+        
+        else:
+            # Try to process as image
+            try:
+                image = Image.open(io.BytesIO(file_contents))
+                if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+                    img_bytes = io.BytesIO()
+                    image.save(img_bytes, format='JPEG')
+                    img_bytes.seek(0)
+                    image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
+                    response = model.generate_content([validation_prompt, image_part])
+                else:
+                    response = model.generate_content([validation_prompt, image])
+                response_text = response.text.strip()
+            except:
+                return None
+        
+        # Parse JSON response
+        try:
+            # Clean up response text - remove markdown code blocks if present
+            response_text = response_text.strip()
+            
+            # Remove markdown code blocks
+            if response_text.startswith("```json"):
+                response_text = response_text[7:].strip()
+            elif response_text.startswith("```"):
+                response_text = response_text[3:].strip()
+            
+            if response_text.endswith("```"):
+                response_text = response_text[:-3].strip()
+            
+            # Find first { and last } to extract JSON
+            first_brace = response_text.find('{')
+            last_brace = response_text.rfind('}')
+            
+            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                response_text = response_text[first_brace:last_brace + 1]
+            
+            import json
+            result = json.loads(response_text)
+            
+            # Ensure required fields exist
+            if "Document Validation" not in result:
+                result["Document Validation"] = "Yes"
+            if "Message" not in result:
+                result["Message"] = "Document processed successfully"
+            
+            return result
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON response from Gemini: {str(e)}")
+            print(f"Response text: {response_text[:500]}")
+            # Return a fallback response
+            return {
+                "Document Validation": "Yes",
+                "Message": "Document processed but validation response format was invalid. Please verify your document manually.",
+                "Name": None,
+                "Date of Birth": None,
+                "Document Number": None,
+                "Expiration Date": None,
+                "Issue Date": None,
+                "Country": None,
+                "Other Information": response_text[:500] if response_text else None
+            }
+    
+    except Exception as e:
+        print(f"Error validating and extracting document with Gemini: {str(e)}")
+        return None
+
 def extract_text_from_document(file_contents: bytes, filename: str, mime_type: str) -> Optional[str]:
     """
     Extract main information from a document using Gemini AI.

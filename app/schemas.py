@@ -162,6 +162,15 @@ class DocumentResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class DocumentValidationResponse(BaseModel):
+    is_valid: bool
+    message: Optional[str] = None
+    details: Optional[dict] = None
+
+class DocumentUploadResponse(BaseModel):
+    document: DocumentResponse
+    validation: DocumentValidationResponse
+
 class DocumentListResponse(BaseModel):
     documents: List[DocumentResponse]
     total: int

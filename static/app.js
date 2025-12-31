@@ -2,6 +2,10 @@ const API_BASE = '';
 let currentUser = null;
 let authToken = null;
 
+// Notification System
+let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
+let notificationDropdownOpen = false;
+
 // URL Routing System
 let isNavigating = false; // Flag to prevent recursive navigation
 
@@ -112,6 +116,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Check authentication first
     await checkAuth();
+    loadNotifications();
     
     // Handle initial route (use replaceState for initial load)
     handleRoute(true);
@@ -305,6 +310,8 @@ function updateUIForAuth() {
         document.getElementById('registerLink').style.display = 'none';
         document.getElementById('createLink').style.display = 'block';
         document.getElementById('userMenu').style.display = 'block';
+        document.getElementById('notificationContainer').style.display = 'block';
+        updateNotificationBadge();
         
         // Update homepage buttons
         const heroSellBtn = document.getElementById('heroSellBtn');
@@ -333,6 +340,7 @@ function updateUIForAuth() {
         document.getElementById('registerLink').style.display = 'block';
         document.getElementById('createLink').style.display = 'none';
         document.getElementById('userMenu').style.display = 'none';
+        document.getElementById('notificationContainer').style.display = 'none';
         
         // Update homepage buttons
         const heroSellBtn = document.getElementById('heroSellBtn');
@@ -349,12 +357,148 @@ function toggleUserMenu() {
     dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
 }
 
+// Notification Functions
+function addNotification(title, message, type = 'info', data = null) {
+    const notification = {
+        id: Date.now(),
+        title: title,
+        message: message,
+        type: type, // 'success', 'error', 'warning', 'info'
+        data: data,
+        timestamp: new Date().toISOString(),
+        read: false
+    };
+    notifications.unshift(notification);
+    // Keep only last 50 notifications
+    if (notifications.length > 50) {
+        notifications = notifications.slice(0, 50);
+    }
+    saveNotifications();
+    updateNotificationBadge();
+    renderNotifications();
+    return notification;
+}
+
+function saveNotifications() {
+    localStorage.setItem('notifications', JSON.stringify(notifications));
+}
+
+function loadNotifications() {
+    notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
+    updateNotificationBadge();
+    renderNotifications();
+}
+
+function updateNotificationBadge() {
+    const badge = document.getElementById('notificationBadge');
+    const unreadCount = notifications.filter(n => !n.read).length;
+    if (badge) {
+        if (unreadCount > 0) {
+            badge.textContent = unreadCount > 99 ? '99+' : unreadCount;
+            badge.style.display = 'block';
+        } else {
+            badge.style.display = 'none';
+        }
+    }
+}
+
+function renderNotifications() {
+    const list = document.getElementById('notificationList');
+    if (!list) return;
+    
+    if (notifications.length === 0) {
+        list.innerHTML = '<p style="text-align: center; padding: 1rem; color: var(--text-secondary);">No notifications</p>';
+        return;
+    }
+    
+    list.innerHTML = notifications.map(notif => {
+        const date = new Date(notif.timestamp);
+        const timeAgo = getTimeAgo(date);
+        const icon = getNotificationIcon(notif.type);
+        const readClass = notif.read ? 'read' : '';
+        
+        return `
+            <div class="notification-item ${readClass}" onclick="markNotificationRead(${notif.id})">
+                <div class="notification-icon ${notif.type}">${icon}</div>
+                <div class="notification-content">
+                    <div class="notification-title">${escapeHtml(notif.title)}</div>
+                    <div class="notification-message">${escapeHtml(notif.message)}</div>
+                    <div class="notification-time">${timeAgo}</div>
+                </div>
+                ${!notif.read ? '<div class="notification-dot"></div>' : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+function getNotificationIcon(type) {
+    const icons = {
+        'success': '✅',
+        'error': '❌',
+        'warning': '⚠️',
+        'info': 'ℹ️'
+    };
+    return icons[type] || 'ℹ️';
+}
+
+function getTimeAgo(date) {
+    const seconds = Math.floor((new Date() - date) / 1000);
+    if (seconds < 60) return 'just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function toggleNotifications() {
+    const dropdown = document.getElementById('notificationDropdown');
+    notificationDropdownOpen = !notificationDropdownOpen;
+    dropdown.style.display = notificationDropdownOpen ? 'block' : 'none';
+    if (notificationDropdownOpen) {
+        renderNotifications();
+    }
+}
+
+function markNotificationRead(id) {
+    const notif = notifications.find(n => n.id === id);
+    if (notif && !notif.read) {
+        notif.read = true;
+        saveNotifications();
+        updateNotificationBadge();
+        renderNotifications();
+    }
+}
+
+function clearAllNotifications() {
+    if (confirm('Clear all notifications?')) {
+        notifications = [];
+        saveNotifications();
+        updateNotificationBadge();
+        renderNotifications();
+    }
+}
+
 // Close dropdown when clicking outside
 document.addEventListener('click', (e) => {
     const userMenu = document.getElementById('userMenu');
     const dropdown = document.getElementById('userMenuDropdown');
     if (userMenu && dropdown && !userMenu.contains(e.target)) {
         dropdown.style.display = 'none';
+    }
+    
+    const notificationContainer = document.getElementById('notificationContainer');
+    const notificationDropdown = document.getElementById('notificationDropdown');
+    if (notificationContainer && notificationDropdown && !notificationContainer.contains(e.target)) {
+        notificationDropdown.style.display = 'none';
+        notificationDropdownOpen = false;
     }
 });
 
@@ -2747,7 +2891,35 @@ async function handleDocumentUpload(e) {
         const data = await response.json();
         
         if (response.ok) {
-            showMessage('Document encrypted and uploaded successfully!', 'success');
+            // Check for validation results
+            if (data.validation) {
+                const validation = data.validation;
+                if (!validation.is_valid) {
+                    // Document validation failed
+                    addNotification(
+                        'Document Validation Failed',
+                        validation.message || 'The uploaded document does not match the specified type. Please verify and upload the correct document.',
+                        'error',
+                        validation.details
+                    );
+                    showMessage(validation.message || 'Document uploaded but validation failed. Please check notifications.', 'error');
+                } else {
+                    // Document validation passed
+                    const name = validation.details?.Name || '';
+                    const successMsg = name ? `Document validated successfully! Extracted name: ${name}` : 'Document validated and uploaded successfully!';
+                    addNotification(
+                        'Document Validated',
+                        successMsg,
+                        'success',
+                        validation.details
+                    );
+                    showMessage('Document encrypted and uploaded successfully!', 'success');
+                }
+            } else {
+                // No validation data (legacy or processing failed)
+                showMessage('Document encrypted and uploaded successfully!', 'success');
+            }
+            
             document.getElementById('documentUploadForm').reset();
             await loadMyDocuments();
         } else {
