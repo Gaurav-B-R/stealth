@@ -3531,6 +3531,7 @@ function toggleFloatingChat() {
         window.style.display = 'block';
         document.getElementById('floatingChatLoginPrompt').style.display = 'none';
         document.getElementById('floatingChatInputContainer').style.display = 'block';
+        messagesContainer.style.display = 'flex';
         
         // Show welcome message if no messages exist
         if (messagesContainer.children.length === 0) {
@@ -3544,12 +3545,23 @@ function toggleFloatingChat() {
                 </div>
             `;
             messagesContainer.appendChild(welcomeDiv);
+            // Scroll to bottom after welcome message
+            setTimeout(() => {
+                scrollFloatingChatToBottom();
+            }, 100);
         }
         
-        // Focus input
+        // Ensure proper layout and scrolling
         setTimeout(() => {
+            const messagesContainer = document.getElementById('floatingChatMessages');
+            if (messagesContainer) {
+                messagesContainer.style.display = 'flex';
+                // Force a reflow to ensure scrolling works
+                messagesContainer.offsetHeight;
+                scrollFloatingChatToBottom();
+            }
             document.getElementById('floatingChatInput')?.focus();
-        }, 100);
+        }, 150);
     } else {
         window.style.display = 'none';
     }
@@ -3565,6 +3577,22 @@ function handleFloatingChatKeyDown(event) {
 function autoResizeFloatingChatInput(textarea) {
     textarea.style.height = 'auto';
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+}
+
+function scrollFloatingChatToBottom() {
+    const messagesContainer = document.getElementById('floatingChatMessages');
+    if (!messagesContainer) return;
+    
+    // Force immediate scroll first
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    
+    // Then smooth scroll with requestAnimationFrame for better performance
+    requestAnimationFrame(() => {
+        messagesContainer.scrollTo({
+            top: messagesContainer.scrollHeight,
+            behavior: 'smooth'
+        });
+    });
 }
 
 function addMessageToFloatingChat(message, isUser = false) {
@@ -3601,14 +3629,15 @@ function addMessageToFloatingChat(message, isUser = false) {
     }
     
     messagesContainer.appendChild(messageDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    // Scroll to bottom with smooth behavior after DOM update
+    scrollFloatingChatToBottom();
 }
 
 function showFloatingChatTyping() {
     const typingIndicator = document.getElementById('floatingChatTyping');
     typingIndicator.style.display = 'block';
-    const messagesContainer = document.getElementById('floatingChatMessages');
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    // Scroll to bottom to show typing indicator
+    scrollFloatingChatToBottom();
 }
 
 function removeFloatingChatTyping() {
@@ -3690,15 +3719,22 @@ async function handleFloatingChatSubmit(e) {
 
 function updateFloatingChatVisibility() {
     const widget = document.getElementById('floatingAiChatWidget');
+    const messagesContainer = document.getElementById('floatingChatMessages');
     if (currentUser) {
         widget.style.display = 'block';
         document.getElementById('floatingChatLoginPrompt').style.display = 'none';
         document.getElementById('floatingChatInputContainer').style.display = 'block';
+        if (messagesContainer) {
+            messagesContainer.style.display = 'flex';
+        }
     } else {
         widget.style.display = 'block'; // Still show widget but with login prompt
         if (floatingChatOpen) {
             document.getElementById('floatingChatLoginPrompt').style.display = 'flex';
             document.getElementById('floatingChatInputContainer').style.display = 'none';
+            if (messagesContainer) {
+                messagesContainer.style.display = 'none';
+            }
         }
     }
 }
