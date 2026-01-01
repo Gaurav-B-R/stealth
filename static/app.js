@@ -117,6 +117,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Check authentication first
     await checkAuth();
     loadNotifications();
+    updateFloatingChatVisibility();
     
     // Handle initial route (use replaceState for initial load)
     handleRoute(true);
@@ -312,6 +313,7 @@ function updateUIForAuth() {
         document.getElementById('userMenu').style.display = 'block';
         document.getElementById('notificationContainer').style.display = 'block';
         updateNotificationBadge();
+        updateFloatingChatVisibility();
         
         // Update homepage buttons
         const heroSellBtn = document.getElementById('heroSellBtn');
@@ -341,6 +343,7 @@ function updateUIForAuth() {
         document.getElementById('createLink').style.display = 'none';
         document.getElementById('userMenu').style.display = 'none';
         document.getElementById('notificationContainer').style.display = 'none';
+        updateFloatingChatVisibility();
         
         // Update homepage buttons
         const heroSellBtn = document.getElementById('heroSellBtn');
@@ -1063,6 +1066,9 @@ function logout() {
     localStorage.removeItem('authToken');
     authToken = null;
     currentUser = null;
+    floatingChatOpen = false;
+    floatingChatConversationHistory = [];
+    document.getElementById('floatingChatWindow').style.display = 'none';
     updateUIForAuth();
     showMessage('Logged out successfully', 'success');
     showHomepage();
@@ -3337,6 +3343,9 @@ function removeRilonoAiTypingIndicator() {
     }
 }
 
+// Store conversation history for Rilono AI
+let rilonoAiConversationHistory = [];
+
 async function handleRilonoAiChatSubmit(e) {
     e.preventDefault();
     const input = document.getElementById('rilonoAiChatInput');
@@ -3344,22 +3353,68 @@ async function handleRilonoAiChatSubmit(e) {
     
     if (!message) return;
     
+    if (!authToken) {
+        showMessage('Please login to chat with Rilono AI', 'error');
+        return;
+    }
+    
     // Add user message
     addMessageToRilonoAiChat(message, true);
+    
+    // Add to conversation history
+    rilonoAiConversationHistory.push({
+        role: 'user',
+        content: message
+    });
+    
     input.value = '';
     autoResizeRilonoAiInput(input);
     
     // Show typing indicator
     showRilonoAiTypingIndicator();
     
-    // Simulate AI response (replace with actual API call later)
-    setTimeout(() => {
+    try {
+        // Call the AI chat API
+        const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                message: message,
+                conversation_history: rilonoAiConversationHistory.slice(-10)  // Last 10 messages for context
+            })
+        });
+        
         removeRilonoAiTypingIndicator();
         
-        // Generate response based on message
-        let response = generateRilonoAiResponse(message);
-        addMessageToRilonoAiChat(response, false);
-    }, 1000 + Math.random() * 1000); // Random delay between 1-2 seconds
+        if (response.ok) {
+            const data = await response.json();
+            const aiResponse = data.response;
+            
+            // Add AI response to conversation history
+            rilonoAiConversationHistory.push({
+                role: 'assistant',
+                content: aiResponse
+            });
+            
+            // Keep only last 20 messages in history
+            if (rilonoAiConversationHistory.length > 20) {
+                rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-20);
+            }
+            
+            addMessageToRilonoAiChat(aiResponse, false);
+        } else {
+            const errorData = await response.json();
+            const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
+            addMessageToRilonoAiChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
+        }
+    } catch (error) {
+        removeRilonoAiTypingIndicator();
+        console.error('Rilono AI chat error:', error);
+        addMessageToRilonoAiChat('Sorry, I encountered an error. Please try again later.', false);
+    }
 }
 
 function generateRilonoAiResponse(userMessage) {
@@ -3446,6 +3501,205 @@ function initializeRilonoAiChat() {
     const chatForm = document.getElementById('rilonoAiChatForm');
     if (chatForm) {
         chatForm.addEventListener('submit', handleRilonoAiChatSubmit);
+    }
+    // Reset conversation history when initializing (optional - can be removed if you want persistent history)
+    // rilonoAiConversationHistory = [];
+}
+
+// Floating Chat Widget Functions
+let floatingChatOpen = false;
+let floatingChatConversationHistory = [];
+
+function toggleFloatingChat() {
+    const widget = document.getElementById('floatingAiChatWidget');
+    const window = document.getElementById('floatingChatWindow');
+    const messagesContainer = document.getElementById('floatingChatMessages');
+    
+    if (!currentUser) {
+        // Show login prompt
+        document.getElementById('floatingChatLoginPrompt').style.display = 'flex';
+        document.getElementById('floatingChatInputContainer').style.display = 'none';
+        messagesContainer.innerHTML = '';
+        window.style.display = 'block';
+        floatingChatOpen = true;
+        return;
+    }
+    
+    floatingChatOpen = !floatingChatOpen;
+    
+    if (floatingChatOpen) {
+        window.style.display = 'block';
+        document.getElementById('floatingChatLoginPrompt').style.display = 'none';
+        document.getElementById('floatingChatInputContainer').style.display = 'block';
+        
+        // Show welcome message if no messages exist
+        if (messagesContainer.children.length === 0) {
+            const welcomeDiv = document.createElement('div');
+            welcomeDiv.className = 'chat-welcome-message';
+            welcomeDiv.innerHTML = `
+                <div class="chat-avatar">🤖</div>
+                <div class="welcome-bubble">
+                    <p><strong>Hello! I'm Rilono AI</strong></p>
+                    <p>I'm here to help you with your US visa process and documentation. How can I assist you today?</p>
+                </div>
+            `;
+            messagesContainer.appendChild(welcomeDiv);
+        }
+        
+        // Focus input
+        setTimeout(() => {
+            document.getElementById('floatingChatInput')?.focus();
+        }, 100);
+    } else {
+        window.style.display = 'none';
+    }
+}
+
+function handleFloatingChatKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        document.getElementById('floatingChatForm').dispatchEvent(new Event('submit'));
+    }
+}
+
+function autoResizeFloatingChatInput(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+}
+
+function addMessageToFloatingChat(message, isUser = false) {
+    const messagesContainer = document.getElementById('floatingChatMessages');
+    
+    // Remove welcome message if it exists (only when adding first user message)
+    if (isUser) {
+        const welcomeMsg = messagesContainer.querySelector('.chat-welcome-message');
+        if (welcomeMsg) {
+            welcomeMsg.remove();
+        }
+    }
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${isUser ? 'user' : 'assistant'}`;
+    
+    if (!isUser) {
+        const avatar = document.createElement('div');
+        avatar.className = 'chat-avatar';
+        avatar.textContent = '🤖';
+        messageDiv.appendChild(avatar);
+    }
+    
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-message-bubble';
+    bubble.textContent = message;
+    messageDiv.appendChild(bubble);
+    
+    if (isUser) {
+        const avatar = document.createElement('div');
+        avatar.className = 'chat-avatar';
+        avatar.textContent = currentUser?.full_name?.charAt(0).toUpperCase() || currentUser?.username?.charAt(0).toUpperCase() || 'U';
+        messageDiv.appendChild(avatar);
+    }
+    
+    messagesContainer.appendChild(messageDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function showFloatingChatTyping() {
+    const typingIndicator = document.getElementById('floatingChatTyping');
+    typingIndicator.style.display = 'block';
+    const messagesContainer = document.getElementById('floatingChatMessages');
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function removeFloatingChatTyping() {
+    const typingIndicator = document.getElementById('floatingChatTyping');
+    typingIndicator.style.display = 'none';
+}
+
+async function handleFloatingChatSubmit(e) {
+    e.preventDefault();
+    const input = document.getElementById('floatingChatInput');
+    const message = input.value.trim();
+    
+    if (!message) return;
+    
+    if (!authToken) {
+        showMessage('Please login to chat with Rilono AI', 'error');
+        toggleFloatingChat();
+        return;
+    }
+    
+    // Add user message
+    addMessageToFloatingChat(message, true);
+    
+    // Add to conversation history
+    floatingChatConversationHistory.push({
+        role: 'user',
+        content: message
+    });
+    
+    input.value = '';
+    autoResizeFloatingChatInput(input);
+    
+    // Show typing indicator
+    showFloatingChatTyping();
+    
+    try {
+        // Call the AI chat API
+        const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                message: message,
+                conversation_history: floatingChatConversationHistory.slice(-10)
+            })
+        });
+        
+        removeFloatingChatTyping();
+        
+        if (response.ok) {
+            const data = await response.json();
+            const aiResponse = data.response;
+            
+            // Add AI response to conversation history
+            floatingChatConversationHistory.push({
+                role: 'assistant',
+                content: aiResponse
+            });
+            
+            // Keep only last 20 messages in history
+            if (floatingChatConversationHistory.length > 20) {
+                floatingChatConversationHistory = floatingChatConversationHistory.slice(-20);
+            }
+            
+            addMessageToFloatingChat(aiResponse, false);
+        } else {
+            const errorData = await response.json();
+            const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
+            addMessageToFloatingChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
+        }
+    } catch (error) {
+        removeFloatingChatTyping();
+        console.error('Floating chat error:', error);
+        addMessageToFloatingChat('Sorry, I encountered an error. Please try again later.', false);
+    }
+}
+
+function updateFloatingChatVisibility() {
+    const widget = document.getElementById('floatingAiChatWidget');
+    if (currentUser) {
+        widget.style.display = 'block';
+        document.getElementById('floatingChatLoginPrompt').style.display = 'none';
+        document.getElementById('floatingChatInputContainer').style.display = 'block';
+    } else {
+        widget.style.display = 'block'; // Still show widget but with login prompt
+        if (floatingChatOpen) {
+            document.getElementById('floatingChatLoginPrompt').style.display = 'flex';
+            document.getElementById('floatingChatInputContainer').style.display = 'none';
+        }
     }
 }
 
