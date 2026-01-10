@@ -187,8 +187,28 @@ Current user message: {user_message}
 
 Please provide a helpful response to the user's question:"""
         
+        print("\n" + "="*80)
+        print(f"🔵 GEMINI API CALL: generate_ai_response() - AI CHAT")
+        print(f"👤 User: {user_name}")
+        print("-"*80)
+        print("📤 SENDING PROMPT TO GEMINI:")
+        print("-"*80)
+        print(full_prompt[:2000] + ("..." if len(full_prompt) > 2000 else ""))
+        if len(full_prompt) > 2000:
+            print(f"\n[... {len(full_prompt) - 2000} more characters ...]")
+        print("-"*80)
+        print("⏳ Waiting for Gemini response...")
+        
         # Generate response
         response = model.generate_content(full_prompt)
+        
+        print("✅ RECEIVED RESPONSE FROM GEMINI:")
+        print("-"*80)
+        print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+        if len(response.text) > 1000:
+            print(f"\n[... {len(response.text) - 1000} more characters ...]")
+        print("="*80 + "\n")
+        
         return response.text
         
     except Exception as e:

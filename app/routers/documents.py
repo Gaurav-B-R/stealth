@@ -219,9 +219,14 @@ async def upload_document(
             
             extracted_text_file_url = extracted_text_r2_key
             is_processed = True
+        else:
+            # If validation_result is None (Gemini returned None), mark as invalid
+            is_valid = False
+            validation_message = "Document uploaded but validation could not be completed. Please verify your document manually."
     except Exception as e:
         # Log error but don't fail the upload if Gemini processing fails
         print(f"Warning: Failed to process document with Gemini: {str(e)}")
+        is_valid = False  # Mark as invalid when processing fails
         validation_message = "Document uploaded but validation failed. Please verify your document manually."
         # Continue with document upload even if Gemini processing fails
     
@@ -240,7 +245,9 @@ async def upload_document(
         description=description,
         is_processed=is_processed,
         extracted_text_file_url=extracted_text_file_url,  # R2 key for extracted text file
-        encrypted_file_key=base64.b64encode(encrypted_file_key).decode('utf-8')  # Store encrypted key
+        encrypted_file_key=base64.b64encode(encrypted_file_key).decode('utf-8'),  # Store encrypted key
+        is_valid=is_valid,  # Store validation status from Gemini
+        validation_message=validation_message  # Store validation message from Gemini
     )
     
     db.add(db_document)

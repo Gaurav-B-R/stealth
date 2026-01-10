@@ -110,6 +110,8 @@ class Document(Base):
     is_processed = Column(Boolean, default=False)  # Whether AI has processed it
     extracted_text_file_url = Column(String, nullable=True)  # R2 URL for Gemini-extracted text file
     encrypted_file_key = Column(Text, nullable=True)  # File encryption key encrypted with user password (base64)
+    is_valid = Column(Boolean, nullable=True)  # Whether document validation passed (from Gemini)
+    validation_message = Column(Text, nullable=True)  # Validation message from Gemini (e.g., "Document validated successfully" or error message)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     

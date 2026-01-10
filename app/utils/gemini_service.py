@@ -175,6 +175,17 @@ Remember: Output ONLY the JSON object, nothing else."""
             # For images, use vision model
             image = Image.open(io.BytesIO(file_contents))
             
+            print("\n" + "="*80)
+            print(f"🔵 GEMINI API CALL: validate_and_extract_document() - IMAGE")
+            print(f"📄 File: {filename} ({file_extension})")
+            print(f"📝 Document Type: {document_type or 'Not specified'}")
+            print("-"*80)
+            print("📤 SENDING PROMPT TO GEMINI:")
+            print("-"*80)
+            print(validation_prompt)
+            print("-"*80)
+            print("⏳ Waiting for Gemini response...")
+            
             if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                 img_bytes = io.BytesIO()
                 image.save(img_bytes, format='JPEG')
@@ -185,6 +196,11 @@ Remember: Output ONLY the JSON object, nothing else."""
                 response = model.generate_content([validation_prompt, image])
             
             response_text = response.text.strip()
+            
+            print("✅ RECEIVED RESPONSE FROM GEMINI:")
+            print("-"*80)
+            print(response_text[:1000] + ("..." if len(response_text) > 1000 else ""))
+            print("="*80 + "\n")
         
         elif file_extension == ".pdf":
             # For PDFs
@@ -195,6 +211,17 @@ Remember: Output ONLY the JSON object, nothing else."""
                 tmp_path = tmp_file.name
             
             try:
+                print("\n" + "="*80)
+                print(f"🔵 GEMINI API CALL: validate_and_extract_document() - PDF")
+                print(f"📄 File: {filename}")
+                print(f"📝 Document Type: {document_type or 'Not specified'}")
+                print("-"*80)
+                print("📤 SENDING PROMPT TO GEMINI:")
+                print("-"*80)
+                print(validation_prompt)
+                print("-"*80)
+                print("⏳ Waiting for Gemini response...")
+                
                 if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                     with open(tmp_path, 'rb') as f:
                         pdf_data = f.read()
@@ -206,13 +233,16 @@ Remember: Output ONLY the JSON object, nothing else."""
                         mime_type="application/pdf"
                     )
                     import time
+                    print("📤 Uploading PDF to Gemini...")
                     while pdf_file.state.name == "PROCESSING":
+                        print("   ⏳ PDF still processing...")
                         time.sleep(2)
                         pdf_file = genai.get_file(pdf_file.name)
                     
                     if pdf_file.state.name == "FAILED":
                         raise Exception(f"File processing failed: {pdf_file.state}")
                     
+                    print("✅ PDF uploaded, generating content...")
                     response = model.generate_content([validation_prompt, pdf_file])
                     
                     try:
@@ -221,6 +251,11 @@ Remember: Output ONLY the JSON object, nothing else."""
                         pass
                 
                 response_text = response.text.strip()
+                
+                print("✅ RECEIVED RESPONSE FROM GEMINI:")
+                print("-"*80)
+                print(response_text[:1000] + ("..." if len(response_text) > 1000 else ""))
+                print("="*80 + "\n")
             finally:
                 try:
                     os.unlink(tmp_path)
@@ -230,13 +265,42 @@ Remember: Output ONLY the JSON object, nothing else."""
         elif file_extension == ".txt":
             text_content = file_contents.decode('utf-8', errors='ignore')
             prompt = validation_prompt + f"\n\nDocument content:\n{text_content[:50000]}"
+            
+            print("\n" + "="*80)
+            print(f"🔵 GEMINI API CALL: validate_and_extract_document() - TEXT")
+            print(f"📄 File: {filename}")
+            print(f"📝 Document Type: {document_type or 'Not specified'}")
+            print("-"*80)
+            print("📤 SENDING PROMPT TO GEMINI:")
+            print("-"*80)
+            print(prompt[:2000] + ("..." if len(prompt) > 2000 else ""))
+            print("-"*80)
+            print("⏳ Waiting for Gemini response...")
+            
             response = model.generate_content(prompt)
             response_text = response.text.strip()
+            
+            print("✅ RECEIVED RESPONSE FROM GEMINI:")
+            print("-"*80)
+            print(response_text[:1000] + ("..." if len(response_text) > 1000 else ""))
+            print("="*80 + "\n")
         
         else:
             # Try to process as image
             try:
                 image = Image.open(io.BytesIO(file_contents))
+                
+                print("\n" + "="*80)
+                print(f"🔵 GEMINI API CALL: validate_and_extract_document() - UNKNOWN TYPE (trying as image)")
+                print(f"📄 File: {filename} ({file_extension})")
+                print(f"📝 Document Type: {document_type or 'Not specified'}")
+                print("-"*80)
+                print("📤 SENDING PROMPT TO GEMINI:")
+                print("-"*80)
+                print(validation_prompt)
+                print("-"*80)
+                print("⏳ Waiting for Gemini response...")
+                
                 if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                     img_bytes = io.BytesIO()
                     image.save(img_bytes, format='JPEG')
@@ -246,6 +310,11 @@ Remember: Output ONLY the JSON object, nothing else."""
                 else:
                     response = model.generate_content([validation_prompt, image])
                 response_text = response.text.strip()
+                
+                print("✅ RECEIVED RESPONSE FROM GEMINI:")
+                print("-"*80)
+                print(response_text[:1000] + ("..." if len(response_text) > 1000 else ""))
+                print("="*80 + "\n")
             except:
                 return None
         
@@ -339,6 +408,16 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             
             Format the output as clear, structured text that captures all essential information from the document."""
             
+            print("\n" + "="*80)
+            print(f"🔵 GEMINI API CALL: extract_text_from_document() - IMAGE")
+            print(f"📄 File: {filename}")
+            print("-"*80)
+            print("📤 SENDING PROMPT TO GEMINI:")
+            print("-"*80)
+            print(prompt)
+            print("-"*80)
+            print("⏳ Waiting for Gemini response...")
+            
             if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                 # Vertex AI format - convert image to bytes
                 img_bytes = io.BytesIO()
@@ -349,6 +428,11 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             else:
                 # Standard API format
                 response = model.generate_content([prompt, image])
+            
+            print("✅ RECEIVED RESPONSE FROM GEMINI:")
+            print("-"*80)
+            print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+            print("="*80 + "\n")
             
             return response.text
         
@@ -373,6 +457,16 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 
                 Format the output as clear, structured text that captures all essential information from the document."""
                 
+                print("\n" + "="*80)
+                print(f"🔵 GEMINI API CALL: extract_text_from_document() - PDF")
+                print(f"📄 File: {filename}")
+                print("-"*80)
+                print("📤 SENDING PROMPT TO GEMINI:")
+                print("-"*80)
+                print(prompt)
+                print("-"*80)
+                print("⏳ Waiting for Gemini response...")
+                
                 if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                     # Vertex AI - read PDF directly
                     with open(tmp_path, 'rb') as f:
@@ -381,6 +475,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                     response = model.generate_content([prompt, pdf_part])
                 else:
                     # Standard API - upload file first
+                    print("📤 Uploading PDF to Gemini...")
                     pdf_file = genai.upload_file(
                         path=tmp_path,
                         mime_type="application/pdf"
@@ -389,12 +484,14 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                     # Wait for file to be processed
                     import time
                     while pdf_file.state.name == "PROCESSING":
+                        print("   ⏳ PDF still processing...")
                         time.sleep(2)
                         pdf_file = genai.get_file(pdf_file.name)
                     
                     if pdf_file.state.name == "FAILED":
                         raise Exception(f"File processing failed: {pdf_file.state}")
                     
+                    print("✅ PDF uploaded, generating content...")
                     response = model.generate_content([prompt, pdf_file])
                     
                     # Clean up uploaded file
@@ -402,6 +499,11 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                         genai.delete_file(pdf_file.name)
                     except:
                         pass
+                
+                print("✅ RECEIVED RESPONSE FROM GEMINI:")
+                print("-"*80)
+                print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+                print("="*80 + "\n")
                 
                 return response.text
             finally:
@@ -428,7 +530,23 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             Document content:
             {text_content[:50000]}"""  # Limit to 50k chars to avoid token limits
             
+            print("\n" + "="*80)
+            print(f"🔵 GEMINI API CALL: extract_text_from_document() - TEXT")
+            print(f"📄 File: {filename}")
+            print("-"*80)
+            print("📤 SENDING PROMPT TO GEMINI:")
+            print("-"*80)
+            print(prompt[:2000] + ("..." if len(prompt) > 2000 else ""))
+            print("-"*80)
+            print("⏳ Waiting for Gemini response...")
+            
             response = model.generate_content(prompt)
+            
+            print("✅ RECEIVED RESPONSE FROM GEMINI:")
+            print("-"*80)
+            print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+            print("="*80 + "\n")
+            
             return response.text
         
         else:
@@ -445,6 +563,16 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 
                 Format the output as clear, structured text that captures all essential information from the document."""
                 
+                print("\n" + "="*80)
+                print(f"🔵 GEMINI API CALL: extract_text_from_document() - UNKNOWN TYPE (trying as image)")
+                print(f"📄 File: {filename} ({file_extension})")
+                print("-"*80)
+                print("📤 SENDING PROMPT TO GEMINI:")
+                print("-"*80)
+                print(prompt)
+                print("-"*80)
+                print("⏳ Waiting for Gemini response...")
+                
                 if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                     # Vertex AI format - convert image to bytes
                     img_bytes = io.BytesIO()
@@ -455,6 +583,11 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 else:
                     # Standard API format
                     response = model.generate_content([prompt, image])
+                
+                print("✅ RECEIVED RESPONSE FROM GEMINI:")
+                print("-"*80)
+                print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+                print("="*80 + "\n")
                 
                 return response.text
             except:
