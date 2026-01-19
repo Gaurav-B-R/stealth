@@ -175,18 +175,26 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
 
 @router.post("/login", response_model=schemas.Token)
 async def login(
-    form_data: OAuth2PasswordRequestForm = Depends(), 
-    db: Session = Depends(get_db),
-    request: Request = None
+    request: Request,
+    db: Session = Depends(get_db)
 ):
-    # Get Turnstile token from form data (OAuth2PasswordRequestForm doesn't support custom fields)
-    turnstile_token = None
-    if request:
-        try:
-            form = await request.form()
-            turnstile_token = form.get("cf_turnstile_token")
-        except Exception as e:
-            print(f"Error getting Turnstile token from form: {e}")
+    # Read form data manually to get both OAuth2 fields and Turnstile token
+    form = await request.form()
+    
+    # Extract OAuth2 fields
+    username = form.get("username")
+    password = form.get("password")
+    
+    if not username or not password:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Username and password are required"
+        )
+    
+    # Get Turnstile token
+    turnstile_token = form.get("cf_turnstile_token")
+    if isinstance(turnstile_token, list) and turnstile_token:
+        turnstile_token = turnstile_token[0]
     
     # Verify Turnstile token
     if turnstile_token:
@@ -204,8 +212,8 @@ async def login(
                 detail="Security verification is required"
             )
     
-    # OAuth2PasswordRequestForm uses "username" field, but we treat it as email
-    user = authenticate_user(db, form_data.username, form_data.password)
+    # Use username field as email (OAuth2PasswordRequestForm convention)
+    user = authenticate_user(db, username, password)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
