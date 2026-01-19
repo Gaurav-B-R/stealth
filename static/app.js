@@ -2,6 +2,10 @@ const API_BASE = '';
 let currentUser = null;
 let authToken = null;
 let turnstileSiteKey = null;
+let turnstileWidgetIds = {
+    login: null,
+    register: null
+};
 
 // Notification System
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
@@ -596,15 +600,28 @@ function showLogin(skipURLUpdate = false) {
             const renderWidget = () => {
                 if (window.turnstile) {
                     try {
-                        // Try to reset first (if already rendered)
-                        window.turnstile.reset('turnstile-login');
-                    } catch (e) {
-                        // If reset fails, widget might not be rendered yet, so render it
-                        try {
-                            window.turnstile.render(loginWidget, {
+                        // Check if widget is already rendered by trying to get response
+                        const existingToken = window.turnstile.getResponse(loginWidget);
+                        if (existingToken) {
+                            // Widget exists, just reset it
+                            window.turnstile.reset(loginWidget);
+                            turnstileWidgetIds.login = loginWidget;
+                        } else {
+                            // Widget doesn't exist, render it
+                            const widgetId = window.turnstile.render(loginWidget, {
                                 sitekey: turnstileSiteKey,
                                 theme: 'light'
                             });
+                            turnstileWidgetIds.login = widgetId || loginWidget;
+                        }
+                    } catch (e) {
+                        // Widget might not be rendered yet, so render it
+                        try {
+                            const widgetId = window.turnstile.render(loginWidget, {
+                                sitekey: turnstileSiteKey,
+                                theme: 'light'
+                            });
+                            turnstileWidgetIds.login = widgetId || loginWidget;
                         } catch (renderError) {
                             console.error('Error rendering Turnstile:', renderError);
                         }
@@ -700,15 +717,28 @@ function showRegister(skipURLUpdate = false) {
             const renderWidget = () => {
                 if (window.turnstile) {
                     try {
-                        // Try to reset first (if already rendered)
-                        window.turnstile.reset('turnstile-register');
-                    } catch (e) {
-                        // If reset fails, widget might not be rendered yet, so render it
-                        try {
-                            window.turnstile.render(registerWidget, {
+                        // Check if widget is already rendered by trying to get response
+                        const existingToken = window.turnstile.getResponse(registerWidget);
+                        if (existingToken) {
+                            // Widget exists, just reset it
+                            window.turnstile.reset(registerWidget);
+                            turnstileWidgetIds.register = registerWidget;
+                        } else {
+                            // Widget doesn't exist, render it
+                            const widgetId = window.turnstile.render(registerWidget, {
                                 sitekey: turnstileSiteKey,
                                 theme: 'light'
                             });
+                            turnstileWidgetIds.register = widgetId || registerWidget;
+                        }
+                    } catch (e) {
+                        // Widget might not be rendered yet, so render it
+                        try {
+                            const widgetId = window.turnstile.render(registerWidget, {
+                                sitekey: turnstileSiteKey,
+                                theme: 'light'
+                            });
+                            turnstileWidgetIds.register = widgetId || registerWidget;
                         } catch (renderError) {
                             console.error('Error rendering Turnstile:', renderError);
                         }
@@ -1052,7 +1082,23 @@ async function handleLogin(e) {
     let turnstileToken = null;
     if (window.turnstile) {
         try {
-            turnstileToken = window.turnstile.getResponse('turnstile-login');
+            // Try to get token using stored widget ID or element
+            const loginWidget = document.getElementById('turnstile-login');
+            if (loginWidget) {
+                // Use the element directly (more reliable than ID string)
+                turnstileToken = window.turnstile.getResponse(loginWidget);
+            }
+            
+            // Fallback: try using stored widget ID
+            if (!turnstileToken && turnstileWidgetIds.login) {
+                turnstileToken = window.turnstile.getResponse(turnstileWidgetIds.login);
+            }
+            
+            // Last fallback: try using ID string
+            if (!turnstileToken) {
+                turnstileToken = window.turnstile.getResponse('turnstile-login');
+            }
+            
             if (!turnstileToken) {
                 showMessage('Please complete the security verification', 'error');
                 return;
@@ -1090,7 +1136,14 @@ async function handleLogin(e) {
             document.getElementById('loginForm').reset();
             // Reset Turnstile widget
             if (window.turnstile) {
-                window.turnstile.reset('turnstile-login');
+                const loginWidget = document.getElementById('turnstile-login');
+                if (loginWidget) {
+                    try {
+                        window.turnstile.reset(loginWidget);
+                    } catch (e) {
+                        // Ignore reset errors
+                    }
+                }
             }
             showMarketplace();
         } else {
@@ -1171,7 +1224,23 @@ async function handleRegister(e) {
     let turnstileToken = null;
     if (window.turnstile) {
         try {
-            turnstileToken = window.turnstile.getResponse('turnstile-register');
+            // Try to get token using stored widget ID or element
+            const registerWidget = document.getElementById('turnstile-register');
+            if (registerWidget) {
+                // Use the element directly (more reliable than ID string)
+                turnstileToken = window.turnstile.getResponse(registerWidget);
+            }
+            
+            // Fallback: try using stored widget ID
+            if (!turnstileToken && turnstileWidgetIds.register) {
+                turnstileToken = window.turnstile.getResponse(turnstileWidgetIds.register);
+            }
+            
+            // Last fallback: try using ID string
+            if (!turnstileToken) {
+                turnstileToken = window.turnstile.getResponse('turnstile-register');
+            }
+            
             if (!turnstileToken) {
                 showMessage('Please complete the security verification', 'error');
                 return;
@@ -1204,7 +1273,14 @@ async function handleRegister(e) {
             document.getElementById('registerForm').reset();
             // Reset Turnstile widget
             if (window.turnstile) {
-                window.turnstile.reset('turnstile-register');
+                const registerWidget = document.getElementById('turnstile-register');
+                if (registerWidget) {
+                    try {
+                        window.turnstile.reset(registerWidget);
+                    } catch (e) {
+                        // Ignore reset errors
+                    }
+                }
             }
             showVerification(email);
         } else {
