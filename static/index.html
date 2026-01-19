@@ -13,6 +13,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rilono</title>
     <link rel="stylesheet" href="/static/styles.css">
+    <!-- Cloudflare Turnstile -->
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
     <!-- Favicons -->
     <link rel="icon" type="image/png" href="/static/logo.png">
     <link rel="apple-touch-icon" href="/static/logo.png">
@@ -99,6 +101,9 @@
                     </div>
                     <div style="text-align: right; margin-bottom: 1rem;">
                         <a href="#" onclick="event.preventDefault(); showForgotPassword(); return false;" style="color: var(--primary-color); text-decoration: none; font-size: 0.875rem;">Forgot Password?</a>
+                    </div>
+                    <div class="form-group" style="display: flex; justify-content: center; margin-bottom: 1rem;">
+                        <div id="turnstile-login" class="cf-turnstile" data-theme="light"></div>
                     </div>
                     <button type="submit" class="btn btn-primary">Login</button>
                 </form>
@@ -201,6 +206,9 @@
                     <div class="form-group">
                         <label for="registerPhone">Phone</label>
                         <input type="tel" id="registerPhone">
+                    </div>
+                    <div class="form-group" style="display: flex; justify-content: center; margin-bottom: 1rem;">
+                        <div id="turnstile-register" class="cf-turnstile" data-theme="light"></div>
                     </div>
                     <button type="submit" class="btn btn-primary">Register</button>
                 </form>

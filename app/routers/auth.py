@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
@@ -12,9 +12,16 @@ from app.auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
 from app.email_service import generate_verification_token, send_verification_email, send_password_reset_email
+from app.utils.turnstile import verify_turnstile_token
 import os
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
+
+@router.get("/turnstile-site-key")
+def get_turnstile_site_key():
+    """Get the Cloudflare Turnstile site key for frontend use."""
+    site_key = os.getenv("TURNSTILE_SITE_KEY", "")
+    return {"site_key": site_key}
 
 def extract_email_domain(email: str) -> str:
     """Extract domain from email address."""
@@ -58,7 +65,24 @@ def get_university_by_email(email: str, db: Session = Depends(get_db)):
     }
 
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
-def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
+def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: Request = None):
+    # Verify Turnstile token if provided
+    turnstile_token = user.cf_turnstile_token
+    if turnstile_token:
+        client_ip = request.client.host if request else None
+        if not verify_turnstile_token(turnstile_token, client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security verification failed. Please try again."
+            )
+    else:
+        # In production, require Turnstile token
+        if os.getenv("ENVIRONMENT", "production").lower() != "development":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security verification is required"
+            )
+    
     # Extract email domain
     email_domain = extract_email_domain(user.email)
     
@@ -150,7 +174,36 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
     return db_user
 
 @router.post("/login", response_model=schemas.Token)
-def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+async def login(
+    form_data: OAuth2PasswordRequestForm = Depends(), 
+    db: Session = Depends(get_db),
+    request: Request = None
+):
+    # Get Turnstile token from form data (OAuth2PasswordRequestForm doesn't support custom fields)
+    turnstile_token = None
+    if request:
+        try:
+            form = await request.form()
+            turnstile_token = form.get("cf_turnstile_token")
+        except Exception as e:
+            print(f"Error getting Turnstile token from form: {e}")
+    
+    # Verify Turnstile token
+    if turnstile_token:
+        client_ip = request.client.host if request else None
+        if not verify_turnstile_token(turnstile_token, client_ip):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security verification failed. Please try again."
+            )
+    else:
+        # In production, require Turnstile token
+        if os.getenv("ENVIRONMENT", "production").lower() != "development":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security verification is required"
+            )
+    
     # OAuth2PasswordRequestForm uses "username" field, but we treat it as email
     user = authenticate_user(db, form_data.username, form_data.password)
     if not user:

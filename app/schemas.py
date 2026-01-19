@@ -12,6 +12,7 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
+    cf_turnstile_token: Optional[str] = None  # Cloudflare Turnstile token
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None

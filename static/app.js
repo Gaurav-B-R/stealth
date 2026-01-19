@@ -1,6 +1,7 @@
 const API_BASE = '';
 let currentUser = null;
 let authToken = null;
+let turnstileSiteKey = null;
 
 // Notification System
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
@@ -102,10 +103,45 @@ window.addEventListener('popstate', (e) => {
     handleRoute(true); // Skip URL update when handling back/forward
 });
 
+// Initialize Turnstile site key
+async function initializeTurnstile() {
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/turnstile-site-key`);
+        if (response.ok) {
+            const data = await response.json();
+            turnstileSiteKey = data.site_key;
+            
+            if (!turnstileSiteKey) {
+                // Hide widgets if no site key is configured
+                const loginWidget = document.getElementById('turnstile-login');
+                const registerWidget = document.getElementById('turnstile-register');
+                if (loginWidget) loginWidget.style.display = 'none';
+                if (registerWidget) registerWidget.style.display = 'none';
+                return;
+            }
+            
+            // Set site key attribute - Turnstile will auto-render when script loads
+            const loginWidget = document.getElementById('turnstile-login');
+            const registerWidget = document.getElementById('turnstile-register');
+            if (loginWidget) {
+                loginWidget.setAttribute('data-sitekey', turnstileSiteKey);
+            }
+            if (registerWidget) {
+                registerWidget.setAttribute('data-sitekey', turnstileSiteKey);
+            }
+        }
+    } catch (error) {
+        console.error('Error loading Turnstile site key:', error);
+    }
+}
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     initializeAddressAutocomplete();
+    
+    // Initialize Turnstile
+    await initializeTurnstile();
     
     // Set last updated dates for legal pages
     const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
@@ -544,6 +580,47 @@ function showHomepage(skipURLUpdate = false) {
 function showLogin(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('loginSection').style.display = 'block';
+    
+    // Ensure Turnstile widget is properly initialized
+    const loginWidget = document.getElementById('turnstile-login');
+    if (loginWidget) {
+        if (turnstileSiteKey) {
+            // Make sure widget is visible
+            loginWidget.style.display = 'block';
+            // Set site key if not already set
+            if (!loginWidget.getAttribute('data-sitekey')) {
+                loginWidget.setAttribute('data-sitekey', turnstileSiteKey);
+            }
+            
+            // Wait a bit for Turnstile script to load, then render
+            const renderWidget = () => {
+                if (window.turnstile) {
+                    try {
+                        // Try to reset first (if already rendered)
+                        window.turnstile.reset('turnstile-login');
+                    } catch (e) {
+                        // If reset fails, widget might not be rendered yet, so render it
+                        try {
+                            window.turnstile.render(loginWidget, {
+                                sitekey: turnstileSiteKey,
+                                theme: 'light'
+                            });
+                        } catch (renderError) {
+                            console.error('Error rendering Turnstile:', renderError);
+                        }
+                    }
+                } else {
+                    // Wait for Turnstile to load
+                    setTimeout(renderWidget, 100);
+                }
+            };
+            renderWidget();
+        } else {
+            // Hide widget if no site key
+            loginWidget.style.display = 'none';
+        }
+    }
+    
     if (!skipURLUpdate) {
         updateURL('/login', false); // Use pushState for navigation
     }
@@ -607,6 +684,46 @@ function showRegister(skipURLUpdate = false) {
     const messageEl = document.getElementById('emailValidationMessage');
     if (universityInput) universityInput.value = '';
     if (messageEl) messageEl.style.display = 'none';
+    
+    // Ensure Turnstile widget is properly initialized
+    const registerWidget = document.getElementById('turnstile-register');
+    if (registerWidget) {
+        if (turnstileSiteKey) {
+            // Make sure widget is visible
+            registerWidget.style.display = 'block';
+            // Set site key if not already set
+            if (!registerWidget.getAttribute('data-sitekey')) {
+                registerWidget.setAttribute('data-sitekey', turnstileSiteKey);
+            }
+            
+            // Wait a bit for Turnstile script to load, then render
+            const renderWidget = () => {
+                if (window.turnstile) {
+                    try {
+                        // Try to reset first (if already rendered)
+                        window.turnstile.reset('turnstile-register');
+                    } catch (e) {
+                        // If reset fails, widget might not be rendered yet, so render it
+                        try {
+                            window.turnstile.render(registerWidget, {
+                                sitekey: turnstileSiteKey,
+                                theme: 'light'
+                            });
+                        } catch (renderError) {
+                            console.error('Error rendering Turnstile:', renderError);
+                        }
+                    }
+                } else {
+                    // Wait for Turnstile to load
+                    setTimeout(renderWidget, 100);
+                }
+            };
+            renderWidget();
+        } else {
+            // Hide widget if no site key
+            registerWidget.style.display = 'none';
+        }
+    }
     
     if (!skipURLUpdate) {
         updateURL('/register', false); // Use pushState for navigation
@@ -931,10 +1048,29 @@ async function handleLogin(e) {
         return;
     }
 
+    // Get Turnstile token
+    let turnstileToken = null;
+    if (window.turnstile) {
+        try {
+            turnstileToken = window.turnstile.getResponse('turnstile-login');
+            if (!turnstileToken) {
+                showMessage('Please complete the security verification', 'error');
+                return;
+            }
+        } catch (error) {
+            console.error('Turnstile error:', error);
+            showMessage('Please complete the security verification', 'error');
+            return;
+        }
+    }
+
     try {
         const formData = new URLSearchParams();
         formData.append('username', email);  // OAuth2PasswordRequestForm expects 'username' field, but we use it for email
         formData.append('password', password);
+        if (turnstileToken) {
+            formData.append('cf_turnstile_token', turnstileToken);
+        }
 
         const response = await fetch(`${API_BASE}/api/auth/login`, {
             method: 'POST',
@@ -952,6 +1088,10 @@ async function handleLogin(e) {
             await checkAuth();
             showMessage('Login successful!', 'success');
             document.getElementById('loginForm').reset();
+            // Reset Turnstile widget
+            if (window.turnstile) {
+                window.turnstile.reset('turnstile-login');
+            }
             showMarketplace();
         } else {
             let errorMessage = 'Login failed';
@@ -1027,6 +1167,26 @@ async function handleRegister(e) {
         return;
     }
 
+    // Get Turnstile token
+    let turnstileToken = null;
+    if (window.turnstile) {
+        try {
+            turnstileToken = window.turnstile.getResponse('turnstile-register');
+            if (!turnstileToken) {
+                showMessage('Please complete the security verification', 'error');
+                return;
+            }
+        } catch (error) {
+            console.error('Turnstile error:', error);
+            showMessage('Please complete the security verification', 'error');
+            return;
+        }
+    }
+    
+    if (turnstileToken) {
+        userData.cf_turnstile_token = turnstileToken;
+    }
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/register`, {
             method: 'POST',
@@ -1042,6 +1202,10 @@ async function handleRegister(e) {
             const email = userData.email;
             showMessage('Registration successful! Please check your email to verify your account.', 'success');
             document.getElementById('registerForm').reset();
+            // Reset Turnstile widget
+            if (window.turnstile) {
+                window.turnstile.reset('turnstile-register');
+            }
             showVerification(email);
         } else {
             // Handle different error formats
