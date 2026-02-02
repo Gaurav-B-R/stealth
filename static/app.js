@@ -1078,9 +1078,9 @@ async function handleLogin(e) {
         return;
     }
 
-    // Get Turnstile token
+    // Get Turnstile token (only if Turnstile is configured)
     let turnstileToken = null;
-    if (window.turnstile) {
+    if (turnstileSiteKey && window.turnstile) {
         try {
             // Try to get token using stored widget ID or element
             const loginWidget = document.getElementById('turnstile-login');
@@ -1220,9 +1220,9 @@ async function handleRegister(e) {
         return;
     }
 
-    // Get Turnstile token
+    // Get Turnstile token (only if Turnstile is configured)
     let turnstileToken = null;
-    if (window.turnstile) {
+    if (turnstileSiteKey && window.turnstile) {
         try {
             // Try to get token using stored widget ID or element
             const registerWidget = document.getElementById('turnstile-register');
@@ -3517,59 +3517,39 @@ function sendQuickMessage(message) {
 function addMessageToRilonoAiChat(message, isUser = false) {
     const messagesContainer = document.getElementById('rilonoAiChatMessages');
     const messageDiv = document.createElement('div');
-    messageDiv.className = isUser ? 'user-message' : 'ai-message';
+    messageDiv.className = `rilono-ai-message ${isUser ? 'user' : 'assistant'}`;
     
     if (isUser) {
-        messageDiv.style.alignSelf = 'flex-end';
-        messageDiv.style.maxWidth = '75%';
         messageDiv.innerHTML = `
-            <div style="background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); color: white; padding: 0.875rem 1.25rem; border-radius: 1rem; box-shadow: var(--shadow); border-top-right-radius: 0.25rem;">
-                <p style="margin: 0; line-height: 1.6;">${escapeHtml(message)}</p>
+            <div class="message-avatar">${currentUser?.full_name?.charAt(0) || currentUser?.username?.charAt(0) || 'U'}</div>
+            <div class="message-bubble">
+                <p>${escapeHtml(message)}</p>
             </div>
         `;
     } else {
-        messageDiv.style.alignSelf = 'flex-start';
-        messageDiv.style.maxWidth = '75%';
         messageDiv.innerHTML = `
-            <div style="display: flex; gap: 0.75rem; align-items: start;">
-                <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0;">🤖</div>
-                <div style="background: white; padding: 1rem; border-radius: 1rem; box-shadow: var(--shadow); border-top-left-radius: 0.25rem;">
-                    <p style="margin: 0; color: var(--text-primary); line-height: 1.6; white-space: pre-wrap;">${escapeHtml(message)}</p>
-                </div>
+            <div class="message-avatar">🤖</div>
+            <div class="message-bubble">
+                <p style="white-space: pre-wrap;">${escapeHtml(message)}</p>
             </div>
         `;
     }
     
     messagesContainer.appendChild(messageDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    
-    // Add animation
-    messageDiv.style.opacity = '0';
-    messageDiv.style.transform = 'translateY(10px)';
-    setTimeout(() => {
-        messageDiv.style.transition = 'all 0.3s ease';
-        messageDiv.style.opacity = '1';
-        messageDiv.style.transform = 'translateY(0)';
-    }, 10);
 }
 
 function showRilonoAiTypingIndicator() {
     const messagesContainer = document.getElementById('rilonoAiChatMessages');
     const typingDiv = document.createElement('div');
     typingDiv.id = 'rilonoAiTypingIndicator';
-    typingDiv.className = 'ai-message';
-    typingDiv.style.alignSelf = 'flex-start';
-    typingDiv.style.maxWidth = '75%';
+    typingDiv.className = 'rilono-ai-typing';
     typingDiv.innerHTML = `
-        <div style="display: flex; gap: 0.75rem; align-items: start;">
-            <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; flex-shrink: 0;">🤖</div>
-            <div style="background: white; padding: 1rem; border-radius: 1rem; box-shadow: var(--shadow); border-top-left-radius: 0.25rem;">
-                <div style="display: flex; gap: 0.5rem; align-items: center;">
-                    <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-secondary); animation: typingDot 1.4s infinite;"></div>
-                    <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-secondary); animation: typingDot 1.4s infinite; animation-delay: 0.2s;"></div>
-                    <div style="width: 8px; height: 8px; border-radius: 50%; background: var(--text-secondary); animation: typingDot 1.4s infinite; animation-delay: 0.4s;"></div>
-                </div>
-            </div>
+        <div class="message-avatar">🤖</div>
+        <div class="typing-bubble">
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
         </div>
     `;
     messagesContainer.appendChild(typingDiv);

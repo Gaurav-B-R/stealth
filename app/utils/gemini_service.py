@@ -17,16 +17,15 @@ except ImportError:
     VERTEX_AI_AVAILABLE = False
     print("⚠ Warning: google-cloud-aiplatform not installed. Install with: pip install google-cloud-aiplatform")
 
-# Fallback to standard Gemini API (deprecated but kept for compatibility)
-# Only import if Vertex AI is not available to avoid deprecation warning
+# Also import standard Gemini API as fallback
 GENAI_AVAILABLE = False
 genai = None
-if not VERTEX_AI_AVAILABLE:
-    try:
-        import google.generativeai as genai
-        GENAI_AVAILABLE = True
-    except ImportError:
-        GENAI_AVAILABLE = False
+try:
+    import google.generativeai as genai
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+    print("⚠ Warning: google-generativeai not installed. Install with: pip install google-generativeai")
 
 # Configure authentication - Check for service account first
 SERVICE_ACCOUNT_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
@@ -108,9 +107,9 @@ def validate_and_extract_document(file_contents: bytes, filename: str, mime_type
         
         # Initialize the model
         if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
-            model = GenerativeModel('gemini-2.0-flash-lite')
+            model = GenerativeModel('gemini-3-pro-preview')
         elif GENAI_AVAILABLE:
-            model = genai.GenerativeModel('gemini-2.0-flash-lite')
+            model = genai.GenerativeModel('gemini-3-pro-preview')
         else:
             print("Error: Neither Vertex AI nor standard Gemini API available")
             return None
@@ -386,9 +385,9 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
         
         # Initialize the model - Use Vertex AI if available, otherwise standard API
         if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
-            model = GenerativeModel('gemini-2.0-flash-lite')
+            model = GenerativeModel('gemini-3-pro-preview')
         elif GENAI_AVAILABLE:
-            model = genai.GenerativeModel('gemini-2.0-flash-lite')
+            model = genai.GenerativeModel('gemini-3-pro-preview')
         else:
             print("Error: Neither Vertex AI nor standard Gemini API available")
             return None

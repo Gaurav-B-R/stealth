@@ -135,11 +135,11 @@ def generate_ai_response(user_message: str, user_name: str, documents_context: s
         # Initialize model based on available service
         if hasattr(gemini_utils, 'USE_VERTEX_AI') and gemini_utils.USE_VERTEX_AI and hasattr(gemini_utils, 'VERTEX_AI_AVAILABLE') and gemini_utils.VERTEX_AI_AVAILABLE:
             from vertexai.generative_models import GenerativeModel
-            model = GenerativeModel('gemini-2.0-flash-lite')
+            model = GenerativeModel('gemini-3-pro-preview')
         elif hasattr(gemini_utils, 'GENAI_AVAILABLE') and gemini_utils.GENAI_AVAILABLE:
             try:
                 import google.generativeai as genai
-                model = genai.GenerativeModel('gemini-2.0-flash-lite')
+                model = genai.GenerativeModel('gemini-3-pro-preview')
             except:
                 raise Exception("Gemini API not properly configured")
         else:
