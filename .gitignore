@@ -23,6 +23,7 @@ uploads/
 
 # Service account credentials (GCP/Vertex AI)
 service_account.json
+service_account.json.disabled
 
 # IDE
 .vscode/
