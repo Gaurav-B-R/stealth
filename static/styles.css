@@ -2592,6 +2592,12 @@ body {
     font-size: 0.875rem;
 }
 
+.footer-social a:hover {
+    background: rgba(10, 102, 194, 0.2) !important;
+    border-color: rgba(10, 102, 194, 0.4) !important;
+    transform: translateY(-2px);
+}
+
 @media (max-width: 768px) {
     #dashboardSection .dashboard-container {
         flex-direction: column;
