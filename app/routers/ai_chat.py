@@ -38,13 +38,13 @@ class ChatMessage(BaseModel):
 class ChatResponse(BaseModel):
     response: str
 
-def get_visa_journey_status(user_id: int) -> dict:
+def get_student_profile_and_status(user_id: int) -> dict:
     """
-    Fetch user's visa journey status from R2.
-    Returns the status dict or None if not found.
+    Fetch student's comprehensive profile and visa status from R2.
+    Returns the full profile dict or None if not found.
     """
     try:
-        r2_key = f"user_{user_id}/visa_journey_status.json"
+        r2_key = f"user_{user_id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
         response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=r2_key)
         json_content = response['Body'].read().decode('utf-8')
         return json.loads(json_content)
@@ -52,27 +52,46 @@ def get_visa_journey_status(user_id: int) -> dict:
         return None
 
 
-def format_visa_status_context(status_data: dict) -> str:
+def format_student_profile_context(profile_data: dict) -> str:
     """
-    Format visa journey status as context string for the AI.
+    Format comprehensive student profile as context string for the AI.
+    Includes profile info, documentation preferences, and visa journey status.
     """
-    if not status_data:
-        return "Visa journey status: Not yet calculated. User should visit their dashboard."
+    if not profile_data:
+        return "Student profile: Not yet available. User should visit their dashboard."
     
-    stage_info = status_data.get('stage_info', {})
-    current_stage = status_data.get('current_stage', 1)
-    total_stages = status_data.get('total_stages', 7)
-    progress = status_data.get('progress_percent', 0)
-    uploaded_types = status_data.get('uploaded_document_types', [])
+    # Extract sections
+    student_profile = profile_data.get('student_profile', {})
+    doc_prefs = profile_data.get('documentation_preferences', {})
+    visa_journey = profile_data.get('visa_journey', {})
+    docs_summary = profile_data.get('documents_summary', {})
     
     context = f"""
-VISA JOURNEY STATUS:
-- Current Stage: {current_stage} of {total_stages} - "{stage_info.get('name', 'Getting Started')}"
-- Progress: {progress}%
-- Stage Description: {stage_info.get('description', '')}
-- Next Step Required: {stage_info.get('next_step', '')}
-- Documents Uploaded: {len(uploaded_types)} types ({', '.join(uploaded_types) if uploaded_types else 'None yet'})
-- Last Updated: {status_data.get('last_updated', 'Unknown')}
+=== STUDENT PROFILE AND F1 VISA STATUS ===
+
+STUDENT INFORMATION:
+- Name: {student_profile.get('full_name', 'Unknown')}
+- Email: {student_profile.get('email', 'Unknown')}
+- University: {student_profile.get('university', 'Not set')}
+- Phone: {student_profile.get('phone', 'Not provided')}
+- Account Created: {student_profile.get('account_created', 'Unknown')}
+
+DOCUMENTATION PREFERENCES:
+- Target Country: {doc_prefs.get('target_country', 'United States')}
+- Intake Semester: {doc_prefs.get('intake_semester', 'Not set')}
+- Intake Year: {doc_prefs.get('intake_year', 'Not set')}
+
+F1 VISA JOURNEY STATUS:
+- Current Stage: {visa_journey.get('current_stage', 1)} of {visa_journey.get('total_stages', 7)} - "{visa_journey.get('stage_name', 'Getting Started')}"
+- Progress: {visa_journey.get('progress_percent', 0)}%
+- Stage Description: {visa_journey.get('stage_description', '')}
+- Next Step Required: {visa_journey.get('next_step_required', '')}
+
+DOCUMENTS SUMMARY:
+- Total Documents Uploaded: {docs_summary.get('total_documents_uploaded', 0)}
+- Document Types: {', '.join(docs_summary.get('uploaded_document_types', [])) or 'None yet'}
+
+Last Updated: {profile_data.get('last_updated', 'Unknown')}
 """
     return context
 
@@ -166,9 +185,9 @@ def get_user_documents_context(user_id: int, db: Session) -> str:
         print(f"Error fetching documents context: {str(e)}")
         return "Unable to retrieve document information at this time."
 
-def generate_ai_response(user_message: str, user_name: str, documents_context: str, visa_status_context: str, conversation_history: Optional[List[dict]] = None) -> str:
+def generate_ai_response(user_message: str, user_name: str, documents_context: str, student_profile_context: str, conversation_history: Optional[List[dict]] = None) -> str:
     """
-    Generate AI response using Gemini with system prompt, document context, and visa status.
+    Generate AI response using Gemini with system prompt, document context, and comprehensive student profile.
     """
     try:
         # Initialize model based on available service
@@ -184,8 +203,8 @@ def generate_ai_response(user_message: str, user_name: str, documents_context: s
         else:
             raise Exception("Gemini AI not available. Please configure service account or API key.")
         
-        # Build system prompt
-        system_prompt = f"""You are Rilono AI, a F1 student visa expert assistant. You are guiding the student {user_name} through the F1 student visa process and documentation.
+        # Build system prompt with comprehensive student profile
+        system_prompt = f"""You are Rilono AI, a F1 student visa expert assistant. You are guiding the student through the F1 student visa process and documentation.
 
 Your role:
 - Provide expert guidance on F1 student visa requirements and processes
@@ -194,22 +213,24 @@ Your role:
 - Assist with understanding visa documentation requirements
 - Be friendly, supportive, and professional
 
-{visa_status_context}
+{student_profile_context}
 
 User's uploaded documents and extracted information:
 {documents_context}
 
 Instructions:
-- IMPORTANT: Reference the user's current visa journey stage when giving advice
+- IMPORTANT: Use the STUDENT PROFILE AND F1 VISA STATUS information above to personalize your responses
+- Reference the student's name, university, and current visa journey stage when giving advice
 - Guide them based on their current stage and what the next step is
-- Use the document information above to provide personalized guidance
+- Consider their intake semester/year when providing timeline guidance
+- Use the document information to provide personalized guidance
 - If the user asks about specific documents, reference their uploaded documents when relevant
 - Be concise but thorough in your responses
 - If you don't have information about a specific document, let the user know and guide them on what they need
 - Always maintain a helpful and encouraging tone
 - When suggesting next steps, be specific about what documents they need to upload or actions to take
 
-Remember: You are helping {user_name} navigate their F1 student visa journey. They are currently at stage {visa_status_context.split('Current Stage:')[1].split('-')[0].strip() if 'Current Stage:' in visa_status_context else '1'}. Be supportive and give stage-appropriate guidance."""
+Remember: You have access to the student's complete profile including their name, university, documentation preferences, and current visa journey status. Use this information to provide highly personalized, stage-appropriate guidance."""
 
         # Build conversation context
         conversation_text = ""
@@ -269,17 +290,17 @@ async def chat_with_ai(
     db: Session = Depends(get_db)
 ):
     """
-    Chat with Rilono AI. The AI has access to the user's uploaded documents and visa journey status.
+    Chat with Rilono AI. The AI has access to the user's complete profile, documents, and visa journey status.
     """
     try:
         # Get user's name
         user_name = current_user.full_name or current_user.username or "Student"
         
-        # Get visa journey status from R2
-        visa_status = get_visa_journey_status(current_user.id)
-        visa_status_context = format_visa_status_context(visa_status)
+        # Get comprehensive student profile from R2 (includes profile, preferences, visa status)
+        student_profile = get_student_profile_and_status(current_user.id)
+        student_profile_context = format_student_profile_context(student_profile)
         
-        # Get documents context
+        # Get documents context (extracted text from uploaded documents)
         documents_context = get_user_documents_context(current_user.id, db)
         
         # Generate response
@@ -287,7 +308,7 @@ async def chat_with_ai(
             user_message=chat_message.message,
             user_name=user_name,
             documents_context=documents_context,
-            visa_status_context=visa_status_context,
+            student_profile_context=student_profile_context,
             conversation_history=chat_message.conversation_history
         )
         

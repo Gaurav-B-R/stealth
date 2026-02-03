@@ -725,60 +725,6 @@
                                 </div>
                             </div>
                             
-                            <!-- Quick Stats Widget -->
-                            <div class="dashboard-widget">
-                                <div class="widget-header">
-                                    <h3>📊 Quick Stats</h3>
-                                </div>
-                                <div class="widget-content">
-                                    <div id="quickStatsContent" style="padding: 1rem;">
-                                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
-                                            <span style="color: var(--text-secondary);">Active Listings</span>
-                                            <strong id="activeListingsCount">-</strong>
-                                        </div>
-                                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
-                                            <span style="color: var(--text-secondary);">Sold Items</span>
-                                            <strong id="soldItemsCount">-</strong>
-                                        </div>
-                                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
-                                            <span style="color: var(--text-secondary);">Messages</span>
-                                            <strong id="messagesCount">-</strong>
-                                        </div>
-                                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0;">
-                                            <span style="color: var(--text-secondary);">Unread</span>
-                                            <strong id="unreadCount">-</strong>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Quick Actions Widget -->
-                            <div class="dashboard-widget">
-                                <div class="widget-header">
-                                    <h3>⚡ Quick Actions</h3>
-                                </div>
-                                <div class="widget-content">
-                                    <div style="padding: 1rem;">
-                                        <a href="#" onclick="event.preventDefault(); showCreateItem(); return false;" class="quick-action-btn">
-                                            <span class="action-icon">➕</span>
-                                            <span>List New Item</span>
-                                        </a>
-                                        <a href="#" onclick="event.preventDefault(); showMyListings(); return false;" class="quick-action-btn">
-                                            <span class="action-icon">📦</span>
-                                            <span>My Listings</span>
-                                        </a>
-                                        <a href="/messages" class="quick-action-btn">
-                                            <span class="action-icon">💬</span>
-                                            <span>Messages</span>
-                                        </a>
-                                        <a href="#" onclick="event.preventDefault(); switchDashboardTab('documents'); return false;" class="quick-action-btn">
-                                            <span class="action-icon">📄</span>
-                                            <span>Upload Document</span>
-                                        </a>
-                                    </div>
-                                </div>
-                            </div>
-                            
                             <!-- Profile Completion Widget -->
                             <div class="dashboard-widget" style="grid-column: 1 / -1;">
                                 <div class="widget-header">
@@ -849,8 +795,16 @@
                                 <input type="text" id="profileFullName">
                             </div>
                             <div class="form-group">
-                                <label for="profileUniversity">University</label>
-                                <input type="text" id="profileUniversity">
+                                <label for="profileUniversity">University <span style="font-size: 0.75rem; color: var(--text-secondary); font-weight: normal;">(from your .edu email)</span></label>
+                                <input type="text" id="profileUniversity" readonly style="background-color: var(--bg-tertiary); cursor: not-allowed; opacity: 0.8;">
+                                <button type="button" onclick="showChangeUniversityModal()" style="margin-top: 0.5rem; font-size: 0.8rem; padding: 0.4rem 0.8rem; background: transparent; border: 1px solid var(--primary-color); color: var(--primary-color); border-radius: 6px; cursor: pointer;">
+                                    🎓 Change University
+                                </button>
+                                <div id="pendingUniversityChange" style="display: none; margin-top: 0.5rem; padding: 0.75rem; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 8px; font-size: 0.85rem;">
+                                    <div style="color: #f59e0b; margin-bottom: 0.5rem;">⏳ Pending Change</div>
+                                    <div style="color: var(--text-secondary);">Waiting for verification: <strong id="pendingUniversityName"></strong></div>
+                                    <button type="button" onclick="cancelUniversityChange()" style="margin-top: 0.5rem; font-size: 0.75rem; padding: 0.3rem 0.6rem; background: transparent; border: 1px solid var(--danger-color); color: var(--danger-color); border-radius: 4px; cursor: pointer;">Cancel Request</button>
+                                </div>
                             </div>
                             <div class="form-group">
                                 <label for="profilePhone">Phone</label>
@@ -1376,6 +1330,42 @@
             </div>
         </div>
     </footer>
+    
+    <!-- Change University Modal -->
+    <div id="changeUniversityModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content" style="max-width: 500px; background: var(--card-bg); border-radius: 16px; padding: 2rem; position: relative;">
+            <button onclick="closeChangeUniversityModal()" style="position: absolute; top: 1rem; right: 1rem; background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary);">&times;</button>
+            <div style="text-align: center; margin-bottom: 1.5rem;">
+                <div style="font-size: 3rem; margin-bottom: 0.5rem;">🎓</div>
+                <h2 style="color: var(--text-primary); margin-bottom: 0.5rem;">Change University</h2>
+                <p style="color: var(--text-secondary); font-size: 0.9rem;">Enter your new university email to verify and update your university.</p>
+            </div>
+            <form id="changeUniversityForm" onsubmit="handleChangeUniversity(event)">
+                <div class="form-group">
+                    <label for="newUniversityEmail">New University Email</label>
+                    <input type="email" id="newUniversityEmail" required placeholder="your.name@newuniversity.edu" style="width: 100%;">
+                    <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">Must be a valid .edu email from your new university</small>
+                </div>
+                <div class="form-group">
+                    <label for="newUniversityName">University Name</label>
+                    <input type="text" id="newUniversityName" readonly placeholder="Auto-filled from email domain" style="width: 100%; background-color: var(--bg-tertiary); cursor: not-allowed;">
+                </div>
+                <div id="universityChangeError" style="display: none; color: var(--danger-color); background: rgba(239, 68, 68, 0.1); padding: 0.75rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem;"></div>
+                <div style="display: flex; gap: 1rem;">
+                    <button type="button" onclick="closeChangeUniversityModal()" class="btn btn-secondary" style="flex: 1;">Cancel</button>
+                    <button type="submit" id="changeUniversitySubmitBtn" class="btn btn-primary" style="flex: 1;">
+                        <span id="changeUniversityBtnText">Send Verification</span>
+                    </button>
+                </div>
+            </form>
+            <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border-color); text-align: center;">
+                <p style="color: var(--text-secondary); font-size: 0.8rem;">
+                    📧 A verification email will be sent to your new university email.<br>
+                    Click the link to confirm the change.
+                </p>
+            </div>
+        </div>
+    </div>
     
     <!-- Image Gallery Modal -->
     <div id="imageGalleryModal" class="image-gallery-modal" style="display: none;">

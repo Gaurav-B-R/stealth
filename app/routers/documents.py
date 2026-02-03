@@ -435,22 +435,80 @@ def calculate_visa_journey_stage(documents: List[models.Document]) -> dict:
     }
 
 
-def save_visa_status_to_r2(user_id: int, status_data: dict) -> str:
+def save_student_profile_to_r2(user: models.User, status_data: dict, documents: List[models.Document]) -> str:
     """
-    Save the visa journey status as a JSON file to R2.
+    Save comprehensive student profile and visa status as a JSON file to R2.
+    This file contains all information about the student for LLM context.
     Returns the R2 key of the saved file.
     """
-    # Add metadata
-    status_data["user_id"] = user_id
-    status_data["last_updated"] = datetime.utcnow().isoformat()
-    status_data["version"] = "1.0"
+    # Use user's stored documentation preferences (fallback to document values if not set)
+    preferred_country = getattr(user, 'preferred_country', None) or "United States"
+    preferred_intake = getattr(user, 'preferred_intake', None)
+    preferred_year = getattr(user, 'preferred_year', None)
+    
+    # If user preferences not set, try to extract from documents
+    if not preferred_intake or not preferred_year:
+        for doc in documents:
+            if doc.intake and not preferred_intake:
+                preferred_intake = doc.intake
+            if doc.year and not preferred_year:
+                preferred_year = doc.year
+    
+    # Build comprehensive student profile
+    comprehensive_data = {
+        # File metadata for LLM understanding
+        "_file_description": "Complete student profile, documentation preferences, uploaded documents summary, and F1 visa journey status",
+        "_file_purpose": "Use this data to provide personalized F1 visa guidance based on the student's current status and documents",
+        
+        # Student Profile Information
+        "student_profile": {
+            "user_id": user.id,
+            "full_name": user.full_name,
+            "email": user.email,
+            "university": user.university,
+            "phone": user.phone,
+            "account_created": user.created_at.isoformat() if user.created_at else None,
+            "email_verified": user.email_verified
+        },
+        
+        # Documentation Preferences
+        "documentation_preferences": {
+            "target_country": preferred_country,
+            "intake_semester": preferred_intake,
+            "intake_year": preferred_year
+        },
+        
+        # Visa Journey Status (from existing calculation)
+        "visa_journey": {
+            "current_stage": status_data.get("current_stage"),
+            "total_stages": status_data.get("total_stages", 7),
+            "stage_name": status_data.get("stage_info", {}).get("name"),
+            "stage_description": status_data.get("stage_info", {}).get("description"),
+            "next_step_required": status_data.get("stage_info", {}).get("next_step"),
+            "progress_percent": status_data.get("progress_percent", 0)
+        },
+        
+        # Documents Summary
+        "documents_summary": {
+            "total_documents_uploaded": len(documents),
+            "uploaded_document_types": status_data.get("uploaded_document_types", []),
+            "documents_by_type": status_data.get("documents_by_type", {})
+        },
+        
+        # All stages for reference
+        "all_visa_stages": status_data.get("all_stages", []),
+        
+        # Metadata
+        "last_updated": datetime.utcnow().isoformat(),
+        "version": "2.0"
+    }
     
     # Convert to JSON
-    json_content = json.dumps(status_data, indent=2, default=str)
+    json_content = json.dumps(comprehensive_data, indent=2, default=str)
     json_bytes = json_content.encode('utf-8')
     
-    # R2 key for the status file
-    r2_key = f"user_{user_id}/visa_journey_status.json"
+    # Descriptive filename for LLM to understand
+    r2_key = f"user_{user.id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
     
     try:
         r2_client.put_object(
@@ -459,21 +517,22 @@ def save_visa_status_to_r2(user_id: int, status_data: dict) -> str:
             Body=json_bytes,
             ContentType="application/json",
             Metadata={
-                'type': 'visa-journey-status',
-                'user-id': str(user_id)
+                'type': 'student-profile-visa-status',
+                'user-id': str(user.id),
+                'student-name': user.full_name or 'Unknown'
             }
         )
         return r2_key
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save visa status to R2: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save student profile to R2: {str(e)}")
 
 
-def get_visa_status_from_r2(user_id: int) -> Optional[dict]:
+def get_student_profile_from_r2(user_id: int) -> Optional[dict]:
     """
-    Get the visa journey status JSON file from R2.
+    Get the student profile and visa status JSON file from R2.
     Returns None if not found.
     """
-    r2_key = f"user_{user_id}/visa_journey_status.json"
+    r2_key = f"user_{user_id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
     
     try:
         response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=r2_key)
@@ -492,23 +551,42 @@ async def get_visa_journey_status(
 ):
     """
     Get the current visa journey status for the user.
-    Calculates the stage based on uploaded documents and saves to R2.
+    Reads from R2 if exists, otherwise creates it (for new users).
+    Does NOT write to R2 on every load - only reads.
     """
-    # Get user's documents
+    # First, try to get existing profile from R2
+    existing_profile = get_student_profile_from_r2(current_user.id)
+    
+    if existing_profile:
+        # Profile exists in R2 - just return it (no write needed)
+        # Calculate fresh stage data for UI display
+        documents = db.query(models.Document).filter(
+            models.Document.user_id == current_user.id
+        ).all()
+        status_data = calculate_visa_journey_stage(documents)
+        
+        # Merge with existing profile data
+        status_data["r2_key"] = f"user_{current_user.id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
+        status_data["user_email"] = current_user.email
+        status_data["user_name"] = current_user.full_name
+        status_data["from_cache"] = True
+        
+        return JSONResponse(content=status_data)
+    
+    # Profile doesn't exist in R2 - create it for the first time
     documents = db.query(models.Document).filter(
         models.Document.user_id == current_user.id
     ).all()
     
-    # Calculate current journey status
     status_data = calculate_visa_journey_stage(documents)
     
-    # Save to R2
-    r2_key = save_visa_status_to_r2(current_user.id, status_data)
+    # Create the R2 file for the first time
+    r2_key = save_student_profile_to_r2(current_user, status_data, documents)
     
-    # Add R2 key to response
     status_data["r2_key"] = r2_key
     status_data["user_email"] = current_user.email
     status_data["user_name"] = current_user.full_name
+    status_data["from_cache"] = False
     
     return JSONResponse(content=status_data)
 
@@ -519,7 +597,7 @@ async def refresh_visa_journey_status(
     db: Session = Depends(get_db)
 ):
     """
-    Force refresh the visa journey status and save to R2.
+    Force refresh the visa journey status and save comprehensive profile to R2.
     Use this after uploading new documents.
     """
     # Get user's documents
@@ -530,8 +608,8 @@ async def refresh_visa_journey_status(
     # Calculate current journey status
     status_data = calculate_visa_journey_stage(documents)
     
-    # Save to R2
-    r2_key = save_visa_status_to_r2(current_user.id, status_data)
+    # Save comprehensive student profile to R2
+    r2_key = save_student_profile_to_r2(current_user, status_data, documents)
     
     # Add metadata to response
     status_data["r2_key"] = r2_key
@@ -547,15 +625,15 @@ async def get_visa_status_from_storage(
     current_user: models.User = Depends(get_current_active_user)
 ):
     """
-    Get the last saved visa journey status from R2 storage.
+    Get the last saved student profile and visa status from R2 storage.
     Returns the cached status without recalculating.
     """
-    status_data = get_visa_status_from_r2(current_user.id)
+    status_data = get_student_profile_from_r2(current_user.id)
     
     if not status_data:
         raise HTTPException(
             status_code=404,
-            detail="No visa status found. Please visit your dashboard to generate one."
+            detail="No student profile found. Please visit your dashboard to generate one."
         )
     
     return JSONResponse(content=status_data)

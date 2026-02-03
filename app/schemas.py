@@ -133,6 +133,18 @@ class PasswordReset(BaseModel):
     token: str
     new_password: str
 
+class UniversityChangeRequest(BaseModel):
+    new_email: str
+    new_university: str
+
+class UniversityChangeVerify(BaseModel):
+    token: str
+
+class DocumentationPreferences(BaseModel):
+    country: Optional[str] = "United States"
+    intake: Optional[str] = None  # Spring or Fall
+    year: Optional[int] = None
+
 class DocumentCreate(BaseModel):
     document_type: Optional[str] = None
     country: Optional[str] = None

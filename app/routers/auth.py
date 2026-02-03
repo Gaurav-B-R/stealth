@@ -444,3 +444,204 @@ def resend_verification_email(request: schemas.ResendVerificationRequest, db: Se
             detail=error_detail
         )
 
+
+@router.post("/request-university-change")
+def request_university_change(
+    request: Request,
+    change_request: schemas.UniversityChangeRequest,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Request to change university. Sends verification email to the new .edu email.
+    """
+    from app.email_service import generate_verification_token, send_university_change_email
+    
+    new_email = change_request.new_email.lower().strip()
+    new_university = change_request.new_university.strip()
+    
+    # Validate that new email is different from current
+    if new_email == current_user.email:
+        raise HTTPException(
+            status_code=400,
+            detail="New email must be different from your current email."
+        )
+    
+    # Validate that new email is a valid .edu email or developer email
+    email_domain = extract_email_domain(new_email)
+    
+    # Check if it's a developer email
+    dev_email = db.query(models.DeveloperEmail).filter(
+        models.DeveloperEmail.email == new_email
+    ).first()
+    
+    if not dev_email:
+        # Check if domain is a valid university domain
+        university = db.query(models.UniversityDomain).filter(
+            models.UniversityDomain.email_domain == email_domain
+        ).first()
+        
+        if not university:
+            raise HTTPException(
+                status_code=400,
+                detail="Please use a valid university .edu email address."
+            )
+        
+        # Verify university name matches domain
+        if university.university_name.lower() != new_university.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=f"The email domain does not match {new_university}."
+            )
+    
+    # Check if new email is already registered to another user
+    existing_user = db.query(models.User).filter(
+        models.User.email == new_email,
+        models.User.id != current_user.id
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="This email is already registered to another account."
+        )
+    
+    # Generate verification token
+    change_token = generate_verification_token()
+    token_expires = datetime.utcnow() + timedelta(hours=24)
+    
+    # Store pending change info
+    current_user.pending_email = new_email
+    current_user.pending_university = new_university
+    current_user.university_change_token = change_token
+    current_user.university_change_token_expires = token_expires
+    
+    db.commit()
+    
+    # Get base URL
+    base_url = str(request.base_url).rstrip('/')
+    if 'localhost' not in base_url and 'http://' in base_url:
+        base_url = base_url.replace('http://', 'https://')
+    
+    # Send verification email
+    email_sent = send_university_change_email(new_email, new_university, change_token, base_url)
+    
+    if email_sent:
+        return {
+            "message": f"Verification email sent to {new_email}. Please check your inbox to confirm the university change."
+        }
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to send verification email. Please try again later."
+        )
+
+
+@router.get("/verify-university-change")
+def verify_university_change(token: str, db: Session = Depends(get_db)):
+    """
+    Verify and complete university change using the verification token.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="Verification token is required."
+        )
+    
+    # Find user with this token
+    user = db.query(models.User).filter(
+        models.User.university_change_token == token
+    ).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid verification token. Please request a new university change."
+        )
+    
+    # Check if token has expired
+    if user.university_change_token_expires and user.university_change_token_expires < datetime.utcnow():
+        # Clear the pending change
+        user.pending_email = None
+        user.pending_university = None
+        user.university_change_token = None
+        user.university_change_token_expires = None
+        db.commit()
+        
+        raise HTTPException(
+            status_code=400,
+            detail="Verification token has expired. Please request a new university change."
+        )
+    
+    # Check if pending info exists
+    if not user.pending_email or not user.pending_university:
+        raise HTTPException(
+            status_code=400,
+            detail="No pending university change found."
+        )
+    
+    # Update user's email and university
+    old_email = user.email
+    old_university = user.university
+    
+    user.email = user.pending_email
+    user.university = user.pending_university
+    
+    # Clear pending change info
+    user.pending_email = None
+    user.pending_university = None
+    user.university_change_token = None
+    user.university_change_token_expires = None
+    
+    db.commit()
+    
+    return {
+        "message": f"University successfully changed to {user.university}!",
+        "old_email": old_email,
+        "new_email": user.email,
+        "old_university": old_university,
+        "new_university": user.university
+    }
+
+
+@router.get("/pending-university-change")
+def get_pending_university_change(
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """
+    Check if there's a pending university change request.
+    """
+    if current_user.pending_email and current_user.pending_university:
+        return {
+            "has_pending_change": True,
+            "pending_email": current_user.pending_email,
+            "pending_university": current_user.pending_university,
+            "expires": current_user.university_change_token_expires.isoformat() if current_user.university_change_token_expires else None
+        }
+    
+    return {"has_pending_change": False}
+
+
+@router.post("/cancel-university-change")
+def cancel_university_change(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Cancel a pending university change request.
+    """
+    if not current_user.pending_email:
+        raise HTTPException(
+            status_code=400,
+            detail="No pending university change to cancel."
+        )
+    
+    current_user.pending_email = None
+    current_user.pending_university = None
+    current_user.university_change_token = None
+    current_user.university_change_token_expires = None
+    
+    db.commit()
+    
+    return {"message": "University change request cancelled."}
+

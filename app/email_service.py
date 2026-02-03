@@ -289,3 +289,142 @@ def send_password_reset_email(email: str, reset_token: str, base_url: str = "htt
             print("   which doesn't require domain verification.\n")
         
         return False
+
+
+def send_university_change_email(email: str, new_university: str, change_token: str, base_url: str = "http://localhost:8000") -> bool:
+    """
+    Send university change verification email using Resend.
+    
+    Args:
+        email: New email address to verify
+        new_university: Name of the new university
+        change_token: Token for verification
+        base_url: Base URL of the application (for verification link)
+    
+    Returns:
+        bool: True if email was sent successfully, False otherwise
+    """
+    if not RESEND_API_KEY:
+        print(f"ERROR: Cannot send university change email - Resend not configured")
+        return False
+    
+    verification_link = f"{base_url}/verify-university-change?token={change_token}"
+    
+    # HTML email template
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Verify University Change - Rilono</title>
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+            <h1 style="color: white; margin: 0; font-size: 28px;">🎓 University Change Request</h1>
+        </div>
+        
+        <div style="background: #ffffff; padding: 40px; border: 1px solid #e5e7eb; border-top: none; border-radius: 0 0 10px 10px;">
+            <p style="font-size: 16px; margin-bottom: 20px;">Hi there,</p>
+            
+            <p style="font-size: 16px; margin-bottom: 20px;">
+                You've requested to change your university to <strong>{new_university}</strong> on Rilono. 
+                To confirm this change, please verify your new university email by clicking the button below:
+            </p>
+            
+            <div style="text-align: center; margin: 30px 0;">
+                <a href="{verification_link}" 
+                   style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                          color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; 
+                          font-weight: 600; font-size: 16px;">
+                    Verify University Change
+                </a>
+            </div>
+            
+            <div style="background: #f0f9ff; border-left: 4px solid #667eea; padding: 15px; margin: 20px 0; border-radius: 0 5px 5px 0;">
+                <p style="margin: 0; font-size: 14px; color: #1e40af;">
+                    <strong>New University:</strong> {new_university}<br>
+                    <strong>New Email:</strong> {email}
+                </p>
+            </div>
+            
+            <p style="font-size: 14px; color: #6b7280; margin-top: 30px;">
+                Or copy and paste this link into your browser:
+            </p>
+            <p style="font-size: 12px; color: #9ca3af; word-break: break-all; background: #f9fafb; padding: 10px; border-radius: 5px;">
+                {verification_link}
+            </p>
+            
+            <p style="font-size: 14px; color: #6b7280; margin-top: 30px;">
+                This verification link will expire in 24 hours. If you didn't request this change, 
+                please ignore this email - your account will remain unchanged.
+            </p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px; padding: 20px; color: #9ca3af; font-size: 12px;">
+            <p style="margin: 0;">© 2026 Rilono. All rights reserved.</p>
+            <p style="margin: 5px 0 0 0;">Your F1 Student Visa Assistant</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    # Plain text version
+    text_content = f"""
+    University Change Request - Rilono
+    
+    You've requested to change your university to {new_university} on Rilono.
+    
+    To confirm this change, click the link below:
+    
+    {verification_link}
+    
+    New University: {new_university}
+    New Email: {email}
+    
+    This link will expire in 24 hours. If you didn't request this change, please ignore this email.
+    
+    © 2026 Rilono. All rights reserved.
+    """
+    
+    try:
+        # In development mode, use Resend's test email sender
+        if USE_TEST_EMAIL or DEV_MODE:
+            from_email = "delivered@resend.dev"
+            print(f"DEV MODE: Using test email sender (delivered@resend.dev)")
+        else:
+            from_email = RESEND_FROM_EMAIL
+        
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{from_email}>",
+            "to": [email],
+            "subject": f"Verify University Change to {new_university} - Rilono",
+            "html": html_content,
+            "text": text_content,
+        }
+        
+        email_response = resend.Emails.send(params)
+        
+        # Check if email was sent successfully
+        email_id = None
+        if isinstance(email_response, dict):
+            email_id = email_response.get('id')
+        elif email_response and hasattr(email_response, 'id'):
+            email_id = email_response.id
+        
+        if email_id:
+            print(f"University change verification email sent successfully to {email} (ID: {email_id})")
+            return True
+        else:
+            print(f"Failed to send university change email to {email}. Response: {email_response}")
+            return False
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error sending university change email to {email}: {error_msg}")
+        
+        if "domain is not verified" in error_msg.lower() or "not verified" in error_msg.lower():
+            print("\n💡 TIP: For development/testing, add to your .env file:")
+            print("   USE_TEST_EMAIL=true")
+        
+        return False

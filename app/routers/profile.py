@@ -23,8 +23,12 @@ def update_profile(
     """Update current user's profile"""
     update_data = user_update.dict(exclude_unset=True)
     
+    # University is not editable - it's derived from .edu email at registration
+    protected_fields = {'university', 'email', 'username', 'is_active', 'is_verified'}
+    
     for field, value in update_data.items():
-        setattr(current_user, field, value)
+        if field not in protected_fields:
+            setattr(current_user, field, value)
     
     db.commit()
     db.refresh(current_user)
@@ -42,6 +46,45 @@ def get_user_profile(
     
     # Return public profile (exclude sensitive info)
     return user
+
+@router.put("/documentation-preferences")
+def update_documentation_preferences(
+    preferences: schemas.DocumentationPreferences,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Update user's documentation preferences (country, intake, year)"""
+    if preferences.country:
+        current_user.preferred_country = preferences.country
+    if preferences.intake:
+        current_user.preferred_intake = preferences.intake
+    if preferences.year:
+        current_user.preferred_year = preferences.year
+    
+    db.commit()
+    db.refresh(current_user)
+    
+    return {
+        "message": "Documentation preferences updated successfully",
+        "preferences": {
+            "country": current_user.preferred_country,
+            "intake": current_user.preferred_intake,
+            "year": current_user.preferred_year
+        }
+    }
+
+
+@router.get("/documentation-preferences")
+def get_documentation_preferences(
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """Get user's documentation preferences"""
+    return {
+        "country": current_user.preferred_country or "United States",
+        "intake": current_user.preferred_intake,
+        "year": current_user.preferred_year
+    }
+
 
 @router.delete("/", status_code=status.HTTP_204_NO_CONTENT)
 def delete_account(

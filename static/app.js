@@ -71,6 +71,8 @@ function handleRoute(skipURLUpdate = false) {
         showRegister(skipURLUpdate);
     } else if (path === '/verify-email') {
         handleEmailVerification(skipURLUpdate);
+    } else if (path === '/verify-university-change') {
+        handleUniversityChangeVerification(skipURLUpdate);
     } else if (path === '/forgot-password') {
         showForgotPassword(skipURLUpdate);
     } else if (path === '/reset-password') {
@@ -891,6 +893,91 @@ async function handleEmailVerification(skipURLUpdate = false) {
     
     if (!skipURLUpdate) {
         updateURL('/verify-email' + (token ? `?token=${token}` : ''), false);
+    }
+}
+
+async function handleUniversityChangeVerification(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('verificationSection').style.display = 'block';
+    
+    // Get token from URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    
+    if (token) {
+        // Show loading
+        document.getElementById('verificationContent').innerHTML = `
+            <div style="text-align: center;">
+                <div style="font-size: 4rem; margin-bottom: 1rem;">⏳</div>
+                <h3 style="margin-bottom: 1rem;">Verifying University Change...</h3>
+                <p style="color: var(--text-secondary);">Please wait while we verify your request.</p>
+            </div>
+        `;
+        
+        // Verify the token
+        try {
+            const response = await fetch(`${API_BASE}/api/auth/verify-university-change?token=${encodeURIComponent(token)}`);
+            const data = await response.json();
+            
+            if (response.ok) {
+                document.getElementById('verificationContent').innerHTML = `
+                    <div style="text-align: center;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem;">🎓</div>
+                        <h3 style="margin-bottom: 1rem; color: var(--success-color);">University Changed!</h3>
+                        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                            Your university has been successfully updated.
+                        </p>
+                        <div style="background: var(--bg-tertiary); padding: 1.5rem; border-radius: 12px; margin-bottom: 2rem; text-align: left;">
+                            <p style="margin: 0.5rem 0;"><strong>New University:</strong> ${escapeHtml(data.new_university)}</p>
+                            <p style="margin: 0.5rem 0;"><strong>New Email:</strong> ${escapeHtml(data.new_email)}</p>
+                        </div>
+                        <p style="color: var(--text-secondary); margin-bottom: 2rem; font-size: 0.9rem;">
+                            Please log in again with your new email address.
+                        </p>
+                        <a href="#" onclick="logout(); showLogin(); return false;" class="btn btn-primary">Login with New Email</a>
+                    </div>
+                `;
+            } else {
+                document.getElementById('verificationContent').innerHTML = `
+                    <div style="text-align: center;">
+                        <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--danger-color);">✗</div>
+                        <h3 style="margin-bottom: 1rem; color: var(--danger-color);">Verification Failed</h3>
+                        <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                            ${escapeHtml(data.detail || 'Invalid or expired verification token.')}
+                        </p>
+                        <button onclick="showDashboard(); return false;" class="btn btn-primary">Go to Dashboard</button>
+                    </div>
+                `;
+            }
+        } catch (error) {
+            console.error('University change verification error:', error);
+            document.getElementById('verificationContent').innerHTML = `
+                <div style="text-align: center;">
+                    <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--danger-color);">✗</div>
+                    <h3 style="margin-bottom: 1rem; color: var(--danger-color);">Error</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                        An error occurred during verification. Please try again.
+                    </p>
+                    <button onclick="showDashboard(); return false;" class="btn btn-primary">Go to Dashboard</button>
+                </div>
+            `;
+        }
+    } else {
+        // No token
+        document.getElementById('verificationContent').innerHTML = `
+            <div style="text-align: center;">
+                <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--danger-color);">✗</div>
+                <h3 style="margin-bottom: 1rem; color: var(--danger-color);">Invalid Link</h3>
+                <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                    This verification link is invalid. Please request a new university change from your profile.
+                </p>
+                <button onclick="showDashboard(); return false;" class="btn btn-primary">Go to Dashboard</button>
+            </div>
+        `;
+    }
+    
+    if (!skipURLUpdate) {
+        updateURL('/verify-university-change' + (token ? `?token=${token}` : ''), false);
     }
 }
 
@@ -2561,52 +2648,61 @@ function displayProfile(profile) {
         placeholder.style.display = 'flex';
         placeholder.textContent = (profile.full_name || profile.username || 'U').charAt(0).toUpperCase();
     }
+    
+    // Check for pending university change
+    checkPendingUniversityChange();
+    
+    // Load documentation preferences
+    loadDocumentationPreferences();
+}
+
+async function loadDocumentationPreferences() {
+    if (!authToken) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/profile/documentation-preferences`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            const prefs = await response.json();
+            
+            // Populate the form fields
+            const countryField = document.getElementById('documentationCountry');
+            const intakeField = document.getElementById('documentationIntake');
+            const yearField = document.getElementById('documentationYear');
+            
+            if (countryField && prefs.country) {
+                countryField.value = prefs.country;
+            }
+            if (intakeField && prefs.intake) {
+                intakeField.value = prefs.intake;
+            }
+            if (yearField && prefs.year) {
+                yearField.value = prefs.year;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading documentation preferences:', error);
+        // Fall back to localStorage
+        const localPrefs = localStorage.getItem('documentationPreferences');
+        if (localPrefs) {
+            const prefs = JSON.parse(localPrefs);
+            const intakeField = document.getElementById('documentationIntake');
+            const yearField = document.getElementById('documentationYear');
+            if (intakeField && prefs.intake) intakeField.value = prefs.intake;
+            if (yearField && prefs.year) yearField.value = prefs.year;
+        }
+    }
 }
 
 async function loadDashboardStats() {
     if (!authToken) return;
     
     try {
-        // Load user's items to count active and sold
-        const itemsResponse = await fetch(`${API_BASE}/api/items/my/listings`, {
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
-        });
-        
-        if (itemsResponse.ok) {
-            const items = await itemsResponse.json();
-            const activeCount = items.filter(item => !item.is_sold).length;
-            const soldCount = items.filter(item => item.is_sold).length;
-            
-            document.getElementById('activeListingsCount').textContent = activeCount;
-            document.getElementById('soldItemsCount').textContent = soldCount;
-        }
-        
-        // Load unread messages count
-        const messagesResponse = await fetch(`${API_BASE}/api/messages/unread-count`, {
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
-        });
-        
-        if (messagesResponse.ok) {
-            const data = await messagesResponse.json();
-            document.getElementById('unreadCount').textContent = data.unread_count || 0;
-            
-            // Get total conversations count
-            const convResponse = await fetch(`${API_BASE}/api/messages/conversations`, {
-                headers: {
-                    'Authorization': `Bearer ${authToken}`
-                }
-            });
-            if (convResponse.ok) {
-                const conversations = await convResponse.json();
-                document.getElementById('messagesCount').textContent = conversations.length || 0;
-            }
-        }
-        
-        // Load profile completion and pending documents
+        // Load profile completion and pending documents (main dashboard content)
         await loadProfileCompletion();
     } catch (error) {
         console.error('Load dashboard stats error:', error);
@@ -2651,8 +2747,8 @@ async function loadProfileCompletion() {
         // Update visa journey tracker
         updateVisaJourneyUI(documents);
         
-        // Save visa status to R2 (fire and forget)
-        saveVisaStatusToR2();
+        // NOTE: We no longer save to R2 on every dashboard load
+        // R2 is only updated when data actually changes (document upload/delete, profile update, preferences update)
     } catch (error) {
         console.error('Load profile completion error:', error);
     }
@@ -2662,7 +2758,10 @@ async function saveVisaStatusToR2() {
     if (!authToken) return;
     
     try {
-        const response = await fetch(`${API_BASE}/api/documents/visa-status`, {
+        // Use POST /refresh endpoint to actually write to R2
+        // GET /visa-status only reads (doesn't write)
+        const response = await fetch(`${API_BASE}/api/documents/visa-status/refresh`, {
+            method: 'POST',
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
@@ -3049,7 +3148,7 @@ async function handleUpdateProfile(e) {
     
     const profileData = {
         full_name: getValue('profileFullName'),
-        university: getValue('profileUniversity'),
+        // university is not editable - derived from .edu email at registration
         phone: getValue('profilePhone'),
         profile_picture: profilePictureUrl || currentUser.profile_picture || null
     };
@@ -3078,6 +3177,9 @@ async function handleUpdateProfile(e) {
             }
             // Reload profile display if on dashboard
             displayProfile(data);
+            
+            // Update R2 with new profile data
+            await saveVisaStatusToR2();
         } else {
             let errorMessage = 'Failed to update profile';
             if (data.detail) {
@@ -3094,6 +3196,173 @@ async function handleUpdateProfile(e) {
         showMessage('An error occurred. Please check your connection and try again.', 'error');
     }
 }
+
+// ========== Change University Functions ==========
+
+function showChangeUniversityModal() {
+    const modal = document.getElementById('changeUniversityModal');
+    modal.style.display = 'flex';
+    document.getElementById('newUniversityEmail').value = '';
+    document.getElementById('newUniversityName').value = '';
+    document.getElementById('universityChangeError').style.display = 'none';
+    
+    // Add email input listener for auto-fill
+    const emailInput = document.getElementById('newUniversityEmail');
+    emailInput.addEventListener('input', debounce(checkNewUniversityEmail, 500));
+}
+
+function closeChangeUniversityModal() {
+    document.getElementById('changeUniversityModal').style.display = 'none';
+}
+
+// Simple debounce function
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+async function checkNewUniversityEmail() {
+    const email = document.getElementById('newUniversityEmail').value.trim();
+    const universityInput = document.getElementById('newUniversityName');
+    const errorDiv = document.getElementById('universityChangeError');
+    
+    if (!email || !email.includes('@')) {
+        universityInput.value = '';
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/university-by-email?email=${encodeURIComponent(email)}`);
+        const data = await response.json();
+        
+        if (data.is_valid && data.university_name) {
+            universityInput.value = data.university_name;
+            errorDiv.style.display = 'none';
+        } else {
+            universityInput.value = '';
+            errorDiv.textContent = 'Please use a valid university .edu email address.';
+            errorDiv.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error checking university email:', error);
+        universityInput.value = '';
+    }
+}
+
+async function handleChangeUniversity(e) {
+    e.preventDefault();
+    
+    const email = document.getElementById('newUniversityEmail').value.trim();
+    const university = document.getElementById('newUniversityName').value.trim();
+    const errorDiv = document.getElementById('universityChangeError');
+    const submitBtn = document.getElementById('changeUniversitySubmitBtn');
+    const btnText = document.getElementById('changeUniversityBtnText');
+    
+    if (!email || !university) {
+        errorDiv.textContent = 'Please enter a valid university email.';
+        errorDiv.style.display = 'block';
+        return;
+    }
+    
+    // Disable button and show loading
+    submitBtn.disabled = true;
+    btnText.textContent = 'Sending...';
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/request-university-change`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                new_email: email,
+                new_university: university
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            closeChangeUniversityModal();
+            showMessage(data.message || 'Verification email sent! Check your inbox.', 'success');
+            // Show pending change UI
+            checkPendingUniversityChange();
+        } else {
+            errorDiv.textContent = data.detail || 'Failed to request university change.';
+            errorDiv.style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Change university error:', error);
+        errorDiv.textContent = 'An error occurred. Please try again.';
+        errorDiv.style.display = 'block';
+    } finally {
+        submitBtn.disabled = false;
+        btnText.textContent = 'Send Verification';
+    }
+}
+
+async function checkPendingUniversityChange() {
+    if (!authToken) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/pending-university-change`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        const data = await response.json();
+        const pendingDiv = document.getElementById('pendingUniversityChange');
+        const pendingName = document.getElementById('pendingUniversityName');
+        
+        if (data.has_pending_change) {
+            pendingName.textContent = data.pending_university;
+            pendingDiv.style.display = 'block';
+        } else {
+            pendingDiv.style.display = 'none';
+        }
+    } catch (error) {
+        console.error('Error checking pending university change:', error);
+    }
+}
+
+async function cancelUniversityChange() {
+    if (!authToken) return;
+    
+    if (!confirm('Are you sure you want to cancel the university change request?')) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/cancel-university-change`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            showMessage('University change request cancelled.', 'success');
+            document.getElementById('pendingUniversityChange').style.display = 'none';
+        } else {
+            const data = await response.json();
+            showMessage(data.detail || 'Failed to cancel request.', 'error');
+        }
+    } catch (error) {
+        console.error('Cancel university change error:', error);
+        showMessage('An error occurred.', 'error');
+    }
+}
+
+// ========== End Change University Functions ==========
 
 async function handleDeleteAccount() {
     if (!authToken) {
@@ -3315,20 +3584,48 @@ async function handleDocumentationForm(e) {
         return;
     }
     
-    // Save preferences to localStorage
-    const preferences = {
-        country: country,
-        intake: intake,
-        year: year,
-        savedAt: new Date().toISOString()
-    };
+    if (!authToken) {
+        showMessage('Please login to save preferences', 'error');
+        return;
+    }
     
-    localStorage.setItem('documentationPreferences', JSON.stringify(preferences));
-    
-    showMessage(`Preferences saved: ${intake} ${year}`, 'success');
-    
-    // TODO: In the future, this will send data to the backend API
-    // For now, we're just storing it locally
+    try {
+        // Save to backend API
+        const response = await fetch(`${API_BASE}/api/profile/documentation-preferences`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                country: country,
+                intake: intake,
+                year: parseInt(year)
+            })
+        });
+        
+        if (response.ok) {
+            // Also save to localStorage as backup
+            const preferences = {
+                country: country,
+                intake: intake,
+                year: year,
+                savedAt: new Date().toISOString()
+            };
+            localStorage.setItem('documentationPreferences', JSON.stringify(preferences));
+            
+            showMessage(`Preferences saved: ${intake} ${year}`, 'success');
+            
+            // Refresh the R2 student profile file
+            await saveVisaStatusToR2();
+        } else {
+            const data = await response.json();
+            showMessage(data.detail || 'Failed to save preferences', 'error');
+        }
+    } catch (error) {
+        console.error('Save preferences error:', error);
+        showMessage('Failed to save preferences. Please try again.', 'error');
+    }
 }
 
 async function handleDocumentUpload(e) {

@@ -20,9 +20,18 @@ class User(Base):
     verification_token_expires = Column(DateTime(timezone=True), nullable=True)
     password_reset_token = Column(String, nullable=True, unique=True, index=True)
     password_reset_token_expires = Column(DateTime(timezone=True), nullable=True)
+    # Pending university change fields
+    pending_email = Column(String, nullable=True)  # New email for university change
+    pending_university = Column(String, nullable=True)  # New university name
+    university_change_token = Column(String, nullable=True, unique=True, index=True)
+    university_change_token_expires = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, default=False)  # Admin/Developer access
     is_developer = Column(Boolean, default=False)  # Developer team access
     encryption_salt = Column(String, nullable=True)  # Salt for Zero-Knowledge encryption (base64 encoded)
+    # Documentation preferences
+    preferred_country = Column(String, nullable=True, default="United States")
+    preferred_intake = Column(String, nullable=True)  # Spring or Fall
+    preferred_year = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     items = relationship("Item", back_populates="seller", cascade="all, delete-orphan")
