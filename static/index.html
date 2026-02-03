@@ -959,32 +959,35 @@
                                             </small>
                                         </div>
                                         <div class="form-group">
-                                            <label for="documentType">Document Type</label>
-                                            <select id="documentType">
-                                                <option value="">Select Type (Optional)</option>
-                                                <option value="passport">Passport</option>
-                                                <option value="ds-160-confirmation">DS-160 Confirmation Page</option>
-                                                <option value="ds-160-application">DS-160 Application</option>
-                                                <option value="us-visa-appointment-letter">US Visa Appointment Letter</option>
-                                                <option value="visa-fee-receipt">Visa Fee Receipt</option>
-                                                <option value="photograph-2x2">Photograph (2x2 Inches)</option>
-                                                <option value="form-i20-signed">Form I-20 (Signed)</option>
-                                                <option value="previous-i20s">Previous I-20's</option>
-                                                <option value="university-admission-letter">University Admission Letter</option>
-                                                <option value="bank-balance-certificate">Bank balance certificate</option>
-                                                <option value="loan-approval-letter">Loan approval letter (if applicable)</option>
-                                                <option value="affidavit-of-support">Affidavit of Support (if sponsored)</option>
-                                                <option value="sponsor-income-proof">Sponsor's income proof (salary slips, IT returns)</option>
-                                                <option value="degree-certificates">Degree certificates</option>
-                                                <option value="provisional-certificates">Provisional certificates</option>
-                                                <option value="transcripts-marksheets">Transcripts / mark sheets (all semesters)</option>
-                                                <option value="standardized-test-scores">Standardized test scores (GRE, TOEFL, IELTS, Duolingo – if applicable)</option>
-                                                <option value="experience-letters">Experience letters</option>
-                                                <option value="offer-letters">Offer letters</option>
-                                                <option value="salary-slips">Salary slips (last 3–6 months)</option>
-                                                <option value="resume">Resume (updated)</option>
-                                                <option value="i901-sevis-fee-confirmation">I-901 SEVIS fee payment confirmation</option>
-                                            </select>
+                                            <label for="documentTypeSearch">Document Type <span style="color: var(--danger-color);">*</span></label>
+                                            <div class="searchable-dropdown" id="documentTypeDropdown">
+                                                <input type="text" id="documentTypeSearch" class="dropdown-search" placeholder="Search or select document type..." autocomplete="off">
+                                                <input type="hidden" id="documentType" required>
+                                                <div class="dropdown-list" id="documentTypeList">
+                                                    <div class="dropdown-item" data-value="passport">Passport</div>
+                                                    <div class="dropdown-item" data-value="ds-160-confirmation">DS-160 Confirmation Page</div>
+                                                    <div class="dropdown-item" data-value="ds-160-application">DS-160 Application</div>
+                                                    <div class="dropdown-item" data-value="us-visa-appointment-letter">US Visa Appointment Letter</div>
+                                                    <div class="dropdown-item" data-value="visa-fee-receipt">Visa Fee Receipt</div>
+                                                    <div class="dropdown-item" data-value="photograph-2x2">Photograph (2x2 Inches)</div>
+                                                    <div class="dropdown-item" data-value="form-i20-signed">Form I-20 (Signed)</div>
+                                                    <div class="dropdown-item" data-value="previous-i20s">Previous I-20's</div>
+                                                    <div class="dropdown-item" data-value="university-admission-letter">University Admission Letter</div>
+                                                    <div class="dropdown-item" data-value="bank-balance-certificate">Bank balance certificate</div>
+                                                    <div class="dropdown-item" data-value="loan-approval-letter">Loan approval letter (if applicable)</div>
+                                                    <div class="dropdown-item" data-value="affidavit-of-support">Affidavit of Support (if sponsored)</div>
+                                                    <div class="dropdown-item" data-value="sponsor-income-proof">Sponsor's income proof (salary slips, IT returns)</div>
+                                                    <div class="dropdown-item" data-value="degree-certificates">Degree certificates</div>
+                                                    <div class="dropdown-item" data-value="provisional-certificates">Provisional certificates</div>
+                                                    <div class="dropdown-item" data-value="transcripts-marksheets">Transcripts / mark sheets (all semesters)</div>
+                                                    <div class="dropdown-item" data-value="standardized-test-scores">Standardized test scores (GRE, TOEFL, IELTS, Duolingo)</div>
+                                                    <div class="dropdown-item" data-value="experience-letters">Experience letters</div>
+                                                    <div class="dropdown-item" data-value="offer-letters">Offer letters</div>
+                                                    <div class="dropdown-item" data-value="salary-slips">Salary slips (last 3-6 months)</div>
+                                                    <div class="dropdown-item" data-value="resume">Resume (updated)</div>
+                                                    <div class="dropdown-item" data-value="i901-sevis-fee-confirmation">I-901 SEVIS fee payment confirmation</div>
+                                                </div>
+                                            </div>
                                         </div>
                                         <div class="form-group">
                                             <label for="documentDescription">Description (Optional)</label>

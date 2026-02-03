@@ -115,7 +115,7 @@ def get_presigned_url(r2_key: str, expiration: int = 3600) -> str:
 async def upload_document(
     file: UploadFile = File(...),
     password: str = Form(...),  # User's password for Zero-Knowledge encryption
-    document_type: Optional[str] = Form(None),
+    document_type: str = Form(...),  # Required - document type must be specified
     country: Optional[str] = Form(None),
     intake: Optional[str] = Form(None),
     year: Optional[int] = Form(None),

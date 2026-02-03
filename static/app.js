@@ -145,6 +145,7 @@ async function initializeTurnstile() {
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     initializeAddressAutocomplete();
+    initializeSearchableDropdowns();
     
     // Initialize Turnstile
     await initializeTurnstile();
@@ -1891,6 +1892,135 @@ function initializeAddressAutocomplete() {
     
     // Start checking for Google Maps API
     checkGoogleMaps();
+}
+
+function initializeSearchableDropdowns() {
+    // Initialize document type searchable dropdown
+    const documentTypeDropdown = document.getElementById('documentTypeDropdown');
+    if (!documentTypeDropdown) return;
+    
+    const searchInput = documentTypeDropdown.querySelector('.dropdown-search');
+    const hiddenInput = documentTypeDropdown.querySelector('input[type="hidden"]');
+    const dropdownList = documentTypeDropdown.querySelector('.dropdown-list');
+    const items = dropdownList.querySelectorAll('.dropdown-item');
+    
+    // Open dropdown on focus
+    searchInput.addEventListener('focus', () => {
+        documentTypeDropdown.classList.add('open');
+        filterItems('');
+    });
+    
+    // Filter items on input
+    searchInput.addEventListener('input', (e) => {
+        const searchTerm = e.target.value.toLowerCase();
+        filterItems(searchTerm);
+        
+        // Clear selection if user is typing
+        if (searchTerm) {
+            hiddenInput.value = '';
+            items.forEach(item => item.classList.remove('selected'));
+        }
+    });
+    
+    // Handle item selection
+    items.forEach(item => {
+        item.addEventListener('click', () => {
+            const value = item.dataset.value;
+            const text = item.textContent;
+            
+            searchInput.value = text;
+            hiddenInput.value = value;
+            
+            // Update selected state
+            items.forEach(i => i.classList.remove('selected'));
+            item.classList.add('selected');
+            
+            documentTypeDropdown.classList.remove('open');
+        });
+    });
+    
+    // Close dropdown on click outside
+    document.addEventListener('click', (e) => {
+        if (!documentTypeDropdown.contains(e.target)) {
+            documentTypeDropdown.classList.remove('open');
+            
+            // If no valid selection, clear the input
+            if (!hiddenInput.value && searchInput.value) {
+                // Try to find an exact match
+                const matchingItem = Array.from(items).find(
+                    item => item.textContent.toLowerCase() === searchInput.value.toLowerCase()
+                );
+                if (matchingItem) {
+                    hiddenInput.value = matchingItem.dataset.value;
+                    searchInput.value = matchingItem.textContent;
+                    matchingItem.classList.add('selected');
+                } else {
+                    searchInput.value = '';
+                }
+            }
+        }
+    });
+    
+    // Handle keyboard navigation
+    searchInput.addEventListener('keydown', (e) => {
+        const visibleItems = Array.from(items).filter(item => !item.classList.contains('hidden'));
+        const currentIndex = visibleItems.findIndex(item => item.classList.contains('highlighted'));
+        
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (!documentTypeDropdown.classList.contains('open')) {
+                documentTypeDropdown.classList.add('open');
+            }
+            const nextIndex = currentIndex < visibleItems.length - 1 ? currentIndex + 1 : 0;
+            highlightItem(visibleItems, nextIndex);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            const prevIndex = currentIndex > 0 ? currentIndex - 1 : visibleItems.length - 1;
+            highlightItem(visibleItems, prevIndex);
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const highlightedItem = visibleItems.find(item => item.classList.contains('highlighted'));
+            if (highlightedItem) {
+                highlightedItem.click();
+            } else if (visibleItems.length === 1) {
+                visibleItems[0].click();
+            }
+        } else if (e.key === 'Escape') {
+            documentTypeDropdown.classList.remove('open');
+        }
+    });
+    
+    function filterItems(searchTerm) {
+        let hasResults = false;
+        items.forEach(item => {
+            const text = item.textContent.toLowerCase();
+            const matches = text.includes(searchTerm);
+            item.classList.toggle('hidden', !matches);
+            if (matches) hasResults = true;
+        });
+        
+        // Show "no results" message
+        let noResultsEl = dropdownList.querySelector('.no-results');
+        if (!hasResults) {
+            if (!noResultsEl) {
+                noResultsEl = document.createElement('div');
+                noResultsEl.className = 'no-results';
+                noResultsEl.textContent = 'No document types found';
+                dropdownList.appendChild(noResultsEl);
+            }
+            noResultsEl.style.display = 'block';
+        } else if (noResultsEl) {
+            noResultsEl.style.display = 'none';
+        }
+    }
+    
+    function highlightItem(visibleItems, index) {
+        items.forEach(item => item.classList.remove('highlighted'));
+        if (visibleItems[index]) {
+            visibleItems[index].classList.add('highlighted');
+            visibleItems[index].scrollIntoView({ block: 'nearest' });
+        }
+    }
 }
 
 async function uploadImages(files) {
@@ -3653,6 +3783,11 @@ async function handleDocumentUpload(e) {
         return;
     }
     
+    if (!documentType) {
+        showMessage('Please select a document type', 'error');
+        return;
+    }
+    
     const file = fileInput.files[0];
     
     // Validate file size (50MB)
@@ -3668,7 +3803,7 @@ async function handleDocumentUpload(e) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('password', password);  // Required for Zero-Knowledge encryption
-        if (documentType) formData.append('document_type', documentType);
+        formData.append('document_type', documentType);  // Required field
         if (country) formData.append('country', country);
         if (intake) formData.append('intake', intake);
         if (year) formData.append('year', year);
@@ -3686,7 +3821,7 @@ async function handleDocumentUpload(e) {
         
         if (response.ok) {
             const documentName = file.name;
-            const docType = documentType || 'document';
+            const docType = documentType;
             
             // Check for validation results
             if (data.validation) {
@@ -3730,6 +3865,11 @@ async function handleDocumentUpload(e) {
             }
             
             document.getElementById('documentUploadForm').reset();
+            // Also reset the searchable dropdown
+            document.getElementById('documentType').value = '';
+            document.getElementById('documentTypeSearch').value = '';
+            const dropdownItems = document.querySelectorAll('#documentTypeList .dropdown-item');
+            dropdownItems.forEach(item => item.classList.remove('selected'));
             await loadMyDocuments();
             
             // Refresh visa status after document upload

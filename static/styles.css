@@ -536,6 +536,95 @@ body {
     color: var(--text-muted);
 }
 
+/* Searchable Dropdown */
+.searchable-dropdown {
+    position: relative;
+    width: 100%;
+}
+
+.searchable-dropdown .dropdown-search {
+    width: 100%;
+    padding: 0.875rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    transition: all 0.2s ease;
+    cursor: text;
+}
+
+.searchable-dropdown .dropdown-search:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.searchable-dropdown .dropdown-search::placeholder {
+    color: var(--text-muted);
+}
+
+.searchable-dropdown .dropdown-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 250px;
+    overflow-y: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0 0 0.5rem 0.5rem;
+    z-index: 1000;
+    display: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.searchable-dropdown.open .dropdown-list {
+    display: block;
+}
+
+.searchable-dropdown.open .dropdown-search {
+    border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.searchable-dropdown .dropdown-item {
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.searchable-dropdown .dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.searchable-dropdown .dropdown-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.searchable-dropdown .dropdown-item.selected {
+    background: rgba(99, 102, 241, 0.15);
+    color: var(--primary-light);
+}
+
+.searchable-dropdown .dropdown-item.hidden {
+    display: none;
+}
+
+.searchable-dropdown .dropdown-item.highlighted {
+    background: var(--bg-tertiary);
+}
+
+.searchable-dropdown .no-results {
+    padding: 0.75rem 1rem;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    text-align: center;
+}
+
 #imagePreviews {
     margin-top: 1rem;
 }
