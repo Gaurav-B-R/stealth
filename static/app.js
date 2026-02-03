@@ -504,6 +504,45 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// Convert markdown to HTML for AI responses
+function markdownToHtml(text) {
+    if (!text) return '';
+    
+    // Escape HTML first to prevent XSS
+    let html = escapeHtml(text);
+    
+    // Convert **bold** to <strong>
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    
+    // Convert *italic* to <em> (but not if it's part of **)
+    html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+    
+    // Convert `code` to <code>
+    html = html.replace(/`([^`]+)`/g, '<code style="background: rgba(139, 92, 246, 0.2); padding: 2px 6px; border-radius: 4px; font-family: monospace;">$1</code>');
+    
+    // Convert bullet points (lines starting with - or •)
+    html = html.replace(/^[\-•]\s+(.+)$/gm, '<li>$1</li>');
+    
+    // Convert numbered lists (lines starting with 1. 2. etc)
+    html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+    
+    // Wrap consecutive <li> elements in <ul>
+    html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => {
+        return '<ul style="margin: 8px 0; padding-left: 20px; list-style-type: disc;">' + match + '</ul>';
+    });
+    
+    // Convert line breaks to <br> but not inside lists
+    html = html.replace(/\n(?!<)/g, '<br>');
+    
+    // Clean up extra <br> before/after lists
+    html = html.replace(/<br><ul/g, '<ul');
+    html = html.replace(/<\/ul><br>/g, '</ul>');
+    html = html.replace(/<br><li>/g, '<li>');
+    html = html.replace(/<\/li><br>/g, '</li>');
+    
+    return html;
+}
+
 function toggleNotifications() {
     const dropdown = document.getElementById('notificationDropdown');
     notificationDropdownOpen = !notificationDropdownOpen;
@@ -1315,8 +1354,17 @@ function logout() {
     authToken = null;
     currentUser = null;
     floatingChatOpen = false;
-    floatingChatConversationHistory = [];
+    rilonoAiConversationHistory = [];  // Clear shared chat history
     document.getElementById('floatingChatWindow').style.display = 'none';
+    // Clear floating chat messages
+    const floatingMessages = document.getElementById('floatingChatMessages');
+    if (floatingMessages) floatingMessages.innerHTML = '';
+    // Clear main chat messages
+    const mainMessages = document.getElementById('rilonoAiChatMessages');
+    if (mainMessages) {
+        const existingMsgs = mainMessages.querySelectorAll('.rilono-ai-message');
+        existingMsgs.forEach(msg => msg.remove());
+    }
     updateUIForAuth();
     showMessage('Logged out successfully', 'success');
     showHomepage();
@@ -3724,6 +3772,8 @@ function sendQuickMessage(message) {
 
 function addMessageToRilonoAiChat(message, isUser = false) {
     const messagesContainer = document.getElementById('rilonoAiChatMessages');
+    if (!messagesContainer) return;  // Guard: container might not exist
+    
     const messageDiv = document.createElement('div');
     messageDiv.className = `rilono-ai-message ${isUser ? 'user' : 'assistant'}`;
     
@@ -3735,10 +3785,11 @@ function addMessageToRilonoAiChat(message, isUser = false) {
             </div>
         `;
     } else {
+        // Use markdown parser for AI responses
         messageDiv.innerHTML = `
             <div class="message-avatar">🤖</div>
             <div class="message-bubble">
-                <p style="white-space: pre-wrap;">${escapeHtml(message)}</p>
+                <div class="ai-response-content">${markdownToHtml(message)}</div>
             </div>
         `;
     }
@@ -3786,10 +3837,11 @@ async function handleRilonoAiChatSubmit(e) {
         return;
     }
     
-    // Add user message
+    // Add user message to both chats
     addMessageToRilonoAiChat(message, true);
+    addMessageToFloatingChat(message, true);
     
-    // Add to conversation history
+    // Add to shared conversation history
     rilonoAiConversationHistory.push({
         role: 'user',
         content: message
@@ -3821,7 +3873,7 @@ async function handleRilonoAiChatSubmit(e) {
             const data = await response.json();
             const aiResponse = data.response;
             
-            // Add AI response to conversation history
+            // Add AI response to shared conversation history
             rilonoAiConversationHistory.push({
                 role: 'assistant',
                 content: aiResponse
@@ -3832,7 +3884,9 @@ async function handleRilonoAiChatSubmit(e) {
                 rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-20);
             }
             
+            // Add to both chats
             addMessageToRilonoAiChat(aiResponse, false);
+            addMessageToFloatingChat(aiResponse, false);
         } else {
             const errorData = await response.json();
             const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
@@ -3928,15 +3982,17 @@ Could you be more specific about what you need help with? Or try one of the quic
 function initializeRilonoAiChat() {
     const chatForm = document.getElementById('rilonoAiChatForm');
     if (chatForm) {
+        // Remove existing listener to prevent duplicates
+        chatForm.removeEventListener('submit', handleRilonoAiChatSubmit);
         chatForm.addEventListener('submit', handleRilonoAiChatSubmit);
     }
-    // Reset conversation history when initializing (optional - can be removed if you want persistent history)
-    // rilonoAiConversationHistory = [];
+    // Sync messages from shared history
+    syncMainChatFromHistory();
 }
 
 // Floating Chat Widget Functions
 let floatingChatOpen = false;
-let floatingChatConversationHistory = [];
+// Note: floatingChatConversationHistory removed - using shared rilonoAiConversationHistory instead
 
 function toggleFloatingChat() {
     const widget = document.getElementById('floatingAiChatWidget');
@@ -3972,23 +4028,8 @@ function toggleFloatingChat() {
         document.getElementById('floatingChatInputContainer').style.display = 'block';
         messagesContainer.style.display = 'flex';
         
-        // Show welcome message if no messages exist
-        if (messagesContainer.children.length === 0) {
-            const welcomeDiv = document.createElement('div');
-            welcomeDiv.className = 'chat-welcome-message';
-            welcomeDiv.innerHTML = `
-                <div class="chat-avatar">🤖</div>
-                <div class="welcome-bubble">
-                    <p><strong>Hello! I'm Rilono AI</strong></p>
-                    <p>I'm here to help you with your F1 student visa process and documentation. How can I assist you today?</p>
-                </div>
-            `;
-            messagesContainer.appendChild(welcomeDiv);
-            // Scroll to bottom after welcome message
-            setTimeout(() => {
-                scrollFloatingChatToBottom();
-            }, 100);
-        }
+        // Sync conversation from shared history
+        syncFloatingChatFromHistory();
         
         // Ensure proper layout and scrolling
         setTimeout(() => {
@@ -4003,6 +4044,52 @@ function toggleFloatingChat() {
         }, 150);
     } else {
         chatWindow.style.display = 'none';
+    }
+}
+
+// Sync floating chat UI from shared conversation history
+function syncFloatingChatFromHistory() {
+    const messagesContainer = document.getElementById('floatingChatMessages');
+    if (!messagesContainer) return;
+    
+    // Clear existing messages
+    messagesContainer.innerHTML = '';
+    
+    // Show welcome message if no conversation history
+    if (rilonoAiConversationHistory.length === 0) {
+        const welcomeDiv = document.createElement('div');
+        welcomeDiv.className = 'chat-welcome-message';
+        welcomeDiv.innerHTML = `
+            <div class="chat-avatar">🤖</div>
+            <div class="welcome-bubble">
+                <p><strong>Hello! I'm Rilono AI</strong></p>
+                <p>I'm here to help you with your F1 student visa process and documentation. How can I assist you today?</p>
+            </div>
+        `;
+        messagesContainer.appendChild(welcomeDiv);
+    } else {
+        // Rebuild messages from shared history
+        for (const msg of rilonoAiConversationHistory) {
+            addMessageToFloatingChat(msg.content, msg.role === 'user');
+        }
+    }
+    
+    scrollFloatingChatToBottom();
+}
+
+// Sync main Rilono AI chat UI from shared conversation history
+function syncMainChatFromHistory() {
+    const messagesContainer = document.getElementById('rilonoAiChatMessages');
+    if (!messagesContainer) return;
+    
+    // Don't clear the initial welcome message area, just add messages if there are any
+    // Clear only the message area (keep welcome if no history)
+    const existingMessages = messagesContainer.querySelectorAll('.rilono-ai-message');
+    existingMessages.forEach(msg => msg.remove());
+    
+    // Rebuild messages from shared history
+    for (const msg of rilonoAiConversationHistory) {
+        addMessageToRilonoAiChat(msg.content, msg.role === 'user');
     }
 }
 
@@ -4036,6 +4123,7 @@ function scrollFloatingChatToBottom() {
 
 function addMessageToFloatingChat(message, isUser = false) {
     const messagesContainer = document.getElementById('floatingChatMessages');
+    if (!messagesContainer) return;  // Guard: container might not exist
     
     // Remove welcome message if it exists (only when adding first user message)
     if (isUser) {
@@ -4057,7 +4145,14 @@ function addMessageToFloatingChat(message, isUser = false) {
     
     const bubble = document.createElement('div');
     bubble.className = 'chat-message-bubble';
-    bubble.textContent = message;
+    
+    if (isUser) {
+        // User messages: plain text
+        bubble.textContent = message;
+    } else {
+        // AI responses: parse markdown
+        bubble.innerHTML = markdownToHtml(message);
+    }
     messageDiv.appendChild(bubble);
     
     if (isUser) {
@@ -4097,11 +4192,12 @@ async function handleFloatingChatSubmit(e) {
         return;
     }
     
-    // Add user message
+    // Add user message to both chats
     addMessageToFloatingChat(message, true);
+    addMessageToRilonoAiChat(message, true);
     
-    // Add to conversation history
-    floatingChatConversationHistory.push({
+    // Add to shared conversation history
+    rilonoAiConversationHistory.push({
         role: 'user',
         content: message
     });
@@ -4122,7 +4218,7 @@ async function handleFloatingChatSubmit(e) {
             },
             body: JSON.stringify({
                 message: message,
-                conversation_history: floatingChatConversationHistory.slice(-10)
+                conversation_history: rilonoAiConversationHistory.slice(-10)
             })
         });
         
@@ -4132,18 +4228,20 @@ async function handleFloatingChatSubmit(e) {
             const data = await response.json();
             const aiResponse = data.response;
             
-            // Add AI response to conversation history
-            floatingChatConversationHistory.push({
+            // Add AI response to shared conversation history
+            rilonoAiConversationHistory.push({
                 role: 'assistant',
                 content: aiResponse
             });
             
             // Keep only last 20 messages in history
-            if (floatingChatConversationHistory.length > 20) {
-                floatingChatConversationHistory = floatingChatConversationHistory.slice(-20);
+            if (rilonoAiConversationHistory.length > 20) {
+                rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-20);
             }
             
+            // Add to both chats
             addMessageToFloatingChat(aiResponse, false);
+            addMessageToRilonoAiChat(aiResponse, false);
         } else {
             const errorData = await response.json();
             const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';

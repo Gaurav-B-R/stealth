@@ -3193,6 +3193,40 @@ body {
     font-size: 0.875rem;
 }
 
+/* AI Response Markdown Formatting */
+.chat-message-bubble strong,
+.ai-response-content strong {
+    font-weight: 600;
+    color: var(--primary-color);
+}
+
+.chat-message-bubble em,
+.ai-response-content em {
+    font-style: italic;
+}
+
+.chat-message-bubble ul,
+.ai-response-content ul {
+    margin: 8px 0;
+    padding-left: 20px;
+    list-style-type: disc;
+}
+
+.chat-message-bubble li,
+.ai-response-content li {
+    margin: 4px 0;
+    line-height: 1.5;
+}
+
+.chat-message-bubble code,
+.ai-response-content code {
+    background: rgba(139, 92, 246, 0.2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
 .chat-login-prompt {
     flex: 1 1 auto;
     display: flex;
