@@ -2599,8 +2599,33 @@ async function loadProfileCompletion() {
         
         // Update UI
         updateProfileCompletionUI(completionData);
+        
+        // Update visa journey tracker
+        updateVisaJourneyUI(documents);
+        
+        // Save visa status to R2 (fire and forget)
+        saveVisaStatusToR2();
     } catch (error) {
         console.error('Load profile completion error:', error);
+    }
+}
+
+async function saveVisaStatusToR2() {
+    if (!authToken) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/api/documents/visa-status`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            console.log('Visa status saved to R2:', data.r2_key);
+        }
+    } catch (error) {
+        console.error('Failed to save visa status to R2:', error);
     }
 }
 
@@ -2726,6 +2751,173 @@ function updateProfileCompletionUI(data) {
                 </div>
             `;
         }
+    }
+}
+
+// Visa Journey Tracker Functions
+function calculateVisaJourneyStage(documents) {
+    // Get uploaded document types
+    const uploadedDocTypes = new Set(
+        documents.map(doc => doc.document_type).filter(type => type)
+    );
+    
+    // Define stages and their required documents
+    const stages = [
+        {
+            stage: 1,
+            name: 'Getting Started',
+            emoji: '📝',
+            description: 'Welcome! Start your F1 visa journey.',
+            nextStep: 'Upload your university offer/admission letter',
+            requiredDocs: []
+        },
+        {
+            stage: 2,
+            name: 'Admission Received',
+            emoji: '🎓',
+            description: 'University admission confirmed!',
+            nextStep: 'Upload your passport and academic documents',
+            requiredDocs: ['university-admission-letter']
+        },
+        {
+            stage: 3,
+            name: 'Documents Ready',
+            emoji: '📄',
+            description: 'Essential documents collected.',
+            nextStep: 'Get your signed I-20 from your university',
+            requiredDocs: ['passport', 'degree-certificates', 'transcripts-marksheets']
+        },
+        {
+            stage: 4,
+            name: 'I-20 Received',
+            emoji: '📘',
+            description: 'Great! You have your I-20 from the university.',
+            nextStep: 'Complete your DS-160 application online',
+            requiredDocs: ['form-i20-signed']
+        },
+        {
+            stage: 5,
+            name: 'DS-160 Filed',
+            emoji: '📋',
+            description: 'DS-160 application submitted successfully.',
+            nextStep: 'Pay your SEVIS I-901 fee and visa fee',
+            requiredDocs: ['ds-160-confirmation']
+        },
+        {
+            stage: 6,
+            name: 'Fees Paid',
+            emoji: '💳',
+            description: 'SEVIS and visa fees payment confirmed.',
+            nextStep: 'Schedule your visa interview appointment',
+            requiredDocs: ['i901-sevis-fee-confirmation', 'visa-fee-receipt']
+        },
+        {
+            stage: 7,
+            name: 'Ready to Fly!',
+            emoji: '✈️',
+            description: 'Interview scheduled! All documents ready.',
+            nextStep: 'You\'re all set! Good luck with your visa interview!',
+            requiredDocs: ['us-visa-appointment-letter', 'photograph-2x2', 'bank-balance-certificate']
+        }
+    ];
+    
+    // Calculate current stage based on documents
+    let currentStage = 1; // Start at stage 1
+    
+    // Check stage 2: University admission letter
+    if (uploadedDocTypes.has('university-admission-letter')) {
+        currentStage = 2;
+    }
+    
+    // Check stage 3: Passport and academic documents
+    const hasBasicDocs = uploadedDocTypes.has('passport') &&
+                         (uploadedDocTypes.has('degree-certificates') || uploadedDocTypes.has('transcripts-marksheets'));
+    if (currentStage >= 2 && hasBasicDocs) {
+        currentStage = 3;
+    }
+    
+    // Check stage 4: I-20
+    if (currentStage >= 3 && uploadedDocTypes.has('form-i20-signed')) {
+        currentStage = 4;
+    }
+    
+    // Check stage 5: DS-160
+    if (currentStage >= 4 && uploadedDocTypes.has('ds-160-confirmation')) {
+        currentStage = 5;
+    }
+    
+    // Check stage 6: SEVIS and visa fees
+    if (currentStage >= 5 && uploadedDocTypes.has('i901-sevis-fee-confirmation')) {
+        currentStage = 6;
+    }
+    
+    // Check stage 7: Interview scheduled and all docs ready
+    const interviewReady = uploadedDocTypes.has('us-visa-appointment-letter') &&
+                           uploadedDocTypes.has('photograph-2x2') &&
+                           uploadedDocTypes.has('bank-balance-certificate');
+    if (currentStage >= 6 && interviewReady) {
+        currentStage = 7;
+    }
+    
+    return {
+        currentStage,
+        stageInfo: stages[currentStage - 1],
+        stages
+    };
+}
+
+function updateVisaJourneyUI(documents) {
+    const journeyData = calculateVisaJourneyStage(documents);
+    const { currentStage, stageInfo, stages } = journeyData;
+    
+    // Update progress line
+    const progressLine = document.getElementById('journeyProgressLine');
+    if (progressLine) {
+        // Calculate progress percentage (stage 1 = 0%, stage 7 = 100%)
+        const progressPercent = ((currentStage - 1) / (stages.length - 1)) * 90;
+        progressLine.style.width = `${progressPercent}%`;
+    }
+    
+    // Update stage icons
+    for (let i = 1; i <= 7; i++) {
+        const stageIcon = document.getElementById(`stageIcon${i}`);
+        if (stageIcon) {
+            if (i < currentStage) {
+                // Completed stage
+                stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
+                stageIcon.style.color = 'white';
+                stageIcon.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.4)';
+                stageIcon.innerHTML = '✓';
+            } else if (i === currentStage) {
+                // Current stage
+                stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
+                stageIcon.style.color = 'white';
+                stageIcon.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.4)';
+                stageIcon.style.animation = 'pulse 2s ease-in-out infinite';
+            } else {
+                // Future stage
+                stageIcon.style.background = 'var(--border-color)';
+                stageIcon.style.color = 'var(--text-secondary)';
+                stageIcon.style.boxShadow = 'none';
+            }
+        }
+    }
+    
+    // Update current stage info box
+    const currentStageEmoji = document.getElementById('currentStageEmoji');
+    const currentStageName = document.getElementById('currentStageName');
+    const currentStageDesc = document.getElementById('currentStageDesc');
+    const nextStepText = document.getElementById('nextStepText');
+    
+    if (currentStageEmoji) currentStageEmoji.textContent = stageInfo.emoji;
+    if (currentStageName) currentStageName.textContent = `Stage ${currentStage}: ${stageInfo.name}`;
+    if (currentStageDesc) currentStageDesc.textContent = stageInfo.description;
+    if (nextStepText) nextStepText.textContent = stageInfo.nextStep;
+    
+    // Hide next step hint if at final stage
+    const nextStepHint = document.getElementById('nextStepHint');
+    if (nextStepHint && currentStage === 7) {
+        nextStepHint.innerHTML = '<span style="color: #34d399; font-weight: 600;">🎉 Congratulations! You\'re all set for your journey!</span>';
     }
 }
 
@@ -3194,6 +3386,10 @@ async function handleDocumentUpload(e) {
             
             document.getElementById('documentUploadForm').reset();
             await loadMyDocuments();
+            
+            // Refresh visa status after document upload
+            await saveVisaStatusToR2();
+            await loadDashboardStats(); // Refresh the journey tracker
         } else {
             let errorMessage = 'Failed to upload document';
             if (data.detail) {
@@ -3484,6 +3680,10 @@ async function deleteDocument(documentId, filename) {
             showMessage('Document deleted successfully', 'success');
             // Reload documents list
             await loadMyDocuments();
+            
+            // Refresh visa status after document deletion
+            await saveVisaStatusToR2();
+            await loadDashboardStats();
         } else {
             const error = await response.json().catch(() => ({}));
             if (response.status === 403) {
@@ -3741,28 +3941,33 @@ let floatingChatConversationHistory = [];
 function toggleFloatingChat() {
     const widget = document.getElementById('floatingAiChatWidget');
     const chatWindow = document.getElementById('floatingChatWindow');
+    const chatToggle = document.getElementById('floatingChatToggle');
     const messagesContainer = document.getElementById('floatingChatMessages');
     
     // Toggle the state
     floatingChatOpen = !floatingChatOpen;
     
-    // If closing, just hide the window
+    // If closing, hide window and show toggle button
     if (!floatingChatOpen) {
         chatWindow.style.display = 'none';
+        if (chatToggle) chatToggle.style.display = 'flex';
         return;
     }
+    
+    // Hide toggle button when chat is open
+    if (chatToggle) chatToggle.style.display = 'none';
     
     if (!currentUser) {
         // Show login prompt
         document.getElementById('floatingChatLoginPrompt').style.display = 'flex';
         document.getElementById('floatingChatInputContainer').style.display = 'none';
         messagesContainer.innerHTML = '';
-        chatWindow.style.display = 'block';
+        chatWindow.style.display = 'flex';
         return;
     }
     
     if (floatingChatOpen) {
-        chatWindow.style.display = 'block';
+        chatWindow.style.display = 'flex';
         document.getElementById('floatingChatLoginPrompt').style.display = 'none';
         document.getElementById('floatingChatInputContainer').style.display = 'block';
         messagesContainer.style.display = 'flex';
@@ -3775,7 +3980,7 @@ function toggleFloatingChat() {
                 <div class="chat-avatar">🤖</div>
                 <div class="welcome-bubble">
                     <p><strong>Hello! I'm Rilono AI</strong></p>
-                    <p>I'm here to help you with your US visa process and documentation. How can I assist you today?</p>
+                    <p>I'm here to help you with your F1 student visa process and documentation. How can I assist you today?</p>
                 </div>
             `;
             messagesContainer.appendChild(welcomeDiv);

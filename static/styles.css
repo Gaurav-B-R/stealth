@@ -3027,12 +3027,12 @@ body {
 
 .floating-chat-window {
     position: absolute;
-    bottom: 80px;
+    bottom: 0;
     right: 0;
     width: 400px;
     max-width: calc(100vw - 40px);
-    height: 580px;
-    max-height: calc(100vh - 120px);
+    height: 550px;
+    max-height: calc(100vh - 40px);
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: 1.25rem;
@@ -3041,7 +3041,6 @@ body {
     flex-direction: column;
     overflow: hidden;
     animation: slideUp 0.3s ease-out;
-    min-height: 400px;
 }
 
 @keyframes slideUp {
@@ -3116,7 +3115,7 @@ body {
 }
 
 .floating-chat-messages {
-    flex: 1 1 auto;
+    flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
     padding: 1.25rem;
@@ -3125,10 +3124,8 @@ body {
     gap: 0.875rem;
     background: var(--bg-secondary);
     min-height: 0;
-    max-height: 100%;
     scroll-behavior: smooth;
     -webkit-overflow-scrolling: touch;
-    position: relative;
 }
 
 .chat-welcome-message {
@@ -3169,12 +3166,13 @@ body {
 }
 
 .chat-message-bubble {
-    max-width: 80%;
+    max-width: 85%;
     padding: 0.875rem 1rem;
     border-radius: 1rem;
     font-size: 0.9rem;
     line-height: 1.6;
     word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .chat-message.assistant .chat-message-bubble {
@@ -3371,9 +3369,10 @@ body {
     
     .floating-chat-window {
         width: calc(100vw - 30px);
-        height: calc(100vh - 100px);
-        bottom: 75px;
+        height: calc(100vh - 30px);
+        bottom: 0;
         right: 0;
+        border-radius: 1rem;
     }
     
     .floating-chat-toggle {

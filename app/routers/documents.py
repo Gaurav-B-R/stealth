@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import desc
 from app.database import get_db
@@ -21,6 +21,8 @@ import boto3
 from botocore.config import Config
 from io import BytesIO
 import base64
+import json
+from datetime import datetime
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -294,6 +296,272 @@ async def get_my_documents(
             doc.file_url = get_presigned_url(doc.filename, expiration=3600)
     
     return documents
+
+
+# ========== VISA JOURNEY STATUS ENDPOINTS ==========
+# NOTE: These must be defined BEFORE /{document_id} to avoid route conflicts
+
+def calculate_visa_journey_stage(documents: List[models.Document]) -> dict:
+    """
+    Calculate the current visa journey stage based on uploaded documents.
+    Returns stage info and progress details.
+    """
+    # Get uploaded document types
+    uploaded_doc_types = set(
+        doc.document_type for doc in documents if doc.document_type
+    )
+    
+    # Define stages and their required documents
+    stages = [
+        {
+            "stage": 1,
+            "name": "Getting Started",
+            "emoji": "📝",
+            "description": "Welcome! Start your F1 visa journey.",
+            "next_step": "Upload your university offer/admission letter",
+            "required_docs": []
+        },
+        {
+            "stage": 2,
+            "name": "Admission Received",
+            "emoji": "🎓",
+            "description": "University admission confirmed!",
+            "next_step": "Upload your passport and academic documents",
+            "required_docs": ["university-admission-letter"]
+        },
+        {
+            "stage": 3,
+            "name": "Documents Ready",
+            "emoji": "📄",
+            "description": "Essential documents collected.",
+            "next_step": "Get your signed I-20 from your university",
+            "required_docs": ["passport", "degree-certificates", "transcripts-marksheets"]
+        },
+        {
+            "stage": 4,
+            "name": "I-20 Received",
+            "emoji": "📘",
+            "description": "Great! You have your I-20 from the university.",
+            "next_step": "Complete your DS-160 application online",
+            "required_docs": ["form-i20-signed"]
+        },
+        {
+            "stage": 5,
+            "name": "DS-160 Filed",
+            "emoji": "📋",
+            "description": "DS-160 application submitted successfully.",
+            "next_step": "Pay your SEVIS I-901 fee and visa fee",
+            "required_docs": ["ds-160-confirmation"]
+        },
+        {
+            "stage": 6,
+            "name": "Fees Paid",
+            "emoji": "💳",
+            "description": "SEVIS and visa fees payment confirmed.",
+            "next_step": "Schedule your visa interview appointment",
+            "required_docs": ["i901-sevis-fee-confirmation", "visa-fee-receipt"]
+        },
+        {
+            "stage": 7,
+            "name": "Ready to Fly!",
+            "emoji": "✈️",
+            "description": "Interview scheduled! All documents ready.",
+            "next_step": "You're all set! Good luck with your visa interview!",
+            "required_docs": ["us-visa-appointment-letter", "photograph-2x2", "bank-balance-certificate"]
+        }
+    ]
+    
+    # Calculate current stage based on documents
+    current_stage = 1
+    
+    # Check stage 2: University admission letter
+    if "university-admission-letter" in uploaded_doc_types:
+        current_stage = 2
+    
+    # Check stage 3: Passport and academic documents
+    has_basic_docs = ("passport" in uploaded_doc_types and 
+                      ("degree-certificates" in uploaded_doc_types or 
+                       "transcripts-marksheets" in uploaded_doc_types))
+    if current_stage >= 2 and has_basic_docs:
+        current_stage = 3
+    
+    # Check stage 4: I-20
+    if current_stage >= 3 and "form-i20-signed" in uploaded_doc_types:
+        current_stage = 4
+    
+    # Check stage 5: DS-160
+    if current_stage >= 4 and "ds-160-confirmation" in uploaded_doc_types:
+        current_stage = 5
+    
+    # Check stage 6: SEVIS and visa fees
+    if current_stage >= 5 and "i901-sevis-fee-confirmation" in uploaded_doc_types:
+        current_stage = 6
+    
+    # Check stage 7: Interview scheduled and all docs ready
+    interview_ready = ("us-visa-appointment-letter" in uploaded_doc_types and
+                       "photograph-2x2" in uploaded_doc_types and
+                       "bank-balance-certificate" in uploaded_doc_types)
+    if current_stage >= 6 and interview_ready:
+        current_stage = 7
+    
+    # Get current stage info
+    stage_info = stages[current_stage - 1]
+    
+    # Calculate progress percentage
+    progress_percent = round(((current_stage - 1) / (len(stages) - 1)) * 100)
+    
+    # Get documents by stage
+    documents_by_stage = {}
+    for doc in documents:
+        if doc.document_type:
+            if doc.document_type not in documents_by_stage:
+                documents_by_stage[doc.document_type] = []
+            documents_by_stage[doc.document_type].append({
+                "id": doc.id,
+                "filename": doc.original_filename,
+                "uploaded_at": doc.created_at.isoformat() if doc.created_at else None,
+                "is_valid": doc.is_valid
+            })
+    
+    return {
+        "current_stage": current_stage,
+        "total_stages": len(stages),
+        "progress_percent": progress_percent,
+        "stage_info": stage_info,
+        "all_stages": stages,
+        "uploaded_document_types": list(uploaded_doc_types),
+        "documents_by_type": documents_by_stage,
+        "total_documents_uploaded": len(documents)
+    }
+
+
+def save_visa_status_to_r2(user_id: int, status_data: dict) -> str:
+    """
+    Save the visa journey status as a JSON file to R2.
+    Returns the R2 key of the saved file.
+    """
+    # Add metadata
+    status_data["user_id"] = user_id
+    status_data["last_updated"] = datetime.utcnow().isoformat()
+    status_data["version"] = "1.0"
+    
+    # Convert to JSON
+    json_content = json.dumps(status_data, indent=2, default=str)
+    json_bytes = json_content.encode('utf-8')
+    
+    # R2 key for the status file
+    r2_key = f"user_{user_id}/visa_journey_status.json"
+    
+    try:
+        r2_client.put_object(
+            Bucket=R2_DOCUMENTS_BUCKET,
+            Key=r2_key,
+            Body=json_bytes,
+            ContentType="application/json",
+            Metadata={
+                'type': 'visa-journey-status',
+                'user-id': str(user_id)
+            }
+        )
+        return r2_key
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save visa status to R2: {str(e)}")
+
+
+def get_visa_status_from_r2(user_id: int) -> Optional[dict]:
+    """
+    Get the visa journey status JSON file from R2.
+    Returns None if not found.
+    """
+    r2_key = f"user_{user_id}/visa_journey_status.json"
+    
+    try:
+        response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=r2_key)
+        json_content = response['Body'].read().decode('utf-8')
+        return json.loads(json_content)
+    except r2_client.exceptions.NoSuchKey:
+        return None
+    except Exception:
+        return None
+
+
+@router.get("/visa-status")
+async def get_visa_journey_status(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the current visa journey status for the user.
+    Calculates the stage based on uploaded documents and saves to R2.
+    """
+    # Get user's documents
+    documents = db.query(models.Document).filter(
+        models.Document.user_id == current_user.id
+    ).all()
+    
+    # Calculate current journey status
+    status_data = calculate_visa_journey_stage(documents)
+    
+    # Save to R2
+    r2_key = save_visa_status_to_r2(current_user.id, status_data)
+    
+    # Add R2 key to response
+    status_data["r2_key"] = r2_key
+    status_data["user_email"] = current_user.email
+    status_data["user_name"] = current_user.full_name
+    
+    return JSONResponse(content=status_data)
+
+
+@router.post("/visa-status/refresh")
+async def refresh_visa_journey_status(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Force refresh the visa journey status and save to R2.
+    Use this after uploading new documents.
+    """
+    # Get user's documents
+    documents = db.query(models.Document).filter(
+        models.Document.user_id == current_user.id
+    ).all()
+    
+    # Calculate current journey status
+    status_data = calculate_visa_journey_stage(documents)
+    
+    # Save to R2
+    r2_key = save_visa_status_to_r2(current_user.id, status_data)
+    
+    # Add metadata to response
+    status_data["r2_key"] = r2_key
+    status_data["user_email"] = current_user.email
+    status_data["user_name"] = current_user.full_name
+    status_data["refreshed_at"] = datetime.utcnow().isoformat()
+    
+    return JSONResponse(content=status_data)
+
+
+@router.get("/visa-status/history")
+async def get_visa_status_from_storage(
+    current_user: models.User = Depends(get_current_active_user)
+):
+    """
+    Get the last saved visa journey status from R2 storage.
+    Returns the cached status without recalculating.
+    """
+    status_data = get_visa_status_from_r2(current_user.id)
+    
+    if not status_data:
+        raise HTTPException(
+            status_code=404,
+            detail="No visa status found. Please visit your dashboard to generate one."
+        )
+    
+    return JSONResponse(content=status_data)
+
+
+# ========== DOCUMENT BY ID ENDPOINTS ==========
 
 @router.get("/{document_id}", response_model=schemas.DocumentResponse)
 async def get_document(
@@ -625,4 +893,3 @@ async def delete_document_admin(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
-
