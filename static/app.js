@@ -562,18 +562,26 @@ function showHomepage(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('homepageSection').style.display = 'block';
     // Update button visibility based on auth status
-    const heroSellBtn = document.getElementById('heroSellBtn');
     const heroRegisterBtn = document.getElementById('heroRegisterBtn');
+    const heroLoginBtn = document.getElementById('heroLoginBtn');
+    const heroDashboardBtn = document.getElementById('heroDashboardBtn');
     const ctaRegisterBtn = document.getElementById('ctaRegisterBtn');
+    const ctaDashboardBtn = document.getElementById('ctaDashboardBtn');
     
     if (currentUser) {
-        if (heroSellBtn) heroSellBtn.style.display = 'inline-block';
+        // Logged in: show dashboard buttons, hide login/register
         if (heroRegisterBtn) heroRegisterBtn.style.display = 'none';
+        if (heroLoginBtn) heroLoginBtn.style.display = 'none';
+        if (heroDashboardBtn) heroDashboardBtn.style.display = 'inline-flex';
         if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'none';
+        if (ctaDashboardBtn) ctaDashboardBtn.style.display = 'inline-flex';
     } else {
-        if (heroSellBtn) heroSellBtn.style.display = 'none';
-        if (heroRegisterBtn) heroRegisterBtn.style.display = 'inline-block';
-        if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'inline-block';
+        // Logged out: show login/register, hide dashboard
+        if (heroRegisterBtn) heroRegisterBtn.style.display = 'inline-flex';
+        if (heroLoginBtn) heroLoginBtn.style.display = 'inline-flex';
+        if (heroDashboardBtn) heroDashboardBtn.style.display = 'none';
+        if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'inline-flex';
+        if (ctaDashboardBtn) ctaDashboardBtn.style.display = 'none';
     }
     
     if (!skipURLUpdate) {
@@ -3732,23 +3740,29 @@ let floatingChatConversationHistory = [];
 
 function toggleFloatingChat() {
     const widget = document.getElementById('floatingAiChatWidget');
-    const window = document.getElementById('floatingChatWindow');
+    const chatWindow = document.getElementById('floatingChatWindow');
     const messagesContainer = document.getElementById('floatingChatMessages');
+    
+    // Toggle the state
+    floatingChatOpen = !floatingChatOpen;
+    
+    // If closing, just hide the window
+    if (!floatingChatOpen) {
+        chatWindow.style.display = 'none';
+        return;
+    }
     
     if (!currentUser) {
         // Show login prompt
         document.getElementById('floatingChatLoginPrompt').style.display = 'flex';
         document.getElementById('floatingChatInputContainer').style.display = 'none';
         messagesContainer.innerHTML = '';
-        window.style.display = 'block';
-        floatingChatOpen = true;
+        chatWindow.style.display = 'block';
         return;
     }
     
-    floatingChatOpen = !floatingChatOpen;
-    
     if (floatingChatOpen) {
-        window.style.display = 'block';
+        chatWindow.style.display = 'block';
         document.getElementById('floatingChatLoginPrompt').style.display = 'none';
         document.getElementById('floatingChatInputContainer').style.display = 'block';
         messagesContainer.style.display = 'flex';
@@ -3783,7 +3797,7 @@ function toggleFloatingChat() {
             document.getElementById('floatingChatInput')?.focus();
         }, 150);
     } else {
-        window.style.display = 'none';
+        chatWindow.style.display = 'none';
     }
 }
 

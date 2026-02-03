@@ -11,7 +11,8 @@
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rilono</title>
+    <title>Rilono - AI F1 Visa Agent | Your Student Visa Made Simple</title>
+    <meta name="description" content="Your AI-powered F1 student visa assistant. Organize documents, track requirements, and prepare for your visa interview with confidence.">
     <link rel="stylesheet" href="/static/styles.css">
     <!-- Cloudflare Turnstile -->
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -36,7 +37,7 @@
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
-                <a href="#" onclick="showHome(); return false;" style="display: flex; align-items: center; gap: 0.75rem; text-decoration: none; color: white;">
+                <a href="/" onclick="event.preventDefault(); showHomepage(); return false;" style="display: flex; align-items: center; gap: 0.75rem; text-decoration: none; color: white;">
                     <img src="/static/logo.png" alt="Rilono Logo" style="height: 40px; width: auto; object-fit: contain;">
                     <h1 style="margin: 0;">Rilono</h1>
                 </a>
@@ -228,37 +229,40 @@
                 <div class="hero-content">
                     <div class="hero-badge">
                         <span class="badge-icon">🎓</span>
-                        <span>Trusted by Students Worldwide</span>
+                        <span>AI-Powered F1 Student Visa Assistant</span>
                     </div>
                     <h1 class="hero-title">
-                        <span class="title-gradient">Buy, Sell & Connect</span><br>
-                        <span class="title-main">Your Student Marketplace</span>
+                        <span class="title-gradient">Your AI F1 Visa Agent</span><br>
+                        <span class="title-main">Student Visa Made Simple</span>
                     </h1>
-                    <p class="hero-subtitle">Join thousands of students buying and selling textbooks, electronics, furniture, and more. Safe, secure, and student-focused.</p>
+                    <p class="hero-subtitle">Navigate the F1 student visa process with confidence. Our AI agent helps you organize documents, track requirements, and ace your visa interview.</p>
                     <div class="hero-buttons">
-                        <a href="/marketplace" onclick="event.preventDefault(); showMarketplace(); return false;" class="btn btn-primary btn-large btn-hero-primary">
-                            <span>Browse Marketplace</span>
+                        <!-- Buttons for logged-out users -->
+                        <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" class="btn btn-primary btn-large btn-hero-primary" id="heroRegisterBtn">
+                            <span>Get Started Free</span>
                             <span class="btn-icon">→</span>
                         </a>
-                        <a href="/sell" onclick="event.preventDefault(); showCreateItem(); return false;" class="btn btn-secondary btn-large btn-hero-secondary" id="heroSellBtn" style="display: none;">
-                            <span>Sell Your Item</span>
+                        <a href="/login" onclick="event.preventDefault(); showLogin(); return false;" class="btn btn-secondary btn-large btn-hero-secondary" id="heroLoginBtn">
+                            <span>Login to Dashboard</span>
                         </a>
-                        <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" class="btn btn-secondary btn-large btn-hero-secondary" id="heroRegisterBtn">
-                            <span>Get Started Free</span>
+                        <!-- Button for logged-in users -->
+                        <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); return false;" class="btn btn-primary btn-large btn-hero-primary" id="heroDashboardBtn" style="display: none;">
+                            <span>Go to Dashboard</span>
+                            <span class="btn-icon">→</span>
                         </a>
                     </div>
                     <div class="hero-stats">
                         <div class="stat-item">
-                            <div class="stat-number">10K+</div>
-                            <div class="stat-label">Active Users</div>
+                            <div class="stat-number">5K+</div>
+                            <div class="stat-label">Students Helped</div>
                         </div>
                         <div class="stat-item">
-                            <div class="stat-number">50K+</div>
-                            <div class="stat-label">Items Listed</div>
+                            <div class="stat-number">20+</div>
+                            <div class="stat-label">Document Types</div>
                         </div>
                         <div class="stat-item">
-                            <div class="stat-number">100+</div>
-                            <div class="stat-label">Universities</div>
+                            <div class="stat-number">24/7</div>
+                            <div class="stat-label">AI Assistance</div>
                         </div>
                     </div>
                 </div>
@@ -268,28 +272,61 @@
             <div class="homepage-how-it-works">
                 <div class="section-header">
                     <h2 class="section-title">How It Works</h2>
-                    <p class="section-subtitle">Get started in three simple steps</p>
+                    <p class="section-subtitle">Your visa documentation made simple</p>
                 </div>
                 <div class="steps-container">
                     <div class="step-card">
                         <div class="step-number">1</div>
-                        <div class="step-icon">📝</div>
-                        <h3>Create Account</h3>
-                        <p>Sign up with your university email and create your profile in seconds</p>
+                        <div class="step-icon">📤</div>
+                        <h3>Upload Documents</h3>
+                        <p>Securely upload your visa documents with zero-knowledge encryption. Your data stays private.</p>
                     </div>
                     <div class="step-connector"></div>
                     <div class="step-card">
                         <div class="step-number">2</div>
-                        <div class="step-icon">📸</div>
-                        <h3>List or Browse</h3>
-                        <p>Upload items to sell or browse thousands of listings from fellow students</p>
+                        <div class="step-icon">🤖</div>
+                        <h3>AI Analysis</h3>
+                        <p>Our AI reviews your documents, identifies missing items, and provides personalized guidance.</p>
                     </div>
                     <div class="step-connector"></div>
                     <div class="step-card">
                         <div class="step-number">3</div>
-                        <div class="step-icon">🤝</div>
-                        <h3>Connect & Trade</h3>
-                        <p>Message sellers directly, negotiate, and complete your transaction safely</p>
+                        <div class="step-icon">✅</div>
+                        <h3>Get Visa Ready</h3>
+                        <p>Follow AI recommendations, complete your checklist, and feel confident for your visa interview.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Value Proposition Banner -->
+            <div class="homepage-value-banner" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); padding: 4rem 2rem; margin: 3rem 0; border-radius: 1.5rem; position: relative; overflow: hidden;">
+                <div style="position: absolute; top: -50%; right: -10%; width: 400px; height: 400px; background: radial-gradient(circle, rgba(99, 102, 241, 0.15) 0%, transparent 70%); border-radius: 50%;"></div>
+                <div style="position: absolute; bottom: -30%; left: -5%; width: 300px; height: 300px; background: radial-gradient(circle, rgba(168, 85, 247, 0.1) 0%, transparent 70%); border-radius: 50%;"></div>
+                <div style="max-width: 900px; margin: 0 auto; text-align: center; position: relative; z-index: 1;">
+                    <div style="font-size: 3rem; margin-bottom: 1.5rem;">💡</div>
+                    <h2 style="color: white; font-size: 2rem; font-weight: 700; margin-bottom: 1.5rem; line-height: 1.3;">
+                        Stop Spending ₹50,000+ on F1 Visa Consultants
+                    </h2>
+                    <p style="color: rgba(255,255,255,0.85); font-size: 1.15rem; line-height: 1.8; margin-bottom: 1.5rem;">
+                        We've been there. The DS-160 confusion, I-20 anxiety, endless document checklists, and consultants charging lakhs for basic guidance. 
+                        That's why we built Rilono — an AI F1 visa agent created by AI professionals who personally went through the stressful F1 student visa journey.
+                    </p>
+                    <p style="color: rgba(255,255,255,0.7); font-size: 1rem; line-height: 1.7; margin-bottom: 2rem;">
+                        No more overpaying for outdated advice. Get smarter, faster, and more accurate guidance — <strong style="color: #a78bfa;">completely free to start</strong>.
+                    </p>
+                    <div style="display: flex; justify-content: center; gap: 2rem; flex-wrap: wrap;">
+                        <div style="text-align: center;">
+                            <div style="color: #34d399; font-size: 1.75rem; font-weight: 700;">₹0</div>
+                            <div style="color: rgba(255,255,255,0.6); font-size: 0.875rem;">vs ₹50K+ agents</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="color: #60a5fa; font-size: 1.75rem; font-weight: 700;">24/7</div>
+                            <div style="color: rgba(255,255,255,0.6); font-size: 0.875rem;">Always available</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="color: #f472b6; font-size: 1.75rem; font-weight: 700;">Real Experience</div>
+                            <div style="color: rgba(255,255,255,0.6); font-size: 0.875rem;">Built by visa holders</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -298,90 +335,90 @@
             <div class="homepage-features">
                 <div class="section-header">
                     <h2 class="section-title">Why Choose Rilono?</h2>
-                    <p class="section-subtitle">Everything you need for a seamless marketplace experience</p>
+                    <p class="section-subtitle">Everything you need to ace your F1 student visa</p>
                 </div>
                 <div class="features-container">
                     <div class="feature-card">
                         <div class="feature-icon-wrapper">
-                            <div class="feature-icon">📚</div>
+                            <div class="feature-icon">🤖</div>
                         </div>
-                        <h3>Textbooks & More</h3>
-                        <p>Find affordable textbooks, electronics, furniture, and everything students need at unbeatable prices.</p>
+                        <h3>F1 Visa Expert AI</h3>
+                        <p>Get instant answers to your F1 visa questions. DS-160, I-20, SEVIS, financial docs — we've got you covered.</p>
                     </div>
                     <div class="feature-card">
                         <div class="feature-icon-wrapper">
-                            <div class="feature-icon">🏠</div>
+                            <div class="feature-icon">📋</div>
                         </div>
-                        <h3>Subleases</h3>
-                        <p>Find or list sublease opportunities perfect for student housing needs. Connect with roommates easily.</p>
-                    </div>
-                    <div class="feature-card">
-                        <div class="feature-icon-wrapper">
-                            <div class="feature-icon">💬</div>
-                        </div>
-                        <h3>Direct Messaging</h3>
-                        <p>Connect directly with sellers and buyers through our built-in messaging system. No third-party apps needed.</p>
+                        <h3>F1 Document Checklist</h3>
+                        <p>Never miss a document. Complete checklist for F1 visa — from I-20 to bank statements to academic records.</p>
                     </div>
                     <div class="feature-card">
                         <div class="feature-icon-wrapper">
                             <div class="feature-icon">🔒</div>
                         </div>
-                        <h3>Secure & Safe</h3>
-                        <p>Verified student accounts ensure a trusted marketplace experience. Your safety is our priority.</p>
+                        <h3>Zero-Knowledge Security</h3>
+                        <p>Your documents are encrypted with your password. Even we can't read them. Maximum privacy guaranteed.</p>
                     </div>
                     <div class="feature-card">
                         <div class="feature-icon-wrapper">
-                            <div class="feature-icon">🔍</div>
+                            <div class="feature-icon">📄</div>
                         </div>
-                        <h3>Smart Search</h3>
-                        <p>Advanced filters help you find exactly what you're looking for. Search by category, price, and location.</p>
+                        <h3>Document Intelligence</h3>
+                        <p>AI extracts and organizes information from your documents automatically. No manual data entry.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon-wrapper">
+                            <div class="feature-icon">🎯</div>
+                        </div>
+                        <h3>F1 Interview Prep</h3>
+                        <p>Practice common F1 interview questions — funding, university choice, post-graduation plans — with AI feedback.</p>
                     </div>
                     <div class="feature-card">
                         <div class="feature-icon-wrapper">
                             <div class="feature-icon">📱</div>
                         </div>
-                        <h3>Mobile Friendly</h3>
-                        <p>Access Rilono from any device. Browse, list, and message on the go with our responsive design.</p>
+                        <h3>Access Anywhere</h3>
+                        <p>Your F1 documents and AI assistant available on any device — even while waiting at the embassy.</p>
                     </div>
                 </div>
             </div>
 
-            <!-- Categories Preview -->
+            <!-- Document Types Section -->
             <div class="homepage-categories">
                 <div class="section-header">
-                    <h2 class="section-title">Shop by Category</h2>
-                    <p class="section-subtitle">Explore items across different categories</p>
+                    <h2 class="section-title">F1 Visa Documents We Help With</h2>
+                    <p class="section-subtitle">Everything you need for your student visa interview</p>
                 </div>
                 <div class="categories-grid">
-                    <div class="category-card" onclick="event.preventDefault(); showMarketplace(); document.getElementById('categoryFilter').value='textbooks'; loadItems(); return false;">
-                        <div class="category-icon">📚</div>
-                        <h3>Textbooks</h3>
-                        <p>Find your course materials</p>
+                    <div class="category-card" onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('documents'); } else { showRegister(); } return false;">
+                        <div class="category-icon">🛂</div>
+                        <h3>DS-160</h3>
+                        <p>Application & confirmation</p>
                     </div>
-                    <div class="category-card" onclick="event.preventDefault(); showMarketplace(); document.getElementById('categoryFilter').value='electronics'; loadItems(); return false;">
-                        <div class="category-icon">💻</div>
-                        <h3>Electronics</h3>
-                        <p>Laptops, phones & more</p>
+                    <div class="category-card" onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('documents'); } else { showRegister(); } return false;">
+                        <div class="category-icon">📘</div>
+                        <h3>I-20 Forms</h3>
+                        <p>Current & previous</p>
                     </div>
-                    <div class="category-card" onclick="event.preventDefault(); showMarketplace(); document.getElementById('categoryFilter').value='furniture'; loadItems(); return false;">
-                        <div class="category-icon">🪑</div>
-                        <h3>Furniture</h3>
-                        <p>Dorm essentials</p>
+                    <div class="category-card" onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('documents'); } else { showRegister(); } return false;">
+                        <div class="category-icon">💰</div>
+                        <h3>Financial Docs</h3>
+                        <p>Bank statements & loans</p>
                     </div>
-                    <div class="category-card" onclick="event.preventDefault(); showMarketplace(); document.getElementById('categoryFilter').value='clothing'; loadItems(); return false;">
-                        <div class="category-icon">👕</div>
-                        <h3>Clothing</h3>
-                        <p>Style on a budget</p>
+                    <div class="category-card" onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('documents'); } else { showRegister(); } return false;">
+                        <div class="category-icon">🎓</div>
+                        <h3>Academic Records</h3>
+                        <p>Transcripts & certificates</p>
                     </div>
-                    <div class="category-card" onclick="event.preventDefault(); showMarketplace(); document.getElementById('categoryFilter').value='sports'; loadItems(); return false;">
-                        <div class="category-icon">⚽</div>
-                        <h3>Sports</h3>
-                        <p>Gear & equipment</p>
+                    <div class="category-card" onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('documents'); } else { showRegister(); } return false;">
+                        <div class="category-icon">📝</div>
+                        <h3>Test Scores</h3>
+                        <p>GRE, TOEFL, IELTS</p>
                     </div>
-                    <div class="category-card" onclick="event.preventDefault(); showMarketplace(); document.getElementById('categoryFilter').value='sublease'; loadItems(); return false;">
-                        <div class="category-icon">🏠</div>
-                        <h3>Sublease</h3>
-                        <p>Housing options</p>
+                    <div class="category-card" onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('documents'); } else { showRegister(); } return false;">
+                        <div class="category-icon">💼</div>
+                        <h3>Work Experience</h3>
+                        <p>Letters & resume</p>
                     </div>
                 </div>
             </div>
@@ -390,29 +427,33 @@
             <div class="homepage-cta">
                 <div class="cta-background"></div>
                 <div class="cta-content">
-                    <h2>Ready to Start Trading?</h2>
-                    <p>Join thousands of students buying and selling on Rilono. Create your free account today and start saving money!</p>
+                    <h2>Ready to Ace Your F1 Visa Interview?</h2>
+                    <p>Join thousands of students who trust Rilono AI to organize their F1 documents and confidently walk into their visa interview.</p>
                     <div class="cta-buttons">
                         <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" class="btn btn-primary btn-large" id="ctaRegisterBtn">
-                            <span>Create Free Account</span>
+                            <span>Start Your F1 Journey</span>
+                            <span class="btn-icon">→</span>
+                        </a>
+                        <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); return false;" class="btn btn-primary btn-large" id="ctaDashboardBtn" style="display: none;">
+                            <span>Go to Dashboard</span>
                             <span class="btn-icon">→</span>
                         </a>
                         <a href="/marketplace" onclick="event.preventDefault(); showMarketplace(); return false;" class="btn btn-cta-secondary btn-large">
-                            <span>Browse Without Account</span>
+                            <span>Explore Student Marketplace</span>
                         </a>
                     </div>
                     <div class="cta-features">
                         <div class="cta-feature">
                             <span class="cta-check">✓</span>
-                            <span>Free to join</span>
+                            <span>Free to start</span>
                         </div>
                         <div class="cta-feature">
                             <span class="cta-check">✓</span>
-                            <span>No hidden fees</span>
+                            <span>Zero-knowledge encryption</span>
                         </div>
                         <div class="cta-feature">
                             <span class="cta-check">✓</span>
-                            <span>Instant access</span>
+                            <span>24/7 AI assistance</span>
                         </div>
                     </div>
                 </div>
@@ -944,7 +985,7 @@
             
             <section>
                 <h2>1. Introduction</h2>
-                <p>Welcome to Rilono ("we," "our," or "us"). We are committed to protecting your privacy and ensuring you have a positive experience on our platform. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our student marketplace platform.</p>
+                <p>Welcome to Rilono ("we," "our," or "us"). We are committed to protecting your privacy and ensuring you have a positive experience on our platform. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our AI-powered visa documentation platform and student marketplace.</p>
             </section>
 
             <section>
@@ -1068,7 +1109,7 @@
 
             <section>
                 <h2>2. Description of Service</h2>
-                <p>Rilono is a student marketplace platform that allows users to buy and sell items, communicate with other users, and manage their listings. We provide a platform for connecting buyers and sellers but are not a party to any transactions between users.</p>
+                <p>Rilono is an AI-powered visa documentation platform that helps students organize their visa documents, receive AI guidance, and prepare for visa interviews. We also provide a student marketplace where users can buy and sell items. We provide a platform for document management and connecting buyers and sellers, but are not a party to any transactions between users nor do we provide legal or immigration advice.</p>
             </section>
 
             <section>
@@ -1222,7 +1263,7 @@
                 <a href="#" onclick="event.preventDefault(); showTerms(); return false;">Terms & Conditions</a>
             </div>
             <div class="footer-copyright">
-                © 2025 Rilono. All rights reserved.
+                © 2026 Rilono. All rights reserved.
             </div>
         </div>
     </footer>

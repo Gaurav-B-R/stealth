@@ -11,7 +11,7 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Rilono",
-    description="A marketplace for students to buy and sell items",
+    description="AI-powered F1 student visa documentation assistant",
     version="1.0.0"
 )
 
