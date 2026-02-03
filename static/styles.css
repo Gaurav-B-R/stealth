@@ -2583,6 +2583,17 @@ body {
     }
 }
 
+@keyframes blink {
+    0%, 100% {
+        opacity: 1;
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.8);
+    }
+    50% {
+        opacity: 0.4;
+        box-shadow: 0 0 2px rgba(52, 211, 153, 0.4);
+    }
+}
+
 @keyframes typingDot {
     0%, 60%, 100% {
         transform: translateY(0);
