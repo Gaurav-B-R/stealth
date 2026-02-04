@@ -283,6 +283,45 @@ Please provide a helpful response to the user's question:"""
             detail=f"Failed to generate AI response: {str(e)}"
         )
 
+def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
+    """
+    Check if the cached student profile is stale (document count mismatch) and refresh if needed.
+    Returns the up-to-date profile data.
+    """
+    from app.routers.documents import calculate_visa_journey_stage, save_student_profile_to_r2
+    
+    # Get actual document count from database
+    actual_documents = db.query(models.Document).filter(
+        models.Document.user_id == user.id
+    ).all()
+    actual_count = len(actual_documents)
+    
+    # Get cached profile
+    cached_profile = get_student_profile_and_status(user.id)
+    
+    if cached_profile:
+        cached_count = cached_profile.get('documents_summary', {}).get('total_documents_uploaded', 0)
+        
+        # If counts match, profile is up-to-date
+        if cached_count == actual_count:
+            return cached_profile
+        
+        # Profile is stale - refresh it
+        print(f"🔄 Refreshing stale profile for user {user.id}: cached={cached_count}, actual={actual_count}")
+    else:
+        print(f"🔄 Creating new profile for user {user.id}")
+    
+    # Refresh the profile
+    try:
+        status_data = calculate_visa_journey_stage(actual_documents)
+        save_student_profile_to_r2(user, status_data, actual_documents)
+        # Return the fresh profile
+        return get_student_profile_and_status(user.id)
+    except Exception as e:
+        print(f"Warning: Failed to refresh profile: {str(e)}")
+        return cached_profile  # Fall back to cached if refresh fails
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat_with_ai(
     chat_message: ChatMessage,
@@ -296,8 +335,8 @@ async def chat_with_ai(
         # Get user's name
         user_name = current_user.full_name or current_user.username or "Student"
         
-        # Get comprehensive student profile from R2 (includes profile, preferences, visa status)
-        student_profile = get_student_profile_and_status(current_user.id)
+        # Get comprehensive student profile from R2, auto-refresh if stale
+        student_profile = refresh_student_profile_if_stale(current_user, db)
         student_profile_context = format_student_profile_context(student_profile)
         
         # Get documents context (extracted text from uploaded documents)

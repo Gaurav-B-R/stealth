@@ -260,6 +260,18 @@ async def upload_document(
     # Users will need to provide password to decrypt when viewing/downloading
     db_document.file_url = ""  # Empty URL - requires password to decrypt
     
+    # Refresh the student profile in R2 to include the new document
+    # This ensures the AI chat has accurate document counts
+    try:
+        all_documents = db.query(models.Document).filter(
+            models.Document.user_id == current_user.id
+        ).all()
+        status_data = calculate_visa_journey_stage(all_documents)
+        save_student_profile_to_r2(current_user, status_data, all_documents)
+    except Exception as e:
+        # Don't fail the upload if profile refresh fails
+        print(f"Warning: Failed to refresh student profile after upload: {str(e)}")
+    
     # Prepare response with validation information
     response_data = schemas.DocumentUploadResponse(
         document=db_document,
@@ -934,6 +946,17 @@ async def delete_document(
         db.delete(document)
         db.commit()
         
+        # Refresh the student profile in R2 to update document counts
+        try:
+            all_documents = db.query(models.Document).filter(
+                models.Document.user_id == current_user.id
+            ).all()
+            status_data = calculate_visa_journey_stage(all_documents)
+            save_student_profile_to_r2(current_user, status_data, all_documents)
+        except Exception as refresh_error:
+            # Don't fail the delete if profile refresh fails
+            print(f"Warning: Failed to refresh student profile after delete: {str(refresh_error)}")
+        
         return None
     except Exception as e:
         db.rollback()
@@ -951,6 +974,9 @@ async def delete_document_admin(
     if not document:
         raise HTTPException(status_code=404, detail="Document not found")
     
+    # Get the document owner for profile refresh
+    document_owner_id = document.user_id
+    
     try:
         # Delete original file from R2
         r2_client.delete_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.filename)
@@ -966,6 +992,19 @@ async def delete_document_admin(
         # Delete from database
         db.delete(document)
         db.commit()
+        
+        # Refresh the document owner's student profile in R2
+        try:
+            document_owner = db.query(models.User).filter(models.User.id == document_owner_id).first()
+            if document_owner:
+                all_documents = db.query(models.Document).filter(
+                    models.Document.user_id == document_owner_id
+                ).all()
+                status_data = calculate_visa_journey_stage(all_documents)
+                save_student_profile_to_r2(document_owner, status_data, all_documents)
+        except Exception as refresh_error:
+            # Don't fail the delete if profile refresh fails
+            print(f"Warning: Failed to refresh student profile after admin delete: {str(refresh_error)}")
         
         return None
     except Exception as e:
