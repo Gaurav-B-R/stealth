@@ -428,3 +428,167 @@ def send_university_change_email(email: str, new_university: str, change_token: 
             print("   USE_TEST_EMAIL=true")
         
         return False
+
+
+def send_contact_form_email(
+    name: str,
+    email: str,
+    subject: str,
+    message: str,
+    user_type: str = "visitor"
+) -> bool:
+    """
+    Send contact form submission to contact@rilono.com.
+    
+    Args:
+        name: Sender's name
+        email: Sender's email address (for reply)
+        subject: Message subject
+        message: Message content
+        user_type: Type of user (visitor, student, etc.)
+    
+    Returns:
+        bool: True if email was sent successfully, False otherwise
+    """
+    if not RESEND_API_KEY:
+        print(f"ERROR: Cannot send contact form email - Resend not configured")
+        return False
+    
+    # Email to contact@rilono.com
+    contact_email = "contact@rilono.com"
+    
+    # HTML email template for the contact form
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+            }}
+            .header {{
+                background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+                color: white;
+                padding: 30px;
+                border-radius: 12px 12px 0 0;
+                text-align: center;
+            }}
+            .content {{
+                background: #f8fafc;
+                padding: 30px;
+                border: 1px solid #e2e8f0;
+                border-top: none;
+                border-radius: 0 0 12px 12px;
+            }}
+            .field {{
+                margin-bottom: 20px;
+                padding: 15px;
+                background: white;
+                border-radius: 8px;
+                border: 1px solid #e2e8f0;
+            }}
+            .field-label {{
+                font-weight: 600;
+                color: #6366f1;
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 5px;
+            }}
+            .field-value {{
+                color: #1e293b;
+                font-size: 15px;
+            }}
+            .message-content {{
+                white-space: pre-wrap;
+                background: white;
+                padding: 20px;
+                border-radius: 8px;
+                border: 1px solid #e2e8f0;
+                margin-top: 10px;
+            }}
+            .reply-btn {{
+                display: inline-block;
+                background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+                color: white;
+                padding: 12px 24px;
+                text-decoration: none;
+                border-radius: 8px;
+                font-weight: 600;
+                margin-top: 20px;
+            }}
+            .footer {{
+                text-align: center;
+                margin-top: 20px;
+                color: #64748b;
+                font-size: 12px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1 style="margin: 0; font-size: 24px;">📬 New Contact Form Submission</h1>
+            <p style="margin: 10px 0 0 0; opacity: 0.9;">Someone reached out through Rilono</p>
+        </div>
+        <div class="content">
+            <div class="field">
+                <div class="field-label">From</div>
+                <div class="field-value">{name}</div>
+            </div>
+            <div class="field">
+                <div class="field-label">Email</div>
+                <div class="field-value"><a href="mailto:{email}">{email}</a></div>
+            </div>
+            <div class="field">
+                <div class="field-label">User Type</div>
+                <div class="field-value">{user_type.title()}</div>
+            </div>
+            <div class="field">
+                <div class="field-label">Subject</div>
+                <div class="field-value">{subject}</div>
+            </div>
+            <div class="field">
+                <div class="field-label">Message</div>
+                <div class="message-content">{message}</div>
+            </div>
+            
+            <div style="text-align: center;">
+                <a href="mailto:{email}?subject=Re: {subject}" class="reply-btn">Reply to {name}</a>
+            </div>
+        </div>
+        <div class="footer">
+            <p>This message was sent via the Rilono contact form.</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    try:
+        from_email = f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>"
+        
+        params = {
+            "from": from_email,
+            "to": [contact_email],
+            "reply_to": email,  # So you can reply directly to the sender
+            "subject": f"[Rilono Contact] {subject}",
+            "html": html_content
+        }
+        
+        email_response = resend.Emails.send(params)
+        
+        if email_response and email_response.get("id"):
+            print(f"✓ Contact form email sent successfully (ID: {email_response['id']})")
+            return True
+        else:
+            print(f"✗ Failed to send contact form email: {email_response}")
+            return False
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Error sending contact form email: {error_msg}")
+        return False

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime
@@ -644,4 +644,49 @@ def cancel_university_change(
     db.commit()
     
     return {"message": "University change request cancelled."}
+
+
+@router.post("/contact")
+async def submit_contact_form(
+    name: str = Form(...),
+    email: str = Form(...),
+    subject: str = Form(...),
+    message: str = Form(...),
+    user_type: str = Form("visitor")
+):
+    """
+    Submit contact form - sends email to contact@rilono.com.
+    No authentication required.
+    """
+    from ..email_service import send_contact_form_email
+    
+    # Basic validation
+    if not name or len(name.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Please provide your name")
+    
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Please provide a valid email address")
+    
+    if not subject or len(subject.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Please provide a subject")
+    
+    if not message or len(message.strip()) < 10:
+        raise HTTPException(status_code=400, detail="Please provide a message (at least 10 characters)")
+    
+    # Send the email
+    success = send_contact_form_email(
+        name=name.strip(),
+        email=email.strip(),
+        subject=subject.strip(),
+        message=message.strip(),
+        user_type=user_type
+    )
+    
+    if success:
+        return {"message": "Thank you for contacting us! We'll get back to you soon."}
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to send your message. Please try again or email us directly at contact@rilono.com"
+        )
 

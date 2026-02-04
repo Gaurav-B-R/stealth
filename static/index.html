@@ -1111,6 +1111,79 @@
                     </div>
             </div>
         </div>
+
+    </div>
+
+    <!-- Contact Us Section -->
+    <div id="contactSection" class="section" style="display: none;">
+        <div class="contact-page">
+            <div class="contact-header">
+                <h1>Contact Us</h1>
+                <p>Have a question, feedback, or need help? We'd love to hear from you!</p>
+            </div>
+            
+            <div class="contact-content">
+                <div class="contact-form-container">
+                    <form id="contactForm" class="contact-form">
+                        <div class="form-group">
+                            <label for="contactName">Your Name <span style="color: var(--danger-color);">*</span></label>
+                            <input type="text" id="contactName" required placeholder="John Doe">
+                        </div>
+                        <div class="form-group">
+                            <label for="contactEmail">Your Email <span style="color: var(--danger-color);">*</span></label>
+                            <input type="email" id="contactEmail" required placeholder="john@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="contactUserType">I am a</label>
+                            <select id="contactUserType">
+                                <option value="visitor">Visitor / Prospective Student</option>
+                                <option value="student">Current Student</option>
+                                <option value="alumni">Alumni</option>
+                                <option value="partner">Potential Partner</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="contactSubject">Subject <span style="color: var(--danger-color);">*</span></label>
+                            <input type="text" id="contactSubject" required placeholder="How can we help you?">
+                        </div>
+                        <div class="form-group">
+                            <label for="contactMessage">Message <span style="color: var(--danger-color);">*</span></label>
+                            <textarea id="contactMessage" rows="6" required placeholder="Tell us more about your question or feedback..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary" id="contactSubmitBtn">
+                            <span>Send Message</span>
+                        </button>
+                    </form>
+                </div>
+                
+                <div class="contact-info">
+                    <div class="contact-info-card">
+                        <div class="contact-info-icon">📧</div>
+                        <h3>Email Us</h3>
+                        <p>For general inquiries:</p>
+                        <a href="mailto:contact@rilono.com">contact@rilono.com</a>
+                    </div>
+                    <div class="contact-info-card">
+                        <div class="contact-info-icon">💬</div>
+                        <h3>Chat with AI</h3>
+                        <p>Get instant answers:</p>
+                        <a href="#" onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('rilono-ai'); } else { showRegister(); } return false;">Try Rilono AI</a>
+                    </div>
+                    <div class="contact-info-card">
+                        <div class="contact-info-icon">🔗</div>
+                        <h3>Follow Us</h3>
+                        <p>Stay connected:</p>
+                        <a href="https://www.linkedin.com/company/rilono-ai/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+                    </div>
+                    <div class="contact-info-card">
+                        <div class="contact-info-icon">⏰</div>
+                        <h3>Response Time</h3>
+                        <p>We typically respond within 24-48 hours during business days.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Privacy Policy Section -->
@@ -1395,6 +1468,7 @@
     <footer class="footer">
         <div class="footer-content">
             <div class="footer-links">
+                <a href="#" onclick="event.preventDefault(); showContact(); return false;">Contact Us</a>
                 <a href="#" onclick="event.preventDefault(); showPrivacy(); return false;">Privacy Policy</a>
                 <a href="#" onclick="event.preventDefault(); showTerms(); return false;">Terms & Conditions</a>
             </div>

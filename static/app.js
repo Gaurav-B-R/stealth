@@ -87,6 +87,8 @@ function handleRoute(skipURLUpdate = false) {
         showPrivacy(skipURLUpdate);
     } else if (path === '/terms') {
         showTerms(skipURLUpdate);
+    } else if (path === '/contact') {
+        showContact(skipURLUpdate);
     } else if (path.startsWith('/item/')) {
         const itemId = path.split('/item/')[1];
         if (itemId) {
@@ -186,6 +188,7 @@ function setupEventListeners() {
     document.getElementById('resetPasswordForm').addEventListener('submit', handleResetPassword);
     document.getElementById('createItemForm').addEventListener('submit', handleCreateItem);
     document.getElementById('profileForm').addEventListener('submit', handleUpdateProfile);
+    document.getElementById('contactForm').addEventListener('submit', handleContactSubmit);
     document.getElementById('searchInput').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') loadItems();
     });
@@ -1156,6 +1159,107 @@ function showTerms(skipURLUpdate = false) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (!skipURLUpdate) {
         updateURL('/terms', false);
+    }
+}
+
+function showContact(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('contactSection').style.display = 'block';
+    // Scroll to top
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    
+    // Pre-fill email if user is logged in
+    if (currentUser) {
+        const emailField = document.getElementById('contactEmail');
+        const nameField = document.getElementById('contactName');
+        const userTypeField = document.getElementById('contactUserType');
+        
+        if (emailField && currentUser.email) {
+            emailField.value = currentUser.email;
+        }
+        if (nameField && currentUser.full_name) {
+            nameField.value = currentUser.full_name;
+        }
+        if (userTypeField) {
+            userTypeField.value = 'student';
+        }
+    }
+    
+    if (!skipURLUpdate) {
+        updateURL('/contact', false);
+    }
+}
+
+async function handleContactSubmit(e) {
+    e.preventDefault();
+    
+    const name = document.getElementById('contactName').value.trim();
+    const email = document.getElementById('contactEmail').value.trim();
+    const userType = document.getElementById('contactUserType').value;
+    const subject = document.getElementById('contactSubject').value.trim();
+    const message = document.getElementById('contactMessage').value.trim();
+    const submitBtn = document.getElementById('contactSubmitBtn');
+    
+    // Validation
+    if (!name || name.length < 2) {
+        showMessage('Please enter your name', 'error');
+        return;
+    }
+    
+    if (!email || !email.includes('@')) {
+        showMessage('Please enter a valid email address', 'error');
+        return;
+    }
+    
+    if (!subject || subject.length < 3) {
+        showMessage('Please enter a subject', 'error');
+        return;
+    }
+    
+    if (!message || message.length < 10) {
+        showMessage('Please enter a message (at least 10 characters)', 'error');
+        return;
+    }
+    
+    // Disable button and show loading state
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span>Sending...</span>';
+    
+    try {
+        const formData = new FormData();
+        formData.append('name', name);
+        formData.append('email', email);
+        formData.append('user_type', userType);
+        formData.append('subject', subject);
+        formData.append('message', message);
+        
+        const response = await fetch(`${API_BASE}/api/auth/contact`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            showMessage(data.message || 'Message sent successfully! We\'ll get back to you soon.', 'success');
+            // Clear the form
+            document.getElementById('contactForm').reset();
+            // Re-fill email/name if logged in
+            if (currentUser) {
+                if (currentUser.email) document.getElementById('contactEmail').value = currentUser.email;
+                if (currentUser.full_name) document.getElementById('contactName').value = currentUser.full_name;
+                document.getElementById('contactUserType').value = 'student';
+            }
+        } else {
+            showMessage(data.detail || 'Failed to send message. Please try again.', 'error');
+        }
+    } catch (error) {
+        console.error('Contact form error:', error);
+        showMessage('Failed to send message. Please try again or email us directly at contact@rilono.com', 'error');
+    } finally {
+        // Re-enable button
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<span>Send Message</span>';
     }
 }
 
