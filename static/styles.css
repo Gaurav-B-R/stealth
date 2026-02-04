@@ -61,12 +61,20 @@
     --blur-lg: blur(24px);
 }
 
+html {
+    margin: 0;
+    padding: 0;
+}
+
 body {
+    margin: 0;
+    padding: 0;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     background: var(--bg-color);
     color: var(--text-primary);
     line-height: 1.6;
     min-height: 100vh;
+    overflow-x: hidden;
 }
 
 /* Custom Scrollbar */
@@ -426,6 +434,11 @@ body {
 
 .section {
     animation: fadeIn 0.3s ease-in;
+}
+
+#homepageSection.section {
+    padding: 0;
+    margin: 0;
 }
 
 @keyframes fadeIn {
@@ -1800,6 +1813,20 @@ body {
 }
 
 /* Homepage Styles */
+#homepageSection {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    max-width: 100%;
+}
+
+#homepageSection > div {
+    margin: 0;
+    border-radius: 0;
+    width: 100%;
+    box-sizing: border-box;
+}
+
 .homepage-hero {
     background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
     position: relative;
@@ -1810,6 +1837,9 @@ body {
     min-height: 90vh;
     display: flex;
     align-items: center;
+    width: 100%;
+    margin: 0;
+    border-radius: 0;
 }
 
 .hero-background {
@@ -2054,6 +2084,8 @@ body {
 .homepage-how-it-works {
     padding: 6rem 2rem;
     background: var(--bg-secondary);
+    width: 100%;
+    margin: 0;
 }
 
 .steps-container {
@@ -2146,6 +2178,8 @@ body {
 .homepage-features {
     padding: 6rem 2rem;
     background: var(--bg-color);
+    width: 100%;
+    margin: 0;
 }
 
 .features-container {
@@ -2222,6 +2256,8 @@ body {
 .homepage-categories {
     padding: 6rem 2rem;
     background: var(--bg-secondary);
+    width: 100%;
+    margin: 0;
 }
 
 .categories-grid {
@@ -2281,6 +2317,8 @@ body {
     position: relative;
     overflow: hidden;
     color: white;
+    width: 100%;
+    margin: 0;
 }
 
 .cta-background {
