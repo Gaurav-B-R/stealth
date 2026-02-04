@@ -98,8 +98,8 @@ Last Updated: {profile_data.get('last_updated', 'Unknown')}
 
 def get_user_documents_context(user_id: int, db: Session) -> str:
     """
-    Fetch user's documents from R2 and create context string with extracted information.
-    Returns a formatted string with document information.
+    Fetch user's documents from R2 and create context string with document list.
+    Returns a formatted string with document names (detailed content is attached separately).
     """
     try:
         documents = db.query(models.Document).filter(
@@ -110,84 +110,66 @@ def get_user_documents_context(user_id: int, db: Session) -> str:
         if not documents:
             return "No documents have been uploaded yet."
         
-        context_parts = ["User's Uploaded Documents:"]
+        context_parts = [f"User's Uploaded Documents ({len(documents)} total):"]
         
         for doc in documents:
-            try:
-                # Get extracted text file from R2
-                response = r2_client.get_object(
-                    Bucket=R2_DOCUMENTS_BUCKET, 
-                    Key=doc.extracted_text_file_url
-                )
-                extracted_text = response['Body'].read().decode('utf-8')
-                
-                # Parse JSON if possible - look for JSON in the text
-                try:
-                    # Try to find JSON object in the text
-                    text_lines = extracted_text.split('\n')
-                    json_start = -1
-                    json_end = -1
-                    
-                    for i, line in enumerate(text_lines):
-                        if line.strip().startswith('{'):
-                            json_start = i
-                            break
-                    
-                    if json_start >= 0:
-                        # Find the closing brace
-                        json_text = '\n'.join(text_lines[json_start:])
-                        # Try to extract JSON
-                        brace_count = 0
-                        json_end_pos = -1
-                        for i, char in enumerate(json_text):
-                            if char == '{':
-                                brace_count += 1
-                            elif char == '}':
-                                brace_count -= 1
-                                if brace_count == 0:
-                                    json_end_pos = i + 1
-                                    break
-                        
-                        if json_end_pos > 0:
-                            json_str = json_text[:json_end_pos]
-                            doc_data = json.loads(json_str)
-                            
-                            context_parts.append(f"\n- {doc.document_type or 'Document'}: {doc.original_filename}")
-                            if doc_data.get('Name'):
-                                context_parts.append(f"  Name: {doc_data.get('Name')}")
-                            if doc_data.get('Document Number'):
-                                context_parts.append(f"  Document Number: {doc_data.get('Document Number')}")
-                            if doc_data.get('Date of Birth'):
-                                context_parts.append(f"  Date of Birth: {doc_data.get('Date of Birth')}")
-                            if doc_data.get('Expiration Date'):
-                                context_parts.append(f"  Expiration Date: {doc_data.get('Expiration Date')}")
-                            if doc_data.get('Issue Date'):
-                                context_parts.append(f"  Issue Date: {doc_data.get('Issue Date')}")
-                            if doc_data.get('Country'):
-                                context_parts.append(f"  Country: {doc_data.get('Country')}")
-                            if doc_data.get('Other Information'):
-                                context_parts.append(f"  Additional Info: {doc_data.get('Other Information')}")
-                        else:
-                            raise json.JSONDecodeError("No valid JSON found", json_text, 0)
-                    else:
-                        raise json.JSONDecodeError("No JSON start found", extracted_text, 0)
-                except (json.JSONDecodeError, ValueError) as e:
-                    # If not JSON, use the text as-is (skip header)
-                    text_content = extracted_text.split('=' * 80, 1)[-1].strip() if '=' * 80 in extracted_text else extracted_text
-                    context_parts.append(f"\n- {doc.document_type or 'Document'}: {doc.original_filename}")
-                    context_parts.append(f"  Extracted Information: {text_content[:500]}...")
-            except Exception as e:
-                # Skip documents that can't be read
-                continue
+            validation_status = "Valid" if doc.is_valid else "Needs Review"
+            context_parts.append(f"- {doc.document_type or 'Document'}: {doc.original_filename} [{validation_status}]")
         
         return "\n".join(context_parts)
     except Exception as e:
         print(f"Error fetching documents context: {str(e)}")
         return "Unable to retrieve document information at this time."
 
-def generate_ai_response(user_message: str, user_name: str, documents_context: str, student_profile_context: str, conversation_history: Optional[List[dict]] = None) -> str:
+
+def get_user_document_files(user_id: int, db: Session) -> List[dict]:
     """
-    Generate AI response using Gemini with system prompt, document context, and comprehensive student profile.
+    Fetch user's document JSON files from R2 for attachment to Gemini prompt.
+    Returns a list of dicts with document_type, filename, and json_content.
+    """
+    document_files = []
+    
+    try:
+        documents = db.query(models.Document).filter(
+            models.Document.user_id == user_id,
+            models.Document.extracted_text_file_url.isnot(None)
+        ).all()
+        
+        for doc in documents:
+            try:
+                # Get extracted text/JSON file from R2
+                response = r2_client.get_object(
+                    Bucket=R2_DOCUMENTS_BUCKET, 
+                    Key=doc.extracted_text_file_url
+                )
+                extracted_content = response['Body'].read().decode('utf-8')
+                
+                # Try to parse as JSON, otherwise use raw content
+                try:
+                    json_data = json.loads(extracted_content)
+                    content = json.dumps(json_data, indent=2)
+                except json.JSONDecodeError:
+                    content = extracted_content
+                
+                document_files.append({
+                    "document_type": doc.document_type or "document",
+                    "filename": doc.original_filename,
+                    "is_valid": doc.is_valid,
+                    "validation_message": doc.validation_message,
+                    "content": content
+                })
+            except Exception as e:
+                print(f"Warning: Failed to fetch document {doc.id}: {str(e)}")
+                continue
+        
+        return document_files
+    except Exception as e:
+        print(f"Error fetching document files: {str(e)}")
+        return []
+
+def generate_ai_response(user_message: str, user_name: str, documents_context: str, student_profile_context: str, document_files: List[dict] = None, conversation_history: Optional[List[dict]] = None) -> str:
+    """
+    Generate AI response using Gemini with system prompt, document context, attached document files, and comprehensive student profile.
     """
     try:
         # Initialize model based on available service
@@ -203,6 +185,18 @@ def generate_ai_response(user_message: str, user_name: str, documents_context: s
         else:
             raise Exception("Gemini AI not available. Please configure service account or API key.")
         
+        # Build attached documents section
+        attached_docs_text = ""
+        if document_files and len(document_files) > 0:
+            attached_docs_text = f"\n\n=== ATTACHED DOCUMENT FILES ({len(document_files)} documents) ===\nAll uploaded documents are attached below with their full extracted information for your reference.\n"
+            for i, doc_file in enumerate(document_files, 1):
+                validation_status = "VALID" if doc_file.get('is_valid') else "NEEDS REVIEW"
+                attached_docs_text += f"\n--- DOCUMENT {i}: {doc_file['document_type'].upper()} ({doc_file['filename']}) [{validation_status}] ---\n"
+                if doc_file.get('validation_message'):
+                    attached_docs_text += f"Validation Note: {doc_file['validation_message']}\n"
+                attached_docs_text += f"Extracted Data:\n{doc_file['content']}\n"
+            attached_docs_text += "\n=== END OF ATTACHED DOCUMENTS ===\n"
+        
         # Build system prompt with comprehensive student profile
         system_prompt = f"""You are Rilono AI, a F1 student visa expert assistant. You are guiding the student through the F1 student visa process and documentation.
 
@@ -215,22 +209,23 @@ Your role:
 
 {student_profile_context}
 
-User's uploaded documents and extracted information:
 {documents_context}
+{attached_docs_text}
 
 Instructions:
 - IMPORTANT: Use the STUDENT PROFILE AND F1 VISA STATUS information above to personalize your responses
 - Reference the student's name, university, and current visa journey stage when giving advice
 - Guide them based on their current stage and what the next step is
 - Consider their intake semester/year when providing timeline guidance
-- Use the document information to provide personalized guidance
-- If the user asks about specific documents, reference their uploaded documents when relevant
+- USE THE ATTACHED DOCUMENT FILES to provide detailed, personalized guidance based on the actual extracted data
+- If a document has validation issues (marked as NEEDS REVIEW), proactively mention what might need to be corrected
+- If the user asks about specific documents, reference the attached document data when relevant
 - Be concise but thorough in your responses
 - If you don't have information about a specific document, let the user know and guide them on what they need
 - Always maintain a helpful and encouraging tone
 - When suggesting next steps, be specific about what documents they need to upload or actions to take
 
-Remember: You have access to the student's complete profile including their name, university, documentation preferences, and current visa journey status. Use this information to provide highly personalized, stage-appropriate guidance."""
+Remember: You have access to the student's complete profile including their name, university, documentation preferences, current visa journey status, AND their full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance."""
 
         # Build conversation context
         conversation_text = ""
@@ -255,6 +250,7 @@ Please provide a helpful response to the user's question:"""
         print("\n" + "="*80)
         print(f"🔵 GEMINI API CALL: generate_ai_response() - AI CHAT")
         print(f"👤 User: {user_name}")
+        print(f"📎 Attached Documents: {len(document_files) if document_files else 0}")
         print("-"*80)
         print("📤 SENDING PROMPT TO GEMINI:")
         print("-"*80)
@@ -330,6 +326,7 @@ async def chat_with_ai(
 ):
     """
     Chat with Rilono AI. The AI has access to the user's complete profile, documents, and visa journey status.
+    Document JSON files are attached to the prompt for detailed context.
     """
     try:
         # Get user's name
@@ -339,15 +336,19 @@ async def chat_with_ai(
         student_profile = refresh_student_profile_if_stale(current_user, db)
         student_profile_context = format_student_profile_context(student_profile)
         
-        # Get documents context (extracted text from uploaded documents)
+        # Get documents context (summary list of uploaded documents)
         documents_context = get_user_documents_context(current_user.id, db)
         
-        # Generate response
+        # Get document files (full JSON content) to attach to the prompt
+        document_files = get_user_document_files(current_user.id, db)
+        
+        # Generate response with attached document files
         response_text = generate_ai_response(
             user_message=chat_message.message,
             user_name=user_name,
             documents_context=documents_context,
             student_profile_context=student_profile_context,
+            document_files=document_files,
             conversation_history=chat_message.conversation_history
         )
         
