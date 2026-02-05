@@ -34,18 +34,16 @@ def update_profile(
     db.refresh(current_user)
     return current_user
 
-@router.get("/{user_id}", response_model=schemas.UserResponse)
-def get_user_profile(
-    user_id: int,
-    db: Session = Depends(get_db)
+@router.get("/documentation-preferences")
+def get_documentation_preferences(
+    current_user: models.User = Depends(get_current_active_user)
 ):
-    """Get a user's public profile (limited info)"""
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Return public profile (exclude sensitive info)
-    return user
+    """Get user's documentation preferences"""
+    return {
+        "country": current_user.preferred_country or "United States",
+        "intake": current_user.preferred_intake,
+        "year": current_user.preferred_year
+    }
 
 @router.put("/documentation-preferences")
 def update_documentation_preferences(
@@ -73,17 +71,20 @@ def update_documentation_preferences(
         }
     }
 
-
-@router.get("/documentation-preferences")
-def get_documentation_preferences(
-    current_user: models.User = Depends(get_current_active_user)
+# Note: This route must come AFTER specific paths like /documentation-preferences
+# because {user_id} would otherwise match any path segment
+@router.get("/{user_id}", response_model=schemas.UserResponse)
+def get_user_profile(
+    user_id: int,
+    db: Session = Depends(get_db)
 ):
-    """Get user's documentation preferences"""
-    return {
-        "country": current_user.preferred_country or "United States",
-        "intake": current_user.preferred_intake,
-        "year": current_user.preferred_year
-    }
+    """Get a user's public profile (limited info)"""
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Return public profile (exclude sensitive info)
+    return user
 
 
 @router.delete("/", status_code=status.HTTP_204_NO_CONTENT)
