@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Database URL
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./student_marketplace.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./rilono.db")
 
 # Create engine
 if DATABASE_URL.startswith("sqlite"):

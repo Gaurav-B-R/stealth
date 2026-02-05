@@ -1,18 +1,16 @@
 # Rilono
 
-A beautiful and modern marketplace platform built with FastAPI and Python, designed specifically for student communities. Students can create accounts, list items for sale, and browse items from other students.
+An AI-powered F1 student visa documentation assistant built with FastAPI and Python. Students can securely organize documents, receive AI guidance, and prepare for visa interviews with confidence.
 
 ## Features
 
-- 🔐 **User Authentication**: Secure registration and login with JWT tokens
-- 📦 **Item Listings**: Create, update, and delete item listings
-- 🖼️ **Multiple Images**: Upload up to 10 images per item listing
-- 📍 **Address Autocomplete**: Google Places integration for pickup location
-- 🔍 **Search & Filter**: Search items by title/description, filter by category and price range
-- 👤 **User Profiles**: View your own listings and manage your items
+- 🔐 **User Authentication**: Secure registration, email verification, and JWT-based sessions
+- 📄 **Document Uploads**: Upload and manage visa-related documents with metadata
+- 🔒 **Zero-Knowledge Encryption**: Files encrypted with a key derived from the user's password
+- 🧠 **AI Validation & Extraction**: Automated document validation and text extraction
+- 🧭 **Visa Journey Dashboard**: Track progress and documentation preferences
+- 💬 **AI Chat Assistant**: Context-aware guidance based on uploaded documents
 - 🎨 **Modern UI**: Beautiful, responsive design with smooth animations
-- 🏷️ **Categories**: Organize items by category (Textbooks, Electronics, Furniture, Clothing, Sports, Sublease, Other)
-- ✅ **Sold Status**: Mark items as sold when they're purchased
 
 ## Tech Stack
 
@@ -60,14 +58,6 @@ A beautiful and modern marketplace platform built with FastAPI and Python, desig
    print(secrets.token_urlsafe(32))
    ```
 
-5. **Set up Google Places API (Optional but recommended)**:
-   - Go to [Google Cloud Console](https://console.cloud.google.com/)
-   - Create a new project or select an existing one
-   - Enable the "Places API" and "Maps JavaScript API"
-   - Create an API key
-   - In `static/index.html`, replace `YOUR_GOOGLE_API_KEY` with your actual API key
-   - **Note**: Without the API key, address input will work as a basic text field (autocomplete will be disabled)
-
 5. **Run the application**:
    ```bash
    uvicorn app.main:app --reload
@@ -84,30 +74,25 @@ A beautiful and modern marketplace platform built with FastAPI and Python, desig
 
 1. **Register an Account**:
    - Click "Register" in the navigation bar
-   - Fill in your details (email, username, password, etc.)
-   - Click "Register"
+   - Fill in your details (email, password, etc.)
+   - Verify your email to activate your account
 
 2. **Login**:
    - Click "Login" in the navigation bar
-   - Enter your username and password
-   - You'll be automatically logged in
+   - Enter your email and password
 
-3. **List an Item for Sale**:
-   - Click "Sell Item" in the navigation bar
-   - Fill in the item details (title, description, price, category, etc.)
-   - Click "List Item"
-   - Your item will appear in Rilono
+3. **Set Documentation Preferences**:
+   - Open your dashboard
+   - Choose target country, intake, and year
 
-4. **Browse Items**:
-   - Use the search bar to search by keywords
-   - Filter by category using the dropdown
-   - Set price range using min/max price fields
-   - Click "Search" to apply filters
+4. **Upload Documents**:
+   - Upload visa-related documents
+   - Provide your password to encrypt the file
+   - Review validation feedback
 
-5. **Manage Your Listings**:
-   - Click "My Listings" to see all your items
-   - Mark items as "Sold" when they're purchased
-   - Delete items you no longer want to sell
+5. **Use AI Guidance**:
+   - Ask questions in the AI chat
+   - Get guidance based on your uploaded documents
 
 ## API Endpoints
 
@@ -116,17 +101,18 @@ A beautiful and modern marketplace platform built with FastAPI and Python, desig
 - `POST /api/auth/login` - Login and get access token
 - `GET /api/auth/me` - Get current user info
 
-### Items
-- `GET /api/items/` - Get all items (with optional filters)
-- `GET /api/items/{item_id}` - Get a specific item
-- `POST /api/items/` - Create a new item (requires authentication)
-- `PUT /api/items/{item_id}` - Update an item (requires authentication, owner only)
-- `DELETE /api/items/{item_id}` - Delete an item (requires authentication, owner only)
-- `GET /api/items/my/listings` - Get current user's items (requires authentication)
+### Documents
+- `POST /api/documents/upload` - Upload a document (requires authentication)
+- `GET /api/documents/my-documents` - List your documents (requires authentication)
+- `GET /api/documents/{document_id}` - Get a document (requires authentication)
+- `GET /api/documents/{document_id}/extracted-text` - Get extracted text (requires authentication)
+
+### AI Chat
+- `POST /api/ai-chat/chat` - Send a chat message (requires authentication)
 
 ## Database
 
-The application uses SQLite by default, which creates a `student_marketplace.db` file in the project root. The database is automatically created when you first run the application. (Note: The database filename can be customized in the database configuration.)
+The application uses SQLite by default, which creates a `rilono.db` file in the project root. The database is automatically created when you first run the application. (Note: The database filename can be customized in the database configuration.)
 
 To use PostgreSQL instead:
 1. Update `DATABASE_URL` in `.env` to your PostgreSQL connection string
@@ -146,7 +132,10 @@ stealth/
 │   └── routers/
 │       ├── __init__.py
 │       ├── auth.py          # Authentication routes
-│       └── items.py         # Item routes
+│       ├── documents.py     # Document upload and management routes
+│       ├── ai_chat.py       # AI chat routes
+│       ├── profile.py       # Profile and account routes
+│       └── upload.py        # Upload helpers
 ├── static/
 │   ├── index.html           # Main HTML page
 │   ├── styles.css           # CSS styles
@@ -179,4 +168,3 @@ This project is open source and available for educational purposes.
 ## Contributing
 
 Feel free to submit issues, fork the repository, and create pull requests for any improvements.
-

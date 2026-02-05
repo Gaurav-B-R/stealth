@@ -1463,6 +1463,197 @@ body {
     margin-top: 1rem;
 }
 
+#dashboardTab-overview .overview-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.8fr) minmax(360px, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+    margin-top: 1rem;
+}
+
+#dashboardTab-overview .overview-main .dashboard-grid {
+    margin-top: 0;
+}
+
+#dashboardTab-overview .overview-health-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+#dashboardTab-overview .overview-health-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+#dashboardTab-overview .overview-health-subtitle {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+}
+
+#dashboardTab-overview .overview-health-badge {
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 0.4rem 0.8rem;
+    white-space: nowrap;
+}
+
+#dashboardTab-overview .overview-health-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+#dashboardTab-overview .overview-health-stat {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    padding: 0.85rem;
+}
+
+#dashboardTab-overview .overview-health-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+}
+
+#dashboardTab-overview .overview-health-value {
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1;
+}
+
+#dashboardTab-overview .overview-health-rate {
+    margin-bottom: 1rem;
+}
+
+#dashboardTab-overview .overview-health-rate-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    margin-bottom: 0.4rem;
+}
+
+#dashboardTab-overview .overview-health-rate-track {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    height: 10px;
+    overflow: hidden;
+}
+
+#dashboardTab-overview .overview-health-rate-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+    border-radius: 999px;
+    transition: width 0.35s ease;
+}
+
+#dashboardTab-overview .overview-health-list-wrap {
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    background: var(--bg-secondary);
+    padding: 0.75rem;
+}
+
+#dashboardTab-overview .overview-health-list-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+}
+
+#dashboardTab-overview .overview-health-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+#dashboardTab-overview .overview-health-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid var(--border-color);
+    background: var(--card-bg);
+    border-radius: 0.6rem;
+    padding: 0.55rem 0.7rem;
+}
+
+#dashboardTab-overview .overview-health-item-clickable {
+    cursor: pointer;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+#dashboardTab-overview .overview-health-item-clickable:hover {
+    border-color: var(--primary-color);
+    transform: translateY(-1px);
+}
+
+#dashboardTab-overview .overview-health-item-name {
+    font-size: 0.82rem;
+    color: var(--text-primary);
+}
+
+#dashboardTab-overview .overview-health-item-status {
+    font-size: 0.75rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 0.2rem 0.55rem;
+    white-space: nowrap;
+}
+
+#dashboardTab-overview .overview-health-empty {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 0.5rem 0;
+}
+
+.document-focus-highlight {
+    outline: 2px solid var(--primary-color);
+    box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.18);
+}
+
+#dashboardTab-overview .overview-chat-column {
+    position: sticky;
+    top: 1rem;
+}
+
+#dashboardTab-overview .overview-chat-widget {
+    height: 760px;
+}
+
+@media (max-width: 1280px) {
+    #dashboardTab-overview .overview-layout {
+        grid-template-columns: 1fr;
+    }
+
+    #dashboardTab-overview .overview-chat-column {
+        position: static;
+    }
+
+    #dashboardTab-overview .overview-chat-widget {
+        height: 620px;
+    }
+
+    #dashboardTab-overview .overview-health-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
 #dashboardSection .dashboard-widget {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
@@ -2589,6 +2780,171 @@ body {
     font-weight: 600;
 }
 
+/* Pricing Page Styles */
+.pricing-page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 3rem 1rem;
+}
+
+.pricing-header {
+    text-align: center;
+    margin-bottom: 2.5rem;
+}
+
+.pricing-header h1 {
+    font-size: 2.5rem;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+}
+
+.pricing-header p {
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+}
+
+.pricing-controls {
+    margin: 1.25rem auto 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+}
+
+.pricing-controls label {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.pricing-controls select {
+    background: var(--card-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 0.65rem;
+    padding: 0.5rem 0.75rem;
+    min-width: 220px;
+}
+
+.pricing-currency-hint {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.pricing-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
+}
+
+.pricing-card {
+    position: relative;
+    border: 1px solid var(--border-color);
+    border-radius: 1rem;
+    background: var(--card-bg);
+    padding: 2rem;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.pricing-card-free {
+    border-color: var(--border-color);
+}
+
+.pricing-card-pro {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.25), var(--shadow-lg);
+}
+
+.pricing-badge {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: white;
+    background: var(--gradient-primary);
+    border-radius: 999px;
+    padding: 0.25rem 0.6rem;
+}
+
+.pricing-card-head h2 {
+    font-size: 1.6rem;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.pricing-card-head p {
+    margin: 0.35rem 0 0;
+    color: var(--text-secondary);
+}
+
+.pricing-price {
+    font-size: 2.25rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    line-height: 1;
+}
+
+.pricing-price span {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-left: 0.25rem;
+}
+
+.pricing-features {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.pricing-features li {
+    color: var(--text-primary);
+    position: relative;
+    padding-left: 1.35rem;
+}
+
+.pricing-features li::before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: #22c55e;
+    font-weight: 700;
+}
+
+.pricing-card .btn {
+    margin-top: auto;
+}
+
+.pricing-disclaimer {
+    margin-top: 1rem;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+    .pricing-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .pricing-card {
+        padding: 1.5rem;
+    }
+
+    .pricing-controls {
+        justify-content: flex-start;
+    }
+}
+
 /* Footer Styles */
 .footer {
     background: var(--bg-secondary);
@@ -3232,6 +3588,19 @@ body {
 /* Responsive */
 @media (max-width: 768px) {
     .rilono-ai-widget {
+        height: 550px;
+    }
+
+    #dashboardTab-overview .overview-health-head {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    #dashboardTab-overview .overview-health-grid {
+        grid-template-columns: 1fr;
+    }
+
+    #dashboardTab-overview .overview-chat-widget {
         height: 550px;
     }
     

@@ -95,15 +95,8 @@ def delete_account(
     """Delete the current user's account and all associated data"""
     user_id = current_user.id
     
-    # Delete all messages where user is sender or receiver
-    db.query(models.Message).filter(
-        (models.Message.sender_id == user_id) | (models.Message.receiver_id == user_id)
-    ).delete()
-    
-    # Items and ItemImages will be deleted automatically due to cascade="all, delete-orphan"
-    # But we need to delete the user explicitly
+    # Delete the user explicitly; related documents will be removed by cascade
     db.delete(current_user)
     db.commit()
     
     return None
-

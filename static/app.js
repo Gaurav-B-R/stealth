@@ -11,6 +11,23 @@ let turnstileWidgetIds = {
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
 let notificationDropdownOpen = false;
 
+const PRICING_BASE_USD = {
+    free: 0,
+    pro: 19
+};
+
+const PRICING_COUNTRY_CONFIG = {
+    US: { country: 'United States', currency: 'USD', rate: 1.0 },
+    IN: { country: 'India', currency: 'INR', rate: 83.2 },
+    GB: { country: 'United Kingdom', currency: 'GBP', rate: 0.79 },
+    CA: { country: 'Canada', currency: 'CAD', rate: 1.35 },
+    AU: { country: 'Australia', currency: 'AUD', rate: 1.53 },
+    DE: { country: 'Germany', currency: 'EUR', rate: 0.92 },
+    AE: { country: 'United Arab Emirates', currency: 'AED', rate: 3.67 },
+    SG: { country: 'Singapore', currency: 'SGD', rate: 1.35 },
+    JP: { country: 'Japan', currency: 'JPY', rate: 149.0 }
+};
+
 // URL Routing System
 let isNavigating = false; // Flag to prevent recursive navigation
 
@@ -58,13 +75,6 @@ function handleRoute(skipURLUpdate = false) {
     if (path === '/' || path === '') {
         // Homepage - landing page
         showHomepage(skipURLUpdate);
-    } else if (path === '/marketplace') {
-        // Marketplace - check for search params
-        if (queryParams.search || queryParams.category || queryParams.minPrice || queryParams.maxPrice) {
-            showMarketplaceWithFilters(queryParams, skipURLUpdate);
-        } else {
-            showMarketplace(skipURLUpdate);
-        }
     } else if (path === '/login') {
         showLogin(skipURLUpdate);
     } else if (path === '/register') {
@@ -77,25 +87,16 @@ function handleRoute(skipURLUpdate = false) {
         showForgotPassword(skipURLUpdate);
     } else if (path === '/reset-password') {
         handleResetPasswordPage(skipURLUpdate);
-    } else if (path === '/sell') {
-        showCreateItem(skipURLUpdate);
-    } else if (path === '/listings') {
-        showMyListings(skipURLUpdate);
     } else if (path === '/dashboard') {
         showDashboard(skipURLUpdate);
+    } else if (path === '/pricing') {
+        showPricing(skipURLUpdate);
     } else if (path === '/privacy') {
         showPrivacy(skipURLUpdate);
     } else if (path === '/terms') {
         showTerms(skipURLUpdate);
     } else if (path === '/contact') {
         showContact(skipURLUpdate);
-    } else if (path.startsWith('/item/')) {
-        const itemId = path.split('/item/')[1];
-        if (itemId) {
-            showItemDetail(itemId, skipURLUpdate);
-        } else {
-            showMarketplace(skipURLUpdate);
-        }
     } else {
         // Unknown route, redirect to homepage
         if (!skipURLUpdate) {
@@ -146,8 +147,8 @@ async function initializeTurnstile() {
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
-    initializeAddressAutocomplete();
     initializeSearchableDropdowns();
+    initializePricingSelector();
     
     // Initialize Turnstile
     await initializeTurnstile();
@@ -168,30 +169,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     handleRoute(true);
     // Update URL once after initial route is handled
     const path = getPathFromURL();
-    const queryParams = getQueryParams();
-    if (path === '/marketplace' && (queryParams.search || queryParams.category || queryParams.minPrice || queryParams.maxPrice)) {
-        const searchURL = buildSearchURL(queryParams.search, queryParams.category, queryParams.minPrice, queryParams.maxPrice);
-        updateURL('/marketplace' + (searchURL !== '/' ? searchURL.replace('/', '?') : ''), true);
-    } else {
-        updateURL(path || '/', true);
-    }
-    
-    checkUnreadMessages();
-    // Check for unread messages every 30 seconds
-    setInterval(checkUnreadMessages, 30000);
+    updateURL(path || '/', true);
 });
 
 function setupEventListeners() {
-    document.getElementById('loginForm').addEventListener('submit', handleLogin);
-    document.getElementById('registerForm').addEventListener('submit', handleRegister);
-    document.getElementById('forgotPasswordForm').addEventListener('submit', handleForgotPassword);
-    document.getElementById('resetPasswordForm').addEventListener('submit', handleResetPassword);
-    document.getElementById('createItemForm').addEventListener('submit', handleCreateItem);
-    document.getElementById('profileForm').addEventListener('submit', handleUpdateProfile);
-    document.getElementById('contactForm').addEventListener('submit', handleContactSubmit);
-    document.getElementById('searchInput').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') loadItems();
-    });
+    const loginForm = document.getElementById('loginForm');
+    if (loginForm) loginForm.addEventListener('submit', handleLogin);
+    const registerForm = document.getElementById('registerForm');
+    if (registerForm) registerForm.addEventListener('submit', handleRegister);
+    const forgotPasswordForm = document.getElementById('forgotPasswordForm');
+    if (forgotPasswordForm) forgotPasswordForm.addEventListener('submit', handleForgotPassword);
+    const resetPasswordForm = document.getElementById('resetPasswordForm');
+    if (resetPasswordForm) resetPasswordForm.addEventListener('submit', handleResetPassword);
+    const createItemForm = document.getElementById('createItemForm');
+    if (createItemForm) createItemForm.addEventListener('submit', handleCreateItem);
+    const profileForm = document.getElementById('profileForm');
+    if (profileForm) profileForm.addEventListener('submit', handleUpdateProfile);
+    const contactForm = document.getElementById('contactForm');
+    if (contactForm) contactForm.addEventListener('submit', handleContactSubmit);
+    const searchInput = document.getElementById('searchInput');
+    if (searchInput) {
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') loadItems();
+        });
+    }
     
     // Image preview for multiple file upload
     const imageFileInput = document.getElementById('itemImageFiles');
@@ -355,7 +356,6 @@ function updateUIForAuth() {
     if (currentUser) {
         document.getElementById('loginLink').style.display = 'none';
         document.getElementById('registerLink').style.display = 'none';
-        document.getElementById('createLink').style.display = 'block';
         document.getElementById('userMenu').style.display = 'block';
         document.getElementById('notificationContainer').style.display = 'block';
         updateNotificationBadge();
@@ -376,7 +376,6 @@ function updateUIForAuth() {
         } else {
             userInfoEl.innerHTML = `<div style="width: 2rem; height: 2rem; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-weight: 600;">${(currentUser.full_name || currentUser.username).charAt(0).toUpperCase()}</div> <span>${currentUser.username}</span>`;
         }
-        checkUnreadMessages();
         // Only load profile data if we're on the dashboard section
         const currentSection = sessionStorage.getItem('currentSection');
         if (currentSection === 'dashboard' || currentSection === 'profile') {
@@ -386,7 +385,6 @@ function updateUIForAuth() {
     } else {
         document.getElementById('loginLink').style.display = 'block';
         document.getElementById('registerLink').style.display = 'block';
-        document.getElementById('createLink').style.display = 'none';
         document.getElementById('userMenu').style.display = 'none';
         document.getElementById('notificationContainer').style.display = 'none';
         updateFloatingChatVisibility();
@@ -1015,67 +1013,23 @@ async function resendVerificationEmail(email = null) {
 }
 
 function showMarketplace(skipURLUpdate = false) {
-    hideAllSections();
-    document.getElementById('marketplaceSection').style.display = 'block';
-    // Clear search filters
-    document.getElementById('searchInput').value = '';
-    document.getElementById('categoryFilter').value = '';
-    document.getElementById('minPrice').value = '';
-    document.getElementById('maxPrice').value = '';
-    loadItems(skipURLUpdate);
-    if (!skipURLUpdate) {
-        updateURL('/marketplace', false); // Use pushState for navigation
-    }
+    showHomepage(skipURLUpdate);
 }
 
 function showMarketplaceWithFilters(params, skipURLUpdate = false) {
-    hideAllSections();
-    document.getElementById('marketplaceSection').style.display = 'block';
-    // Set search filters from URL
-    if (document.getElementById('searchInput')) document.getElementById('searchInput').value = params.search || '';
-    if (document.getElementById('categoryFilter')) document.getElementById('categoryFilter').value = params.category || '';
-    if (document.getElementById('minPrice')) document.getElementById('minPrice').value = params.minPrice || '';
-    if (document.getElementById('maxPrice')) document.getElementById('maxPrice').value = params.maxPrice || '';
-    loadItems(skipURLUpdate);
-    // Don't update URL if we're handling a route (skipURLUpdate = true)
-    // This prevents overwriting the URL when back/forward is used
+    showHomepage(skipURLUpdate);
 }
 
 function showCreateItem(skipURLUpdate = false) {
-    if (!currentUser) {
-        showMessage('Please login to list an item', 'error');
-        showLogin();
-        return;
-    }
-    hideAllSections();
-    document.getElementById('createItemSection').style.display = 'block';
-    if (!skipURLUpdate) {
-        updateURL('/sell', false); // Use pushState for navigation
-    }
-    
-    // Reset form if not editing
-    if (!document.getElementById('editingItemId').value) {
-        resetItemForm();
-    }
+    showDashboard(skipURLUpdate);
 }
 
 function showMyListings(skipURLUpdate = false) {
-    if (!currentUser) {
-        showMessage('Please login to view your listings', 'error');
-        showLogin();
-        return;
-    }
-    hideAllSections();
-    document.getElementById('myListingsSection').style.display = 'block';
-    loadMyItems();
-    if (!skipURLUpdate) {
-        updateURL('/listings', false); // Use pushState for navigation
-    }
+    showDashboard(skipURLUpdate);
 }
 
 function showMessages(skipURLUpdate = false) {
-    // Redirect to messages page since messages are now on a separate page
-    window.location.href = '/messages';
+    showDashboard(skipURLUpdate);
 }
 
 function showDashboard(skipURLUpdate = false) {
@@ -1088,6 +1042,7 @@ function showDashboard(skipURLUpdate = false) {
     document.getElementById('dashboardSection').style.display = 'block';
     loadProfile();
     loadDashboardStats();
+    initializeRilonoAiChat();
     initializeYearDropdown();
     loadDocumentationPreferences();
     loadMyDocuments();
@@ -1149,6 +1104,66 @@ function showPrivacy(skipURLUpdate = false) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (!skipURLUpdate) {
         updateURL('/privacy', false);
+    }
+}
+
+function showPricing(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('pricingSection').style.display = 'block';
+    initializePricingSelector();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!skipURLUpdate) {
+        updateURL('/pricing', false);
+    }
+}
+
+function initializePricingSelector() {
+    const countrySelect = document.getElementById('pricingCountrySelect');
+    if (!countrySelect) return;
+
+    const savedCountry = localStorage.getItem('pricingCountry');
+    const countryCode = PRICING_COUNTRY_CONFIG[savedCountry] ? savedCountry : 'US';
+    countrySelect.value = countryCode;
+    updatePricingByCountry(countryCode);
+}
+
+function handlePricingCountryChange(countryCode) {
+    if (!PRICING_COUNTRY_CONFIG[countryCode]) {
+        countryCode = 'US';
+    }
+    localStorage.setItem('pricingCountry', countryCode);
+    updatePricingByCountry(countryCode);
+}
+
+function updatePricingByCountry(countryCode) {
+    const config = PRICING_COUNTRY_CONFIG[countryCode] || PRICING_COUNTRY_CONFIG.US;
+    const freePriceEl = document.getElementById('pricingFreePrice');
+    const proPriceEl = document.getElementById('pricingProPrice');
+    const hintEl = document.getElementById('pricingCurrencyHint');
+
+    const convertedFree = PRICING_BASE_USD.free * config.rate;
+    const convertedPro = PRICING_BASE_USD.pro * config.rate;
+
+    if (freePriceEl) {
+        freePriceEl.innerHTML = `${formatCurrencyAmount(convertedFree, config.currency)}<span>/month</span>`;
+    }
+    if (proPriceEl) {
+        proPriceEl.innerHTML = `${formatCurrencyAmount(convertedPro, config.currency)}<span>/month</span>`;
+    }
+    if (hintEl) {
+        hintEl.textContent = `Currency: ${config.currency} (${config.country})`;
+    }
+}
+
+function formatCurrencyAmount(amount, currencyCode) {
+    try {
+        return new Intl.NumberFormat('en-US', {
+            style: 'currency',
+            currency: currencyCode,
+            maximumFractionDigits: currencyCode === 'JPY' ? 0 : 2
+        }).format(amount);
+    } catch (error) {
+        return `$${amount.toFixed(2)}`;
     }
 }
 
@@ -1264,40 +1279,8 @@ async function handleContactSubmit(e) {
 }
 
 async function showItemDetail(itemId, skipURLUpdate = false) {
-    hideAllSections();
-    document.getElementById('marketplaceSection').style.display = 'block';
-    if (!skipURLUpdate) {
-        updateURL(`/item/${itemId}`, false); // Use pushState for navigation
-    }
-    
-    // Load and highlight the specific item
-    try {
-        const response = await fetch(`${API_BASE}/api/items/${itemId}`);
-        if (response.ok) {
-            const item = await response.json();
-            // Scroll to item if it's in the current view, or load items and scroll
-            loadItems(skipURLUpdate);
-            setTimeout(() => {
-                const itemCard = document.querySelector(`[data-item-id="${itemId}"]`);
-                if (itemCard) {
-                    itemCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    itemCard.style.border = '3px solid var(--primary-color)';
-                    itemCard.style.boxShadow = '0 0 20px rgba(99, 102, 241, 0.5)';
-                    setTimeout(() => {
-                        itemCard.style.border = '';
-                        itemCard.style.boxShadow = '';
-                    }, 3000);
-                }
-            }, 500);
-        } else {
-            showMessage('Item not found', 'error');
-            showMarketplace();
-        }
-    } catch (error) {
-        console.error('Error loading item:', error);
-        showMessage('Failed to load item', 'error');
-        showMarketplace();
-    }
+    showMessage('That page is no longer available.', 'error');
+    showHomepage(skipURLUpdate);
 }
 
 function hideAllSections() {
@@ -1384,7 +1367,7 @@ async function handleLogin(e) {
                     }
                 }
             }
-            showMarketplace();
+            showDashboard();
         } else {
             let errorMessage = 'Login failed';
             if (data.detail) {
@@ -1551,12 +1534,11 @@ function logout() {
     // Clear floating chat messages
     const floatingMessages = document.getElementById('floatingChatMessages');
     if (floatingMessages) floatingMessages.innerHTML = '';
-    // Clear main chat messages
-    const mainMessages = document.getElementById('rilonoAiChatMessages');
-    if (mainMessages) {
+    // Clear main chat messages in all dashboard chat panels
+    getMainChatContainers().forEach((mainMessages) => {
         const existingMsgs = mainMessages.querySelectorAll('.rilono-ai-message');
         existingMsgs.forEach(msg => msg.remove());
-    }
+    });
     updateUIForAuth();
     showMessage('Logged out successfully', 'success');
     showHomepage();
@@ -1702,6 +1684,9 @@ async function handleResetPassword(e) {
 
 // Item functions
 async function loadItems(skipURLUpdate = false) {
+    if (!document.getElementById('marketplaceSection')) {
+        return;
+    }
     const search = document.getElementById('searchInput')?.value || '';
     const category = document.getElementById('categoryFilter')?.value || '';
     const minPrice = document.getElementById('minPrice')?.value || '';
@@ -1710,7 +1695,7 @@ async function loadItems(skipURLUpdate = false) {
     // Update URL with current search filters (only if not handling back/forward)
     if (!skipURLUpdate) {
         const searchURL = buildSearchURL(search.trim(), category, minPrice, maxPrice);
-        updateURL('/marketplace' + (searchURL ? '?' + searchURL : ''), false); // Use pushState when user actively searches
+        updateURL('/' + (searchURL ? '?' + searchURL : ''), false);
     }
 
     let url = `${API_BASE}/api/items/?`;
@@ -2980,12 +2965,143 @@ async function loadProfileCompletion() {
         
         // Update visa journey tracker
         updateVisaJourneyUI(documents);
+        updateOverviewDocumentHealthUI(documents);
         
         // NOTE: We no longer save to R2 on every dashboard load
         // R2 is only updated when data actually changes (document upload/delete, profile update, preferences update)
     } catch (error) {
         console.error('Load profile completion error:', error);
     }
+}
+
+function updateOverviewDocumentHealthUI(documents) {
+    const totalUploaded = documents.length;
+    const uniqueTypes = new Set(documents.map(doc => doc.document_type).filter(Boolean)).size;
+    const validatedCount = documents.filter(doc => doc.is_valid === true).length;
+    const needsReviewCount = documents.filter(doc => doc.is_valid === false).length;
+    const pendingValidationCount = documents.filter(doc => doc.is_valid === null || doc.is_valid === undefined).length;
+    const processedCount = documents.filter(doc => doc.is_processed === true).length;
+
+    const reviewedCount = validatedCount + needsReviewCount;
+    const validationRate = reviewedCount > 0 ? Math.round((validatedCount / reviewedCount) * 100) : 0;
+    const processingRate = totalUploaded > 0 ? Math.round((processedCount / totalUploaded) * 100) : 0;
+    const healthScore = totalUploaded > 0 ? Math.round((validationRate * 0.7) + (processingRate * 0.3)) : 0;
+
+    setTextContent('overviewTotalUploaded', totalUploaded);
+    setTextContent('overviewUniqueTypes', uniqueTypes);
+    setTextContent('overviewValidatedCount', validatedCount);
+    setTextContent('overviewNeedsReviewCount', needsReviewCount);
+    setTextContent('overviewPendingValidationCount', pendingValidationCount);
+    setTextContent('overviewProcessedCount', processedCount);
+    setTextContent('overviewValidationRate', `${validationRate}%`);
+
+    const rateBar = document.getElementById('overviewValidationRateBar');
+    if (rateBar) {
+        rateBar.style.width = `${validationRate}%`;
+    }
+
+    const healthBadge = document.getElementById('overviewDocumentHealthStatus');
+    if (healthBadge) {
+        if (totalUploaded === 0) {
+            healthBadge.textContent = 'No Data';
+            healthBadge.style.background = 'var(--bg-tertiary)';
+            healthBadge.style.borderColor = 'var(--border-color)';
+            healthBadge.style.color = 'var(--text-primary)';
+        } else if (needsReviewCount === 0 && healthScore >= 85) {
+            healthBadge.textContent = 'Excellent';
+            healthBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+            healthBadge.style.borderColor = 'rgba(16, 185, 129, 0.35)';
+            healthBadge.style.color = '#34d399';
+        } else if (healthScore >= 70) {
+            healthBadge.textContent = 'Good';
+            healthBadge.style.background = 'rgba(99, 102, 241, 0.15)';
+            healthBadge.style.borderColor = 'rgba(99, 102, 241, 0.35)';
+            healthBadge.style.color = '#818cf8';
+        } else if (healthScore >= 50) {
+            healthBadge.textContent = 'Fair';
+            healthBadge.style.background = 'rgba(245, 158, 11, 0.15)';
+            healthBadge.style.borderColor = 'rgba(245, 158, 11, 0.35)';
+            healthBadge.style.color = '#fbbf24';
+        } else {
+            healthBadge.textContent = 'Needs Attention';
+            healthBadge.style.background = 'rgba(239, 68, 68, 0.15)';
+            healthBadge.style.borderColor = 'rgba(239, 68, 68, 0.35)';
+            healthBadge.style.color = '#f87171';
+        }
+    }
+
+    const listContainer = document.getElementById('overviewValidationList');
+    if (listContainer) {
+        if (totalUploaded === 0) {
+            listContainer.innerHTML = '<div class="overview-health-empty">No documents uploaded yet.</div>';
+            return;
+        }
+
+        const recentDocuments = [...documents]
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+            .slice(0, 5);
+
+        listContainer.innerHTML = recentDocuments.map((doc) => {
+            let statusLabel = 'Pending';
+            let statusStyle = 'background: rgba(148, 163, 184, 0.18); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3);';
+
+            if (doc.is_valid === true) {
+                statusLabel = 'Valid';
+                statusStyle = 'background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);';
+            } else if (doc.is_valid === false) {
+                statusLabel = 'Needs Review';
+                statusStyle = 'background: rgba(239, 68, 68, 0.18); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);';
+            }
+
+            const name = doc.document_type ? formatDocumentType(doc.document_type) : (doc.original_filename || 'Document');
+            const encodedDocumentType = encodeURIComponent(doc.document_type || '');
+            const documentId = Number.isFinite(doc.id) ? doc.id : 0;
+
+            return `
+                <div class="overview-health-item overview-health-item-clickable" onclick="jumpToDocumentInDocumentsTab(${documentId}, '${encodedDocumentType}')" title="Open in Documents tab">
+                    <div class="overview-health-item-name">${escapeHtml(name)}</div>
+                    <div class="overview-health-item-status" style="${statusStyle}">${statusLabel}</div>
+                </div>
+            `;
+        }).join('');
+    }
+}
+
+function setTextContent(id, value) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.textContent = String(value);
+    }
+}
+
+function formatDocumentType(type) {
+    return type
+        .replace(/[-_]/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+async function jumpToDocumentInDocumentsTab(documentId, encodedDocumentType = '') {
+    const documentType = encodedDocumentType ? decodeURIComponent(encodedDocumentType) : '';
+
+    switchDashboardTab('documents');
+
+    // Ensure document list is freshly rendered before searching for anchors.
+    await loadMyDocuments();
+
+    const targetById = documentId ? document.querySelector(`[data-document-id="${documentId}"]`) : null;
+    const targetByType = !targetById && documentType
+        ? document.querySelector(`[data-document-type="${documentType}"]`)
+        : null;
+    const target = targetById || targetByType;
+
+    if (!target) {
+        showMessage('Could not find that document in the documents list.', 'error');
+        return;
+    }
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    target.classList.add('document-focus-highlight');
+    setTimeout(() => target.classList.remove('document-focus-highlight'), 2200);
 }
 
 async function saveVisaStatusToR2() {
@@ -3606,7 +3722,7 @@ async function handleDeleteAccount() {
     
     // Double confirmation
     const confirmText = 'DELETE';
-    const userInput = prompt(`This action cannot be undone. All your data including items, messages, and profile will be permanently deleted.\n\nType "${confirmText}" to confirm account deletion:`);
+    const userInput = prompt(`This action cannot be undone. All your data including documents and profile will be permanently deleted.\n\nType "${confirmText}" to confirm account deletion:`);
     
     if (userInput !== confirmText) {
         if (userInput !== null) {
@@ -4023,6 +4139,40 @@ async function loadMyDocuments() {
     }
 }
 
+function getDocumentValidationMeta(doc) {
+    if (doc.is_valid === true) {
+        return {
+            statusLabel: 'Valid',
+            statusStyle: 'background: rgba(16, 185, 129, 0.15); color: #166534; border: 1px solid rgba(22, 101, 52, 0.25);',
+            cardStyle: 'border: 1px solid #c3e6cb; background: #d4edda;',
+            indicatorIcon: '✓',
+            indicatorColor: '#28a745',
+            reason: ''
+        };
+    }
+
+    if (doc.is_valid === false) {
+        return {
+            statusLabel: 'Invalid',
+            statusStyle: 'background: rgba(239, 68, 68, 0.15); color: #991b1b; border: 1px solid rgba(153, 27, 27, 0.25);',
+            cardStyle: 'border: 1px solid #f5c6cb; background: #f8d7da;',
+            indicatorIcon: '!',
+            indicatorColor: '#dc3545',
+            reason: doc.validation_message || 'Validation failed. Please upload the correct document.'
+        };
+    }
+
+    const isProcessing = doc.is_processed === false;
+    return {
+        statusLabel: isProcessing ? 'Processing' : 'Pending Validation',
+        statusStyle: 'background: rgba(245, 158, 11, 0.15); color: #92400e; border: 1px solid rgba(146, 64, 14, 0.25);',
+        cardStyle: 'border: 1px solid #ffe0a3; background: #fff7e6;',
+        indicatorIcon: '•',
+        indicatorColor: '#d97706',
+        reason: ''
+    };
+}
+
 function displayDocuments(documents) {
     const container = document.getElementById('documentsContainer');
     
@@ -4069,21 +4219,33 @@ function displayDocuments(documents) {
             });
             const isEncrypted = doc.encrypted_file_key || !doc.file_url;
             const docTypeLabel = requiredDocuments.find(req => req.value === doc.document_type)?.label || doc.document_type;
+            const validationMeta = getDocumentValidationMeta(doc);
             
             html += `
-                <div style="border: 1px solid #c3e6cb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: #d4edda;">
+                <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem;">
                     <div style="display: flex; align-items: start; gap: 0.75rem;">
-                        <div style="color: #28a745; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">✓</div>
+                        <div style="color: ${validationMeta.indicatorColor}; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">${validationMeta.indicatorIcon}</div>
                         <div style="flex: 1;">
                             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
                                 <div style="flex: 1;">
-                                    <div style="font-weight: 600; margin-bottom: 0.25rem; color: #155724;">
+                                    <div style="font-weight: 600; margin-bottom: 0.25rem; color: #1f2937;">
                                         ${escapeHtml(docTypeLabel)}
                                     </div>
                                     <div style="font-size: 0.875rem; color: var(--text-secondary);">
                                         ${escapeHtml(doc.original_filename)} • ${fileSizeMB} MB • ${uploadDate}
                                         ${isEncrypted ? ' • <span style="color: #28a745;">🔒 Encrypted</span>' : ''}
                                     </div>
+                                    <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                                        <span style="font-size: 0.8rem; color: var(--text-secondary);">Validation:</span>
+                                        <span style="font-size: 0.78rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${validationMeta.statusStyle}">
+                                            ${validationMeta.statusLabel}
+                                        </span>
+                                    </div>
+                                    ${validationMeta.reason ? `
+                                        <div style="font-size: 0.85rem; margin-top: 0.5rem; color: #991b1b;">
+                                            <strong>Reason:</strong> ${escapeHtml(validationMeta.reason)}
+                                        </div>
+                                    ` : ''}
                                     ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
                                 </div>
                             </div>
@@ -4105,7 +4267,7 @@ function displayDocuments(documents) {
         // Show pending documents with crosses
         pendingDocs.forEach(pendingDoc => {
             html += `
-                <div style="border: 1px solid #f5c6cb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: #f8d7da;">
+                <div data-document-type="${escapeHtml(pendingDoc.value)}" style="border: 1px solid #f5c6cb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: #f8d7da;">
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
                         <div style="color: #dc3545; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">✗</div>
                         <div style="flex: 1;">
@@ -4137,12 +4299,13 @@ function displayDocuments(documents) {
                 day: 'numeric'
             });
             const isEncrypted = doc.encrypted_file_key || !doc.file_url;
+            const validationMeta = getDocumentValidationMeta(doc);
             
             return `
-                <div style="border: 1px solid var(--border-color); border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: var(--bg-color);">
+                <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem;">
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
                         <div style="flex: 1;">
-                            <div style="font-weight: 600; margin-bottom: 0.25rem;">
+                            <div style="font-weight: 600; margin-bottom: 0.25rem; color: #1f2937;">
                                 ${escapeHtml(doc.original_filename)}
                                 ${isEncrypted ? '<span style="font-size: 0.75rem; color: #28a745; margin-left: 0.5rem;">🔒 Encrypted</span>' : ''}
                             </div>
@@ -4150,6 +4313,17 @@ function displayDocuments(documents) {
                                 ${doc.document_type ? `<span style="text-transform: capitalize;">${escapeHtml(doc.document_type)}</span> • ` : ''}
                                 ${fileSizeMB} MB • ${uploadDate}
                             </div>
+                            <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <span style="font-size: 0.8rem; color: var(--text-secondary);">Validation:</span>
+                                <span style="font-size: 0.78rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${validationMeta.statusStyle}">
+                                    ${validationMeta.statusLabel}
+                                </span>
+                            </div>
+                            ${validationMeta.reason ? `
+                                <div style="font-size: 0.85rem; margin-top: 0.5rem; color: #991b1b;">
+                                    <strong>Reason:</strong> ${escapeHtml(validationMeta.reason)}
+                                </div>
+                            ` : ''}
                             ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
                         </div>
                     </div>
@@ -4292,10 +4466,42 @@ async function deleteDocument(documentId, filename) {
 }
 
 // Rilono AI Chat Functions
+function getMainChatContainers() {
+    const containers = document.querySelectorAll('.rilono-ai-messages[data-main-chat="true"]');
+    if (containers.length > 0) {
+        return Array.from(containers);
+    }
+    const fallback = document.getElementById('rilonoAiChatMessages');
+    return fallback ? [fallback] : [];
+}
+
+function getMainChatForms() {
+    const forms = document.querySelectorAll('.rilono-ai-form[data-main-chat-form="true"]');
+    if (forms.length > 0) {
+        return Array.from(forms);
+    }
+    const fallback = document.getElementById('rilonoAiChatForm');
+    return fallback ? [fallback] : [];
+}
+
+function getMainChatWelcomeMarkup() {
+    return `
+        <div class="rilono-ai-message assistant">
+            <div class="message-avatar">🤖</div>
+            <div class="message-bubble">
+                <p>Hello! I can help with your visa docs, profile status, and next steps.</p>
+            </div>
+        </div>
+    `;
+}
+
 function handleRilonoAiChatKeyDown(event) {
     if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
-        document.getElementById('rilonoAiChatForm').dispatchEvent(new Event('submit'));
+        const form = event.target.closest('form');
+        if (form) {
+            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        }
     }
 }
 
@@ -4304,63 +4510,92 @@ function autoResizeRilonoAiInput(textarea) {
     textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
 }
 
-function sendQuickMessage(message) {
-    const input = document.getElementById('rilonoAiChatInput');
+function sendQuickMessage(message, triggerElement = null) {
+    let input = null;
+    let form = null;
+
+    if (triggerElement) {
+        const chatWidget = triggerElement.closest('.rilono-ai-widget');
+        if (chatWidget) {
+            input = chatWidget.querySelector('.rilono-ai-input');
+            form = chatWidget.querySelector('.rilono-ai-form');
+        }
+    }
+
+    if (!input || !form) {
+        const forms = getMainChatForms();
+        if (forms.length > 0) {
+            form = forms[0];
+            input = form.querySelector('.rilono-ai-input');
+        }
+    }
+
+    if (!input || !form) {
+        return;
+    }
+
     input.value = message;
     autoResizeRilonoAiInput(input);
-    document.getElementById('rilonoAiChatForm').dispatchEvent(new Event('submit'));
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 }
 
 function addMessageToRilonoAiChat(message, isUser = false) {
-    const messagesContainer = document.getElementById('rilonoAiChatMessages');
-    if (!messagesContainer) return;  // Guard: container might not exist
-    
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `rilono-ai-message ${isUser ? 'user' : 'assistant'}`;
-    
-    if (isUser) {
-        messageDiv.innerHTML = `
-            <div class="message-avatar">${currentUser?.full_name?.charAt(0) || currentUser?.username?.charAt(0) || 'U'}</div>
-            <div class="message-bubble">
-                <p>${escapeHtml(message)}</p>
-            </div>
-        `;
-    } else {
-        // Use markdown parser for AI responses
-        messageDiv.innerHTML = `
-            <div class="message-avatar">🤖</div>
-            <div class="message-bubble">
-                <div class="ai-response-content">${markdownToHtml(message)}</div>
-            </div>
-        `;
-    }
-    
-    messagesContainer.appendChild(messageDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    const messagesContainers = getMainChatContainers();
+    if (messagesContainers.length === 0) return;
+
+    messagesContainers.forEach((messagesContainer) => {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `rilono-ai-message ${isUser ? 'user' : 'assistant'}`;
+
+        if (isUser) {
+            messageDiv.innerHTML = `
+                <div class="message-avatar">${currentUser?.full_name?.charAt(0) || currentUser?.username?.charAt(0) || 'U'}</div>
+                <div class="message-bubble">
+                    <p>${escapeHtml(message)}</p>
+                </div>
+            `;
+        } else {
+            // Use markdown parser for AI responses
+            messageDiv.innerHTML = `
+                <div class="message-avatar">🤖</div>
+                <div class="message-bubble">
+                    <div class="ai-response-content">${markdownToHtml(message)}</div>
+                </div>
+            `;
+        }
+
+        messagesContainer.appendChild(messageDiv);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    });
 }
 
 function showRilonoAiTypingIndicator() {
-    const messagesContainer = document.getElementById('rilonoAiChatMessages');
-    const typingDiv = document.createElement('div');
-    typingDiv.id = 'rilonoAiTypingIndicator';
-    typingDiv.className = 'rilono-ai-typing';
-    typingDiv.innerHTML = `
-        <div class="message-avatar">🤖</div>
-        <div class="typing-bubble">
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
-            <div class="typing-dot"></div>
-        </div>
-    `;
-    messagesContainer.appendChild(typingDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    const messagesContainers = getMainChatContainers();
+    if (messagesContainers.length === 0) return;
+
+    messagesContainers.forEach((messagesContainer) => {
+        const existing = messagesContainer.querySelector('.rilono-ai-typing-indicator');
+        if (existing) existing.remove();
+
+        const typingDiv = document.createElement('div');
+        typingDiv.className = 'rilono-ai-typing rilono-ai-typing-indicator';
+        typingDiv.innerHTML = `
+            <div class="message-avatar">🤖</div>
+            <div class="typing-bubble">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>
+        `;
+        messagesContainer.appendChild(typingDiv);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    });
 }
 
 function removeRilonoAiTypingIndicator() {
-    const typingIndicator = document.getElementById('rilonoAiTypingIndicator');
-    if (typingIndicator) {
+    document.querySelectorAll('.rilono-ai-typing-indicator').forEach((typingIndicator) => {
         typingIndicator.remove();
-    }
+    });
 }
 
 // Store conversation history for Rilono AI
@@ -4368,7 +4603,9 @@ let rilonoAiConversationHistory = [];
 
 async function handleRilonoAiChatSubmit(e) {
     e.preventDefault();
-    const input = document.getElementById('rilonoAiChatInput');
+    const form = e.currentTarget;
+    const input = form ? form.querySelector('.rilono-ai-input') : null;
+    if (!input) return;
     const message = input.value.trim();
     
     if (!message) return;
@@ -4521,12 +4758,12 @@ Could you be more specific about what you need help with? Or try one of the quic
 
 // Initialize Rilono AI Chat when tab is shown
 function initializeRilonoAiChat() {
-    const chatForm = document.getElementById('rilonoAiChatForm');
-    if (chatForm) {
+    const chatForms = getMainChatForms();
+    chatForms.forEach((chatForm) => {
         // Remove existing listener to prevent duplicates
         chatForm.removeEventListener('submit', handleRilonoAiChatSubmit);
         chatForm.addEventListener('submit', handleRilonoAiChatSubmit);
-    }
+    });
     // Sync messages from shared history
     syncMainChatFromHistory();
 }
@@ -4620,15 +4857,21 @@ function syncFloatingChatFromHistory() {
 
 // Sync main Rilono AI chat UI from shared conversation history
 function syncMainChatFromHistory() {
-    const messagesContainer = document.getElementById('rilonoAiChatMessages');
-    if (!messagesContainer) return;
-    
-    // Don't clear the initial welcome message area, just add messages if there are any
-    // Clear only the message area (keep welcome if no history)
-    const existingMessages = messagesContainer.querySelectorAll('.rilono-ai-message');
-    existingMessages.forEach(msg => msg.remove());
-    
-    // Rebuild messages from shared history
+    const messagesContainers = getMainChatContainers();
+    if (messagesContainers.length === 0) return;
+
+    messagesContainers.forEach((messagesContainer) => {
+        messagesContainer.innerHTML = '';
+    });
+
+    if (rilonoAiConversationHistory.length === 0) {
+        messagesContainers.forEach((messagesContainer) => {
+            messagesContainer.innerHTML = getMainChatWelcomeMarkup();
+        });
+        return;
+    }
+
+    // Rebuild messages from shared history in all main chat panels
     for (const msg of rilonoAiConversationHistory) {
         addMessageToRilonoAiChat(msg.content, msg.role === 'user');
     }
@@ -4836,4 +5079,3 @@ function handleGalleryKeyPress(e) {
             break;
     }
 }
-

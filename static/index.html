@@ -19,19 +19,6 @@
     <!-- Favicons -->
     <link rel="icon" type="image/png" href="/static/logo.png">
     <link rel="apple-touch-icon" href="/static/logo.png">
-    <!-- Google Places API - Replace YOUR_GOOGLE_API_KEY with your actual API key -->
-    <!-- Get your API key from: https://console.cloud.google.com/google/maps-apis -->
-    <script>
-        // You can set your Google API key here or use an environment variable
-        const GOOGLE_API_KEY = 'YOUR_GOOGLE_API_KEY';
-        if (GOOGLE_API_KEY !== 'YOUR_GOOGLE_API_KEY') {
-            const script = document.createElement('script');
-            script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_API_KEY}&libraries=places`;
-            script.async = true;
-            script.defer = true;
-            document.head.appendChild(script);
-        }
-    </script>
 </head>
 <body>
     <nav class="navbar">
@@ -43,8 +30,7 @@
                 </a>
             </div>
             <div class="nav-links" id="navLinks">
-                <a href="/marketplace" onclick="event.preventDefault(); showMarketplace(); return false;">Marketplace</a>
-                <a href="/sell" onclick="event.preventDefault(); showCreateItem(); return false;" id="createLink" style="display: none;">Sell Item</a>
+                <a href="/pricing" onclick="event.preventDefault(); showPricing(); return false;" id="pricingLink">Pricing</a>
                 <a href="/login" onclick="event.preventDefault(); showLogin(); return false;" id="loginLink">Login</a>
                 <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" id="registerLink">Register</a>
                 <!-- Notification Bell -->
@@ -70,12 +56,6 @@
                     <div class="user-menu-dropdown" id="userMenuDropdown" style="display: none;">
                         <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); toggleUserMenu(); return false;">
                             <span>📊</span> Dashboard
-                        </a>
-                        <a href="/listings" onclick="event.preventDefault(); showMyListings(); toggleUserMenu(); return false;">
-                            <span>📦</span> My Listings
-                        </a>
-                        <a href="/messages" onclick="toggleUserMenu(); return true;">
-                            <span>💬</span> Messages <span id="unreadBadge" style="display: none; background: var(--danger-color); color: white; padding: 0.125rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; margin-left: 0.5rem;">0</span>
                         </a>
                         <a href="#" onclick="logout(); toggleUserMenu(); return false;">
                             <span>🚪</span> Logout
@@ -542,9 +522,6 @@
                             <span>Go to Dashboard</span>
                             <span class="btn-icon">→</span>
                         </a>
-                        <a href="/marketplace" onclick="event.preventDefault(); showMarketplace(); return false;" class="btn btn-cta-secondary btn-large">
-                            <span>Explore Student Marketplace</span>
-                        </a>
                     </div>
                     <div class="cta-features">
                         <div class="cta-feature">
@@ -566,121 +543,6 @@
     </div>
 
     <div class="container">
-        <!-- Marketplace / Browse Items -->
-        <div id="marketplaceSection" class="section" style="display: none;">
-            <div class="search-bar">
-                <input type="text" id="searchInput" placeholder="Search items...">
-                <select id="categoryFilter">
-                    <option value="">All Categories</option>
-                    <option value="textbooks">Textbooks</option>
-                    <option value="electronics">Electronics</option>
-                    <option value="furniture">Furniture</option>
-                    <option value="clothing">Clothing</option>
-                    <option value="sports">Sports</option>
-                    <option value="sublease">Sublease</option>
-                    <option value="other">Other</option>
-                </select>
-                <div class="price-filter">
-                    <input type="number" id="minPrice" placeholder="Min $" step="0.01">
-                    <input type="number" id="maxPrice" placeholder="Max $" step="0.01">
-                </div>
-                <button onclick="loadItems(); return false;" class="btn btn-primary">Search</button>
-            </div>
-            <div id="itemsGrid" class="items-grid">
-                <!-- Items will be loaded here -->
-            </div>
-        </div>
-
-        <!-- Create Item Form -->
-        <div id="createItemSection" class="section" style="display: none;">
-            <div class="form-card">
-                <h2 id="itemFormTitle">List an Item for Sale</h2>
-                <form id="createItemForm">
-                    <input type="hidden" id="editingItemId" value="">
-                    <div class="form-group">
-                        <label for="itemTitle">Title *</label>
-                        <input type="text" id="itemTitle" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="itemDescription">Description</label>
-                        <textarea id="itemDescription" rows="4"></textarea>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="itemPrice">Price ($) *</label>
-                            <input type="number" id="itemPrice" step="0.01" min="0" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="itemCategory">Category</label>
-                            <select id="itemCategory">
-                                <option value="">Select Category</option>
-                                <option value="textbooks">Textbooks</option>
-                                <option value="electronics">Electronics</option>
-                                <option value="furniture">Furniture</option>
-                                <option value="clothing">Clothing</option>
-                                <option value="sports">Sports</option>
-                                <option value="sublease">Sublease</option>
-                                <option value="other">Other</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label for="itemCondition">Condition</label>
-                        <select id="itemCondition">
-                            <option value="">Select Condition</option>
-                            <option value="new">New</option>
-                            <option value="like_new">Like New</option>
-                            <option value="good">Good</option>
-                            <option value="fair">Fair</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="itemImageFiles">Upload Images</label>
-                        <input type="file" id="itemImageFiles" accept="image/*" multiple>
-                        <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                            Select multiple images (max 10, 5MB each, formats: JPG, PNG, GIF, WebP)
-                        </small>
-                    </div>
-                    <div id="imagePreviews" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 1rem; margin-top: 1rem;">
-                        <!-- Image previews will be added here -->
-                    </div>
-                    <div class="form-group">
-                        <label for="itemAddress">Pickup Location</label>
-                        <input type="text" id="itemAddress" placeholder="Start typing your address..." autocomplete="off">
-                        <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                            Enter the address where buyers can pick up the item (optional)
-                        </small>
-                        <div id="addressAutocomplete" style="display: none; position: absolute; z-index: 1000; background: white; border: 1px solid var(--border-color); border-radius: 0.5rem; max-height: 200px; overflow-y: auto; width: 100%; box-shadow: var(--shadow-lg);"></div>
-                    </div>
-                    <div class="form-row" style="display: none;" id="addressDetails">
-                        <div class="form-group">
-                            <label for="itemCity">City</label>
-                            <input type="text" id="itemCity" readonly>
-                        </div>
-                        <div class="form-group">
-                            <label for="itemState">State</label>
-                            <input type="text" id="itemState" readonly>
-                        </div>
-                        <div class="form-group">
-                            <label for="itemZipCode">Zip Code</label>
-                            <input type="text" id="itemZipCode" readonly>
-                        </div>
-                    </div>
-                    <input type="hidden" id="itemLatitude">
-                    <input type="hidden" id="itemLongitude">
-                    <button type="submit" class="btn btn-primary" id="itemSubmitButton">List Item</button>
-                </form>
-            </div>
-        </div>
-
-        <!-- My Listings -->
-        <div id="myListingsSection" class="section" style="display: none;">
-            <h2>My Listings</h2>
-            <div id="myItemsGrid" class="items-grid">
-                <!-- User's items will be loaded here -->
-            </div>
-        </div>
-
         <!-- Dashboard Section -->
         <div id="dashboardSection" class="section" style="display: none;">
             <div class="dashboard-container">
@@ -706,6 +568,10 @@
                             <span class="nav-icon">🛂</span>
                             <span class="nav-label">Visa Status</span>
                         </a>
+                        <a href="#" class="nav-item" data-tab="news" onclick="switchDashboardTab('news'); return false;">
+                            <span class="nav-icon">📰</span>
+                            <span class="nav-label">News</span>
+                        </a>
                         <a href="#" class="nav-item" data-tab="records" onclick="switchDashboardTab('records'); return false;">
                             <span class="nav-icon">🤖</span>
                             <span class="nav-label">Rilono AI</span>
@@ -721,7 +587,9 @@
                             <h2>Overview</h2>
                             <p class="tab-subtitle">Your dashboard at a glance</p>
                         </div>
-            <div class="dashboard-grid">
+                        <div class="overview-layout">
+                            <div class="overview-main">
+                                <div class="dashboard-grid overview-main-grid">
                             <!-- F1 Visa Journey Tracker Widget -->
                             <div class="dashboard-widget" style="grid-column: 1 / -1;">
                                 <div class="widget-header">
@@ -794,33 +662,116 @@
                                     </div>
                                 </div>
                             </div>
-                            
-                            <!-- Profile Completion Widget -->
+
+                            <!-- Document Health Widget -->
                             <div class="dashboard-widget" style="grid-column: 1 / -1;">
                                 <div class="widget-header">
-                                    <h3>📋 Profile Completion</h3>
+                                    <h3>📄 Document Health</h3>
                                 </div>
                                 <div class="widget-content">
-                                    <div style="padding: 1rem;">
-                                        <!-- Profile Completion Percentage -->
-                                        <div style="margin-bottom: 1.5rem;">
-                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                                                <span style="font-weight: 600; color: var(--text-primary);">Profile Completion</span>
-                                                <span id="profileCompletionPercent" style="font-weight: 700; font-size: 1.25rem; color: var(--primary-color);">-</span>
-                                            </div>
-                                            <div style="background: var(--bg-color); border-radius: 0.5rem; height: 12px; overflow: hidden; position: relative;">
-                                                <div id="profileCompletionBar" style="background: linear-gradient(90deg, var(--primary-color) 0%, var(--secondary-color) 100%); height: 100%; width: 0%; transition: width 0.5s ease; border-radius: 0.5rem;"></div>
+                                    <div class="overview-health-head">
+                                        <div>
+                                            <div class="overview-health-title">Validation Overview</div>
+                                            <div class="overview-health-subtitle">Status of uploaded documents and AI checks</div>
+                                        </div>
+                                        <div id="overviewDocumentHealthStatus" class="overview-health-badge">No Data</div>
+                                    </div>
+
+                                    <div class="overview-health-grid">
+                                        <div class="overview-health-stat">
+                                            <div class="overview-health-label">Uploaded</div>
+                                            <div id="overviewTotalUploaded" class="overview-health-value">0</div>
+                                        </div>
+                                        <div class="overview-health-stat">
+                                            <div class="overview-health-label">Unique Types</div>
+                                            <div id="overviewUniqueTypes" class="overview-health-value">0</div>
+                                        </div>
+                                        <div class="overview-health-stat">
+                                            <div class="overview-health-label">Validated</div>
+                                            <div id="overviewValidatedCount" class="overview-health-value">0</div>
+                                        </div>
+                                        <div class="overview-health-stat">
+                                            <div class="overview-health-label">Needs Review</div>
+                                            <div id="overviewNeedsReviewCount" class="overview-health-value">0</div>
+                                        </div>
+                                        <div class="overview-health-stat">
+                                            <div class="overview-health-label">Pending Validation</div>
+                                            <div id="overviewPendingValidationCount" class="overview-health-value">0</div>
+                                        </div>
+                                        <div class="overview-health-stat">
+                                            <div class="overview-health-label">Processed</div>
+                                            <div id="overviewProcessedCount" class="overview-health-value">0</div>
+                                        </div>
+                                    </div>
+
+                                    <div class="overview-health-rate">
+                                        <div class="overview-health-rate-header">
+                                            <span>Validation Rate</span>
+                                            <span id="overviewValidationRate">0%</span>
+                                        </div>
+                                        <div class="overview-health-rate-track">
+                                            <div id="overviewValidationRateBar" class="overview-health-rate-fill" style="width: 0%;"></div>
+                                        </div>
+                                    </div>
+
+                                    <div class="overview-health-list-wrap">
+                                        <div class="overview-health-list-title">Recent Validation Notes</div>
+                                        <div id="overviewValidationList" class="overview-health-list">
+                                            <div class="overview-health-empty">No documents uploaded yet.</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                        </div>
+                            </div>
+                            <div class="overview-chat-column">
+                                <div class="rilono-ai-widget overview-chat-widget">
+                                    <div class="rilono-ai-header">
+                                        <div class="rilono-ai-header-info">
+                                            <div class="rilono-ai-avatar">🤖</div>
+                                            <div>
+                                                <h3 class="rilono-ai-title">Rilono AI Assistant</h3>
+                                                <div class="rilono-ai-status">
+                                                    <span id="overviewAiStatusIndicator" class="status-dot"></span>
+                                                    <span>Online</span>
+                                                </div>
                                             </div>
                                         </div>
-                                        
-                                        <!-- Pending Documents -->
-                                        <div>
-                                            <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.75rem;">Pending Documents</div>
-                                            <div id="pendingDocumentsList" style="min-height: 50px;">
-                                                <p style="color: var(--text-secondary); text-align: center; padding: 0.5rem; font-size: 0.875rem;">Loading...</p>
+                                    </div>
+                                    <div class="rilono-ai-content">
+                                        <div id="overviewRilonoAiChatMessages" class="rilono-ai-messages" data-main-chat="true">
+                                            <div class="rilono-ai-message assistant">
+                                                <div class="message-avatar">🤖</div>
+                                                <div class="message-bubble">
+                                                    <p>Hello! I can help with your visa docs, profile status, and next steps.</p>
+                                                </div>
                                             </div>
-                                            <div style="margin-top: 1rem;">
-                                                <a href="#" onclick="event.preventDefault(); switchDashboardTab('documents'); return false;" class="btn btn-primary" style="width: 100%; font-size: 0.875rem; padding: 0.75rem;">Upload Documents</a>
+                                        </div>
+                                        <div class="rilono-ai-input-area">
+                                            <form id="overviewRilonoAiChatForm" class="rilono-ai-form" data-main-chat-form="true">
+                                                <div class="input-wrapper">
+                                                    <textarea
+                                                        id="overviewRilonoAiChatInput"
+                                                        rows="1"
+                                                        placeholder="Ask a question..."
+                                                        class="rilono-ai-input"
+                                                        onkeydown="handleRilonoAiChatKeyDown(event)"
+                                                        oninput="autoResizeRilonoAiInput(this)"
+                                                    ></textarea>
+                                                    <button type="submit" id="overviewRilonoAiSendButton" class="rilono-ai-send-btn">➤</button>
+                                                </div>
+                                            </form>
+                                            <div class="rilono-ai-quick-actions">
+                                                <button type="button" class="quick-action-chip" onclick="sendQuickMessage('What documents do I need to upload?', this)">
+                                                    Document Checklist
+                                                </button>
+                                                <button type="button" class="quick-action-chip" onclick="sendQuickMessage('What is my profile completion status?', this)">
+                                                    Profile Status
+                                                </button>
+                                                <button type="button" class="quick-action-chip" onclick="sendQuickMessage('Help me with visa application process', this)">
+                                                    Visa Help
+                                                </button>
                                             </div>
                                         </div>
                                     </div>
@@ -1039,6 +990,27 @@
                     </div>
                 </div>
 
+                    <!-- News Tab -->
+                    <div id="dashboardTab-news" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>News</h2>
+                            <p class="tab-subtitle">Latest visa and student updates</p>
+                        </div>
+                        <div class="dashboard-grid">
+                            <div class="dashboard-widget" style="grid-column: 1 / -1;">
+                                <div class="widget-header">
+                                    <h3>📰 News</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div style="padding: 1.5rem; text-align: center;">
+                                        <p style="font-size: 1.15rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--text-primary);">Coming Soon</p>
+                                        <p style="color: var(--text-secondary); margin: 0;">This section will show curated news relevant to your visa journey.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Rilono AI Tab -->
                     <div id="dashboardTab-records" class="dashboard-tab">
                         <div class="tab-header">
@@ -1061,7 +1033,7 @@
                                 </div>
                                 <div class="rilono-ai-content">
                                     <!-- Chat Messages Area -->
-                                    <div id="rilonoAiChatMessages" class="rilono-ai-messages">
+                                    <div id="rilonoAiChatMessages" class="rilono-ai-messages" data-main-chat="true">
                                         <!-- Welcome Message -->
                                         <div class="rilono-ai-message assistant">
                                             <div class="message-avatar">🤖</div>
@@ -1080,7 +1052,7 @@
                                     
                                     <!-- Chat Input Area -->
                                     <div class="rilono-ai-input-area">
-                                        <form id="rilonoAiChatForm" class="rilono-ai-form">
+                                        <form id="rilonoAiChatForm" class="rilono-ai-form" data-main-chat-form="true">
                                             <div class="input-wrapper">
                                                 <textarea 
                                                     id="rilonoAiChatInput" 
@@ -1094,13 +1066,13 @@
                                             </div>
                                         </form>
                                         <div class="rilono-ai-quick-actions">
-                                            <button type="button" class="quick-action-chip" onclick="sendQuickMessage('What documents do I need to upload?')">
+                                            <button type="button" class="quick-action-chip" onclick="sendQuickMessage('What documents do I need to upload?', this)">
                                                 📋 Document Checklist
                                             </button>
-                                            <button type="button" class="quick-action-chip" onclick="sendQuickMessage('What is my profile completion status?')">
+                                            <button type="button" class="quick-action-chip" onclick="sendQuickMessage('What is my profile completion status?', this)">
                                                 📊 Profile Status
                                             </button>
-                                            <button type="button" class="quick-action-chip" onclick="sendQuickMessage('Help me with visa application process')">
+                                            <button type="button" class="quick-action-chip" onclick="sendQuickMessage('Help me with visa application process', this)">
                                                 🛂 Visa Help
                                             </button>
                                         </div>
@@ -1112,6 +1084,63 @@
             </div>
         </div>
 
+    </div>
+
+    <!-- Pricing Section -->
+    <div id="pricingSection" class="section" style="display: none;">
+        <div class="pricing-page">
+            <div class="pricing-header">
+                <h1>Pricing</h1>
+                <p>Simple plans for every stage of your visa journey.</p>
+                <div class="pricing-controls">
+                    <label for="pricingCountrySelect">Country</label>
+                    <select id="pricingCountrySelect" onchange="handlePricingCountryChange(this.value)">
+                        <option value="US">United States</option>
+                        <option value="IN">India</option>
+                        <option value="GB">United Kingdom</option>
+                        <option value="CA">Canada</option>
+                        <option value="AU">Australia</option>
+                        <option value="DE">Germany</option>
+                        <option value="AE">United Arab Emirates</option>
+                        <option value="SG">Singapore</option>
+                        <option value="JP">Japan</option>
+                    </select>
+                    <div id="pricingCurrencyHint" class="pricing-currency-hint">Currency: USD</div>
+                </div>
+            </div>
+
+            <div class="pricing-grid">
+                <div class="pricing-card pricing-card-free">
+                    <div class="pricing-card-head">
+                        <h2>Free</h2>
+                        <p>For getting started</p>
+                    </div>
+                    <div id="pricingFreePrice" class="pricing-price">$0<span>/month</span></div>
+                    <ul class="pricing-features">
+                        <li>Up to 25 messages with Rilono AI</li>
+                        <li>Up to 5 document uploads</li>
+                        <li>Dashboard and visa journey tracking</li>
+                    </ul>
+                    <a href="#" onclick="event.preventDefault(); if(authToken){showDashboard();} else {showRegister();} return false;" class="btn btn-primary">Start Free</a>
+                </div>
+
+                <div class="pricing-card pricing-card-pro">
+                    <div class="pricing-badge">Pro</div>
+                    <div class="pricing-card-head">
+                        <h2>Pro</h2>
+                        <p>For serious applicants</p>
+                    </div>
+                    <div id="pricingProPrice" class="pricing-price">$19<span>/month</span></div>
+                    <ul class="pricing-features">
+                        <li>Unlimited messages with Rilono AI</li>
+                        <li>Unlimited document uploads</li>
+                        <li>Priority support</li>
+                    </ul>
+                    <button type="button" class="btn btn-primary" onclick="showMessage('Pro billing is coming soon.', 'success')">Upgrade to Pro</button>
+                </div>
+            </div>
+            <p class="pricing-disclaimer">Prices are shown in local currency using reference exchange rates.</p>
+        </div>
     </div>
 
     <!-- Contact Us Section -->
@@ -1194,7 +1223,7 @@
             
             <section>
                 <h2>1. Introduction</h2>
-                <p>Welcome to Rilono ("we," "our," or "us"). We are committed to protecting your privacy and ensuring you have a positive experience on our platform. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our AI-powered visa documentation platform and student marketplace.</p>
+                <p>Welcome to Rilono ("we," "our," or "us"). We are committed to protecting your privacy and ensuring you have a positive experience on our platform. This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our AI-powered visa documentation platform.</p>
             </section>
 
             <section>
@@ -1203,9 +1232,9 @@
                 <ul>
                     <li><strong>Account Information:</strong> Email address, username, password, full name, university, and phone number</li>
                     <li><strong>Profile Information:</strong> Profile picture and any additional information you choose to provide</li>
-                    <li><strong>Item Listings:</strong> Item titles, descriptions, prices, images, categories, conditions, and location information</li>
-                    <li><strong>Messages:</strong> Content of messages sent through our messaging system</li>
-                    <li><strong>Location Data:</strong> Address, city, state, zip code, and coordinates (latitude/longitude) for item pickup locations</li>
+                    <li><strong>Document Uploads:</strong> File names, types, metadata you provide, and extracted text for processing</li>
+                    <li><strong>Documentation Preferences:</strong> Target country, intake, and year</li>
+                    <li><strong>AI Chat:</strong> Messages you send to the AI assistant</li>
                 </ul>
 
                 <h3>2.2 Automatically Collected Information</h3>
@@ -1221,7 +1250,7 @@
                 <p>We use the information we collect to:</p>
                 <ul>
                     <li>Provide, maintain, and improve our services</li>
-                    <li>Process transactions and facilitate communication between buyers and sellers</li>
+                    <li>Process document uploads, validation, and AI responses</li>
                     <li>Send you important updates, notifications, and administrative messages</li>
                     <li>Respond to your inquiries and provide customer support</li>
                     <li>Detect, prevent, and address technical issues and fraudulent activity</li>
@@ -1234,9 +1263,7 @@
                 <h2>4. How We Share Your Information</h2>
                 <p>We do not sell your personal information. We may share your information in the following circumstances:</p>
                 <ul>
-                    <li><strong>Public Profile Information:</strong> Your username, profile picture, and university may be visible to other users when you list items or send messages</li>
-                    <li><strong>Item Listings:</strong> Information you provide in item listings (title, description, images, location) is publicly visible to all users</li>
-                    <li><strong>Service Providers:</strong> We may share information with third-party service providers who assist us in operating our platform (e.g., hosting, analytics)</li>
+                    <li><strong>Service Providers:</strong> We may share information with third-party service providers who assist us in operating our platform (e.g., hosting, analytics, storage, AI processing)</li>
                     <li><strong>Legal Requirements:</strong> We may disclose information if required by law or to protect our rights and safety</li>
                     <li><strong>Business Transfers:</strong> In the event of a merger, acquisition, or sale of assets, your information may be transferred</li>
                 </ul>
@@ -1318,7 +1345,7 @@
 
             <section>
                 <h2>2. Description of Service</h2>
-                <p>Rilono is an AI-powered visa documentation platform that helps students organize their visa documents, receive AI guidance, and prepare for visa interviews. We also provide a student marketplace where users can buy and sell items. We provide a platform for document management and connecting buyers and sellers, but are not a party to any transactions between users nor do we provide legal or immigration advice.</p>
+                <p>Rilono is an AI-powered visa documentation platform that helps students organize their visa documents, receive AI guidance, and prepare for visa interviews. We provide document management and informational guidance, but do not provide legal or immigration advice.</p>
             </section>
 
             <section>
@@ -1340,9 +1367,9 @@
                 <p>You agree not to:</p>
                 <ul>
                     <li>Post false, misleading, or fraudulent information</li>
-                    <li>List prohibited items (weapons, drugs, stolen goods, etc.)</li>
+                    <li>Upload documents or content you do not own or have permission to use</li>
                     <li>Harass, threaten, or abuse other users</li>
-                    <li>Spam, scam, or engage in fraudulent transactions</li>
+                    <li>Spam or attempt to misuse the platform</li>
                     <li>Violate any applicable laws or regulations</li>
                     <li>Infringe on intellectual property rights</li>
                     <li>Interfere with or disrupt the platform's functionality</li>
@@ -1352,52 +1379,47 @@
             </section>
 
             <section>
-                <h2>5. Item Listings</h2>
-                <h3>5.1 Listing Requirements</h3>
+                <h2>5. Document Uploads</h2>
+                <h3>5.1 Upload Requirements</h3>
                 <ul>
-                    <li>All item descriptions must be accurate and truthful</li>
-                    <li>Images must accurately represent the item</li>
-                    <li>Prices must be clearly stated</li>
-                    <li>Items must be legal to buy and sell in your jurisdiction</li>
+                    <li>All uploaded documents must be accurate and lawful to store</li>
+                    <li>You must have the rights or permission to upload the files</li>
+                    <li>Files must comply with size and type limits described in the platform</li>
                 </ul>
 
-                <h3>5.2 Prohibited Items</h3>
-                <p>You may not list items that are:</p>
+                <h3>5.2 Prohibited Content</h3>
+                <p>You may not upload content that is:</p>
                 <ul>
-                    <li>Illegal or regulated (weapons, drugs, alcohol, etc.)</li>
-                    <li>Stolen or counterfeit</li>
-                    <li>Hazardous materials</li>
-                    <li>Live animals (except as permitted by law)</li>
-                    <li>Adult content or explicit material</li>
-                    <li>Items that violate intellectual property rights</li>
+                    <li>Illegal, harmful, or malicious</li>
+                    <li>Stolen or confidential without authorization</li>
+                    <li>Explicitly abusive or harassing</li>
+                    <li>In violation of intellectual property rights</li>
                 </ul>
 
-                <h3>5.3 Listing Moderation</h3>
-                <p>We reserve the right to remove, edit, or reject any listing that violates these Terms or our community guidelines.</p>
+                <h3>5.3 Moderation</h3>
+                <p>We reserve the right to remove or restrict access to content that violates these Terms or applicable laws.</p>
             </section>
 
             <section>
-                <h2>6. Transactions</h2>
-                <h3>6.1 Buyer and Seller Responsibilities</h3>
+                <h2>6. AI Guidance</h2>
+                <h3>6.1 Informational Use</h3>
                 <ul>
-                    <li>Buyers and sellers are responsible for negotiating terms of sale</li>
-                    <li>All transactions are between users; Rilono is not a party to any transaction</li>
-                    <li>Users are responsible for payment processing and delivery arrangements</li>
-                    <li>We do not guarantee the quality, safety, or legality of items listed</li>
+                    <li>AI responses are provided for informational purposes only</li>
+                    <li>We do not provide legal or immigration advice</li>
+                    <li>You are responsible for verifying information and making your own decisions</li>
                 </ul>
 
-                <h3>6.2 Disputes</h3>
-                <p>Any disputes between buyers and sellers must be resolved directly between the parties. Rilono is not responsible for resolving disputes, though we may provide tools to facilitate communication.</p>
+                <h3>6.2 Limitations</h3>
+                <p>AI outputs may be incomplete or incorrect. You should consult qualified professionals for legal or immigration guidance.</p>
             </section>
 
             <section>
-                <h2>7. Messaging</h2>
-                <p>Our messaging system is intended for communication related to items and transactions. You agree not to:</p>
+                <h2>7. Communications</h2>
+                <p>Any communications provided through the platform (including AI chat and support interactions) must be used responsibly. You agree not to:</p>
                 <ul>
                     <li>Send spam, unsolicited messages, or advertisements</li>
-                    <li>Harass, threaten, or abuse other users</li>
-                    <li>Share personal contact information to circumvent our platform</li>
-                    <li>Use messaging for any illegal purpose</li>
+                    <li>Harass, threaten, or abuse others</li>
+                    <li>Use communications for any illegal purpose</li>
                 </ul>
             </section>
 
@@ -1468,6 +1490,7 @@
     <footer class="footer">
         <div class="footer-content">
             <div class="footer-links">
+                <a href="#" onclick="event.preventDefault(); showPricing(); return false;">Pricing</a>
                 <a href="#" onclick="event.preventDefault(); showContact(); return false;">Contact Us</a>
                 <a href="#" onclick="event.preventDefault(); showPrivacy(); return false;">Privacy Policy</a>
                 <a href="#" onclick="event.preventDefault(); showTerms(); return false;">Terms & Conditions</a>
@@ -1607,4 +1630,3 @@
     <script src="/static/app.js"></script>
 </body>
 </html>
-

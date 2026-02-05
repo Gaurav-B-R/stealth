@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
-from app.routers import auth, items, upload, messages, profile, documents, ai_chat
+from app.routers import auth, upload, profile, documents, ai_chat
 import os
 
 # Create database tables
@@ -26,9 +26,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router)
-app.include_router(items.router)
 app.include_router(upload.router)
-app.include_router(messages.router)
 app.include_router(profile.router)
 app.include_router(documents.router)
 app.include_router(ai_chat.router)
@@ -55,14 +53,6 @@ async def read_root():
 def health_check():
     return {"status": "healthy"}
 
-@app.get("/messages")
-async def read_messages():
-    """Serve the messages HTML page"""
-    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "pages", "messages.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
-    return {"detail": "Messages page not found"}
-
 # Catch-all route for client-side routing
 # This must be last to allow API routes to work
 @app.get("/{full_path:path}")
@@ -76,4 +66,3 @@ async def serve_spa(full_path: str):
     if os.path.exists(html_path):
         return FileResponse(html_path)
     return {"message": "Rilono API", "docs": "/docs"}
-

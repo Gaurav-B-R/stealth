@@ -61,7 +61,7 @@ def send_verification_email(email: str, verification_token: str, base_url: str =
             <p style="font-size: 16px; margin-bottom: 20px;">Hi there,</p>
             
             <p style="font-size: 16px; margin-bottom: 20px;">
-                Thank you for signing up for Rilono! To complete your registration and start using our student marketplace, 
+                Thank you for signing up for Rilono! To complete your registration and start using the platform,
                 please verify your email address by clicking the button below:
             </p>
             
@@ -89,7 +89,7 @@ def send_verification_email(email: str, verification_token: str, base_url: str =
         
         <div style="text-align: center; margin-top: 30px; padding: 20px; color: #9ca3af; font-size: 12px;">
             <p style="margin: 0;">© 2025 Rilono. All rights reserved.</p>
-            <p style="margin: 5px 0 0 0;">Your Student Marketplace</p>
+            <p style="margin: 5px 0 0 0;">Your F1 Visa Documentation Companion</p>
         </div>
     </body>
     </html>
