@@ -667,11 +667,11 @@ async def submit_contact_form(
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Please provide a valid email address")
     
-    if not subject or len(subject.strip()) < 3:
+    if not subject or len(subject.strip()) < 1:
         raise HTTPException(status_code=400, detail="Please provide a subject")
     
-    if not message or len(message.strip()) < 10:
-        raise HTTPException(status_code=400, detail="Please provide a message (at least 10 characters)")
+    if not message or len(message.strip()) < 1:
+        raise HTTPException(status_code=400, detail="Please provide a message")
     
     # Send the email
     success = send_contact_form_email(
