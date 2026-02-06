@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import engine, Base
-from app.routers import auth, upload, profile, documents, ai_chat
+from app.database import engine, Base, SessionLocal
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription
+from app.subscriptions import backfill_missing_subscriptions
 import os
 
 # Create database tables
@@ -30,6 +31,18 @@ app.include_router(upload.router)
 app.include_router(profile.router)
 app.include_router(documents.router)
 app.include_router(ai_chat.router)
+app.include_router(pricing.router)
+app.include_router(subscription.router)
+
+
+@app.on_event("startup")
+def startup_backfill_subscriptions():
+    """Ensure existing users have default Free subscriptions."""
+    db = SessionLocal()
+    try:
+        backfill_missing_subscriptions(db)
+    finally:
+        db.close()
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

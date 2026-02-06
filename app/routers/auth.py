@@ -13,6 +13,7 @@ from app.auth import (
 )
 from app.email_service import generate_verification_token, send_verification_email, send_password_reset_email
 from app.utils.turnstile import verify_turnstile_token
+from app.subscriptions import get_or_create_user_subscription
 import os
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
@@ -161,6 +162,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
+    get_or_create_user_subscription(db, db_user.id)
     
     # Send verification email
     base_url = os.getenv("BASE_URL", "http://localhost:8000")
@@ -245,6 +247,9 @@ async def login(
                     status_code=403,
                     detail="Your account email domain is no longer valid. Please contact support."
                 )
+
+    # Ensure legacy users also have a default subscription record.
+    get_or_create_user_subscription(db, user.id)
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     # Store email in token instead of username
@@ -254,7 +259,11 @@ async def login(
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.get("/me", response_model=schemas.UserResponse)
-def read_users_me(current_user: models.User = Depends(get_current_active_user)):
+def read_users_me(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    get_or_create_user_subscription(db, current_user.id)
     return current_user
 
 @router.post("/forgot-password")
@@ -689,4 +698,3 @@ async def submit_contact_form(
             status_code=500,
             detail="Failed to send your message. Please try again or email us directly at contact@rilono.com"
         )
-

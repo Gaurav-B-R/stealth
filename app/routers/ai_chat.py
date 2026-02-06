@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_active_user
+from app.subscriptions import get_or_create_user_subscription, get_plan_limits
 # Import Gemini configuration
 from app.utils import gemini_service as gemini_utils
 from typing import Optional, List
@@ -329,6 +330,18 @@ async def chat_with_ai(
     Document JSON files are attached to the prompt for detailed context.
     """
     try:
+        subscription = get_or_create_user_subscription(db, current_user.id)
+        limits = get_plan_limits(subscription.plan)
+        ai_limit = limits["ai_messages_limit"]
+        if ai_limit >= 0 and subscription.ai_messages_used >= ai_limit:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Free plan message limit reached ({ai_limit}). "
+                    "Upgrade to Pro for unlimited Rilono AI messages."
+                )
+            )
+
         # Get user's name
         user_name = current_user.full_name or current_user.username or "Student"
         
@@ -351,6 +364,10 @@ async def chat_with_ai(
             document_files=document_files,
             conversation_history=chat_message.conversation_history
         )
+
+        # Count only successful AI responses toward message usage.
+        subscription.ai_messages_used += 1
+        db.commit()
         
         return ChatResponse(response=response_text)
         
@@ -361,4 +378,3 @@ async def chat_with_ai(
             status_code=500,
             detail=f"An error occurred: {str(e)}"
         )
-

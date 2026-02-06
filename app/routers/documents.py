@@ -13,6 +13,7 @@ from app.utils.security import (
     decode_salt_from_storage
 )
 from app.utils.gemini_service import extract_text_from_document, create_extracted_text_file, validate_and_extract_document
+from app.subscriptions import get_or_create_user_subscription, get_plan_limits
 from typing import Optional, List
 import os
 import uuid
@@ -134,6 +135,28 @@ async def upload_document(
             status_code=401,
             detail="Incorrect password. Please provide your login password to encrypt the document."
         )
+
+    # Enforce subscription upload limits
+    subscription = get_or_create_user_subscription(db, current_user.id)
+    limits = get_plan_limits(subscription.plan)
+    upload_limit = limits["document_uploads_limit"]
+    if upload_limit >= 0:
+        if subscription.document_uploads_used <= 0:
+            existing_uploads = db.query(models.Document).filter(
+                models.Document.user_id == current_user.id
+            ).count()
+            if existing_uploads > 0:
+                subscription.document_uploads_used = existing_uploads
+                db.commit()
+                db.refresh(subscription)
+        if subscription.document_uploads_used >= upload_limit:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Free plan upload limit reached ({upload_limit}). "
+                    "Upgrade to Pro for unlimited document uploads."
+                )
+            )
     
     # Validate file extension
     if not is_allowed_document(file.filename):
@@ -281,6 +304,10 @@ async def upload_document(
             details=validation_result if validation_result else None
         )
     )
+
+    # Count this successful upload toward subscription usage.
+    subscription.document_uploads_used += 1
+    db.commit()
     
     return response_data
 

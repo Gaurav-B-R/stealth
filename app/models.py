@@ -35,6 +35,7 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
+    subscription = relationship("Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
 class USUniversity(Base):
     __tablename__ = "us_universities"
@@ -74,3 +75,20 @@ class Document(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     uploader = relationship("User", back_populates="documents")
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    plan = Column(String, nullable=False, default="free")  # free | pro
+    status = Column(String, nullable=False, default="active")  # active | canceled
+    ai_messages_used = Column(Integer, nullable=False, default=0)
+    document_uploads_used = Column(Integer, nullable=False, default=0)
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    ends_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="subscription")

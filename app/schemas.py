@@ -29,6 +29,18 @@ class UserResponse(UserBase):
     class Config:
         from_attributes = True
 
+
+class SubscriptionResponse(BaseModel):
+    plan: str
+    status: str
+    ai_messages_used: int
+    ai_messages_limit: int
+    ai_messages_remaining: int
+    document_uploads_used: int
+    document_uploads_limit: int
+    document_uploads_remaining: int
+    is_pro: bool
+
 class Token(BaseModel):
     access_token: str
     token_type: str

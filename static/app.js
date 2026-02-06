@@ -1,6 +1,7 @@
 const API_BASE = '';
 let currentUser = null;
 let authToken = null;
+let currentSubscription = null;
 let turnstileSiteKey = null;
 let turnstileWidgetIds = {
     login: null,
@@ -17,16 +18,34 @@ const PRICING_BASE_USD = {
 };
 
 const PRICING_COUNTRY_CONFIG = {
-    US: { country: 'United States', currency: 'USD', rate: 1.0 },
-    IN: { country: 'India', currency: 'INR', rate: 83.2 },
-    GB: { country: 'United Kingdom', currency: 'GBP', rate: 0.79 },
-    CA: { country: 'Canada', currency: 'CAD', rate: 1.35 },
-    AU: { country: 'Australia', currency: 'AUD', rate: 1.53 },
-    DE: { country: 'Germany', currency: 'EUR', rate: 0.92 },
-    AE: { country: 'United Arab Emirates', currency: 'AED', rate: 3.67 },
-    SG: { country: 'Singapore', currency: 'SGD', rate: 1.35 },
-    JP: { country: 'Japan', currency: 'JPY', rate: 149.0 }
+    US: { country: 'United States', currency: 'USD' },
+    IN: { country: 'India', currency: 'INR' },
+    GB: { country: 'United Kingdom', currency: 'GBP' },
+    CA: { country: 'Canada', currency: 'CAD' },
+    AU: { country: 'Australia', currency: 'AUD' },
+    DE: { country: 'Germany', currency: 'EUR' },
+    AE: { country: 'United Arab Emirates', currency: 'AED' },
+    SG: { country: 'Singapore', currency: 'SGD' },
+    JP: { country: 'Japan', currency: 'JPY' }
 };
+
+const PRICING_FALLBACK_RATES = {
+    USD: 1.0,
+    INR: 83.2,
+    GBP: 0.79,
+    CAD: 1.35,
+    AUD: 1.53,
+    EUR: 0.92,
+    AED: 3.67,
+    SGD: 1.35,
+    JPY: 149.0
+};
+
+const PRICING_RATES_CACHE_WINDOW_MS = 60 * 60 * 1000;
+let pricingRatesByCurrency = { ...PRICING_FALLBACK_RATES };
+let pricingRatesMeta = { source: 'fallback', providerDate: null, stale: true, missingCurrencies: [] };
+let pricingRatesFetchedAt = 0;
+let pricingRatesRequestPromise = null;
 
 // URL Routing System
 let isNavigating = false; // Flag to prevent recursive navigation
@@ -336,19 +355,26 @@ async function checkAuth() {
             if (response.ok) {
                 currentUser = await response.json();
                 updateUIForAuth();
+                await loadSubscriptionStatus(true);
                 return true;
             } else {
                 localStorage.removeItem('authToken');
                 authToken = null;
+                currentSubscription = null;
+                updateSubscriptionUI();
                 return false;
             }
         } catch (error) {
             console.error('Auth check failed:', error);
             localStorage.removeItem('authToken');
             authToken = null;
+            currentSubscription = null;
+            updateSubscriptionUI();
             return false;
         }
     }
+    currentSubscription = null;
+    updateSubscriptionUI();
     return false;
 }
 
@@ -396,6 +422,8 @@ function updateUIForAuth() {
         if (heroSellBtn) heroSellBtn.style.display = 'none';
         if (heroRegisterBtn) heroRegisterBtn.style.display = 'inline-block';
         if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'inline-block';
+        currentSubscription = null;
+        updateSubscriptionUI();
     }
 }
 
@@ -1046,6 +1074,7 @@ function showDashboard(skipURLUpdate = false) {
     initializeYearDropdown();
     loadDocumentationPreferences();
     loadMyDocuments();
+    loadSubscriptionStatus(true);
     
     // Set default tab to overview if no tab is active
     const activeTab = document.querySelector('.dashboard-tab.active');
@@ -1056,6 +1085,147 @@ function showDashboard(skipURLUpdate = false) {
     if (!skipURLUpdate) {
         updateURL('/dashboard', false); // Use pushState for navigation
     }
+}
+
+async function loadSubscriptionStatus(silent = true) {
+    if (!authToken) {
+        currentSubscription = null;
+        updateSubscriptionUI();
+        return null;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/subscription/me`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            if (!silent) {
+                showMessage(errorData.detail || 'Failed to load subscription status', 'error');
+            }
+            return null;
+        }
+
+        currentSubscription = await response.json();
+        updateSubscriptionUI();
+        return currentSubscription;
+    } catch (error) {
+        console.error('Error loading subscription status:', error);
+        if (!silent) {
+            showMessage('Failed to load subscription status', 'error');
+        }
+        return null;
+    }
+}
+
+function formatUsageText(used, limit, metricLabel) {
+    if (limit < 0) {
+        return `${metricLabel}: Unlimited`;
+    }
+    return `${metricLabel}: ${used}/${limit} used`;
+}
+
+function updateSubscriptionUI() {
+    const planNameEl = document.getElementById('dashboardPlanName');
+    const aiUsageEl = document.getElementById('dashboardPlanUsage');
+    const uploadUsageEl = document.getElementById('dashboardUploadUsage');
+    const sidebarUpgradeButton = document.getElementById('dashboardUpgradeButton');
+    const pricingUpgradeButton = document.getElementById('pricingProUpgradeButton');
+
+    if (!currentSubscription) {
+        if (planNameEl) planNameEl.textContent = 'Free';
+        if (aiUsageEl) aiUsageEl.textContent = 'AI: 0/25 used';
+        if (uploadUsageEl) uploadUsageEl.textContent = 'Uploads: 0/5 used';
+        if (sidebarUpgradeButton) {
+            sidebarUpgradeButton.disabled = false;
+            sidebarUpgradeButton.textContent = 'Upgrade to Pro';
+            sidebarUpgradeButton.style.opacity = '1';
+            sidebarUpgradeButton.style.cursor = 'pointer';
+        }
+        if (pricingUpgradeButton) {
+            pricingUpgradeButton.disabled = false;
+            pricingUpgradeButton.textContent = 'Upgrade to Pro';
+        }
+        return;
+    }
+
+    const isPro = Boolean(currentSubscription.is_pro);
+    const planLabel = isPro ? 'Pro' : 'Free';
+
+    if (planNameEl) {
+        planNameEl.textContent = `${planLabel} Plan`;
+    }
+    if (aiUsageEl) {
+        aiUsageEl.textContent = formatUsageText(
+            currentSubscription.ai_messages_used,
+            currentSubscription.ai_messages_limit,
+            'AI'
+        );
+    }
+    if (uploadUsageEl) {
+        uploadUsageEl.textContent = formatUsageText(
+            currentSubscription.document_uploads_used,
+            currentSubscription.document_uploads_limit,
+            'Uploads'
+        );
+    }
+
+    if (sidebarUpgradeButton) {
+        sidebarUpgradeButton.disabled = isPro;
+        sidebarUpgradeButton.textContent = isPro ? 'You are on Pro' : 'Upgrade to Pro';
+        sidebarUpgradeButton.style.opacity = isPro ? '0.8' : '1';
+        sidebarUpgradeButton.style.cursor = isPro ? 'not-allowed' : 'pointer';
+    }
+
+    if (pricingUpgradeButton) {
+        pricingUpgradeButton.disabled = isPro;
+        pricingUpgradeButton.textContent = isPro ? 'You are on Pro' : 'Upgrade to Pro';
+    }
+}
+
+async function handleUpgradeToPro() {
+    if (!authToken) {
+        showRegister();
+        return;
+    }
+
+    if (currentSubscription?.is_pro) {
+        showMessage('Your account is already on Pro.', 'success');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/subscription/upgrade`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            showMessage(data.detail || 'Failed to upgrade subscription', 'error');
+            return;
+        }
+
+        currentSubscription = data;
+        updateSubscriptionUI();
+        showMessage('Subscription upgraded to Pro.', 'success');
+    } catch (error) {
+        console.error('Upgrade to pro failed:', error);
+        showMessage('Failed to upgrade subscription. Please try again.', 'error');
+    }
+}
+
+async function upgradeToProFromPricing() {
+    if (!authToken) {
+        showRegister();
+        return;
+    }
+    await handleUpgradeToPro();
 }
 
 function switchDashboardTab(tabName) {
@@ -1111,6 +1281,11 @@ function showPricing(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('pricingSection').style.display = 'block';
     initializePricingSelector();
+    if (authToken) {
+        void loadSubscriptionStatus(true);
+    } else {
+        updateSubscriptionUI();
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (!skipURLUpdate) {
         updateURL('/pricing', false);
@@ -1123,8 +1298,14 @@ function initializePricingSelector() {
 
     const savedCountry = localStorage.getItem('pricingCountry');
     const countryCode = PRICING_COUNTRY_CONFIG[savedCountry] ? savedCountry : 'US';
+    const searchParams = new URLSearchParams(window.location.search);
+    const shouldForceRefresh = searchParams.get('fx_refresh') === '1';
     countrySelect.value = countryCode;
     updatePricingByCountry(countryCode);
+
+    void ensurePricingExchangeRates(shouldForceRefresh).then(() => {
+        updatePricingByCountry(countrySelect.value || countryCode);
+    });
 }
 
 function handlePricingCountryChange(countryCode) {
@@ -1135,14 +1316,73 @@ function handlePricingCountryChange(countryCode) {
     updatePricingByCountry(countryCode);
 }
 
+function ensurePricingExchangeRates(forceRefresh = false) {
+    const now = Date.now();
+    if (
+        !forceRefresh &&
+        pricingRatesFetchedAt &&
+        (now - pricingRatesFetchedAt) < PRICING_RATES_CACHE_WINDOW_MS
+    ) {
+        return Promise.resolve();
+    }
+
+    if (pricingRatesRequestPromise) {
+        return pricingRatesRequestPromise;
+    }
+
+    pricingRatesRequestPromise = (async () => {
+        try {
+            const ratesUrl = forceRefresh
+                ? `${API_BASE}/api/pricing/exchange-rates?refresh=1`
+                : `${API_BASE}/api/pricing/exchange-rates`;
+            const response = await fetch(ratesUrl);
+            if (!response.ok) {
+                throw new Error(`Pricing rates request failed: ${response.status}`);
+            }
+
+            const data = await response.json();
+            if (!data || !data.rates || typeof data.rates !== 'object') {
+                throw new Error('Pricing rates response missing rates payload');
+            }
+
+            const normalizedRates = { ...PRICING_FALLBACK_RATES };
+            Object.keys(normalizedRates).forEach((currencyCode) => {
+                const rawRate = Number(data.rates[currencyCode]);
+                if (Number.isFinite(rawRate) && rawRate > 0) {
+                    normalizedRates[currencyCode] = rawRate;
+                }
+            });
+
+            pricingRatesByCurrency = normalizedRates;
+            pricingRatesMeta = {
+                source: data.source || 'frankfurter',
+                providerDate: data.provider_date || null,
+                stale: Boolean(data.stale),
+                missingCurrencies: Array.isArray(data.missing_currencies) ? data.missing_currencies : []
+            };
+            pricingRatesFetchedAt = Date.now();
+        } catch (error) {
+            console.warn('Unable to refresh pricing exchange rates, using fallback rates:', error);
+            pricingRatesByCurrency = { ...PRICING_FALLBACK_RATES };
+            pricingRatesMeta = { source: 'fallback', providerDate: null, stale: true, missingCurrencies: [] };
+            pricingRatesFetchedAt = Date.now();
+        } finally {
+            pricingRatesRequestPromise = null;
+        }
+    })();
+
+    return pricingRatesRequestPromise;
+}
+
 function updatePricingByCountry(countryCode) {
     const config = PRICING_COUNTRY_CONFIG[countryCode] || PRICING_COUNTRY_CONFIG.US;
     const freePriceEl = document.getElementById('pricingFreePrice');
     const proPriceEl = document.getElementById('pricingProPrice');
     const hintEl = document.getElementById('pricingCurrencyHint');
+    const rate = pricingRatesByCurrency[config.currency] || PRICING_FALLBACK_RATES[config.currency] || 1;
 
-    const convertedFree = PRICING_BASE_USD.free * config.rate;
-    const convertedPro = PRICING_BASE_USD.pro * config.rate;
+    const convertedFree = PRICING_BASE_USD.free * rate;
+    const convertedPro = PRICING_BASE_USD.pro * rate;
 
     if (freePriceEl) {
         freePriceEl.innerHTML = `${formatCurrencyAmount(convertedFree, config.currency)}<span>/month</span>`;
@@ -1151,13 +1391,24 @@ function updatePricingByCountry(countryCode) {
         proPriceEl.innerHTML = `${formatCurrencyAmount(convertedPro, config.currency)}<span>/month</span>`;
     }
     if (hintEl) {
-        hintEl.textContent = `Currency: ${config.currency} (${config.country})`;
+        let hintText = `Currency: ${config.currency} (${config.country})`;
+        if (pricingRatesMeta.providerDate) {
+            hintText += ` • Rates date: ${pricingRatesMeta.providerDate}`;
+        }
+        if (pricingRatesMeta.source === 'fallback') {
+            hintText += ' • Using fallback rates';
+        } else if (pricingRatesMeta.missingCurrencies.includes(config.currency)) {
+            hintText += ` • Using fallback for ${config.currency}`;
+        } else if (pricingRatesMeta.stale) {
+            hintText += ' • Using cached rates';
+        }
+        hintEl.textContent = hintText;
     }
 }
 
 function formatCurrencyAmount(amount, currencyCode) {
     try {
-        return new Intl.NumberFormat('en-US', {
+        return new Intl.NumberFormat(undefined, {
             style: 'currency',
             currency: currencyCode,
             maximumFractionDigits: currencyCode === 'JPY' ? 0 : 2
@@ -1528,6 +1779,7 @@ function logout() {
     localStorage.removeItem('authToken');
     authToken = null;
     currentUser = null;
+    currentSubscription = null;
     floatingChatOpen = false;
     rilonoAiConversationHistory = [];  // Clear shared chat history
     document.getElementById('floatingChatWindow').style.display = 'none';
@@ -4095,6 +4347,7 @@ async function handleDocumentUpload(e) {
             // Refresh visa status after document upload
             await saveVisaStatusToR2();
             await loadDashboardStats(); // Refresh the journey tracker
+            void loadSubscriptionStatus(true);
         } else {
             let errorMessage = 'Failed to upload document';
             if (data.detail) {
@@ -4105,6 +4358,9 @@ async function handleDocumentUpload(e) {
                 }
             }
             showMessage(errorMessage, 'error');
+            if (response.status === 403) {
+                void loadSubscriptionStatus(true);
+            }
         }
     } catch (error) {
         console.error('Document upload error:', error);
@@ -4665,10 +4921,14 @@ async function handleRilonoAiChatSubmit(e) {
             // Add to both chats
             addMessageToRilonoAiChat(aiResponse, false);
             addMessageToFloatingChat(aiResponse, false);
+            void loadSubscriptionStatus(true);
         } else {
             const errorData = await response.json();
             const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
             addMessageToRilonoAiChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
+            if (response.status === 403) {
+                void loadSubscriptionStatus(true);
+            }
         }
     } catch (error) {
         removeRilonoAiTypingIndicator();
@@ -5026,10 +5286,14 @@ async function handleFloatingChatSubmit(e) {
             // Add to both chats
             addMessageToFloatingChat(aiResponse, false);
             addMessageToRilonoAiChat(aiResponse, false);
+            void loadSubscriptionStatus(true);
         } else {
             const errorData = await response.json();
             const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
             addMessageToFloatingChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
+            if (response.status === 403) {
+                void loadSubscriptionStatus(true);
+            }
         }
     } catch (error) {
         removeFloatingChatTyping();

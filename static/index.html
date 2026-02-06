@@ -577,6 +577,15 @@
                             <span class="nav-label">Rilono AI</span>
                         </a>
                     </nav>
+                    <div class="sidebar-subscription-card">
+                        <div class="sidebar-subscription-label">Subscription</div>
+                        <div id="dashboardPlanName" class="sidebar-subscription-plan">Free</div>
+                        <div id="dashboardPlanUsage" class="sidebar-subscription-usage">AI: 0/25 used</div>
+                        <div id="dashboardUploadUsage" class="sidebar-subscription-usage">Uploads: 0/5 used</div>
+                        <button id="dashboardUpgradeButton" type="button" class="btn btn-primary sidebar-upgrade-btn" onclick="handleUpgradeToPro()">
+                            Upgrade to Pro
+                        </button>
+                    </div>
                 </div>
                 
                 <!-- Dashboard Content Area -->
@@ -1136,10 +1145,10 @@
                         <li>Unlimited document uploads</li>
                         <li>Priority support</li>
                     </ul>
-                    <button type="button" class="btn btn-primary" onclick="showMessage('Pro billing is coming soon.', 'success')">Upgrade to Pro</button>
+                    <button id="pricingProUpgradeButton" type="button" class="btn btn-primary" onclick="upgradeToProFromPricing()">Upgrade to Pro</button>
                 </div>
             </div>
-            <p class="pricing-disclaimer">Prices are shown in local currency using reference exchange rates.</p>
+            <p class="pricing-disclaimer">Prices are shown in local currency using daily exchange rates with cache fallback.</p>
         </div>
     </div>
 
