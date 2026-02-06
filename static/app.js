@@ -7,6 +7,7 @@ let turnstileWidgetIds = {
     login: null,
     register: null
 };
+let newsRequestInFlight = false;
 
 // Notification System
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
@@ -1228,6 +1229,84 @@ async function upgradeToProFromPricing() {
     await handleUpgradeToPro();
 }
 
+async function loadF1VisaNews(forceRefresh = false) {
+    if (!authToken) return;
+
+    const newsContainer = document.getElementById('newsContainer');
+    const metaInfo = document.getElementById('newsMetaInfo');
+    if (!newsContainer || !metaInfo) return;
+
+    if (newsRequestInFlight) return;
+    newsRequestInFlight = true;
+
+    if (!forceRefresh) {
+        newsContainer.innerHTML = '<div class="news-loading">Fetching latest F1 visa news...</div>';
+    } else {
+        metaInfo.textContent = 'Refreshing...';
+    }
+
+    try {
+        const endpoint = forceRefresh
+            ? `${API_BASE}/api/news/f1-latest?refresh=1`
+            : `${API_BASE}/api/news/f1-latest`;
+        const response = await fetch(endpoint, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.detail || 'Failed to load news');
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (items.length === 0) {
+            newsContainer.innerHTML = '<div class="news-loading">No recent F1 visa updates were found.</div>';
+        } else {
+            newsContainer.innerHTML = items.map((item) => {
+                const title = escapeHtml(item.title || 'Update');
+                const summary = escapeHtml(item.summary || '');
+                const impact = escapeHtml(item.why_it_matters || '');
+                const sourceName = escapeHtml(item.source_name || 'Source');
+                const sourceUrl = item.source_url && (item.source_url.startsWith('http://') || item.source_url.startsWith('https://'))
+                    ? item.source_url
+                    : '';
+                const safeSourceUrl = sourceUrl ? encodeURI(sourceUrl) : '';
+                const publishedDate = escapeHtml(item.published_date || 'unknown');
+                const sourceLink = safeSourceUrl
+                    ? `<a href="${safeSourceUrl}" target="_blank" rel="noopener noreferrer" class="news-item-link">Read Source</a>`
+                    : '<span class="news-item-link" style="opacity:0.6; cursor:not-allowed;">No Link</span>';
+
+                return `
+                    <article class="news-item">
+                        <h4 class="news-item-title">${title}</h4>
+                        <p class="news-item-summary">${summary}</p>
+                        ${impact ? `<p class="news-item-impact"><strong>Why this matters:</strong> ${impact}</p>` : ''}
+                        <div class="news-item-footer">
+                            <div class="news-item-source">${sourceName} • ${publishedDate}</div>
+                            ${sourceLink}
+                        </div>
+                    </article>
+                `;
+            }).join('');
+        }
+
+        const fetchedAt = data.fetched_at ? new Date(data.fetched_at) : null;
+        const fetchedText = fetchedAt && !Number.isNaN(fetchedAt.getTime())
+            ? fetchedAt.toLocaleString()
+            : 'just now';
+        const cacheText = data.cached ? 'cached' : 'fresh';
+        metaInfo.textContent = `Last updated: ${fetchedText} (${cacheText})`;
+    } catch (error) {
+        console.error('Error loading F1 visa news:', error);
+        newsContainer.innerHTML = '<div class="news-loading">Unable to load F1 visa news right now. Try refresh in a moment.</div>';
+        metaInfo.textContent = 'Failed to load updates';
+    } finally {
+        newsRequestInFlight = false;
+    }
+}
+
 function switchDashboardTab(tabName) {
     // Hide all tabs
     document.querySelectorAll('.dashboard-tab').forEach(tab => {
@@ -1258,6 +1337,8 @@ function switchDashboardTab(tabName) {
         loadDashboardStats();
     } else if (tabName === 'records') {
         initializeRilonoAiChat();
+    } else if (tabName === 'news') {
+        loadF1VisaNews();
     }
     
     // Scroll to top of dashboard content

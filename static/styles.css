@@ -1499,6 +1499,91 @@ body {
     margin-top: 1rem;
 }
 
+#dashboardSection .news-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+#dashboardSection .news-meta {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
+#dashboardSection .news-refresh-btn {
+    width: auto;
+    min-width: 110px;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.85rem;
+}
+
+#dashboardSection .news-list {
+    display: grid;
+    gap: 0.85rem;
+}
+
+#dashboardSection .news-loading {
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 1.25rem 0.75rem;
+    border: 1px dashed var(--border-color);
+    border-radius: 0.75rem;
+    background: var(--bg-secondary);
+}
+
+#dashboardSection .news-item {
+    border: 1px solid var(--border-color);
+    border-radius: 0.85rem;
+    background: var(--bg-secondary);
+    padding: 0.95rem 1rem;
+}
+
+#dashboardSection .news-item-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+#dashboardSection .news-item-summary {
+    margin: 0.5rem 0;
+    color: var(--text-secondary);
+    font-size: 0.93rem;
+    line-height: 1.5;
+}
+
+#dashboardSection .news-item-impact {
+    margin: 0 0 0.65rem;
+    color: var(--text-primary);
+    font-size: 0.88rem;
+}
+
+#dashboardSection .news-item-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+#dashboardSection .news-item-source {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+#dashboardSection .news-item-link {
+    color: var(--primary-light);
+    text-decoration: none;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+#dashboardSection .news-item-link:hover {
+    text-decoration: underline;
+}
+
 #dashboardTab-overview .overview-layout {
     display: grid;
     grid-template-columns: minmax(0, 1.8fr) minmax(360px, 1fr);
@@ -3228,6 +3313,11 @@ body {
 
     #dashboardSection .sidebar-subscription-card {
         margin: 0.75rem 1rem 0;
+    }
+
+    #dashboardSection .news-toolbar {
+        flex-direction: column;
+        align-items: flex-start;
     }
     
     #dashboardSection .tab-header h2 {
