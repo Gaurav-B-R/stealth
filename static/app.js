@@ -1069,6 +1069,10 @@ function showDashboard(skipURLUpdate = false) {
     }
     hideAllSections();
     document.getElementById('dashboardSection').style.display = 'block';
+    const pageContainer = document.querySelector('.container');
+    if (pageContainer) {
+        pageContainer.classList.add('dashboard-fluid');
+    }
     loadProfile();
     loadDashboardStats();
     initializeRilonoAiChat();
@@ -1619,6 +1623,10 @@ function hideAllSections() {
     document.querySelectorAll('.section').forEach(section => {
         section.style.display = 'none';
     });
+    const pageContainer = document.querySelector('.container');
+    if (pageContainer) {
+        pageContainer.classList.remove('dashboard-fluid');
+    }
 }
 
 // Auth functions

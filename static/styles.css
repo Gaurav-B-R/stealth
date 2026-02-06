@@ -432,6 +432,12 @@ body {
     padding: 0 2rem;
 }
 
+.container.dashboard-fluid {
+    max-width: none;
+    width: 100%;
+    padding: 0;
+}
+
 .section {
     animation: fadeIn 0.3s ease-in;
 }
@@ -1310,10 +1316,11 @@ body {
 /* Dashboard */
 #dashboardSection .dashboard-container {
     display: flex;
-    gap: 2rem;
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 0 1rem;
+    gap: clamp(1rem, 1.8vw, 2rem);
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0 clamp(1rem, 2.4vw, 2.5rem);
 }
 
 #dashboardSection .dashboard-sidebar {
@@ -1586,14 +1593,18 @@ body {
 
 #dashboardTab-overview .overview-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1.8fr) minmax(360px, 1fr);
-    gap: 1.5rem;
+    grid-template-columns: minmax(0, 2.15fr) minmax(420px, 1fr);
+    gap: clamp(1rem, 1.8vw, 2rem);
     align-items: start;
     margin-top: 1rem;
 }
 
 #dashboardTab-overview .overview-main .dashboard-grid {
     margin-top: 0;
+}
+
+#dashboardTab-overview .overview-main {
+    min-width: 0;
 }
 
 #dashboardTab-overview .overview-health-head {
@@ -1754,7 +1765,7 @@ body {
 }
 
 #dashboardTab-overview .overview-chat-widget {
-    height: 760px;
+    height: clamp(660px, 78vh, 900px);
 }
 
 @media (max-width: 1280px) {
@@ -3380,15 +3391,16 @@ body {
 
 /* ===== Rilono AI Dashboard Chat Styles ===== */
 .rilono-ai-container {
-    max-width: 1000px;
-    margin: 0 auto;
+    max-width: none;
+    width: 100%;
+    margin: 0;
 }
 
 .rilono-ai-widget {
     background: var(--card-bg);
     border: 1px solid var(--border-color);
     border-radius: 1.25rem;
-    height: 650px;
+    height: clamp(660px, 76vh, 900px);
     display: flex;
     flex-direction: column;
     overflow: hidden;
