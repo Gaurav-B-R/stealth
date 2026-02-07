@@ -77,6 +77,14 @@ function getQueryParams() {
     };
 }
 
+function getReferralCodeFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    const refCode = params.get('ref') || params.get('referral');
+    if (!refCode) return null;
+    const normalized = refCode.trim().toUpperCase();
+    return normalized || null;
+}
+
 function buildSearchURL(search, category, minPrice, maxPrice) {
     const params = new URLSearchParams();
     if (search) params.append('q', search);
@@ -784,8 +792,12 @@ function showRegister(skipURLUpdate = false) {
     // Clear university field and validation message when showing register form
     const universityInput = document.getElementById('registerUniversity');
     const messageEl = document.getElementById('emailValidationMessage');
+    const referralInput = document.getElementById('registerReferralCode');
     if (universityInput) universityInput.value = '';
     if (messageEl) messageEl.style.display = 'none';
+    if (referralInput) {
+        referralInput.value = getReferralCodeFromURL() || '';
+    }
     
     // Ensure Turnstile widget is properly initialized
     const registerWidget = document.getElementById('turnstile-register');
@@ -1729,6 +1741,11 @@ async function handleLogin(e) {
                 }
             }
             showDashboard();
+            if (data.referral_bonus_awarded && data.referral_bonus_message) {
+                setTimeout(() => {
+                    showMessage(data.referral_bonus_message, 'success');
+                }, 800);
+            }
         } else {
             let errorMessage = 'Login failed';
             if (data.detail) {
@@ -1773,7 +1790,8 @@ async function handleRegister(e) {
         password: getValue('registerPassword'),
         full_name: getValue('registerFullName'),
         university: getValue('registerUniversity'),
-        phone: getValue('registerPhone')
+        phone: getValue('registerPhone'),
+        referral_code: getValue('registerReferralCode')
         // Username is optional - will be auto-generated from email on backend
     };
 
@@ -3215,6 +3233,17 @@ function displayProfile(profile) {
     document.getElementById('profileFullName').value = profile.full_name || '';
     document.getElementById('profileUniversity').value = profile.university || '';
     document.getElementById('profilePhone').value = profile.phone || '';
+    const referralCodeInput = document.getElementById('profileReferralCode');
+    const referralLinkInput = document.getElementById('profileReferralLink');
+    const referralCode = (profile.referral_code || '').trim().toUpperCase();
+    if (referralCodeInput) {
+        referralCodeInput.value = referralCode;
+    }
+    if (referralLinkInput) {
+        referralLinkInput.value = referralCode
+            ? `${window.location.origin}/register?ref=${encodeURIComponent(referralCode)}`
+            : '';
+    }
     
     // Display profile picture
     const preview = document.getElementById('profilePicturePreview');
@@ -3232,9 +3261,95 @@ function displayProfile(profile) {
     
     // Check for pending university change
     checkPendingUniversityChange();
+    loadReferralSummary();
     
     // Load documentation preferences
     loadDocumentationPreferences();
+}
+
+async function loadReferralSummary() {
+    if (!authToken) return;
+    const statsEl = document.getElementById('profileReferralStats');
+    if (statsEl) {
+        statsEl.textContent = 'Loading referral stats...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/profile/referral-summary`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        if (!response.ok) {
+            throw new Error('Failed to load referral summary');
+        }
+
+        const summary = await response.json();
+        const referralCode = (summary.referral_code || '').trim().toUpperCase();
+        const referralCodeInput = document.getElementById('profileReferralCode');
+        const referralLinkInput = document.getElementById('profileReferralLink');
+        if (referralCodeInput) referralCodeInput.value = referralCode;
+        if (referralLinkInput) {
+            referralLinkInput.value = referralCode
+                ? `${window.location.origin}/register?ref=${encodeURIComponent(referralCode)}`
+                : '';
+        }
+        if (statsEl) {
+            statsEl.textContent =
+                `Invited: ${summary.total_invited} • Rewarded: ${summary.successful_referrals} • Pending: ${summary.pending_referrals}`;
+        }
+    } catch (error) {
+        console.error('Error loading referral summary:', error);
+        if (statsEl) {
+            statsEl.textContent = 'Unable to load referral stats right now.';
+        }
+    }
+}
+
+async function copyTextToClipboard(text) {
+    if (!text) return false;
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch (error) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'absolute';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        let success = false;
+        try {
+            success = document.execCommand('copy');
+        } catch (execError) {
+            success = false;
+        }
+        document.body.removeChild(textarea);
+        return success;
+    }
+}
+
+async function copyReferralCode() {
+    const input = document.getElementById('profileReferralCode');
+    const code = input ? input.value.trim() : '';
+    if (!code) {
+        showMessage('Referral code not available yet.', 'error');
+        return;
+    }
+    const copied = await copyTextToClipboard(code);
+    showMessage(copied ? 'Referral code copied.' : 'Unable to copy referral code.', copied ? 'success' : 'error');
+}
+
+async function copyReferralLink() {
+    const input = document.getElementById('profileReferralLink');
+    const link = input ? input.value.trim() : '';
+    if (!link) {
+        showMessage('Referral link not available yet.', 'error');
+        return;
+    }
+    const copied = await copyTextToClipboard(link);
+    showMessage(copied ? 'Referral link copied.' : 'Unable to copy referral link.', copied ? 'success' : 'error');
 }
 
 async function loadDocumentationPreferences() {

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_active_user
+from app.referrals import ensure_user_referral_code
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -12,7 +13,33 @@ def get_profile(
     db: Session = Depends(get_db)
 ):
     """Get current user's profile"""
+    ensure_user_referral_code(db, current_user, commit=True)
     return current_user
+
+
+@router.get("/referral-summary")
+def get_referral_summary(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    code = ensure_user_referral_code(db, current_user, commit=True)
+
+    total_invited = db.query(models.User).filter(
+        models.User.referred_by_user_id == current_user.id
+    ).count()
+    successful_referrals = db.query(models.User).filter(
+        models.User.referred_by_user_id == current_user.id,
+        models.User.referral_reward_granted_at.isnot(None)
+    ).count()
+    pending_referrals = max(total_invited - successful_referrals, 0)
+
+    return {
+        "referral_code": code,
+        "total_invited": total_invited,
+        "successful_referrals": successful_referrals,
+        "pending_referrals": pending_referrals,
+        "reward": "Both users receive 1 month Pro after email verification and first login",
+    }
 
 @router.put("/", response_model=schemas.UserResponse)
 def update_profile(

@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
 from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news
 from app.subscriptions import backfill_missing_subscriptions
+from app.referrals import backfill_missing_referral_codes
 import os
 
 # Create database tables
@@ -38,10 +39,11 @@ app.include_router(news.router)
 
 @app.on_event("startup")
 def startup_backfill_subscriptions():
-    """Ensure existing users have default Free subscriptions."""
+    """Ensure existing users have default subscription + referral records."""
     db = SessionLocal()
     try:
         backfill_missing_subscriptions(db)
+        backfill_missing_referral_codes(db)
     finally:
         db.close()
 

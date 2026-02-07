@@ -32,6 +32,10 @@ class User(Base):
     preferred_country = Column(String, nullable=True, default="United States")
     preferred_intake = Column(String, nullable=True)  # Spring or Fall
     preferred_year = Column(Integer, nullable=True)
+    referral_code = Column(String, unique=True, index=True, nullable=True)
+    referred_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    first_login_at = Column(DateTime(timezone=True), nullable=True)
+    referral_reward_granted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")

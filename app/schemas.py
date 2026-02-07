@@ -13,6 +13,7 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
     cf_turnstile_token: Optional[str] = None  # Cloudflare Turnstile token
+    referral_code: Optional[str] = None
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -24,6 +25,7 @@ class UserResponse(UserBase):
     id: int
     is_active: bool
     email_verified: bool
+    referral_code: Optional[str] = None
     created_at: datetime
     
     class Config:
@@ -44,6 +46,8 @@ class SubscriptionResponse(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+    referral_bonus_awarded: Optional[bool] = None
+    referral_bonus_message: Optional[str] = None
 
 class TokenData(BaseModel):
     username: Optional[str] = None

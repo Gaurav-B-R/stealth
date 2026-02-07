@@ -14,6 +14,12 @@ from app.auth import (
 from app.email_service import generate_verification_token, send_verification_email, send_password_reset_email
 from app.utils.turnstile import verify_turnstile_token
 from app.subscriptions import get_or_create_user_subscription
+from app.referrals import (
+    ensure_user_referral_code,
+    generate_unique_referral_code,
+    get_user_by_referral_code,
+    maybe_award_referral_bonus_on_login,
+)
 import os
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
@@ -115,6 +121,13 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    referrer = None
+    normalized_referral_code = (user.referral_code or "").strip().upper()
+    if normalized_referral_code:
+        referrer = get_user_by_referral_code(db, normalized_referral_code)
+        if not referrer:
+            raise HTTPException(status_code=400, detail="Invalid referral code")
     
     # Auto-generate username from email if not provided
     username = user.username
@@ -155,6 +168,8 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
         full_name=user.full_name,
         university=university_name,  # Auto-filled from database (or developer email)
         phone=user.phone,
+        referral_code=generate_unique_referral_code(db),
+        referred_by_user_id=referrer.id if referrer else None,
         email_verified=False,
         verification_token=verification_token,
         verification_token_expires=token_expires
@@ -250,13 +265,34 @@ async def login(
 
     # Ensure legacy users also have a default subscription record.
     get_or_create_user_subscription(db, user.id)
+    had_referral_code = bool(user.referral_code)
+    ensure_user_referral_code(db, user, commit=False)
+
+    reward_payload = {"awarded": False, "message": None}
+    now = datetime.utcnow()
+    changes_pending = not had_referral_code
+    if user.first_login_at is None:
+        user.first_login_at = now
+        changes_pending = True
+
+    reward_payload = maybe_award_referral_bonus_on_login(db, user, commit=False)
+    if reward_payload.get("awarded"):
+        changes_pending = True
+
+    if changes_pending:
+        db.commit()
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     # Store email in token instead of username
     access_token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "referral_bonus_awarded": bool(reward_payload.get("awarded")),
+        "referral_bonus_message": reward_payload.get("message"),
+    }
 
 @router.get("/me", response_model=schemas.UserResponse)
 def read_users_me(
@@ -264,6 +300,7 @@ def read_users_me(
     db: Session = Depends(get_db)
 ):
     get_or_create_user_subscription(db, current_user.id)
+    ensure_user_referral_code(db, current_user, commit=True)
     return current_user
 
 @router.post("/forgot-password")
