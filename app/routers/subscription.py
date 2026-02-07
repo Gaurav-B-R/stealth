@@ -1,6 +1,5 @@
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -46,11 +45,9 @@ def upgrade_to_pro(
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
-    subscription = get_or_create_user_subscription(db, current_user.id)
-    subscription.plan = PLAN_PRO
-    subscription.status = STATUS_ACTIVE
-    subscription.started_at = datetime.now(timezone.utc)
-    subscription.ends_at = None
-    db.commit()
-    db.refresh(subscription)
-    return _build_subscription_response(subscription)
+    del current_user
+    del db
+    raise HTTPException(
+        status_code=503,
+        detail="Pro upgrades are temporarily unavailable until payments are enabled."
+    )

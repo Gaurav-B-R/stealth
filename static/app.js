@@ -8,6 +8,7 @@ let turnstileWidgetIds = {
     register: null
 };
 let newsRequestInFlight = false;
+const PRO_UPGRADE_ENABLED = false;
 
 // Notification System
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
@@ -1145,14 +1146,14 @@ function updateSubscriptionUI() {
         if (aiUsageEl) aiUsageEl.textContent = 'AI: 0/25 used';
         if (uploadUsageEl) uploadUsageEl.textContent = 'Uploads: 0/5 used';
         if (sidebarUpgradeButton) {
-            sidebarUpgradeButton.disabled = false;
-            sidebarUpgradeButton.textContent = 'Upgrade to Pro';
-            sidebarUpgradeButton.style.opacity = '1';
-            sidebarUpgradeButton.style.cursor = 'pointer';
+            sidebarUpgradeButton.disabled = !PRO_UPGRADE_ENABLED;
+            sidebarUpgradeButton.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
+            sidebarUpgradeButton.style.opacity = PRO_UPGRADE_ENABLED ? '1' : '0.75';
+            sidebarUpgradeButton.style.cursor = PRO_UPGRADE_ENABLED ? 'pointer' : 'not-allowed';
         }
         if (pricingUpgradeButton) {
-            pricingUpgradeButton.disabled = false;
-            pricingUpgradeButton.textContent = 'Upgrade to Pro';
+            pricingUpgradeButton.disabled = !PRO_UPGRADE_ENABLED;
+            pricingUpgradeButton.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
         }
         return;
     }
@@ -1179,15 +1180,17 @@ function updateSubscriptionUI() {
     }
 
     if (sidebarUpgradeButton) {
-        sidebarUpgradeButton.disabled = isPro;
-        sidebarUpgradeButton.textContent = isPro ? 'You are on Pro' : 'Upgrade to Pro';
-        sidebarUpgradeButton.style.opacity = isPro ? '0.8' : '1';
-        sidebarUpgradeButton.style.cursor = isPro ? 'not-allowed' : 'pointer';
+        const canUpgrade = !isPro && PRO_UPGRADE_ENABLED;
+        sidebarUpgradeButton.disabled = !canUpgrade;
+        sidebarUpgradeButton.textContent = isPro ? 'You are on Pro' : (canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon');
+        sidebarUpgradeButton.style.opacity = canUpgrade || isPro ? '0.8' : '0.75';
+        sidebarUpgradeButton.style.cursor = canUpgrade ? 'pointer' : 'not-allowed';
     }
 
     if (pricingUpgradeButton) {
-        pricingUpgradeButton.disabled = isPro;
-        pricingUpgradeButton.textContent = isPro ? 'You are on Pro' : 'Upgrade to Pro';
+        const canUpgrade = !isPro && PRO_UPGRADE_ENABLED;
+        pricingUpgradeButton.disabled = !canUpgrade;
+        pricingUpgradeButton.textContent = isPro ? 'You are on Pro' : (canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon');
     }
 }
 
@@ -1199,6 +1202,11 @@ async function handleUpgradeToPro() {
 
     if (currentSubscription?.is_pro) {
         showMessage('Your account is already on Pro.', 'success');
+        return;
+    }
+
+    if (!PRO_UPGRADE_ENABLED) {
+        showMessage('Pro upgrades are coming soon. Payment integration is pending.', 'error');
         return;
     }
 
