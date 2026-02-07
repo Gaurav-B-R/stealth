@@ -8,7 +8,10 @@ let turnstileWidgetIds = {
     register: null
 };
 let newsRequestInFlight = false;
+let visaInterviewRequestInFlight = false;
+let visaInterviewFiltersInitialized = false;
 const PRO_UPGRADE_ENABLED = false;
+const PUBLIC_APP_ORIGIN = 'https://rilono.com';
 
 // Notification System
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
@@ -29,6 +32,17 @@ const PRICING_COUNTRY_CONFIG = {
     AE: { country: 'United Arab Emirates', currency: 'AED' },
     SG: { country: 'Singapore', currency: 'SGD' },
     JP: { country: 'Japan', currency: 'JPY' }
+};
+
+const VISA_INTERVIEW_CONSULATE_MAP = {
+    India: ['New Delhi', 'Mumbai', 'Chennai', 'Hyderabad', 'Kolkata'],
+    'United Kingdom': ['London', 'Belfast'],
+    Canada: ['Ottawa', 'Toronto', 'Vancouver', 'Montreal', 'Calgary', 'Halifax', 'Quebec City'],
+    Australia: ['Sydney', 'Melbourne', 'Perth'],
+    Germany: ['Berlin', 'Frankfurt', 'Munich'],
+    'United Arab Emirates': ['Abu Dhabi', 'Dubai'],
+    Singapore: ['Singapore'],
+    Japan: ['Tokyo', 'Osaka / Kobe', 'Naha', 'Sapporo', 'Fukuoka']
 };
 
 const PRICING_FALLBACK_RATES = {
@@ -83,6 +97,26 @@ function getReferralCodeFromURL() {
     if (!refCode) return null;
     const normalized = refCode.trim().toUpperCase();
     return normalized || null;
+}
+
+function getPublicAppOrigin() {
+    return PUBLIC_APP_ORIGIN;
+}
+
+function buildReferralInviteLink(referralCode) {
+    if (!referralCode) return '';
+    return `${getPublicAppOrigin()}/register?ref=${encodeURIComponent(referralCode)}`;
+}
+
+function getCurrentReferralCode() {
+    const codeFromUser = (currentUser?.referral_code || '').trim().toUpperCase();
+    if (codeFromUser) return codeFromUser;
+
+    const codeFromProfile = (document.getElementById('profileReferralCode')?.value || '').trim().toUpperCase();
+    if (codeFromProfile) return codeFromProfile;
+
+    const codeFromBanner = (document.getElementById('dashboardReferralBannerCode')?.textContent || '').trim().toUpperCase();
+    return codeFromBanner && codeFromBanner !== '--------' ? codeFromBanner : '';
 }
 
 function buildSearchURL(search, category, minPrice, maxPrice) {
@@ -1097,6 +1131,7 @@ function showDashboard(skipURLUpdate = false) {
     loadDocumentationPreferences();
     loadMyDocuments();
     loadSubscriptionStatus(true);
+    renderReferralPromotions();
     
     // Set default tab to overview if no tab is active
     const activeTab = document.querySelector('.dashboard-tab.active');
@@ -1335,6 +1370,187 @@ async function loadF1VisaNews(forceRefresh = false) {
     }
 }
 
+function initializeVisaInterviewFilters() {
+    const countrySelect = document.getElementById('visaExperienceCountry');
+    const consulateContainer = document.getElementById('visaExperienceConsulates');
+    if (!countrySelect || !consulateContainer) return;
+
+    if (!visaInterviewFiltersInitialized) {
+        countrySelect.innerHTML = Object.keys(VISA_INTERVIEW_CONSULATE_MAP)
+            .map((country) => `<option value="${escapeHtml(country)}">${escapeHtml(country)}</option>`)
+            .join('');
+        visaInterviewFiltersInitialized = true;
+    }
+
+    const savedCountry = localStorage.getItem('visaExperienceCountry');
+    const country = savedCountry && VISA_INTERVIEW_CONSULATE_MAP[savedCountry] ? savedCountry : 'India';
+    countrySelect.value = country;
+
+    const savedConsulates = JSON.parse(localStorage.getItem(`visaExperienceConsulates:${country}`) || '[]');
+    renderVisaConsulateOptions(country, Array.isArray(savedConsulates) ? savedConsulates : []);
+
+    const container = document.getElementById('visaExperienceContainer');
+    const loaded = container?.dataset.loaded === '1';
+    if (!loaded) {
+        void loadF1InterviewExperiences(false);
+    }
+}
+
+function renderVisaConsulateOptions(country, selectedConsulates = []) {
+    const consulateContainer = document.getElementById('visaExperienceConsulates');
+    if (!consulateContainer) return;
+
+    const consulates = VISA_INTERVIEW_CONSULATE_MAP[country] || [];
+    const defaultToAll = !Array.isArray(selectedConsulates) || selectedConsulates.length === 0;
+    const selectedSet = new Set(defaultToAll ? consulates : selectedConsulates.filter((name) => consulates.includes(name)));
+
+    consulateContainer.innerHTML = consulates.map((consulate, index) => {
+        const isSelected = selectedSet.has(consulate);
+        const safeConsulate = escapeHtml(consulate);
+        const chipClass = isSelected ? 'visa-consulate-chip active' : 'visa-consulate-chip';
+        return `
+            <label class="${chipClass}">
+                <input type="checkbox" class="visa-consulate-checkbox" value="${safeConsulate}" ${isSelected ? 'checked' : ''} onchange="handleVisaConsulateSelectionChange()">
+                <span>${safeConsulate}</span>
+            </label>
+        `;
+    }).join('');
+
+    persistVisaConsulateSelection();
+}
+
+function getSelectedVisaConsulates() {
+    return Array.from(document.querySelectorAll('#visaExperienceConsulates .visa-consulate-checkbox:checked'))
+        .map((checkbox) => checkbox.value.trim())
+        .filter(Boolean);
+}
+
+function persistVisaConsulateSelection() {
+    const country = document.getElementById('visaExperienceCountry')?.value || 'India';
+    const selected = getSelectedVisaConsulates();
+    localStorage.setItem('visaExperienceCountry', country);
+    localStorage.setItem(`visaExperienceConsulates:${country}`, JSON.stringify(selected));
+}
+
+function handleVisaConsulateSelectionChange() {
+    document.querySelectorAll('#visaExperienceConsulates .visa-consulate-chip').forEach((chip) => {
+        const checkbox = chip.querySelector('input[type="checkbox"]');
+        if (!checkbox) return;
+        chip.classList.toggle('active', checkbox.checked);
+    });
+    persistVisaConsulateSelection();
+}
+
+function toggleVisaConsulates(selectAll) {
+    const checkboxes = document.querySelectorAll('#visaExperienceConsulates .visa-consulate-checkbox');
+    checkboxes.forEach((checkbox) => {
+        checkbox.checked = Boolean(selectAll);
+    });
+    handleVisaConsulateSelectionChange();
+}
+
+function handleVisaExperienceCountryChange(country) {
+    if (!country || !VISA_INTERVIEW_CONSULATE_MAP[country]) return;
+    localStorage.setItem('visaExperienceCountry', country);
+    const savedConsulates = JSON.parse(localStorage.getItem(`visaExperienceConsulates:${country}`) || '[]');
+    renderVisaConsulateOptions(country, Array.isArray(savedConsulates) ? savedConsulates : []);
+}
+
+async function loadF1InterviewExperiences(forceRefresh = false) {
+    if (!authToken) return;
+
+    const container = document.getElementById('visaExperienceContainer');
+    const metaInfo = document.getElementById('visaExperienceMeta');
+    const countrySelect = document.getElementById('visaExperienceCountry');
+    if (!container || !metaInfo || !countrySelect) return;
+
+    if (visaInterviewRequestInFlight) return;
+    visaInterviewRequestInFlight = true;
+
+    const country = countrySelect.value || 'India';
+    const consulates = getSelectedVisaConsulates();
+    if (consulates.length === 0) {
+        showMessage('Select at least one consulate to fetch experiences.', 'error');
+        visaInterviewRequestInFlight = false;
+        return;
+    }
+    persistVisaConsulateSelection();
+
+    if (!forceRefresh) {
+        container.innerHTML = '<div class="news-loading">Fetching latest interview experiences...</div>';
+    } else {
+        metaInfo.textContent = 'Refreshing interview experiences...';
+    }
+
+    try {
+        const params = new URLSearchParams();
+        params.set('country', country);
+        consulates.forEach((consulate) => params.append('consulates', consulate));
+        if (forceRefresh) params.set('refresh', '1');
+
+        const response = await fetch(`${API_BASE}/api/news/f1-interview-experiences?${params.toString()}`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.detail || 'Failed to load interview experiences');
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (items.length === 0) {
+            container.innerHTML = '<div class="news-loading">No interview experiences found for the selected filters right now.</div>';
+            delete container.dataset.loaded;
+        } else {
+            container.innerHTML = items.map((item) => {
+                const consulate = escapeHtml(item.consulate || 'Consulate');
+                const result = escapeHtml(item.interview_result || 'Reported');
+                const summary = escapeHtml(item.summary || '');
+                const keyTakeaway = escapeHtml(item.key_takeaway || '');
+                const platform = escapeHtml(item.platform || 'Community');
+                const sourceName = escapeHtml(item.source_name || 'Source');
+                const reportedDate = escapeHtml(item.reported_date || 'unknown');
+                const sourceUrl = item.source_url && (item.source_url.startsWith('http://') || item.source_url.startsWith('https://'))
+                    ? encodeURI(item.source_url)
+                    : '';
+                const sourceLink = sourceUrl
+                    ? `<a href="${sourceUrl}" target="_blank" rel="noopener noreferrer">Open Source</a>`
+                    : '<span style="opacity:0.6;">No Source Link</span>';
+
+                return `
+                    <article class="visa-experience-item">
+                        <div class="visa-experience-title">${consulate} • ${result}</div>
+                        <div class="visa-experience-note">${summary || 'No summary available.'}</div>
+                        ${keyTakeaway ? `<div class="visa-experience-note"><strong>Key takeaway:</strong> ${keyTakeaway}</div>` : ''}
+                        <div class="visa-experience-badges">
+                            <span class="visa-experience-badge">${platform}</span>
+                        </div>
+                        <div class="visa-experience-source">
+                            <span>${sourceName} • ${reportedDate}</span>
+                            ${sourceLink}
+                        </div>
+                    </article>
+                `;
+            }).join('');
+            container.dataset.loaded = '1';
+        }
+
+        const fetchedAt = data.fetched_at ? new Date(data.fetched_at) : null;
+        const fetchedText = fetchedAt && !Number.isNaN(fetchedAt.getTime())
+            ? fetchedAt.toLocaleString()
+            : 'just now';
+        const cacheText = data.cached ? 'cached' : 'fresh';
+        metaInfo.textContent = `${country} • ${consulates.length} consulate(s) • Updated ${fetchedText} (${cacheText})`;
+    } catch (error) {
+        console.error('Error loading F1 interview experiences:', error);
+        container.innerHTML = '<div class="news-loading">Unable to load interview experiences right now. Try again shortly.</div>';
+        metaInfo.textContent = 'Failed to load interview experiences';
+    } finally {
+        visaInterviewRequestInFlight = false;
+    }
+}
+
 function switchDashboardTab(tabName) {
     // Hide all tabs
     document.querySelectorAll('.dashboard-tab').forEach(tab => {
@@ -1365,6 +1581,7 @@ function switchDashboardTab(tabName) {
         loadDashboardStats();
     } else if (tabName === 'visa') {
         loadDashboardStats();
+        initializeVisaInterviewFilters();
     } else if (tabName === 'records') {
         initializeRilonoAiChat();
     } else if (tabName === 'news') {
@@ -1376,6 +1593,17 @@ function switchDashboardTab(tabName) {
     if (dashboardContent) {
         dashboardContent.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+}
+
+function openVisaAiPrompt(prompt) {
+    switchDashboardTab('records');
+    setTimeout(() => {
+        sendQuickMessage(prompt);
+    }, 120);
+}
+
+function openVisaNewsSection() {
+    switchDashboardTab('news');
 }
 
 function showPrivacy(skipURLUpdate = false) {
@@ -1741,6 +1969,10 @@ async function handleLogin(e) {
                 }
             }
             showDashboard();
+            renderReferralPromotions();
+            setTimeout(() => {
+                openReferralPromoModal(true);
+            }, 260);
             if (data.referral_bonus_awarded && data.referral_bonus_message) {
                 setTimeout(() => {
                     showMessage(data.referral_bonus_message, 'success');
@@ -1908,6 +2140,7 @@ function logout() {
     authToken = null;
     currentUser = null;
     currentSubscription = null;
+    closeReferralPromoModal();
     floatingChatOpen = false;
     rilonoAiConversationHistory = [];  // Clear shared chat history
     document.getElementById('floatingChatWindow').style.display = 'none';
@@ -3236,14 +3469,16 @@ function displayProfile(profile) {
     const referralCodeInput = document.getElementById('profileReferralCode');
     const referralLinkInput = document.getElementById('profileReferralLink');
     const referralCode = (profile.referral_code || '').trim().toUpperCase();
+    if (currentUser) {
+        currentUser.referral_code = referralCode || currentUser.referral_code;
+    }
     if (referralCodeInput) {
         referralCodeInput.value = referralCode;
     }
     if (referralLinkInput) {
-        referralLinkInput.value = referralCode
-            ? `${window.location.origin}/register?ref=${encodeURIComponent(referralCode)}`
-            : '';
+        referralLinkInput.value = buildReferralInviteLink(referralCode);
     }
+    renderReferralPromotions();
     
     // Display profile picture
     const preview = document.getElementById('profilePicturePreview');
@@ -3286,24 +3521,77 @@ async function loadReferralSummary() {
 
         const summary = await response.json();
         const referralCode = (summary.referral_code || '').trim().toUpperCase();
+        if (currentUser) {
+            currentUser.referral_code = referralCode || currentUser.referral_code;
+        }
         const referralCodeInput = document.getElementById('profileReferralCode');
         const referralLinkInput = document.getElementById('profileReferralLink');
         if (referralCodeInput) referralCodeInput.value = referralCode;
         if (referralLinkInput) {
-            referralLinkInput.value = referralCode
-                ? `${window.location.origin}/register?ref=${encodeURIComponent(referralCode)}`
-                : '';
+            referralLinkInput.value = buildReferralInviteLink(referralCode);
         }
         if (statsEl) {
             statsEl.textContent =
                 `Invited: ${summary.total_invited} • Rewarded: ${summary.successful_referrals} • Pending: ${summary.pending_referrals}`;
         }
+        renderReferralPromotions(summary);
     } catch (error) {
         console.error('Error loading referral summary:', error);
         if (statsEl) {
             statsEl.textContent = 'Unable to load referral stats right now.';
         }
+        renderReferralPromotions();
     }
+}
+
+function renderReferralPromotions(summary = null) {
+    const banner = document.getElementById('dashboardReferralBanner');
+    const bannerCodeEl = document.getElementById('dashboardReferralBannerCode');
+    const bannerStatsEl = document.getElementById('dashboardReferralBannerStats');
+    const promoCodeEl = document.getElementById('referralPromoCode');
+    const promoLinkEl = document.getElementById('referralPromoLink');
+
+    const referralCode = getCurrentReferralCode();
+    const referralLink = buildReferralInviteLink(referralCode);
+
+    if (banner) {
+        banner.style.display = currentUser ? 'flex' : 'none';
+    }
+    if (bannerCodeEl) {
+        bannerCodeEl.textContent = referralCode || '--------';
+    }
+    if (promoCodeEl) {
+        promoCodeEl.textContent = referralCode || '--------';
+    }
+    if (promoLinkEl) {
+        promoLinkEl.textContent = referralLink || 'Referral link will appear shortly.';
+    }
+
+    if (bannerStatsEl) {
+        if (summary && typeof summary === 'object') {
+            bannerStatsEl.textContent =
+                `Invited ${summary.total_invited} • Rewarded ${summary.successful_referrals} • Pending ${summary.pending_referrals}`;
+        } else {
+            bannerStatsEl.textContent = 'Share to unlock rewards.';
+        }
+    }
+}
+
+function openReferralPromoModal(force = false) {
+    if (!currentUser && !force) return;
+    renderReferralPromotions();
+    if (!getCurrentReferralCode() && authToken) {
+        void loadReferralSummary();
+    }
+    const modal = document.getElementById('referralPromoModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+}
+
+function closeReferralPromoModal() {
+    const modal = document.getElementById('referralPromoModal');
+    if (!modal) return;
+    modal.style.display = 'none';
 }
 
 async function copyTextToClipboard(text) {
@@ -3331,8 +3619,7 @@ async function copyTextToClipboard(text) {
 }
 
 async function copyReferralCode() {
-    const input = document.getElementById('profileReferralCode');
-    const code = input ? input.value.trim() : '';
+    const code = getCurrentReferralCode();
     if (!code) {
         showMessage('Referral code not available yet.', 'error');
         return;
@@ -3342,8 +3629,7 @@ async function copyReferralCode() {
 }
 
 async function copyReferralLink() {
-    const input = document.getElementById('profileReferralLink');
-    const link = input ? input.value.trim() : '';
+    const link = buildReferralInviteLink(getCurrentReferralCode());
     if (!link) {
         showMessage('Referral link not available yet.', 'error');
         return;

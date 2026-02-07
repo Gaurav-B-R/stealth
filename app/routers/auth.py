@@ -23,6 +23,7 @@ from app.referrals import (
 import os
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
+DEFAULT_PUBLIC_BASE_URL = "https://rilono.com"
 
 @router.get("/turnstile-site-key")
 def get_turnstile_site_key():
@@ -180,7 +181,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
     get_or_create_user_subscription(db, db_user.id)
     
     # Send verification email
-    base_url = os.getenv("BASE_URL", "http://localhost:8000")
+    base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
     email_sent = send_verification_email(user.email, verification_token, base_url)
     
     if not email_sent:
@@ -333,7 +334,7 @@ def forgot_password(request: schemas.PasswordResetRequest, db: Session = Depends
     db.commit()
     
     # Send password reset email
-    base_url = os.getenv("BASE_URL", "http://localhost:8000")
+    base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
     email_sent = send_password_reset_email(user.email, reset_token, base_url)
     
     if email_sent:
@@ -471,7 +472,7 @@ def resend_verification_email(request: schemas.ResendVerificationRequest, db: Se
     db.commit()
     
     # Send verification email
-    base_url = os.getenv("BASE_URL", "http://localhost:8000")
+    base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
     email_sent = send_verification_email(user.email, verification_token, base_url)
     
     if email_sent:

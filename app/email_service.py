@@ -19,13 +19,15 @@ if RESEND_API_KEY:
 else:
     print("WARNING: RESEND_API_KEY not found. Email functionality will be disabled.")
 
+DEFAULT_PUBLIC_BASE_URL = "https://rilono.com"
+
 
 def generate_verification_token() -> str:
     """Generate a secure random token for email verification."""
     return secrets.token_urlsafe(32)
 
 
-def send_verification_email(email: str, verification_token: str, base_url: str = "http://localhost:8000") -> bool:
+def send_verification_email(email: str, verification_token: str, base_url: str = DEFAULT_PUBLIC_BASE_URL) -> bool:
     """
     Send email verification email using Resend.
     
@@ -157,7 +159,7 @@ def send_verification_email(email: str, verification_token: str, base_url: str =
         return False
 
 
-def send_password_reset_email(email: str, reset_token: str, base_url: str = "http://localhost:8000") -> bool:
+def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFAULT_PUBLIC_BASE_URL) -> bool:
     """
     Send password reset email using Resend.
     
@@ -291,7 +293,7 @@ def send_password_reset_email(email: str, reset_token: str, base_url: str = "htt
         return False
 
 
-def send_university_change_email(email: str, new_university: str, change_token: str, base_url: str = "http://localhost:8000") -> bool:
+def send_university_change_email(email: str, new_university: str, change_token: str, base_url: str = DEFAULT_PUBLIC_BASE_URL) -> bool:
     """
     Send university change verification email using Resend.
     
