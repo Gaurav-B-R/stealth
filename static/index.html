@@ -893,85 +893,148 @@
                             <h2>AI Documentation Agent</h2>
                             <p class="tab-subtitle">Manage your documents and preferences</p>
                         </div>
-                        <div class="dashboard-grid">
-                            <div class="dashboard-widget" style="grid-column: 1 / -1;">
-                                <div class="widget-header">
-                                    <h3>📤 Upload Documents</h3>
-                                </div>
-                                <div class="widget-content">
-                                    <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
-                                        <strong style="color: #856404;">🔒 Zero-Knowledge Encryption</strong>
-                                        <p style="color: #856404; margin: 0.5rem 0 0 0; font-size: 0.875rem;">
-                                            Your documents are encrypted with your password. Even we cannot read them. 
-                                            <strong>If you forget your password, your documents cannot be recovered.</strong>
-                                        </p>
+                        <div class="documents-layout">
+                            <div class="documents-main-column">
+                                <div class="dashboard-widget documents-health-widget">
+                                    <div class="widget-header">
+                                        <h3>📄 Document Health</h3>
                                     </div>
-                                    <form id="documentUploadForm">
-                                        <div class="form-group">
-                                            <label for="documentFile">Select Document</label>
-                                            <input type="file" id="documentFile" accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.webp,.xls,.xlsx,.csv,.zip,.rar" required>
-                                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                                Supported formats: PDF, DOC, DOCX, TXT, Images, Excel, CSV, ZIP, RAR (Max 50MB)
-                                            </small>
+                                    <div class="widget-content">
+                                        <div class="overview-health-head">
+                                            <div>
+                                                <div class="overview-health-title">Validation Overview</div>
+                                                <div class="overview-health-subtitle">Status of uploaded documents and AI checks</div>
+                                            </div>
+                                            <div id="documentsHealthStatus" class="overview-health-badge">No Data</div>
                                         </div>
-                                        <div class="form-group">
-                                            <label for="documentPassword">Your Password *</label>
-                                            <input type="password" id="documentPassword" required placeholder="Enter your login password to encrypt">
-                                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                                Required to encrypt your document. We use Zero-Knowledge encryption - your password is never stored.
-                                            </small>
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="documentTypeSearch">Document Type <span style="color: var(--danger-color);">*</span></label>
-                                            <div class="searchable-dropdown" id="documentTypeDropdown">
-                                                <input type="text" id="documentTypeSearch" class="dropdown-search" placeholder="Search or select document type..." autocomplete="off">
-                                                <input type="hidden" id="documentType" required>
-                                                <div class="dropdown-list" id="documentTypeList">
-                                                    <div class="dropdown-item" data-value="passport">Passport</div>
-                                                    <div class="dropdown-item" data-value="ds-160-confirmation">DS-160 Confirmation Page</div>
-                                                    <div class="dropdown-item" data-value="ds-160-application">DS-160 Application</div>
-                                                    <div class="dropdown-item" data-value="us-visa-appointment-letter">US Visa Appointment Letter</div>
-                                                    <div class="dropdown-item" data-value="visa-fee-receipt">Visa Fee Receipt</div>
-                                                    <div class="dropdown-item" data-value="photograph-2x2">Photograph (2x2 Inches)</div>
-                                                    <div class="dropdown-item" data-value="form-i20-signed">Form I-20 (Signed)</div>
-                                                    <div class="dropdown-item" data-value="previous-i20s">Previous I-20's</div>
-                                                    <div class="dropdown-item" data-value="university-admission-letter">University Admission Letter</div>
-                                                    <div class="dropdown-item" data-value="bank-balance-certificate">Bank balance certificate</div>
-                                                    <div class="dropdown-item" data-value="loan-approval-letter">Loan approval letter (if applicable)</div>
-                                                    <div class="dropdown-item" data-value="affidavit-of-support">Affidavit of Support (if sponsored)</div>
-                                                    <div class="dropdown-item" data-value="sponsor-income-proof">Sponsor's income proof (salary slips, IT returns)</div>
-                                                    <div class="dropdown-item" data-value="degree-certificates">Degree certificates</div>
-                                                    <div class="dropdown-item" data-value="provisional-certificates">Provisional certificates</div>
-                                                    <div class="dropdown-item" data-value="transcripts-marksheets">Transcripts / mark sheets (all semesters)</div>
-                                                    <div class="dropdown-item" data-value="standardized-test-scores">Standardized test scores (GRE, TOEFL, IELTS, Duolingo)</div>
-                                                    <div class="dropdown-item" data-value="experience-letters">Experience letters</div>
-                                                    <div class="dropdown-item" data-value="offer-letters">Offer letters</div>
-                                                    <div class="dropdown-item" data-value="salary-slips">Salary slips (last 3-6 months)</div>
-                                                    <div class="dropdown-item" data-value="resume">Resume (updated)</div>
-                                                    <div class="dropdown-item" data-value="i901-sevis-fee-confirmation">I-901 SEVIS fee payment confirmation</div>
-                                                </div>
+
+                                        <div class="overview-health-grid">
+                                            <div class="overview-health-stat">
+                                                <div class="overview-health-label">Uploaded</div>
+                                                <div id="documentsTotalUploaded" class="overview-health-value">0</div>
+                                            </div>
+                                            <div class="overview-health-stat">
+                                                <div class="overview-health-label">Unique Types</div>
+                                                <div id="documentsUniqueTypes" class="overview-health-value">0</div>
+                                            </div>
+                                            <div class="overview-health-stat">
+                                                <div class="overview-health-label">Validated</div>
+                                                <div id="documentsValidatedCount" class="overview-health-value">0</div>
+                                            </div>
+                                            <div class="overview-health-stat">
+                                                <div class="overview-health-label">Needs Review</div>
+                                                <div id="documentsNeedsReviewCount" class="overview-health-value">0</div>
+                                            </div>
+                                            <div class="overview-health-stat">
+                                                <div class="overview-health-label">Pending Validation</div>
+                                                <div id="documentsPendingValidationCount" class="overview-health-value">0</div>
+                                            </div>
+                                            <div class="overview-health-stat">
+                                                <div class="overview-health-label">Processed</div>
+                                                <div id="documentsProcessedCount" class="overview-health-value">0</div>
                                             </div>
                                         </div>
-                                        <div class="form-group">
-                                            <label for="documentDescription">Description (Optional)</label>
-                                            <textarea id="documentDescription" rows="2" placeholder="Add any notes about this document..."></textarea>
-                                            <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                                💡 Rilono AI reads this description to better understand and process your document.
-                                            </small>
+
+                                        <div class="overview-health-rate">
+                                            <div class="overview-health-rate-header">
+                                                <span>Validation Rate</span>
+                                                <span id="documentsValidationRate">0%</span>
+                                            </div>
+                                            <div class="overview-health-rate-track">
+                                                <div id="documentsValidationRateBar" class="overview-health-rate-fill" style="width: 0%;"></div>
+                                            </div>
                                         </div>
-                                        <button type="submit" class="btn btn-primary" style="width: 100%;">Upload Document</button>
-                                    </form>
+
+                                        <div class="overview-health-list-wrap">
+                                            <div class="overview-health-list-title">Recent Validation Notes</div>
+                                            <div id="documentsValidationList" class="overview-health-list">
+                                                <div class="overview-health-empty">No documents uploaded yet.</div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            
-                            <div class="dashboard-widget" style="grid-column: 1 / -1;">
-                                <div class="widget-header">
-                                    <h3>📁 My Documents</h3>
-                                </div>
-                                <div class="widget-content">
-                                    <div id="documentsContainer">
-                                        <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">Loading documents...</p>
+
+                            <div class="documents-right-column">
+                                <div class="dashboard-widget documents-upload-widget">
+                                    <div class="widget-header">
+                                        <h3>📤 Upload Documents</h3>
                                     </div>
+                                    <div class="widget-content">
+                                        <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
+                                            <strong style="color: #856404;">🔒 Zero-Knowledge Encryption</strong>
+                                            <p style="color: #856404; margin: 0.5rem 0 0 0; font-size: 0.875rem;">
+                                                Your documents are encrypted with your password. Even we cannot read them.
+                                                <strong>If you forget your password, your documents cannot be recovered.</strong>
+                                            </p>
+                                        </div>
+                                        <form id="documentUploadForm">
+                                            <div class="form-group">
+                                                <label for="documentFile">Select Document</label>
+                                                <input type="file" id="documentFile" accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.webp,.xls,.xlsx,.csv,.zip,.rar" required>
+                                                <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                                    Supported formats: PDF, DOC, DOCX, TXT, Images, Excel, CSV, ZIP, RAR (Max 50MB)
+                                                </small>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="documentPassword">Your Password *</label>
+                                                <input type="password" id="documentPassword" required placeholder="Enter your login password to encrypt">
+                                                <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                                    Required to encrypt your document. We use Zero-Knowledge encryption - your password is never stored.
+                                                </small>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="documentTypeSearch">Document Type <span style="color: var(--danger-color);">*</span></label>
+                                                <div class="searchable-dropdown" id="documentTypeDropdown">
+                                                    <input type="text" id="documentTypeSearch" class="dropdown-search" placeholder="Search or select document type..." autocomplete="off">
+                                                    <input type="hidden" id="documentType" required>
+                                                    <div class="dropdown-list" id="documentTypeList">
+                                                        <div class="dropdown-item" data-value="passport">Passport</div>
+                                                        <div class="dropdown-item" data-value="ds-160-confirmation">DS-160 Confirmation Page</div>
+                                                        <div class="dropdown-item" data-value="ds-160-application">DS-160 Application</div>
+                                                        <div class="dropdown-item" data-value="us-visa-appointment-letter">US Visa Appointment Letter</div>
+                                                        <div class="dropdown-item" data-value="visa-fee-receipt">Visa Fee Receipt</div>
+                                                        <div class="dropdown-item" data-value="photograph-2x2">Photograph (2x2 Inches)</div>
+                                                        <div class="dropdown-item" data-value="form-i20-signed">Form I-20 (Signed)</div>
+                                                        <div class="dropdown-item" data-value="previous-i20s">Previous I-20's</div>
+                                                        <div class="dropdown-item" data-value="university-admission-letter">University Admission Letter</div>
+                                                        <div class="dropdown-item" data-value="bank-balance-certificate">Bank balance certificate</div>
+                                                        <div class="dropdown-item" data-value="loan-approval-letter">Loan approval letter (if applicable)</div>
+                                                        <div class="dropdown-item" data-value="affidavit-of-support">Affidavit of Support (if sponsored)</div>
+                                                        <div class="dropdown-item" data-value="sponsor-income-proof">Sponsor's income proof (salary slips, IT returns)</div>
+                                                        <div class="dropdown-item" data-value="degree-certificates">Degree certificates</div>
+                                                        <div class="dropdown-item" data-value="provisional-certificates">Provisional certificates</div>
+                                                        <div class="dropdown-item" data-value="transcripts-marksheets">Transcripts / mark sheets (all semesters)</div>
+                                                        <div class="dropdown-item" data-value="standardized-test-scores">Standardized test scores (GRE, TOEFL, IELTS, Duolingo)</div>
+                                                        <div class="dropdown-item" data-value="experience-letters">Experience letters</div>
+                                                        <div class="dropdown-item" data-value="offer-letters">Offer letters</div>
+                                                        <div class="dropdown-item" data-value="salary-slips">Salary slips (last 3-6 months)</div>
+                                                        <div class="dropdown-item" data-value="resume">Resume (updated)</div>
+                                                        <div class="dropdown-item" data-value="i901-sevis-fee-confirmation">I-901 SEVIS fee payment confirmation</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="documentDescription">Description (Optional)</label>
+                                                <textarea id="documentDescription" rows="2" placeholder="Add any notes about this document..."></textarea>
+                                                <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                                    💡 Rilono AI reads this description to better understand and process your document.
+                                                </small>
+                                            </div>
+                                            <button type="submit" class="btn btn-primary" style="width: 100%;">Upload Document</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="dashboard-widget documents-list-widget">
+                            <div class="widget-header">
+                                <h3>📁 My Documents</h3>
+                            </div>
+                            <div class="widget-content">
+                                <div id="documentsContainer">
+                                    <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">Loading documents...</p>
                                 </div>
                             </div>
                         </div>

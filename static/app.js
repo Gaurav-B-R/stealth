@@ -3315,6 +3315,7 @@ async function loadProfileCompletion() {
         // Update visa journey tracker
         updateVisaJourneyUI(documents);
         updateOverviewDocumentHealthUI(documents);
+        updateDocumentsTabHealthUI(documents);
         
         // NOTE: We no longer save to R2 on every dashboard load
         // R2 is only updated when data actually changes (document upload/delete, profile update, preferences update)
@@ -3324,6 +3325,38 @@ async function loadProfileCompletion() {
 }
 
 function updateOverviewDocumentHealthUI(documents) {
+    updateDocumentHealthUI(documents, {
+        totalUploadedId: 'overviewTotalUploaded',
+        uniqueTypesId: 'overviewUniqueTypes',
+        validatedCountId: 'overviewValidatedCount',
+        needsReviewCountId: 'overviewNeedsReviewCount',
+        pendingValidationCountId: 'overviewPendingValidationCount',
+        processedCountId: 'overviewProcessedCount',
+        validationRateId: 'overviewValidationRate',
+        validationRateBarId: 'overviewValidationRateBar',
+        healthStatusId: 'overviewDocumentHealthStatus',
+        validationListId: 'overviewValidationList',
+        listItemTitle: 'Open in Documents tab'
+    });
+}
+
+function updateDocumentsTabHealthUI(documents) {
+    updateDocumentHealthUI(documents, {
+        totalUploadedId: 'documentsTotalUploaded',
+        uniqueTypesId: 'documentsUniqueTypes',
+        validatedCountId: 'documentsValidatedCount',
+        needsReviewCountId: 'documentsNeedsReviewCount',
+        pendingValidationCountId: 'documentsPendingValidationCount',
+        processedCountId: 'documentsProcessedCount',
+        validationRateId: 'documentsValidationRate',
+        validationRateBarId: 'documentsValidationRateBar',
+        healthStatusId: 'documentsHealthStatus',
+        validationListId: 'documentsValidationList',
+        listItemTitle: 'Jump to document'
+    });
+}
+
+function updateDocumentHealthUI(documents, config) {
     const totalUploaded = documents.length;
     const uniqueTypes = new Set(documents.map(doc => doc.document_type).filter(Boolean)).size;
     const validatedCount = documents.filter(doc => doc.is_valid === true).length;
@@ -3336,20 +3369,20 @@ function updateOverviewDocumentHealthUI(documents) {
     const processingRate = totalUploaded > 0 ? Math.round((processedCount / totalUploaded) * 100) : 0;
     const healthScore = totalUploaded > 0 ? Math.round((validationRate * 0.7) + (processingRate * 0.3)) : 0;
 
-    setTextContent('overviewTotalUploaded', totalUploaded);
-    setTextContent('overviewUniqueTypes', uniqueTypes);
-    setTextContent('overviewValidatedCount', validatedCount);
-    setTextContent('overviewNeedsReviewCount', needsReviewCount);
-    setTextContent('overviewPendingValidationCount', pendingValidationCount);
-    setTextContent('overviewProcessedCount', processedCount);
-    setTextContent('overviewValidationRate', `${validationRate}%`);
+    setTextContent(config.totalUploadedId, totalUploaded);
+    setTextContent(config.uniqueTypesId, uniqueTypes);
+    setTextContent(config.validatedCountId, validatedCount);
+    setTextContent(config.needsReviewCountId, needsReviewCount);
+    setTextContent(config.pendingValidationCountId, pendingValidationCount);
+    setTextContent(config.processedCountId, processedCount);
+    setTextContent(config.validationRateId, `${validationRate}%`);
 
-    const rateBar = document.getElementById('overviewValidationRateBar');
+    const rateBar = document.getElementById(config.validationRateBarId);
     if (rateBar) {
         rateBar.style.width = `${validationRate}%`;
     }
 
-    const healthBadge = document.getElementById('overviewDocumentHealthStatus');
+    const healthBadge = document.getElementById(config.healthStatusId);
     if (healthBadge) {
         if (totalUploaded === 0) {
             healthBadge.textContent = 'No Data';
@@ -3379,7 +3412,7 @@ function updateOverviewDocumentHealthUI(documents) {
         }
     }
 
-    const listContainer = document.getElementById('overviewValidationList');
+    const listContainer = document.getElementById(config.validationListId);
     if (listContainer) {
         if (totalUploaded === 0) {
             listContainer.innerHTML = '<div class="overview-health-empty">No documents uploaded yet.</div>';
@@ -3407,7 +3440,7 @@ function updateOverviewDocumentHealthUI(documents) {
             const documentId = Number.isFinite(doc.id) ? doc.id : 0;
 
             return `
-                <div class="overview-health-item overview-health-item-clickable" onclick="jumpToDocumentInDocumentsTab(${documentId}, '${encodedDocumentType}')" title="Open in Documents tab">
+                <div class="overview-health-item overview-health-item-clickable" onclick="jumpToDocumentInDocumentsTab(${documentId}, '${encodedDocumentType}')" title="${escapeHtml(config.listItemTitle || 'Open document')}">
                     <div class="overview-health-item-name">${escapeHtml(name)}</div>
                     <div class="overview-health-item-status" style="${statusStyle}">${statusLabel}</div>
                 </div>
@@ -4478,6 +4511,7 @@ async function loadMyDocuments() {
         if (response.ok) {
             const documents = await response.json();
             displayDocuments(documents);
+            updateDocumentsTabHealthUI(documents);
         } else {
             const error = await response.json().catch(() => ({}));
             if (response.status === 401) {
@@ -4496,33 +4530,36 @@ function getDocumentValidationMeta(doc) {
     if (doc.is_valid === true) {
         return {
             statusLabel: 'Valid',
-            statusStyle: 'background: rgba(16, 185, 129, 0.15); color: #166534; border: 1px solid rgba(22, 101, 52, 0.25);',
-            cardStyle: 'border: 1px solid #c3e6cb; background: #d4edda;',
+            statusStyle: 'background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);',
+            cardStyle: 'border: 1px solid rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.08);',
             indicatorIcon: '✓',
-            indicatorColor: '#28a745',
-            reason: ''
+            indicatorColor: '#34d399',
+            reason: '',
+            reasonStyle: ''
         };
     }
 
     if (doc.is_valid === false) {
         return {
-            statusLabel: 'Invalid',
-            statusStyle: 'background: rgba(239, 68, 68, 0.15); color: #991b1b; border: 1px solid rgba(153, 27, 27, 0.25);',
-            cardStyle: 'border: 1px solid #f5c6cb; background: #f8d7da;',
+            statusLabel: 'Needs Review',
+            statusStyle: 'background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35);',
+            cardStyle: 'border: 1px solid rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.09);',
             indicatorIcon: '!',
-            indicatorColor: '#dc3545',
-            reason: doc.validation_message || 'Validation failed. Please upload the correct document.'
+            indicatorColor: '#f59e0b',
+            reason: doc.validation_message || 'Validation failed. Please upload the correct document.',
+            reasonStyle: 'color: #fcd34d; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 0.6rem; padding: 0.55rem 0.65rem;'
         };
     }
 
     const isProcessing = doc.is_processed === false;
     return {
         statusLabel: isProcessing ? 'Processing' : 'Pending Validation',
-        statusStyle: 'background: rgba(245, 158, 11, 0.15); color: #92400e; border: 1px solid rgba(146, 64, 14, 0.25);',
-        cardStyle: 'border: 1px solid #ffe0a3; background: #fff7e6;',
+        statusStyle: 'background: rgba(99, 102, 241, 0.15); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.35);',
+        cardStyle: 'border: 1px solid rgba(99, 102, 241, 0.35); background: rgba(99, 102, 241, 0.08);',
         indicatorIcon: '•',
-        indicatorColor: '#d97706',
-        reason: ''
+        indicatorColor: '#818cf8',
+        reason: '',
+        reasonStyle: ''
     };
 }
 
@@ -4575,18 +4612,18 @@ function displayDocuments(documents) {
             const validationMeta = getDocumentValidationMeta(doc);
             
             html += `
-                <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem;">
+                <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.75rem; padding: 1rem; margin-bottom: 0.8rem;">
                     <div style="display: flex; align-items: start; gap: 0.75rem;">
                         <div style="color: ${validationMeta.indicatorColor}; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">${validationMeta.indicatorIcon}</div>
                         <div style="flex: 1;">
                             <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
                                 <div style="flex: 1;">
-                                    <div style="font-weight: 600; margin-bottom: 0.25rem; color: #1f2937;">
+                                    <div style="font-weight: 650; margin-bottom: 0.25rem; color: var(--text-primary);">
                                         ${escapeHtml(docTypeLabel)}
                                     </div>
                                     <div style="font-size: 0.875rem; color: var(--text-secondary);">
                                         ${escapeHtml(doc.original_filename)} • ${fileSizeMB} MB • ${uploadDate}
-                                        ${isEncrypted ? ' • <span style="color: #28a745;">🔒 Encrypted</span>' : ''}
+                                        ${isEncrypted ? ' • <span style="color: #34d399;">🔒 Encrypted</span>' : ''}
                                     </div>
                                     <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
                                         <span style="font-size: 0.8rem; color: var(--text-secondary);">Validation:</span>
@@ -4595,7 +4632,7 @@ function displayDocuments(documents) {
                                         </span>
                                     </div>
                                     ${validationMeta.reason ? `
-                                        <div style="font-size: 0.85rem; margin-top: 0.5rem; color: #991b1b;">
+                                        <div style="font-size: 0.85rem; margin-top: 0.55rem; ${validationMeta.reasonStyle}">
                                             <strong>Reason:</strong> ${escapeHtml(validationMeta.reason)}
                                         </div>
                                     ` : ''}
@@ -4609,7 +4646,7 @@ function displayDocuments(documents) {
                                     <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
                                     <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
                                 `}
-                                <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--danger-color); color: white; border: none;">Delete</button>
+                                <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">Delete</button>
                             </div>
                         </div>
                     </div>
@@ -4620,15 +4657,16 @@ function displayDocuments(documents) {
         // Show pending documents with crosses
         pendingDocs.forEach(pendingDoc => {
             html += `
-                <div data-document-type="${escapeHtml(pendingDoc.value)}" style="border: 1px solid #f5c6cb; border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem; background: #f8d7da;">
+                <div data-document-type="${escapeHtml(pendingDoc.value)}" style="border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 0.95rem 1rem; margin-bottom: 0.75rem; background: var(--bg-secondary);">
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
-                        <div style="color: #dc3545; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">✗</div>
+                        <div style="color: #94a3b8; font-size: 1.15rem; font-weight: bold; flex-shrink: 0;">○</div>
                         <div style="flex: 1;">
-                            <div style="font-weight: 600; color: #721c24; margin-bottom: 0.25rem;">
+                            <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem;">
                                 ${escapeHtml(pendingDoc.label)}
                             </div>
-                            <div style="font-size: 0.875rem; color: #856404;">
-                                Pending upload
+                            <div style="font-size: 0.84rem; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 0.35rem;">
+                                <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #fbbf24;"></span>
+                                Not uploaded yet
                             </div>
                         </div>
                     </div>
@@ -4655,12 +4693,12 @@ function displayDocuments(documents) {
             const validationMeta = getDocumentValidationMeta(doc);
             
             return `
-                <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.5rem; padding: 1rem; margin-bottom: 0.75rem;">
+                <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.75rem; padding: 1rem; margin-bottom: 0.8rem;">
                     <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
                         <div style="flex: 1;">
-                            <div style="font-weight: 600; margin-bottom: 0.25rem; color: #1f2937;">
+                            <div style="font-weight: 600; margin-bottom: 0.25rem; color: var(--text-primary);">
                                 ${escapeHtml(doc.original_filename)}
-                                ${isEncrypted ? '<span style="font-size: 0.75rem; color: #28a745; margin-left: 0.5rem;">🔒 Encrypted</span>' : ''}
+                                ${isEncrypted ? '<span style="font-size: 0.75rem; color: #34d399; margin-left: 0.5rem;">🔒 Encrypted</span>' : ''}
                             </div>
                             <div style="font-size: 0.875rem; color: var(--text-secondary);">
                                 ${doc.document_type ? `<span style="text-transform: capitalize;">${escapeHtml(doc.document_type)}</span> • ` : ''}
@@ -4673,7 +4711,7 @@ function displayDocuments(documents) {
                                 </span>
                             </div>
                             ${validationMeta.reason ? `
-                                <div style="font-size: 0.85rem; margin-top: 0.5rem; color: #991b1b;">
+                                <div style="font-size: 0.85rem; margin-top: 0.55rem; ${validationMeta.reasonStyle}">
                                     <strong>Reason:</strong> ${escapeHtml(validationMeta.reason)}
                                 </div>
                             ` : ''}
@@ -4687,7 +4725,7 @@ function displayDocuments(documents) {
                             <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
                             <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
                         `}
-                        <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--danger-color); color: white; border: none;">Delete</button>
+                        <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">Delete</button>
                     </div>
                 </div>
             `;
