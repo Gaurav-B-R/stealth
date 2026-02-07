@@ -1487,9 +1487,6 @@ function updatePricingByCountry(countryCode) {
     }
     if (hintEl) {
         let hintText = `Currency: ${config.currency} (${config.country})`;
-        if (pricingRatesMeta.providerDate) {
-            hintText += ` • Rates date: ${pricingRatesMeta.providerDate}`;
-        }
         if (pricingRatesMeta.source === 'fallback') {
             hintText += ' • Using fallback rates';
         } else if (pricingRatesMeta.missingCurrencies.includes(config.currency)) {
