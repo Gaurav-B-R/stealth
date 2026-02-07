@@ -116,6 +116,8 @@ function handleRoute(skipURLUpdate = false) {
         showPrivacy(skipURLUpdate);
     } else if (path === '/terms') {
         showTerms(skipURLUpdate);
+    } else if (path === '/refund-policy') {
+        showRefundPolicy(skipURLUpdate);
     } else if (path === '/contact') {
         showContact(skipURLUpdate);
     } else {
@@ -178,8 +180,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const privacyLastUpdated = document.getElementById('privacyLastUpdated');
     const termsLastUpdated = document.getElementById('termsLastUpdated');
+    const refundLastUpdated = document.getElementById('refundLastUpdated');
     if (privacyLastUpdated) privacyLastUpdated.textContent = today;
     if (termsLastUpdated) termsLastUpdated.textContent = today;
+    if (refundLastUpdated) refundLastUpdated.textContent = today;
     
     // Check authentication first
     await checkAuth();
@@ -1517,6 +1521,16 @@ function showTerms(skipURLUpdate = false) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (!skipURLUpdate) {
         updateURL('/terms', false);
+    }
+}
+
+function showRefundPolicy(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('refundPolicySection').style.display = 'block';
+    // Scroll to top
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!skipURLUpdate) {
+        updateURL('/refund-policy', false);
     }
 }
 
