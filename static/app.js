@@ -1347,6 +1347,8 @@ function switchDashboardTab(tabName) {
         loadMyDocuments();
     } else if (tabName === 'overview') {
         loadDashboardStats();
+    } else if (tabName === 'visa') {
+        loadDashboardStats();
     } else if (tabName === 'records') {
         initializeRilonoAiChat();
     } else if (tabName === 'news') {
@@ -3748,55 +3750,80 @@ function calculateVisaJourneyStage(documents) {
 function updateVisaJourneyUI(documents) {
     const journeyData = calculateVisaJourneyStage(documents);
     const { currentStage, stageInfo, stages } = journeyData;
-    
-    // Update progress line
-    const progressLine = document.getElementById('journeyProgressLine');
+
+    updateVisaJourneyWidget({
+        progressLineId: 'journeyProgressLine',
+        stageIconPrefix: 'stageIcon',
+        currentStageEmojiId: 'currentStageEmoji',
+        currentStageNameId: 'currentStageName',
+        currentStageDescId: 'currentStageDesc',
+        nextStepHintId: 'nextStepHint',
+        nextStepTextId: 'nextStepText'
+    }, journeyData);
+
+    updateVisaJourneyWidget({
+        progressLineId: 'visaTabJourneyProgressLine',
+        stageIconPrefix: 'visaTabStageIcon',
+        currentStageEmojiId: 'visaTabCurrentStageEmoji',
+        currentStageNameId: 'visaTabCurrentStageName',
+        currentStageDescId: 'visaTabCurrentStageDesc',
+        nextStepHintId: 'visaTabNextStepHint',
+        nextStepTextId: 'visaTabNextStepText'
+    }, journeyData);
+}
+
+function updateVisaJourneyWidget(config, journeyData) {
+    const { currentStage, stageInfo, stages } = journeyData;
+
+    const progressLine = document.getElementById(config.progressLineId);
     if (progressLine) {
-        // Calculate progress percentage (stage 1 = 0%, stage 7 = 100%)
         const progressPercent = ((currentStage - 1) / (stages.length - 1)) * 90;
         progressLine.style.width = `${progressPercent}%`;
     }
-    
-    // Update stage icons
-    for (let i = 1; i <= 7; i++) {
-        const stageIcon = document.getElementById(`stageIcon${i}`);
-        if (stageIcon) {
-            if (i < currentStage) {
-                // Completed stage
-                stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
-                stageIcon.style.color = 'white';
-                stageIcon.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.4)';
-                stageIcon.innerHTML = '✓';
-            } else if (i === currentStage) {
-                // Current stage
-                stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
-                stageIcon.style.color = 'white';
-                stageIcon.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.4)';
-                stageIcon.style.animation = 'pulse 2s ease-in-out infinite';
-            } else {
-                // Future stage
-                stageIcon.style.background = 'var(--border-color)';
-                stageIcon.style.color = 'var(--text-secondary)';
-                stageIcon.style.boxShadow = 'none';
-            }
+
+    for (let i = 1; i <= stages.length; i++) {
+        const stageIcon = document.getElementById(`${config.stageIconPrefix}${i}`);
+        if (!stageIcon) continue;
+
+        const defaultEmoji = stages[i - 1]?.emoji || '•';
+        stageIcon.style.animation = 'none';
+
+        if (i < currentStage) {
+            stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
+            stageIcon.style.color = 'white';
+            stageIcon.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.4)';
+            stageIcon.innerHTML = '✓';
+        } else if (i === currentStage) {
+            stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
+            stageIcon.style.color = 'white';
+            stageIcon.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.4)';
+            stageIcon.style.animation = 'pulse 2s ease-in-out infinite';
+            stageIcon.innerHTML = defaultEmoji;
+        } else {
+            stageIcon.style.background = 'var(--border-color)';
+            stageIcon.style.color = 'var(--text-secondary)';
+            stageIcon.style.boxShadow = 'none';
+            stageIcon.innerHTML = defaultEmoji;
         }
     }
-    
-    // Update current stage info box
-    const currentStageEmoji = document.getElementById('currentStageEmoji');
-    const currentStageName = document.getElementById('currentStageName');
-    const currentStageDesc = document.getElementById('currentStageDesc');
-    const nextStepText = document.getElementById('nextStepText');
-    
+
+    const currentStageEmoji = document.getElementById(config.currentStageEmojiId);
+    const currentStageName = document.getElementById(config.currentStageNameId);
+    const currentStageDesc = document.getElementById(config.currentStageDescId);
+    const nextStepText = document.getElementById(config.nextStepTextId);
+    const nextStepHint = document.getElementById(config.nextStepHintId);
+
     if (currentStageEmoji) currentStageEmoji.textContent = stageInfo.emoji;
     if (currentStageName) currentStageName.textContent = `Stage ${currentStage}: ${stageInfo.name}`;
     if (currentStageDesc) currentStageDesc.textContent = stageInfo.description;
     if (nextStepText) nextStepText.textContent = stageInfo.nextStep;
-    
-    // Hide next step hint if at final stage
-    const nextStepHint = document.getElementById('nextStepHint');
-    if (nextStepHint && currentStage === 7) {
-        nextStepHint.innerHTML = '<span style="color: #34d399; font-weight: 600;">🎉 Congratulations! You\'re all set for your journey!</span>';
+
+    if (nextStepHint) {
+        if (currentStage === 7) {
+            nextStepHint.innerHTML = '<span style="color: #34d399; font-weight: 600;">🎉 Congratulations! You\'re all set for your journey!</span>';
+        } else {
+            nextStepHint.innerHTML = `<strong>Next step:</strong> <span id="${config.nextStepTextId}">${escapeHtml(stageInfo.nextStep)}</span>`;
+        }
     }
 }
 

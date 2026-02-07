@@ -1047,18 +1047,61 @@
                             <p class="tab-subtitle">Manage your visa documents and status</p>
                         </div>
                         <div class="dashboard-grid">
-                <div class="dashboard-widget">
-                    <div class="widget-header">
-                        <h3>🛂 Visa Status</h3>
-                    </div>
-                    <div class="widget-content">
-                        <div style="text-align: center; padding: 2rem 1rem;">
-                            <div style="font-size: 3rem; margin-bottom: 1rem;">📋</div>
-                            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Manage your visa documents and status</p>
-                            <button class="btn btn-primary" onclick="showMessage('Visa feature coming soon!', 'success')">View Visa Info</button>
+                            <div class="dashboard-widget" style="grid-column: 1 / -1;">
+                                <div class="widget-header">
+                                    <h3>🛂 Your F1 Visa Journey</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div id="visaTabJourneyTracker" style="padding: 1.5rem;">
+                                        <div class="journey-stages" style="display: flex; justify-content: space-between; position: relative; margin-bottom: 1rem;">
+                                            <div style="position: absolute; top: 20px; left: 5%; right: 5%; height: 4px; background: var(--border-color); border-radius: 2px; z-index: 0;"></div>
+                                            <div id="visaTabJourneyProgressLine" style="position: absolute; top: 20px; left: 5%; height: 4px; background: linear-gradient(90deg, var(--primary-color), var(--secondary-color)); border-radius: 2px; z-index: 1; width: 0%; transition: width 0.5s ease;"></div>
+
+                                            <div class="journey-stage" data-stage="1" style="display: flex; flex-direction: column; align-items: center; z-index: 2; flex: 1;">
+                                                <div class="stage-icon" id="visaTabStageIcon1" style="width: 44px; height: 44px; border-radius: 50%; background: var(--border-color); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; transition: all 0.3s ease; border: 3px solid var(--card-bg);">📝</div>
+                                                <span class="stage-label" style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.5rem; text-align: center; max-width: 92px;">Getting Started</span>
+                                            </div>
+                                            <div class="journey-stage" data-stage="2" style="display: flex; flex-direction: column; align-items: center; z-index: 2; flex: 1;">
+                                                <div class="stage-icon" id="visaTabStageIcon2" style="width: 44px; height: 44px; border-radius: 50%; background: var(--border-color); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; transition: all 0.3s ease; border: 3px solid var(--card-bg);">🎓</div>
+                                                <span class="stage-label" style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.5rem; text-align: center; max-width: 92px;">Admission</span>
+                                            </div>
+                                            <div class="journey-stage" data-stage="3" style="display: flex; flex-direction: column; align-items: center; z-index: 2; flex: 1;">
+                                                <div class="stage-icon" id="visaTabStageIcon3" style="width: 44px; height: 44px; border-radius: 50%; background: var(--border-color); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; transition: all 0.3s ease; border: 3px solid var(--card-bg);">📄</div>
+                                                <span class="stage-label" style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.5rem; text-align: center; max-width: 92px;">Documents</span>
+                                            </div>
+                                            <div class="journey-stage" data-stage="4" style="display: flex; flex-direction: column; align-items: center; z-index: 2; flex: 1;">
+                                                <div class="stage-icon" id="visaTabStageIcon4" style="width: 44px; height: 44px; border-radius: 50%; background: var(--border-color); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; transition: all 0.3s ease; border: 3px solid var(--card-bg);">📘</div>
+                                                <span class="stage-label" style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.5rem; text-align: center; max-width: 92px;">I-20</span>
+                                            </div>
+                                            <div class="journey-stage" data-stage="5" style="display: flex; flex-direction: column; align-items: center; z-index: 2; flex: 1;">
+                                                <div class="stage-icon" id="visaTabStageIcon5" style="width: 44px; height: 44px; border-radius: 50%; background: var(--border-color); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; transition: all 0.3s ease; border: 3px solid var(--card-bg);">📋</div>
+                                                <span class="stage-label" style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.5rem; text-align: center; max-width: 92px;">DS-160</span>
+                                            </div>
+                                            <div class="journey-stage" data-stage="6" style="display: flex; flex-direction: column; align-items: center; z-index: 2; flex: 1;">
+                                                <div class="stage-icon" id="visaTabStageIcon6" style="width: 44px; height: 44px; border-radius: 50%; background: var(--border-color); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; transition: all 0.3s ease; border: 3px solid var(--card-bg);">💳</div>
+                                                <span class="stage-label" style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.5rem; text-align: center; max-width: 92px;">Fees Paid</span>
+                                            </div>
+                                            <div class="journey-stage" data-stage="7" style="display: flex; flex-direction: column; align-items: center; z-index: 2; flex: 1;">
+                                                <div class="stage-icon" id="visaTabStageIcon7" style="width: 44px; height: 44px; border-radius: 50%; background: var(--border-color); display: flex; align-items: center; justify-content: center; font-size: 1.25rem; transition: all 0.3s ease; border: 3px solid var(--card-bg);">✈️</div>
+                                                <span class="stage-label" style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.5rem; text-align: center; max-width: 92px;">Ready to Fly</span>
+                                            </div>
+                                        </div>
+
+                                        <div id="visaTabCurrentStageInfo" style="background: var(--bg-secondary); border-radius: 0.75rem; padding: 1.2rem 1.25rem; margin-top: 1rem; border-left: 4px solid var(--primary-color);">
+                                            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                                                <span id="visaTabCurrentStageEmoji" style="font-size: 1.65rem;">📝</span>
+                                                <div>
+                                                    <div id="visaTabCurrentStageName" style="font-weight: 650; color: var(--text-primary); font-size: 1.65rem;">Stage 1: Getting Started</div>
+                                                    <div id="visaTabCurrentStageDesc" style="font-size: 1.1rem; color: var(--text-secondary);">Welcome! Start your F1 visa journey.</div>
+                                                </div>
+                                            </div>
+                                            <div id="visaTabNextStepHint" style="font-size: 1.1rem; color: var(--primary-color); margin-top: 0.65rem;">
+                                                <strong>Next step:</strong> <span id="visaTabNextStepText">Upload your university offer/admission letter</span>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
-                        </div>
+                            </div>
                     </div>
                 </div>
 
