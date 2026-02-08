@@ -8,6 +8,8 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     university: Optional[str] = None
     phone: Optional[str] = None
+    current_residence_country: Optional[str] = "United States"
+    preferred_country: Optional[str] = "United States"
     profile_picture: Optional[str] = None
 
 class UserCreate(UserBase):
@@ -19,6 +21,7 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     university: Optional[str] = None
     phone: Optional[str] = None
+    current_residence_country: Optional[str] = None
     profile_picture: Optional[str] = None
 
 class UserResponse(UserBase):

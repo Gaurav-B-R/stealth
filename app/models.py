@@ -13,6 +13,7 @@ class User(Base):
     full_name = Column(String, nullable=True)
     university = Column(String, nullable=True)
     phone = Column(String, nullable=True)
+    current_residence_country = Column(String, nullable=True, default="United States")
     profile_picture = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     email_verified = Column(Boolean, default=False)

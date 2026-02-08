@@ -673,6 +673,10 @@ body {
     display: none;
 }
 
+.searchable-dropdown .dropdown-item.rule-hidden {
+    display: none;
+}
+
 .searchable-dropdown .dropdown-item.highlighted {
     background: var(--bg-tertiary);
 }

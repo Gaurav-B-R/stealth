@@ -10,6 +10,7 @@ let turnstileWidgetIds = {
 let newsRequestInFlight = false;
 let visaInterviewRequestInFlight = false;
 let visaInterviewFiltersInitialized = false;
+let documentTypeDropdownController = null;
 const PRO_UPGRADE_ENABLED = false;
 const PUBLIC_APP_ORIGIN = 'https://rilono.com';
 
@@ -214,6 +215,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     initializeSearchableDropdowns();
     initializePricingSelector();
+    initializeRegisterCountrySelector();
     
     // Initialize Turnstile
     await initializeTurnstile();
@@ -238,6 +240,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     const path = getPathFromURL();
     updateURL(path || '/', true);
 });
+
+function initializeRegisterCountrySelector() {
+    const countrySelect = document.getElementById('registerCountry');
+    if (!countrySelect) return;
+
+    const countryFlagsByCode = {
+        US: '🇺🇸',
+        IN: '🇮🇳',
+        GB: '🇬🇧',
+        CA: '🇨🇦',
+        AU: '🇦🇺',
+        DE: '🇩🇪',
+        AE: '🇦🇪',
+        SG: '🇸🇬',
+        JP: '🇯🇵'
+    };
+    const countries = Object.entries(PRICING_COUNTRY_CONFIG).map(([code, entry]) => ({
+        name: entry.country,
+        flag: countryFlagsByCode[code] || '🌍'
+    }));
+    countrySelect.innerHTML = [
+        '<option value="">Select country</option>',
+        ...countries.map((country) => `<option value="${escapeHtml(country.name)}">${country.flag} ${escapeHtml(country.name)}</option>`)
+    ].join('');
+
+    countrySelect.value = 'United States';
+}
 
 function setupEventListeners() {
     const loginForm = document.getElementById('loginForm');
@@ -827,8 +856,10 @@ function showRegister(skipURLUpdate = false) {
     const universityInput = document.getElementById('registerUniversity');
     const messageEl = document.getElementById('emailValidationMessage');
     const referralInput = document.getElementById('registerReferralCode');
+    const countryInput = document.getElementById('registerCountry');
     if (universityInput) universityInput.value = '';
     if (messageEl) messageEl.style.display = 'none';
+    if (countryInput) countryInput.value = 'United States';
     if (referralInput) {
         referralInput.value = getReferralCodeFromURL() || '';
     }
@@ -2022,7 +2053,7 @@ async function handleRegister(e) {
         password: getValue('registerPassword'),
         full_name: getValue('registerFullName'),
         university: getValue('registerUniversity'),
-        phone: getValue('registerPhone'),
+        current_residence_country: getValue('registerCountry'),
         referral_code: getValue('registerReferralCode')
         // Username is optional - will be auto-generated from email on backend
     };
@@ -2152,6 +2183,7 @@ function logout() {
         const existingMsgs = mainMessages.querySelectorAll('.rilono-ai-message');
         existingMsgs.forEach(msg => msg.remove());
     });
+    updateDocumentTypeAvailability([]);
     updateUIForAuth();
     showMessage('Logged out successfully', 'success');
     showHomepage();
@@ -2604,7 +2636,7 @@ function initializeSearchableDropdowns() {
     const searchInput = documentTypeDropdown.querySelector('.dropdown-search');
     const hiddenInput = documentTypeDropdown.querySelector('input[type="hidden"]');
     const dropdownList = documentTypeDropdown.querySelector('.dropdown-list');
-    const items = dropdownList.querySelectorAll('.dropdown-item');
+    const items = Array.from(dropdownList.querySelectorAll('.dropdown-item'));
     
     // Open dropdown on focus
     searchInput.addEventListener('focus', () => {
@@ -2627,6 +2659,7 @@ function initializeSearchableDropdowns() {
     // Handle item selection
     items.forEach(item => {
         item.addEventListener('click', () => {
+            if (item.classList.contains('rule-hidden')) return;
             const value = item.dataset.value;
             const text = item.textContent;
             
@@ -2650,7 +2683,10 @@ function initializeSearchableDropdowns() {
             if (!hiddenInput.value && searchInput.value) {
                 // Try to find an exact match
                 const matchingItem = Array.from(items).find(
-                    item => item.textContent.toLowerCase() === searchInput.value.toLowerCase()
+                    item => (
+                        item.textContent.toLowerCase() === searchInput.value.toLowerCase() &&
+                        !item.classList.contains('rule-hidden')
+                    )
                 );
                 if (matchingItem) {
                     hiddenInput.value = matchingItem.dataset.value;
@@ -2697,8 +2733,10 @@ function initializeSearchableDropdowns() {
         items.forEach(item => {
             const text = item.textContent.toLowerCase();
             const matches = text.includes(searchTerm);
-            item.classList.toggle('hidden', !matches);
-            if (matches) hasResults = true;
+            const blockedByRule = item.classList.contains('rule-hidden');
+            const shouldHide = !matches || blockedByRule;
+            item.classList.toggle('hidden', shouldHide);
+            if (!shouldHide) hasResults = true;
         });
         
         // Show "no results" message
@@ -2722,6 +2760,38 @@ function initializeSearchableDropdowns() {
             visibleItems[index].classList.add('highlighted');
             visibleItems[index].scrollIntoView({ block: 'nearest' });
         }
+    }
+
+    documentTypeDropdownController = {
+        dropdown: documentTypeDropdown,
+        searchInput,
+        hiddenInput,
+        dropdownList,
+        items,
+        filterItems
+    };
+}
+
+function updateDocumentTypeAvailability(documents = []) {
+    const passportItem = document.querySelector('#documentTypeList .dropdown-item[data-value="passport"]');
+    if (!passportItem) return;
+
+    const hasValidatedPassport = Array.isArray(documents) && documents.some(
+        (doc) => doc && doc.document_type === 'passport' && doc.is_valid === true
+    );
+    passportItem.classList.toggle('rule-hidden', hasValidatedPassport);
+
+    const hiddenInput = document.getElementById('documentType');
+    const searchInput = document.getElementById('documentTypeSearch');
+    if (hasValidatedPassport && hiddenInput?.value === 'passport') {
+        hiddenInput.value = '';
+        if (searchInput) searchInput.value = '';
+        passportItem.classList.remove('selected');
+    }
+
+    if (documentTypeDropdownController?.filterItems) {
+        const currentTerm = (documentTypeDropdownController.searchInput?.value || '').toLowerCase();
+        documentTypeDropdownController.filterItems(currentTerm);
     }
 }
 
@@ -4951,6 +5021,7 @@ async function loadMyDocuments() {
             const documents = await response.json();
             displayDocuments(documents);
             updateDocumentsTabHealthUI(documents);
+            updateDocumentTypeAvailability(documents);
         } else {
             const error = await response.json().catch(() => ({}));
             if (response.status === 401) {

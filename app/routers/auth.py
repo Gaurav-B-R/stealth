@@ -169,6 +169,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
         full_name=user.full_name,
         university=university_name,  # Auto-filled from database (or developer email)
         phone=user.phone,
+        current_residence_country=user.current_residence_country or "United States",
         referral_code=generate_unique_referral_code(db),
         referred_by_user_id=referrer.id if referrer else None,
         email_verified=False,
