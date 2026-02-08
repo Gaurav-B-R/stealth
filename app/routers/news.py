@@ -15,11 +15,7 @@ router = APIRouter(prefix="/api/news", tags=["news"])
 NEWS_CACHE_TTL = timedelta(hours=6)
 INTERVIEW_CACHE_TTL = timedelta(hours=6)
 _news_lock = Lock()
-_news_cache: Dict[str, Any] = {
-    "items": [],
-    "fetched_at": None,
-    "model_used": None,
-}
+_news_cache: Dict[str, Dict[str, Any]] = {}
 _interview_lock = Lock()
 _interview_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -34,11 +30,7 @@ INTERVIEW_COUNTRY_CONSULATE_MAP: Dict[str, List[str]] = {
     "Japan": ["Tokyo", "Osaka / Kobe", "Naha", "Sapporo", "Fukuoka"],
 }
 
-
-def _cache_is_fresh(now_utc: datetime) -> bool:
-    if not _news_cache["fetched_at"] or not _news_cache["items"]:
-        return False
-    return (now_utc - _news_cache["fetched_at"]) < NEWS_CACHE_TTL
+GEMINI_LOG_MAX_CHARS = int(os.getenv("GEMINI_LOG_MAX_CHARS", "0") or "0")
 
 
 def _cache_entry_is_fresh(entry: Dict[str, Any], now_utc: datetime, ttl: timedelta) -> bool:
@@ -47,6 +39,16 @@ def _cache_entry_is_fresh(entry: Dict[str, Any], now_utc: datetime, ttl: timedel
     if not fetched_at or not items:
         return False
     return (now_utc - fetched_at) < ttl
+
+
+def _resolve_user_residence_country(user: models.User) -> str:
+    country = (
+        getattr(user, "current_residence_country", None)
+        or getattr(user, "preferred_country", None)
+        or "United States"
+    )
+    normalized = str(country).strip()
+    return normalized or "United States"
 
 
 def _clean_and_parse_json(text: str) -> Dict[str, Any]:
@@ -176,7 +178,98 @@ def _normalize_interview_items(items: Any, allowed_consulates: List[str]) -> Lis
     return normalized
 
 
-def _generate_f1_news_with_gemini() -> Dict[str, Any]:
+def _clip_for_log(text: str) -> str:
+    if text is None:
+        return ""
+    if GEMINI_LOG_MAX_CHARS <= 0:
+        return text
+    if len(text) <= GEMINI_LOG_MAX_CHARS:
+        return text
+    return f"{text[:GEMINI_LOG_MAX_CHARS]}\n\n...[truncated {len(text) - GEMINI_LOG_MAX_CHARS} chars]"
+
+
+def _log_gemini_prompt(label: str, model_name: str, prompt: str, extra: str = "") -> None:
+    print("\n" + "=" * 90)
+    print(f"🔵 GEMINI REQUEST [{label}]")
+    print(f"Model: {model_name}")
+    if extra:
+        print(f"Meta: {extra}")
+    print("-" * 90)
+    print(_clip_for_log(prompt))
+    print("=" * 90)
+
+
+def _log_gemini_response(label: str, model_name: str, response: Any, extra: str = "") -> None:
+    response_text = str(getattr(response, "text", "") or "")
+    print("\n" + "-" * 90)
+    print(f"✅ GEMINI RESPONSE [{label}]")
+    print(f"Model: {model_name}")
+    if extra:
+        print(f"Meta: {extra}")
+    print("-" * 90)
+    print(_clip_for_log(response_text))
+    print("-" * 90 + "\n")
+
+
+def _generate_content_with_grounding(model: Any, prompt: str, model_name: str, label: str) -> Any:
+    """
+    Generate content with Google Search grounding enabled.
+    Falls back to regular generation if grounded call path is unavailable.
+    This helper is intentionally used only by News/Interview endpoints.
+    """
+    grounding_errors: List[str] = []
+    _log_gemini_prompt(label, model_name, prompt, extra="grounding=enabled")
+
+    # Vertex AI grounding path
+    if gemini_utils.USE_VERTEX_AI and gemini_utils.VERTEX_AI_AVAILABLE:
+        try:
+            from vertexai.generative_models import Tool
+            from vertexai.generative_models import grounding
+            tool = Tool.from_google_search_retrieval(
+                grounding.GoogleSearchRetrieval()
+            )
+            response = model.generate_content(prompt, tools=[tool])
+            _log_gemini_response(label, model_name, response, extra="grounding_method=vertex_google_search_retrieval")
+            return response
+        except Exception as exc:
+            grounding_errors.append(f"vertex_grounding_error={str(exc)}")
+    else:
+        # google.generativeai grounding path
+        if gemini_utils.GENAI_AVAILABLE and gemini_utils.genai:
+            try:
+                tool = gemini_utils.genai.protos.Tool(
+                    google_search_retrieval=gemini_utils.genai.protos.GoogleSearchRetrieval()
+                )
+                response = model.generate_content(prompt, tools=[tool])
+                _log_gemini_response(label, model_name, response, extra="grounding_method=genai_protos_tool")
+                return response
+            except Exception as exc:
+                grounding_errors.append(f"genai_proto_grounding_error={str(exc)}")
+
+            # Alternate dict-style tool format for compatibility with some SDK builds.
+            try:
+                response = model.generate_content(prompt, tools=[{"google_search_retrieval": {}}])
+                _log_gemini_response(label, model_name, response, extra="grounding_method=genai_dict_tool")
+                return response
+            except Exception as exc:
+                grounding_errors.append(f"genai_dict_grounding_error={str(exc)}")
+
+    # Fallback to non-grounded generation if grounding tool failed.
+    try:
+        response = model.generate_content(prompt)
+        _log_gemini_response(
+            label,
+            model_name,
+            response,
+            extra=f"grounding_method=fallback_non_grounded; errors={' | '.join(grounding_errors) if grounding_errors else 'none'}"
+        )
+        return response
+    except Exception as exc:
+        details = "; ".join(grounding_errors) if grounding_errors else "grounding_unavailable"
+        raise RuntimeError(f"generation_failed_after_grounding_attempts: {details}; base_error={str(exc)}")
+
+
+def _generate_f1_news_with_gemini(user_country: str) -> Dict[str, Any]:
     has_service_account = os.path.exists(gemini_utils.SERVICE_ACCOUNT_PATH)
     has_valid_api_key = gemini_utils.GEMINI_API_KEY and gemini_utils.GEMINI_API_KEY.startswith("AIza")
     if not has_service_account and not has_valid_api_key:
@@ -185,11 +278,19 @@ def _generate_f1_news_with_gemini() -> Dict[str, Any]:
             detail="Gemini is not configured on the server"
         )
 
+    now_utc_iso = datetime.now(timezone.utc).isoformat()
+
     prompt = f"""You are a research assistant for F1 student visa applicants.
-Task: Provide the latest important updates on US F1 visa news.
+Task: Provide the latest important updates on US F1 visa news, tailored for students currently residing in {user_country}.
+
+Student context:
+- Current country of residence: {user_country}
+- Current date/time (UTC): {now_utc_iso}
 
 Requirements:
-- Focus on recent and relevant updates for F1 student visa applicants
+- Focus on recent and relevant updates for F1 student visa applicants in this country context.
+- Prioritize updates that materially affect students from or residing in {user_country}.
+- Treat the current UTC date/time above as "now" when determining recency.
 - Include source links for each update
 - Keep summaries clear and concise
 - If uncertain, prefer official sources and major publications
@@ -197,7 +298,7 @@ Requirements:
 
 Output JSON format:
 {{
-  "generated_at_utc": "{datetime.now(timezone.utc).isoformat()}",
+  "generated_at_utc": "{now_utc_iso}",
   "items": [
     {{
       "title": "short headline",
@@ -229,7 +330,7 @@ Provide 4 to 8 items."""
             else:
                 raise HTTPException(status_code=503, detail="Gemini library is not available")
 
-            response = model.generate_content(prompt)
+            response = _generate_content_with_grounding(model, prompt, model_name=model_name, label="news.f1_latest")
             data = _clean_and_parse_json(getattr(response, "text", ""))
             items = _normalize_items(data.get("items", []))
             if not items:
@@ -255,12 +356,14 @@ def _generate_f1_interview_experiences_with_gemini(country: str, consulates: Lis
         )
 
     consulate_text = ", ".join(consulates)
+    now_utc_iso = datetime.now(timezone.utc).isoformat()
     prompt = f"""You are a research assistant helping F1 visa students.
 Task: Find recent F-1 visa interview experiences posted by real users online.
 
 Filters:
 - Country where interview happened: {country}
 - Target consulates: {consulate_text}
+- Current date/time (UTC): {now_utc_iso}
 
 Sources to prioritize:
 - Reddit
@@ -272,13 +375,14 @@ Sources to prioritize:
 Strict output requirements:
 - Include only experiences relevant to the selected country and consulates.
 - Prefer very recent posts.
+- Treat the current UTC date/time above as "now" when determining recency.
 - Include a direct source link for each item when available.
 - Keep each summary short and practical for a student.
 - Return ONLY valid JSON. No markdown.
 
 Output JSON format:
 {{
-  "generated_at_utc": "{datetime.now(timezone.utc).isoformat()}",
+  "generated_at_utc": "{now_utc_iso}",
   "items": [
     {{
       "consulate": "Hyderabad",
@@ -312,7 +416,12 @@ Provide 5 to 10 items."""
             else:
                 raise HTTPException(status_code=503, detail="Gemini library is not available")
 
-            response = model.generate_content(prompt)
+            response = _generate_content_with_grounding(
+                model,
+                prompt,
+                model_name=model_name,
+                label="news.f1_interview_experiences"
+            )
             data = _clean_and_parse_json(getattr(response, "text", ""))
             items = _normalize_interview_items(data.get("items", []), consulates)
             if not items:
@@ -333,24 +442,31 @@ def get_f1_latest_news(
     refresh: bool = Query(default=False),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    del current_user  # endpoint is protected; user object is not needed further.
+    user_country = _resolve_user_residence_country(current_user)
     now_utc = datetime.now(timezone.utc)
+    country_cache_key = user_country.lower()
 
     with _news_lock:
-        if not refresh and _cache_is_fresh(now_utc):
+        cache_entry = _news_cache.get(country_cache_key)
+        if cache_entry and not refresh and _cache_entry_is_fresh(cache_entry, now_utc, NEWS_CACHE_TTL):
             return {
-                "items": _news_cache["items"],
+                "country_context": user_country,
+                "items": cache_entry["items"],
                 "cached": True,
-                "fetched_at": _news_cache["fetched_at"].isoformat() if _news_cache["fetched_at"] else None,
-                "model_used": _news_cache["model_used"],
+                "fetched_at": cache_entry["fetched_at"].isoformat() if cache_entry.get("fetched_at") else None,
+                "model_used": cache_entry.get("model_used"),
             }
 
-        generated = _generate_f1_news_with_gemini()
-        _news_cache["items"] = generated["items"]
-        _news_cache["fetched_at"] = now_utc
-        _news_cache["model_used"] = generated["model_used"]
+        generated = _generate_f1_news_with_gemini(user_country)
+        _news_cache[country_cache_key] = {
+            "country_context": user_country,
+            "items": generated["items"],
+            "fetched_at": now_utc,
+            "model_used": generated["model_used"],
+        }
 
         return {
+            "country_context": user_country,
             "items": generated["items"],
             "cached": False,
             "fetched_at": now_utc.isoformat(),
