@@ -1709,6 +1709,28 @@ function appendVisaInterviewLog(mode, role, text) {
     logEl.scrollTop = logEl.scrollHeight;
 }
 
+function upsertVisaInterviewPendingBubble(mode, text) {
+    const cfg = getVisaInterviewSessionConfig(mode);
+    const logEl = document.getElementById(cfg.logId);
+    if (!logEl) return;
+
+    let pendingItem = logEl.querySelector('.visa-mock-log-item.pending');
+    if (!pendingItem) {
+        pendingItem = document.createElement('div');
+        pendingItem.className = 'visa-mock-log-item assistant pending';
+        logEl.appendChild(pendingItem);
+    }
+    pendingItem.textContent = text;
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+function clearVisaInterviewPendingBubble(mode) {
+    const cfg = getVisaInterviewSessionConfig(mode);
+    const logEl = document.getElementById(cfg.logId);
+    if (!logEl) return;
+    logEl.querySelectorAll('.visa-mock-log-item.pending').forEach((node) => node.remove());
+}
+
 function updateVisaInterviewControls(mode) {
     const cfg = getVisaInterviewSessionConfig(mode);
     const state = getVisaInterviewState(mode);
@@ -2023,7 +2045,9 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
     }
 
     state.pending = true;
-    setVisaInterviewStatus(mode, `${cfg.assistantLabel} is responding...`);
+    const waitingStatus = state.channel === 'chat' ? 'VO is typing...' : 'VO is thinking...';
+    setVisaInterviewStatus(mode, waitingStatus);
+    upsertVisaInterviewPendingBubble(mode, waitingStatus);
     updateVisaInterviewControls(mode);
 
     const initialTurnPrompt = mode === 'prep'
@@ -2076,6 +2100,7 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
             state.history = state.history.slice(-40);
         }
 
+        clearVisaInterviewPendingBubble(mode);
         appendVisaInterviewLog(mode, 'assistant', `${cfg.assistantLabel}: ${aiResponse}`);
         const isChatMode = state.channel === 'chat' && (mode === 'mock' || mode === 'prep');
         if (!isChatMode) {
@@ -2103,9 +2128,11 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
         }
     } catch (error) {
         console.error('Voice interview error:', error);
+        clearVisaInterviewPendingBubble(mode);
         appendVisaInterviewLog(mode, 'system', `Error: ${error.message || 'Unable to continue this session.'}`);
         setVisaInterviewStatus(mode, 'Error');
     } finally {
+        clearVisaInterviewPendingBubble(mode);
         state.pending = false;
         updateVisaInterviewControls(mode);
         if (mode === 'mock' && shouldAutoFinish) {
@@ -2430,6 +2457,7 @@ async function startVoiceMockInterview() {
 }
 
 function stopVoiceMockInterview(silent = false) {
+    clearVisaInterviewPendingBubble('mock');
     stopVisaInterviewRecognition('mock');
     visaMockInterviewState.active = false;
     visaMockInterviewState.pending = false;
@@ -2446,6 +2474,7 @@ function stopVoiceMockInterview(silent = false) {
 }
 
 function stopVoicePrepInterview(silent = false) {
+    clearVisaInterviewPendingBubble('prep');
     stopVisaInterviewRecognition('prep');
     visaPrepInterviewState.active = false;
     visaPrepInterviewState.pending = false;
