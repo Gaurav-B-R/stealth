@@ -573,10 +573,25 @@
                             <span class="nav-icon">📄</span>
                             <span class="nav-label">Documents</span>
                         </a>
-                        <a href="#" class="nav-item" data-tab="visa" onclick="switchDashboardTab('visa'); return false;">
+                        <a href="#" class="nav-item nav-item-parent" data-tab="visa" onclick="switchDashboardTab('visa'); return false;">
                             <span class="nav-icon">🛂</span>
                             <span class="nav-label">F1-Visa (Interviews/Slots)</span>
+                            <span id="visaNavCaret" class="nav-caret">▾</span>
                         </a>
+                        <div id="visaSubNav" class="visa-subnav" style="display: none;">
+                            <a href="#" class="visa-subnav-item active" data-visa-subtab="slots" onclick="openVisaSubTab('slots'); return false;">
+                                🗓️ F1-Visa Slots
+                            </a>
+                            <a href="#" class="visa-subnav-item" data-visa-subtab="prep" onclick="openVisaSubTab('prep'); return false;">
+                                🎯 F-1 Visa Interview Prep (Rilono AI)
+                            </a>
+                            <a href="#" class="visa-subnav-item" data-visa-subtab="mock" onclick="openVisaSubTab('mock'); return false;">
+                                🧠 F1 Mock Interview (Rilono AI)
+                            </a>
+                            <a href="#" class="visa-subnav-item" data-visa-subtab="experiences" onclick="openVisaSubTab('experiences'); return false;">
+                                📚 Recent F1 Interview Experiences
+                            </a>
+                        </div>
                         <a href="#" class="nav-item" data-tab="news" onclick="switchDashboardTab('news'); return false;">
                             <span class="nav-icon">📰</span>
                             <span class="nav-label">News</span>
@@ -1090,85 +1105,173 @@
                     <div id="dashboardTab-visa" class="dashboard-tab">
                         <div class="tab-header">
                             <h2>F1-Visa (Interviews/Slots)</h2>
-                            <p class="tab-subtitle">Track slots, prepare for your interview, and practice with Rilono AI</p>
+                            <p class="tab-subtitle">Choose a module from the sidebar and work in a dedicated standalone view.</p>
                         </div>
-                        <div class="visa-hub-grid">
-                            <div class="dashboard-widget visa-hub-card visa-hub-slots">
-                                <div class="widget-header">
-                                    <h3>🗓️ F1-Visa Slots</h3>
-                                </div>
-                                <div class="widget-content visa-hub-content">
-                                    <p class="visa-hub-copy">Track slot openings and stay ahead with frequent updates and intelligent nudges.</p>
-                                    <div class="visa-hub-meta">Current status: <span class="visa-hub-tag">Active Tracking</span></div>
-                                    <div class="visa-hub-actions">
-                                        <button type="button" class="btn btn-primary" onclick="openVisaNewsSection()">View Slot Updates</button>
-                                        <button type="button" class="btn btn-secondary" onclick="showMessage('Slot alerts are coming soon.', 'success')">Enable Alerts</button>
+                        <div id="visaSubTab-slots" class="visa-subtab-panel active">
+                            <div class="dashboard-grid">
+                                <div class="dashboard-widget visa-hub-card visa-hub-slots visa-subtab-card" style="grid-column: 1 / -1;">
+                                    <div class="widget-header">
+                                        <h3>🗓️ F1-Visa Slots</h3>
                                     </div>
-                                </div>
-                            </div>
-
-                            <div class="dashboard-widget visa-hub-card">
-                                <div class="widget-header">
-                                    <h3>🎯 F-1 Visa Interview Prep (Rilono AI)</h3>
-                                </div>
-                                <div class="widget-content visa-hub-content">
-                                    <p class="visa-hub-copy">Get personalized prep questions and answers based on your profile, docs, and stage.</p>
-                                    <ul class="visa-hub-list">
-                                        <li>Why this university and program</li>
-                                        <li>Funding and ties-to-home-country responses</li>
-                                        <li>Red-flag answer correction</li>
-                                    </ul>
-                                    <div class="visa-hub-actions">
-                                        <button type="button" class="btn btn-primary" onclick="openVisaAiPrompt('Help me prepare for my F-1 visa interview based on my current profile and documents.')">Start Interview Prep</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="dashboard-widget visa-hub-card">
-                                <div class="widget-header">
-                                    <h3>🧠 F1 Mock Interview (Rilono AI)</h3>
-                                </div>
-                                <div class="widget-content visa-hub-content">
-                                    <p class="visa-hub-copy">Run a realistic mock interview with scoring feedback and targeted improvement notes.</p>
-                                    <ul class="visa-hub-list">
-                                        <li>Real VO-style question flow</li>
-                                        <li>Confidence and clarity feedback</li>
-                                        <li>Follow-up drill practice</li>
-                                    </ul>
-                                    <div class="visa-hub-actions">
-                                        <button type="button" class="btn btn-primary" onclick="openVisaAiPrompt('Conduct a full F1 mock visa interview for me and give feedback after each answer.')">Start Mock Interview</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="dashboard-widget visa-hub-card visa-hub-experiences">
-                                <div class="widget-header">
-                                    <h3>📚 Recent F1 Interview Experiences</h3>
-                                </div>
-                                <div class="widget-content visa-hub-content">
-                                    <p class="visa-hub-copy">Select a country and one or more consulates to fetch recent interview experiences discussed by users online.</p>
-                                    <div class="visa-experience-filters">
-                                        <div class="visa-experience-field">
-                                            <label for="visaExperienceCountry">Country</label>
-                                            <select id="visaExperienceCountry" onchange="handleVisaExperienceCountryChange(this.value)">
-                                                <option value="">Select country</option>
-                                            </select>
+                                    <div class="widget-content visa-hub-content">
+                                        <p class="visa-hub-copy">Track slot openings and stay ahead with frequent updates and intelligent nudges.</p>
+                                        <div class="visa-hub-meta">Current status: <span class="visa-hub-tag">Active Tracking</span></div>
+                                        <div class="visa-hub-actions">
+                                            <button type="button" class="btn btn-primary" onclick="openVisaNewsSection()">View Slot Updates</button>
+                                            <button type="button" class="btn btn-secondary" onclick="showMessage('Slot alerts are coming soon.', 'success')">Enable Alerts</button>
                                         </div>
-                                        <div class="visa-experience-field visa-experience-field-consulates">
-                                            <div class="visa-experience-field-label">
-                                                <label>Consulates</label>
-                                                <button type="button" class="visa-consulate-select-all" onclick="toggleVisaConsulates(true)">Select all</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="visaSubTab-prep" class="visa-subtab-panel">
+                            <div class="dashboard-grid">
+                                <div class="dashboard-widget visa-hub-card visa-subtab-card" style="grid-column: 1 / -1;">
+                                    <div class="widget-header">
+                                        <h3>🎯 F-1 Visa Interview Prep (Rilono AI)</h3>
+                                    </div>
+                                    <div class="widget-content visa-hub-content">
+                                        <p class="visa-hub-copy">Get personalized prep questions and answers based on your profile, docs, and stage.</p>
+                                        <ul class="visa-hub-list">
+                                            <li>Why this university and program</li>
+                                            <li>Funding and ties-to-home-country responses</li>
+                                            <li>Red-flag answer correction</li>
+                                        </ul>
+                                        <div class="visa-mock-panel">
+                                            <div class="visa-mock-headerline">
+                                                <div class="visa-mock-console-title">Prep Console</div>
+                                                <div class="visa-mock-state-pills">
+                                                    <span id="visaPrepInterviewStatus" class="visa-hub-tag">Idle</span>
+                                                    <span id="visaPrepModeBadge" class="visa-hub-tag visa-hub-tag-muted">Mode: not selected</span>
+                                                </div>
                                             </div>
-                                            <div id="visaExperienceConsulates" class="visa-consulate-grid"></div>
+                                            <div class="visa-mock-toolbar">
+                                                <div class="visa-mock-controls visa-mock-controls-main">
+                                                    <button type="button" class="btn btn-primary" id="visaPrepStartBtn" onclick="openPrepInterviewModePicker()">Start Prep Session</button>
+                                                    <div id="visaPrepSecondaryControls" class="visa-mock-secondary-controls" style="display: none;">
+                                                        <button type="button" class="btn btn-secondary" id="visaPrepSpeakBtn" onclick="listenPrepInterviewAnswer()" disabled>Speak Answer</button>
+                                                        <button type="button" class="btn btn-secondary" id="visaPrepStopBtn" onclick="stopVoicePrepInterview()" disabled>Stop</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div id="visaPrepInterviewGuide" class="visa-mock-note">Choose Voice or Chat mode to start your prep session. You will get feedback after each answer.</div>
+                                            <div id="visaPrepModePicker" class="visa-mock-mode-picker" style="display: none;">
+                                                <div class="visa-mock-mode-title">Choose prep mode for this session</div>
+                                                <div class="visa-mock-mode-actions">
+                                                    <button type="button" class="btn btn-primary" onclick="beginPrepInterview('voice')">
+                                                        <span>Voice Prep</span>
+                                                        <small>Speak answers with microphone</small>
+                                                    </button>
+                                                    <button type="button" class="btn btn-secondary" onclick="beginPrepInterview('chat')">
+                                                        <span>Chat Prep</span>
+                                                        <small>Type answers in chat style</small>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div id="visaPrepInterviewLog" class="visa-mock-log">
+                                                <div class="visa-mock-log-item system">Start Prep Session to begin a guided F-1 interview coaching flow.</div>
+                                            </div>
+                                            <div id="visaPrepChatComposer" class="visa-mock-chat-composer" style="display: none;">
+                                                <input id="visaPrepChatInput" type="text" placeholder="Type your prep answer..." onkeydown="handlePrepChatInputKeydown(event)">
+                                                <button type="button" class="btn btn-primary" id="visaPrepChatSendBtn" onclick="sendPrepInterviewChatAnswer()" disabled>Send</button>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div id="visaExperienceMeta" class="news-meta">Choose filters and fetch latest experiences.</div>
-                                    <div id="visaExperienceContainer" class="visa-experience-list">
-                                        <div class="news-loading">Fetching interview experiences...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="visaSubTab-mock" class="visa-subtab-panel">
+                            <div class="dashboard-grid">
+                                <div class="dashboard-widget visa-hub-card visa-subtab-card" style="grid-column: 1 / -1;">
+                                    <div class="widget-header">
+                                        <h3>🧠 F1 Mock Interview (Rilono AI)</h3>
                                     </div>
-                                    <div class="visa-hub-actions">
-                                        <button type="button" class="btn btn-primary" onclick="loadF1InterviewExperiences(true)">Fetch Latest Experiences</button>
-                                        <button type="button" class="btn btn-secondary" onclick="openVisaAiPrompt('Share recent F1 interview experiences and key patterns I should prepare for.')">Ask Rilono AI</button>
+                                    <div class="widget-content visa-hub-content">
+                                        <p class="visa-hub-copy">Run a realistic visa-officer style interview. Feedback is withheld until the final report.</p>
+                                        <ul class="visa-hub-list">
+                                            <li>Real VO-style question flow</li>
+                                            <li>No coaching during interview</li>
+                                            <li>Final approval/rejection probability report</li>
+                                        </ul>
+                                        <div class="visa-mock-panel">
+                                            <div class="visa-mock-headerline">
+                                                <div class="visa-mock-console-title">Interview Console</div>
+                                                <div class="visa-mock-state-pills">
+                                                    <span id="visaMockInterviewStatus" class="visa-hub-tag">Idle</span>
+                                                    <span id="visaMockModeBadge" class="visa-hub-tag visa-hub-tag-muted">Mode: not selected</span>
+                                                </div>
+                                            </div>
+                                            <div class="visa-mock-toolbar">
+                                                <div class="visa-mock-controls visa-mock-controls-main">
+                                                    <button type="button" class="btn btn-primary" id="visaMockStartBtn" onclick="openMockInterviewModePicker()">Start Interview</button>
+                                                    <div id="visaMockSecondaryControls" class="visa-mock-secondary-controls" style="display: none;">
+                                                        <button type="button" class="btn btn-secondary" id="visaMockSpeakBtn" onclick="listenMockInterviewAnswer()" disabled>Speak Answer</button>
+                                                        <button type="button" class="btn btn-secondary" id="visaMockFinishBtn" onclick="finishVoiceMockInterview()" disabled>Finish & Report</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div id="visaMockInterviewGuide" class="visa-mock-note">Click Start Interview, choose Voice or Chat, then proceed question by question. The AI officer ends the interview when complete.</div>
+                                            <div id="visaMockModePicker" class="visa-mock-mode-picker" style="display: none;">
+                                                <div class="visa-mock-mode-title">Choose interview mode for this session</div>
+                                                <div class="visa-mock-mode-actions">
+                                                    <button type="button" class="btn btn-primary" onclick="beginMockInterview('voice')">
+                                                        <span>Voice Interview</span>
+                                                        <small>Speak answers with microphone</small>
+                                                    </button>
+                                                    <button type="button" class="btn btn-secondary" onclick="beginMockInterview('chat')">
+                                                        <span>Chat Interview</span>
+                                                        <small>Type answers in chat style</small>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div class="visa-mock-transcript-label">Interview Transcript</div>
+                                            <div id="visaMockInterviewLog" class="visa-mock-log">
+                                                <div class="visa-mock-log-item system">Click Start Interview and choose Voice or Chat to begin your visa-officer simulation. The AI officer will close it automatically.</div>
+                                            </div>
+                                            <div id="visaMockChatComposer" class="visa-mock-chat-composer" style="display: none;">
+                                                <input id="visaMockChatInput" type="text" placeholder="Type your interview answer..." onkeydown="handleMockChatInputKeydown(event)">
+                                                <button type="button" class="btn btn-primary" id="visaMockChatSendBtn" onclick="sendMockInterviewChatAnswer()" disabled>Send</button>
+                                            </div>
+                                            <div id="visaMockInterviewReport" class="visa-mock-report" style="display: none;"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="visaSubTab-experiences" class="visa-subtab-panel">
+                            <div class="dashboard-grid">
+                                <div class="dashboard-widget visa-hub-card visa-hub-experiences visa-subtab-card" style="grid-column: 1 / -1;">
+                                    <div class="widget-header">
+                                        <h3>📚 Recent F1 Interview Experiences</h3>
+                                    </div>
+                                    <div class="widget-content visa-hub-content">
+                                        <p class="visa-hub-copy">Select a country and one or more consulates to fetch recent interview experiences discussed by users online.</p>
+                                        <div class="visa-experience-filters">
+                                            <div class="visa-experience-field">
+                                                <label for="visaExperienceCountry">Country</label>
+                                                <select id="visaExperienceCountry" onchange="handleVisaExperienceCountryChange(this.value)">
+                                                    <option value="">Select country</option>
+                                                </select>
+                                            </div>
+                                            <div class="visa-experience-field visa-experience-field-consulates">
+                                                <div class="visa-experience-field-label">
+                                                    <label>Consulates</label>
+                                                    <button type="button" class="visa-consulate-select-all" onclick="toggleVisaConsulates(true)">Select all</button>
+                                                </div>
+                                                <div id="visaExperienceConsulates" class="visa-consulate-grid"></div>
+                                            </div>
+                                        </div>
+                                        <div id="visaExperienceMeta" class="news-meta">Choose filters and fetch latest experiences.</div>
+                                        <div id="visaExperienceContainer" class="visa-experience-list">
+                                            <div class="news-loading">Fetching interview experiences...</div>
+                                        </div>
+                                        <div class="visa-hub-actions">
+                                            <button type="button" class="btn btn-primary" onclick="loadF1InterviewExperiences(true)">Fetch Latest Experiences</button>
+                                            <button type="button" class="btn btn-secondary" onclick="openVisaAiPrompt('Share recent F1 interview experiences and key patterns I should prepare for.')">Ask Rilono AI</button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

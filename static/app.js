@@ -10,6 +10,7 @@ let turnstileWidgetIds = {
 let newsRequestInFlight = false;
 let visaInterviewRequestInFlight = false;
 let visaInterviewFiltersInitialized = false;
+let currentVisaSubTab = 'slots';
 let documentTypeDropdownController = null;
 const PRO_UPGRADE_ENABLED = false;
 const PUBLIC_APP_ORIGIN = 'https://rilono.com';
@@ -44,6 +45,56 @@ const VISA_INTERVIEW_CONSULATE_MAP = {
     'United Arab Emirates': ['Abu Dhabi', 'Dubai'],
     Singapore: ['Singapore'],
     Japan: ['Tokyo', 'Osaka / Kobe', 'Naha', 'Sapporo', 'Fukuoka']
+};
+
+const VISA_PREP_INTERVIEW_INSTRUCTION = `You are an F-1 visa interview coach for a student.
+Rules:
+- Ask one question at a time.
+- After every student answer, provide short coaching with this exact structure:
+  1) Feedback: what was strong/weak
+  2) Improve: a better sample answer (2-4 lines)
+  3) Next Question: ask the next VO-style question
+- Focus on clarity, confidence, university/program fit, finances, ties to home country, and post-study intent.
+- Keep each turn concise and practical.`;
+
+const VISA_MOCK_INTERVIEW_INSTRUCTION = `You are a U.S. Visa Officer conducting a realistic F-1 interview simulation.
+Rules:
+- Stay strictly in Visa Officer role.
+- Ask one question at a time.
+- Do NOT provide coaching, feedback, scores, or suggestions during the interview.
+- Keep responses concise and interview-like.
+- If answer is vague, ask a direct follow-up question.
+- When you decide the interview is complete, include the exact token INTERVIEW_COMPLETE in your response once (preferably at the end).`;
+
+const VISA_MOCK_REPORT_INSTRUCTION = `You are evaluating a completed F-1 visa mock interview transcript.
+Generate a concise final report in plain text with these sections:
+1) Approval Probability: X%
+2) Rejection Probability: Y%
+3) Decision Drivers (3-5 bullets)
+4) Strengths (3 bullets)
+5) Risk Areas (3 bullets)
+6) Top Improvements Before Real Interview (3 actionable bullets)
+Make probabilities realistic, balanced, and sum to 100%.
+Do not use markdown formatting characters such as **, *, #, -, or backticks.`;
+
+let visaMockInterviewState = {
+    active: false,
+    listening: false,
+    pending: false,
+    history: [],
+    recognition: null,
+    channel: null,
+    showModePicker: false
+};
+
+let visaPrepInterviewState = {
+    active: false,
+    listening: false,
+    pending: false,
+    history: [],
+    recognition: null,
+    channel: null,
+    showModePicker: false
 };
 
 const PRICING_FALLBACK_RATES = {
@@ -1582,7 +1633,907 @@ async function loadF1InterviewExperiences(forceRefresh = false) {
     }
 }
 
+function getSpeechRecognitionConstructor() {
+    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+function stripMarkdownForSpeech(text) {
+    return String(text || '')
+        .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
+        .replace(/[`*_>#-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function getVisaInterviewSessionConfig(mode) {
+    if (mode === 'prep') {
+        return {
+            statusId: 'visaPrepInterviewStatus',
+            logId: 'visaPrepInterviewLog',
+            startSelector: '#visaPrepStartBtn',
+            speakId: 'visaPrepSpeakBtn',
+            stopId: 'visaPrepStopBtn',
+            finishId: null,
+            assistantLabel: 'Prep Coach'
+        };
+    }
+    return {
+        statusId: 'visaMockInterviewStatus',
+        logId: 'visaMockInterviewLog',
+        startSelector: '#visaMockStartBtn',
+        speakId: 'visaMockSpeakBtn',
+        stopId: null,
+        finishId: 'visaMockFinishBtn',
+        assistantLabel: 'Visa Officer'
+    };
+}
+
+function getVisaInterviewState(mode) {
+    return mode === 'prep' ? visaPrepInterviewState : visaMockInterviewState;
+}
+
+function setVisaInterviewStatus(mode, statusText) {
+    const cfg = getVisaInterviewSessionConfig(mode);
+    const statusEl = document.getElementById(cfg.statusId);
+    if (statusEl) {
+        statusEl.textContent = statusText;
+    }
+}
+
+function formatPrepInterviewLogHtml(text) {
+    const raw = String(text || '').replace(/\r/g, '').trim();
+    if (!raw) return '';
+
+    // Add visible breaks before major coaching blocks for better readability.
+    const normalized = raw
+        .replace(/\s*(\*\*?Feedback:\*\*?)/gi, '\n$1')
+        .replace(/\s*(\*\*?Improve:\*\*?)/gi, '\n$1')
+        .replace(/\s*(\*\*?Next Question:\*\*?)/gi, '\n$1');
+
+    return markdownToHtml(normalized);
+}
+
+function appendVisaInterviewLog(mode, role, text) {
+    const cfg = getVisaInterviewSessionConfig(mode);
+    const logEl = document.getElementById(cfg.logId);
+    if (!logEl) return;
+
+    const item = document.createElement('div');
+    item.className = `visa-mock-log-item ${role}`;
+    if (mode === 'prep' && role === 'assistant') {
+        item.innerHTML = formatPrepInterviewLogHtml(text);
+    } else {
+        item.textContent = text;
+    }
+    logEl.appendChild(item);
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+function updateVisaInterviewControls(mode) {
+    const cfg = getVisaInterviewSessionConfig(mode);
+    const state = getVisaInterviewState(mode);
+    const startBtn = document.querySelector(cfg.startSelector);
+    const speakBtn = document.getElementById(cfg.speakId);
+    const stopBtn = document.getElementById(cfg.stopId);
+    const finishBtn = cfg.finishId ? document.getElementById(cfg.finishId) : null;
+    const speechSupported = Boolean(getSpeechRecognitionConstructor());
+
+    if (startBtn) {
+        if (mode === 'mock' || mode === 'prep') {
+            startBtn.disabled = state.active || state.pending;
+        } else {
+            startBtn.disabled = !speechSupported || state.active || state.pending;
+        }
+    }
+    if (speakBtn) {
+        if (mode === 'mock' || mode === 'prep') {
+            const voiceMode = state.channel === 'voice';
+            speakBtn.disabled = !speechSupported || !voiceMode || !state.active || state.pending || state.listening;
+        } else {
+            speakBtn.disabled = !speechSupported || !state.active || state.pending || state.listening;
+        }
+    }
+    if (stopBtn) {
+        stopBtn.disabled = !state.active && !state.pending;
+    }
+    if (finishBtn) {
+        finishBtn.disabled = state.pending || (!state.active && state.history.length === 0);
+    }
+    if (mode === 'mock') {
+        renderMockInterviewModeUI();
+    } else if (mode === 'prep') {
+        renderPrepInterviewModeUI();
+    }
+}
+
+function renderMockInterviewModeUI() {
+    const modePicker = document.getElementById('visaMockModePicker');
+    const chatComposer = document.getElementById('visaMockChatComposer');
+    const chatInput = document.getElementById('visaMockChatInput');
+    const chatSendBtn = document.getElementById('visaMockChatSendBtn');
+    const startBtn = document.getElementById('visaMockStartBtn');
+    const secondaryControls = document.getElementById('visaMockSecondaryControls');
+    const speakBtn = document.getElementById('visaMockSpeakBtn');
+    const modeBadge = document.getElementById('visaMockModeBadge');
+    const guide = document.getElementById('visaMockInterviewGuide');
+    const state = visaMockInterviewState;
+    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !speakBtn || !modeBadge || !guide) {
+        return;
+    }
+
+    if (!chatInput.dataset.boundMockInput) {
+        chatInput.addEventListener('input', () => renderMockInterviewModeUI());
+        chatInput.dataset.boundMockInput = '1';
+    }
+
+    const showPicker = !state.active && !state.pending && state.showModePicker;
+    modePicker.style.display = showPicker ? 'grid' : 'none';
+    const showSecondaryControls = state.active || state.pending || state.history.length > 0;
+    secondaryControls.style.display = showSecondaryControls ? 'flex' : 'none';
+    startBtn.textContent = state.active
+        ? 'Interview Running'
+        : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Interview' : 'Start Interview'));
+
+    const chatModeActive = state.active && state.channel === 'chat';
+    chatComposer.style.display = chatModeActive ? 'flex' : 'none';
+    chatInput.disabled = !chatModeActive || state.pending;
+    chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
+    speakBtn.style.display = state.channel === 'chat' && state.active ? 'none' : 'inline-flex';
+
+    if (state.channel === 'voice') {
+        modeBadge.textContent = 'Mode: Voice';
+        modeBadge.classList.remove('visa-hub-tag-mode-chat');
+        modeBadge.classList.add('visa-hub-tag-mode-voice');
+        guide.textContent = state.active
+            ? 'Use Speak Answer for each response. The AI officer ends the interview automatically.'
+            : 'Click Start Interview and choose Voice to run a microphone-based simulation.';
+    } else if (state.channel === 'chat') {
+        modeBadge.textContent = 'Mode: Chat';
+        modeBadge.classList.remove('visa-hub-tag-mode-voice');
+        modeBadge.classList.add('visa-hub-tag-mode-chat');
+        guide.textContent = state.active
+            ? 'Type each answer in the input below. The AI officer ends the interview automatically.'
+            : 'Click Start Interview and choose Chat to run a typed interview simulation.';
+    } else {
+        modeBadge.textContent = 'Mode: not selected';
+        modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
+        guide.textContent = 'Click Start Interview, choose Voice or Chat, then proceed question by question. The AI officer closes the interview when complete.';
+    }
+
+    if (chatModeActive && !state.pending) {
+        requestAnimationFrame(() => chatInput.focus());
+    }
+}
+
+function renderPrepInterviewModeUI() {
+    const modePicker = document.getElementById('visaPrepModePicker');
+    const chatComposer = document.getElementById('visaPrepChatComposer');
+    const chatInput = document.getElementById('visaPrepChatInput');
+    const chatSendBtn = document.getElementById('visaPrepChatSendBtn');
+    const startBtn = document.getElementById('visaPrepStartBtn');
+    const secondaryControls = document.getElementById('visaPrepSecondaryControls');
+    const speakBtn = document.getElementById('visaPrepSpeakBtn');
+    const modeBadge = document.getElementById('visaPrepModeBadge');
+    const guide = document.getElementById('visaPrepInterviewGuide');
+    const state = visaPrepInterviewState;
+    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !speakBtn || !modeBadge || !guide) {
+        return;
+    }
+
+    if (!chatInput.dataset.boundPrepInput) {
+        chatInput.addEventListener('input', () => renderPrepInterviewModeUI());
+        chatInput.dataset.boundPrepInput = '1';
+    }
+
+    const showPicker = !state.active && !state.pending && state.showModePicker;
+    modePicker.style.display = showPicker ? 'grid' : 'none';
+    const showSecondaryControls = state.active || state.pending || state.history.length > 0;
+    secondaryControls.style.display = showSecondaryControls ? 'flex' : 'none';
+    startBtn.textContent = state.active
+        ? 'Prep Running'
+        : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Prep Session' : 'Start Prep Session'));
+
+    const chatModeActive = state.active && state.channel === 'chat';
+    chatComposer.style.display = chatModeActive ? 'flex' : 'none';
+    chatInput.disabled = !chatModeActive || state.pending;
+    chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
+    speakBtn.style.display = state.channel === 'chat' && state.active ? 'none' : 'inline-flex';
+
+    if (state.channel === 'voice') {
+        modeBadge.textContent = 'Mode: Voice';
+        modeBadge.classList.remove('visa-hub-tag-mode-chat');
+        modeBadge.classList.add('visa-hub-tag-mode-voice');
+        guide.textContent = state.active
+            ? 'Use Speak Answer for each response. Rilono AI will coach and ask the next question.'
+            : 'Click Start Prep Session and choose Voice to practice with microphone input.';
+    } else if (state.channel === 'chat') {
+        modeBadge.textContent = 'Mode: Chat';
+        modeBadge.classList.remove('visa-hub-tag-mode-voice');
+        modeBadge.classList.add('visa-hub-tag-mode-chat');
+        guide.textContent = state.active
+            ? 'Type each answer below. Rilono AI gives feedback and improvement on every turn.'
+            : 'Click Start Prep Session and choose Chat to practice in typed mode.';
+    } else {
+        modeBadge.textContent = 'Mode: not selected';
+        modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
+        guide.textContent = 'Choose Voice or Chat mode to start your prep session. You will get feedback after each answer.';
+    }
+
+    if (chatModeActive && !state.pending) {
+        requestAnimationFrame(() => chatInput.focus());
+    }
+}
+
+function initializeVisaInterviewUI(mode) {
+    const cfg = getVisaInterviewSessionConfig(mode);
+    const state = getVisaInterviewState(mode);
+    const logEl = document.getElementById(cfg.logId);
+    if (!logEl) return;
+
+    const speechSupported = Boolean(getSpeechRecognitionConstructor());
+    if (!speechSupported && state.channel === 'voice') {
+        setVisaInterviewStatus(mode, 'Mic Unsupported');
+        appendVisaInterviewLog(mode, 'system', 'Voice input is not supported in this browser. Use Chrome/Edge for mic-based interview mode.');
+    } else if (!state.active && !state.pending) {
+        setVisaInterviewStatus(mode, 'Idle');
+    }
+    updateVisaInterviewControls(mode);
+}
+
+function initializeVisaPrepInterviewUI() {
+    initializeVisaInterviewUI('prep');
+}
+
+function initializeVisaMockInterviewUI() {
+    initializeVisaInterviewUI('mock');
+}
+
+function stopVisaInterviewRecognition(mode) {
+    const state = getVisaInterviewState(mode);
+    if (state.recognition) {
+        try {
+            state.recognition.onresult = null;
+            state.recognition.onerror = null;
+            state.recognition.onend = null;
+            state.recognition.stop();
+        } catch (error) {
+            // no-op
+        }
+        state.recognition = null;
+    }
+    state.listening = false;
+}
+
+async function speakVisaInterviewResponse(text) {
+    const utteranceText = stripMarkdownForSpeech(text);
+    if (!utteranceText || !window.speechSynthesis) {
+        return;
+    }
+
+    await new Promise((resolve) => {
+        try {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(utteranceText);
+            utterance.lang = 'en-US';
+            utterance.rate = 1;
+            utterance.pitch = 1;
+
+            const voices = window.speechSynthesis.getVoices();
+            const preferredVoice = voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith('en-us'));
+            if (preferredVoice) {
+                utterance.voice = preferredVoice;
+            }
+
+            utterance.onend = () => resolve();
+            utterance.onerror = () => resolve();
+            window.speechSynthesis.speak(utterance);
+        } catch (error) {
+            resolve();
+        }
+    });
+}
+
+function listenVisaInterviewAnswer(mode) {
+    const cfg = getVisaInterviewSessionConfig(mode);
+    const state = getVisaInterviewState(mode);
+    if (!state.active || state.pending) {
+        return;
+    }
+
+    const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
+    if (!SpeechRecognitionCtor) {
+        showMessage('Voice recognition is not supported in this browser.', 'error');
+        return;
+    }
+
+    stopVisaInterviewRecognition(mode);
+    const recognition = new SpeechRecognitionCtor();
+    state.recognition = recognition;
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+        state.listening = true;
+        setVisaInterviewStatus(mode, 'Listening...');
+        updateVisaInterviewControls(mode);
+    };
+
+    recognition.onerror = (event) => {
+        state.listening = false;
+        updateVisaInterviewControls(mode);
+        if (!state.active) return;
+        if (event.error === 'no-speech') {
+            setVisaInterviewStatus(mode, 'No speech detected');
+            appendVisaInterviewLog(mode, 'system', 'No speech detected. Click "Speak Answer" and try again.');
+            return;
+        }
+        setVisaInterviewStatus(mode, 'Mic error');
+        appendVisaInterviewLog(mode, 'system', `Mic error: ${event.error}. Try again.`);
+    };
+
+    recognition.onend = () => {
+        state.listening = false;
+        updateVisaInterviewControls(mode);
+        if (state.active && !state.pending) {
+            setVisaInterviewStatus(mode, 'Ready for answer');
+        }
+    };
+
+    recognition.onresult = async (event) => {
+        const transcript = event?.results?.[0]?.[0]?.transcript?.trim() || '';
+        if (!transcript) {
+            setVisaInterviewStatus(mode, 'No speech detected');
+            return;
+        }
+        appendVisaInterviewLog(mode, 'user', `Student: ${transcript}`);
+        await sendVisaInterviewTurn(mode, transcript, false);
+    };
+
+    try {
+        recognition.start();
+    } catch (error) {
+        state.listening = false;
+        updateVisaInterviewControls(mode);
+        setVisaInterviewStatus(mode, 'Mic start failed');
+        appendVisaInterviewLog(mode, 'system', 'Could not start microphone. Click "Speak Answer" again and allow mic permission.');
+    }
+}
+
+function listenPrepInterviewAnswer() {
+    listenVisaInterviewAnswer('prep');
+}
+
+function listenMockInterviewAnswer() {
+    listenVisaInterviewAnswer('mock');
+}
+
+async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
+    const cfg = getVisaInterviewSessionConfig(mode);
+    const state = getVisaInterviewState(mode);
+    if (!state.active || state.pending) {
+        return;
+    }
+
+    if (mode === 'mock' && !isInitialTurn && /end interview/i.test(studentMessage)) {
+        state.history.push({ role: 'user', content: studentMessage });
+        await finishVoiceMockInterview();
+        return;
+    }
+
+    state.pending = true;
+    setVisaInterviewStatus(mode, `${cfg.assistantLabel} is responding...`);
+    updateVisaInterviewControls(mode);
+
+    const initialTurnPrompt = mode === 'prep'
+        ? 'Start the prep session now. Ask the first F-1 interview question.'
+        : 'Start the mock interview now. Ask your first visa-officer question only.';
+    const instruction = mode === 'prep' ? VISA_PREP_INTERVIEW_INSTRUCTION : VISA_MOCK_INTERVIEW_INSTRUCTION;
+    const userTurnContent = isInitialTurn ? initialTurnPrompt : `Student answer: ${studentMessage}`;
+    const geminiMessage = `${instruction}\n\n${userTurnContent}`;
+
+    const conversationHistory = state.history.slice(-14);
+    conversationHistory.push({
+        role: 'user',
+        content: studentMessage
+    });
+
+    let shouldAutoFinish = false;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                message: geminiMessage,
+                conversation_history: conversationHistory
+            })
+        });
+
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            if (response.status === 403) {
+                void loadSubscriptionStatus(true);
+            }
+            throw new Error(data.detail || 'Failed to get mock interview response');
+        }
+
+        const data = await response.json();
+        const rawAiResponse = data.response || 'I could not generate a response right now.';
+        const completionDetected = mode === 'mock' && /INTERVIEW_COMPLETE/i.test(rawAiResponse);
+        const cleanedAiResponse = mode === 'mock'
+            ? rawAiResponse.replace(/INTERVIEW_COMPLETE/gi, '').trim()
+            : rawAiResponse;
+        const aiResponse = cleanedAiResponse || (completionDetected ? 'Thank you. This interview is complete.' : 'I could not generate a response right now.');
+
+        state.history.push({ role: 'user', content: studentMessage });
+        state.history.push({ role: 'assistant', content: aiResponse });
+        if (state.history.length > 40) {
+            state.history = state.history.slice(-40);
+        }
+
+        appendVisaInterviewLog(mode, 'assistant', `${cfg.assistantLabel}: ${aiResponse}`);
+        const isChatMode = state.channel === 'chat' && (mode === 'mock' || mode === 'prep');
+        if (!isChatMode) {
+            await speakVisaInterviewResponse(aiResponse);
+        }
+        void loadSubscriptionStatus(true);
+
+        if (mode === 'mock' && completionDetected) {
+            state.active = false;
+            setVisaInterviewStatus('mock', 'Interview complete');
+            appendVisaInterviewLog('mock', 'system', 'Interview completed by Visa Officer. Generating final report...');
+            shouldAutoFinish = true;
+        } else if (state.active) {
+            if (state.channel === 'chat' && (mode === 'mock' || mode === 'prep')) {
+                setVisaInterviewStatus(mode, 'Type your answer');
+                if (mode === 'mock') {
+                    renderMockInterviewModeUI();
+                } else {
+                    renderPrepInterviewModeUI();
+                }
+            } else {
+                setVisaInterviewStatus(mode, 'Speak your answer');
+                listenVisaInterviewAnswer(mode);
+            }
+        }
+    } catch (error) {
+        console.error('Voice interview error:', error);
+        appendVisaInterviewLog(mode, 'system', `Error: ${error.message || 'Unable to continue this session.'}`);
+        setVisaInterviewStatus(mode, 'Error');
+    } finally {
+        state.pending = false;
+        updateVisaInterviewControls(mode);
+        if (mode === 'mock' && shouldAutoFinish) {
+            await finishVoiceMockInterview();
+        }
+    }
+}
+
+function buildVisaInterviewTranscript(history) {
+    return history
+        .map((turn) => {
+            const role = turn.role === 'assistant' ? 'Officer' : 'Student';
+            return `${role}: ${turn.content}`;
+        })
+        .join('\n');
+}
+
+function normalizeMockInterviewReportText(reportText) {
+    return String(reportText || '')
+        .replace(/\r/g, '')
+        .replace(/^\s*---+\s*$/gm, '')
+        .replace(/\*\*/g, '')
+        .replace(/^(\s*)\*\s+/gm, '$1- ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+function buildMockInterviewReportHtml(reportText) {
+    const text = normalizeMockInterviewReportText(reportText);
+    if (!text) {
+        return '<p class="visa-mock-report-paragraph">No report content available.</p>';
+    }
+
+    const lines = text.split('\n');
+    const htmlParts = [];
+    const metricCards = [];
+    let listItems = [];
+
+    const flushList = () => {
+        if (!listItems.length) return;
+        htmlParts.push(`<ul class="visa-mock-report-list">${listItems.join('')}</ul>`);
+        listItems = [];
+    };
+
+    for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) {
+            flushList();
+            continue;
+        }
+
+        let normalized = line
+            .replace(/^\d+\)\s*/, '')
+            .replace(/^\d+\.\s*/, '')
+            .trim();
+
+        const metricMatch = normalized.match(/^(Approval Probability|Rejection Probability)\s*:?\s*(\d{1,3})%/i);
+        if (metricMatch) {
+            flushList();
+            metricCards.push(
+                `<div class="visa-mock-report-metric-card">` +
+                `<div class="visa-mock-report-metric-label">${escapeHtml(metricMatch[1])}</div>` +
+                `<div class="visa-mock-report-metric-value">${escapeHtml(metricMatch[2])}%</div>` +
+                `</div>`
+            );
+            continue;
+        }
+
+        if (/^[-•]\s+/.test(normalized)) {
+            normalized = normalized.replace(/^[-•]\s+/, '').trim();
+            if (normalized) {
+                listItems.push(`<li>${escapeHtml(normalized)}</li>`);
+            }
+            continue;
+        }
+
+        if (/^(Decision Drivers|Strengths|Risk Areas|Top Improvements Before Real Interview|Rilono AI Note)/i.test(normalized)) {
+            flushList();
+            htmlParts.push(`<h4 class="visa-mock-report-section-title">${escapeHtml(normalized)}</h4>`);
+            continue;
+        }
+
+        flushList();
+        htmlParts.push(`<p class="visa-mock-report-paragraph">${escapeHtml(normalized)}</p>`);
+    }
+
+    flushList();
+
+    const metricHtml = metricCards.length
+        ? `<div class="visa-mock-report-metrics">${metricCards.join('')}</div>`
+        : '';
+
+    return `${metricHtml}${htmlParts.join('')}`;
+}
+
+function renderVisaMockInterviewReport(reportText) {
+    const reportEl = document.getElementById('visaMockInterviewReport');
+    if (!reportEl) return;
+    reportEl.style.display = 'block';
+    reportEl.innerHTML = `
+        <div class="visa-mock-report-title">Final Interview Report</div>
+        <div class="visa-mock-report-body">${buildMockInterviewReportHtml(reportText)}</div>
+    `;
+}
+
+async function finishVoiceMockInterview() {
+    const state = visaMockInterviewState;
+    if (state.pending) {
+        return;
+    }
+    if (state.history.length === 0) {
+        showMessage('No mock interview history found. Start the interview first.', 'error');
+        return;
+    }
+
+    stopVisaInterviewRecognition('mock');
+    state.active = false;
+    state.pending = true;
+    setVisaInterviewStatus('mock', 'Generating final report...');
+    updateVisaInterviewControls('mock');
+    appendVisaInterviewLog('mock', 'system', 'Interview completed. Generating final approval/rejection report...');
+
+    try {
+        const transcript = buildVisaInterviewTranscript(state.history);
+        const reportPrompt = `${VISA_MOCK_REPORT_INSTRUCTION}\n\nInterview transcript:\n${transcript}`;
+        const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                message: reportPrompt,
+                conversation_history: []
+            })
+        });
+
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            if (response.status === 403) {
+                void loadSubscriptionStatus(true);
+            }
+            throw new Error(data.detail || 'Failed to generate interview report');
+        }
+
+        const data = await response.json();
+        const report = data.response || 'Could not generate a report right now.';
+        renderVisaMockInterviewReport(report);
+        appendVisaInterviewLog('mock', 'assistant', 'Visa Officer: Final report is ready below.');
+        void loadSubscriptionStatus(true);
+    } catch (error) {
+        console.error('Mock report generation error:', error);
+        appendVisaInterviewLog('mock', 'system', `Error: ${error.message || 'Unable to generate final report.'}`);
+        setVisaInterviewStatus('mock', 'Report error');
+    } finally {
+        state.pending = false;
+        if (window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+        }
+        if (state.history.length > 0) {
+            setVisaInterviewStatus('mock', 'Completed');
+        }
+        updateVisaInterviewControls('mock');
+    }
+}
+
+function openMockInterviewModePicker() {
+    const state = visaMockInterviewState;
+    if (state.active || state.pending) {
+        return;
+    }
+    state.showModePicker = !state.showModePicker;
+    renderMockInterviewModeUI();
+}
+
+function handleMockChatInputKeydown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        void sendMockInterviewChatAnswer();
+    }
+}
+
+async function sendMockInterviewChatAnswer() {
+    const state = visaMockInterviewState;
+    if (!state.active || state.pending || state.channel !== 'chat') {
+        return;
+    }
+
+    const input = document.getElementById('visaMockChatInput');
+    if (!input) {
+        return;
+    }
+
+    const answer = input.value.trim();
+    if (!answer) {
+        return;
+    }
+
+    input.value = '';
+    appendVisaInterviewLog('mock', 'user', `Student: ${answer}`);
+    renderMockInterviewModeUI();
+    await sendVisaInterviewTurn('mock', answer, false);
+}
+
+async function beginMockInterview(channel) {
+    if (channel !== 'voice' && channel !== 'chat') {
+        return;
+    }
+    visaMockInterviewState.channel = channel;
+    visaMockInterviewState.showModePicker = false;
+    renderMockInterviewModeUI();
+    await startVoiceInterviewSession('mock', { channel });
+}
+
+function openPrepInterviewModePicker() {
+    const state = visaPrepInterviewState;
+    if (state.active || state.pending) {
+        return;
+    }
+    state.showModePicker = !state.showModePicker;
+    renderPrepInterviewModeUI();
+}
+
+function handlePrepChatInputKeydown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        void sendPrepInterviewChatAnswer();
+    }
+}
+
+async function sendPrepInterviewChatAnswer() {
+    const state = visaPrepInterviewState;
+    if (!state.active || state.pending || state.channel !== 'chat') {
+        return;
+    }
+
+    const input = document.getElementById('visaPrepChatInput');
+    if (!input) {
+        return;
+    }
+
+    const answer = input.value.trim();
+    if (!answer) {
+        return;
+    }
+
+    input.value = '';
+    appendVisaInterviewLog('prep', 'user', `Student: ${answer}`);
+    renderPrepInterviewModeUI();
+    await sendVisaInterviewTurn('prep', answer, false);
+}
+
+async function beginPrepInterview(channel) {
+    if (channel !== 'voice' && channel !== 'chat') {
+        return;
+    }
+    visaPrepInterviewState.channel = channel;
+    visaPrepInterviewState.showModePicker = false;
+    renderPrepInterviewModeUI();
+    await startVoiceInterviewSession('prep', { channel });
+}
+
+async function startVoiceInterviewSession(mode, options = {}) {
+    const state = getVisaInterviewState(mode);
+    const cfg = getVisaInterviewSessionConfig(mode);
+    if (!authToken) {
+        showMessage('Please login to start this interview session.', 'error');
+        return;
+    }
+
+    const useVoiceInput = options.channel === 'voice';
+    const SpeechRecognitionCtor = getSpeechRecognitionConstructor();
+    if (useVoiceInput && !SpeechRecognitionCtor) {
+        showMessage('Voice recognition is not supported in this browser. Use Chrome/Edge.', 'error');
+        initializeVisaInterviewUI(mode);
+        return;
+    }
+
+    if (mode === 'prep') {
+        stopVoicePrepInterview(true);
+        state.channel = options.channel || 'voice';
+        state.showModePicker = false;
+    } else {
+        stopVoiceMockInterview(true);
+        state.channel = options.channel || 'voice';
+        state.showModePicker = false;
+    }
+
+    state.active = true;
+    state.pending = false;
+    state.history = [];
+
+    const logEl = document.getElementById(cfg.logId);
+    if (logEl) {
+        logEl.innerHTML = '';
+    }
+    if (mode === 'prep') {
+        appendVisaInterviewLog('prep', 'system', 'Prep session started. Rilono AI will coach your answer after every question.');
+    } else {
+        const reportEl = document.getElementById('visaMockInterviewReport');
+        if (reportEl) {
+            reportEl.style.display = 'none';
+            reportEl.innerHTML = '';
+        }
+        appendVisaInterviewLog('mock', 'system', 'Session started. Rilono AI is now acting as your Visa Officer.');
+    }
+
+    setVisaInterviewStatus(mode, 'Starting interview...');
+    updateVisaInterviewControls(mode);
+    const readyMessage = mode === 'prep'
+        ? 'I am ready for my F-1 interview prep session.'
+        : 'I am ready for my F-1 visa mock interview.';
+    await sendVisaInterviewTurn(mode, readyMessage, true);
+}
+
+async function startVoicePrepInterview() {
+    await beginPrepInterview('voice');
+}
+
+async function startVoiceMockInterview() {
+    await beginMockInterview('voice');
+}
+
+function stopVoiceMockInterview(silent = false) {
+    stopVisaInterviewRecognition('mock');
+    visaMockInterviewState.active = false;
+    visaMockInterviewState.pending = false;
+    visaMockInterviewState.channel = null;
+    visaMockInterviewState.showModePicker = false;
+    if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+    }
+    setVisaInterviewStatus('mock', 'Stopped');
+    updateVisaInterviewControls('mock');
+    if (!silent) {
+        appendVisaInterviewLog('mock', 'system', 'Session stopped. Click "Finish & Report" to generate the final result.');
+    }
+}
+
+function stopVoicePrepInterview(silent = false) {
+    stopVisaInterviewRecognition('prep');
+    visaPrepInterviewState.active = false;
+    visaPrepInterviewState.pending = false;
+    visaPrepInterviewState.channel = null;
+    visaPrepInterviewState.showModePicker = false;
+    if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+    }
+    setVisaInterviewStatus('prep', 'Stopped');
+    updateVisaInterviewControls('prep');
+    if (!silent) {
+        appendVisaInterviewLog('prep', 'system', 'Prep session stopped.');
+    }
+}
+
+function setVisaSubNavVisibility(isVisible) {
+    const subNav = document.getElementById('visaSubNav');
+    if (subNav) {
+        subNav.style.display = isVisible ? 'grid' : 'none';
+    }
+
+    const visaNavItem = document.querySelector('.nav-item[data-tab="visa"]');
+    if (visaNavItem) {
+        visaNavItem.classList.toggle('expanded', isVisible);
+    }
+
+    const caret = document.getElementById('visaNavCaret');
+    if (caret) {
+        caret.textContent = isVisible ? '▴' : '▾';
+    }
+}
+
+function switchVisaSubTab(subTab) {
+    const validSubTabs = ['slots', 'prep', 'mock', 'experiences'];
+    const targetSubTab = validSubTabs.includes(subTab) ? subTab : 'slots';
+
+    if (currentVisaSubTab === 'mock' && targetSubTab !== 'mock' && (visaMockInterviewState.active || visaMockInterviewState.listening || visaMockInterviewState.pending)) {
+        stopVoiceMockInterview(true);
+    }
+    if (currentVisaSubTab === 'prep' && targetSubTab !== 'prep' && (visaPrepInterviewState.active || visaPrepInterviewState.listening || visaPrepInterviewState.pending)) {
+        stopVoicePrepInterview(true);
+    }
+
+    currentVisaSubTab = targetSubTab;
+
+    document.querySelectorAll('.visa-subnav-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.visaSubtab === targetSubTab);
+    });
+
+    document.querySelectorAll('.visa-subtab-panel').forEach(panel => {
+        panel.classList.remove('active');
+    });
+
+    const selectedPanel = document.getElementById(`visaSubTab-${targetSubTab}`);
+    if (selectedPanel) {
+        selectedPanel.classList.add('active');
+    }
+
+    if (targetSubTab === 'experiences') {
+        initializeVisaInterviewFilters();
+    }
+
+    if (targetSubTab === 'prep') {
+        initializeVisaPrepInterviewUI();
+    }
+
+    if (targetSubTab === 'mock') {
+        initializeVisaMockInterviewUI();
+    }
+}
+
+function openVisaSubTab(subTab) {
+    currentVisaSubTab = subTab;
+    if (document.getElementById('dashboardTab-visa')?.classList.contains('active')) {
+        switchVisaSubTab(subTab);
+        return;
+    }
+    switchDashboardTab('visa');
+}
+
 function switchDashboardTab(tabName) {
+    if (tabName !== 'visa' && (visaMockInterviewState.active || visaMockInterviewState.listening || visaMockInterviewState.pending)) {
+        stopVoiceMockInterview(true);
+    }
+    if (tabName !== 'visa' && (visaPrepInterviewState.active || visaPrepInterviewState.listening || visaPrepInterviewState.pending)) {
+        stopVoicePrepInterview(true);
+    }
+
     // Hide all tabs
     document.querySelectorAll('.dashboard-tab').forEach(tab => {
         tab.classList.remove('active');
@@ -1604,6 +2555,8 @@ function switchDashboardTab(tabName) {
     if (navItem) {
         navItem.classList.add('active');
     }
+
+    setVisaSubNavVisibility(tabName === 'visa');
     
     // Load data for specific tabs
     if (tabName === 'documents') {
@@ -1612,7 +2565,7 @@ function switchDashboardTab(tabName) {
         loadDashboardStats();
     } else if (tabName === 'visa') {
         loadDashboardStats();
-        initializeVisaInterviewFilters();
+        switchVisaSubTab(currentVisaSubTab);
     } else if (tabName === 'records') {
         initializeRilonoAiChat();
     } else if (tabName === 'news') {
@@ -1912,6 +2865,8 @@ async function showItemDetail(itemId, skipURLUpdate = false) {
 }
 
 function hideAllSections() {
+    stopVoiceMockInterview(true);
+    stopVoicePrepInterview(true);
     document.querySelectorAll('.section').forEach(section => {
         section.style.display = 'none';
     });
@@ -2174,6 +3129,8 @@ function logout() {
     closeReferralPromoModal();
     floatingChatOpen = false;
     rilonoAiConversationHistory = [];  // Clear shared chat history
+    stopVoiceMockInterview(true);
+    stopVoicePrepInterview(true);
     document.getElementById('floatingChatWindow').style.display = 'none';
     // Clear floating chat messages
     const floatingMessages = document.getElementById('floatingChatMessages');
