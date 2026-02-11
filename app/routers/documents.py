@@ -12,6 +12,7 @@ from app.utils.security import (
     encode_salt_for_storage,
     decode_salt_from_storage
 )
+from app.utils.secure_artifacts import encrypt_artifact_bytes, decrypt_artifact_bytes
 from app.utils.gemini_service import extract_text_from_document, create_extracted_text_file, validate_and_extract_document
 from app.subscriptions import get_or_create_user_subscription, get_plan_limits
 from typing import Optional, List
@@ -80,7 +81,7 @@ def get_content_type(filename: str) -> str:
     }
     return content_types.get(ext, "application/octet-stream")
 
-def upload_document_to_r2(file_contents: bytes, filename: str, content_type: str) -> str:
+def upload_document_to_r2(file_contents: bytes, filename: str, content_type: str, encrypted: bool = False) -> str:
     """Upload document to R2 and return the R2 key/path"""
     try:
         r2_client.put_object(
@@ -91,7 +92,7 @@ def upload_document_to_r2(file_contents: bytes, filename: str, content_type: str
             # Set metadata for security
             Metadata={
                 'uploaded-by': 'rilono-system',
-                'encrypted': 'false'  # Can be enhanced with encryption later
+                'encrypted': 'true' if encrypted else 'false'
             }
         )
         
@@ -204,7 +205,7 @@ async def upload_document(
     content_type = get_content_type(file.filename)
     
     # Upload ENCRYPTED file to R2 (stored as encrypted blob)
-    r2_key = upload_document_to_r2(encrypted_file_data, unique_filename, content_type)
+    r2_key = upload_document_to_r2(encrypted_file_data, unique_filename, content_type, encrypted=True)
     
     # Process document with Gemini AI for validation and text extraction
     extracted_text_file_url = None
@@ -231,15 +232,17 @@ async def upload_document(
             import json
             validation_json = json.dumps(validation_result, indent=2)
             extracted_text_bytes = validation_json.encode('utf-8')
+            encrypted_extracted_text_bytes = encrypt_artifact_bytes(extracted_text_bytes)
             
             # Generate unique filename for extracted text file
             extracted_text_filename = f"user_{current_user.id}/{uuid.uuid4()}_extracted.txt"
             
-            # Upload extracted text file to R2 (stored as plain text, not encrypted)
+            # Upload extracted text file to R2 as encrypted artifact payload.
             extracted_text_r2_key = upload_document_to_r2(
-                extracted_text_bytes, 
+                encrypted_extracted_text_bytes,
                 extracted_text_filename, 
-                "text/plain"
+                "application/octet-stream",
+                encrypted=True
             )
             
             extracted_text_file_url = extracted_text_r2_key
@@ -545,6 +548,7 @@ def save_student_profile_to_r2(user: models.User, status_data: dict, documents: 
     # Convert to JSON
     json_content = json.dumps(comprehensive_data, indent=2, default=str)
     json_bytes = json_content.encode('utf-8')
+    encrypted_json_bytes = encrypt_artifact_bytes(json_bytes)
     
     # Descriptive filename for LLM to understand
     r2_key = f"user_{user.id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
@@ -553,12 +557,13 @@ def save_student_profile_to_r2(user: models.User, status_data: dict, documents: 
         r2_client.put_object(
             Bucket=R2_DOCUMENTS_BUCKET,
             Key=r2_key,
-            Body=json_bytes,
-            ContentType="application/json",
+            Body=encrypted_json_bytes,
+            ContentType="application/octet-stream",
             Metadata={
                 'type': 'student-profile-visa-status',
                 'user-id': str(user.id),
-                'student-name': user.full_name or 'Unknown'
+                'student-name': user.full_name or 'Unknown',
+                'encrypted': 'true'
             }
         )
         return r2_key
@@ -575,7 +580,8 @@ def get_student_profile_from_r2(user_id: int) -> Optional[dict]:
     
     try:
         response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=r2_key)
-        json_content = response['Body'].read().decode('utf-8')
+        encrypted_blob = response['Body'].read()
+        json_content = decrypt_artifact_bytes(encrypted_blob).decode('utf-8')
         return json.loads(json_content)
     except r2_client.exceptions.NoSuchKey:
         return None
@@ -823,9 +829,10 @@ async def get_extracted_text(
         )
     
     try:
-        # Get extracted text file from R2 (stored as plain text, not encrypted)
+        # Get extracted text file from R2 and decrypt artifact payload if needed.
         response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.extracted_text_file_url)
-        file_content = response['Body'].read()
+        encrypted_blob = response['Body'].read()
+        file_content = decrypt_artifact_bytes(encrypted_blob)
         
         return StreamingResponse(
             BytesIO(file_content),

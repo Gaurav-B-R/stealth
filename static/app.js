@@ -475,39 +475,75 @@ async function checkUniversityByEmail(email) {
 }
 
 async function checkAuth() {
-    const token = localStorage.getItem('authToken');
-    if (token) {
-        authToken = token;
-        try {
-            const response = await fetch(`${API_BASE}/api/auth/me`, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-            if (response.ok) {
-                currentUser = await response.json();
-                updateUIForAuth();
-                await loadSubscriptionStatus(true);
-                return true;
-            } else {
-                localStorage.removeItem('authToken');
-                authToken = null;
-                currentSubscription = null;
-                updateSubscriptionUI();
-                return false;
+    if (!authToken) {
+        currentSubscription = null;
+        updateSubscriptionUI();
+        return false;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/me`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
             }
-        } catch (error) {
-            console.error('Auth check failed:', error);
-            localStorage.removeItem('authToken');
+        });
+        if (response.ok) {
+            currentUser = await response.json();
+            updateUIForAuth();
+            await loadSubscriptionStatus(true);
+            return true;
+        } else {
             authToken = null;
             currentSubscription = null;
             updateSubscriptionUI();
             return false;
         }
+    } catch (error) {
+        console.error('Auth check failed:', error);
+        authToken = null;
+        currentSubscription = null;
+        updateSubscriptionUI();
+        return false;
     }
-    currentSubscription = null;
-    updateSubscriptionUI();
-    return false;
+}
+
+function renderUserInfo(user) {
+    const userInfoEl = document.getElementById('userInfo');
+    if (!userInfoEl) return;
+
+    const safeUsername = user?.username || 'User';
+    const safeDisplayName = user?.full_name || safeUsername;
+    const safeInitial = (safeDisplayName || 'U').charAt(0).toUpperCase();
+
+    userInfoEl.replaceChildren();
+
+    if (user?.profile_picture) {
+        const avatarImg = document.createElement('img');
+        avatarImg.src = getImageUrl(user.profile_picture);
+        avatarImg.alt = safeUsername;
+
+        const usernameSpan = document.createElement('span');
+        usernameSpan.textContent = safeUsername;
+
+        userInfoEl.append(avatarImg, usernameSpan);
+        return;
+    }
+
+    const avatar = document.createElement('div');
+    avatar.style.width = '2rem';
+    avatar.style.height = '2rem';
+    avatar.style.borderRadius = '50%';
+    avatar.style.background = 'rgba(255,255,255,0.3)';
+    avatar.style.display = 'flex';
+    avatar.style.alignItems = 'center';
+    avatar.style.justifyContent = 'center';
+    avatar.style.fontWeight = '600';
+    avatar.textContent = safeInitial;
+
+    const usernameSpan = document.createElement('span');
+    usernameSpan.textContent = safeUsername;
+
+    userInfoEl.append(avatar, usernameSpan);
 }
 
 function updateUIForAuth() {
@@ -527,13 +563,7 @@ function updateUIForAuth() {
         if (heroRegisterBtn) heroRegisterBtn.style.display = 'none';
         if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'none';
         
-        // Update user info with profile picture if available
-        const userInfoEl = document.getElementById('userInfo');
-        if (currentUser.profile_picture) {
-            userInfoEl.innerHTML = `<img src="${getImageUrl(currentUser.profile_picture)}" alt="${currentUser.username}"> <span>${currentUser.username}</span>`;
-        } else {
-            userInfoEl.innerHTML = `<div style="width: 2rem; height: 2rem; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-weight: 600;">${(currentUser.full_name || currentUser.username).charAt(0).toUpperCase()}</div> <span>${currentUser.username}</span>`;
-        }
+        renderUserInfo(currentUser);
         // Only load profile data if we're on the dashboard section
         const currentSection = sessionStorage.getItem('currentSection');
         if (currentSection === 'dashboard' || currentSection === 'profile') {
@@ -2983,7 +3013,6 @@ async function handleLogin(e) {
 
         if (response.ok) {
             authToken = data.access_token;
-            localStorage.setItem('authToken', authToken);
             await checkAuth();
             showMessage('Login successful!', 'success');
             document.getElementById('loginForm').reset();
@@ -3174,7 +3203,6 @@ async function handleRegister(e) {
 }
 
 function logout() {
-    localStorage.removeItem('authToken');
     authToken = null;
     currentUser = null;
     currentSubscription = null;
@@ -5419,12 +5447,7 @@ async function handleUpdateProfile(e) {
             showMessage('Profile updated successfully!', 'success');
             currentUser = data;
             // Update UI to reflect changes
-            const userInfoEl = document.getElementById('userInfo');
-            if (currentUser.profile_picture) {
-                userInfoEl.innerHTML = `<img src="${getImageUrl(currentUser.profile_picture)}" alt="${currentUser.username}"> <span>${currentUser.username}</span>`;
-            } else {
-                userInfoEl.innerHTML = `<div style="width: 2rem; height: 2rem; border-radius: 50%; background: rgba(255,255,255,0.3); display: flex; align-items: center; justify-content: center; font-weight: 600;">${(currentUser.full_name || currentUser.username).charAt(0).toUpperCase()}</div> <span>${currentUser.username}</span>`;
-            }
+            renderUserInfo(currentUser);
             // Reload profile display if on dashboard
             displayProfile(data);
             
@@ -5646,8 +5669,7 @@ async function handleDeleteAccount() {
         
         if (response.ok || response.status === 204) {
             showMessage('Your account has been deleted successfully.', 'success');
-            // Clear local storage and logout
-            localStorage.removeItem('authToken');
+            // Clear auth state and logout
             authToken = null;
             currentUser = null;
             updateUIForAuth();

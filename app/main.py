@@ -7,6 +7,7 @@ from app.routers import auth, upload, profile, documents, ai_chat, pricing, subs
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.schema_patch import ensure_user_legal_consent_column
+from app.token_backfill import backfill_hashed_auth_tokens
 import os
 
 # Create database tables
@@ -18,10 +19,32 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware
+DEFAULT_CORS_ORIGINS = [
+    "https://rilono.com",
+    "https://www.rilono.com",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+
+def _parse_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+    if not raw:
+        return DEFAULT_CORS_ORIGINS
+
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if "*" in origins:
+        # Credentials are enabled; wildcard origin is unsafe and invalid in many browsers.
+        origins = [origin for origin in origins if origin != "*"]
+    return origins or DEFAULT_CORS_ORIGINS
+
+
+# Add CORS middleware with explicit origins only.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=_parse_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,6 +69,7 @@ def startup_backfill_subscriptions():
     try:
         backfill_missing_subscriptions(db)
         backfill_missing_referral_codes(db)
+        backfill_hashed_auth_tokens(db)
     finally:
         db.close()
 

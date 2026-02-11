@@ -4,6 +4,7 @@ from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_active_user
 from app.subscriptions import get_or_create_user_subscription, get_plan_limits
+from app.utils.secure_artifacts import decrypt_artifact_bytes
 # Import Gemini configuration
 from app.utils import gemini_service as gemini_utils
 from typing import Optional, List
@@ -47,7 +48,8 @@ def get_student_profile_and_status(user_id: int) -> dict:
     try:
         r2_key = f"user_{user_id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
         response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=r2_key)
-        json_content = response['Body'].read().decode('utf-8')
+        encrypted_blob = response['Body'].read()
+        json_content = decrypt_artifact_bytes(encrypted_blob).decode('utf-8')
         return json.loads(json_content)
     except Exception:
         return None
@@ -143,7 +145,8 @@ def get_user_document_files(user_id: int, db: Session) -> List[dict]:
                     Bucket=R2_DOCUMENTS_BUCKET, 
                     Key=doc.extracted_text_file_url
                 )
-                extracted_content = response['Body'].read().decode('utf-8')
+                encrypted_blob = response['Body'].read()
+                extracted_content = decrypt_artifact_bytes(encrypted_blob).decode('utf-8')
                 
                 # Try to parse as JSON, otherwise use raw content
                 try:

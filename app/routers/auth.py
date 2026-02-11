@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Form
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from datetime import timedelta, datetime
 from app.database import get_db
 from app import models, schemas
@@ -20,10 +21,43 @@ from app.referrals import (
     get_user_by_referral_code,
     maybe_award_referral_bonus_on_login,
 )
+from app.utils.rate_limiter import check_ip_rate_limit
+from app.utils.token_security import hash_token, token_matches
 import os
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 DEFAULT_PUBLIC_BASE_URL = "https://rilono.com"
+
+REGISTER_RATE_LIMIT = int(os.getenv("REGISTER_RATE_LIMIT", "5"))
+REGISTER_RATE_WINDOW_SECONDS = int(os.getenv("REGISTER_RATE_WINDOW_SECONDS", "900"))
+LOGIN_RATE_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "12"))
+LOGIN_RATE_WINDOW_SECONDS = int(os.getenv("LOGIN_RATE_WINDOW_SECONDS", "300"))
+FORGOT_PASSWORD_RATE_LIMIT = int(os.getenv("FORGOT_PASSWORD_RATE_LIMIT", "5"))
+FORGOT_PASSWORD_RATE_WINDOW_SECONDS = int(os.getenv("FORGOT_PASSWORD_RATE_WINDOW_SECONDS", "900"))
+CONTACT_RATE_LIMIT = int(os.getenv("CONTACT_RATE_LIMIT", "5"))
+CONTACT_RATE_WINDOW_SECONDS = int(os.getenv("CONTACT_RATE_WINDOW_SECONDS", "1800"))
+
+
+def _enforce_rate_limit_or_429(
+    request: Request,
+    scope: str,
+    limit: int,
+    window_seconds: int,
+    extra_key: str | None = None,
+) -> None:
+    allowed, retry_after = check_ip_rate_limit(
+        request=request,
+        scope=scope,
+        limit=limit,
+        window_seconds=window_seconds,
+        extra_key=extra_key,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 @router.get("/turnstile-site-key")
 def get_turnstile_site_key():
@@ -73,7 +107,14 @@ def get_university_by_email(email: str, db: Session = Depends(get_db)):
     }
 
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
-def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: Request = None):
+def register(user: schemas.UserCreate, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="auth.register",
+        limit=REGISTER_RATE_LIMIT,
+        window_seconds=REGISTER_RATE_WINDOW_SECONDS,
+    )
+
     if not user.accepted_terms_privacy:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -127,7 +168,10 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
     # Check if user already exists
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
     if db_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to complete registration. Please check your details or log in if you already have an account."
+        )
 
     referrer = None
     normalized_referral_code = (user.referral_code or "").strip().upper()
@@ -165,6 +209,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
     
     # Generate verification token
     verification_token = generate_verification_token()
+    verification_token_hash = hash_token(verification_token)
     token_expires = datetime.utcnow() + timedelta(hours=24)  # Token expires in 24 hours
     
     # Auto-fill university name from the database (ignore user-provided university)
@@ -180,7 +225,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
         referred_by_user_id=referrer.id if referrer else None,
         accepted_terms_privacy_at=datetime.utcnow(),
         email_verified=False,
-        verification_token=verification_token,
+        verification_token=verification_token_hash,
         verification_token_expires=token_expires
     )
     db.add(db_user)
@@ -204,6 +249,13 @@ async def login(
     request: Request,
     db: Session = Depends(get_db)
 ):
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="auth.login",
+        limit=LOGIN_RATE_LIMIT,
+        window_seconds=LOGIN_RATE_WINDOW_SECONDS,
+    )
+
     # Read form data manually to get both OAuth2 fields and Turnstile token
     form = await request.form()
     
@@ -313,31 +365,44 @@ def read_users_me(
     return current_user
 
 @router.post("/forgot-password")
-def forgot_password(request: schemas.PasswordResetRequest, db: Session = Depends(get_db)):
+def forgot_password(
+    payload: schemas.PasswordResetRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
     """
     Request password reset. Sends a password reset email.
     """
-    email = request.email.lower().strip()
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="auth.forgot_password",
+        limit=FORGOT_PASSWORD_RATE_LIMIT,
+        window_seconds=FORGOT_PASSWORD_RATE_WINDOW_SECONDS,
+    )
+
+    email = payload.email.lower().strip()
     
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
     
+    generic_message = {
+        "message": "If an account with this email exists, a password reset link has been sent."
+    }
+
     # Find user by email
     user = db.query(models.User).filter(models.User.email == email).first()
     
-    # Check if account exists
+    # Do not reveal whether account exists
     if not user:
-        raise HTTPException(
-            status_code=404,
-            detail="No account found with this email address. Please create an account first."
-        )
+        return generic_message
     
     # Generate password reset token
     reset_token = generate_verification_token()
+    reset_token_hash = hash_token(reset_token)
     token_expires = datetime.utcnow() + timedelta(hours=1)  # Token expires in 1 hour
     
     # Save reset token to user
-    user.password_reset_token = reset_token
+    user.password_reset_token = reset_token_hash
     user.password_reset_token_expires = token_expires
     db.commit()
     
@@ -345,15 +410,11 @@ def forgot_password(request: schemas.PasswordResetRequest, db: Session = Depends
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
     email_sent = send_password_reset_email(user.email, reset_token, base_url)
     
-    if email_sent:
-        return {
-            "message": "Password reset link has been sent to your email. Please check your inbox."
-        }
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to send password reset email. Please try again later or contact support."
-        )
+    if not email_sent:
+        # Log only, keep external response generic to prevent enumeration.
+        print(f"Warning: Failed to send password reset email to {email}")
+
+    return generic_message
 
 @router.post("/reset-password")
 def reset_password(request: schemas.PasswordReset, db: Session = Depends(get_db)):
@@ -372,12 +433,17 @@ def reset_password(request: schemas.PasswordReset, db: Session = Depends(get_db)
     if len(new_password.encode('utf-8')) > 200:
         raise HTTPException(status_code=400, detail="Password is too long. Maximum 200 characters allowed.")
     
-    # Find user by reset token
+    token_hash = hash_token(token)
+
+    # Find user by hashed token, with legacy plaintext fallback support.
     user = db.query(models.User).filter(
-        models.User.password_reset_token == token
+        or_(
+            models.User.password_reset_token == token_hash,
+            models.User.password_reset_token == token,
+        )
     ).first()
     
-    if not user:
+    if not user or not token_matches(token, user.password_reset_token):
         raise HTTPException(
             status_code=404,
             detail="Invalid or expired password reset token"
@@ -414,12 +480,17 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     if not token:
         raise HTTPException(status_code=400, detail="Verification token is required")
     
-    # Find user by verification token
+    token_hash = hash_token(token)
+
+    # Find user by hashed token, with legacy plaintext fallback support.
     user = db.query(models.User).filter(
-        models.User.verification_token == token
+        or_(
+            models.User.verification_token == token_hash,
+            models.User.verification_token == token,
+        )
     ).first()
     
-    if not user:
+    if not user or not token_matches(token, user.verification_token):
         raise HTTPException(
             status_code=404,
             detail="Invalid or expired verification token"
@@ -473,9 +544,10 @@ def resend_verification_email(request: schemas.ResendVerificationRequest, db: Se
     
     # Generate new verification token
     verification_token = generate_verification_token()
+    verification_token_hash = hash_token(verification_token)
     token_expires = datetime.utcnow() + timedelta(hours=24)
     
-    user.verification_token = verification_token
+    user.verification_token = verification_token_hash
     user.verification_token_expires = token_expires
     db.commit()
     
@@ -502,7 +574,6 @@ def resend_verification_email(request: schemas.ResendVerificationRequest, db: Se
 
 @router.post("/request-university-change")
 def request_university_change(
-    request: Request,
     change_request: schemas.UniversityChangeRequest,
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -532,8 +603,8 @@ def request_university_change(
     
     if not dev_email:
         # Check if domain is a valid university domain
-        university = db.query(models.UniversityDomain).filter(
-            models.UniversityDomain.email_domain == email_domain
+        university = db.query(models.USUniversity).filter(
+            models.USUniversity.email_domain == email_domain
         ).first()
         
         if not university:
@@ -563,20 +634,21 @@ def request_university_change(
     
     # Generate verification token
     change_token = generate_verification_token()
+    change_token_hash = hash_token(change_token)
     token_expires = datetime.utcnow() + timedelta(hours=24)
     
     # Store pending change info
     current_user.pending_email = new_email
     current_user.pending_university = new_university
-    current_user.university_change_token = change_token
+    current_user.university_change_token = change_token_hash
     current_user.university_change_token_expires = token_expires
     
     db.commit()
     
-    # Get base URL
-    base_url = str(request.base_url).rstrip('/')
-    if 'localhost' not in base_url and 'http://' in base_url:
-        base_url = base_url.replace('http://', 'https://')
+    # Use configured public base URL only (do not trust request Host header).
+    base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL).rstrip("/")
+    if not base_url:
+        base_url = DEFAULT_PUBLIC_BASE_URL
     
     # Send verification email
     email_sent = send_university_change_email(new_email, new_university, change_token, base_url)
@@ -603,12 +675,17 @@ def verify_university_change(token: str, db: Session = Depends(get_db)):
             detail="Verification token is required."
         )
     
-    # Find user with this token
+    token_hash = hash_token(token)
+
+    # Find user by hashed token, with legacy plaintext fallback support.
     user = db.query(models.User).filter(
-        models.User.university_change_token == token
+        or_(
+            models.User.university_change_token == token_hash,
+            models.User.university_change_token == token,
+        )
     ).first()
     
-    if not user:
+    if not user or not token_matches(token, user.university_change_token):
         raise HTTPException(
             status_code=400,
             detail="Invalid verification token. Please request a new university change."
@@ -703,6 +780,7 @@ def cancel_university_change(
 
 @router.post("/contact")
 async def submit_contact_form(
+    request: Request,
     name: str = Form(...),
     email: str = Form(...),
     subject: str = Form(...),
@@ -713,6 +791,13 @@ async def submit_contact_form(
     Submit contact form - sends email to contact@rilono.com.
     No authentication required.
     """
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="auth.contact",
+        limit=CONTACT_RATE_LIMIT,
+        window_seconds=CONTACT_RATE_WINDOW_SECONDS,
+    )
+
     from ..email_service import send_contact_form_email
     
     # Basic validation

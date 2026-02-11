@@ -17,14 +17,14 @@ class User(Base):
     profile_picture = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     email_verified = Column(Boolean, default=False)
-    verification_token = Column(String, nullable=True, unique=True, index=True)
+    verification_token = Column(String, nullable=True, unique=True, index=True)  # Stores hashed token
     verification_token_expires = Column(DateTime(timezone=True), nullable=True)
-    password_reset_token = Column(String, nullable=True, unique=True, index=True)
+    password_reset_token = Column(String, nullable=True, unique=True, index=True)  # Stores hashed token
     password_reset_token_expires = Column(DateTime(timezone=True), nullable=True)
     # Pending university change fields
     pending_email = Column(String, nullable=True)  # New email for university change
     pending_university = Column(String, nullable=True)  # New university name
-    university_change_token = Column(String, nullable=True, unique=True, index=True)
+    university_change_token = Column(String, nullable=True, unique=True, index=True)  # Stores hashed token
     university_change_token_expires = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, default=False)  # Admin/Developer access
     is_developer = Column(Boolean, default=False)  # Developer team access
