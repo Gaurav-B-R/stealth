@@ -522,25 +522,37 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     }
 
 @router.post("/resend-verification")
-def resend_verification_email(request: schemas.ResendVerificationRequest, db: Session = Depends(get_db)):
+def resend_verification_email(
+    payload: schemas.ResendVerificationRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
     """
     Resend verification email to user.
     """
-    email = request.email
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="auth.resend_verification",
+        limit=FORGOT_PASSWORD_RATE_LIMIT,
+        window_seconds=FORGOT_PASSWORD_RATE_WINDOW_SECONDS,
+    )
+
+    email = payload.email.lower().strip()
+    generic_message = {
+        "message": "If an account with this email exists and is not verified, a verification email has been sent."
+    }
+
+    if not email:
+        return generic_message
     
     user = db.query(models.User).filter(models.User.email == email).first()
     
     if not user:
-        # Don't reveal if email exists or not for security
-        return {
-            "message": "If an account with this email exists and is not verified, a verification email has been sent."
-        }
+        return generic_message
     
     # Check if already verified
     if user.email_verified:
-        return {
-            "message": "Email is already verified"
-        }
+        return generic_message
     
     # Generate new verification token
     verification_token = generate_verification_token()
@@ -555,21 +567,11 @@ def resend_verification_email(request: schemas.ResendVerificationRequest, db: Se
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
     email_sent = send_verification_email(user.email, verification_token, base_url)
     
-    if email_sent:
-        return {
-            "message": "Verification email sent successfully. Please check your inbox."
-        }
-    else:
-        # Return helpful error message
-        error_detail = (
-            "Failed to send verification email. "
-            "If you're in development mode, make sure RESEND_API_KEY is set and "
-            "consider using USE_TEST_EMAIL=true in your .env file to use Resend's test email sender."
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=error_detail
-        )
+    if not email_sent:
+        # Keep response generic to avoid account/email state leaks.
+        print(f"Warning: Failed to resend verification email to {email}")
+
+    return generic_message
 
 
 @router.post("/request-university-change")

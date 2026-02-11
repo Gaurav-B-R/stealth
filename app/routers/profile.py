@@ -1,11 +1,28 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from urllib.parse import urlparse
 from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_active_user
 from app.referrals import ensure_user_referral_code
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
+
+
+def _is_safe_profile_picture_url(value: str) -> bool:
+    """Allow only absolute http(s) URLs or root-relative paths."""
+    if not value:
+        return False
+
+    candidate = value.strip()
+    if not candidate:
+        return False
+
+    if candidate.startswith("/"):
+        return True
+
+    parsed = urlparse(candidate)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 @router.get("/", response_model=schemas.UserResponse)
 def get_profile(
@@ -55,6 +72,11 @@ def update_profile(
     
     for field, value in update_data.items():
         if field not in protected_fields:
+            if field == "profile_picture" and value is not None and not _is_safe_profile_picture_url(value):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid profile picture URL. Only http(s) URLs or relative paths are allowed."
+                )
             setattr(current_user, field, value)
     
     db.commit()

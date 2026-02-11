@@ -3433,10 +3433,25 @@ async function loadMyItems() {
 
 function getImageUrl(imageUrl) {
     if (!imageUrl) return null;
-    if (imageUrl.startsWith('http') || imageUrl.startsWith('/')) {
-        return imageUrl;
+
+    const raw = String(imageUrl).trim();
+    if (!raw) return null;
+
+    let candidate = raw;
+    if (!(raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('/'))) {
+        candidate = API_BASE + (raw.startsWith('/') ? '' : '/') + raw;
     }
-    return API_BASE + (imageUrl.startsWith('/') ? '' : '/') + imageUrl;
+
+    try {
+        const parsed = new URL(candidate, window.location.origin);
+        const protocol = parsed.protocol.toLowerCase();
+        if (protocol !== 'http:' && protocol !== 'https:') {
+            return null;
+        }
+        return parsed.href;
+    } catch (error) {
+        return null;
+    }
 }
 
 function displayItems(items, containerId, showActions = false) {
@@ -3461,12 +3476,12 @@ function displayItems(items, containerId, showActions = false) {
         if (!window.itemImagesMap) {
             window.itemImagesMap = {};
         }
-        window.itemImagesMap[imageKey] = images.map(img => getImageUrl(img));
+        window.itemImagesMap[imageKey] = images.map((img) => getImageUrl(img)).filter(Boolean);
         
         return `
         <div class="item-card" style="cursor: pointer;" onclick="showItemDetail(${item.id})" data-item-id="${item.id}">
             <div class="item-image" style="position: relative; cursor: ${imageCount > 0 ? 'pointer' : 'default'};" ${imageCount > 0 ? `data-image-key="${imageKey}" data-item-id="${item.id}" data-item-title="${escapeHtml(item.title)}" onclick="event.stopPropagation(); handleItemImageClick(this)"` : ''}>
-                ${imageUrl ? `<img src="${imageUrl}" alt="${item.title}" style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;" onerror="this.parentElement.innerHTML='📦';">` : '📦'}
+                ${imageUrl ? `<img src="${imageUrl}" alt="${escapeHtml(item.title)}" style="width: 100%; height: 100%; object-fit: cover; pointer-events: none;" onerror="this.parentElement.innerHTML='📦';">` : '📦'}
                 ${imageCount > 1 ? `<div style="position: absolute; bottom: 0.5rem; right: 0.5rem; background: rgba(0,0,0,0.7); color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.875rem; pointer-events: none;">${imageCount} photos</div>` : ''}
             </div>
             <div class="item-content">
@@ -4178,8 +4193,9 @@ function displayConversations(conversations) {
         const displayName = conv.other_user.full_name || conv.other_user.username;
         const university = conv.other_user.university || '';
         
-        const avatarContent = conv.other_user.profile_picture 
-            ? `<img src="${getImageUrl(conv.other_user.profile_picture)}" alt="${escapeHtml(displayName)}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`
+        const avatarUrl = getImageUrl(conv.other_user.profile_picture);
+        const avatarContent = avatarUrl
+            ? `<img src="${avatarUrl}" alt="${escapeHtml(displayName)}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`
             : displayName.charAt(0).toUpperCase();
         
         return `
@@ -4333,8 +4349,9 @@ function updateChatHeader(otherUser, itemTitle) {
     const university = otherUser.university || '';
     
     // Create avatar for header
-    const avatarHtml = otherUser.profile_picture
-        ? `<img src="${getImageUrl(otherUser.profile_picture)}" alt="${escapeHtml(name)}" style="width: 2.5rem; height: 2.5rem; border-radius: 50%; object-fit: cover; margin-right: 0.75rem; border: 2px solid var(--primary-color);">`
+    const avatarUrl = getImageUrl(otherUser.profile_picture);
+    const avatarHtml = avatarUrl
+        ? `<img src="${avatarUrl}" alt="${escapeHtml(name)}" style="width: 2.5rem; height: 2.5rem; border-radius: 50%; object-fit: cover; margin-right: 0.75rem; border: 2px solid var(--primary-color);">`
         : `<div style="width: 2.5rem; height: 2.5rem; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; margin-right: 0.75rem; border: 2px solid var(--primary-color);">${name.charAt(0).toUpperCase()}</div>`;
     
     document.getElementById('chatHeaderInfo').innerHTML = `
