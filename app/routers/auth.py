@@ -74,6 +74,12 @@ def get_university_by_email(email: str, db: Session = Depends(get_db)):
 
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: Request = None):
+    if not user.accepted_terms_privacy:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must accept the Terms & Conditions and Privacy Policy to register."
+        )
+
     # Verify Turnstile token if provided
     turnstile_token = user.cf_turnstile_token
     if turnstile_token:
@@ -172,6 +178,7 @@ def register(user: schemas.UserCreate, db: Session = Depends(get_db), request: R
         current_residence_country=user.current_residence_country or "United States",
         referral_code=generate_unique_referral_code(db),
         referred_by_user_id=referrer.id if referrer else None,
+        accepted_terms_privacy_at=datetime.utcnow(),
         email_verified=False,
         verification_token=verification_token,
         verification_token_expires=token_expires

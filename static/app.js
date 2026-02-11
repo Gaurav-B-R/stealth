@@ -3042,7 +3042,8 @@ async function handleRegister(e) {
     e.preventDefault();
 
     const consentInput = document.getElementById('registerConsent');
-    if (!consentInput || !consentInput.checked) {
+    const acceptedTermsPrivacy = Boolean(consentInput && consentInput.checked);
+    if (!acceptedTermsPrivacy) {
         showMessage('Please accept the Terms & Conditions and Privacy Policy to continue.', 'error');
         return;
     }
@@ -3059,7 +3060,8 @@ async function handleRegister(e) {
         full_name: getValue('registerFullName'),
         university: getValue('registerUniversity'),
         current_residence_country: getValue('registerCountry'),
-        referral_code: getValue('registerReferralCode')
+        referral_code: getValue('registerReferralCode'),
+        accepted_terms_privacy: acceptedTermsPrivacy
         // Username is optional - will be auto-generated from email on backend
     };
 

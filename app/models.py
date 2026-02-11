@@ -37,6 +37,7 @@ class User(Base):
     referred_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     first_login_at = Column(DateTime(timezone=True), nullable=True)
     referral_reward_granted_at = Column(DateTime(timezone=True), nullable=True)
+    accepted_terms_privacy_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
