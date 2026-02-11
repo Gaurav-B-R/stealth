@@ -37,6 +37,18 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
+class PublicUserResponse(BaseModel):
+    id: int
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    university: Optional[str] = None
+    profile_picture: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class SubscriptionResponse(BaseModel):
     plan: str
     status: str

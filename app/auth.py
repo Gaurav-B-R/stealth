@@ -12,7 +12,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY environment variable must be set.")
+if SECRET_KEY == "your-secret-key-change-in-production":
+    raise RuntimeError("Insecure SECRET_KEY detected. Set a strong unique SECRET_KEY.")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
@@ -96,4 +100,3 @@ def get_current_admin_user(current_user: models.User = Depends(get_current_activ
             detail="Admin or developer access required"
         )
     return current_user
-

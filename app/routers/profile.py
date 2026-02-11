@@ -100,17 +100,16 @@ def update_documentation_preferences(
 
 # Note: This route must come AFTER specific paths like /documentation-preferences
 # because {user_id} would otherwise match any path segment
-@router.get("/{user_id}", response_model=schemas.UserResponse)
+@router.get("/{user_id}", response_model=schemas.PublicUserResponse)
 def get_user_profile(
     user_id: int,
     db: Session = Depends(get_db)
 ):
-    """Get a user's public profile (limited info)"""
+    """Get a user's public profile (safe non-sensitive fields only)."""
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
-    # Return public profile (exclude sensitive info)
+
     return user
 
 
