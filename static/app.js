@@ -10,7 +10,7 @@ let turnstileWidgetIds = {
 let newsRequestInFlight = false;
 let visaInterviewRequestInFlight = false;
 let visaInterviewFiltersInitialized = false;
-let currentVisaSubTab = 'slots';
+let currentVisaSubTab = 'prep';
 let documentTypeDropdownController = null;
 const PRO_UPGRADE_ENABLED = false;
 const PUBLIC_APP_ORIGIN = 'https://rilono.com';
@@ -206,6 +206,8 @@ function handleRoute(skipURLUpdate = false) {
         showDashboard(skipURLUpdate);
     } else if (path === '/pricing') {
         showPricing(skipURLUpdate);
+    } else if (path === '/about-us') {
+        showAboutUs(skipURLUpdate);
     } else if (path === '/privacy') {
         showPrivacy(skipURLUpdate);
     } else if (path === '/terms') {
@@ -273,9 +275,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Set last updated dates for legal pages
     const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const aboutLastUpdated = document.getElementById('aboutLastUpdated');
     const privacyLastUpdated = document.getElementById('privacyLastUpdated');
     const termsLastUpdated = document.getElementById('termsLastUpdated');
     const refundLastUpdated = document.getElementById('refundLastUpdated');
+    if (aboutLastUpdated) aboutLastUpdated.textContent = today;
     if (privacyLastUpdated) privacyLastUpdated.textContent = today;
     if (termsLastUpdated) termsLastUpdated.textContent = today;
     if (refundLastUpdated) refundLastUpdated.textContent = today;
@@ -908,12 +912,14 @@ function showRegister(skipURLUpdate = false) {
     const messageEl = document.getElementById('emailValidationMessage');
     const referralInput = document.getElementById('registerReferralCode');
     const countryInput = document.getElementById('registerCountry');
+    const consentInput = document.getElementById('registerConsent');
     if (universityInput) universityInput.value = '';
     if (messageEl) messageEl.style.display = 'none';
     if (countryInput) countryInput.value = 'United States';
     if (referralInput) {
         referralInput.value = getReferralCodeFromURL() || '';
     }
+    if (consentInput) consentInput.checked = false;
     
     // Ensure Turnstile widget is properly initialized
     const registerWidget = document.getElementById('turnstile-register');
@@ -2508,8 +2514,8 @@ function setVisaSubNavVisibility(isVisible) {
 }
 
 function switchVisaSubTab(subTab) {
-    const validSubTabs = ['slots', 'prep', 'mock', 'experiences'];
-    const targetSubTab = validSubTabs.includes(subTab) ? subTab : 'slots';
+    const validSubTabs = ['prep', 'mock', 'experiences'];
+    const targetSubTab = validSubTabs.includes(subTab) ? subTab : 'prep';
 
     if (currentVisaSubTab === 'mock' && targetSubTab !== 'mock' && (visaMockInterviewState.active || visaMockInterviewState.listening || visaMockInterviewState.pending)) {
         stopVoiceMockInterview(true);
@@ -2641,6 +2647,15 @@ function showPricing(skipURLUpdate = false) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (!skipURLUpdate) {
         updateURL('/pricing', false);
+    }
+}
+
+function showAboutUs(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('aboutUsSection').style.display = 'block';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!skipURLUpdate) {
+        updateURL('/about-us', false);
     }
 }
 
@@ -3025,6 +3040,12 @@ async function handleLogin(e) {
 
 async function handleRegister(e) {
     e.preventDefault();
+
+    const consentInput = document.getElementById('registerConsent');
+    if (!consentInput || !consentInput.checked) {
+        showMessage('Please accept the Terms & Conditions and Privacy Policy to continue.', 'error');
+        return;
+    }
     
     // Get form values and convert empty strings to null
     const getValue = (id) => {

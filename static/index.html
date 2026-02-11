@@ -31,6 +31,7 @@
             </div>
             <div class="nav-links" id="navLinks">
                 <a href="/pricing" onclick="event.preventDefault(); showPricing(); return false;" id="pricingLink">Pricing</a>
+                <a href="/about-us" onclick="event.preventDefault(); showAboutUs(); return false;" id="aboutUsLink">About Us</a>
                 <a href="/login" onclick="event.preventDefault(); showLogin(); return false;" id="loginLink">Login</a>
                 <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" id="registerLink">Register</a>
                 <!-- Notification Bell -->
@@ -196,6 +197,15 @@
                         <small style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
                             Invite benefit: both users get 1 month Pro after verification and first login.
                         </small>
+                    </div>
+                    <div class="form-group register-consent-group">
+                        <input type="checkbox" id="registerConsent" class="register-consent-checkbox" required>
+                        <label for="registerConsent" class="register-consent-label">
+                            I agree to the
+                            <a href="/terms" onclick="event.preventDefault(); showTerms(); return false;">Terms &amp; Conditions</a>
+                            and
+                            <a href="/privacy" onclick="event.preventDefault(); showPrivacy(); return false;">Privacy Policy</a>.
+                        </label>
                     </div>
                     <div class="form-group" style="display: flex; justify-content: center; margin-bottom: 1rem;">
                         <div id="turnstile-register" class="cf-turnstile" data-theme="light"></div>
@@ -575,14 +585,11 @@
                         </a>
                         <a href="#" class="nav-item nav-item-parent" data-tab="visa" onclick="switchDashboardTab('visa'); return false;">
                             <span class="nav-icon">🛂</span>
-                            <span class="nav-label">F1-Visa (Interviews/Slots)</span>
+                            <span class="nav-label">F1-Visa (Interviews)</span>
                             <span id="visaNavCaret" class="nav-caret">▾</span>
                         </a>
                         <div id="visaSubNav" class="visa-subnav" style="display: none;">
-                            <a href="#" class="visa-subnav-item active" data-visa-subtab="slots" onclick="openVisaSubTab('slots'); return false;">
-                                🗓️ F1-Visa Slots
-                            </a>
-                            <a href="#" class="visa-subnav-item" data-visa-subtab="prep" onclick="openVisaSubTab('prep'); return false;">
+                            <a href="#" class="visa-subnav-item active" data-visa-subtab="prep" onclick="openVisaSubTab('prep'); return false;">
                                 🎯 F-1 Visa Interview Prep (Rilono AI)
                             </a>
                             <a href="#" class="visa-subnav-item" data-visa-subtab="mock" onclick="openVisaSubTab('mock'); return false;">
@@ -1104,28 +1111,10 @@
                     <!-- Visa Tab -->
                     <div id="dashboardTab-visa" class="dashboard-tab">
                         <div class="tab-header">
-                            <h2>F1-Visa (Interviews/Slots)</h2>
+                            <h2>F1-Visa (Interviews)</h2>
                             <p class="tab-subtitle">Choose a module from the sidebar and work in a dedicated standalone view.</p>
                         </div>
-                        <div id="visaSubTab-slots" class="visa-subtab-panel active">
-                            <div class="dashboard-grid">
-                                <div class="dashboard-widget visa-hub-card visa-hub-slots visa-subtab-card" style="grid-column: 1 / -1;">
-                                    <div class="widget-header">
-                                        <h3>🗓️ F1-Visa Slots</h3>
-                                    </div>
-                                    <div class="widget-content visa-hub-content">
-                                        <p class="visa-hub-copy">Track slot openings and stay ahead with frequent updates and intelligent nudges.</p>
-                                        <div class="visa-hub-meta">Current status: <span class="visa-hub-tag">Active Tracking</span></div>
-                                        <div class="visa-hub-actions">
-                                            <button type="button" class="btn btn-primary" onclick="openVisaNewsSection()">View Slot Updates</button>
-                                            <button type="button" class="btn btn-secondary" onclick="showMessage('Slot alerts are coming soon.', 'success')">Enable Alerts</button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div id="visaSubTab-prep" class="visa-subtab-panel">
+                        <div id="visaSubTab-prep" class="visa-subtab-panel active">
                             <div class="dashboard-grid">
                                 <div class="dashboard-widget visa-hub-card visa-subtab-card" style="grid-column: 1 / -1;">
                                     <div class="widget-header">
@@ -1508,6 +1497,53 @@
         </div>
     </div>
 
+    <!-- About Us Section -->
+    <div id="aboutUsSection" class="section" style="display: none;">
+        <div class="legal-page">
+            <h1>About Rilono</h1>
+            <p class="last-updated">Last Updated: <span id="aboutLastUpdated"></span></p>
+
+            <section>
+                <h2>Who We Are</h2>
+                <p>Rilono is an AI-first platform dedicated to simplifying the US F1 visa journey for international students. We combine advanced artificial intelligence with real-time data to bridge the gap between expensive consultants and self-guided research.</p>
+                <p>Founded by a team of AI engineers and data scientists in Bengaluru, India, we understand the anxiety of the visa process firsthand. We built Rilono to be the intelligent, 24/7 companion we wish we had during our own studies.</p>
+            </section>
+
+            <section>
+                <h2>What We Do</h2>
+                <ul>
+                    <li><strong>AI Documentation Validation:</strong> Instant, intelligent reviews of your visa documents to ensure accuracy and compliance before you submit, with tracking throughout your journey.</li>
+                    <li><strong>Mock Interview:</strong> Realistic voice-enabled or chat-mode AI mock interviews that prepare you for real consulate pressure, including approval and rejection probability scoring based on your interview conversation.</li>
+                    <li><strong>Deadline Guardrails:</strong> Smart notifications and timeline tracking so you never miss critical dates, intake deadlines, or submission windows.</li>
+                    <li><strong>Real-Time Visa Intelligence:</strong> Latest F1 visa news, policy updates, and interview trends curated for your region.</li>
+                    <li><strong>F1 Interview Experiences from Real Candidates:</strong> Access to recent interview experiences shared by students across countries and consulates.</li>
+                    <li><strong>Personalized AI Assistant:</strong> A dedicated Rilono AI companion that understands your profile, answers questions quickly, and guides you on exactly what to do next at every stage.</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>Our Mission</h2>
+                <p>To democratize access to high-quality visa guidance. We believe every student deserves a personalized expert in their pocket: affordable, accurate, and always available.</p>
+            </section>
+
+            <section>
+                <h2>Contact Us</h2>
+                <p>We are here to help you succeed.</p>
+                <p>
+                    <strong>Email:</strong> contact@rilono.com<br>
+                    <strong>Location:</strong> Bengaluru, Karnataka, India
+                </p>
+                <p>
+                    <a href="#" onclick="event.preventDefault(); showContact(); return false;">Contact Us Form</a>
+                </p>
+            </section>
+
+            <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--border-color);">
+                <a href="#" onclick="event.preventDefault(); showHomepage(); return false;" class="btn btn-primary">Back to Home</a>
+            </div>
+        </div>
+    </div>
+
     <!-- Privacy Policy Section -->
     <div id="privacySection" class="section" style="display: none;">
         <div class="legal-page">
@@ -1865,6 +1901,7 @@
         <div class="footer-content">
             <div class="footer-links">
                 <a href="#" onclick="event.preventDefault(); showPricing(); return false;">Pricing</a>
+                <a href="#" onclick="event.preventDefault(); showAboutUs(); return false;">About Us</a>
                 <a href="#" onclick="event.preventDefault(); showContact(); return false;">Contact Us</a>
                 <a href="#" onclick="event.preventDefault(); showPrivacy(); return false;">Privacy Policy</a>
                 <a href="#" onclick="event.preventDefault(); showTerms(); return false;">Terms & Conditions</a>
