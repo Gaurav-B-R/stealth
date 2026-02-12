@@ -58,7 +58,23 @@ class SubscriptionResponse(BaseModel):
     document_uploads_used: int
     document_uploads_limit: int
     document_uploads_remaining: int
+    prep_sessions_used: int
+    prep_sessions_limit: int
+    prep_sessions_remaining: int
+    mock_interviews_used: int
+    mock_interviews_limit: int
+    mock_interviews_remaining: int
     is_pro: bool
+
+
+class RazorpayPaymentVerifyRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+class SubscriptionSessionConsumeRequest(BaseModel):
+    session_type: str  # prep | mock
 
 class Token(BaseModel):
     access_token: str
@@ -142,3 +158,30 @@ class DocumentListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class DocumentTypeCatalogItem(BaseModel):
+    value: str
+    label: str
+    description: Optional[str] = None
+    sort_order: int
+    is_active: bool
+    is_required: bool
+    journey_stage: Optional[int] = None
+    stage_gate_required: bool
+    stage_gate_group: Optional[str] = None
+
+
+class JourneyStageDefinition(BaseModel):
+    stage: int
+    name: str
+    emoji: str
+    description: str
+    next_step: str
+    required_docs: List[str]
+
+
+class DocumentCatalogResponse(BaseModel):
+    document_types: List[DocumentTypeCatalogItem]
+    required_document_types: List[str]
+    journey_stages: List[JourneyStageDefinition]

@@ -11,6 +11,8 @@ STATUS_ACTIVE = "active"
 
 FREE_AI_MESSAGE_LIMIT = 25
 FREE_DOCUMENT_UPLOAD_LIMIT = 5
+FREE_PREP_SESSION_LIMIT = 3
+FREE_MOCK_INTERVIEW_LIMIT = 2
 
 
 def _normalize_datetime(value):
@@ -38,16 +40,25 @@ def _apply_subscription_expiry(subscription: models.Subscription) -> bool:
     subscription.ends_at = None
     subscription.ai_messages_used = 0
     subscription.document_uploads_used = 0
+    subscription.prep_sessions_used = 0
+    subscription.mock_interviews_used = 0
     return True
 
 
 def get_plan_limits(plan: str) -> Dict[str, int]:
     normalized_plan = (plan or PLAN_FREE).lower()
     if normalized_plan == PLAN_PRO:
-        return {"ai_messages_limit": -1, "document_uploads_limit": -1}
+        return {
+            "ai_messages_limit": -1,
+            "document_uploads_limit": -1,
+            "prep_sessions_limit": -1,
+            "mock_interviews_limit": -1,
+        }
     return {
         "ai_messages_limit": FREE_AI_MESSAGE_LIMIT,
         "document_uploads_limit": FREE_DOCUMENT_UPLOAD_LIMIT,
+        "prep_sessions_limit": FREE_PREP_SESSION_LIMIT,
+        "mock_interviews_limit": FREE_MOCK_INTERVIEW_LIMIT,
     }
 
 
@@ -75,6 +86,8 @@ def get_or_create_user_subscription(
         status=STATUS_ACTIVE,
         ai_messages_used=0,
         document_uploads_used=0,
+        prep_sessions_used=0,
+        mock_interviews_used=0,
     )
     db.add(subscription)
     if commit:
@@ -133,6 +146,8 @@ def backfill_missing_subscriptions(db: Session) -> int:
                 status=STATUS_ACTIVE,
                 ai_messages_used=0,
                 document_uploads_used=0,
+                prep_sessions_used=0,
+                mock_interviews_used=0,
             )
         )
         created += 1

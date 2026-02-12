@@ -5270,6 +5270,75 @@ body {
     }
 }
 
+.documents-loading-state {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    border-radius: 0.75rem;
+    padding: 0.875rem 1rem;
+    color: #c7d2fe;
+    background: rgba(37, 99, 235, 0.1);
+    font-size: 0.95rem;
+}
+
+.documents-loading-dot {
+    width: 0.625rem;
+    height: 0.625rem;
+    border-radius: 999px;
+    background: #a5b4fc;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+.document-upload-progress-overlay {
+    z-index: 12050;
+    background: rgba(2, 6, 23, 0.72);
+    backdrop-filter: blur(6px);
+}
+
+.document-upload-progress-card {
+    width: min(500px, 94vw);
+    border-radius: 18px;
+    border: 1px solid rgba(99, 102, 241, 0.45);
+    background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(17, 24, 39, 0.98));
+    box-shadow: 0 30px 70px rgba(37, 99, 235, 0.2);
+    padding: 1.8rem 1.6rem;
+    text-align: center;
+}
+
+.document-upload-progress-spinner {
+    width: 52px;
+    height: 52px;
+    margin: 0 auto 1rem auto;
+    border-radius: 999px;
+    border: 4px solid rgba(99, 102, 241, 0.3);
+    border-top-color: #a78bfa;
+    border-right-color: #6366f1;
+    animation: documentUploadSpin 0.85s linear infinite;
+}
+
+.document-upload-progress-title {
+    margin: 0;
+    color: #eef2ff;
+    font-size: 1.35rem;
+    font-weight: 700;
+}
+
+.document-upload-progress-text {
+    margin: 0.65rem 0 0 0;
+    color: #c7d2fe;
+    font-size: 1.02rem;
+}
+
+@keyframes documentUploadSpin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 @media (max-width: 900px) {
     .dashboard-referral-strip {
         gap: 0.55rem;

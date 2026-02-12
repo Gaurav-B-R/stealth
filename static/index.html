@@ -16,6 +16,8 @@
     <link rel="stylesheet" href="/static/styles.css">
     <!-- Cloudflare Turnstile -->
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+    <!-- Razorpay Checkout -->
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <!-- Favicons -->
     <link rel="icon" type="image/png" href="/static/logo.png">
     <link rel="apple-touch-icon" href="/static/logo.png">
@@ -316,7 +318,7 @@
                     </p>
                     <div style="display: flex; justify-content: center; gap: 2rem; flex-wrap: wrap;">
                         <div style="text-align: center;">
-                            <div style="color: #34d399; font-size: 1.75rem; font-weight: 700;">₹599</div>
+                            <div style="color: #34d399; font-size: 1.75rem; font-weight: 700;">₹699</div>
                             <div style="color: rgba(255,255,255,0.6); font-size: 0.875rem;">vs ₹50K+ agents</div>
                         </div>
                         <div style="text-align: center;">
@@ -613,8 +615,13 @@
                         <div id="dashboardPlanName" class="sidebar-subscription-plan">Free</div>
                         <div id="dashboardPlanUsage" class="sidebar-subscription-usage">AI: 0/25 used</div>
                         <div id="dashboardUploadUsage" class="sidebar-subscription-usage">Uploads: 0/5 used</div>
+                        <div id="dashboardPrepUsage" class="sidebar-subscription-usage">Prep: 0/3 used</div>
+                        <div id="dashboardMockUsage" class="sidebar-subscription-usage">Mock: 0/2 used</div>
                         <button id="dashboardUpgradeButton" type="button" class="btn btn-primary sidebar-upgrade-btn" onclick="handleUpgradeToPro()">
                             Upgrade to Pro
+                        </button>
+                        <button id="dashboardCancelButton" type="button" class="btn btn-secondary sidebar-upgrade-btn" onclick="handleCancelSubscription()" style="display: none;">
+                            Cancel Pro Plan
                         </button>
                     </div>
                 </div>
@@ -1057,28 +1064,7 @@
                                                     <input type="text" id="documentTypeSearch" class="dropdown-search" placeholder="Search or select document type..." autocomplete="off">
                                                     <input type="hidden" id="documentType" required>
                                                     <div class="dropdown-list" id="documentTypeList">
-                                                        <div class="dropdown-item" data-value="passport">Passport</div>
-                                                        <div class="dropdown-item" data-value="ds-160-confirmation">DS-160 Confirmation Page</div>
-                                                        <div class="dropdown-item" data-value="ds-160-application">DS-160 Application</div>
-                                                        <div class="dropdown-item" data-value="us-visa-appointment-letter">US Visa Appointment Letter</div>
-                                                        <div class="dropdown-item" data-value="visa-fee-receipt">Visa Fee Receipt</div>
-                                                        <div class="dropdown-item" data-value="photograph-2x2">Photograph (2x2 Inches)</div>
-                                                        <div class="dropdown-item" data-value="form-i20-signed">Form I-20 (Signed)</div>
-                                                        <div class="dropdown-item" data-value="previous-i20s">Previous I-20's</div>
-                                                        <div class="dropdown-item" data-value="university-admission-letter">University Admission Letter</div>
-                                                        <div class="dropdown-item" data-value="bank-balance-certificate">Bank balance certificate</div>
-                                                        <div class="dropdown-item" data-value="loan-approval-letter">Loan approval letter (if applicable)</div>
-                                                        <div class="dropdown-item" data-value="affidavit-of-support">Affidavit of Support (if sponsored)</div>
-                                                        <div class="dropdown-item" data-value="sponsor-income-proof">Sponsor's income proof (salary slips, IT returns)</div>
-                                                        <div class="dropdown-item" data-value="degree-certificates">Degree certificates</div>
-                                                        <div class="dropdown-item" data-value="provisional-certificates">Provisional certificates</div>
-                                                        <div class="dropdown-item" data-value="transcripts-marksheets">Transcripts / mark sheets (all semesters)</div>
-                                                        <div class="dropdown-item" data-value="standardized-test-scores">Standardized test scores (GRE, TOEFL, IELTS, Duolingo)</div>
-                                                        <div class="dropdown-item" data-value="experience-letters">Experience letters</div>
-                                                        <div class="dropdown-item" data-value="offer-letters">Offer letters</div>
-                                                        <div class="dropdown-item" data-value="salary-slips">Salary slips (last 3-6 months)</div>
-                                                        <div class="dropdown-item" data-value="resume">Resume (updated)</div>
-                                                        <div class="dropdown-item" data-value="i901-sevis-fee-confirmation">I-901 SEVIS fee payment confirmation</div>
+                                                        <div class="dropdown-item" data-value="">Loading document types...</div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -1401,6 +1387,8 @@
                     <ul class="pricing-features">
                         <li>Up to 25 messages with Rilono AI</li>
                         <li>Up to 5 document uploads</li>
+                        <li>Up to 3 F-1 interview prep sessions</li>
+                        <li>Up to 2 F-1 mock interviews</li>
                         <li>Dashboard and visa journey tracking</li>
                     </ul>
                     <a href="#" onclick="event.preventDefault(); if(authToken){showDashboard();} else {showRegister();} return false;" class="btn btn-primary">Start Free</a>
@@ -1412,10 +1400,12 @@
                         <h2>Pro</h2>
                         <p>For serious applicants</p>
                     </div>
-                    <div id="pricingProPrice" class="pricing-price">$19<span>/month</span></div>
+                    <div id="pricingProPrice" class="pricing-price">₹699<span>/month</span></div>
                     <ul class="pricing-features">
                         <li>Unlimited messages with Rilono AI</li>
                         <li>Unlimited document uploads</li>
+                        <li>Unlimited F-1 interview prep sessions</li>
+                        <li>Unlimited F-1 mock interviews</li>
                         <li>Priority support</li>
                     </ul>
                     <button id="pricingProUpgradeButton" type="button" class="btn btn-primary" onclick="upgradeToProFromPricing()">Upgrade to Pro</button>
@@ -1491,6 +1481,11 @@
                         <div class="contact-info-icon">⏰</div>
                         <h3>Response Time</h3>
                         <p>We typically respond within 24-48 hours during business days.</p>
+                    </div>
+                    <div class="contact-info-card">
+                        <div class="contact-info-icon">🏢</div>
+                        <h3>Business Identity</h3>
+                        <p><strong>Business:</strong> Rilono<br><strong>Office Region:</strong> Bengaluru, Karnataka, India</p>
                     </div>
                 </div>
             </div>
@@ -1754,10 +1749,12 @@
                 <p>Rilono offers free and paid "Pro" subscription plans. By selecting a paid plan, you agree to pay the fees indicated at the time of purchase. You authorize us (through our payment processors like Razorpay or Apple/Google In-App Purchase) to charge your payment method on a recurring monthly or annual basis until you cancel.</p>
 
                 <h3>6.2 Cancellation Policy</h3>
-                <p>You may cancel your subscription at any time through your account dashboard or App Store settings. Cancellation will take effect at the end of your current billing cycle. You will retain access to Pro features until the end of the billing period, and you will not be charged for the following cycle.</p>
+                <p>You may cancel your subscription at any time through your account dashboard or App Store settings. During the current prelaunch billing phase, cancellation may take effect immediately in your account. Once recurring billing is fully enabled, cancellation will take effect at the end of your current billing cycle and you will not be charged for the following cycle.</p>
 
                 <h3>6.3 Refund Policy</h3>
                 <p>All fees are non-refundable. We do not offer refunds or credits for partial months of service, upgrade/downgrade refunds, or refunds for unused time with an open account. If you believe there has been an error in billing, please contact support within 7 days of the charge.</p>
+                <h3>6.4 Delivery of Service</h3>
+                <p>Rilono is a digital service. Access to Pro features is delivered electronically to your account after successful payment verification and activation. No physical goods are shipped.</p>
             </section>
 
             <section>
@@ -1894,6 +1891,45 @@
         </div>
     </div>
 
+    <!-- Delivery Policy Section -->
+    <div id="deliveryPolicySection" class="section" style="display: none;">
+        <div class="legal-page">
+            <h1>Delivery Policy</h1>
+            <p class="last-updated">Last Updated: <span id="deliveryLastUpdated"></span></p>
+
+            <section>
+                <h2>1. Nature of Service</h2>
+                <p>Rilono provides digital software services only. We do not sell or ship physical products.</p>
+            </section>
+
+            <section>
+                <h2>2. Delivery Timeline</h2>
+                <p>For paid subscriptions, access to Pro features is delivered electronically to your account after successful payment authorization and verification. In most cases activation is immediate.</p>
+            </section>
+
+            <section>
+                <h2>3. Delays and Failed Activations</h2>
+                <p>If payment is successful but your access is not activated, please contact us from the Contact Us page with your payment reference. We will validate and resolve activation issues as quickly as possible.</p>
+            </section>
+
+            <section>
+                <h2>4. Contact</h2>
+                <p>
+                    <strong>Email:</strong> contact@rilono.com<br>
+                    <strong>Office Region:</strong> Bengaluru, Karnataka, India
+                </p>
+                <p>
+                    <a href="#" onclick="event.preventDefault(); showContact(); return false;">Contact Us Form</a>
+                </p>
+            </section>
+
+            <div style="margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--border-color); display: flex; gap: 0.75rem; flex-wrap: wrap;">
+                <a href="#" onclick="event.preventDefault(); showPricing(); return false;" class="btn btn-secondary">Back to Pricing</a>
+                <a href="#" onclick="event.preventDefault(); showHomepage(); return false;" class="btn btn-primary">Back to Home</a>
+            </div>
+        </div>
+    </div>
+
     <div id="message" class="message"></div>
     
     <!-- Footer -->
@@ -1906,6 +1942,7 @@
                 <a href="#" onclick="event.preventDefault(); showPrivacy(); return false;">Privacy Policy</a>
                 <a href="#" onclick="event.preventDefault(); showTerms(); return false;">Terms & Conditions</a>
                 <a href="#" onclick="event.preventDefault(); showRefundPolicy(); return false;">Refund Policy</a>
+                <a href="#" onclick="event.preventDefault(); showDeliveryPolicy(); return false;">Delivery Policy</a>
             </div>
             <div class="footer-apps" style="display: flex; align-items: center; gap: 1rem; margin: 1rem 0; flex-wrap: wrap; justify-content: center;">
                 <div style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.05); padding: 0.5rem 1rem; border-radius: 2rem; border: 1px solid rgba(255,255,255,0.1);">
@@ -1986,6 +2023,15 @@
                 <button type="button" class="btn btn-primary" onclick="copyReferralLink()" style="width: auto;">Copy Invite Link</button>
                 <button type="button" class="btn btn-secondary" onclick="closeReferralPromoModal()" style="width: auto;">Done</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Document Upload Progress Modal -->
+    <div id="documentUploadProgressModal" class="modal-overlay document-upload-progress-overlay" style="display: none;">
+        <div class="modal-content document-upload-progress-card">
+            <div class="document-upload-progress-spinner" aria-hidden="true"></div>
+            <h3 class="document-upload-progress-title">Uploading your document</h3>
+            <p id="documentUploadProgressText" class="document-upload-progress-text">Encrypting document...</p>
         </div>
     </div>
     

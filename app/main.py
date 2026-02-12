@@ -6,7 +6,8 @@ from app.database import engine, Base, SessionLocal
 from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
-from app.schema_patch import ensure_user_legal_consent_column
+from app.schema_patch import ensure_subscription_usage_columns, ensure_user_legal_consent_column
+from app.document_catalog import ensure_default_document_type_catalog
 from app.token_backfill import backfill_hashed_auth_tokens
 import os
 
@@ -65,8 +66,10 @@ app.include_router(news.router)
 def startup_backfill_subscriptions():
     """Ensure existing users have default subscription + referral records."""
     ensure_user_legal_consent_column()
+    ensure_subscription_usage_columns()
     db = SessionLocal()
     try:
+        ensure_default_document_type_catalog(db)
         backfill_missing_subscriptions(db)
         backfill_missing_referral_codes(db)
         backfill_hashed_auth_tokens(db)

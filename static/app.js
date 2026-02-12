@@ -1,4 +1,5 @@
 const API_BASE = '';
+const AUTH_TOKEN_STORAGE_KEY = 'rilono_auth_token';
 let currentUser = null;
 let authToken = null;
 let currentSubscription = null;
@@ -10,10 +11,19 @@ let turnstileWidgetIds = {
 let newsRequestInFlight = false;
 let visaInterviewRequestInFlight = false;
 let visaInterviewFiltersInitialized = false;
+let documentUploadInProgress = false;
+let documentUploadStatusTimer = null;
 let currentVisaSubTab = 'prep';
 let documentTypeDropdownController = null;
-const PRO_UPGRADE_ENABLED = false;
+const PRO_UPGRADE_ENABLED = true;
 const PUBLIC_APP_ORIGIN = 'https://rilono.com';
+const LEGAL_LAST_UPDATED = {
+    about: 'February 12, 2026',
+    privacy: 'February 12, 2026',
+    terms: 'February 12, 2026',
+    refund: 'February 12, 2026',
+    delivery: 'February 12, 2026'
+};
 
 // Notification System
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
@@ -23,6 +33,7 @@ const PRICING_BASE_USD = {
     free: 0,
     pro: 19
 };
+const PRO_PRICE_INR = 699;
 
 const PRICING_COUNTRY_CONFIG = {
     US: { country: 'United States', currency: 'USD' },
@@ -46,6 +57,95 @@ const VISA_INTERVIEW_CONSULATE_MAP = {
     Singapore: ['Singapore'],
     Japan: ['Tokyo', 'Osaka / Kobe', 'Naha', 'Sapporo', 'Fukuoka']
 };
+
+const FALLBACK_JOURNEY_STAGES = [
+    {
+        stage: 1,
+        name: 'Getting Started',
+        emoji: '📝',
+        description: 'Welcome! Start your F1 visa journey.',
+        next_step: 'Upload your university offer/admission letter',
+        required_docs: []
+    },
+    {
+        stage: 2,
+        name: 'Admission Received',
+        emoji: '🎓',
+        description: 'University admission confirmed!',
+        next_step: 'Upload your passport and academic documents',
+        required_docs: ['university-admission-letter']
+    },
+    {
+        stage: 3,
+        name: 'Documents Ready',
+        emoji: '📄',
+        description: 'Essential documents collected.',
+        next_step: 'Get your signed I-20 from your university',
+        required_docs: ['passport', 'degree-certificates', 'transcripts-marksheets']
+    },
+    {
+        stage: 4,
+        name: 'I-20 Received',
+        emoji: '📘',
+        description: 'Great! You have your I-20 from the university.',
+        next_step: 'Complete your DS-160 application online',
+        required_docs: ['form-i20-signed']
+    },
+    {
+        stage: 5,
+        name: 'DS-160 Filed',
+        emoji: '📋',
+        description: 'DS-160 application submitted successfully.',
+        next_step: 'Pay your SEVIS I-901 fee and visa fee',
+        required_docs: ['ds-160-confirmation']
+    },
+    {
+        stage: 6,
+        name: 'Fees Paid',
+        emoji: '💳',
+        description: 'SEVIS and visa fees payment confirmed.',
+        next_step: 'Schedule your visa interview appointment',
+        required_docs: ['i901-sevis-fee-confirmation', 'visa-fee-receipt']
+    },
+    {
+        stage: 7,
+        name: 'Ready to Fly!',
+        emoji: '✈️',
+        description: 'Interview scheduled! All documents ready.',
+        next_step: 'You\'re all set! Good luck with your visa interview!',
+        required_docs: ['us-visa-appointment-letter', 'photograph-2x2', 'bank-balance-certificate']
+    }
+];
+
+const FALLBACK_DOCUMENT_TYPES = [
+    { value: 'passport', label: 'Passport', sort_order: 10, is_active: true, is_required: true, journey_stage: 3, stage_gate_required: true, stage_gate_group: null },
+    { value: 'ds-160-confirmation', label: 'DS-160 Confirmation Page', sort_order: 20, is_active: true, is_required: true, journey_stage: 5, stage_gate_required: true, stage_gate_group: null },
+    { value: 'ds-160-application', label: 'DS-160 Application', sort_order: 30, is_active: true, is_required: true, journey_stage: 5, stage_gate_required: false, stage_gate_group: null },
+    { value: 'us-visa-appointment-letter', label: 'US Visa Appointment Letter', sort_order: 40, is_active: true, is_required: true, journey_stage: 7, stage_gate_required: true, stage_gate_group: null },
+    { value: 'visa-fee-receipt', label: 'Visa Fee Receipt', sort_order: 50, is_active: true, is_required: true, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
+    { value: 'photograph-2x2', label: 'Photograph (2x2 Inches)', sort_order: 60, is_active: true, is_required: true, journey_stage: 7, stage_gate_required: true, stage_gate_group: null },
+    { value: 'form-i20-signed', label: 'Form I-20 (Signed)', sort_order: 70, is_active: true, is_required: true, journey_stage: 4, stage_gate_required: true, stage_gate_group: null },
+    { value: 'previous-i20s', label: 'Previous I-20\'s', sort_order: 80, is_active: true, is_required: false, journey_stage: 4, stage_gate_required: false, stage_gate_group: null },
+    { value: 'university-admission-letter', label: 'University Admission Letter', sort_order: 90, is_active: true, is_required: true, journey_stage: 2, stage_gate_required: true, stage_gate_group: null },
+    { value: 'bank-balance-certificate', label: 'Bank balance certificate', sort_order: 100, is_active: true, is_required: true, journey_stage: 7, stage_gate_required: true, stage_gate_group: null },
+    { value: 'loan-approval-letter', label: 'Loan approval letter (if applicable)', sort_order: 110, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
+    { value: 'affidavit-of-support', label: 'Affidavit of Support (if sponsored)', sort_order: 120, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
+    { value: 'sponsor-income-proof', label: 'Sponsor\'s income proof (salary slips, IT returns)', sort_order: 130, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
+    { value: 'degree-certificates', label: 'Degree certificates', sort_order: 140, is_active: true, is_required: true, journey_stage: 3, stage_gate_required: true, stage_gate_group: 'academics_one_of' },
+    { value: 'provisional-certificates', label: 'Provisional certificates', sort_order: 150, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
+    { value: 'transcripts-marksheets', label: 'Transcripts / mark sheets (all semesters)', sort_order: 160, is_active: true, is_required: true, journey_stage: 3, stage_gate_required: true, stage_gate_group: 'academics_one_of' },
+    { value: 'standardized-test-scores', label: 'Standardized test scores (GRE, TOEFL, IELTS, Duolingo)', sort_order: 170, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
+    { value: 'experience-letters', label: 'Experience letters', sort_order: 180, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
+    { value: 'offer-letters', label: 'Offer letters', sort_order: 190, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
+    { value: 'salary-slips', label: 'Salary slips (last 3-6 months)', sort_order: 200, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
+    { value: 'resume', label: 'Resume (updated)', sort_order: 210, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
+    { value: 'i901-sevis-fee-confirmation', label: 'I-901 SEVIS fee payment confirmation', sort_order: 220, is_active: true, is_required: true, journey_stage: 6, stage_gate_required: true, stage_gate_group: null }
+];
+
+let documentTypeCatalog = [];
+let requiredDocumentTypeValues = [];
+let journeyStageCatalog = [];
+let documentTypeLabelByValue = {};
 
 const VISA_PREP_INTERVIEW_INSTRUCTION = `You are an F-1 visa interview coach for a student.
 Rules:
@@ -155,6 +255,92 @@ function getPublicAppOrigin() {
     return PUBLIC_APP_ORIGIN;
 }
 
+function persistAuthToken(token) {
+    if (token) {
+        sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+        return;
+    }
+    sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+}
+
+function restoreAuthToken() {
+    if (authToken) return;
+    const saved = sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+    if (saved) {
+        authToken = saved;
+    }
+}
+
+function applyDocumentCatalogPayload(payload = null) {
+    const sourceDocumentTypes = Array.isArray(payload?.document_types) ? payload.document_types : FALLBACK_DOCUMENT_TYPES;
+    const sourceJourneyStages = Array.isArray(payload?.journey_stages) ? payload.journey_stages : FALLBACK_JOURNEY_STAGES;
+    const sourceRequiredTypes = Array.isArray(payload?.required_document_types) ? payload.required_document_types : [];
+
+    documentTypeCatalog = sourceDocumentTypes
+        .filter((row) => row && row.value)
+        .map((row, index) => ({
+            value: String(row.value),
+            label: String(row.label || row.value),
+            description: row.description || null,
+            sort_order: Number.isFinite(row.sort_order) ? row.sort_order : index,
+            is_active: row.is_active !== false,
+            is_required: Boolean(row.is_required),
+            journey_stage: Number.isFinite(row.journey_stage) ? row.journey_stage : null,
+            stage_gate_required: Boolean(row.stage_gate_required),
+            stage_gate_group: row.stage_gate_group || null
+        }))
+        .sort((a, b) => a.sort_order - b.sort_order);
+
+    documentTypeLabelByValue = {};
+    documentTypeCatalog.forEach((row) => {
+        documentTypeLabelByValue[row.value] = row.label;
+    });
+
+    const requiredFromCatalog = documentTypeCatalog
+        .filter((row) => row.is_required)
+        .map((row) => row.value);
+    requiredDocumentTypeValues = sourceRequiredTypes.length
+        ? sourceRequiredTypes.filter((value) => documentTypeLabelByValue[value])
+        : requiredFromCatalog;
+
+    journeyStageCatalog = sourceJourneyStages.length ? sourceJourneyStages : FALLBACK_JOURNEY_STAGES;
+}
+
+function renderDocumentTypeDropdownItems() {
+    const dropdownList = document.getElementById('documentTypeList');
+    if (!dropdownList) return;
+
+    const activeTypes = documentTypeCatalog.filter((row) => row.is_active !== false);
+    if (!activeTypes.length) {
+        dropdownList.innerHTML = '<div class="dropdown-item" data-value="">No document types available</div>';
+        return;
+    }
+
+    dropdownList.innerHTML = activeTypes
+        .map((row) => `<div class="dropdown-item" data-value="${escapeHtml(row.value)}">${escapeHtml(row.label)}</div>`)
+        .join('');
+}
+
+function getDocumentTypeLabel(documentType) {
+    if (!documentType) return 'Document';
+    return documentTypeLabelByValue[documentType] || formatDocumentType(documentType);
+}
+
+async function initializeDocumentCatalog() {
+    try {
+        const response = await fetch(`${API_BASE}/api/documents/catalog`);
+        if (!response.ok) {
+            throw new Error(`Catalog request failed: ${response.status}`);
+        }
+        const payload = await response.json();
+        applyDocumentCatalogPayload(payload);
+    } catch (error) {
+        console.warn('Unable to load document catalog from backend; using fallback catalog.', error);
+        applyDocumentCatalogPayload(null);
+    }
+    renderDocumentTypeDropdownItems();
+}
+
 function buildReferralInviteLink(referralCode) {
     if (!referralCode) return '';
     return `${getPublicAppOrigin()}/register?ref=${encodeURIComponent(referralCode)}`;
@@ -214,6 +400,8 @@ function handleRoute(skipURLUpdate = false) {
         showTerms(skipURLUpdate);
     } else if (path === '/refund-policy') {
         showRefundPolicy(skipURLUpdate);
+    } else if (path === '/delivery-policy') {
+        showDeliveryPolicy(skipURLUpdate);
     } else if (path === '/contact') {
         showContact(skipURLUpdate);
     } else {
@@ -266,6 +454,7 @@ async function initializeTurnstile() {
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
+    await initializeDocumentCatalog();
     initializeSearchableDropdowns();
     initializePricingSelector();
     initializeRegisterCountrySelector();
@@ -273,18 +462,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize Turnstile
     await initializeTurnstile();
     
-    // Set last updated dates for legal pages
-    const today = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    // Set explicit legal revision dates (stable, not per-page-load dynamic values).
     const aboutLastUpdated = document.getElementById('aboutLastUpdated');
     const privacyLastUpdated = document.getElementById('privacyLastUpdated');
     const termsLastUpdated = document.getElementById('termsLastUpdated');
     const refundLastUpdated = document.getElementById('refundLastUpdated');
-    if (aboutLastUpdated) aboutLastUpdated.textContent = today;
-    if (privacyLastUpdated) privacyLastUpdated.textContent = today;
-    if (termsLastUpdated) termsLastUpdated.textContent = today;
-    if (refundLastUpdated) refundLastUpdated.textContent = today;
+    const deliveryLastUpdated = document.getElementById('deliveryLastUpdated');
+    if (aboutLastUpdated) aboutLastUpdated.textContent = LEGAL_LAST_UPDATED.about;
+    if (privacyLastUpdated) privacyLastUpdated.textContent = LEGAL_LAST_UPDATED.privacy;
+    if (termsLastUpdated) termsLastUpdated.textContent = LEGAL_LAST_UPDATED.terms;
+    if (refundLastUpdated) refundLastUpdated.textContent = LEGAL_LAST_UPDATED.refund;
+    if (deliveryLastUpdated) deliveryLastUpdated.textContent = LEGAL_LAST_UPDATED.delivery;
     
-    // Check authentication first
+    // Restore token for same-tab refresh persistence and check authentication.
+    restoreAuthToken();
     await checkAuth();
     loadNotifications();
     updateFloatingChatVisibility();
@@ -494,6 +685,7 @@ async function checkAuth() {
             return true;
         } else {
             authToken = null;
+            persistAuthToken(null);
             currentSubscription = null;
             updateSubscriptionUI();
             return false;
@@ -501,6 +693,7 @@ async function checkAuth() {
     } catch (error) {
         console.error('Auth check failed:', error);
         authToken = null;
+        persistAuthToken(null);
         currentSubscription = null;
         updateSubscriptionUI();
         return false;
@@ -1307,18 +1500,26 @@ function updateSubscriptionUI() {
     const planNameEl = document.getElementById('dashboardPlanName');
     const aiUsageEl = document.getElementById('dashboardPlanUsage');
     const uploadUsageEl = document.getElementById('dashboardUploadUsage');
+    const prepUsageEl = document.getElementById('dashboardPrepUsage');
+    const mockUsageEl = document.getElementById('dashboardMockUsage');
     const sidebarUpgradeButton = document.getElementById('dashboardUpgradeButton');
+    const sidebarCancelButton = document.getElementById('dashboardCancelButton');
     const pricingUpgradeButton = document.getElementById('pricingProUpgradeButton');
 
     if (!currentSubscription) {
         if (planNameEl) planNameEl.textContent = 'Free';
         if (aiUsageEl) aiUsageEl.textContent = 'AI: 0/25 used';
         if (uploadUsageEl) uploadUsageEl.textContent = 'Uploads: 0/5 used';
+        if (prepUsageEl) prepUsageEl.textContent = 'Prep: 0/3 used';
+        if (mockUsageEl) mockUsageEl.textContent = 'Mock: 0/2 used';
         if (sidebarUpgradeButton) {
             sidebarUpgradeButton.disabled = !PRO_UPGRADE_ENABLED;
             sidebarUpgradeButton.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
             sidebarUpgradeButton.style.opacity = PRO_UPGRADE_ENABLED ? '1' : '0.75';
             sidebarUpgradeButton.style.cursor = PRO_UPGRADE_ENABLED ? 'pointer' : 'not-allowed';
+        }
+        if (sidebarCancelButton) {
+            sidebarCancelButton.style.display = 'none';
         }
         if (pricingUpgradeButton) {
             pricingUpgradeButton.disabled = !PRO_UPGRADE_ENABLED;
@@ -1328,6 +1529,7 @@ function updateSubscriptionUI() {
     }
 
     const isPro = Boolean(currentSubscription.is_pro);
+    const subscriptionStatus = (currentSubscription.status || '').toLowerCase();
     const planLabel = isPro ? 'Pro' : 'Free';
 
     if (planNameEl) {
@@ -1347,6 +1549,20 @@ function updateSubscriptionUI() {
             'Uploads'
         );
     }
+    if (prepUsageEl) {
+        prepUsageEl.textContent = formatUsageText(
+            currentSubscription.prep_sessions_used,
+            currentSubscription.prep_sessions_limit,
+            'Prep'
+        );
+    }
+    if (mockUsageEl) {
+        mockUsageEl.textContent = formatUsageText(
+            currentSubscription.mock_interviews_used,
+            currentSubscription.mock_interviews_limit,
+            'Mock'
+        );
+    }
 
     if (sidebarUpgradeButton) {
         const canUpgrade = !isPro && PRO_UPGRADE_ENABLED;
@@ -1354,6 +1570,11 @@ function updateSubscriptionUI() {
         sidebarUpgradeButton.textContent = isPro ? 'You are on Pro' : (canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon');
         sidebarUpgradeButton.style.opacity = canUpgrade || isPro ? '0.8' : '0.75';
         sidebarUpgradeButton.style.cursor = canUpgrade ? 'pointer' : 'not-allowed';
+    }
+
+    if (sidebarCancelButton) {
+        const showCancel = isPro && subscriptionStatus === 'active';
+        sidebarCancelButton.style.display = showCancel ? 'block' : 'none';
     }
 
     if (pricingUpgradeButton) {
@@ -1393,9 +1614,62 @@ async function handleUpgradeToPro() {
             return;
         }
 
-        currentSubscription = data;
-        updateSubscriptionUI();
-        showMessage('Subscription upgraded to Pro.', 'success');
+        if (data.action === 'already_pro') {
+            currentSubscription = data.subscription || currentSubscription;
+            updateSubscriptionUI();
+            showMessage(data.message || 'Your account is already on Pro.', 'success');
+            return;
+        }
+
+        if (data.action === 'contact_support') {
+            showMessage(data.message || 'Pro billing is not available right now. Please contact support.', 'error');
+            showContact();
+            return;
+        }
+
+        if (data.action !== 'razorpay_checkout') {
+            showMessage('Unable to start Pro checkout right now. Please try again.', 'error');
+            return;
+        }
+
+        if (typeof window.Razorpay !== 'function') {
+            showMessage('Razorpay Checkout failed to load. Please refresh and try again.', 'error');
+            return;
+        }
+
+        const options = {
+            key: data.key_id,
+            amount: data.amount,
+            currency: data.currency,
+            name: data.name || 'Rilono',
+            description: data.description || 'Rilono Pro Subscription',
+            order_id: data.order_id,
+            handler: async function (paymentResponse) {
+                await verifyRazorpayPayment(paymentResponse);
+            },
+            prefill: {
+                name: currentUser?.full_name || '',
+                email: currentUser?.email || ''
+            },
+            notes: {
+                user_id: String(currentUser?.id || '')
+            },
+            theme: {
+                color: '#7c5cff'
+            },
+            modal: {
+                ondismiss: function () {
+                    showMessage('Payment cancelled.', 'error');
+                }
+            }
+        };
+
+        const razorpay = new window.Razorpay(options);
+        razorpay.on('payment.failed', function (event) {
+            const reason = event?.error?.description || 'Payment failed. Please try again.';
+            showMessage(reason, 'error');
+        });
+        razorpay.open();
     } catch (error) {
         console.error('Upgrade to pro failed:', error);
         showMessage('Failed to upgrade subscription. Please try again.', 'error');
@@ -1408,6 +1682,107 @@ async function upgradeToProFromPricing() {
         return;
     }
     await handleUpgradeToPro();
+}
+
+async function verifyRazorpayPayment(paymentResponse) {
+    try {
+        const response = await fetch(`${API_BASE}/api/subscription/verify-payment`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                razorpay_order_id: paymentResponse.razorpay_order_id,
+                razorpay_payment_id: paymentResponse.razorpay_payment_id,
+                razorpay_signature: paymentResponse.razorpay_signature
+            })
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+            showMessage(data.detail || 'Payment verification failed. Please contact support.', 'error');
+            return;
+        }
+
+        currentSubscription = data;
+        updateSubscriptionUI();
+        showMessage('Payment successful. Pro subscription activated.', 'success');
+        if (document.getElementById('pricingSection')?.style.display === 'block') {
+            showPricing(true);
+        }
+    } catch (error) {
+        console.error('Razorpay payment verification failed:', error);
+        showMessage('Payment was received but verification failed. Please contact support.', 'error');
+    }
+}
+
+async function handleCancelSubscription() {
+    if (!authToken) {
+        showLogin();
+        return;
+    }
+
+    if (!currentSubscription?.is_pro) {
+        showMessage('Your account is not on Pro.', 'error');
+        return;
+    }
+
+    if (!confirm('Do you want to cancel your Pro subscription?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/subscription/cancel`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            showMessage(data.detail || 'Failed to cancel subscription.', 'error');
+            return;
+        }
+        currentSubscription = data;
+        updateSubscriptionUI();
+        showMessage('Your Pro cancellation request has been applied.', 'success');
+    } catch (error) {
+        console.error('Subscription cancellation failed:', error);
+        showMessage('Failed to cancel subscription. Please try again.', 'error');
+    }
+}
+
+async function consumeInterviewSession(sessionType) {
+    if (!authToken) {
+        showLogin();
+        return false;
+    }
+    try {
+        const response = await fetch(`${API_BASE}/api/subscription/consume-session`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ session_type: sessionType })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            showMessage(data.detail || 'Session limit reached for your current plan.', 'error');
+            if (response.status === 403) {
+                showPricing();
+            }
+            return false;
+        }
+        currentSubscription = data;
+        updateSubscriptionUI();
+        return true;
+    } catch (error) {
+        console.error('Session quota check failed:', error);
+        showMessage('Unable to validate session quota. Please try again.', 'error');
+        return false;
+    }
 }
 
 async function loadF1VisaNews(forceRefresh = false) {
@@ -2447,6 +2822,13 @@ async function startVoiceInterviewSession(mode, options = {}) {
         return;
     }
 
+    const sessionType = mode === 'prep' ? 'prep' : 'mock';
+    const quotaAllowed = await consumeInterviewSession(sessionType);
+    if (!quotaAllowed) {
+        initializeVisaInterviewUI(mode);
+        return;
+    }
+
     if (mode === 'prep') {
         stopVoicePrepInterview(true);
         state.channel = options.channel || 'voice';
@@ -2777,9 +3159,10 @@ function updatePricingByCountry(countryCode) {
     const proPriceEl = document.getElementById('pricingProPrice');
     const hintEl = document.getElementById('pricingCurrencyHint');
     const rate = pricingRatesByCurrency[config.currency] || PRICING_FALLBACK_RATES[config.currency] || 1;
+    const inrRate = pricingRatesByCurrency.INR || PRICING_FALLBACK_RATES.INR || 1;
 
     const convertedFree = PRICING_BASE_USD.free * rate;
-    const convertedPro = PRICING_BASE_USD.pro * rate;
+    const convertedPro = (PRO_PRICE_INR / inrRate) * rate;
 
     if (freePriceEl) {
         freePriceEl.innerHTML = `${formatCurrencyAmount(convertedFree, config.currency)}<span>/month</span>`;
@@ -2796,6 +3179,7 @@ function updatePricingByCountry(countryCode) {
         } else if (pricingRatesMeta.stale) {
             hintText += ' • Using cached rates';
         }
+        hintText += ' • Converted from base ₹699/month';
         hintEl.textContent = hintText;
     }
 }
@@ -2829,6 +3213,15 @@ function showRefundPolicy(skipURLUpdate = false) {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (!skipURLUpdate) {
         updateURL('/refund-policy', false);
+    }
+}
+
+function showDeliveryPolicy(skipURLUpdate = false) {
+    hideAllSections();
+    document.getElementById('deliveryPolicySection').style.display = 'block';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!skipURLUpdate) {
+        updateURL('/delivery-policy', false);
     }
 }
 
@@ -3013,6 +3406,7 @@ async function handleLogin(e) {
 
         if (response.ok) {
             authToken = data.access_token;
+            persistAuthToken(authToken);
             await checkAuth();
             showMessage('Login successful!', 'success');
             document.getElementById('loginForm').reset();
@@ -3204,6 +3598,7 @@ async function handleRegister(e) {
 
 function logout() {
     authToken = null;
+    persistAuthToken(null);
     currentUser = null;
     currentSubscription = null;
     closeReferralPromoModal();
@@ -4995,6 +5390,9 @@ function setTextContent(id, value) {
 }
 
 function formatDocumentType(type) {
+    if (documentTypeLabelByValue[type]) {
+        return documentTypeLabelByValue[type];
+    }
     return type
         .replace(/[-_]/g, ' ')
         .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -5055,21 +5453,10 @@ function calculateProfileCompletion(profile, documents) {
         'profile_picture': profile?.profile_picture
     };
     
-    // Required documents list (based on common visa requirements)
-    const requiredDocuments = [
-        'passport',
-        'ds-160-confirmation',
-        'ds-160-application',
-        'us-visa-appointment-letter',
-        'visa-fee-receipt',
-        'photograph-2x2',
-        'form-i20-signed',
-        'university-admission-letter',
-        'bank-balance-certificate',
-        'transcripts-marksheets',
-        'degree-certificates',
-        'i901-sevis-fee-confirmation'
-    ];
+    // Required document types come from database-backed catalog.
+    const requiredDocuments = requiredDocumentTypeValues.length
+        ? [...requiredDocumentTypeValues]
+        : FALLBACK_DOCUMENT_TYPES.filter((row) => row.is_required).map((row) => row.value);
     
     // Count completed profile fields
     let completedFields = 0;
@@ -5092,7 +5479,9 @@ function calculateProfileCompletion(profile, documents) {
     // Calculate completion percentage
     // Profile fields: 40% weight, Documents: 60% weight
     const profileCompletion = (completedFields / totalFields) * 100;
-    const documentsCompletion = ((requiredDocuments.length - pendingDocuments.length) / requiredDocuments.length) * 100;
+    const documentsCompletion = requiredDocuments.length
+        ? ((requiredDocuments.length - pendingDocuments.length) / requiredDocuments.length) * 100
+        : 100;
     const overallCompletion = Math.round((profileCompletion * 0.4) + (documentsCompletion * 0.6));
     
     return {
@@ -5128,24 +5517,8 @@ function updateProfileCompletionUI(data) {
                 </div>
             `;
         } else {
-            // Map document type values to display names
-            const docTypeNames = {
-                'passport': 'Passport',
-                'ds-160-confirmation': 'DS-160 Confirmation Page',
-                'ds-160-application': 'DS-160 Application',
-                'us-visa-appointment-letter': 'US Visa Appointment Letter',
-                'visa-fee-receipt': 'Visa Fee Receipt',
-                'photograph-2x2': 'Photograph (2x2 Inches)',
-                'form-i20-signed': 'Form I-20 (Signed)',
-                'university-admission-letter': 'University Admission Letter',
-                'bank-balance-certificate': 'Bank balance certificate',
-                'transcripts-marksheets': 'Transcripts / mark sheets',
-                'degree-certificates': 'Degree certificates',
-                'i901-sevis-fee-confirmation': 'I-901 SEVIS fee payment confirmation'
-            };
-            
             const pendingList = data.pendingDocuments.slice(0, 5).map(docType => {
-                const displayName = docTypeNames[docType] || docType;
+                const displayName = getDocumentTypeLabel(docType);
                 return `
                     <div style="display: flex; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
                         <span style="color: var(--danger-color); margin-right: 0.5rem;">○</span>
@@ -5173,112 +5546,63 @@ function updateProfileCompletionUI(data) {
 
 // Visa Journey Tracker Functions
 function calculateVisaJourneyStage(documents) {
-    // Get uploaded document types
     const uploadedDocTypes = new Set(
         documents.map(doc => doc.document_type).filter(type => type)
     );
-    
-    // Define stages and their required documents
-    const stages = [
-        {
-            stage: 1,
-            name: 'Getting Started',
-            emoji: '📝',
-            description: 'Welcome! Start your F1 visa journey.',
-            nextStep: 'Upload your university offer/admission letter',
-            requiredDocs: []
-        },
-        {
-            stage: 2,
-            name: 'Admission Received',
-            emoji: '🎓',
-            description: 'University admission confirmed!',
-            nextStep: 'Upload your passport and academic documents',
-            requiredDocs: ['university-admission-letter']
-        },
-        {
-            stage: 3,
-            name: 'Documents Ready',
-            emoji: '📄',
-            description: 'Essential documents collected.',
-            nextStep: 'Get your signed I-20 from your university',
-            requiredDocs: ['passport', 'degree-certificates', 'transcripts-marksheets']
-        },
-        {
-            stage: 4,
-            name: 'I-20 Received',
-            emoji: '📘',
-            description: 'Great! You have your I-20 from the university.',
-            nextStep: 'Complete your DS-160 application online',
-            requiredDocs: ['form-i20-signed']
-        },
-        {
-            stage: 5,
-            name: 'DS-160 Filed',
-            emoji: '📋',
-            description: 'DS-160 application submitted successfully.',
-            nextStep: 'Pay your SEVIS I-901 fee and visa fee',
-            requiredDocs: ['ds-160-confirmation']
-        },
-        {
-            stage: 6,
-            name: 'Fees Paid',
-            emoji: '💳',
-            description: 'SEVIS and visa fees payment confirmed.',
-            nextStep: 'Schedule your visa interview appointment',
-            requiredDocs: ['i901-sevis-fee-confirmation', 'visa-fee-receipt']
-        },
-        {
-            stage: 7,
-            name: 'Ready to Fly!',
-            emoji: '✈️',
-            description: 'Interview scheduled! All documents ready.',
-            nextStep: 'You\'re all set! Good luck with your visa interview!',
-            requiredDocs: ['us-visa-appointment-letter', 'photograph-2x2', 'bank-balance-certificate']
+    const stages = (journeyStageCatalog && journeyStageCatalog.length)
+        ? journeyStageCatalog.map((stage) => ({
+            stage: stage.stage,
+            name: stage.name,
+            emoji: stage.emoji,
+            description: stage.description,
+            nextStep: stage.next_step || stage.nextStep || '',
+            requiredDocs: Array.isArray(stage.required_docs) ? stage.required_docs : []
+        }))
+        : FALLBACK_JOURNEY_STAGES.map((stage) => ({
+            stage: stage.stage,
+            name: stage.name,
+            emoji: stage.emoji,
+            description: stage.description,
+            nextStep: stage.next_step || stage.nextStep || '',
+            requiredDocs: Array.isArray(stage.required_docs) ? stage.required_docs : []
+        }));
+
+    let currentStage = 1;
+    const stageGateRules = documentTypeCatalog.filter((row) => row.stage_gate_required && row.journey_stage);
+
+    for (const stage of stages.sort((a, b) => a.stage - b.stage)) {
+        const stageNumber = Number(stage.stage || 0);
+        if (stageNumber <= 1) continue;
+        if (stageNumber !== currentStage + 1) continue;
+
+        const gateDocs = stageGateRules.filter((row) => Number(row.journey_stage) === stageNumber);
+        if (!gateDocs.length) {
+            currentStage = stageNumber;
+            continue;
         }
-    ];
-    
-    // Calculate current stage based on documents
-    let currentStage = 1; // Start at stage 1
-    
-    // Check stage 2: University admission letter
-    if (uploadedDocTypes.has('university-admission-letter')) {
-        currentStage = 2;
+
+        const directDocs = gateDocs.filter((row) => !row.stage_gate_group).map((row) => row.value);
+        const directSatisfied = directDocs.every((docType) => uploadedDocTypes.has(docType));
+        if (!directSatisfied) break;
+
+        const grouped = {};
+        gateDocs.forEach((row) => {
+            if (!row.stage_gate_group) return;
+            if (!grouped[row.stage_gate_group]) grouped[row.stage_gate_group] = [];
+            grouped[row.stage_gate_group].push(row.value);
+        });
+
+        const groupsSatisfied = Object.values(grouped).every((groupTypes) => groupTypes.some((docType) => uploadedDocTypes.has(docType)));
+        if (!groupsSatisfied) break;
+
+        currentStage = stageNumber;
     }
-    
-    // Check stage 3: Passport and academic documents
-    const hasBasicDocs = uploadedDocTypes.has('passport') &&
-                         (uploadedDocTypes.has('degree-certificates') || uploadedDocTypes.has('transcripts-marksheets'));
-    if (currentStage >= 2 && hasBasicDocs) {
-        currentStage = 3;
-    }
-    
-    // Check stage 4: I-20
-    if (currentStage >= 3 && uploadedDocTypes.has('form-i20-signed')) {
-        currentStage = 4;
-    }
-    
-    // Check stage 5: DS-160
-    if (currentStage >= 4 && uploadedDocTypes.has('ds-160-confirmation')) {
-        currentStage = 5;
-    }
-    
-    // Check stage 6: SEVIS and visa fees
-    if (currentStage >= 5 && uploadedDocTypes.has('i901-sevis-fee-confirmation')) {
-        currentStage = 6;
-    }
-    
-    // Check stage 7: Interview scheduled and all docs ready
-    const interviewReady = uploadedDocTypes.has('us-visa-appointment-letter') &&
-                           uploadedDocTypes.has('photograph-2x2') &&
-                           uploadedDocTypes.has('bank-balance-certificate');
-    if (currentStage >= 6 && interviewReady) {
-        currentStage = 7;
-    }
-    
+
+    const stageInfo = stages.find((stage) => stage.stage === currentStage) || stages[0];
+
     return {
         currentStage,
-        stageInfo: stages[currentStage - 1],
+        stageInfo,
         stages
     };
 }
@@ -5688,6 +6012,7 @@ async function handleDeleteAccount() {
             showMessage('Your account has been deleted successfully.', 'success');
             // Clear auth state and logout
             authToken = null;
+            persistAuthToken(null);
             currentUser = null;
             updateUIForAuth();
             showHomepage();
@@ -5919,6 +6244,10 @@ async function handleDocumentationForm(e) {
 
 async function handleDocumentUpload(e) {
     e.preventDefault();
+    if (documentUploadInProgress) {
+        return;
+    }
+
     if (!authToken) {
         showMessage('Please login to upload documents', 'error');
         return;
@@ -5957,6 +6286,7 @@ async function handleDocumentUpload(e) {
     }
     
     try {
+        setDocumentUploadLoading(true, 'Encrypting document...');
         showMessage('Encrypting and uploading document...', 'success');
         
         const formData = new FormData();
@@ -6023,13 +6353,15 @@ async function handleDocumentUpload(e) {
                 showMessage('Document encrypted and uploaded successfully!', 'success');
             }
             
+            setDocumentUploadLoading(true, 'Upload complete. Syncing your documents...');
             document.getElementById('documentUploadForm').reset();
             // Also reset the searchable dropdown
             document.getElementById('documentType').value = '';
             document.getElementById('documentTypeSearch').value = '';
             const dropdownItems = document.querySelectorAll('#documentTypeList .dropdown-item');
             dropdownItems.forEach(item => item.classList.remove('selected'));
-            await loadMyDocuments();
+            await loadMyDocuments(true, 'Refreshing your uploaded documents...');
+            setDocumentUploadLoading(false, 'Document is now visible in your list.');
             
             // Refresh visa status after document upload
             await saveVisaStatusToR2();
@@ -6052,12 +6384,87 @@ async function handleDocumentUpload(e) {
     } catch (error) {
         console.error('Document upload error:', error);
         showMessage('An error occurred while uploading the document. Please try again.', 'error');
+    } finally {
+        if (documentUploadInProgress) {
+            setDocumentUploadLoading(false);
+        }
     }
 }
 
-async function loadMyDocuments() {
+function setDocumentUploadLoading(isLoading, message = '') {
+    const form = document.getElementById('documentUploadForm');
+    const modal = document.getElementById('documentUploadProgressModal');
+    const modalTextEl = document.getElementById('documentUploadProgressText');
+    if (!form) return;
+
+    const submitButton = form.querySelector('button[type="submit"]');
+    if (!submitButton) return;
+    if (!submitButton.dataset.defaultText) {
+        submitButton.dataset.defaultText = submitButton.textContent || 'Upload Document';
+    }
+
+    if (documentUploadStatusTimer) {
+        clearTimeout(documentUploadStatusTimer);
+        documentUploadStatusTimer = null;
+    }
+
+    if (isLoading) {
+        documentUploadInProgress = true;
+        const fields = form.querySelectorAll('input, textarea, button, select');
+        fields.forEach((field) => {
+            field.disabled = true;
+        });
+        submitButton.textContent = 'Uploading...';
+        if (modalTextEl) {
+            modalTextEl.textContent = message || 'Uploading document...';
+        }
+        if (modal) {
+            modal.style.display = 'flex';
+        }
+        return;
+    }
+
+    documentUploadInProgress = false;
+    const fields = form.querySelectorAll('input, textarea, button, select');
+    fields.forEach((field) => {
+        field.disabled = false;
+    });
+    submitButton.textContent = submitButton.dataset.defaultText;
+
+    if (message) {
+        if (modalTextEl) {
+            modalTextEl.textContent = message;
+        }
+        documentUploadStatusTimer = setTimeout(() => {
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }, 900);
+    } else {
+        if (modal) {
+            modal.style.display = 'none';
+        }
+    }
+}
+
+function showDocumentListLoading(message = 'Loading your documents...') {
+    const container = document.getElementById('documentsContainer');
+    if (!container) return;
+    container.innerHTML = `
+        <div class="documents-loading-state">
+            <div class="documents-loading-dot"></div>
+            <div>${escapeHtml(message)}</div>
+        </div>
+    `;
+}
+
+async function loadMyDocuments(showLoadingState = false, loadingMessage = 'Loading your documents...') {
     if (!authToken) return;
-    
+
+    if (showLoadingState) {
+        showDocumentListLoading(loadingMessage);
+    }
+
     try {
         const response = await fetch(`${API_BASE}/api/documents/my-documents`, {
             headers: {
@@ -6124,21 +6531,14 @@ function getDocumentValidationMeta(doc) {
 function displayDocuments(documents) {
     const container = document.getElementById('documentsContainer');
     
-    // Required documents list (same as in profile completion)
-    const requiredDocuments = [
-        { value: 'passport', label: 'Passport' },
-        { value: 'ds-160-confirmation', label: 'DS-160 Confirmation Page' },
-        { value: 'ds-160-application', label: 'DS-160 Application' },
-        { value: 'us-visa-appointment-letter', label: 'US Visa Appointment Letter' },
-        { value: 'visa-fee-receipt', label: 'Visa Fee Receipt' },
-        { value: 'photograph-2x2', label: 'Photograph (2x2 Inches)' },
-        { value: 'form-i20-signed', label: 'Form I-20 (Signed)' },
-        { value: 'university-admission-letter', label: 'University Admission Letter' },
-        { value: 'bank-balance-certificate', label: 'Bank balance certificate' },
-        { value: 'transcripts-marksheets', label: 'Transcripts / mark sheets' },
-        { value: 'degree-certificates', label: 'Degree certificates' },
-        { value: 'i901-sevis-fee-confirmation', label: 'I-901 SEVIS fee payment confirmation' }
-    ];
+    // Required documents list comes from database-backed catalog.
+    const requiredValues = requiredDocumentTypeValues.length
+        ? requiredDocumentTypeValues
+        : FALLBACK_DOCUMENT_TYPES.filter((row) => row.is_required).map((row) => row.value);
+    const requiredDocuments = requiredValues.map((value) => ({
+        value,
+        label: getDocumentTypeLabel(value)
+    }));
     
     // Get uploaded document types
     const uploadedDocTypes = new Set(

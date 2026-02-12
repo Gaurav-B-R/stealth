@@ -313,7 +313,7 @@ def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
     
     # Refresh the profile
     try:
-        status_data = calculate_visa_journey_stage(actual_documents)
+        status_data = calculate_visa_journey_stage(actual_documents, db)
         save_student_profile_to_r2(user, status_data, actual_documents)
         # Return the fresh profile
         return get_student_profile_and_status(user.id)

@@ -15,6 +15,12 @@ from app.utils.security import (
 from app.utils.secure_artifacts import encrypt_artifact_bytes, decrypt_artifact_bytes
 from app.utils.gemini_service import extract_text_from_document, create_extracted_text_file, validate_and_extract_document
 from app.subscriptions import get_or_create_user_subscription, get_plan_limits
+from app.document_catalog import (
+    build_document_catalog_response,
+    build_journey_stages,
+    ensure_default_document_type_catalog,
+    get_document_type_payload,
+)
 from typing import Optional, List
 import os
 import uuid
@@ -113,6 +119,13 @@ def get_presigned_url(r2_key: str, expiration: int = 3600) -> str:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate presigned URL: {str(e)}")
 
+
+@router.get("/catalog", response_model=schemas.DocumentCatalogResponse)
+def get_document_catalog(db: Session = Depends(get_db)):
+    ensure_default_document_type_catalog(db)
+    payload = build_document_catalog_response(db)
+    return schemas.DocumentCatalogResponse(**payload)
+
 @router.post("/upload", response_model=schemas.DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     file: UploadFile = File(...),
@@ -135,6 +148,16 @@ async def upload_document(
         raise HTTPException(
             status_code=401,
             detail="Incorrect password. Please provide your login password to encrypt the document."
+        )
+
+    ensure_default_document_type_catalog(db)
+    allowed_document_types = {
+        item["value"] for item in get_document_type_payload(db, active_only=True)
+    }
+    if document_type not in allowed_document_types:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid document type. Please select a valid type from the list.",
         )
 
     # Enforce subscription upload limits
@@ -292,7 +315,7 @@ async def upload_document(
         all_documents = db.query(models.Document).filter(
             models.Document.user_id == current_user.id
         ).all()
-        status_data = calculate_visa_journey_stage(all_documents)
+        status_data = calculate_visa_journey_stage(all_documents, db)
         save_student_profile_to_r2(current_user, status_data, all_documents)
     except Exception as e:
         # Don't fail the upload if profile refresh fails
@@ -343,115 +366,99 @@ async def get_my_documents(
 # ========== VISA JOURNEY STATUS ENDPOINTS ==========
 # NOTE: These must be defined BEFORE /{document_id} to avoid route conflicts
 
-def calculate_visa_journey_stage(documents: List[models.Document]) -> dict:
+def _is_stage_completed(
+    stage_number: int,
+    uploaded_doc_types: set[str],
+    document_types: list[dict],
+) -> bool:
+    stage_gate_docs = [
+        row
+        for row in document_types
+        if row.get("journey_stage") == stage_number and row.get("stage_gate_required")
+    ]
+    if not stage_gate_docs:
+        return True
+
+    direct_required = [row["value"] for row in stage_gate_docs if not row.get("stage_gate_group")]
+    if any(doc_type not in uploaded_doc_types for doc_type in direct_required):
+        return False
+
+    grouped_requirements: dict[str, list[str]] = {}
+    for row in stage_gate_docs:
+        group_key = row.get("stage_gate_group")
+        if not group_key:
+            continue
+        grouped_requirements.setdefault(group_key, []).append(row["value"])
+
+    for group_values in grouped_requirements.values():
+        if not any(doc_type in uploaded_doc_types for doc_type in group_values):
+            return False
+
+    return True
+
+
+def calculate_visa_journey_stage(documents: List[models.Document], db: Optional[Session] = None) -> dict:
     """
     Calculate the current visa journey stage based on uploaded documents.
     Returns stage info and progress details.
     """
-    # Get uploaded document types
+    if db is not None:
+        ensure_default_document_type_catalog(db)
+        document_type_catalog = get_document_type_payload(db, active_only=True)
+    else:
+        document_type_catalog = []
+
+    if not document_type_catalog:
+        # Fallback to built-in defaults if DB is unavailable.
+        from app.document_catalog import DEFAULT_DOCUMENT_TYPES
+
+        document_type_catalog = [
+            {
+                "value": row["document_type"],
+                "label": row["label"],
+                "description": row.get("description"),
+                "sort_order": row["sort_order"],
+                "is_active": True,
+                "is_required": row.get("is_required", False),
+                "journey_stage": row.get("journey_stage"),
+                "stage_gate_required": row.get("stage_gate_required", False),
+                "stage_gate_group": row.get("stage_gate_group"),
+            }
+            for row in DEFAULT_DOCUMENT_TYPES
+        ]
+
+    journey_stages = build_journey_stages(document_type_catalog)
+
+    # Get uploaded document types.
     uploaded_doc_types = set(
         doc.document_type for doc in documents if doc.document_type
     )
-    
-    # Define stages and their required documents
-    stages = [
-        {
-            "stage": 1,
-            "name": "Getting Started",
-            "emoji": "📝",
-            "description": "Welcome! Start your F1 visa journey.",
-            "next_step": "Upload your university offer/admission letter",
-            "required_docs": []
-        },
-        {
-            "stage": 2,
-            "name": "Admission Received",
-            "emoji": "🎓",
-            "description": "University admission confirmed!",
-            "next_step": "Upload your passport and academic documents",
-            "required_docs": ["university-admission-letter"]
-        },
-        {
-            "stage": 3,
-            "name": "Documents Ready",
-            "emoji": "📄",
-            "description": "Essential documents collected.",
-            "next_step": "Get your signed I-20 from your university",
-            "required_docs": ["passport", "degree-certificates", "transcripts-marksheets"]
-        },
-        {
-            "stage": 4,
-            "name": "I-20 Received",
-            "emoji": "📘",
-            "description": "Great! You have your I-20 from the university.",
-            "next_step": "Complete your DS-160 application online",
-            "required_docs": ["form-i20-signed"]
-        },
-        {
-            "stage": 5,
-            "name": "DS-160 Filed",
-            "emoji": "📋",
-            "description": "DS-160 application submitted successfully.",
-            "next_step": "Pay your SEVIS I-901 fee and visa fee",
-            "required_docs": ["ds-160-confirmation"]
-        },
-        {
-            "stage": 6,
-            "name": "Fees Paid",
-            "emoji": "💳",
-            "description": "SEVIS and visa fees payment confirmed.",
-            "next_step": "Schedule your visa interview appointment",
-            "required_docs": ["i901-sevis-fee-confirmation", "visa-fee-receipt"]
-        },
-        {
-            "stage": 7,
-            "name": "Ready to Fly!",
-            "emoji": "✈️",
-            "description": "Interview scheduled! All documents ready.",
-            "next_step": "You're all set! Good luck with your visa interview!",
-            "required_docs": ["us-visa-appointment-letter", "photograph-2x2", "bank-balance-certificate"]
-        }
-    ]
-    
-    # Calculate current stage based on documents
+
+    # Calculate current stage sequentially from stage gate rules.
     current_stage = 1
-    
-    # Check stage 2: University admission letter
-    if "university-admission-letter" in uploaded_doc_types:
-        current_stage = 2
-    
-    # Check stage 3: Passport and academic documents
-    has_basic_docs = ("passport" in uploaded_doc_types and 
-                      ("degree-certificates" in uploaded_doc_types or 
-                       "transcripts-marksheets" in uploaded_doc_types))
-    if current_stage >= 2 and has_basic_docs:
-        current_stage = 3
-    
-    # Check stage 4: I-20
-    if current_stage >= 3 and "form-i20-signed" in uploaded_doc_types:
-        current_stage = 4
-    
-    # Check stage 5: DS-160
-    if current_stage >= 4 and "ds-160-confirmation" in uploaded_doc_types:
-        current_stage = 5
-    
-    # Check stage 6: SEVIS and visa fees
-    if current_stage >= 5 and "i901-sevis-fee-confirmation" in uploaded_doc_types:
-        current_stage = 6
-    
-    # Check stage 7: Interview scheduled and all docs ready
-    interview_ready = ("us-visa-appointment-letter" in uploaded_doc_types and
-                       "photograph-2x2" in uploaded_doc_types and
-                       "bank-balance-certificate" in uploaded_doc_types)
-    if current_stage >= 6 and interview_ready:
-        current_stage = 7
-    
+
+    for stage in sorted(journey_stages, key=lambda row: row["stage"]):
+        stage_number = stage["stage"]
+        if stage_number <= 1:
+            continue
+        if stage_number != current_stage + 1:
+            continue
+        if _is_stage_completed(stage_number, uploaded_doc_types, document_type_catalog):
+            current_stage = stage_number
+        else:
+            break
+
     # Get current stage info
-    stage_info = stages[current_stage - 1]
-    
+    stage_info = next(
+        (stage for stage in journey_stages if stage["stage"] == current_stage),
+        journey_stages[0] if journey_stages else {},
+    )
+
     # Calculate progress percentage
-    progress_percent = round(((current_stage - 1) / (len(stages) - 1)) * 100)
-    
+    total_stages = len(journey_stages) if journey_stages else 1
+    denominator = max(total_stages - 1, 1)
+    progress_percent = round(((current_stage - 1) / denominator) * 100)
+
     # Get documents by stage
     documents_by_stage = {}
     for doc in documents:
@@ -467,10 +474,10 @@ def calculate_visa_journey_stage(documents: List[models.Document]) -> dict:
     
     return {
         "current_stage": current_stage,
-        "total_stages": len(stages),
+        "total_stages": total_stages,
         "progress_percent": progress_percent,
         "stage_info": stage_info,
-        "all_stages": stages,
+        "all_stages": journey_stages,
         "uploaded_document_types": list(uploaded_doc_types),
         "documents_by_type": documents_by_stage,
         "total_documents_uploaded": len(documents)
@@ -608,7 +615,7 @@ async def get_visa_journey_status(
         documents = db.query(models.Document).filter(
             models.Document.user_id == current_user.id
         ).all()
-        status_data = calculate_visa_journey_stage(documents)
+        status_data = calculate_visa_journey_stage(documents, db)
         
         # Merge with existing profile data
         status_data["r2_key"] = f"user_{current_user.id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
@@ -623,7 +630,7 @@ async def get_visa_journey_status(
         models.Document.user_id == current_user.id
     ).all()
     
-    status_data = calculate_visa_journey_stage(documents)
+    status_data = calculate_visa_journey_stage(documents, db)
     
     # Create the R2 file for the first time
     r2_key = save_student_profile_to_r2(current_user, status_data, documents)
@@ -651,7 +658,7 @@ async def refresh_visa_journey_status(
     ).all()
     
     # Calculate current journey status
-    status_data = calculate_visa_journey_stage(documents)
+    status_data = calculate_visa_journey_stage(documents, db)
     
     # Save comprehensive student profile to R2
     r2_key = save_student_profile_to_r2(current_user, status_data, documents)
@@ -985,7 +992,7 @@ async def delete_document(
             all_documents = db.query(models.Document).filter(
                 models.Document.user_id == current_user.id
             ).all()
-            status_data = calculate_visa_journey_stage(all_documents)
+            status_data = calculate_visa_journey_stage(all_documents, db)
             save_student_profile_to_r2(current_user, status_data, all_documents)
         except Exception as refresh_error:
             # Don't fail the delete if profile refresh fails
@@ -1034,7 +1041,7 @@ async def delete_document_admin(
                 all_documents = db.query(models.Document).filter(
                     models.Document.user_id == document_owner_id
                 ).all()
-                status_data = calculate_visa_journey_stage(all_documents)
+                status_data = calculate_visa_journey_stage(all_documents, db)
                 save_student_profile_to_r2(document_owner, status_data, all_documents)
         except Exception as refresh_error:
             # Don't fail the delete if profile refresh fails

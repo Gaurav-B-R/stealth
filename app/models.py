@@ -83,6 +83,23 @@ class Document(Base):
     uploader = relationship("User", back_populates="documents")
 
 
+class DocumentTypeCatalog(Base):
+    __tablename__ = "document_type_catalog"
+
+    id = Column(Integer, primary_key=True, index=True)
+    document_type = Column(String, unique=True, index=True, nullable=False)
+    label = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_required = Column(Boolean, nullable=False, default=False)
+    journey_stage = Column(Integer, nullable=True)
+    stage_gate_required = Column(Boolean, nullable=False, default=False)
+    stage_gate_group = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
 
@@ -92,6 +109,8 @@ class Subscription(Base):
     status = Column(String, nullable=False, default="active")  # active | canceled
     ai_messages_used = Column(Integer, nullable=False, default=0)
     document_uploads_used = Column(Integer, nullable=False, default=0)
+    prep_sessions_used = Column(Integer, nullable=False, default=0)
+    mock_interviews_used = Column(Integer, nullable=False, default=0)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     ends_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
