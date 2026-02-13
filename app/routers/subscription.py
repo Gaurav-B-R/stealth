@@ -597,7 +597,7 @@ def upgrade_to_pro(
                         "amount": amount,
                         "currency": currency,
                         "name": "Rilono",
-                        "description": "Rilono Pro Subscription (Auto-renew)",
+                        "description": "Rilono Pro Subscription (Auto-renew, cancel anytime)",
                     }
             except HTTPException:
                 pass
@@ -646,7 +646,7 @@ def upgrade_to_pro(
             "amount": amount,
             "currency": currency,
             "name": "Rilono",
-            "description": "Rilono Pro Subscription (Auto-renew)",
+            "description": "Rilono Pro Subscription (Auto-renew, cancel anytime)",
         }
 
     receipt = _create_receipt(current_user.id)

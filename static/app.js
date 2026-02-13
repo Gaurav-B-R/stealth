@@ -1828,7 +1828,7 @@ async function handleUpgradeToPro() {
             key: data.key_id,
             name: data.name || 'Rilono',
             description: data.description || 'Rilono Pro Subscription',
-            image: `${PUBLIC_APP_ORIGIN}/static/logo.png`,
+            image: `${PUBLIC_APP_ORIGIN}/static/logo.png?v=1`,
             handler: async function (paymentResponse) {
                 await verifyRazorpayPayment(paymentResponse, data.checkout_mode || 'order');
             },
@@ -1938,7 +1938,7 @@ async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode }) 
 
     if (modeEl) {
         modeEl.textContent = String(checkoutMode || '').toLowerCase() === 'subscription'
-            ? 'Auto-renew enabled. Cancel anytime from your dashboard.'
+            ? 'Auto-renew enabled. Cancel anytime from Profile > Subscription.'
             : 'One-time checkout for your current billing cycle.';
     }
 
