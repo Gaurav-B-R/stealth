@@ -1826,9 +1826,7 @@ async function handleUpgradeToPro() {
 
         const options = {
             key: data.key_id,
-            name: data.name || 'Rilono',
             description: data.description || 'Rilono Pro Subscription',
-            image: `${PUBLIC_APP_ORIGIN}/static/logo.png?v=1`,
             handler: async function (paymentResponse) {
                 await verifyRazorpayPayment(paymentResponse, data.checkout_mode || 'order');
             },
