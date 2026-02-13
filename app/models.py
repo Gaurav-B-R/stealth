@@ -95,6 +95,7 @@ class DocumentTypeCatalog(Base):
     is_required = Column(Boolean, nullable=False, default=False)
     journey_stage = Column(Integer, nullable=True)
     stage_gate_required = Column(Boolean, nullable=False, default=False)
+    stage_gate_requires_validation = Column(Boolean, nullable=False, default=False)
     stage_gate_group = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

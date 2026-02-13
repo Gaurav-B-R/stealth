@@ -63,8 +63,8 @@ const FALLBACK_JOURNEY_STAGES = [
         stage: 1,
         name: 'Getting Started',
         emoji: '📝',
-        description: 'Welcome! Start your F1 visa journey.',
-        next_step: 'Upload your university offer/admission letter',
+        description: 'Build your profile with core academic and test documents.',
+        next_step: 'Upload and validate your starter document set',
         required_docs: []
     },
     {
@@ -72,40 +72,40 @@ const FALLBACK_JOURNEY_STAGES = [
         name: 'Admission Received',
         emoji: '🎓',
         description: 'University admission confirmed!',
-        next_step: 'Upload your passport and academic documents',
-        required_docs: ['university-admission-letter']
+        next_step: 'Upload admission proof and one financial proof document',
+        required_docs: ['university-admission-letter', 'bank-statement']
     },
     {
         stage: 3,
-        name: 'Documents Ready',
-        emoji: '📄',
-        description: 'Essential documents collected.',
-        next_step: 'Get your signed I-20 from your university',
-        required_docs: ['passport', 'degree-certificates', 'transcripts-marksheets']
-    },
-    {
-        stage: 4,
         name: 'I-20 Received',
         emoji: '📘',
-        description: 'Great! You have your I-20 from the university.',
+        description: 'Upload and validate your signed Form I-20.',
         next_step: 'Complete your DS-160 application online',
         required_docs: ['form-i20-signed']
     },
     {
-        stage: 5,
+        stage: 4,
         name: 'DS-160 Filed',
         emoji: '📋',
-        description: 'DS-160 application submitted successfully.',
+        description: 'Upload and validate your full DS-160 application and 2x2 photograph.',
         next_step: 'Pay your SEVIS I-901 fee and visa fee',
-        required_docs: ['ds-160-confirmation']
+        required_docs: ['ds-160-application', 'photograph-2x2']
+    },
+    {
+        stage: 5,
+        name: 'Fees Paid',
+        emoji: '💳',
+        description: 'SEVIS payment is mandatory. Other fee/appointment confirmations are optional.',
+        next_step: 'Book interview slot and upload interview documents',
+        required_docs: ['i901-sevis-fee-confirmation']
     },
     {
         stage: 6,
-        name: 'Fees Paid',
-        emoji: '💳',
-        description: 'SEVIS and visa fees payment confirmed.',
-        next_step: 'Schedule your visa interview appointment',
-        required_docs: ['i901-sevis-fee-confirmation', 'visa-fee-receipt']
+        name: 'Visa Stage',
+        emoji: '🛂',
+        description: 'Prepare your visa interview packet and supporting documents.',
+        next_step: 'Review final interview checklist and confidence prep',
+        required_docs: ['us-visa-appointment-letter', 'stamped-f1-visa']
     },
     {
         stage: 7,
@@ -113,33 +113,45 @@ const FALLBACK_JOURNEY_STAGES = [
         emoji: '✈️',
         description: 'Interview scheduled! All documents ready.',
         next_step: 'You\'re all set! Good luck with your visa interview!',
-        required_docs: ['us-visa-appointment-letter', 'photograph-2x2', 'bank-balance-certificate']
+        required_docs: ['immunization-vaccination-records']
     }
 ];
 
 const FALLBACK_DOCUMENT_TYPES = [
-    { value: 'passport', label: 'Passport', sort_order: 10, is_active: true, is_required: true, journey_stage: 3, stage_gate_required: true, stage_gate_group: null },
-    { value: 'ds-160-confirmation', label: 'DS-160 Confirmation Page', sort_order: 20, is_active: true, is_required: true, journey_stage: 5, stage_gate_required: true, stage_gate_group: null },
-    { value: 'ds-160-application', label: 'DS-160 Application', sort_order: 30, is_active: true, is_required: true, journey_stage: 5, stage_gate_required: false, stage_gate_group: null },
-    { value: 'us-visa-appointment-letter', label: 'US Visa Appointment Letter', sort_order: 40, is_active: true, is_required: true, journey_stage: 7, stage_gate_required: true, stage_gate_group: null },
-    { value: 'visa-fee-receipt', label: 'Visa Fee Receipt', sort_order: 50, is_active: true, is_required: true, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
-    { value: 'photograph-2x2', label: 'Photograph (2x2 Inches)', sort_order: 60, is_active: true, is_required: true, journey_stage: 7, stage_gate_required: true, stage_gate_group: null },
-    { value: 'form-i20-signed', label: 'Form I-20 (Signed)', sort_order: 70, is_active: true, is_required: true, journey_stage: 4, stage_gate_required: true, stage_gate_group: null },
-    { value: 'previous-i20s', label: 'Previous I-20\'s', sort_order: 80, is_active: true, is_required: false, journey_stage: 4, stage_gate_required: false, stage_gate_group: null },
-    { value: 'university-admission-letter', label: 'University Admission Letter', sort_order: 90, is_active: true, is_required: true, journey_stage: 2, stage_gate_required: true, stage_gate_group: null },
-    { value: 'bank-balance-certificate', label: 'Bank balance certificate', sort_order: 100, is_active: true, is_required: true, journey_stage: 7, stage_gate_required: true, stage_gate_group: null },
-    { value: 'loan-approval-letter', label: 'Loan approval letter (if applicable)', sort_order: 110, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
-    { value: 'affidavit-of-support', label: 'Affidavit of Support (if sponsored)', sort_order: 120, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
-    { value: 'sponsor-income-proof', label: 'Sponsor\'s income proof (salary slips, IT returns)', sort_order: 130, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
-    { value: 'degree-certificates', label: 'Degree certificates', sort_order: 140, is_active: true, is_required: true, journey_stage: 3, stage_gate_required: true, stage_gate_group: 'academics_one_of' },
-    { value: 'provisional-certificates', label: 'Provisional certificates', sort_order: 150, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
-    { value: 'transcripts-marksheets', label: 'Transcripts / mark sheets (all semesters)', sort_order: 160, is_active: true, is_required: true, journey_stage: 3, stage_gate_required: true, stage_gate_group: 'academics_one_of' },
-    { value: 'standardized-test-scores', label: 'Standardized test scores (GRE, TOEFL, IELTS, Duolingo)', sort_order: 170, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
-    { value: 'experience-letters', label: 'Experience letters', sort_order: 180, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
-    { value: 'offer-letters', label: 'Offer letters', sort_order: 190, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
-    { value: 'salary-slips', label: 'Salary slips (last 3-6 months)', sort_order: 200, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_group: null },
-    { value: 'resume', label: 'Resume (updated)', sort_order: 210, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_group: null },
-    { value: 'i901-sevis-fee-confirmation', label: 'I-901 SEVIS fee payment confirmation', sort_order: 220, is_active: true, is_required: true, journey_stage: 6, stage_gate_required: true, stage_gate_group: null }
+    { value: 'passport', label: 'Passport', sort_order: 10, is_active: true, is_required: true, journey_stage: 1, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'high-school-transcripts', label: 'High School Transcripts', sort_order: 20, is_active: true, is_required: false, journey_stage: 1, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'bachelors-transcript', label: 'Bachelors Transcript (Optional)', sort_order: 30, is_active: true, is_required: false, journey_stage: 1, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'masters-transcript', label: 'Master\'s Transcript (Optional)', sort_order: 40, is_active: true, is_required: false, journey_stage: 1, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'other-school-college-degree-certificates', label: 'Other School/College/Degree Certificates', sort_order: 50, is_active: true, is_required: false, journey_stage: 1, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'standardized-test-scores', label: 'Standardized Test Scores (TOEFL/IELTS/Duolingo)', sort_order: 60, is_active: true, is_required: true, journey_stage: 1, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'standardized-test-scores-gre-gmat', label: 'Standardized Test Scores (GRE/GMAT)', sort_order: 70, is_active: true, is_required: false, journey_stage: 1, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'statement-of-purpose-lors', label: 'Statement of Purpose (SOP) & LORs', sort_order: 80, is_active: true, is_required: false, journey_stage: 1, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'resume', label: 'Resume/CV', sort_order: 90, is_active: true, is_required: true, journey_stage: 1, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'university-admission-letter', label: 'University Admission Letter', sort_order: 100, is_active: true, is_required: true, journey_stage: 2, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: 'admission_proof' },
+    { value: 'university-offer-letter', label: 'University Offer Letter', sort_order: 101, is_active: true, is_required: false, journey_stage: 2, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: 'admission_proof' },
+    { value: 'bank-statement', label: 'Bank Statement', sort_order: 102, is_active: true, is_required: true, journey_stage: 2, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: 'financial_proof' },
+    { value: 'bank-balance-certificate', label: 'Bank balance certificate', sort_order: 103, is_active: true, is_required: false, journey_stage: 2, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: 'financial_proof' },
+    { value: 'loan-approval-letter', label: 'Loan approval letter (if applicable)', sort_order: 104, is_active: true, is_required: false, journey_stage: 2, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: 'financial_proof' },
+    { value: 'loan-sanction-letter', label: 'Loan Sanction Letter', sort_order: 105, is_active: true, is_required: false, journey_stage: 2, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: 'financial_proof' },
+    { value: 'provisional-certificates', label: 'Provisional certificates', sort_order: 130, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'form-i20-signed', label: 'Form I-20 (Signed)', sort_order: 140, is_active: true, is_required: true, journey_stage: 3, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'previous-i20s', label: 'Previous I-20\'s', sort_order: 150, is_active: true, is_required: false, journey_stage: 3, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'ds-160-confirmation', label: 'DS-160 Confirmation Page', sort_order: 160, is_active: true, is_required: false, journey_stage: 4, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'ds-160-application', label: 'DS-160 Application (Full Application)', sort_order: 170, is_active: true, is_required: true, journey_stage: 4, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'travel-history-documents', label: 'Travel History Documents', sort_order: 175, is_active: true, is_required: false, journey_stage: 4, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'i901-sevis-fee-confirmation', label: 'SEVIS I-901 Fee Receipt', sort_order: 180, is_active: true, is_required: true, journey_stage: 5, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'visa-fee-receipt', label: 'Visa Application (MRV) Fee Receipts', sort_order: 190, is_active: true, is_required: false, journey_stage: 5, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'biometric-appointment-confirmation', label: 'Biometric Appointment Confirmation', sort_order: 191, is_active: true, is_required: false, journey_stage: 5, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'consular-interview-confirmation', label: 'Consular Interview Confirmation', sort_order: 192, is_active: true, is_required: false, journey_stage: 5, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'affidavit-of-support', label: 'Affidavit of Support (from parents/sponsors)', sort_order: 210, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'sponsor-income-proof', label: 'Sponsor\'s income proof (salary slips, IT returns)', sort_order: 220, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'ca-statement', label: 'CA Statement (summary of assets)', sort_order: 225, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'salary-slips', label: 'Salary slips (last 3-6 months)', sort_order: 230, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'us-visa-appointment-letter', label: 'US Visa Appointment Letter', sort_order: 240, is_active: true, is_required: true, journey_stage: 6, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'stamped-f1-visa', label: 'Stamped F-1 Visa', sort_order: 245, is_active: true, is_required: true, journey_stage: 6, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'photograph-2x2', label: 'Photograph (2x2 Inches)', sort_order: 250, is_active: true, is_required: true, journey_stage: 4, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null },
+    { value: 'experience-letters', label: 'Work Experience Letters', sort_order: 280, is_active: true, is_required: false, journey_stage: 6, stage_gate_required: false, stage_gate_requires_validation: false, stage_gate_group: null },
+    { value: 'immunization-vaccination-records', label: 'Immunization/Vaccination Records', sort_order: 290, is_active: true, is_required: true, journey_stage: 7, stage_gate_required: true, stage_gate_requires_validation: true, stage_gate_group: null }
 ];
 
 let documentTypeCatalog = [];
@@ -287,6 +299,7 @@ function applyDocumentCatalogPayload(payload = null) {
             is_required: Boolean(row.is_required),
             journey_stage: Number.isFinite(row.journey_stage) ? row.journey_stage : null,
             stage_gate_required: Boolean(row.stage_gate_required),
+            stage_gate_requires_validation: Boolean(row.stage_gate_requires_validation),
             stage_gate_group: row.stage_gate_group || null
         }))
         .sort((a, b) => a.sort_order - b.sort_order);
@@ -4220,20 +4233,41 @@ function initializeSearchableDropdowns() {
 }
 
 function updateDocumentTypeAvailability(documents = []) {
-    const passportItem = document.querySelector('#documentTypeList .dropdown-item[data-value="passport"]');
-    if (!passportItem) return;
+    const dropdownItems = Array.from(document.querySelectorAll('#documentTypeList .dropdown-item[data-value]'));
+    if (!dropdownItems.length) return;
 
-    const hasValidatedPassport = Array.isArray(documents) && documents.some(
-        (doc) => doc && doc.document_type === 'passport' && doc.is_valid === true
+    const uploadedDocumentTypes = new Set(
+        (Array.isArray(documents) ? documents : [])
+            .map((doc) => doc?.document_type)
+            .filter(Boolean)
     );
-    passportItem.classList.toggle('rule-hidden', hasValidatedPassport);
+    const mandatoryDocumentTypes = new Set(
+        (documentTypeCatalog || [])
+            .filter((row) => row && row.is_active !== false && row.is_required === true)
+            .map((row) => row.value)
+    );
+    if (!mandatoryDocumentTypes.size && Array.isArray(requiredDocumentTypeValues)) {
+        requiredDocumentTypeValues.forEach((value) => mandatoryDocumentTypes.add(value));
+    }
 
     const hiddenInput = document.getElementById('documentType');
     const searchInput = document.getElementById('documentTypeSearch');
-    if (hasValidatedPassport && hiddenInput?.value === 'passport') {
-        hiddenInput.value = '';
-        if (searchInput) searchInput.value = '';
-        passportItem.classList.remove('selected');
+    let selectionWasCleared = false;
+
+    dropdownItems.forEach((item) => {
+        const value = item.dataset.value;
+        const shouldHide = mandatoryDocumentTypes.has(value) && uploadedDocumentTypes.has(value);
+        item.classList.toggle('rule-hidden', shouldHide);
+
+        if (shouldHide && hiddenInput?.value === value) {
+            hiddenInput.value = '';
+            item.classList.remove('selected');
+            selectionWasCleared = true;
+        }
+    });
+
+    if (selectionWasCleared && searchInput) {
+        searchInput.value = '';
     }
 
     if (documentTypeDropdownController?.filterItems) {
@@ -5549,6 +5583,11 @@ function calculateVisaJourneyStage(documents) {
     const uploadedDocTypes = new Set(
         documents.map(doc => doc.document_type).filter(type => type)
     );
+    const validatedDocTypes = new Set(
+        documents
+            .filter((doc) => doc && doc.document_type && doc.is_valid === true)
+            .map((doc) => doc.document_type)
+    );
     const stages = (journeyStageCatalog && journeyStageCatalog.length)
         ? journeyStageCatalog.map((stage) => ({
             stage: stage.stage,
@@ -5569,41 +5608,78 @@ function calculateVisaJourneyStage(documents) {
 
     let currentStage = 1;
     const stageGateRules = documentTypeCatalog.filter((row) => row.stage_gate_required && row.journey_stage);
+    const orderedStages = [...stages].sort((a, b) => a.stage - b.stage);
 
-    for (const stage of stages.sort((a, b) => a.stage - b.stage)) {
-        const stageNumber = Number(stage.stage || 0);
-        if (stageNumber <= 1) continue;
-        if (stageNumber !== currentStage + 1) continue;
-
-        const gateDocs = stageGateRules.filter((row) => Number(row.journey_stage) === stageNumber);
-        if (!gateDocs.length) {
-            currentStage = stageNumber;
-            continue;
+    const isRuleSatisfied = (rule) => {
+        if (rule.stage_gate_requires_validation) {
+            return validatedDocTypes.has(rule.value);
         }
+        return uploadedDocTypes.has(rule.value);
+    };
 
-        const directDocs = gateDocs.filter((row) => !row.stage_gate_group).map((row) => row.value);
-        const directSatisfied = directDocs.every((docType) => uploadedDocTypes.has(docType));
-        if (!directSatisfied) break;
+    const isStageComplete = (stageNumber) => {
+        const gateDocs = stageGateRules.filter((row) => Number(row.journey_stage) === stageNumber);
+        if (!gateDocs.length) return true;
+
+        const directRules = gateDocs.filter((row) => !row.stage_gate_group);
+        if (directRules.some((rule) => !isRuleSatisfied(rule))) {
+            return false;
+        }
 
         const grouped = {};
         gateDocs.forEach((row) => {
             if (!row.stage_gate_group) return;
             if (!grouped[row.stage_gate_group]) grouped[row.stage_gate_group] = [];
-            grouped[row.stage_gate_group].push(row.value);
+            grouped[row.stage_gate_group].push(row);
         });
 
-        const groupsSatisfied = Object.values(grouped).every((groupTypes) => groupTypes.some((docType) => uploadedDocTypes.has(docType)));
-        if (!groupsSatisfied) break;
+        return Object.values(grouped).every((groupRules) => groupRules.some((rule) => isRuleSatisfied(rule)));
+    };
 
-        currentStage = stageNumber;
+    const stageCompletionMap = {};
+    orderedStages.forEach((stage) => {
+        stageCompletionMap[stage.stage] = isStageComplete(stage.stage);
+    });
+
+    let foundInProgressStage = false;
+    for (const stage of orderedStages) {
+        const stageNumber = Number(stage.stage || 0);
+        if (!stageNumber) continue;
+
+        const previousStageComplete = stageNumber === 1 ? true : stageCompletionMap[stageNumber - 1] === true;
+        const thisStageComplete = stageCompletionMap[stageNumber] === true;
+        if (previousStageComplete && !thisStageComplete) {
+            currentStage = stageNumber;
+            foundInProgressStage = true;
+            break;
+        }
+    }
+
+    let completedStageCount = 0;
+    for (const stage of orderedStages) {
+        if (stageCompletionMap[stage.stage]) {
+            completedStageCount += 1;
+            continue;
+        }
+        break;
+    }
+
+    const allStagesComplete = completedStageCount === orderedStages.length && orderedStages.length > 0;
+    if (!foundInProgressStage && allStagesComplete) {
+        currentStage = orderedStages[orderedStages.length - 1]?.stage || 1;
     }
 
     const stageInfo = stages.find((stage) => stage.stage === currentStage) || stages[0];
+    const progressPercent = Math.round((completedStageCount / Math.max(stages.length, 1)) * 100);
 
     return {
         currentStage,
         stageInfo,
-        stages
+        stages,
+        stageCompletionMap,
+        allStagesComplete,
+        completedStageCount,
+        progressPercent
     };
 }
 
@@ -5633,12 +5709,22 @@ function updateVisaJourneyUI(documents) {
 }
 
 function updateVisaJourneyWidget(config, journeyData) {
-    const { currentStage, stageInfo, stages } = journeyData;
+    const { currentStage, stageInfo, stages, stageCompletionMap = {}, allStagesComplete = false, progressPercent } = journeyData;
 
     const progressLine = document.getElementById(config.progressLineId);
     if (progressLine) {
-        const progressPercent = ((currentStage - 1) / (stages.length - 1)) * 90;
-        progressLine.style.width = `${progressPercent}%`;
+        const normalizedPercent = Math.max(0, Math.min(100, Number(progressPercent) || 0));
+        progressLine.style.width = `${(normalizedPercent / 100) * 90}%`;
+    }
+
+    // A stage should look completed only when it and all previous stages are completed.
+    const sequentialCompletionMap = {};
+    let previousSequentialComplete = true;
+    for (let i = 1; i <= stages.length; i++) {
+        const thisStageComplete = stageCompletionMap[i] === true;
+        const isSequentiallyComplete = previousSequentialComplete && thisStageComplete;
+        sequentialCompletionMap[i] = isSequentiallyComplete;
+        previousSequentialComplete = isSequentiallyComplete;
     }
 
     for (let i = 1; i <= stages.length; i++) {
@@ -5647,16 +5733,18 @@ function updateVisaJourneyWidget(config, journeyData) {
 
         const defaultEmoji = stages[i - 1]?.emoji || '•';
         stageIcon.style.animation = 'none';
+        const isCompleted = sequentialCompletionMap[i] === true;
+        const isInProgress = !allStagesComplete && i === currentStage && !isCompleted;
 
-        if (i < currentStage) {
+        if (isCompleted) {
             stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
             stageIcon.style.color = 'white';
-            stageIcon.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.4)';
+            stageIcon.style.boxShadow = '0 0 0 2px rgba(99, 102, 241, 0.45), 0 8px 22px rgba(139, 92, 246, 0.45)';
             stageIcon.innerHTML = '✓';
-        } else if (i === currentStage) {
+        } else if (isInProgress) {
             stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
             stageIcon.style.color = 'white';
-            stageIcon.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.4)';
+            stageIcon.style.boxShadow = '0 0 0 2px rgba(99, 102, 241, 0.5), 0 10px 24px rgba(99, 102, 241, 0.5)';
             stageIcon.style.animation = 'pulse 2s ease-in-out infinite';
             stageIcon.innerHTML = defaultEmoji;
         } else {
@@ -5679,7 +5767,7 @@ function updateVisaJourneyWidget(config, journeyData) {
     if (nextStepText) nextStepText.textContent = stageInfo.nextStep;
 
     if (nextStepHint) {
-        if (currentStage === 7) {
+        if (allStagesComplete) {
             nextStepHint.innerHTML = '<span style="color: #34d399; font-weight: 600;">🎉 Congratulations! You\'re all set for your journey!</span>';
         } else {
             nextStepHint.innerHTML = `<strong>Next step:</strong> <span id="${config.nextStepTextId}">${escapeHtml(stageInfo.nextStep)}</span>`;
@@ -6530,176 +6618,172 @@ function getDocumentValidationMeta(doc) {
 
 function displayDocuments(documents) {
     const container = document.getElementById('documentsContainer');
-    
-    // Required documents list comes from database-backed catalog.
-    const requiredValues = requiredDocumentTypeValues.length
-        ? requiredDocumentTypeValues
-        : FALLBACK_DOCUMENT_TYPES.filter((row) => row.is_required).map((row) => row.value);
-    const requiredDocuments = requiredValues.map((value) => ({
-        value,
-        label: getDocumentTypeLabel(value)
-    }));
-    
-    // Get uploaded document types
-    const uploadedDocTypes = new Set(
-        documents.map(doc => doc.document_type).filter(type => type)
-    );
-    
-    // Separate uploaded and pending documents
-    const uploadedDocs = documents.filter(doc => doc.document_type && requiredDocuments.some(req => req.value === doc.document_type));
-    const otherDocs = documents.filter(doc => !doc.document_type || !requiredDocuments.some(req => req.value === doc.document_type));
-    const pendingDocs = requiredDocuments.filter(req => !uploadedDocTypes.has(req.value));
-    
-    let html = '';
-    
-    // Show uploaded required documents with checkmarks
-    if (uploadedDocs.length > 0 || pendingDocs.length > 0) {
-        html += '<div style="margin-bottom: 2rem;">';
-        html += '<h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">Required Documents</h4>';
-        
-        // Show uploaded documents
-        uploadedDocs.forEach(doc => {
-            const fileSizeMB = (doc.file_size / (1024 * 1024)).toFixed(2);
-            const uploadDate = new Date(doc.created_at).toLocaleDateString('en-US', {
+    if (!container) return;
+
+    const activeCatalog = ((documentTypeCatalog && documentTypeCatalog.length) ? documentTypeCatalog : FALLBACK_DOCUMENT_TYPES)
+        .filter((row) => row && row.value && row.is_active !== false)
+        .map((row, index) => ({
+            value: String(row.value),
+            label: String(row.label || row.value),
+            sort_order: Number.isFinite(row.sort_order) ? row.sort_order : index,
+            is_required: Boolean(row.is_required),
+            journey_stage: Number.isFinite(row.journey_stage) ? row.journey_stage : null
+        }))
+        .sort((a, b) => {
+            const stageA = Number.isFinite(a.journey_stage) ? a.journey_stage : 999;
+            const stageB = Number.isFinite(b.journey_stage) ? b.journey_stage : 999;
+            if (stageA !== stageB) return stageA - stageB;
+            return a.sort_order - b.sort_order;
+        });
+
+    const catalogByType = {};
+    activeCatalog.forEach((row) => {
+        catalogByType[row.value] = row;
+    });
+
+    const stageSource = (journeyStageCatalog && journeyStageCatalog.length) ? journeyStageCatalog : FALLBACK_JOURNEY_STAGES;
+    const stageLabelByNumber = {};
+    stageSource.forEach((stage) => {
+        const stageNo = Number(stage.stage);
+        if (Number.isFinite(stageNo)) {
+            stageLabelByNumber[stageNo] = stage.name || `Stage ${stageNo}`;
+        }
+    });
+
+    const uploadedDocs = (Array.isArray(documents) ? documents : [])
+        .filter((doc) => doc && doc.document_type)
+        .slice()
+        .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+    const uploadedTypeSet = new Set(uploadedDocs.map((doc) => doc.document_type).filter(Boolean));
+
+    const pendingCatalogTypes = activeCatalog.filter((row) => !uploadedTypeSet.has(row.value));
+
+    const summaryLine = `
+        <div style="margin-bottom: 0.9rem; color: var(--text-secondary); font-size: 0.86rem;">
+            Showing all document types from your database catalog. Uploaded documents are listed first.
+        </div>
+    `;
+
+    const renderMetaBadges = (docType) => {
+        const meta = catalogByType[docType] || null;
+        const isMandatory = meta ? meta.is_required : false;
+        const stageNo = meta ? meta.journey_stage : null;
+        const stageLabel = stageNo && stageLabelByNumber[stageNo] ? stageLabelByNumber[stageNo] : (stageNo ? `Stage ${stageNo}` : 'Unassigned');
+
+        const requirementText = meta ? (isMandatory ? 'Mandatory' : 'Optional') : 'Not In Catalog';
+        const requirementStyle = meta
+            ? (isMandatory
+                ? 'background: rgba(239, 68, 68, 0.14); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.35);'
+                : 'background: rgba(59, 130, 246, 0.14); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.35);')
+            : 'background: rgba(148, 163, 184, 0.14); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.35);';
+
+        return `
+            <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.45rem;">
+                <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${requirementStyle}">
+                    ${escapeHtml(requirementText)}
+                </span>
+                <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; background: rgba(99, 102, 241, 0.14); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.35);">
+                    ${escapeHtml(stageNo ? `Stage ${stageNo}: ${stageLabel}` : stageLabel)}
+                </span>
+            </div>
+        `;
+    };
+
+    let cardsHtml = '';
+
+    uploadedDocs.forEach((doc) => {
+        const fileSizeMB = ((doc.file_size || 0) / (1024 * 1024)).toFixed(2);
+        const uploadDate = doc.created_at
+            ? new Date(doc.created_at).toLocaleDateString('en-US', {
                 year: 'numeric',
                 month: 'short',
                 day: 'numeric'
-            });
-            const isEncrypted = doc.encrypted_file_key || !doc.file_url;
-            const docTypeLabel = requiredDocuments.find(req => req.value === doc.document_type)?.label || doc.document_type;
-            const validationMeta = getDocumentValidationMeta(doc);
-            
-            html += `
-                <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.75rem; padding: 1rem; margin-bottom: 0.8rem;">
-                    <div style="display: flex; align-items: start; gap: 0.75rem;">
-                        <div style="color: ${validationMeta.indicatorColor}; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">${validationMeta.indicatorIcon}</div>
-                        <div style="flex: 1;">
-                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
-                                <div style="flex: 1;">
-                                    <div style="font-weight: 650; margin-bottom: 0.25rem; color: var(--text-primary);">
-                                        ${escapeHtml(docTypeLabel)}
-                                    </div>
-                                    <div style="font-size: 0.875rem; color: var(--text-secondary);">
-                                        ${escapeHtml(doc.original_filename)} • ${fileSizeMB} MB • ${uploadDate}
-                                        ${isEncrypted ? ' • <span style="color: #34d399;">🔒 Encrypted</span>' : ''}
-                                    </div>
-                                    <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
-                                        <span style="font-size: 0.8rem; color: var(--text-secondary);">Validation:</span>
-                                        <span style="font-size: 0.78rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${validationMeta.statusStyle}">
-                                            ${validationMeta.statusLabel}
-                                        </span>
-                                    </div>
-                                    ${validationMeta.reason ? `
-                                        <div style="font-size: 0.85rem; margin-top: 0.55rem; ${validationMeta.reasonStyle}">
-                                            <strong>Reason:</strong> ${escapeHtml(validationMeta.reason)}
-                                        </div>
-                                    ` : ''}
-                                    ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
-                                </div>
+            })
+            : 'Unknown date';
+        const isEncrypted = doc.encrypted_file_key || !doc.file_url;
+        const docTypeLabel = getDocumentTypeLabel(doc.document_type);
+        const validationMeta = getDocumentValidationMeta(doc);
+
+        cardsHtml += `
+            <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.75rem; padding: 1rem; margin-bottom: 0.8rem;">
+                <div style="display: flex; align-items: start; gap: 0.75rem;">
+                    <div style="color: ${validationMeta.indicatorColor}; font-size: 1.25rem; font-weight: bold; flex-shrink: 0;">${validationMeta.indicatorIcon}</div>
+                    <div style="flex: 1;">
+                        <div style="font-weight: 650; margin-bottom: 0.25rem; color: var(--text-primary);">
+                            ${escapeHtml(docTypeLabel)}
+                        </div>
+                        <div style="font-size: 0.875rem; color: var(--text-secondary);">
+                            ${escapeHtml(doc.original_filename || 'Uploaded file')} • ${fileSizeMB} MB • ${uploadDate}
+                            ${isEncrypted ? ' • <span style="color: #34d399;">🔒 Encrypted</span>' : ''}
+                        </div>
+                        ${renderMetaBadges(doc.document_type)}
+                        <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="font-size: 0.8rem; color: var(--text-secondary);">Validation:</span>
+                            <span style="font-size: 0.78rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${validationMeta.statusStyle}">
+                                ${validationMeta.statusLabel}
+                            </span>
+                        </div>
+                        ${validationMeta.reason ? `
+                            <div style="font-size: 0.85rem; margin-top: 0.55rem; ${validationMeta.reasonStyle}">
+                                <strong>Reason:</strong> ${escapeHtml(validationMeta.reason)}
                             </div>
-                            <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
-                                ${isEncrypted ? `
-                                    <button onclick="downloadEncryptedDocument(${doc.id})" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
-                                ` : `
-                                    <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
-                                    <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
-                                `}
-                                <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">Delete</button>
-                            </div>
+                        ` : ''}
+                        ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
+                        <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
+                            ${isEncrypted ? `
+                                <button onclick="downloadEncryptedDocument(${doc.id})" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
+                            ` : `
+                                <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
+                                <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
+                            `}
+                            <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename || 'document')}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">Delete</button>
                         </div>
                     </div>
                 </div>
-            `;
-        });
-        
-        // Show pending documents with crosses
-        pendingDocs.forEach(pendingDoc => {
-            html += `
-                <div data-document-type="${escapeHtml(pendingDoc.value)}" style="border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 0.95rem 1rem; margin-bottom: 0.75rem; background: var(--bg-secondary);">
-                    <div style="display: flex; align-items: center; gap: 0.75rem;">
-                        <div style="color: #94a3b8; font-size: 1.15rem; font-weight: bold; flex-shrink: 0;">○</div>
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem;">
-                                ${escapeHtml(pendingDoc.label)}
-                            </div>
-                            <div style="font-size: 0.84rem; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 0.35rem;">
-                                <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #fbbf24;"></span>
-                                Not uploaded yet
-                            </div>
+            </div>
+        `;
+    });
+
+    pendingCatalogTypes.forEach((pendingType) => {
+        const isMandatory = pendingType.is_required === true;
+        const stageNo = pendingType.journey_stage;
+        const stageLabel = stageNo && stageLabelByNumber[stageNo] ? stageLabelByNumber[stageNo] : (stageNo ? `Stage ${stageNo}` : 'Unassigned');
+        const requirementStyle = isMandatory
+            ? 'background: rgba(239, 68, 68, 0.14); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.35);'
+            : 'background: rgba(59, 130, 246, 0.14); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.35);';
+
+        cardsHtml += `
+            <div data-document-type="${escapeHtml(pendingType.value)}" style="border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 0.95rem 1rem; margin-bottom: 0.75rem; background: var(--bg-secondary);">
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="color: #94a3b8; font-size: 1.15rem; font-weight: bold; flex-shrink: 0;">○</div>
+                    <div style="flex: 1;">
+                        <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem;">
+                            ${escapeHtml(pendingType.label)}
+                        </div>
+                        <div style="font-size: 0.84rem; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 0.35rem;">
+                            <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #fbbf24;"></span>
+                            Not uploaded yet
+                        </div>
+                        <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.45rem;">
+                            <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${requirementStyle}">
+                                ${isMandatory ? 'Mandatory' : 'Optional'}
+                            </span>
+                            <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; background: rgba(99, 102, 241, 0.14); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.35);">
+                                ${escapeHtml(stageNo ? `Stage ${stageNo}: ${stageLabel}` : stageLabel)}
+                            </span>
                         </div>
                     </div>
                 </div>
-            `;
-        });
-        
-        html += '</div>';
+            </div>
+        `;
+    });
+
+    if (!cardsHtml) {
+        container.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No document types found in catalog.</p>';
+        return;
     }
-    
-    // Show other uploaded documents (non-required)
-    if (otherDocs.length > 0) {
-        html += '<div style="margin-top: 2rem; padding-top: 2rem; border-top: 2px solid var(--border-color);">';
-        html += '<h4 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-primary);">Other Documents</h4>';
-        
-        html += otherDocs.map(doc => {
-            const fileSizeMB = (doc.file_size / (1024 * 1024)).toFixed(2);
-            const uploadDate = new Date(doc.created_at).toLocaleDateString('en-US', {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric'
-            });
-            const isEncrypted = doc.encrypted_file_key || !doc.file_url;
-            const validationMeta = getDocumentValidationMeta(doc);
-            
-            return `
-                <div data-document-id="${doc.id}" data-document-type="${escapeHtml(doc.document_type || '')}" style="${validationMeta.cardStyle} border-radius: 0.75rem; padding: 1rem; margin-bottom: 0.8rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.5rem;">
-                        <div style="flex: 1;">
-                            <div style="font-weight: 600; margin-bottom: 0.25rem; color: var(--text-primary);">
-                                ${escapeHtml(doc.original_filename)}
-                                ${isEncrypted ? '<span style="font-size: 0.75rem; color: #34d399; margin-left: 0.5rem;">🔒 Encrypted</span>' : ''}
-                            </div>
-                            <div style="font-size: 0.875rem; color: var(--text-secondary);">
-                                ${doc.document_type ? `<span style="text-transform: capitalize;">${escapeHtml(doc.document_type)}</span> • ` : ''}
-                                ${fileSizeMB} MB • ${uploadDate}
-                            </div>
-                            <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
-                                <span style="font-size: 0.8rem; color: var(--text-secondary);">Validation:</span>
-                                <span style="font-size: 0.78rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${validationMeta.statusStyle}">
-                                    ${validationMeta.statusLabel}
-                                </span>
-                            </div>
-                            ${validationMeta.reason ? `
-                                <div style="font-size: 0.85rem; margin-top: 0.55rem; ${validationMeta.reasonStyle}">
-                                    <strong>Reason:</strong> ${escapeHtml(validationMeta.reason)}
-                                </div>
-                            ` : ''}
-                            ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
-                        </div>
-                    </div>
-                    <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
-                        ${isEncrypted ? `
-                            <button onclick="downloadEncryptedDocument(${doc.id})" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
-                        ` : `
-                            <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
-                            <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
-                        `}
-                        <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename)}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">Delete</button>
-                    </div>
-                </div>
-            `;
-        }).join('');
-        
-        html += '</div>';
-    }
-    
-    // Show message if no documents at all
-    if (documents.length === 0 && pendingDocs.length === 0) {
-        html = '<p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet</p>';
-    } else if (documents.length === 0) {
-        html = '<p style="color: var(--text-secondary); text-align: center; padding: 1rem;">No documents uploaded yet. Please upload the required documents above.</p>';
-    }
-    
-    container.innerHTML = html;
+
+    container.innerHTML = `${summaryLine}${cardsHtml}`;
 }
 
 async function downloadEncryptedDocument(documentId) {

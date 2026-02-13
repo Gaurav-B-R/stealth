@@ -169,6 +169,7 @@ class DocumentTypeCatalogItem(BaseModel):
     is_required: bool
     journey_stage: Optional[int] = None
     stage_gate_required: bool
+    stage_gate_requires_validation: bool
     stage_gate_group: Optional[str] = None
 
 

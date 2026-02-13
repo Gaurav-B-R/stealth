@@ -151,14 +151,35 @@ async def upload_document(
         )
 
     ensure_default_document_type_catalog(db)
+    catalog_items = get_document_type_payload(db, active_only=True)
     allowed_document_types = {
-        item["value"] for item in get_document_type_payload(db, active_only=True)
+        item["value"] for item in catalog_items
+    }
+    mandatory_document_types = {
+        item["value"] for item in catalog_items if item.get("is_required")
     }
     if document_type not in allowed_document_types:
         raise HTTPException(
             status_code=400,
             detail="Invalid document type. Please select a valid type from the list.",
         )
+    if document_type in mandatory_document_types:
+        existing_mandatory_doc = db.query(models.Document.id).filter(
+            models.Document.user_id == current_user.id,
+            models.Document.document_type == document_type,
+        ).first()
+        if existing_mandatory_doc:
+            document_label = next(
+                (item.get("label") for item in catalog_items if item.get("value") == document_type),
+                document_type,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{document_label} is already uploaded. "
+                    "Delete the existing file if you want to upload it again."
+                ),
+            )
 
     # Enforce subscription upload limits
     subscription = get_or_create_user_subscription(db, current_user.id)
@@ -369,6 +390,7 @@ async def get_my_documents(
 def _is_stage_completed(
     stage_number: int,
     uploaded_doc_types: set[str],
+    validated_doc_types: set[str],
     document_types: list[dict],
 ) -> bool:
     stage_gate_docs = [
@@ -379,19 +401,24 @@ def _is_stage_completed(
     if not stage_gate_docs:
         return True
 
-    direct_required = [row["value"] for row in stage_gate_docs if not row.get("stage_gate_group")]
-    if any(doc_type not in uploaded_doc_types for doc_type in direct_required):
+    def _has_document_for_rule(rule: dict) -> bool:
+        if rule.get("stage_gate_requires_validation"):
+            return rule["value"] in validated_doc_types
+        return rule["value"] in uploaded_doc_types
+
+    direct_required = [row for row in stage_gate_docs if not row.get("stage_gate_group")]
+    if any(not _has_document_for_rule(rule) for rule in direct_required):
         return False
 
-    grouped_requirements: dict[str, list[str]] = {}
+    grouped_rules: dict[str, list[dict]] = {}
     for row in stage_gate_docs:
         group_key = row.get("stage_gate_group")
         if not group_key:
             continue
-        grouped_requirements.setdefault(group_key, []).append(row["value"])
+        grouped_rules.setdefault(group_key, []).append(row)
 
-    for group_values in grouped_requirements.values():
-        if not any(doc_type in uploaded_doc_types for doc_type in group_values):
+    for group_rules in grouped_rules.values():
+        if not any(_has_document_for_rule(rule) for rule in group_rules):
             return False
 
     return True
@@ -422,6 +449,7 @@ def calculate_visa_journey_stage(documents: List[models.Document], db: Optional[
                 "is_required": row.get("is_required", False),
                 "journey_stage": row.get("journey_stage"),
                 "stage_gate_required": row.get("stage_gate_required", False),
+                "stage_gate_requires_validation": row.get("stage_gate_requires_validation", False),
                 "stage_gate_group": row.get("stage_gate_group"),
             }
             for row in DEFAULT_DOCUMENT_TYPES
@@ -433,20 +461,37 @@ def calculate_visa_journey_stage(documents: List[models.Document], db: Optional[
     uploaded_doc_types = set(
         doc.document_type for doc in documents if doc.document_type
     )
+    validated_doc_types = set(
+        doc.document_type for doc in documents if doc.document_type and doc.is_valid is True
+    )
 
     # Calculate current stage sequentially from stage gate rules.
     current_stage = 1
+    completion_map: dict[int, bool] = {}
+    ordered_stages = sorted(journey_stages, key=lambda row: row["stage"])
+    for stage in ordered_stages:
+        stage_number = stage["stage"]
+        completion_map[stage_number] = _is_stage_completed(
+            stage_number,
+            uploaded_doc_types,
+            validated_doc_types,
+            document_type_catalog,
+        )
 
-    for stage in sorted(journey_stages, key=lambda row: row["stage"]):
+    for stage in ordered_stages:
         stage_number = stage["stage"]
         if stage_number <= 1:
             continue
-        if stage_number != current_stage + 1:
-            continue
-        if _is_stage_completed(stage_number, uploaded_doc_types, document_type_catalog):
+
+        previous_stage_number = stage_number - 1
+        previous_completed = completion_map.get(previous_stage_number, True)
+        this_completed = completion_map.get(stage_number, False)
+
+        # Progress to stage N only when stage N-1 is completed and stage N requirements are also met.
+        if previous_completed and this_completed:
             current_stage = stage_number
-        else:
-            break
+            continue
+        break
 
     # Get current stage info
     stage_info = next(
@@ -456,8 +501,15 @@ def calculate_visa_journey_stage(documents: List[models.Document], db: Optional[
 
     # Calculate progress percentage
     total_stages = len(journey_stages) if journey_stages else 1
-    denominator = max(total_stages - 1, 1)
-    progress_percent = round(((current_stage - 1) / denominator) * 100)
+    completed_stage_count = 0
+    for stage in ordered_stages:
+        stage_number = stage["stage"]
+        if completion_map.get(stage_number):
+            completed_stage_count += 1
+            continue
+        break
+
+    progress_percent = round((completed_stage_count / max(total_stages, 1)) * 100)
 
     # Get documents by stage
     documents_by_stage = {}

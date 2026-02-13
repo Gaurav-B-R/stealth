@@ -43,3 +43,19 @@ def ensure_subscription_usage_columns():
 
         if "mock_interviews_used" not in columns:
             conn.execute(text("ALTER TABLE subscriptions ADD COLUMN mock_interviews_used INTEGER NOT NULL DEFAULT 0"))
+
+
+def ensure_document_catalog_columns():
+    """
+    Patch document_type_catalog table schema for environments without full migrations.
+    """
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "document_type_catalog")
+
+        if "stage_gate_requires_validation" not in columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE document_type_catalog "
+                    "ADD COLUMN stage_gate_requires_validation BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            )
