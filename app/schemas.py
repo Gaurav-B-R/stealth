@@ -73,6 +73,12 @@ class RazorpayPaymentVerifyRequest(BaseModel):
     razorpay_signature: str
 
 
+class RazorpayRecurringPaymentVerifyRequest(BaseModel):
+    razorpay_subscription_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
 class SubscriptionSessionConsumeRequest(BaseModel):
     session_type: str  # prep | mock
 
@@ -98,6 +104,11 @@ class PasswordResetRequest(BaseModel):
 
 class PasswordReset(BaseModel):
     token: str
+    new_password: str
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
     new_password: str
 
 class UniversityChangeRequest(BaseModel):

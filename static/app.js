@@ -1,5 +1,5 @@
 const API_BASE = '';
-const AUTH_TOKEN_STORAGE_KEY = 'rilono_auth_token';
+const COOKIE_AUTH_SENTINEL = '__cookie_session__';
 let currentUser = null;
 let authToken = null;
 let currentSubscription = null;
@@ -13,6 +13,8 @@ let visaInterviewRequestInFlight = false;
 let visaInterviewFiltersInitialized = false;
 let documentUploadInProgress = false;
 let documentUploadStatusTimer = null;
+let proUpgradeInFlight = false;
+let checkoutLaunchResolver = null;
 let currentVisaSubTab = 'prep';
 let documentTypeDropdownController = null;
 const PRO_UPGRADE_ENABLED = true;
@@ -34,6 +36,25 @@ const PRICING_BASE_USD = {
     pro: 19
 };
 const PRO_PRICE_INR = 699;
+
+const nativeFetch = window.fetch.bind(window);
+window.fetch = function secureFetch(input, init = {}) {
+    const nextInit = { ...init };
+    const headers = new Headers(nextInit.headers || {});
+    const authHeader = headers.get('Authorization');
+    if (
+        authHeader === `Bearer ${COOKIE_AUTH_SENTINEL}` ||
+        authHeader === 'Bearer null' ||
+        authHeader === 'Bearer undefined'
+    ) {
+        headers.delete('Authorization');
+    }
+    nextInit.headers = headers;
+    if (nextInit.credentials === undefined) {
+        nextInit.credentials = 'same-origin';
+    }
+    return nativeFetch(input, nextInit);
+};
 
 const PRICING_COUNTRY_CONFIG = {
     US: { country: 'United States', currency: 'USD' },
@@ -268,19 +289,11 @@ function getPublicAppOrigin() {
 }
 
 function persistAuthToken(token) {
-    if (token) {
-        sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
-        return;
-    }
-    sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    authToken = token || null;
 }
 
 function restoreAuthToken() {
-    if (authToken) return;
-    const saved = sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
-    if (saved) {
-        authToken = saved;
-    }
+    // Intentionally no-op: auth is persisted via secure HttpOnly cookie.
 }
 
 function applyDocumentCatalogPayload(payload = null) {
@@ -540,10 +553,18 @@ function setupEventListeners() {
     if (createItemForm) createItemForm.addEventListener('submit', handleCreateItem);
     const profileForm = document.getElementById('profileForm');
     if (profileForm) profileForm.addEventListener('submit', handleUpdateProfile);
+    const profileChangePasswordForm = document.getElementById('profileChangePasswordForm');
+    if (profileChangePasswordForm) profileChangePasswordForm.addEventListener('submit', handleProfileChangePassword);
     const contactForm = document.getElementById('contactForm');
     if (contactForm) contactForm.addEventListener('submit', handleContactSubmit);
     const featureRequestForm = document.getElementById('featureRequestForm');
     if (featureRequestForm) featureRequestForm.addEventListener('submit', handleFeatureRequestSubmit);
+    const registerPasswordInput = document.getElementById('registerPassword');
+    if (registerPasswordInput) registerPasswordInput.addEventListener('input', updateRegisterPasswordHint);
+    const resetPasswordNewInput = document.getElementById('resetPasswordNew');
+    if (resetPasswordNewInput) resetPasswordNewInput.addEventListener('input', updateResetPasswordHint);
+    const profileNewPasswordInput = document.getElementById('profileNewPassword');
+    if (profileNewPasswordInput) profileNewPasswordInput.addEventListener('input', updateProfilePasswordHint);
     const searchInput = document.getElementById('searchInput');
     if (searchInput) {
         searchInput.addEventListener('keypress', (e) => {
@@ -596,6 +617,7 @@ function setupEventListeners() {
         registerEmailInput.addEventListener('input', (e) => {
             clearTimeout(emailCheckTimeout);
             const email = e.target.value.trim();
+            updateRegisterPasswordHint();
             
             // Only check if email looks valid (contains @)
             if (email && email.includes('@')) {
@@ -610,6 +632,10 @@ function setupEventListeners() {
             }
         });
     }
+
+    updateRegisterPasswordHint();
+    updateResetPasswordHint();
+    updateProfilePasswordHint();
 }
 
 function updatePriceLabel() {
@@ -641,6 +667,129 @@ function updatePriceFilterPlaceholders() {
             minPriceInput.placeholder = 'Min $';
             maxPriceInput.placeholder = 'Max $';
         }
+    }
+}
+
+const FRONTEND_PASSWORD_MIN_LENGTH = 10;
+const FRONTEND_PASSWORD_MAX_LENGTH = 200;
+
+function getPasswordValidationErrors(password, email = '') {
+    const value = String(password || '');
+    const errors = [];
+
+    if (value.length < FRONTEND_PASSWORD_MIN_LENGTH) {
+        errors.push(`at least ${FRONTEND_PASSWORD_MIN_LENGTH} characters`);
+    }
+    if (new TextEncoder().encode(value).length > FRONTEND_PASSWORD_MAX_LENGTH) {
+        errors.push(`at most ${FRONTEND_PASSWORD_MAX_LENGTH} bytes`);
+    }
+    if (/\s/.test(value)) {
+        errors.push('no spaces');
+    }
+    if (!/[a-z]/.test(value)) {
+        errors.push('one lowercase letter');
+    }
+    if (!/[A-Z]/.test(value)) {
+        errors.push('one uppercase letter');
+    }
+    if (!/\d/.test(value)) {
+        errors.push('one number');
+    }
+    if (!/[^A-Za-z0-9]/.test(value)) {
+        errors.push('one special character');
+    }
+
+    const weakSet = new Set([
+        'password',
+        'password123',
+        '123456',
+        '12345678',
+        'qwerty',
+        'qwerty123',
+        'admin',
+        'admin123',
+        'letmein',
+        'welcome',
+        'iloveyou',
+        'abc123'
+    ]);
+    if (weakSet.has(value.toLowerCase())) {
+        errors.push('not a common password');
+    }
+
+    const emailLocal = String(email || '').split('@')[0].toLowerCase().trim();
+    if (emailLocal.length >= 3 && value.toLowerCase().includes(emailLocal)) {
+        errors.push('must not contain your email username');
+    }
+
+    return errors;
+}
+
+function updateRegisterPasswordHint() {
+    const hintEl = document.getElementById('registerPasswordPolicyHint');
+    const passwordInput = document.getElementById('registerPassword');
+    const emailInput = document.getElementById('registerEmail');
+    if (!hintEl || !passwordInput) return;
+
+    const password = passwordInput.value || '';
+    if (!password) {
+        hintEl.style.color = 'var(--text-secondary)';
+        hintEl.textContent = 'Use 10+ characters with uppercase, lowercase, number, and special character.';
+        return;
+    }
+
+    const errors = getPasswordValidationErrors(password, emailInput?.value || '');
+    if (!errors.length) {
+        hintEl.style.color = '#34d399';
+        hintEl.textContent = 'Strong password';
+    } else {
+        hintEl.style.color = '#f59e0b';
+        hintEl.textContent = `Needs: ${errors.join(', ')}`;
+    }
+}
+
+function updateResetPasswordHint() {
+    const hintEl = document.getElementById('resetPasswordPolicyHint');
+    const passwordInput = document.getElementById('resetPasswordNew');
+    if (!hintEl || !passwordInput) return;
+
+    const password = passwordInput.value || '';
+    if (!password) {
+        hintEl.style.color = 'var(--text-secondary)';
+        hintEl.textContent = 'Use 10+ characters with uppercase, lowercase, number, and special character.';
+        return;
+    }
+
+    const errors = getPasswordValidationErrors(password);
+    if (!errors.length) {
+        hintEl.style.color = '#34d399';
+        hintEl.textContent = 'Strong password';
+    } else {
+        hintEl.style.color = '#f59e0b';
+        hintEl.textContent = `Needs: ${errors.join(', ')}`;
+    }
+}
+
+function updateProfilePasswordHint() {
+    const hintEl = document.getElementById('profilePasswordPolicyHint');
+    const passwordInput = document.getElementById('profileNewPassword');
+    if (!hintEl || !passwordInput) return;
+
+    const password = passwordInput.value || '';
+    if (!password) {
+        hintEl.style.color = 'var(--text-secondary)';
+        hintEl.textContent = 'Use 10+ characters with uppercase, lowercase, number, and special character.';
+        return;
+    }
+
+    const userEmail = currentUser?.email || document.getElementById('profileEmail')?.value || '';
+    const errors = getPasswordValidationErrors(password, userEmail);
+    if (!errors.length) {
+        hintEl.style.color = '#34d399';
+        hintEl.textContent = 'Strong password';
+    } else {
+        hintEl.style.color = '#f59e0b';
+        hintEl.textContent = `Needs: ${errors.join(', ')}`;
     }
 }
 
@@ -681,20 +830,19 @@ async function checkUniversityByEmail(email) {
 }
 
 async function checkAuth() {
-    if (!authToken) {
-        currentSubscription = null;
-        updateSubscriptionUI();
-        return false;
-    }
-
     try {
+        const headers = {};
+        if (authToken && authToken !== COOKIE_AUTH_SENTINEL) {
+            headers.Authorization = `Bearer ${authToken}`;
+        }
         const response = await fetch(`${API_BASE}/api/auth/me`, {
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
+            headers
         });
         if (response.ok) {
             currentUser = await response.json();
+            if (!authToken) {
+                authToken = COOKIE_AUTH_SENTINEL;
+            }
             updateUIForAuth();
             await loadSubscriptionStatus(true);
             return true;
@@ -1104,6 +1252,7 @@ function showResetPassword(token, skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('resetPasswordSection').style.display = 'block';
     document.getElementById('resetToken').value = token;
+    updateResetPasswordHint();
     if (!skipURLUpdate) {
         updateURL(`/reset-password?token=${encodeURIComponent(token)}`, false);
     }
@@ -1119,6 +1268,7 @@ async function handleResetPasswordPage(skipURLUpdate = false) {
     
     if (token) {
         document.getElementById('resetToken').value = token;
+        updateResetPasswordHint();
     } else {
         // No token in URL, show error
         document.getElementById('resetPasswordSection').innerHTML = `
@@ -1158,6 +1308,9 @@ function showRegister(skipURLUpdate = false) {
         referralInput.value = getReferralCodeFromURL() || '';
     }
     if (consentInput) consentInput.checked = false;
+    const registerPasswordInput = document.getElementById('registerPassword');
+    if (registerPasswordInput) registerPasswordInput.value = '';
+    updateRegisterPasswordHint();
     
     // Ensure Turnstile widget is properly initialized
     const registerWidget = document.getElementById('turnstile-register');
@@ -1217,10 +1370,11 @@ function showRegister(skipURLUpdate = false) {
     }
 }
 
-function showVerification(email = null) {
+function showVerification(email = null, expiryHours = 24) {
     hideAllSections();
     document.getElementById('verificationSection').style.display = 'block';
     const content = document.getElementById('verificationContent');
+    const safeExpiryHours = Number.isFinite(Number(expiryHours)) ? Math.max(1, Number(expiryHours)) : 24;
     if (email) {
         content.innerHTML = `
             <div style="text-align: center; margin-bottom: 2rem;">
@@ -1231,6 +1385,9 @@ function showVerification(email = null) {
                 </p>
                 <p style="color: var(--text-secondary); font-size: 0.875rem;">
                     Click the link in the email to verify your account and start using Rilono.
+                </p>
+                <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 0.5rem;">
+                    For security, this verification link expires in <strong>${safeExpiryHours} hours</strong>.
                 </p>
             </div>
             <div style="text-align: center;">
@@ -1405,10 +1562,11 @@ async function resendVerificationEmail(email = null) {
         });
         
         const data = await response.json();
+        const expiryHours = Number(response.headers.get('X-Verification-Link-Expires-Hours') || 24);
         
         if (response.ok) {
-            showMessage(data.message || 'Verification email sent successfully!', 'success');
-            showVerification(email);
+            showMessage(data.message || `Verification email sent. The link expires in ${expiryHours} hours.`, 'success');
+            showVerification(email, expiryHours);
         } else {
             showMessage(data.detail || 'Failed to send verification email', 'error');
         }
@@ -1605,6 +1763,10 @@ async function handleUpgradeToPro() {
         return;
     }
 
+    if (proUpgradeInFlight) {
+        return;
+    }
+
     if (currentSubscription?.is_pro) {
         showMessage('Your account is already on Pro.', 'success');
         return;
@@ -1614,6 +1776,16 @@ async function handleUpgradeToPro() {
         showMessage('Pro upgrades are coming soon. Payment integration is pending.', 'error');
         return;
     }
+
+    proUpgradeInFlight = true;
+    const dashboardUpgradeButton = document.getElementById('dashboardUpgradeButton');
+    const pricingUpgradeButton = document.getElementById('pricingProUpgradeButton');
+    const upgradeButtons = [dashboardUpgradeButton, pricingUpgradeButton].filter(Boolean);
+    upgradeButtons.forEach((button) => {
+        button.dataset.prevText = button.textContent;
+        button.disabled = true;
+        button.textContent = 'Opening checkout...';
+    });
 
     try {
         const response = await fetch(`${API_BASE}/api/subscription/upgrade`, {
@@ -1654,13 +1826,11 @@ async function handleUpgradeToPro() {
 
         const options = {
             key: data.key_id,
-            amount: data.amount,
-            currency: data.currency,
             name: data.name || 'Rilono',
             description: data.description || 'Rilono Pro Subscription',
-            order_id: data.order_id,
+            image: `${PUBLIC_APP_ORIGIN}/static/logo.png`,
             handler: async function (paymentResponse) {
-                await verifyRazorpayPayment(paymentResponse);
+                await verifyRazorpayPayment(paymentResponse, data.checkout_mode || 'order');
             },
             prefill: {
                 name: currentUser?.full_name || '',
@@ -1672,23 +1842,112 @@ async function handleUpgradeToPro() {
             theme: {
                 color: '#7c5cff'
             },
+            retry: {
+                enabled: true,
+                max_count: 2
+            },
+            remember_customer: true,
             modal: {
+                confirm_close: true,
+                backdropclose: false,
+                escape: true,
+                handleback: true,
+                animation: true,
                 ondismiss: function () {
                     showMessage('Payment cancelled.', 'error');
                 }
             }
         };
 
+        if ((data.checkout_mode || 'order') === 'subscription') {
+            if (!data.subscription_id) {
+                showMessage('Recurring checkout is temporarily unavailable. Please try again.', 'error');
+                return;
+            }
+            options.subscription_id = data.subscription_id;
+        } else {
+            options.order_id = data.order_id;
+            options.amount = data.amount;
+            options.currency = data.currency;
+        }
+
         const razorpay = new window.Razorpay(options);
         razorpay.on('payment.failed', function (event) {
             const reason = event?.error?.description || 'Payment failed. Please try again.';
             showMessage(reason, 'error');
         });
+
+        const proceedToCheckout = await openCheckoutLaunchModal({
+            amountPaise: data.amount,
+            currency: data.currency,
+            checkoutMode: data.checkout_mode || 'order'
+        });
+        if (!proceedToCheckout) {
+            showMessage('Upgrade cancelled.', 'error');
+            return;
+        }
+
         razorpay.open();
     } catch (error) {
         console.error('Upgrade to pro failed:', error);
         showMessage('Failed to upgrade subscription. Please try again.', 'error');
+    } finally {
+        proUpgradeInFlight = false;
+        updateSubscriptionUI();
+        upgradeButtons.forEach((button) => {
+            if (button.dataset.prevText) {
+                delete button.dataset.prevText;
+            }
+        });
     }
+}
+
+function closeCheckoutLaunchModal(shouldProceed = false) {
+    const modal = document.getElementById('checkoutLaunchModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+
+    const resolver = checkoutLaunchResolver;
+    checkoutLaunchResolver = null;
+    if (resolver) {
+        resolver(Boolean(shouldProceed));
+    }
+}
+
+async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode }) {
+    const modal = document.getElementById('checkoutLaunchModal');
+    if (!modal) {
+        return true;
+    }
+
+    const amountEl = document.getElementById('checkoutLaunchAmount');
+    const modeEl = document.getElementById('checkoutLaunchMode');
+    const continueBtn = document.getElementById('checkoutLaunchContinueBtn');
+
+    if (!continueBtn) {
+        return true;
+    }
+
+    const normalizedCurrency = (currency || 'INR').toUpperCase();
+    const parsedAmount = Number(amountPaise);
+    const amountValue = Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount / 100 : PRO_PRICE_INR;
+    if (amountEl) {
+        amountEl.textContent = `${formatCurrencyAmount(amountValue, normalizedCurrency)} / month`;
+    }
+
+    if (modeEl) {
+        modeEl.textContent = String(checkoutMode || '').toLowerCase() === 'subscription'
+            ? 'Auto-renew enabled. Cancel anytime from your dashboard.'
+            : 'One-time checkout for your current billing cycle.';
+    }
+
+    modal.style.display = 'flex';
+
+    return new Promise((resolve) => {
+        checkoutLaunchResolver = resolve;
+        continueBtn.onclick = () => closeCheckoutLaunchModal(true);
+    });
 }
 
 async function upgradeToProFromPricing() {
@@ -1699,19 +1958,43 @@ async function upgradeToProFromPricing() {
     await handleUpgradeToPro();
 }
 
-async function verifyRazorpayPayment(paymentResponse) {
+async function verifyRazorpayPayment(paymentResponse, checkoutMode = 'order') {
+    const mode = (checkoutMode || '').toLowerCase();
+    const isRecurringMode = mode === 'subscription' || Boolean(paymentResponse?.razorpay_subscription_id);
+
+    if (isRecurringMode) {
+        if (!paymentResponse?.razorpay_subscription_id || !paymentResponse?.razorpay_payment_id || !paymentResponse?.razorpay_signature) {
+            showMessage('Recurring payment response is incomplete. Please contact support.', 'error');
+            return;
+        }
+    } else if (!paymentResponse?.razorpay_order_id || !paymentResponse?.razorpay_payment_id || !paymentResponse?.razorpay_signature) {
+        showMessage('Payment response is incomplete. Please contact support.', 'error');
+        return;
+    }
+
     try {
-        const response = await fetch(`${API_BASE}/api/subscription/verify-payment`, {
+        const endpoint = isRecurringMode
+            ? `${API_BASE}/api/subscription/verify-recurring-payment`
+            : `${API_BASE}/api/subscription/verify-payment`;
+        const body = isRecurringMode
+            ? {
+                razorpay_subscription_id: paymentResponse.razorpay_subscription_id,
+                razorpay_payment_id: paymentResponse.razorpay_payment_id,
+                razorpay_signature: paymentResponse.razorpay_signature
+            }
+            : {
+                razorpay_order_id: paymentResponse.razorpay_order_id,
+                razorpay_payment_id: paymentResponse.razorpay_payment_id,
+                razorpay_signature: paymentResponse.razorpay_signature
+            };
+
+        const response = await fetch(endpoint, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
             },
-            body: JSON.stringify({
-                razorpay_order_id: paymentResponse.razorpay_order_id,
-                razorpay_payment_id: paymentResponse.razorpay_payment_id,
-                razorpay_signature: paymentResponse.razorpay_signature
-            })
+            body: JSON.stringify(body)
         });
 
         const data = await response.json();
@@ -1722,7 +2005,9 @@ async function verifyRazorpayPayment(paymentResponse) {
 
         currentSubscription = data;
         updateSubscriptionUI();
-        showMessage('Payment successful. Pro subscription activated.', 'success');
+        showMessage(isRecurringMode
+            ? 'Payment successful. Pro subscription activated with auto-renew.'
+            : 'Payment successful. Pro subscription activated.', 'success');
         if (document.getElementById('pricingSection')?.style.display === 'block') {
             showPricing(true);
         }
@@ -1761,7 +2046,7 @@ async function handleCancelSubscription() {
         }
         currentSubscription = data;
         updateSubscriptionUI();
-        showMessage('Your Pro cancellation request has been applied.', 'success');
+        showMessage('Auto-renew cancel request submitted. Your Pro access remains active until current cycle end.', 'success');
     } catch (error) {
         console.error('Subscription cancellation failed:', error);
         showMessage('Failed to cancel subscription. Please try again.', 'error');
@@ -3534,9 +3819,20 @@ async function handleLogin(e) {
         const data = await response.json();
 
         if (response.ok) {
-            authToken = data.access_token;
+            // Session is persisted in a secure HttpOnly cookie set by backend.
+            authToken = COOKIE_AUTH_SENTINEL;
             persistAuthToken(authToken);
-            await checkAuth();
+            let authVerified = await checkAuth();
+            if (!authVerified && data.access_token) {
+                // Safe fallback for environments where secure cookies are misconfigured.
+                authToken = data.access_token;
+                persistAuthToken(authToken);
+                authVerified = await checkAuth();
+            }
+            if (!authVerified) {
+                showMessage('Login succeeded but session setup failed. Please refresh and try again.', 'error');
+                return;
+            }
             showMessage('Login successful!', 'success');
             document.getElementById('loginForm').reset();
             // Reset Turnstile widget
@@ -3616,10 +3912,21 @@ async function handleRegister(e) {
         accepted_terms_privacy: acceptedTermsPrivacy
         // Username is optional - will be auto-generated from email on backend
     };
+    const confirmPassword = getValue('registerPasswordConfirm');
 
     // Validate required fields
     if (!userData.email || !userData.password) {
         showMessage('Please fill in all required fields (Email, Password)', 'error');
+        return;
+    }
+
+    if (!confirmPassword) {
+        showMessage('Please retype your password to confirm.', 'error');
+        return;
+    }
+
+    if (userData.password !== confirmPassword) {
+        showMessage('Password and confirm password do not match.', 'error');
         return;
     }
     
@@ -3632,14 +3939,10 @@ async function handleRegister(e) {
         return;
     }
     
-    // Validate password length (bcrypt has 72-byte limit, but we handle longer passwords)
-    // Still recommend reasonable length for security
-    if (userData.password.length < 6) {
-        showMessage('Password must be at least 6 characters long', 'error');
-        return;
-    }
-    if (userData.password.length > 200) {
-        showMessage('Password is too long. Please use a password less than 200 characters.', 'error');
+    const registerPasswordErrors = getPasswordValidationErrors(userData.password, userData.email || '');
+    if (registerPasswordErrors.length > 0) {
+        showMessage(`Please use a stronger password: ${registerPasswordErrors[0]}.`, 'error');
+        updateRegisterPasswordHint();
         return;
     }
 
@@ -3689,10 +3992,11 @@ async function handleRegister(e) {
         });
 
         const data = await response.json();
+        const expiryHours = Number(response.headers.get('X-Verification-Link-Expires-Hours') || 24);
 
         if (response.ok) {
             const email = userData.email;
-            showMessage('Registration successful! Please check your email to verify your account.', 'success');
+            showMessage(`Registration successful! Please verify your email. The link expires in ${expiryHours} hours.`, 'success');
             document.getElementById('registerForm').reset();
             // Reset Turnstile widget
             if (window.turnstile) {
@@ -3705,7 +4009,7 @@ async function handleRegister(e) {
                     }
                 }
             }
-            showVerification(email);
+            showVerification(email, expiryHours);
         } else {
             // Handle different error formats
             let errorMessage = 'Registration failed';
@@ -3725,7 +4029,10 @@ async function handleRegister(e) {
     }
 }
 
-function logout() {
+async function logout() {
+    fetch(`${API_BASE}/api/auth/logout`, {
+        method: 'POST'
+    }).catch(() => null);
     authToken = null;
     persistAuthToken(null);
     currentUser = null;
@@ -3832,8 +4139,10 @@ async function handleResetPassword(e) {
         return;
     }
     
-    if (!newPassword || newPassword.length < 6) {
-        showMessage('Password must be at least 6 characters long', 'error');
+    const resetPasswordErrors = getPasswordValidationErrors(newPassword);
+    if (resetPasswordErrors.length > 0) {
+        showMessage(`Please use a stronger password: ${resetPasswordErrors[0]}.`, 'error');
+        updateResetPasswordHint();
         return;
     }
     
@@ -5169,6 +5478,12 @@ function displayProfile(profile) {
     
     // Load documentation preferences
     loadDocumentationPreferences();
+
+    const profilePasswordForm = document.getElementById('profileChangePasswordForm');
+    if (profilePasswordForm) {
+        profilePasswordForm.reset();
+    }
+    updateProfilePasswordHint();
 }
 
 async function loadReferralSummary() {
@@ -6012,6 +6327,94 @@ async function handleUpdateProfile(e) {
     } catch (error) {
         console.error('Update profile error:', error);
         showMessage('An error occurred. Please check your connection and try again.', 'error');
+    }
+}
+
+async function handleProfileChangePassword(e) {
+    e.preventDefault();
+
+    if (!authToken) {
+        showMessage('Please login to change your password', 'error');
+        showLogin();
+        return;
+    }
+
+    const currentPasswordInput = document.getElementById('profileCurrentPassword');
+    const newPasswordInput = document.getElementById('profileNewPassword');
+    const confirmPasswordInput = document.getElementById('profileConfirmPassword');
+    const submitBtn = document.getElementById('profileChangePasswordBtn');
+
+    const currentPassword = currentPasswordInput?.value || '';
+    const newPassword = newPasswordInput?.value || '';
+    const confirmPassword = confirmPasswordInput?.value || '';
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+        showMessage('Please fill all password fields', 'error');
+        return;
+    }
+
+    if (currentPassword === newPassword) {
+        showMessage('New password must be different from your current password.', 'error');
+        return;
+    }
+
+    const userEmail = currentUser?.email || document.getElementById('profileEmail')?.value || '';
+    const passwordErrors = getPasswordValidationErrors(newPassword, userEmail);
+    if (passwordErrors.length > 0) {
+        showMessage(`Please use a stronger password: ${passwordErrors[0]}.`, 'error');
+        updateProfilePasswordHint();
+        return;
+    }
+
+    if (newPassword !== confirmPassword) {
+        showMessage('New password and confirmation do not match', 'error');
+        return;
+    }
+
+    const originalButtonText = submitBtn?.textContent || 'Change Password';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Changing...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/profile/change-password`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({
+                current_password: currentPassword,
+                new_password: newPassword
+            })
+        });
+
+        const data = await response.json().catch(() => ({}));
+
+        if (response.ok) {
+            const form = document.getElementById('profileChangePasswordForm');
+            if (form) form.reset();
+            updateProfilePasswordHint();
+            showMessage(data.message || 'Password changed successfully.', 'success');
+            return;
+        }
+
+        if (response.status === 401) {
+            showMessage('Session expired. Please login again.', 'error');
+            logout();
+            return;
+        }
+
+        showMessage(data.detail || 'Failed to change password. Please try again.', 'error');
+    } catch (error) {
+        console.error('Change password error:', error);
+        showMessage('An error occurred while changing password. Please try again.', 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalButtonText;
+        }
     }
 }
 

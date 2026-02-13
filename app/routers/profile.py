@@ -1,12 +1,21 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from urllib.parse import urlparse
+import os
 from app.database import get_db
 from app import models, schemas
-from app.auth import get_current_active_user
+from app.auth import (
+    get_current_active_user,
+    verify_password,
+    get_password_hash,
+    validate_password_strength,
+)
 from app.referrals import ensure_user_referral_code
+from app.utils.rate_limiter import check_ip_rate_limit
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
+CHANGE_PASSWORD_RATE_LIMIT = int(os.getenv("CHANGE_PASSWORD_RATE_LIMIT", "5"))
+CHANGE_PASSWORD_RATE_WINDOW_SECONDS = int(os.getenv("CHANGE_PASSWORD_RATE_WINDOW_SECONDS", "900"))
 
 
 def _is_safe_profile_picture_url(value: str) -> bool:
@@ -23,6 +32,28 @@ def _is_safe_profile_picture_url(value: str) -> bool:
 
     parsed = urlparse(candidate)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _enforce_rate_limit_or_429(
+    request: Request,
+    scope: str,
+    limit: int,
+    window_seconds: int,
+    extra_key: str | None = None,
+) -> None:
+    allowed, retry_after = check_ip_rate_limit(
+        request=request,
+        scope=scope,
+        limit=limit,
+        window_seconds=window_seconds,
+        extra_key=extra_key,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 @router.get("/", response_model=schemas.UserResponse)
 def get_profile(
@@ -82,6 +113,62 @@ def update_profile(
     db.commit()
     db.refresh(current_user)
     return current_user
+
+
+@router.post("/change-password")
+def change_password(
+    payload: schemas.PasswordChangeRequest,
+    request: Request,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Change current user's password after verifying the current password."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="profile.change_password",
+        limit=CHANGE_PASSWORD_RATE_LIMIT,
+        window_seconds=CHANGE_PASSWORD_RATE_WINDOW_SECONDS,
+    )
+
+    current_password = payload.current_password or ""
+    new_password = payload.new_password or ""
+
+    if not current_password:
+        raise HTTPException(status_code=400, detail="Current password is required.")
+    if not new_password:
+        raise HTTPException(status_code=400, detail="New password is required.")
+
+    if not verify_password(current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+
+    if verify_password(new_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=400,
+            detail="New password must be different from your current password."
+        )
+
+    password_error = validate_password_strength(new_password, current_user.email)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
+
+    try:
+        current_user.hashed_password = get_password_hash(new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while updating your password."
+        )
+
+    # Invalidate any pending reset token after successful password change.
+    current_user.password_reset_token = None
+    current_user.password_reset_token_expires = None
+    db.commit()
+
+    return {
+        "message": "Password changed successfully. Please log in again on any other devices for security."
+    }
 
 @router.get("/documentation-preferences")
 def get_documentation_preferences(

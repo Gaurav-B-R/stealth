@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Form, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -10,7 +10,8 @@ from app.auth import (
     create_access_token,
     get_password_hash,
     get_current_active_user,
-    ACCESS_TOKEN_EXPIRE_MINUTES
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    validate_password_strength,
 )
 from app.email_service import generate_verification_token, send_verification_email, send_password_reset_email
 from app.utils.turnstile import verify_turnstile_token
@@ -36,6 +37,47 @@ FORGOT_PASSWORD_RATE_LIMIT = int(os.getenv("FORGOT_PASSWORD_RATE_LIMIT", "5"))
 FORGOT_PASSWORD_RATE_WINDOW_SECONDS = int(os.getenv("FORGOT_PASSWORD_RATE_WINDOW_SECONDS", "900"))
 CONTACT_RATE_LIMIT = int(os.getenv("CONTACT_RATE_LIMIT", "5"))
 CONTACT_RATE_WINDOW_SECONDS = int(os.getenv("CONTACT_RATE_WINDOW_SECONDS", "1800"))
+EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS = int(os.getenv("EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS", "24"))
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "rilono_access_token").strip() or "rilono_access_token"
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cookie_secure_default() -> bool:
+    env = os.getenv("ENVIRONMENT", "production").strip().lower()
+    return env != "development"
+
+
+AUTH_COOKIE_SECURE = _bool_env("AUTH_COOKIE_SECURE", _cookie_secure_default())
+AUTH_COOKIE_DOMAIN = (os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None)
+_cookie_samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "strict").strip().lower()
+AUTH_COOKIE_SAMESITE = _cookie_samesite_raw if _cookie_samesite_raw in {"lax", "strict", "none"} else "strict"
+
+
+def _set_auth_cookie(response: Response, access_token: str, max_age_seconds: int) -> None:
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=access_token,
+        max_age=max_age_seconds,
+        httponly=True,
+        secure=AUTH_COOKIE_SECURE,
+        samesite=AUTH_COOKIE_SAMESITE,
+        domain=AUTH_COOKIE_DOMAIN,
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        domain=AUTH_COOKIE_DOMAIN,
+        path="/",
+    )
 
 
 def _enforce_rate_limit_or_429(
@@ -107,7 +149,12 @@ def get_university_by_email(email: str, db: Session = Depends(get_db)):
     }
 
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
-def register(user: schemas.UserCreate, request: Request, db: Session = Depends(get_db)):
+def register(
+    user: schemas.UserCreate,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
     _enforce_rate_limit_or_429(
         request=request,
         scope="auth.register",
@@ -195,9 +242,10 @@ def register(user: schemas.UserCreate, request: Request, db: Session = Depends(g
             counter += 1
         username = f"{username}{counter}"
     
-    # Validate password length
-    if len(user.password.encode('utf-8')) > 200:
-        raise HTTPException(status_code=400, detail="Password is too long. Maximum 200 characters allowed.")
+    # Validate password strength
+    password_error = validate_password_strength(user.password, user.email)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
     
     # Create new user with auto-filled university name
     try:
@@ -210,7 +258,7 @@ def register(user: schemas.UserCreate, request: Request, db: Session = Depends(g
     # Generate verification token
     verification_token = generate_verification_token()
     verification_token_hash = hash_token(verification_token)
-    token_expires = datetime.utcnow() + timedelta(hours=24)  # Token expires in 24 hours
+    token_expires = datetime.utcnow() + timedelta(hours=EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS)
     
     # Auto-fill university name from the database (ignore user-provided university)
     db_user = models.User(
@@ -235,18 +283,25 @@ def register(user: schemas.UserCreate, request: Request, db: Session = Depends(g
     
     # Send verification email
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
-    email_sent = send_verification_email(user.email, verification_token, base_url)
+    email_sent = send_verification_email(
+        user.email,
+        verification_token,
+        base_url,
+        expires_in_hours=EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS,
+    )
     
     if not email_sent:
         # Log error but don't fail registration - user can request resend later
         print(f"Warning: Failed to send verification email to {user.email}")
         print("   User can still request a resend verification email later.")
     
+    response.headers["X-Verification-Link-Expires-Hours"] = str(EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS)
     return db_user
 
 @router.post("/login", response_model=schemas.Token)
 async def login(
     request: Request,
+    response: Response,
     db: Session = Depends(get_db)
 ):
     _enforce_rate_limit_or_429(
@@ -348,6 +403,7 @@ async def login(
     access_token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
+    _set_auth_cookie(response, access_token, int(access_token_expires.total_seconds()))
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -363,6 +419,12 @@ def read_users_me(
     get_or_create_user_subscription(db, current_user.id)
     ensure_user_referral_code(db, current_user, commit=True)
     return current_user
+
+
+@router.post("/logout")
+def logout(response: Response):
+    _clear_auth_cookie(response)
+    return {"message": "Logged out successfully."}
 
 @router.post("/forgot-password")
 def forgot_password(
@@ -427,11 +489,9 @@ def reset_password(request: schemas.PasswordReset, db: Session = Depends(get_db)
     if not token:
         raise HTTPException(status_code=400, detail="Reset token is required")
     
-    if not new_password or len(new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
-    
-    if len(new_password.encode('utf-8')) > 200:
-        raise HTTPException(status_code=400, detail="Password is too long. Maximum 200 characters allowed.")
+    password_error = validate_password_strength(new_password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
     
     token_hash = hash_token(token)
 
@@ -448,6 +508,11 @@ def reset_password(request: schemas.PasswordReset, db: Session = Depends(get_db)
             status_code=404,
             detail="Invalid or expired password reset token"
         )
+
+    # Validate again with user context (e.g., disallow password containing email username).
+    password_error_with_user = validate_password_strength(new_password, user.email)
+    if password_error_with_user:
+        raise HTTPException(status_code=400, detail=password_error_with_user)
     
     # Check if token has expired
     if user.password_reset_token_expires and user.password_reset_token_expires < datetime.utcnow():
@@ -500,7 +565,7 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     if user.verification_token_expires and user.verification_token_expires < datetime.utcnow():
         raise HTTPException(
             status_code=400,
-            detail="Verification token has expired. Please request a new verification email."
+            detail=f"Verification token has expired. The link is valid for {EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS} hours. Please request a new verification email."
         )
     
     # Check if already verified
@@ -525,6 +590,7 @@ def verify_email(token: str, db: Session = Depends(get_db)):
 def resend_verification_email(
     payload: schemas.ResendVerificationRequest,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db)
 ):
     """
@@ -539,7 +605,10 @@ def resend_verification_email(
 
     email = payload.email.lower().strip()
     generic_message = {
-        "message": "If an account with this email exists and is not verified, a verification email has been sent."
+        "message": (
+            "If an account with this email exists and is not verified, a verification email has been sent. "
+            f"The link expires in {EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS} hours."
+        )
     }
 
     if not email:
@@ -557,7 +626,7 @@ def resend_verification_email(
     # Generate new verification token
     verification_token = generate_verification_token()
     verification_token_hash = hash_token(verification_token)
-    token_expires = datetime.utcnow() + timedelta(hours=24)
+    token_expires = datetime.utcnow() + timedelta(hours=EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS)
     
     user.verification_token = verification_token_hash
     user.verification_token_expires = token_expires
@@ -565,12 +634,18 @@ def resend_verification_email(
     
     # Send verification email
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
-    email_sent = send_verification_email(user.email, verification_token, base_url)
+    email_sent = send_verification_email(
+        user.email,
+        verification_token,
+        base_url,
+        expires_in_hours=EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS,
+    )
     
     if not email_sent:
         # Keep response generic to avoid account/email state leaks.
         print(f"Warning: Failed to resend verification email to {email}")
 
+    response.headers["X-Verification-Link-Expires-Hours"] = str(EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS)
     return generic_message
 
 

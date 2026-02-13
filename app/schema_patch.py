@@ -59,3 +59,17 @@ def ensure_document_catalog_columns():
                     "ADD COLUMN stage_gate_requires_validation BOOLEAN NOT NULL DEFAULT FALSE"
                 )
             )
+
+
+def ensure_subscription_payment_recurring_columns():
+    """
+    Patch subscription_payments schema for recurring Razorpay metadata.
+    """
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "subscription_payments")
+
+        if "razorpay_subscription_id" not in columns:
+            conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN razorpay_subscription_id VARCHAR"))
+
+        if "razorpay_invoice_id" not in columns:
+            conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN razorpay_invoice_id VARCHAR"))

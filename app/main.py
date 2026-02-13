@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +8,7 @@ from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.schema_patch import (
     ensure_document_catalog_columns,
+    ensure_subscription_payment_recurring_columns,
     ensure_subscription_usage_columns,
     ensure_user_legal_consent_column,
 )
@@ -34,9 +35,34 @@ DEFAULT_CORS_ORIGINS = [
 ]
 
 
+def _is_production() -> bool:
+    return os.getenv("ENVIRONMENT", "production").strip().lower() != "development"
+
+
+def _is_truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEFAULT_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://challenges.cloudflare.com https://www.googletagmanager.com; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https: blob:; "
+    "font-src 'self' data: https:; "
+    "connect-src 'self' https://api.razorpay.com https://checkout.razorpay.com https://www.google-analytics.com https://region1.google-analytics.com https://stats.g.doubleclick.net https://challenges.cloudflare.com; "
+    "frame-src 'self' https://checkout.razorpay.com https://api.razorpay.com https://challenges.cloudflare.com; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+
+
 def _parse_cors_origins() -> list[str]:
     raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
     if not raw:
+        if _is_production():
+            return ["https://rilono.com", "https://www.rilono.com"]
         return DEFAULT_CORS_ORIGINS
 
     origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
@@ -55,6 +81,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=(self), usb=(), magnetometer=(), gyroscope=()",
+    )
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
+    if _is_truthy(os.getenv("ENABLE_CSP", "true")):
+        csp_value = os.getenv("CONTENT_SECURITY_POLICY", DEFAULT_CONTENT_SECURITY_POLICY).strip() or DEFAULT_CONTENT_SECURITY_POLICY
+        response.headers.setdefault("Content-Security-Policy", csp_value)
+
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
+    is_https = request.url.scheme == "https" or forwarded_proto == "https"
+    if is_https:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+    return response
+
 # Include routers
 app.include_router(auth.router)
 app.include_router(upload.router)
@@ -71,6 +122,7 @@ def startup_backfill_subscriptions():
     """Ensure existing users have default subscription + referral records."""
     ensure_user_legal_consent_column()
     ensure_subscription_usage_columns()
+    ensure_subscription_payment_recurring_columns()
     ensure_document_catalog_columns()
     db = SessionLocal()
     try:

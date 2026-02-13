@@ -27,7 +27,12 @@ def generate_verification_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def send_verification_email(email: str, verification_token: str, base_url: str = DEFAULT_PUBLIC_BASE_URL) -> bool:
+def send_verification_email(
+    email: str,
+    verification_token: str,
+    base_url: str = DEFAULT_PUBLIC_BASE_URL,
+    expires_in_hours: int = 24,
+) -> bool:
     """
     Send email verification email using Resend.
     
@@ -35,6 +40,7 @@ def send_verification_email(email: str, verification_token: str, base_url: str =
         email: Recipient email address
         verification_token: Token for verification
         base_url: Base URL of the application (for verification link)
+        expires_in_hours: Verification link expiry in hours
     
     Returns:
         bool: True if email was sent successfully, False otherwise
@@ -84,7 +90,7 @@ def send_verification_email(email: str, verification_token: str, base_url: str =
             </p>
             
             <p style="font-size: 14px; color: #6b7280; margin-top: 30px;">
-                This verification link will expire in 24 hours. If you didn't create an account with Rilono, 
+                This verification link will expire in {expires_in_hours} hours. If you didn't create an account with Rilono,
                 please ignore this email.
             </p>
         </div>
@@ -105,7 +111,7 @@ def send_verification_email(email: str, verification_token: str, base_url: str =
     
     {verification_link}
     
-    This verification link will expire in 24 hours. If you didn't create an account with Rilono, please ignore this email.
+    This verification link will expire in {expires_in_hours} hours. If you didn't create an account with Rilono, please ignore this email.
     
     © 2025 Rilono. All rights reserved.
     """

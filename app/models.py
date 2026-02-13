@@ -42,6 +42,7 @@ class User(Base):
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
     subscription = relationship("Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    subscription_payments = relationship("SubscriptionPayment", back_populates="user", cascade="all, delete-orphan")
 
 class USUniversity(Base):
     __tablename__ = "us_universities"
@@ -118,3 +119,26 @@ class Subscription(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     user = relationship("User", back_populates="subscription")
+
+
+class SubscriptionPayment(Base):
+    __tablename__ = "subscription_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String, nullable=False, default="razorpay")  # razorpay
+    plan = Column(String, nullable=False, default="pro")  # pro
+    amount_paise = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False, default="INR")
+    razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
+    razorpay_subscription_id = Column(String, nullable=True, index=True)
+    razorpay_invoice_id = Column(String, nullable=True, index=True)
+    razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
+    status = Column(String, nullable=False, default="created")  # created | verified | failed
+    signature_verified_at = Column(DateTime(timezone=True), nullable=True)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    user = relationship("User", back_populates="subscription_payments")

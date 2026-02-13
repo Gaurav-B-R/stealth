@@ -130,14 +130,17 @@
                     <input type="hidden" id="resetToken" value="">
                     <div class="form-group">
                         <label for="resetPasswordNew">New Password</label>
-                        <input type="password" id="resetPasswordNew" required minlength="6">
+                        <input type="password" id="resetPasswordNew" required minlength="10" autocomplete="new-password">
+                        <small id="resetPasswordPolicyHint" style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
+                            Use 10+ characters with uppercase, lowercase, number, and special character.
+                        </small>
                         <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem; font-size: 0.875rem;">
-                            Password must be at least 6 characters long
+                            Choose a strong password to protect your account.
                         </small>
                     </div>
                     <div class="form-group">
                         <label for="resetPasswordConfirm">Confirm New Password</label>
-                        <input type="password" id="resetPasswordConfirm" required minlength="6">
+                        <input type="password" id="resetPasswordConfirm" required minlength="10" autocomplete="new-password">
                     </div>
                     <button type="submit" class="btn btn-primary">Reset Password</button>
                 </form>
@@ -177,7 +180,14 @@
                     </div>
                     <div class="form-group">
                         <label for="registerPassword">Password *</label>
-                        <input type="password" id="registerPassword" required>
+                        <input type="password" id="registerPassword" required minlength="10" autocomplete="new-password">
+                        <small id="registerPasswordPolicyHint" style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
+                            Use 10+ characters with uppercase, lowercase, number, and special character.
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label for="registerPasswordConfirm">Confirm Password *</label>
+                        <input type="password" id="registerPasswordConfirm" required minlength="10" autocomplete="new-password">
                     </div>
                     <div class="form-group">
                         <label for="registerFullName">Full Name</label>
@@ -624,7 +634,7 @@
                             Upgrade to Pro
                         </button>
                         <button id="dashboardCancelButton" type="button" class="btn btn-secondary sidebar-upgrade-btn" onclick="handleCancelSubscription()" style="display: none;">
-                            Cancel Pro Plan
+                            Cancel Auto-Renew
                         </button>
                     </div>
                 </div>
@@ -895,6 +905,28 @@
                             </div>
                             <button type="submit" class="btn btn-primary" style="width: 100%;">Update Profile</button>
                         </form>
+                        <div style="margin-top: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-secondary);">
+                            <div style="font-weight: 700; color: var(--text-primary); margin-bottom: 0.2rem;">Security</div>
+                            <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.85rem;">Change your password securely.</div>
+                            <form id="profileChangePasswordForm">
+                                <div class="form-group">
+                                    <label for="profileCurrentPassword">Current Password</label>
+                                    <input type="password" id="profileCurrentPassword" required autocomplete="current-password">
+                                </div>
+                                <div class="form-group">
+                                    <label for="profileNewPassword">New Password</label>
+                                    <input type="password" id="profileNewPassword" required minlength="10" autocomplete="new-password">
+                                </div>
+                                <div class="form-group">
+                                    <label for="profileConfirmPassword">Confirm New Password</label>
+                                    <input type="password" id="profileConfirmPassword" required minlength="10" autocomplete="new-password">
+                                    <small id="profilePasswordPolicyHint" style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.85rem;">
+                                        Use 10+ characters with uppercase, lowercase, number, and special character.
+                                    </small>
+                                </div>
+                                <button type="submit" id="profileChangePasswordBtn" class="btn btn-secondary" style="width: 100%;">Change Password</button>
+                            </form>
+                        </div>
                         <div style="margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(99, 102, 241, 0.08);">
                             <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
                                 <div>
@@ -2079,6 +2111,38 @@
                 <button type="button" class="btn btn-secondary" onclick="copyReferralCode()" style="width: auto;">Copy Code</button>
                 <button type="button" class="btn btn-primary" onclick="copyReferralLink()" style="width: auto;">Copy Invite Link</button>
                 <button type="button" class="btn btn-secondary" onclick="closeReferralPromoModal()" style="width: auto;">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Checkout Launch Modal -->
+    <div id="checkoutLaunchModal" class="modal-overlay checkout-launch-overlay" style="display: none;" onclick="if(event.target===this){closeCheckoutLaunchModal(false);}">
+        <div class="modal-content checkout-launch-modal-content">
+            <button type="button" class="checkout-launch-close-btn" onclick="closeCheckoutLaunchModal(false)" aria-label="Close">×</button>
+            <div class="checkout-launch-header">
+                <div class="checkout-launch-badge">Pro Upgrade</div>
+                <h3 class="checkout-launch-title">Secure Checkout</h3>
+                <p class="checkout-launch-subtitle">You're one step away from unlocking unlimited AI guidance and uploads.</p>
+            </div>
+            <div class="checkout-launch-layout">
+                <div class="checkout-launch-benefits-card">
+                    <div class="checkout-launch-benefits-title">What You Get</div>
+                    <ul class="checkout-launch-benefits">
+                        <li>Unlimited Rilono AI messages</li>
+                        <li>Unlimited document uploads</li>
+                        <li>Unlimited interview prep and mock sessions</li>
+                        <li>Priority support</li>
+                    </ul>
+                </div>
+                <div class="checkout-launch-summary">
+                    <div class="checkout-launch-plan-name">Rilono Pro</div>
+                    <div id="checkoutLaunchAmount" class="checkout-launch-plan-price">₹699 / month</div>
+                    <p id="checkoutLaunchMode" class="checkout-launch-plan-note">Auto-renew enabled. Cancel anytime from your dashboard.</p>
+                </div>
+            </div>
+            <div class="checkout-launch-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeCheckoutLaunchModal(false)">Maybe later</button>
+                <button id="checkoutLaunchContinueBtn" type="button" class="btn btn-primary">Continue to pay</button>
             </div>
         </div>
     </div>
