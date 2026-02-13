@@ -60,6 +60,9 @@
                         <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); toggleUserMenu(); return false;">
                             <span>📊</span> Dashboard
                         </a>
+                        <a href="#" onclick="event.preventDefault(); openFeatureRequestModal(); toggleUserMenu(); return false;">
+                            <span>💡</span> Feature Request
+                        </a>
                         <a href="#" onclick="logout(); toggleUserMenu(); return false;">
                             <span>🚪</span> Logout
                         </a>
@@ -1964,6 +1967,60 @@
         </div>
     </footer>
     
+    <!-- Feature Request Modal -->
+    <div id="featureRequestModal" class="modal-overlay" style="display: none;" onclick="if(event.target===this){closeFeatureRequestModal();}">
+        <div class="modal-content feature-request-modal-content">
+            <button onclick="closeFeatureRequestModal()" class="feature-request-close-btn" aria-label="Close">×</button>
+            <h2 class="feature-request-title">💡 Request a Feature</h2>
+            <p class="feature-request-subtitle">Share what would help your F1 journey. We review all requests and prioritize by student impact.</p>
+
+            <div class="feature-request-meta">
+                <div><strong>Name:</strong> <span id="featureRequestUserName">-</span></div>
+                <div><strong>Email:</strong> <span id="featureRequestUserEmail">-</span></div>
+            </div>
+
+            <form id="featureRequestForm">
+                <div class="form-group">
+                    <label for="featureRequestTitle">Feature Title <span style="color: var(--danger-color);">*</span></label>
+                    <input type="text" id="featureRequestTitle" required placeholder="e.g., Track visa slot changes by consulate">
+                </div>
+                <div class="feature-request-form-row">
+                    <div class="form-group">
+                        <label for="featureRequestArea">Area</label>
+                        <select id="featureRequestArea">
+                            <option value="">Select area</option>
+                            <option value="Overview">Overview</option>
+                            <option value="Documents">Documents</option>
+                            <option value="F1-Visa (Interviews)">F1-Visa (Interviews)</option>
+                            <option value="News">News</option>
+                            <option value="Rilono AI">Rilono AI</option>
+                            <option value="Pricing">Pricing</option>
+                            <option value="Profile">Profile</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="featureRequestPriority">Priority</label>
+                        <select id="featureRequestPriority">
+                            <option value="Medium">Medium</option>
+                            <option value="High">High</option>
+                            <option value="Low">Low</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="featureRequestDetails">Details <span style="color: var(--danger-color);">*</span></label>
+                    <textarea id="featureRequestDetails" rows="5" required placeholder="Describe the problem and how this feature should work..."></textarea>
+                </div>
+                <div class="feature-request-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeFeatureRequestModal()">Cancel</button>
+                    <button type="submit" id="featureRequestSubmitBtn" class="btn btn-primary">Submit Request</button>
+                </div>
+            </form>
+            <p class="feature-request-footnote">Request will be sent to <strong>contact@rilono.com</strong>.</p>
+        </div>
+    </div>
+
     <!-- Change University Modal -->
     <div id="changeUniversityModal" class="modal-overlay" style="display: none;">
         <div class="modal-content" style="max-width: 500px; background: var(--card-bg); border-radius: 16px; padding: 2rem; position: relative;">

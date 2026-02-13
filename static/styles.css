@@ -5199,6 +5199,76 @@ body {
     position: relative;
 }
 
+.feature-request-modal-content {
+    width: min(620px, 96vw);
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+    padding: 1.6rem;
+    position: relative;
+}
+
+.feature-request-close-btn {
+    position: absolute;
+    top: 0.85rem;
+    right: 0.85rem;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.7rem;
+    cursor: pointer;
+}
+
+.feature-request-title {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 1.35rem;
+}
+
+.feature-request-subtitle {
+    margin: 0.55rem 0 1rem 0;
+    color: var(--text-secondary);
+    font-size: 0.92rem;
+}
+
+.feature-request-meta {
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    background: var(--bg-secondary);
+    padding: 0.7rem 0.8rem;
+    margin-bottom: 0.95rem;
+    color: var(--text-secondary);
+    font-size: 0.86rem;
+    display: grid;
+    gap: 0.25rem;
+}
+
+.feature-request-form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+
+.feature-request-actions {
+    display: flex;
+    gap: 0.65rem;
+    justify-content: flex-end;
+}
+
+.feature-request-footnote {
+    margin: 0.9rem 0 0 0;
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+@media (max-width: 640px) {
+    .feature-request-form-row {
+        grid-template-columns: 1fr;
+        gap: 0;
+    }
+}
+
 .referral-promo-close-btn {
     position: absolute;
     top: 0.9rem;

@@ -542,6 +542,8 @@ function setupEventListeners() {
     if (profileForm) profileForm.addEventListener('submit', handleUpdateProfile);
     const contactForm = document.getElementById('contactForm');
     if (contactForm) contactForm.addEventListener('submit', handleContactSubmit);
+    const featureRequestForm = document.getElementById('featureRequestForm');
+    if (featureRequestForm) featureRequestForm.addEventListener('submit', handleFeatureRequestSubmit);
     const searchInput = document.getElementById('searchInput');
     if (searchInput) {
         searchInput.addEventListener('keypress', (e) => {
@@ -3263,6 +3265,120 @@ function showContact(skipURLUpdate = false) {
     
     if (!skipURLUpdate) {
         updateURL('/contact', false);
+    }
+}
+
+function openFeatureRequestModal() {
+    if (!currentUser) {
+        showMessage('Please login to submit a feature request.', 'error');
+        showLogin();
+        return;
+    }
+
+    const modal = document.getElementById('featureRequestModal');
+    const form = document.getElementById('featureRequestForm');
+    const nameEl = document.getElementById('featureRequestUserName');
+    const emailEl = document.getElementById('featureRequestUserEmail');
+    const titleInput = document.getElementById('featureRequestTitle');
+    const areaInput = document.getElementById('featureRequestArea');
+    const priorityInput = document.getElementById('featureRequestPriority');
+    const detailsInput = document.getElementById('featureRequestDetails');
+
+    if (!modal || !form || !nameEl || !emailEl) return;
+
+    form.reset();
+    nameEl.textContent = currentUser.full_name || currentUser.username || 'Student';
+    emailEl.textContent = currentUser.email || '';
+    if (titleInput) titleInput.value = '';
+    if (areaInput) areaInput.value = '';
+    if (priorityInput) priorityInput.value = 'Medium';
+    if (detailsInput) detailsInput.value = '';
+
+    modal.style.display = 'flex';
+}
+
+function closeFeatureRequestModal() {
+    const modal = document.getElementById('featureRequestModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+}
+
+async function handleFeatureRequestSubmit(e) {
+    e.preventDefault();
+
+    if (!currentUser) {
+        showMessage('Please login to submit a feature request.', 'error');
+        closeFeatureRequestModal();
+        showLogin();
+        return;
+    }
+
+    const title = document.getElementById('featureRequestTitle')?.value.trim() || '';
+    const area = document.getElementById('featureRequestArea')?.value || 'Not specified';
+    const priority = document.getElementById('featureRequestPriority')?.value || 'Medium';
+    const details = document.getElementById('featureRequestDetails')?.value.trim() || '';
+    const submitBtn = document.getElementById('featureRequestSubmitBtn');
+
+    if (title.length < 3) {
+        showMessage('Please provide a feature title (at least 3 characters).', 'error');
+        return;
+    }
+
+    if (details.length < 10) {
+        showMessage('Please provide more details (at least 10 characters).', 'error');
+        return;
+    }
+
+    const requesterName = (currentUser.full_name || currentUser.username || 'Student').trim();
+    const requesterEmail = (currentUser.email || '').trim();
+    if (!requesterEmail || !requesterEmail.includes('@')) {
+        showMessage('Your account email is missing. Please update your profile and try again.', 'error');
+        return;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Submitting...';
+    }
+
+    try {
+        const formData = new FormData();
+        formData.append('name', requesterName);
+        formData.append('email', requesterEmail);
+        formData.append('user_type', 'student');
+        formData.append('subject', `Feature Request: ${title}`);
+        formData.append(
+            'message',
+            [
+                `Requested Area: ${area}`,
+                `Priority: ${priority}`,
+                `Requested By: ${requesterName} (${requesterEmail})`,
+                '',
+                'Details:',
+                details
+            ].join('\n')
+        );
+
+        const response = await fetch(`${API_BASE}/api/auth/contact`, {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            throw new Error(data.detail || 'Failed to submit feature request.');
+        }
+
+        showMessage(data.message || 'Feature request submitted. Thank you!', 'success');
+        closeFeatureRequestModal();
+    } catch (error) {
+        console.error('Feature request submit error:', error);
+        showMessage(error.message || 'Failed to submit feature request. Please try again.', 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Submit Request';
+        }
     }
 }
 
