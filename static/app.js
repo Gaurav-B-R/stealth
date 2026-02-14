@@ -1703,6 +1703,9 @@ function updateSubscriptionUI() {
 
     const isPro = Boolean(currentSubscription.is_pro);
     const subscriptionStatus = (currentSubscription.status || '').toLowerCase();
+    const isCancellationScheduled = subscriptionStatus === 'canceled';
+    const hasAutoRenewInfo = typeof currentSubscription.auto_renew_enabled === 'boolean';
+    const autoRenewEnabled = hasAutoRenewInfo ? Boolean(currentSubscription.auto_renew_enabled) : isPro;
     const planLabel = isPro ? 'Pro' : 'Free';
 
     if (planNameEl) {
@@ -1738,22 +1741,36 @@ function updateSubscriptionUI() {
     }
 
     if (sidebarUpgradeButton) {
-        const canUpgrade = !isPro && PRO_UPGRADE_ENABLED;
+        const canRenew = isPro && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled) && PRO_UPGRADE_ENABLED;
+        const canUpgrade = (!isPro && PRO_UPGRADE_ENABLED) || canRenew;
         sidebarUpgradeButton.disabled = !canUpgrade;
-        sidebarUpgradeButton.textContent = isPro ? 'You are on Pro' : (canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon');
+        if (canRenew) {
+            sidebarUpgradeButton.textContent = 'Renew Subscription';
+        } else if (isPro) {
+            sidebarUpgradeButton.textContent = 'You are on Pro';
+        } else {
+            sidebarUpgradeButton.textContent = canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon';
+        }
         sidebarUpgradeButton.style.opacity = canUpgrade || isPro ? '0.8' : '0.75';
         sidebarUpgradeButton.style.cursor = canUpgrade ? 'pointer' : 'not-allowed';
     }
 
     if (sidebarCancelButton) {
-        const showCancel = isPro && subscriptionStatus === 'active';
+        const showCancel = isPro && subscriptionStatus === 'active' && autoRenewEnabled;
         sidebarCancelButton.style.display = showCancel ? 'block' : 'none';
     }
 
     if (pricingUpgradeButton) {
-        const canUpgrade = !isPro && PRO_UPGRADE_ENABLED;
+        const canRenew = isPro && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled) && PRO_UPGRADE_ENABLED;
+        const canUpgrade = (!isPro && PRO_UPGRADE_ENABLED) || canRenew;
         pricingUpgradeButton.disabled = !canUpgrade;
-        pricingUpgradeButton.textContent = isPro ? 'You are on Pro' : (canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon');
+        if (canRenew) {
+            pricingUpgradeButton.textContent = 'Renew Pro';
+        } else if (isPro) {
+            pricingUpgradeButton.textContent = 'You are on Pro';
+        } else {
+            pricingUpgradeButton.textContent = canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon';
+        }
     }
 }
 

@@ -65,6 +65,8 @@ class SubscriptionResponse(BaseModel):
     mock_interviews_limit: int
     mock_interviews_remaining: int
     is_pro: bool
+    auto_renew_enabled: Optional[bool] = None
+    recurring_subscription_status: Optional[str] = None
 
 
 class RazorpayPaymentVerifyRequest(BaseModel):

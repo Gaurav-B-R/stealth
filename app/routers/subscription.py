@@ -204,7 +204,35 @@ def _pro_duration_days() -> int:
         return 30
 
 
-def _build_subscription_response(subscription: models.Subscription) -> schemas.SubscriptionResponse:
+def _is_provider_auto_renew_enabled(subscription_data: dict[str, Any]) -> bool:
+    provider_status = str(subscription_data.get("status") or "").strip().lower()
+    has_scheduled_changes = bool(subscription_data.get("has_scheduled_changes"))
+    remaining_count = int(subscription_data.get("remaining_count", 0) or 0)
+    cancel_at_cycle_end = bool(subscription_data.get("cancel_at_cycle_end"))
+    cancel_scheduled_at = subscription_data.get("change_scheduled_at")
+    ended_at = subscription_data.get("ended_at")
+
+    if provider_status in {"cancelled", "completed", "expired", "halted", "paused"}:
+        return False
+    if cancel_at_cycle_end:
+        return False
+    if cancel_scheduled_at is not None:
+        return False
+    if ended_at is not None:
+        return False
+    if has_scheduled_changes:
+        return False
+    if remaining_count <= 0:
+        return False
+    return provider_status in {"created", "authenticated", "active", "pending"}
+
+
+def _build_subscription_response(
+    subscription: models.Subscription,
+    *,
+    auto_renew_enabled: bool | None = None,
+    recurring_subscription_status: str | None = None,
+) -> schemas.SubscriptionResponse:
     limits = get_plan_limits(subscription.plan)
     ai_limit = limits["ai_messages_limit"]
     doc_limit = limits["document_uploads_limit"]
@@ -231,7 +259,9 @@ def _build_subscription_response(subscription: models.Subscription) -> schemas.S
         mock_interviews_used=subscription.mock_interviews_used,
         mock_interviews_limit=mock_limit,
         mock_interviews_remaining=mock_remaining,
-        is_pro=subscription.plan == PLAN_PRO and subscription.status == STATUS_ACTIVE,
+        is_pro=subscription.plan == PLAN_PRO,
+        auto_renew_enabled=auto_renew_enabled,
+        recurring_subscription_status=recurring_subscription_status,
     )
 
 
@@ -318,7 +348,7 @@ def _apply_pro_access_from_provider_period(
     if provider_period_end and provider_period_end > now:
         subscription = get_or_create_user_subscription(db, user_id, commit=False)
         subscription.plan = PLAN_PRO
-        subscription.status = STATUS_ACTIVE
+        subscription.status = STATUS_ACTIVE if _is_provider_auto_renew_enabled(razorpay_subscription_data) else "canceled"
         existing_end = _normalize_datetime(subscription.ends_at)
         if existing_end and existing_end > provider_period_end:
             subscription.ends_at = existing_end
@@ -662,7 +692,40 @@ def get_my_subscription(
     db: Session = Depends(get_db),
 ):
     subscription = get_or_create_user_subscription(db, current_user.id)
-    return _build_subscription_response(subscription)
+    auto_renew_enabled: bool | None = None
+    recurring_subscription_status: str | None = None
+
+    if subscription.plan == PLAN_PRO:
+        if str(subscription.status or "").strip().lower() == "canceled":
+            auto_renew_enabled = False
+            recurring_subscription_status = "cancelled"
+            return _build_subscription_response(
+                subscription,
+                auto_renew_enabled=auto_renew_enabled,
+                recurring_subscription_status=recurring_subscription_status,
+            )
+
+        subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
+        key_id, key_secret = _razorpay_credentials()
+        if subscription_id and _looks_like_razorpay_id(subscription_id, "sub") and key_id and key_secret:
+            try:
+                subscription_data = _razorpay_request(
+                    method="GET",
+                    path=f"/subscriptions/{subscription_id}",
+                    key_id=key_id,
+                    key_secret=key_secret,
+                )
+                recurring_subscription_status = str(subscription_data.get("status") or "").strip().lower() or None
+                auto_renew_enabled = _is_provider_auto_renew_enabled(subscription_data)
+            except HTTPException:
+                auto_renew_enabled = None
+                recurring_subscription_status = None
+
+    return _build_subscription_response(
+        subscription,
+        auto_renew_enabled=auto_renew_enabled,
+        recurring_subscription_status=recurring_subscription_status,
+    )
 
 
 @router.post("/upgrade")
@@ -687,12 +750,41 @@ def upgrade_to_pro(
         )
 
     subscription = get_or_create_user_subscription(db, current_user.id)
+    key_id, key_secret = _razorpay_credentials()
+
     if subscription.plan == PLAN_PRO and subscription.status == STATUS_ACTIVE:
-        return {
-            "action": "already_pro",
-            "message": "Your account is already on Pro.",
-            "subscription": _build_subscription_response(subscription).model_dump(),
-        }
+        auto_renew_enabled: bool | None = None
+        recurring_subscription_status: str | None = None
+
+        if _razorpay_recurring_enabled() and key_id and key_secret:
+            existing_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
+            if existing_subscription_id and _looks_like_razorpay_id(existing_subscription_id, "sub"):
+                try:
+                    existing_subscription_data = _razorpay_request(
+                        method="GET",
+                        path=f"/subscriptions/{existing_subscription_id}",
+                        key_id=key_id,
+                        key_secret=key_secret,
+                    )
+                    recurring_subscription_status = (
+                        str(existing_subscription_data.get("status") or "").strip().lower() or None
+                    )
+                    auto_renew_enabled = _is_provider_auto_renew_enabled(existing_subscription_data)
+                except HTTPException:
+                    auto_renew_enabled = None
+                    recurring_subscription_status = None
+
+        # If user is already Pro but auto-renew is OFF, allow renewing from checkout.
+        if auto_renew_enabled is not False:
+            return {
+                "action": "already_pro",
+                "message": "Your account is already on Pro.",
+                "subscription": _build_subscription_response(
+                    subscription,
+                    auto_renew_enabled=auto_renew_enabled,
+                    recurring_subscription_status=recurring_subscription_status,
+                ).model_dump(),
+            }
 
     if not _razorpay_checkout_enabled():
         return {
@@ -701,7 +793,6 @@ def upgrade_to_pro(
             "contact_path": "/contact",
         }
 
-    key_id, key_secret = _razorpay_credentials()
     base_amount = _pro_amount_paise()
     currency = _pro_plan_currency()
     base_plan_id = _razorpay_plan_id()
@@ -1394,7 +1485,7 @@ def cancel_my_subscription(
     subscription = get_or_create_user_subscription(db, current_user.id)
 
     if subscription.plan != PLAN_PRO:
-        return _build_subscription_response(subscription)
+        return _build_subscription_response(subscription, auto_renew_enabled=False, recurring_subscription_status=None)
 
     subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
     key_id, key_secret = _razorpay_credentials()
@@ -1416,6 +1507,8 @@ def cancel_my_subscription(
                 key_secret=key_secret,
                 json_payload={"cancel_at_cycle_end": 1},
             )
+            # Force local state to reflect scheduled cancellation even if provider omits explicit flag in response.
+            subscription_data["cancel_at_cycle_end"] = True
 
         updated_subscription = _apply_pro_access_from_provider_period(
             db=db,
@@ -1423,13 +1516,17 @@ def cancel_my_subscription(
             razorpay_subscription_data=subscription_data,
             commit=True,
         )
-        return _build_subscription_response(updated_subscription)
+        return _build_subscription_response(
+            updated_subscription,
+            auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
+            recurring_subscription_status=str(subscription_data.get("status") or "").strip().lower() or None,
+        )
 
     # Legacy one-time Pro subscriptions (without recurring subscription id) downgrade immediately.
     _downgrade_to_free(subscription)
     db.commit()
     db.refresh(subscription)
-    return _build_subscription_response(subscription)
+    return _build_subscription_response(subscription, auto_renew_enabled=False, recurring_subscription_status=None)
 
 
 @router.post("/consume-session", response_model=schemas.SubscriptionResponse)
