@@ -79,6 +79,10 @@ class RazorpayRecurringPaymentVerifyRequest(BaseModel):
     razorpay_signature: str
 
 
+class SubscriptionUpgradeRequest(BaseModel):
+    coupon_code: Optional[str] = None
+
+
 class SubscriptionSessionConsumeRequest(BaseModel):
     session_type: str  # prep | mock
 

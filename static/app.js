@@ -1757,7 +1757,20 @@ function updateSubscriptionUI() {
     }
 }
 
-async function handleUpgradeToPro() {
+function getEnteredCouponCode(source = '') {
+    const sourceKey = String(source || '').toLowerCase();
+    const fromDashboard = (document.getElementById('dashboardCouponCode')?.value || '').trim();
+    const fromPricing = (document.getElementById('pricingCouponCode')?.value || '').trim();
+
+    const selected = sourceKey === 'dashboard'
+        ? fromDashboard
+        : sourceKey === 'pricing'
+            ? fromPricing
+            : (fromDashboard || fromPricing);
+    return selected.toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+}
+
+async function handleUpgradeToPro(source = '') {
     if (!authToken) {
         showRegister();
         return;
@@ -1788,11 +1801,16 @@ async function handleUpgradeToPro() {
     });
 
     try {
+        const couponCode = getEnteredCouponCode(source);
         const response = await fetch(`${API_BASE}/api/subscription/upgrade`, {
             method: 'POST',
             headers: {
+                'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
-            }
+            },
+            body: JSON.stringify({
+                coupon_code: couponCode || null
+            }),
         });
 
         const data = await response.json();
@@ -1878,7 +1896,8 @@ async function handleUpgradeToPro() {
         const proceedToCheckout = await openCheckoutLaunchModal({
             amountPaise: data.amount,
             currency: data.currency,
-            checkoutMode: data.checkout_mode || 'order'
+            checkoutMode: data.checkout_mode || 'order',
+            couponText: data.coupon_applied_text || ''
         });
         if (!proceedToCheckout) {
             showMessage('Upgrade cancelled.', 'error');
@@ -1913,13 +1932,14 @@ function closeCheckoutLaunchModal(shouldProceed = false) {
     }
 }
 
-async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode }) {
+async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode, couponText }) {
     const modal = document.getElementById('checkoutLaunchModal');
     if (!modal) {
         return true;
     }
 
     const amountEl = document.getElementById('checkoutLaunchAmount');
+    const couponEl = document.getElementById('checkoutLaunchCoupon');
     const modeEl = document.getElementById('checkoutLaunchMode');
     const continueBtn = document.getElementById('checkoutLaunchContinueBtn');
 
@@ -1940,6 +1960,16 @@ async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode }) 
             : 'One-time checkout for your current billing cycle.';
     }
 
+    if (couponEl) {
+        if (couponText) {
+            couponEl.textContent = couponText;
+            couponEl.style.display = 'block';
+        } else {
+            couponEl.textContent = '';
+            couponEl.style.display = 'none';
+        }
+    }
+
     modal.style.display = 'flex';
 
     return new Promise((resolve) => {
@@ -1953,7 +1983,7 @@ async function upgradeToProFromPricing() {
         showRegister();
         return;
     }
-    await handleUpgradeToPro();
+    await handleUpgradeToPro('pricing');
 }
 
 async function verifyRazorpayPayment(paymentResponse, checkoutMode = 'order') {
@@ -3477,7 +3507,7 @@ function updatePricingByCountry(countryCode) {
         } else if (pricingRatesMeta.stale) {
             hintText += ' • Using cached rates';
         }
-        hintText += ' • Converted from base ₹699/month';
+        hintText += ` • Converted from base ₹${PRO_PRICE_INR}/month`;
         hintEl.textContent = hintText;
     }
 }

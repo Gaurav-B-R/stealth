@@ -1,6 +1,8 @@
 import hashlib
 import hmac
 import json
+import logging
+import math
 import os
 import re
 import secrets
@@ -8,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -25,6 +27,7 @@ from app.subscriptions import (
 from app.utils.rate_limiter import check_ip_rate_limit
 
 router = APIRouter(prefix="/api/subscription", tags=["subscription"])
+logger = logging.getLogger(__name__)
 
 RAZORPAY_API_BASE = os.getenv("RAZORPAY_API_BASE", "https://api.razorpay.com/v1").rstrip("/")
 UPGRADE_RATE_LIMIT = int(os.getenv("SUBSCRIPTION_UPGRADE_RATE_LIMIT", "8"))
@@ -114,6 +117,76 @@ def _pro_amount_paise() -> int:
         return amount
     except ValueError:
         return 69900
+
+
+def _normalize_coupon_code(raw_code: str | None) -> str:
+    code = str(raw_code or "").strip().upper()
+    if not code:
+        return ""
+    return re.sub(r"[^A-Z0-9_-]", "", code)
+
+
+def _get_coupon_percent_off(db: Session, coupon_code: str) -> int:
+    normalized_code = _normalize_coupon_code(coupon_code)
+    if not normalized_code:
+        return 0
+
+    coupon_row = db.query(models.CouponCode).filter(
+        models.CouponCode.coupon_code == normalized_code
+    ).first()
+    if not coupon_row:
+        raise HTTPException(status_code=400, detail="Invalid coupon code.")
+
+    try:
+        percent_off = int(coupon_row.percent_off)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Coupon configuration is invalid.")
+    if percent_off <= 0 or percent_off >= 100:
+        raise HTTPException(status_code=400, detail="Coupon must be between 1% and 99% off.")
+    return percent_off
+
+
+def _compute_discounted_amount_paise(base_amount_paise: int, percent_off: int) -> int:
+    if percent_off <= 0:
+        return base_amount_paise
+    discounted = int(math.floor((base_amount_paise * (100 - percent_off)) / 100))
+    return max(discounted, 1)
+
+
+def _create_discounted_plan_id(
+    *,
+    key_id: str,
+    key_secret: str,
+    currency: str,
+    base_plan_id: str,
+    discounted_amount_paise: int,
+    percent_off: int,
+) -> str:
+    payload = {
+        "period": "monthly",
+        "interval": 1,
+        "item": {
+            "name": f"Rilono Pro Monthly ({percent_off}% OFF)",
+            "description": f"Auto-generated discounted plan from {base_plan_id}",
+            "amount": discounted_amount_paise,
+            "currency": currency,
+        },
+        "notes": {
+            "source_plan_id": base_plan_id,
+            "discount_percent_off": str(percent_off),
+        },
+    }
+    plan_data = _razorpay_request(
+        method="POST",
+        path="/plans",
+        key_id=key_id,
+        key_secret=key_secret,
+        json_payload=payload,
+    )
+    plan_id = str(plan_data.get("id") or "").strip()
+    if not _looks_like_razorpay_id(plan_id, "plan"):
+        raise HTTPException(status_code=502, detail="Unable to create discounted plan right now.")
+    return plan_id
 
 
 def _pro_plan_currency() -> str:
@@ -343,7 +416,8 @@ def _validate_razorpay_recurring_charge(
     payment_id: str,
     signature: str | None,
     verify_checkout_signature: bool,
-) -> tuple[dict[str, Any], dict[str, Any]]:
+    allow_subscription_rebind: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
     key_id, key_secret = _razorpay_credentials()
     if not key_id or not key_secret:
         raise HTTPException(status_code=503, detail="Payment verification is not configured.")
@@ -379,7 +453,7 @@ def _validate_razorpay_recurring_charge(
     if subscription_data.get("id") != subscription_id:
         raise HTTPException(status_code=400, detail="Razorpay subscription mismatch.")
 
-    expected_plan_id = _razorpay_plan_id()
+    expected_plan_id = str(payment_row.razorpay_plan_id or "").strip()
     actual_plan_id = str(subscription_data.get("plan_id") or "").strip()
     if expected_plan_id and actual_plan_id != expected_plan_id:
         raise HTTPException(status_code=400, detail="Recurring subscription plan mismatch.")
@@ -398,20 +472,82 @@ def _validate_razorpay_recurring_charge(
         raise HTTPException(status_code=400, detail="Razorpay payment mismatch.")
 
     payment_subscription_id = str(payment_data.get("subscription_id") or "").strip()
+    if not _looks_like_razorpay_id(payment_subscription_id, "sub"):
+        # Some recurring payment methods may omit `subscription_id` on payment payload.
+        # In that case, fallback to invoice lookup and resolve subscription ownership from invoice.
+        invoice_id = str(payment_data.get("invoice_id") or "").strip()
+        if _looks_like_razorpay_id(invoice_id, "inv"):
+            invoice_data = _razorpay_request(
+                method="GET",
+                path=f"/invoices/{invoice_id}",
+                key_id=key_id,
+                key_secret=key_secret,
+            )
+            payment_subscription_id = str(invoice_data.get("subscription_id") or "").strip()
+
+    effective_subscription_id = subscription_id
     if payment_subscription_id != subscription_id:
-        raise HTTPException(status_code=400, detail="Payment does not belong to this subscription.")
+        if not allow_subscription_rebind:
+            raise HTTPException(status_code=400, detail="Payment does not belong to this subscription.")
+        if not _looks_like_razorpay_id(payment_subscription_id, "sub"):
+            raise HTTPException(status_code=400, detail="Recurring payment is not linked to a valid subscription id.")
+        rebound_subscription_data = _razorpay_request(
+            method="GET",
+            path=f"/subscriptions/{payment_subscription_id}",
+            key_id=key_id,
+            key_secret=key_secret,
+        )
+        if rebound_subscription_data.get("id") != payment_subscription_id:
+            raise HTTPException(status_code=400, detail="Unable to verify subscription linked to this payment.")
+
+        rebound_plan_id = str(rebound_subscription_data.get("plan_id") or "").strip()
+        if expected_plan_id and rebound_plan_id != expected_plan_id:
+            raise HTTPException(status_code=400, detail="Recurring payment was created for a different plan.")
+
+        rebound_notes = rebound_subscription_data.get("notes") or {}
+        rebound_user_id = str(rebound_notes.get("user_id", "")).strip()
+        rebound_user_email = str(rebound_notes.get("user_email", "")).strip().lower()
+        if rebound_user_id != str(current_user.id):
+            raise HTTPException(status_code=403, detail="This recurring subscription belongs to another account.")
+        if rebound_user_email != (current_user.email or "").strip().lower():
+            raise HTTPException(status_code=403, detail="This recurring subscription belongs to another account.")
+
+        subscription_data = rebound_subscription_data
+        effective_subscription_id = payment_subscription_id
 
     payment_status = str(payment_data.get("status", "")).lower()
     payment_captured = bool(payment_data.get("captured"))
     if payment_status != "captured" and not payment_captured:
         raise HTTPException(status_code=400, detail="Recurring payment is not captured yet.")
 
-    if int(payment_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
-        raise HTTPException(status_code=400, detail="Recurring payment amount validation failed.")
-    if _normalize_currency(payment_data.get("currency", "")) != _normalize_currency(payment_row.currency):
-        raise HTTPException(status_code=400, detail="Recurring payment currency validation failed.")
+    if payment_row.razorpay_plan_id:
+        actual_amount = int(payment_data.get("amount", 0) or 0)
+        actual_currency = _normalize_currency(payment_data.get("currency", ""))
+        if actual_amount <= 0:
+            raise HTTPException(status_code=400, detail="Recurring payment amount validation failed.")
+        if not actual_currency:
+            raise HTTPException(status_code=400, detail="Recurring payment currency validation failed.")
 
-    return subscription_data, payment_data
+        # Self-heal amount/currency drift on pre-verified rows (for example, plan-price changes or
+        # legacy rows from earlier validation logic). Source of truth is Razorpay capture payload.
+        if int(payment_row.amount_paise or 0) != actual_amount:
+            logger.warning(
+                "Recurring payment amount drift corrected payment_row_id=%s stored=%s actual=%s",
+                payment_row.id,
+                payment_row.amount_paise,
+                actual_amount,
+            )
+            payment_row.amount_paise = actual_amount
+        if _normalize_currency(payment_row.currency) != actual_currency:
+            logger.warning(
+                "Recurring payment currency drift corrected payment_row_id=%s stored=%s actual=%s",
+                payment_row.id,
+                payment_row.currency,
+                actual_currency,
+            )
+            payment_row.currency = actual_currency
+
+    return subscription_data, payment_data, effective_subscription_id
 
 
 def _find_latest_subscription_id_for_user(db: Session, user_id: int) -> str | None:
@@ -532,6 +668,7 @@ def get_my_subscription(
 @router.post("/upgrade")
 def upgrade_to_pro(
     request: Request,
+    payload: schemas.SubscriptionUpgradeRequest | None = Body(default=None),
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -565,8 +702,17 @@ def upgrade_to_pro(
         }
 
     key_id, key_secret = _razorpay_credentials()
-    amount = _pro_amount_paise()
+    base_amount = _pro_amount_paise()
     currency = _pro_plan_currency()
+    base_plan_id = _razorpay_plan_id()
+
+    coupon_code = _normalize_coupon_code(payload.coupon_code if payload else "")
+    percent_off = _get_coupon_percent_off(db, coupon_code) if coupon_code else 0
+    effective_amount = _compute_discounted_amount_paise(base_amount, percent_off)
+    effective_plan_id = base_plan_id
+    coupon_applied_text = (
+        f"Coupon {coupon_code} applied ({percent_off}% OFF)." if percent_off > 0 else None
+    )
 
     if _razorpay_recurring_enabled():
         existing_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
@@ -583,9 +729,19 @@ def upgrade_to_pro(
                 existing_notes = existing_subscription_data.get("notes") or {}
                 existing_notes_user_id = str(existing_notes.get("user_id") or "").strip()
                 existing_notes_user_email = str(existing_notes.get("user_email") or "").strip().lower()
+                existing_coupon_code = _normalize_coupon_code(existing_notes.get("coupon_code"))
+                existing_coupon_percent = str(existing_notes.get("coupon_percent_off") or "").strip()
+                existing_coupon_match = (
+                    percent_off > 0
+                    and existing_coupon_code == coupon_code
+                    and existing_coupon_percent == str(percent_off)
+                )
                 if (
                     existing_status in {"created", "authenticated", "active", "pending"}
-                    and existing_plan_id == _razorpay_plan_id()
+                    and (
+                        (percent_off <= 0 and existing_plan_id == base_plan_id)
+                        or existing_coupon_match
+                    )
                     and existing_notes_user_id == str(current_user.id)
                     and existing_notes_user_email == (current_user.email or "").strip().lower()
                 ):
@@ -594,16 +750,27 @@ def upgrade_to_pro(
                         "checkout_mode": "subscription",
                         "key_id": key_id,
                         "subscription_id": existing_subscription_id,
-                        "amount": amount,
+                        "amount": effective_amount,
                         "currency": currency,
                         "name": "Rilono",
                         "description": "Rilono Pro Subscription (Auto-renew, cancel anytime)",
+                        "coupon_applied_text": coupon_applied_text,
                     }
             except HTTPException:
                 pass
 
+        if percent_off > 0:
+            effective_plan_id = _create_discounted_plan_id(
+                key_id=key_id,
+                key_secret=key_secret,
+                currency=currency,
+                base_plan_id=base_plan_id,
+                discounted_amount_paise=effective_amount,
+                percent_off=percent_off,
+            )
+
         recurring_payload = {
-            "plan_id": _razorpay_plan_id(),
+            "plan_id": effective_plan_id,
             "total_count": _razorpay_recurring_total_count(),
             "customer_notify": 1,
             "quantity": 1,
@@ -611,6 +778,8 @@ def upgrade_to_pro(
                 "user_id": str(current_user.id),
                 "user_email": current_user.email,
                 "plan": PLAN_PRO,
+                "coupon_code": coupon_code,
+                "coupon_percent_off": str(percent_off),
             },
         }
         recurring_data = _razorpay_request(
@@ -629,8 +798,9 @@ def upgrade_to_pro(
             user_id=current_user.id,
             provider="razorpay",
             plan=PLAN_PRO,
-            amount_paise=amount,
+            amount_paise=effective_amount,
             currency=currency,
+            razorpay_plan_id=effective_plan_id,
             razorpay_order_id=subscription_id,
             razorpay_subscription_id=subscription_id,
             status="created",
@@ -643,21 +813,24 @@ def upgrade_to_pro(
             "checkout_mode": "subscription",
             "key_id": key_id,
             "subscription_id": subscription_id,
-            "amount": amount,
+            "amount": effective_amount,
             "currency": currency,
             "name": "Rilono",
             "description": "Rilono Pro Subscription (Auto-renew, cancel anytime)",
+            "coupon_applied_text": coupon_applied_text,
         }
 
     receipt = _create_receipt(current_user.id)
     order_payload = {
-        "amount": amount,
+        "amount": effective_amount,
         "currency": currency,
         "receipt": receipt,
         "notes": {
             "user_id": str(current_user.id),
             "user_email": current_user.email,
             "plan": PLAN_PRO,
+            "coupon_code": coupon_code,
+            "coupon_percent_off": str(percent_off),
         },
     }
 
@@ -677,8 +850,9 @@ def upgrade_to_pro(
         user_id=current_user.id,
         provider="razorpay",
         plan=PLAN_PRO,
-        amount_paise=amount,
+        amount_paise=effective_amount,
         currency=currency,
+        razorpay_plan_id=effective_plan_id or None,
         razorpay_order_id=order_id,
         status="created",
     )
@@ -690,10 +864,11 @@ def upgrade_to_pro(
         "checkout_mode": "order",
         "key_id": key_id,
         "order_id": order_id,
-        "amount": int(order_data.get("amount", amount) or amount),
+        "amount": int(order_data.get("amount", effective_amount) or effective_amount),
         "currency": _normalize_currency(order_data.get("currency", currency)),
         "name": "Rilono",
         "description": "Rilono Pro Subscription",
+        "coupon_applied_text": coupon_applied_text,
     }
 
 
@@ -808,6 +983,7 @@ def verify_recurring_payment_and_activate_pro(
             plan=PLAN_PRO,
             amount_paise=_pro_amount_paise(),
             currency=_pro_plan_currency(),
+            razorpay_plan_id=None,
             razorpay_order_id=payload.razorpay_subscription_id,
             razorpay_subscription_id=payload.razorpay_subscription_id,
             status="created",
@@ -816,23 +992,69 @@ def verify_recurring_payment_and_activate_pro(
         db.flush()
 
     try:
-        subscription_data, payment_data = _validate_razorpay_recurring_charge(
+        subscription_data, payment_data, effective_subscription_id = _validate_razorpay_recurring_charge(
             current_user=current_user,
             payment_row=seed_row,
             subscription_id=payload.razorpay_subscription_id,
             payment_id=payload.razorpay_payment_id,
             signature=payload.razorpay_signature,
             verify_checkout_signature=True,
+            allow_subscription_rebind=True,
         )
     except HTTPException as exc:
+        # Persist payment id for debugging and reconciliation even when verification fails.
+        if payload.razorpay_payment_id and not seed_row.razorpay_payment_id:
+            seed_row.razorpay_payment_id = payload.razorpay_payment_id
+        logger.warning(
+            "Recurring payment verify failed user_id=%s payload_sub=%s seed_sub=%s payment_id=%s detail=%s",
+            current_user.id,
+            payload.razorpay_subscription_id,
+            seed_row.razorpay_subscription_id,
+            payload.razorpay_payment_id,
+            str(exc.detail),
+        )
         _mark_payment_failed(db, seed_row, str(exc.detail))
         raise
 
     target_row = seed_row
+    if (target_row.razorpay_subscription_id or "").strip() != effective_subscription_id:
+        existing_row = (
+            db.query(models.SubscriptionPayment)
+            .filter(
+                models.SubscriptionPayment.user_id == current_user.id,
+                models.SubscriptionPayment.provider == "razorpay",
+                models.SubscriptionPayment.razorpay_subscription_id == effective_subscription_id,
+            )
+            .order_by(models.SubscriptionPayment.id.desc())
+            .first()
+        )
+        if existing_row:
+            target_row = existing_row
+        else:
+            target_row = models.SubscriptionPayment(
+                user_id=current_user.id,
+                provider="razorpay",
+                plan=PLAN_PRO,
+                amount_paise=seed_row.amount_paise,
+                currency=seed_row.currency,
+                razorpay_plan_id=seed_row.razorpay_plan_id,
+                razorpay_order_id=_ensure_unique_order_ref(
+                    db,
+                    _order_ref_for_subscription_payment(
+                        payment_data=payment_data,
+                        subscription_id=effective_subscription_id,
+                        payment_id=payload.razorpay_payment_id,
+                    ),
+                ),
+                razorpay_subscription_id=effective_subscription_id,
+                status="created",
+            )
+            db.add(target_row)
+
     if seed_row.razorpay_payment_id and seed_row.razorpay_payment_id != payload.razorpay_payment_id:
         proposed_order_ref = _order_ref_for_subscription_payment(
             payment_data=payment_data,
-            subscription_id=payload.razorpay_subscription_id,
+            subscription_id=effective_subscription_id,
             payment_id=payload.razorpay_payment_id,
         )
         target_row = models.SubscriptionPayment(
@@ -841,8 +1063,9 @@ def verify_recurring_payment_and_activate_pro(
             plan=PLAN_PRO,
             amount_paise=seed_row.amount_paise,
             currency=seed_row.currency,
+            razorpay_plan_id=seed_row.razorpay_plan_id,
             razorpay_order_id=_ensure_unique_order_ref(db, proposed_order_ref),
-            razorpay_subscription_id=payload.razorpay_subscription_id,
+            razorpay_subscription_id=effective_subscription_id,
             status="created",
         )
         db.add(target_row)
@@ -853,7 +1076,7 @@ def verify_recurring_payment_and_activate_pro(
         user_id=current_user.id,
         payment_row=target_row,
         payment_id=payload.razorpay_payment_id,
-        subscription_id=payload.razorpay_subscription_id,
+        subscription_id=effective_subscription_id,
         invoice_id=invoice_id,
         provider_subscription_data=subscription_data,
     )
@@ -918,6 +1141,7 @@ def _handle_recurring_payment_webhook(
             plan=PLAN_PRO,
             amount_paise=_pro_amount_paise(),
             currency=_pro_plan_currency(),
+            razorpay_plan_id=str(subscription_data.get("plan_id") or "").strip() or None,
             razorpay_order_id=subscription_id,
             razorpay_subscription_id=subscription_id,
             status="created",
@@ -926,13 +1150,14 @@ def _handle_recurring_payment_webhook(
         db.flush()
 
     try:
-        subscription_data, payment_data = _validate_razorpay_recurring_charge(
+        subscription_data, payment_data, effective_subscription_id = _validate_razorpay_recurring_charge(
             current_user=user,
             payment_row=seed_row,
             subscription_id=subscription_id,
             payment_id=payment_id,
             signature=None,
             verify_checkout_signature=False,
+            allow_subscription_rebind=False,
         )
     except HTTPException:
         _mark_payment_failed(db, seed_row, "webhook_validation_failed")
@@ -942,7 +1167,7 @@ def _handle_recurring_payment_webhook(
     if target_row is seed_row and seed_row.razorpay_payment_id and seed_row.razorpay_payment_id != payment_id:
         proposed_order_ref = _order_ref_for_subscription_payment(
             payment_data=payment_data,
-            subscription_id=subscription_id,
+            subscription_id=effective_subscription_id,
             payment_id=payment_id,
         )
         target_row = models.SubscriptionPayment(
@@ -951,8 +1176,9 @@ def _handle_recurring_payment_webhook(
             plan=PLAN_PRO,
             amount_paise=seed_row.amount_paise,
             currency=seed_row.currency,
+            razorpay_plan_id=seed_row.razorpay_plan_id,
             razorpay_order_id=_ensure_unique_order_ref(db, proposed_order_ref),
-            razorpay_subscription_id=subscription_id,
+            razorpay_subscription_id=effective_subscription_id,
             status="created",
         )
         db.add(target_row)
@@ -963,7 +1189,7 @@ def _handle_recurring_payment_webhook(
         user_id=user.id,
         payment_row=target_row,
         payment_id=payment_id,
-        subscription_id=subscription_id,
+        subscription_id=effective_subscription_id,
         invoice_id=invoice_id,
         provider_subscription_data=subscription_data,
     )

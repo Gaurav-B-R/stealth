@@ -630,7 +630,8 @@
                         <div id="dashboardUploadUsage" class="sidebar-subscription-usage">Uploads: 0/5 used</div>
                         <div id="dashboardPrepUsage" class="sidebar-subscription-usage">Prep: 0/3 used</div>
                         <div id="dashboardMockUsage" class="sidebar-subscription-usage">Mock: 0/2 used</div>
-                        <button id="dashboardUpgradeButton" type="button" class="btn btn-primary sidebar-upgrade-btn" onclick="handleUpgradeToPro()">
+                        <input id="dashboardCouponCode" type="text" class="coupon-code-input" placeholder="Coupon code (optional)" autocomplete="off">
+                        <button id="dashboardUpgradeButton" type="button" class="btn btn-primary sidebar-upgrade-btn" onclick="handleUpgradeToPro('dashboard')">
                             Upgrade to Pro
                         </button>
                         <button id="dashboardCancelButton" type="button" class="btn btn-secondary sidebar-upgrade-btn" onclick="handleCancelSubscription()" style="display: none;">
@@ -1443,6 +1444,7 @@
                         <li>Unlimited F-1 mock interviews</li>
                         <li>Priority support</li>
                     </ul>
+                    <input id="pricingCouponCode" type="text" class="coupon-code-input pricing-coupon-input" placeholder="Coupon code (optional)" autocomplete="off">
                     <button id="pricingProUpgradeButton" type="button" class="btn btn-primary" onclick="upgradeToProFromPricing()">Upgrade to Pro</button>
                 </div>
             </div>
@@ -2137,6 +2139,7 @@
                 <div class="checkout-launch-summary">
                     <div class="checkout-launch-plan-name">Rilono Pro</div>
                     <div id="checkoutLaunchAmount" class="checkout-launch-plan-price">₹699 / month</div>
+                    <p id="checkoutLaunchCoupon" class="checkout-launch-coupon-note" style="display: none;"></p>
                     <p id="checkoutLaunchMode" class="checkout-launch-plan-note">Auto-renew enabled. Cancel anytime from Profile > Subscription.</p>
                 </div>
             </div>

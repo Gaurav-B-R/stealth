@@ -73,3 +73,6 @@ def ensure_subscription_payment_recurring_columns():
 
         if "razorpay_invoice_id" not in columns:
             conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN razorpay_invoice_id VARCHAR"))
+
+        if "razorpay_plan_id" not in columns:
+            conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN razorpay_plan_id VARCHAR"))

@@ -130,6 +130,7 @@ class SubscriptionPayment(Base):
     plan = Column(String, nullable=False, default="pro")  # pro
     amount_paise = Column(Integer, nullable=False)
     currency = Column(String, nullable=False, default="INR")
+    razorpay_plan_id = Column(String, nullable=True, index=True)
     razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
     razorpay_subscription_id = Column(String, nullable=True, index=True)
     razorpay_invoice_id = Column(String, nullable=True, index=True)
@@ -142,3 +143,10 @@ class SubscriptionPayment(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     user = relationship("User", back_populates="subscription_payments")
+
+
+class CouponCode(Base):
+    __tablename__ = "coupon_codes"
+
+    coupon_code = Column(String, primary_key=True, index=True, nullable=False)
+    percent_off = Column(Integer, nullable=False)
