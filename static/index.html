@@ -60,6 +60,12 @@
                         <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); toggleUserMenu(); return false;">
                             <span>📊</span> Dashboard
                         </a>
+                        <a href="#" onclick="event.preventDefault(); showDashboard(); switchDashboardTab('profile'); toggleUserMenu(); return false;">
+                            <span>👤</span> Profile
+                        </a>
+                        <a href="#" onclick="event.preventDefault(); showDashboard(); switchDashboardTab('subscription'); toggleUserMenu(); return false;">
+                            <span>💳</span> Manage Subscription
+                        </a>
                         <a href="#" onclick="event.preventDefault(); openFeatureRequestModal(); toggleUserMenu(); return false;">
                             <span>💡</span> Feature Request
                         </a>
@@ -604,10 +610,6 @@
                             <span class="nav-icon">📊</span>
                             <span class="nav-label">Overview</span>
                         </a>
-                        <a href="#" class="nav-item" data-tab="profile" onclick="switchDashboardTab('profile'); return false;">
-                            <span class="nav-icon">👤</span>
-                            <span class="nav-label">Profile</span>
-                        </a>
                         <a href="#" class="nav-item" data-tab="documents" onclick="switchDashboardTab('documents'); return false;">
                             <span class="nav-icon">📄</span>
                             <span class="nav-label">Documents</span>
@@ -1017,6 +1019,66 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- Subscription Management Tab -->
+                    <div id="dashboardTab-subscription" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>Subscription Management</h2>
+                            <p class="tab-subtitle">Track plan, usage, renewal, referral bonus, and billing status.</p>
+                        </div>
+                        <div style="max-width: 980px; margin: 0 auto;">
+                            <div class="profile-subscription-manager" style="margin-top: 0;">
+                                <div class="profile-subscription-grid">
+                                    <div class="profile-subscription-card">
+                                        <span>Plan</span>
+                                        <strong id="profileSubscriptionPlan">Free</strong>
+                                    </div>
+                                    <div class="profile-subscription-card">
+                                        <span>Access Source</span>
+                                        <strong id="profileSubscriptionSource">Free Plan</strong>
+                                    </div>
+                                    <div class="profile-subscription-card">
+                                        <span>Status</span>
+                                        <strong id="profileSubscriptionStatus">Active</strong>
+                                    </div>
+                                    <div class="profile-subscription-card">
+                                        <span>Auto-Renew</span>
+                                        <strong id="profileSubscriptionAutoRenew">N/A</strong>
+                                    </div>
+                                </div>
+                                <div class="profile-subscription-grid">
+                                    <div class="profile-subscription-card">
+                                        <span id="profileSubscriptionRenewalLabel">Next Renewal</span>
+                                        <strong id="profileSubscriptionRenewalValue">-</strong>
+                                    </div>
+                                    <div class="profile-subscription-card">
+                                        <span>Access Ends</span>
+                                        <strong id="profileSubscriptionEndsAt">-</strong>
+                                    </div>
+                                    <div class="profile-subscription-card">
+                                        <span>Started On</span>
+                                        <strong id="profileSubscriptionStartedAt">-</strong>
+                                    </div>
+                                    <div class="profile-subscription-card">
+                                        <span>Latest Payment</span>
+                                        <strong id="profileSubscriptionLatestPayment">-</strong>
+                                    </div>
+                                </div>
+                                <div id="profileSubscriptionReferralInfo" class="profile-subscription-referral">Referral bonus: Not active</div>
+                                <div class="profile-subscription-usage-grid">
+                                    <div class="profile-subscription-usage-item" id="profileSubscriptionUsageAi">AI: 0/25 used</div>
+                                    <div class="profile-subscription-usage-item" id="profileSubscriptionUsageUploads">Uploads: 0/5 used</div>
+                                    <div class="profile-subscription-usage-item" id="profileSubscriptionUsagePrep">Prep: 0/3 used</div>
+                                    <div class="profile-subscription-usage-item" id="profileSubscriptionUsageMock">Mock: 0/2 used</div>
+                                </div>
+                                <div class="profile-subscription-actions">
+                                    <button id="profileSubscriptionUpgradeBtn" type="button" class="btn btn-primary" onclick="handleUpgradeToPro('profile')">Upgrade to Pro</button>
+                                    <button id="profileSubscriptionCancelBtn" type="button" class="btn btn-secondary" onclick="handleCancelSubscription()" style="display: none;">Cancel Auto-Renew</button>
+                                    <button type="button" class="btn btn-secondary" onclick="loadSubscriptionStatus(false)">Refresh Details</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                     
                     <!-- Documents Tab -->
                     <div id="dashboardTab-documents" class="dashboard-tab">
@@ -1102,9 +1164,9 @@
                                         <form id="documentUploadForm">
                                             <div class="form-group">
                                                 <label for="documentFile">Select Document</label>
-                                                <input type="file" id="documentFile" accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.webp,.xls,.xlsx,.csv,.zip,.rar" required>
+                                                <input type="file" id="documentFile" accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.webp" required>
                                                 <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                                    Supported formats: PDF, DOC, DOCX, TXT, Images, Excel, CSV, ZIP, RAR (Max 5MB)
+                                                    Supported formats: PDF, DOC, DOCX, TXT, Images (Max 5MB)
                                                 </small>
                                             </div>
                                             <div class="form-group">

@@ -232,6 +232,15 @@ def _build_subscription_response(
     *,
     auto_renew_enabled: bool | None = None,
     recurring_subscription_status: str | None = None,
+    next_renewal_at: datetime | None = None,
+    access_source: str | None = None,
+    referral_bonus_active: bool = False,
+    referral_bonus_granted_at: datetime | None = None,
+    recurring_subscription_id: str | None = None,
+    latest_payment_status: str | None = None,
+    latest_payment_amount_paise: int | None = None,
+    latest_payment_currency: str | None = None,
+    latest_payment_verified_at: datetime | None = None,
 ) -> schemas.SubscriptionResponse:
     limits = get_plan_limits(subscription.plan)
     ai_limit = limits["ai_messages_limit"]
@@ -247,6 +256,9 @@ def _build_subscription_response(
     return schemas.SubscriptionResponse(
         plan=subscription.plan,
         status=subscription.status,
+        started_at=_normalize_datetime(subscription.started_at),
+        ends_at=_normalize_datetime(subscription.ends_at),
+        next_renewal_at=_normalize_datetime(next_renewal_at),
         ai_messages_used=subscription.ai_messages_used,
         ai_messages_limit=ai_limit,
         ai_messages_remaining=ai_remaining,
@@ -260,6 +272,14 @@ def _build_subscription_response(
         mock_interviews_limit=mock_limit,
         mock_interviews_remaining=mock_remaining,
         is_pro=subscription.plan == PLAN_PRO,
+        access_source=access_source,
+        referral_bonus_active=referral_bonus_active,
+        referral_bonus_granted_at=_normalize_datetime(referral_bonus_granted_at),
+        recurring_subscription_id=recurring_subscription_id,
+        latest_payment_status=latest_payment_status,
+        latest_payment_amount_paise=latest_payment_amount_paise,
+        latest_payment_currency=latest_payment_currency,
+        latest_payment_verified_at=_normalize_datetime(latest_payment_verified_at),
         auto_renew_enabled=auto_renew_enabled,
         recurring_subscription_status=recurring_subscription_status,
     )
@@ -329,6 +349,20 @@ def _subscription_period_end(razorpay_subscription_data: dict[str, Any]) -> date
         return None
     try:
         timestamp = int(raw_end)
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0:
+        return None
+    return datetime.utcfromtimestamp(timestamp)
+
+
+def _subscription_next_renewal_at(razorpay_subscription_data: dict[str, Any]) -> datetime | None:
+    # current_end is the most reliable next-cycle boundary for recurring subscriptions.
+    raw_next = razorpay_subscription_data.get("current_end")
+    if raw_next is None:
+        raw_next = razorpay_subscription_data.get("charge_at")
+    try:
+        timestamp = int(raw_next or 0)
     except (TypeError, ValueError):
         return None
     if timestamp <= 0:
@@ -596,6 +630,18 @@ def _find_latest_subscription_id_for_user(db: Session, user_id: int) -> str | No
     return (row.razorpay_subscription_id or "").strip() or None
 
 
+def _find_latest_payment_for_user(db: Session, user_id: int) -> models.SubscriptionPayment | None:
+    return (
+        db.query(models.SubscriptionPayment)
+        .filter(
+            models.SubscriptionPayment.user_id == user_id,
+            models.SubscriptionPayment.provider == "razorpay",
+        )
+        .order_by(models.SubscriptionPayment.id.desc())
+        .first()
+    )
+
+
 def _order_ref_for_subscription_payment(payment_data: dict[str, Any], subscription_id: str, payment_id: str) -> str:
     order_id = str(payment_data.get("order_id") or "").strip()
     if _looks_like_razorpay_id(order_id, "order"):
@@ -694,37 +740,88 @@ def get_my_subscription(
     subscription = get_or_create_user_subscription(db, current_user.id)
     auto_renew_enabled: bool | None = None
     recurring_subscription_status: str | None = None
+    next_renewal_at: datetime | None = None
+    recurring_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
 
     if subscription.plan == PLAN_PRO:
         if str(subscription.status or "").strip().lower() == "canceled":
             auto_renew_enabled = False
             recurring_subscription_status = "cancelled"
-            return _build_subscription_response(
-                subscription,
-                auto_renew_enabled=auto_renew_enabled,
-                recurring_subscription_status=recurring_subscription_status,
-            )
-
-        subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
         key_id, key_secret = _razorpay_credentials()
-        if subscription_id and _looks_like_razorpay_id(subscription_id, "sub") and key_id and key_secret:
+        if (
+            recurring_subscription_id
+            and _looks_like_razorpay_id(recurring_subscription_id, "sub")
+            and key_id
+            and key_secret
+        ):
             try:
                 subscription_data = _razorpay_request(
                     method="GET",
-                    path=f"/subscriptions/{subscription_id}",
+                    path=f"/subscriptions/{recurring_subscription_id}",
                     key_id=key_id,
                     key_secret=key_secret,
                 )
                 recurring_subscription_status = str(subscription_data.get("status") or "").strip().lower() or None
                 auto_renew_enabled = _is_provider_auto_renew_enabled(subscription_data)
+                next_renewal_at = _subscription_next_renewal_at(subscription_data)
             except HTTPException:
-                auto_renew_enabled = None
-                recurring_subscription_status = None
+                pass
+
+    latest_payment = _find_latest_payment_for_user(db, current_user.id)
+    latest_verified_payment = (
+        db.query(models.SubscriptionPayment)
+        .filter(
+            models.SubscriptionPayment.user_id == current_user.id,
+            models.SubscriptionPayment.provider == "razorpay",
+            models.SubscriptionPayment.status == "verified",
+        )
+        .order_by(models.SubscriptionPayment.id.desc())
+        .first()
+    )
+
+    has_verified_payment = latest_verified_payment is not None
+    ends_at = _normalize_datetime(subscription.ends_at)
+    now = datetime.utcnow()
+    referral_bonus_active = bool(
+        subscription.plan == PLAN_PRO
+        and current_user.referral_reward_granted_at
+        and ends_at
+        and ends_at > now
+        and not has_verified_payment
+        and not recurring_subscription_id
+    )
+
+    if subscription.plan != PLAN_PRO:
+        access_source = "Free Plan"
+    elif referral_bonus_active:
+        access_source = "Referral Bonus (1 Month Pro)"
+    elif has_verified_payment:
+        if auto_renew_enabled is False:
+            access_source = "Paid Pro (Auto-Renew Off)"
+        elif auto_renew_enabled is True:
+            access_source = "Paid Pro (Auto-Renew On)"
+        else:
+            access_source = "Paid Pro"
+    elif ends_at and ends_at > now:
+        access_source = "Pro Access (Time-Limited)"
+    else:
+        access_source = "Pro Access"
 
     return _build_subscription_response(
         subscription,
         auto_renew_enabled=auto_renew_enabled,
         recurring_subscription_status=recurring_subscription_status,
+        next_renewal_at=next_renewal_at,
+        access_source=access_source,
+        referral_bonus_active=referral_bonus_active,
+        referral_bonus_granted_at=_normalize_datetime(current_user.referral_reward_granted_at),
+        recurring_subscription_id=recurring_subscription_id,
+        latest_payment_status=(latest_payment.status if latest_payment else None),
+        latest_payment_amount_paise=(latest_payment.amount_paise if latest_payment else None),
+        latest_payment_currency=(latest_payment.currency if latest_payment else None),
+        latest_payment_verified_at=(
+            _normalize_datetime(latest_payment.verified_at) if latest_payment and latest_payment.verified_at else None
+        ),
     )
 
 

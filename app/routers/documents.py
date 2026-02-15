@@ -57,8 +57,8 @@ r2_client = boto3.client(
 
 # Allowed document file types
 ALLOWED_DOCUMENT_EXTENSIONS = {
-    ".pdf", ".doc", ".docx", ".txt", ".jpg", ".jpeg", ".png", 
-    ".gif", ".webp", ".xls", ".xlsx", ".csv", ".zip", ".rar"
+    ".pdf", ".doc", ".docx", ".txt", ".jpg", ".jpeg", ".png",
+    ".gif", ".webp"
 }
 MAX_DOCUMENT_SIZE_MB = int(os.getenv("DOCUMENT_MAX_SIZE_MB", "5") or "5")
 MAX_DOCUMENT_SIZE = MAX_DOCUMENT_SIZE_MB * 1024 * 1024
@@ -79,12 +79,7 @@ def get_content_type(filename: str) -> str:
         ".jpeg": "image/jpeg",
         ".png": "image/png",
         ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".xls": "application/vnd.ms-excel",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".csv": "text/csv",
-        ".zip": "application/zip",
-        ".rar": "application/x-rar-compressed"
+        ".webp": "image/webp"
     }
     return content_types.get(ext, "application/octet-stream")
 

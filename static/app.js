@@ -1687,6 +1687,13 @@ function formatUsageText(used, limit, metricLabel) {
     return `${metricLabel}: ${used}/${limit} used`;
 }
 
+function formatSubscriptionDateTime(value) {
+    if (!value) return '-';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString();
+}
+
 function updateSubscriptionUI() {
     const planNameEl = document.getElementById('dashboardPlanName');
     const aiUsageEl = document.getElementById('dashboardPlanUsage');
@@ -1695,7 +1702,23 @@ function updateSubscriptionUI() {
     const mockUsageEl = document.getElementById('dashboardMockUsage');
     const sidebarUpgradeButton = document.getElementById('dashboardUpgradeButton');
     const sidebarCancelButton = document.getElementById('dashboardCancelButton');
+    const profileUpgradeButton = document.getElementById('profileSubscriptionUpgradeBtn');
+    const profileCancelButton = document.getElementById('profileSubscriptionCancelBtn');
     const pricingUpgradeButton = document.getElementById('pricingProUpgradeButton');
+    const profilePlanEl = document.getElementById('profileSubscriptionPlan');
+    const profileSourceEl = document.getElementById('profileSubscriptionSource');
+    const profileStatusEl = document.getElementById('profileSubscriptionStatus');
+    const profileAutoRenewEl = document.getElementById('profileSubscriptionAutoRenew');
+    const profileRenewalLabelEl = document.getElementById('profileSubscriptionRenewalLabel');
+    const profileRenewalValueEl = document.getElementById('profileSubscriptionRenewalValue');
+    const profileEndsAtEl = document.getElementById('profileSubscriptionEndsAt');
+    const profileStartedAtEl = document.getElementById('profileSubscriptionStartedAt');
+    const profileLatestPaymentEl = document.getElementById('profileSubscriptionLatestPayment');
+    const profileReferralInfoEl = document.getElementById('profileSubscriptionReferralInfo');
+    const profileUsageAiEl = document.getElementById('profileSubscriptionUsageAi');
+    const profileUsageUploadsEl = document.getElementById('profileSubscriptionUsageUploads');
+    const profileUsagePrepEl = document.getElementById('profileSubscriptionUsagePrep');
+    const profileUsageMockEl = document.getElementById('profileSubscriptionUsageMock');
 
     if (!currentSubscription) {
         if (planNameEl) planNameEl.textContent = 'Free';
@@ -1703,19 +1726,34 @@ function updateSubscriptionUI() {
         if (uploadUsageEl) uploadUsageEl.textContent = 'Uploads: 0/5 used';
         if (prepUsageEl) prepUsageEl.textContent = 'Prep: 0/3 used';
         if (mockUsageEl) mockUsageEl.textContent = 'Mock: 0/2 used';
-        if (sidebarUpgradeButton) {
-            sidebarUpgradeButton.disabled = !PRO_UPGRADE_ENABLED;
-            sidebarUpgradeButton.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
-            sidebarUpgradeButton.style.opacity = PRO_UPGRADE_ENABLED ? '1' : '0.75';
-            sidebarUpgradeButton.style.cursor = PRO_UPGRADE_ENABLED ? 'pointer' : 'not-allowed';
-        }
-        if (sidebarCancelButton) {
-            sidebarCancelButton.style.display = 'none';
-        }
+        [sidebarUpgradeButton, profileUpgradeButton].filter(Boolean).forEach((button) => {
+            button.disabled = !PRO_UPGRADE_ENABLED;
+            button.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
+            button.style.opacity = PRO_UPGRADE_ENABLED ? '1' : '0.75';
+            button.style.cursor = PRO_UPGRADE_ENABLED ? 'pointer' : 'not-allowed';
+        });
+        [sidebarCancelButton, profileCancelButton].filter(Boolean).forEach((button) => {
+            button.style.display = 'none';
+        });
         if (pricingUpgradeButton) {
             pricingUpgradeButton.disabled = !PRO_UPGRADE_ENABLED;
             pricingUpgradeButton.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
         }
+
+        if (profilePlanEl) profilePlanEl.textContent = 'Free Plan';
+        if (profileSourceEl) profileSourceEl.textContent = 'Free Plan';
+        if (profileStatusEl) profileStatusEl.textContent = 'Active';
+        if (profileAutoRenewEl) profileAutoRenewEl.textContent = 'N/A';
+        if (profileRenewalLabelEl) profileRenewalLabelEl.textContent = 'Next Renewal';
+        if (profileRenewalValueEl) profileRenewalValueEl.textContent = '-';
+        if (profileEndsAtEl) profileEndsAtEl.textContent = '-';
+        if (profileStartedAtEl) profileStartedAtEl.textContent = '-';
+        if (profileLatestPaymentEl) profileLatestPaymentEl.textContent = '-';
+        if (profileReferralInfoEl) profileReferralInfoEl.textContent = 'Referral bonus: Not active';
+        if (profileUsageAiEl) profileUsageAiEl.textContent = 'AI: 0/25 used';
+        if (profileUsageUploadsEl) profileUsageUploadsEl.textContent = 'Uploads: 0/5 used';
+        if (profileUsagePrepEl) profileUsagePrepEl.textContent = 'Prep: 0/3 used';
+        if (profileUsageMockEl) profileUsageMockEl.textContent = 'Mock: 0/2 used';
         return;
     }
 
@@ -1758,25 +1796,72 @@ function updateSubscriptionUI() {
         );
     }
 
-    if (sidebarUpgradeButton) {
+    if (profilePlanEl) profilePlanEl.textContent = isPro ? 'Pro Plan' : 'Free Plan';
+    if (profileSourceEl) profileSourceEl.textContent = currentSubscription.access_source || (isPro ? 'Pro Access' : 'Free Plan');
+    if (profileStatusEl) profileStatusEl.textContent = currentSubscription.status || 'active';
+    if (profileAutoRenewEl) {
+        if (!isPro) {
+            profileAutoRenewEl.textContent = 'N/A';
+        } else if (hasAutoRenewInfo) {
+            profileAutoRenewEl.textContent = autoRenewEnabled ? 'Enabled' : 'Disabled';
+        } else {
+            profileAutoRenewEl.textContent = 'Unknown';
+        }
+    }
+    if (profileRenewalLabelEl) {
+        profileRenewalLabelEl.textContent = autoRenewEnabled ? 'Next Renewal' : 'Access Until';
+    }
+    if (profileRenewalValueEl) {
+        const renewalDate = autoRenewEnabled
+            ? (currentSubscription.next_renewal_at || currentSubscription.ends_at)
+            : currentSubscription.ends_at;
+        profileRenewalValueEl.textContent = formatSubscriptionDateTime(renewalDate);
+    }
+    if (profileEndsAtEl) profileEndsAtEl.textContent = formatSubscriptionDateTime(currentSubscription.ends_at);
+    if (profileStartedAtEl) profileStartedAtEl.textContent = formatSubscriptionDateTime(currentSubscription.started_at);
+    if (profileLatestPaymentEl) {
+        if (currentSubscription.latest_payment_amount_paise && currentSubscription.latest_payment_currency) {
+            const amount = Number(currentSubscription.latest_payment_amount_paise) / 100;
+            const status = String(currentSubscription.latest_payment_status || '').toLowerCase() || 'created';
+            profileLatestPaymentEl.textContent = `${formatCurrencyAmount(amount, currentSubscription.latest_payment_currency)} (${status})`;
+        } else {
+            profileLatestPaymentEl.textContent = currentSubscription.latest_payment_status || '-';
+        }
+    }
+    if (profileReferralInfoEl) {
+        if (currentSubscription.referral_bonus_active) {
+            const grantedAt = formatSubscriptionDateTime(currentSubscription.referral_bonus_granted_at);
+            profileReferralInfoEl.textContent = `Referral bonus active: 1-month Pro granted on ${grantedAt}.`;
+        } else if (currentSubscription.referral_bonus_granted_at) {
+            profileReferralInfoEl.textContent = `Referral bonus used on ${formatSubscriptionDateTime(currentSubscription.referral_bonus_granted_at)}.`;
+        } else {
+            profileReferralInfoEl.textContent = 'Referral bonus: Not active';
+        }
+    }
+    if (profileUsageAiEl) profileUsageAiEl.textContent = formatUsageText(currentSubscription.ai_messages_used, currentSubscription.ai_messages_limit, 'AI');
+    if (profileUsageUploadsEl) profileUsageUploadsEl.textContent = formatUsageText(currentSubscription.document_uploads_used, currentSubscription.document_uploads_limit, 'Uploads');
+    if (profileUsagePrepEl) profileUsagePrepEl.textContent = formatUsageText(currentSubscription.prep_sessions_used, currentSubscription.prep_sessions_limit, 'Prep');
+    if (profileUsageMockEl) profileUsageMockEl.textContent = formatUsageText(currentSubscription.mock_interviews_used, currentSubscription.mock_interviews_limit, 'Mock');
+
+    [sidebarUpgradeButton, profileUpgradeButton].filter(Boolean).forEach((button) => {
         const canRenew = isPro && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled) && PRO_UPGRADE_ENABLED;
         const canUpgrade = (!isPro && PRO_UPGRADE_ENABLED) || canRenew;
-        sidebarUpgradeButton.disabled = !canUpgrade;
+        button.disabled = !canUpgrade;
         if (canRenew) {
-            sidebarUpgradeButton.textContent = 'Renew Subscription';
+            button.textContent = 'Renew Subscription';
         } else if (isPro) {
-            sidebarUpgradeButton.textContent = 'You are on Pro';
+            button.textContent = 'You are on Pro';
         } else {
-            sidebarUpgradeButton.textContent = canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon';
+            button.textContent = canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon';
         }
-        sidebarUpgradeButton.style.opacity = canUpgrade || isPro ? '0.8' : '0.75';
-        sidebarUpgradeButton.style.cursor = canUpgrade ? 'pointer' : 'not-allowed';
-    }
+        button.style.opacity = canUpgrade || isPro ? '0.8' : '0.75';
+        button.style.cursor = canUpgrade ? 'pointer' : 'not-allowed';
+    });
 
-    if (sidebarCancelButton) {
+    [sidebarCancelButton, profileCancelButton].filter(Boolean).forEach((button) => {
         const showCancel = isPro && subscriptionStatus === 'active' && autoRenewEnabled;
-        sidebarCancelButton.style.display = showCancel ? 'block' : 'none';
-    }
+        button.style.display = showCancel ? 'block' : 'none';
+    });
 
     if (pricingUpgradeButton) {
         const canRenew = isPro && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled) && PRO_UPGRADE_ENABLED;
@@ -1889,7 +1974,13 @@ async function handleUpgradeToPro(source = '') {
         return;
     }
 
-    if (currentSubscription?.is_pro) {
+    const subscriptionStatus = String(currentSubscription?.status || '').toLowerCase();
+    const hasAutoRenewInfo = typeof currentSubscription?.auto_renew_enabled === 'boolean';
+    const canRenewExistingPro = Boolean(
+        currentSubscription?.is_pro
+        && ((hasAutoRenewInfo && currentSubscription.auto_renew_enabled === false) || subscriptionStatus === 'canceled')
+    );
+    if (currentSubscription?.is_pro && !canRenewExistingPro) {
         showMessage('Your account is already on Pro.', 'success');
         return;
     }
@@ -1901,8 +1992,9 @@ async function handleUpgradeToPro(source = '') {
 
     proUpgradeInFlight = true;
     const dashboardUpgradeButton = document.getElementById('dashboardUpgradeButton');
+    const profileUpgradeButton = document.getElementById('profileSubscriptionUpgradeBtn');
     const pricingUpgradeButton = document.getElementById('pricingProUpgradeButton');
-    const upgradeButtons = [dashboardUpgradeButton, pricingUpgradeButton].filter(Boolean);
+    const upgradeButtons = [dashboardUpgradeButton, profileUpgradeButton, pricingUpgradeButton].filter(Boolean);
     upgradeButtons.forEach((button) => {
         button.dataset.prevText = button.textContent;
         button.disabled = true;
@@ -3450,6 +3542,10 @@ function switchDashboardTab(tabName) {
         loadMyDocuments();
     } else if (tabName === 'overview') {
         loadDashboardStats();
+    } else if (tabName === 'profile') {
+        loadProfile();
+    } else if (tabName === 'subscription') {
+        void loadSubscriptionStatus(true);
     } else if (tabName === 'visa') {
         loadDashboardStats();
         switchVisaSubTab(currentVisaSubTab);

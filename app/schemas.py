@@ -52,6 +52,9 @@ class PublicUserResponse(BaseModel):
 class SubscriptionResponse(BaseModel):
     plan: str
     status: str
+    started_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    next_renewal_at: Optional[datetime] = None
     ai_messages_used: int
     ai_messages_limit: int
     ai_messages_remaining: int
@@ -65,6 +68,14 @@ class SubscriptionResponse(BaseModel):
     mock_interviews_limit: int
     mock_interviews_remaining: int
     is_pro: bool
+    access_source: Optional[str] = None
+    referral_bonus_active: bool = False
+    referral_bonus_granted_at: Optional[datetime] = None
+    recurring_subscription_id: Optional[str] = None
+    latest_payment_status: Optional[str] = None
+    latest_payment_amount_paise: Optional[int] = None
+    latest_payment_currency: Optional[str] = None
+    latest_payment_verified_at: Optional[datetime] = None
     auto_renew_enabled: Optional[bool] = None
     recurring_subscription_status: Optional[str] = None
 
