@@ -4389,6 +4389,36 @@ body {
     flex-shrink: 0;
 }
 
+.rilono-ai-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.rilono-ai-expand-btn {
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1;
+    border-radius: 999px;
+    padding: 0.5rem 0.8rem;
+    cursor: pointer;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.rilono-ai-expand-btn:hover {
+    background: rgba(255, 255, 255, 0.24);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+.rilono-ai-expand-btn.is-expanded {
+    background: rgba(15, 23, 42, 0.5);
+    border-color: rgba(255, 255, 255, 0.65);
+}
+
 .rilono-ai-header-info {
     display: flex;
     align-items: center;
@@ -4852,6 +4882,12 @@ body {
     gap: 0.75rem;
 }
 
+.floating-chat-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .chat-avatar {
     width: 40px;
     height: 40px;
@@ -4896,6 +4932,31 @@ body {
     background: rgba(255, 255, 255, 0.25);
 }
 
+.floating-chat-expand-btn {
+    background: rgba(255, 255, 255, 0.15);
+    border: none;
+    color: white;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.95rem;
+    font-weight: 700;
+    line-height: 1;
+    transition: all 0.2s ease;
+}
+
+.floating-chat-expand-btn:hover {
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.floating-chat-expand-btn.is-expanded {
+    background: rgba(15, 23, 42, 0.45);
+}
+
 .floating-chat-messages {
     flex: 1;
     overflow-y: auto;
@@ -4908,6 +4969,67 @@ body {
     min-height: 0;
     scroll-behavior: smooth;
     -webkit-overflow-scrolling: touch;
+}
+
+.chat-expand-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(2, 6, 23, 0.72);
+    z-index: 11850;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    display: none !important;
+}
+
+.chat-expand-backdrop.visible {
+    opacity: 1;
+}
+
+body.chat-expanded-lock {
+    overflow: hidden;
+}
+
+.rilono-ai-widget.chat-expanded,
+.floating-chat-window.chat-expanded {
+    position: fixed !important;
+    inset: 22px !important;
+    width: auto !important;
+    height: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    z-index: 11900 !important;
+    background: #0d1428 !important;
+    border: 1px solid rgba(99, 102, 241, 0.45);
+    border-radius: 1.2rem;
+    box-shadow:
+        0 0 0 100vmax rgba(2, 6, 23, 0.72),
+        0 28px 72px rgba(0, 0, 0, 0.55),
+        0 0 0 1px rgba(99, 102, 241, 0.22);
+    animation: chatExpandIn 0.2s ease-out;
+}
+
+.rilono-ai-widget.chat-expanded .rilono-ai-content,
+.floating-chat-window.chat-expanded .floating-chat-messages {
+    background: linear-gradient(180deg, #0d1428 0%, #0a0d1e 100%);
+}
+
+.rilono-ai-widget.chat-expanded .rilono-ai-message {
+    max-width: min(72%, 900px);
+}
+
+.floating-chat-window.chat-expanded .chat-message-bubble {
+    max-width: min(68vw, 780px);
+}
+
+@keyframes chatExpandIn {
+    from {
+        opacity: 0.6;
+        transform: scale(0.985);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 .chat-welcome-message {
@@ -5198,6 +5320,22 @@ body {
     
     .chat-icon {
         font-size: 24px;
+    }
+}
+
+@media (max-width: 900px) {
+    .rilono-ai-widget.chat-expanded,
+    .floating-chat-window.chat-expanded {
+        inset: 8px !important;
+        border-radius: 1rem;
+    }
+
+    .rilono-ai-widget.chat-expanded .rilono-ai-message {
+        max-width: 92%;
+    }
+
+    .floating-chat-window.chat-expanded .chat-message-bubble {
+        max-width: 90%;
     }
 }
 

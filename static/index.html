@@ -802,7 +802,7 @@
                         </div>
                             </div>
                             <div class="overview-chat-column">
-                                <div class="rilono-ai-widget overview-chat-widget">
+                                <div id="overviewRilonoAiWidget" class="rilono-ai-widget overview-chat-widget">
                                     <div class="rilono-ai-header">
                                         <div class="rilono-ai-header-info">
                                             <div class="rilono-ai-avatar">🤖</div>
@@ -813,6 +813,9 @@
                                                     <span>Online</span>
                                                 </div>
                                             </div>
+                                        </div>
+                                        <div class="rilono-ai-header-actions">
+                                            <button type="button" class="rilono-ai-expand-btn" data-expand-target="overviewRilonoAiWidget" onclick="toggleRilonoAiExpand('overviewRilonoAiWidget')">⤢ Full View</button>
                                         </div>
                                     </div>
                                     <div class="rilono-ai-content">
@@ -1325,7 +1328,7 @@
                             <p class="tab-subtitle">Your AI assistant for visa documentation and guidance</p>
                         </div>
                         <div class="rilono-ai-container">
-                            <div class="rilono-ai-widget">
+                            <div id="recordsRilonoAiWidget" class="rilono-ai-widget">
                                 <div class="rilono-ai-header">
                                     <div class="rilono-ai-header-info">
                                         <div class="rilono-ai-avatar">🤖</div>
@@ -1336,6 +1339,9 @@
                                                 <span>Online</span>
                                             </div>
                                         </div>
+                                    </div>
+                                    <div class="rilono-ai-header-actions">
+                                        <button type="button" class="rilono-ai-expand-btn" data-expand-target="recordsRilonoAiWidget" onclick="toggleRilonoAiExpand('recordsRilonoAiWidget')">⤢ Full View</button>
                                     </div>
                                 </div>
                                 <div class="rilono-ai-content">
@@ -2210,7 +2216,10 @@
                         <div class="chat-subtitle">Your Visa Expert Assistant</div>
                     </div>
                 </div>
-                <button class="chat-minimize-btn" onclick="toggleFloatingChat()" title="Minimize">−</button>
+                <div class="floating-chat-header-actions">
+                    <button id="floatingChatExpandBtn" class="floating-chat-expand-btn" onclick="toggleFloatingChatExpand()" title="Full View">⤢</button>
+                    <button class="chat-minimize-btn" onclick="toggleFloatingChat()" title="Minimize">−</button>
+                </div>
             </div>
             <div class="floating-chat-messages" id="floatingChatMessages">
                 <!-- Messages will be added here dynamically -->
@@ -2251,6 +2260,8 @@
             </div>
         </div>
     </div>
+
+    <div id="chatExpandBackdrop" class="chat-expand-backdrop" style="display: none;" onclick="closeExpandedChatView()"></div>
     
     <script src="/static/app.js"></script>
 </body>

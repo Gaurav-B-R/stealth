@@ -31,6 +31,10 @@ const LEGAL_LAST_UPDATED = {
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
 let notificationDropdownOpen = false;
 let messageHideTimer = null;
+let expandedChatWidgetId = null;
+let floatingChatExpanded = false;
+let expandedChatOriginalParent = null;
+let expandedChatPlaceholder = null;
 
 const PRICING_BASE_USD = {
     free: 0,
@@ -3409,6 +3413,7 @@ function switchDashboardTab(tabName) {
     if (tabName !== 'visa' && (visaPrepInterviewState.active || visaPrepInterviewState.listening || visaPrepInterviewState.pending)) {
         stopVoicePrepInterview(true);
     }
+    closeExpandedChatView();
 
     // Hide all tabs
     document.querySelectorAll('.dashboard-tab').forEach(tab => {
@@ -3877,6 +3882,7 @@ async function showItemDetail(itemId, skipURLUpdate = false) {
 function hideAllSections() {
     stopVoiceMockInterview(true);
     stopVoicePrepInterview(true);
+    closeExpandedChatView();
     document.querySelectorAll('.section').forEach(section => {
         section.style.display = 'none';
     });
@@ -8049,6 +8055,162 @@ function initializeRilonoAiChat() {
 let floatingChatOpen = false;
 // Note: floatingChatConversationHistory removed - using shared rilonoAiConversationHistory instead
 
+function updateRilonoExpandButton(widgetId, expanded) {
+    const buttons = document.querySelectorAll(`.rilono-ai-expand-btn[data-expand-target="${widgetId}"]`);
+    buttons.forEach((button) => {
+        button.classList.toggle('is-expanded', expanded);
+        button.textContent = expanded ? '↙ Exit Full View' : '⤢ Full View';
+        button.title = expanded ? 'Exit Full View' : 'Full View';
+        button.setAttribute('aria-pressed', expanded ? 'true' : 'false');
+    });
+}
+
+function updateFloatingExpandButton(expanded) {
+    const button = document.getElementById('floatingChatExpandBtn');
+    if (!button) return;
+    button.classList.toggle('is-expanded', expanded);
+    button.textContent = expanded ? '↙' : '⤢';
+    button.title = expanded ? 'Exit Full View' : 'Full View';
+    button.setAttribute('aria-pressed', expanded ? 'true' : 'false');
+}
+
+function syncChatExpandBackdrop() {
+    const backdrop = document.getElementById('chatExpandBackdrop');
+    const hasExpandedView = Boolean(expandedChatWidgetId || floatingChatExpanded);
+    if (backdrop) {
+        // Keep backdrop disabled to avoid stacking-context glitches over expanded chat.
+        backdrop.style.display = 'none';
+        backdrop.classList.remove('visible');
+    }
+    document.body.classList.toggle('chat-expanded-lock', hasExpandedView);
+}
+
+function mountExpandedChatWidget(widget) {
+    if (!widget || expandedChatPlaceholder) return;
+    expandedChatOriginalParent = widget.parentElement;
+    expandedChatPlaceholder = document.createComment('expanded-chat-placeholder');
+    if (expandedChatOriginalParent) {
+        expandedChatOriginalParent.insertBefore(expandedChatPlaceholder, widget);
+    }
+    document.body.appendChild(widget);
+}
+
+function restoreExpandedChatWidget(widget) {
+    if (!widget) return;
+    if (expandedChatPlaceholder && expandedChatPlaceholder.parentNode) {
+        expandedChatPlaceholder.parentNode.insertBefore(widget, expandedChatPlaceholder);
+        expandedChatPlaceholder.remove();
+    } else if (expandedChatOriginalParent) {
+        expandedChatOriginalParent.appendChild(widget);
+    }
+    expandedChatPlaceholder = null;
+    expandedChatOriginalParent = null;
+}
+
+function closeExpandedChatView() {
+    if (expandedChatWidgetId) {
+        const expandedWidget = document.getElementById(expandedChatWidgetId);
+        if (expandedWidget) {
+            expandedWidget.classList.remove('chat-expanded');
+            restoreExpandedChatWidget(expandedWidget);
+        }
+        updateRilonoExpandButton(expandedChatWidgetId, false);
+        expandedChatWidgetId = null;
+    }
+
+    if (floatingChatExpanded) {
+        const floatingChatWindow = document.getElementById('floatingChatWindow');
+        if (floatingChatWindow) {
+            floatingChatWindow.classList.remove('chat-expanded');
+        }
+        floatingChatExpanded = false;
+        updateFloatingExpandButton(false);
+    }
+
+    syncChatExpandBackdrop();
+}
+
+function toggleRilonoAiExpand(widgetId) {
+    const widget = document.getElementById(widgetId);
+    if (!widget) return;
+
+    const shouldExpand = expandedChatWidgetId !== widgetId;
+
+    if (expandedChatWidgetId && expandedChatWidgetId !== widgetId) {
+        const previous = document.getElementById(expandedChatWidgetId);
+        if (previous) {
+            previous.classList.remove('chat-expanded');
+            restoreExpandedChatWidget(previous);
+        }
+        updateRilonoExpandButton(expandedChatWidgetId, false);
+        expandedChatWidgetId = null;
+    }
+
+    if (shouldExpand) {
+        if (floatingChatExpanded) {
+            const floatingChatWindow = document.getElementById('floatingChatWindow');
+            if (floatingChatWindow) {
+                floatingChatWindow.classList.remove('chat-expanded');
+            }
+            floatingChatExpanded = false;
+            updateFloatingExpandButton(false);
+        }
+
+        mountExpandedChatWidget(widget);
+        widget.classList.add('chat-expanded');
+        expandedChatWidgetId = widgetId;
+        updateRilonoExpandButton(widgetId, true);
+
+        const messages = widget.querySelector('.rilono-ai-messages');
+        if (messages) {
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        const input = widget.querySelector('.rilono-ai-input');
+        setTimeout(() => input?.focus(), 60);
+    } else {
+        widget.classList.remove('chat-expanded');
+        restoreExpandedChatWidget(widget);
+        expandedChatWidgetId = null;
+        updateRilonoExpandButton(widgetId, false);
+    }
+
+    syncChatExpandBackdrop();
+}
+
+function toggleFloatingChatExpand() {
+    const chatWindow = document.getElementById('floatingChatWindow');
+    if (!chatWindow || chatWindow.style.display === 'none') return;
+
+    const shouldExpand = !floatingChatExpanded;
+
+    if (shouldExpand) {
+        if (expandedChatWidgetId) {
+            const previous = document.getElementById(expandedChatWidgetId);
+            if (previous) {
+                previous.classList.remove('chat-expanded');
+            }
+            updateRilonoExpandButton(expandedChatWidgetId, false);
+            expandedChatWidgetId = null;
+        }
+
+        chatWindow.classList.add('chat-expanded');
+        floatingChatExpanded = true;
+
+        const messages = document.getElementById('floatingChatMessages');
+        if (messages) {
+            messages.scrollTop = messages.scrollHeight;
+        }
+        setTimeout(() => document.getElementById('floatingChatInput')?.focus(), 60);
+    } else {
+        chatWindow.classList.remove('chat-expanded');
+        floatingChatExpanded = false;
+    }
+
+    updateFloatingExpandButton(floatingChatExpanded);
+    syncChatExpandBackdrop();
+}
+
 function toggleFloatingChat() {
     const widget = document.getElementById('floatingAiChatWidget');
     const chatWindow = document.getElementById('floatingChatWindow');
@@ -8060,6 +8222,7 @@ function toggleFloatingChat() {
     
     // If closing, hide window and show toggle button
     if (!floatingChatOpen) {
+        closeExpandedChatView();
         chatWindow.style.display = 'none';
         if (chatToggle) chatToggle.style.display = 'flex';
         return;
@@ -8079,6 +8242,7 @@ function toggleFloatingChat() {
     
     if (floatingChatOpen) {
         chatWindow.style.display = 'flex';
+        updateFloatingExpandButton(false);
         document.getElementById('floatingChatLoginPrompt').style.display = 'none';
         document.getElementById('floatingChatInputContainer').style.display = 'block';
         messagesContainer.style.display = 'flex';
@@ -8340,6 +8504,12 @@ function updateFloatingChatVisibility() {
         }
     }
 }
+
+document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+        closeExpandedChatView();
+    }
+});
 
 function handleGalleryKeyPress(e) {
     const modal = document.getElementById('imageGalleryModal');
