@@ -60,7 +60,8 @@ ALLOWED_DOCUMENT_EXTENSIONS = {
     ".pdf", ".doc", ".docx", ".txt", ".jpg", ".jpeg", ".png", 
     ".gif", ".webp", ".xls", ".xlsx", ".csv", ".zip", ".rar"
 }
-MAX_DOCUMENT_SIZE = 50 * 1024 * 1024  # 50MB for documents
+MAX_DOCUMENT_SIZE_MB = int(os.getenv("DOCUMENT_MAX_SIZE_MB", "5") or "5")
+MAX_DOCUMENT_SIZE = MAX_DOCUMENT_SIZE_MB * 1024 * 1024
 
 def is_allowed_document(filename: str) -> bool:
     """Check if file extension is allowed"""
@@ -217,7 +218,7 @@ async def upload_document(
     if len(contents) > MAX_DOCUMENT_SIZE:
         raise HTTPException(
             status_code=400,
-            detail=f"File too large. Maximum size is {MAX_DOCUMENT_SIZE / 1024 / 1024}MB"
+            detail=f"File too large. Maximum size is {MAX_DOCUMENT_SIZE_MB}MB"
         )
     
     # Generate or get user's encryption salt

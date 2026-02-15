@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -160,6 +160,10 @@ def health_check():
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     """Serve index.html for all non-API routes to support client-side routing"""
+    # Marketplace has been removed from the product; block old deep links explicitly.
+    if full_path == "marketplace" or full_path.startswith("marketplace/"):
+        raise HTTPException(status_code=404, detail="Not found")
+
     # Don't serve HTML for API routes, static files, or uploads
     if full_path.startswith(("api/", "static/", "uploads/", "docs", "redoc", "openapi.json")):
         return {"detail": "Not found"}

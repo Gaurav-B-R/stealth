@@ -4997,7 +4997,7 @@ body.chat-expanded-lock {
     height: auto !important;
     max-width: none !important;
     max-height: none !important;
-    z-index: 11900 !important;
+    z-index: 2147483000 !important;
     background: #0d1428 !important;
     border: 1px solid rgba(99, 102, 241, 0.45);
     border-radius: 1.2rem;
@@ -5011,6 +5011,20 @@ body.chat-expanded-lock {
 .rilono-ai-widget.chat-expanded .rilono-ai-content,
 .floating-chat-window.chat-expanded .floating-chat-messages {
     background: linear-gradient(180deg, #0d1428 0%, #0a0d1e 100%);
+}
+
+.rilono-ai-widget.chat-expanded .rilono-ai-messages {
+    background: linear-gradient(180deg, #0d1428 0%, #0a0d1e 100%) !important;
+}
+
+/* Safety: hide any non-chat blocks that accidentally leak into expanded overview widget. */
+.rilono-ai-widget.chat-expanded > :not(.rilono-ai-header):not(.rilono-ai-content),
+.rilono-ai-widget.chat-expanded #visaJourneyTracker,
+.rilono-ai-widget.chat-expanded .journey-stages,
+.rilono-ai-widget.chat-expanded .journey-stage,
+.rilono-ai-widget.chat-expanded #currentStageInfo,
+.rilono-ai-widget.chat-expanded #journeyProgressLine {
+    display: none !important;
 }
 
 .rilono-ai-widget.chat-expanded .rilono-ai-message {

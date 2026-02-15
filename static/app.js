@@ -1193,6 +1193,17 @@ function showHomepage(skipURLUpdate = false) {
 }
 
 function showLogin(skipURLUpdate = false) {
+    if (currentUser) {
+        showDashboard(true);
+        const dashboardURL = `${window.location.origin}/dashboard`;
+        if (skipURLUpdate || isNavigating) {
+            window.history.replaceState({ path: '/dashboard' }, '', dashboardURL);
+        } else {
+            updateURL('/dashboard', false);
+        }
+        return;
+    }
+
     hideAllSections();
     document.getElementById('loginSection').style.display = 'block';
     
@@ -1590,13 +1601,6 @@ async function resendVerificationEmail(email = null) {
     }
 }
 
-function showMarketplace(skipURLUpdate = false) {
-    showHomepage(skipURLUpdate);
-}
-
-function showMarketplaceWithFilters(params, skipURLUpdate = false) {
-    showHomepage(skipURLUpdate);
-}
 
 function showCreateItem(skipURLUpdate = false) {
     showDashboard(skipURLUpdate);
@@ -2918,7 +2922,8 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
             },
             body: JSON.stringify({
                 message: geminiMessage,
-                conversation_history: conversationHistory
+                conversation_history: conversationHistory,
+                source: mode === 'prep' ? 'visa_prep' : 'mock_interview'
             })
         });
 
@@ -3110,7 +3115,8 @@ async function finishVoiceMockInterview() {
             },
             body: JSON.stringify({
                 message: reportPrompt,
-                conversation_history: []
+                conversation_history: [],
+                source: 'mock_interview'
             })
         });
 
@@ -7212,10 +7218,10 @@ async function handleDocumentUpload(e) {
     
     const file = fileInput.files[0];
     
-    // Validate file size (50MB)
-    const maxSize = 50 * 1024 * 1024;
+    // Validate file size (5MB)
+    const maxSize = 5 * 1024 * 1024;
     if (file.size > maxSize) {
-        showMessage('File is too large. Maximum size is 50MB', 'error');
+        showMessage('File is too large. Maximum size is 5MB', 'error');
         return;
     }
     
@@ -7920,7 +7926,8 @@ async function handleRilonoAiChatSubmit(e) {
             },
             body: JSON.stringify({
                 message: message,
-                conversation_history: rilonoAiConversationHistory.slice(-10)  // Last 10 messages for context
+                conversation_history: rilonoAiConversationHistory.slice(-10),  // Last 10 messages for context
+                source: 'rilono_ai_chat'
             })
         });
         
@@ -8443,7 +8450,8 @@ async function handleFloatingChatSubmit(e) {
             },
             body: JSON.stringify({
                 message: message,
-                conversation_history: rilonoAiConversationHistory.slice(-10)
+                conversation_history: rilonoAiConversationHistory.slice(-10),
+                source: 'rilono_ai_chat'
             })
         });
         

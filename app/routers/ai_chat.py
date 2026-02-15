@@ -36,6 +36,7 @@ r2_client = boto3.client(
 class ChatMessage(BaseModel):
     message: str
     conversation_history: Optional[List[dict]] = None
+    source: Optional[str] = "rilono_ai_chat"
 
 class ChatResponse(BaseModel):
     response: str
@@ -333,10 +334,13 @@ async def chat_with_ai(
     Document JSON files are attached to the prompt for detailed context.
     """
     try:
+        source = (chat_message.source or "rilono_ai_chat").strip().lower()
+        count_toward_rilono_chat_limit = source == "rilono_ai_chat"
+
         subscription = get_or_create_user_subscription(db, current_user.id)
         limits = get_plan_limits(subscription.plan)
         ai_limit = limits["ai_messages_limit"]
-        if ai_limit >= 0 and subscription.ai_messages_used >= ai_limit:
+        if count_toward_rilono_chat_limit and ai_limit >= 0 and subscription.ai_messages_used >= ai_limit:
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -368,9 +372,10 @@ async def chat_with_ai(
             conversation_history=chat_message.conversation_history
         )
 
-        # Count only successful AI responses toward message usage.
-        subscription.ai_messages_used += 1
-        db.commit()
+        # Only the main Rilono AI chat consumes the free AI message quota.
+        if count_toward_rilono_chat_limit:
+            subscription.ai_messages_used += 1
+            db.commit()
         
         return ChatResponse(response=response_text)
         
