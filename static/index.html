@@ -731,6 +731,9 @@
                                             <div id="nextStepHint" style="font-size: 0.8rem; color: var(--primary-color); margin-top: 0.5rem;">
                                                 <strong>Next step:</strong> <span id="nextStepText">Upload your university offer/admission letter</span>
                                             </div>
+                                            <div id="currentStageMandatorySummary" class="journey-stage-summary"></div>
+                                            <div id="currentStageMandatoryList" class="journey-stage-list"></div>
+                                            <div id="currentStageActionHint" class="journey-stage-action-hint" style="display: none;"></div>
                                         </div>
                                     </div>
                                 </div>
@@ -2146,6 +2149,20 @@
             <div class="checkout-launch-actions">
                 <button type="button" class="btn btn-secondary" onclick="closeCheckoutLaunchModal(false)">Maybe later</button>
                 <button id="checkoutLaunchContinueBtn" type="button" class="btn btn-primary">Continue to pay</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Free Plan Limit Modal -->
+    <div id="planLimitModal" class="modal-overlay plan-limit-overlay" style="display: none;" onclick="if(event.target===this){closePlanLimitModal();}">
+        <div class="modal-content plan-limit-modal-content">
+            <button type="button" class="plan-limit-close-btn" onclick="closePlanLimitModal()" aria-label="Close">×</button>
+            <div class="plan-limit-badge">Free Plan Limit Reached</div>
+            <h3 id="planLimitModalTitle" class="plan-limit-title">This feature is exhausted</h3>
+            <p id="planLimitModalText" class="plan-limit-text">You have used all free usage for this feature. Upgrade to Pro to continue instantly.</p>
+            <div class="plan-limit-actions">
+                <button type="button" class="btn btn-secondary" onclick="closePlanLimitModal()">Maybe later</button>
+                <button type="button" class="btn btn-primary" onclick="upgradeFromPlanLimitModal()">Upgrade to Pro</button>
             </div>
         </div>
     </div>

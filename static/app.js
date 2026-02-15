@@ -30,6 +30,7 @@ const LEGAL_LAST_UPDATED = {
 // Notification System
 let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
 let notificationDropdownOpen = false;
+let messageHideTimer = null;
 
 const PRICING_BASE_USD = {
     free: 0,
@@ -179,6 +180,7 @@ let documentTypeCatalog = [];
 let requiredDocumentTypeValues = [];
 let journeyStageCatalog = [];
 let documentTypeLabelByValue = {};
+let journeyStageSelectionByWidget = {};
 
 const VISA_PREP_INTERVIEW_INSTRUCTION = `You are an F-1 visa interview coach for a student.
 Rules:
@@ -1139,11 +1141,19 @@ document.addEventListener('click', (e) => {
 
 function showMessage(text, type = 'success') {
     const messageEl = document.getElementById('message');
+    if (!messageEl) return;
+
+    if (messageHideTimer) {
+        clearTimeout(messageHideTimer);
+        messageHideTimer = null;
+    }
+
     messageEl.textContent = text;
     messageEl.className = `message ${type} show`;
-    setTimeout(() => {
+    messageHideTimer = setTimeout(() => {
         messageEl.classList.remove('show');
-    }, 3000);
+        messageHideTimer = null;
+    }, 10000);
 }
 
 // Navigation
@@ -1772,6 +1782,80 @@ function updateSubscriptionUI() {
             pricingUpgradeButton.textContent = canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon';
         }
     }
+}
+
+function extractErrorDetailText(detail) {
+    if (typeof detail === 'string') {
+        return detail;
+    }
+    if (Array.isArray(detail)) {
+        return detail
+            .map((entry) => {
+                if (typeof entry === 'string') return entry;
+                if (entry && typeof entry === 'object') {
+                    const loc = Array.isArray(entry.loc) ? entry.loc.join('.') : '';
+                    const msg = entry.msg ? String(entry.msg) : JSON.stringify(entry);
+                    return loc ? `${loc}: ${msg}` : msg;
+                }
+                return String(entry);
+            })
+            .join(', ');
+    }
+    if (detail && typeof detail === 'object') {
+        return String(detail.detail || detail.message || JSON.stringify(detail));
+    }
+    return String(detail || '');
+}
+
+function resolveFeatureLabelFromLimitMessage(detailText = '') {
+    const text = String(detailText || '').toLowerCase();
+    if (text.includes('message limit')) return 'Rilono AI messages';
+    if (text.includes('upload limit')) return 'document uploads';
+    if (text.includes('prep limit')) return 'F-1 interview prep sessions';
+    if (text.includes('mock interview limit')) return 'F-1 mock interview sessions';
+    return 'this feature';
+}
+
+function isFreePlanExhaustedError(statusCode, detailText = '') {
+    if (Number(statusCode) !== 403) return false;
+    const text = String(detailText || '').toLowerCase();
+    return text.includes('free plan') && text.includes('limit');
+}
+
+function openPlanLimitModal(detailText = '') {
+    const modal = document.getElementById('planLimitModal');
+    const titleEl = document.getElementById('planLimitModalTitle');
+    const bodyEl = document.getElementById('planLimitModalText');
+    if (!modal) return;
+
+    const featureLabel = resolveFeatureLabelFromLimitMessage(detailText);
+    if (titleEl) {
+        titleEl.textContent = `${featureLabel} exhausted`;
+    }
+    if (bodyEl) {
+        bodyEl.textContent = detailText
+            || `You have used all free usage for ${featureLabel}. Upgrade to Pro to continue instantly.`;
+    }
+    modal.style.display = 'flex';
+}
+
+function closePlanLimitModal() {
+    const modal = document.getElementById('planLimitModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+}
+
+async function upgradeFromPlanLimitModal() {
+    closePlanLimitModal();
+    await handleUpgradeToPro();
+}
+
+function maybeShowPlanLimitPopup(statusCode, detailText = '') {
+    if (!isFreePlanExhaustedError(statusCode, detailText)) {
+        return false;
+    }
+    openPlanLimitModal(detailText);
+    return true;
 }
 
 function getEnteredCouponCode(source = '') {
@@ -6055,6 +6139,85 @@ function updateProfileCompletionUI(data) {
 }
 
 // Visa Journey Tracker Functions
+function getJourneyStageDocumentRows() {
+    const sourceRows = (documentTypeCatalog && documentTypeCatalog.length)
+        ? documentTypeCatalog
+        : FALLBACK_DOCUMENT_TYPES;
+    return sourceRows.filter((row) => row && row.value);
+}
+
+function buildStageRequirementStats(stageNumber, stageRows, isRuleSatisfied, uploadedDocTypes, validatedDocTypes) {
+    const mandatoryRows = stageRows.filter((row) => row.stage_gate_required);
+    const groupedRows = {};
+    const requirementUnits = [];
+
+    mandatoryRows.forEach((row) => {
+        if (!row.stage_gate_group) {
+            requirementUnits.push({
+                key: `doc:${row.value}`,
+                label: getDocumentTypeLabel(row.value),
+                rows: [row]
+            });
+            return;
+        }
+        if (!groupedRows[row.stage_gate_group]) {
+            groupedRows[row.stage_gate_group] = [];
+        }
+        groupedRows[row.stage_gate_group].push(row);
+    });
+
+    Object.entries(groupedRows).forEach(([groupKey, rows]) => {
+        const labels = rows.map((row) => getDocumentTypeLabel(row.value));
+        requirementUnits.push({
+            key: `group:${groupKey}`,
+            label: `Any one of: ${labels.join(' or ')}`,
+            rows
+        });
+    });
+
+    const unitsWithStatus = requirementUnits.map((unit) => {
+        const uploadedCount = unit.rows.filter((row) => uploadedDocTypes.has(row.value)).length;
+        const validatedCount = unit.rows.filter((row) => validatedDocTypes.has(row.value)).length;
+        const requiresValidation = unit.rows.some((row) => Boolean(row.stage_gate_requires_validation));
+        const satisfied = unit.rows.some((row) => isRuleSatisfied(row));
+
+        let status = 'Missing';
+        let statusClass = 'status-missing';
+        if (satisfied) {
+            status = 'Ready';
+            statusClass = 'status-ready';
+        } else if (uploadedCount > 0 && requiresValidation) {
+            status = 'Needs Validation';
+            statusClass = 'status-needs-validation';
+        } else if (uploadedCount > 0) {
+            status = 'Uploaded';
+            statusClass = 'status-uploaded';
+        }
+
+        return {
+            ...unit,
+            uploadedCount,
+            validatedCount,
+            requiresValidation,
+            satisfied,
+            status,
+            statusClass
+        };
+    });
+
+    return {
+        stageNumber,
+        mandatoryTotal: unitsWithStatus.length,
+        mandatoryReady: unitsWithStatus.filter((unit) => unit.satisfied).length,
+        mandatoryUploaded: unitsWithStatus.filter((unit) => unit.uploadedCount > 0).length,
+        mandatoryValidated: unitsWithStatus.filter((unit) => unit.validatedCount > 0).length,
+        stageDocTotal: stageRows.length,
+        stageDocUploaded: stageRows.filter((row) => uploadedDocTypes.has(row.value)).length,
+        stageDocValidated: stageRows.filter((row) => validatedDocTypes.has(row.value)).length,
+        items: unitsWithStatus
+    };
+}
+
 function calculateVisaJourneyStage(documents) {
     const uploadedDocTypes = new Set(
         documents.map(doc => doc.document_type).filter(type => type)
@@ -6082,8 +6245,9 @@ function calculateVisaJourneyStage(documents) {
             requiredDocs: Array.isArray(stage.required_docs) ? stage.required_docs : []
         }));
 
+    const stageDocumentRows = getJourneyStageDocumentRows();
     let currentStage = 1;
-    const stageGateRules = documentTypeCatalog.filter((row) => row.stage_gate_required && row.journey_stage);
+    const stageGateRules = stageDocumentRows.filter((row) => row.stage_gate_required && row.journey_stage);
     const orderedStages = [...stages].sort((a, b) => a.stage - b.stage);
 
     const isRuleSatisfied = (rule) => {
@@ -6113,8 +6277,17 @@ function calculateVisaJourneyStage(documents) {
     };
 
     const stageCompletionMap = {};
+    const stageStatsMap = {};
     orderedStages.forEach((stage) => {
         stageCompletionMap[stage.stage] = isStageComplete(stage.stage);
+        const rowsForStage = stageDocumentRows.filter((row) => Number(row.journey_stage) === Number(stage.stage));
+        stageStatsMap[stage.stage] = buildStageRequirementStats(
+            stage.stage,
+            rowsForStage,
+            isRuleSatisfied,
+            uploadedDocTypes,
+            validatedDocTypes
+        );
     });
 
     let foundInProgressStage = false;
@@ -6153,6 +6326,7 @@ function calculateVisaJourneyStage(documents) {
         stageInfo,
         stages,
         stageCompletionMap,
+        stageStatsMap,
         allStagesComplete,
         completedStageCount,
         progressPercent
@@ -6161,19 +6335,24 @@ function calculateVisaJourneyStage(documents) {
 
 function updateVisaJourneyUI(documents) {
     const journeyData = calculateVisaJourneyStage(documents);
-    const { currentStage, stageInfo, stages } = journeyData;
 
     updateVisaJourneyWidget({
+        widgetKey: 'overviewJourney',
         progressLineId: 'journeyProgressLine',
         stageIconPrefix: 'stageIcon',
         currentStageEmojiId: 'currentStageEmoji',
         currentStageNameId: 'currentStageName',
         currentStageDescId: 'currentStageDesc',
         nextStepHintId: 'nextStepHint',
-        nextStepTextId: 'nextStepText'
+        nextStepTextId: 'nextStepText',
+        stageInfoCardId: 'currentStageInfo',
+        stageMandatorySummaryId: 'currentStageMandatorySummary',
+        stageMandatoryListId: 'currentStageMandatoryList',
+        stageActionHintId: 'currentStageActionHint'
     }, journeyData);
 
     updateVisaJourneyWidget({
+        widgetKey: 'visaJourneyTab',
         progressLineId: 'visaTabJourneyProgressLine',
         stageIconPrefix: 'visaTabStageIcon',
         currentStageEmojiId: 'visaTabCurrentStageEmoji',
@@ -6185,7 +6364,29 @@ function updateVisaJourneyUI(documents) {
 }
 
 function updateVisaJourneyWidget(config, journeyData) {
-    const { currentStage, stageInfo, stages, stageCompletionMap = {}, allStagesComplete = false, progressPercent } = journeyData;
+    const {
+        currentStage,
+        stageInfo,
+        stages,
+        stageCompletionMap = {},
+        stageStatsMap = {},
+        allStagesComplete = false,
+        progressPercent
+    } = journeyData;
+
+    const widgetKey = config.widgetKey || config.stageIconPrefix || 'journey';
+    const stageCount = Array.isArray(stages) ? stages.length : 0;
+    if (!stageCount) {
+        return;
+    }
+
+    const storedSelectedStage = Number(journeyStageSelectionByWidget[widgetKey] || 0);
+    const selectedStageExists = stages.some((stage) => Number(stage.stage) === storedSelectedStage);
+    const selectedStage = selectedStageExists ? storedSelectedStage : Number(currentStage || 1);
+    if (!selectedStageExists) {
+        journeyStageSelectionByWidget[widgetKey] = selectedStage;
+    }
+    const selectedStageInfo = stages.find((stage) => Number(stage.stage) === selectedStage) || stageInfo;
 
     const progressLine = document.getElementById(config.progressLineId);
     if (progressLine) {
@@ -6196,21 +6397,39 @@ function updateVisaJourneyWidget(config, journeyData) {
     // A stage should look completed only when it and all previous stages are completed.
     const sequentialCompletionMap = {};
     let previousSequentialComplete = true;
-    for (let i = 1; i <= stages.length; i++) {
+    for (let i = 1; i <= stageCount; i++) {
         const thisStageComplete = stageCompletionMap[i] === true;
         const isSequentiallyComplete = previousSequentialComplete && thisStageComplete;
         sequentialCompletionMap[i] = isSequentiallyComplete;
         previousSequentialComplete = isSequentiallyComplete;
     }
 
-    for (let i = 1; i <= stages.length; i++) {
+    for (let i = 1; i <= stageCount; i++) {
         const stageIcon = document.getElementById(`${config.stageIconPrefix}${i}`);
         if (!stageIcon) continue;
 
         const defaultEmoji = stages[i - 1]?.emoji || '•';
+        const stageNode = stageIcon.closest('.journey-stage');
         stageIcon.style.animation = 'none';
         const isCompleted = sequentialCompletionMap[i] === true;
         const isInProgress = !allStagesComplete && i === currentStage && !isCompleted;
+        const isSelected = i === selectedStage;
+
+        if (stageNode) {
+            stageNode.classList.toggle('journey-stage-selected', isSelected);
+            stageNode.onclick = () => {
+                journeyStageSelectionByWidget[widgetKey] = i;
+                updateVisaJourneyWidget(config, journeyData);
+            };
+            stageNode.setAttribute('role', 'button');
+            stageNode.setAttribute('tabindex', '0');
+            stageNode.onkeydown = (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    stageNode.click();
+                }
+            };
+        }
 
         if (isCompleted) {
             stageIcon.style.background = 'linear-gradient(135deg, var(--primary-color), var(--secondary-color))';
@@ -6229,6 +6448,10 @@ function updateVisaJourneyWidget(config, journeyData) {
             stageIcon.style.boxShadow = 'none';
             stageIcon.innerHTML = defaultEmoji;
         }
+
+        if (isSelected && !isCompleted && !isInProgress) {
+            stageIcon.style.boxShadow = '0 0 0 2px rgba(129, 140, 248, 0.45), 0 8px 20px rgba(99, 102, 241, 0.35)';
+        }
     }
 
     const currentStageEmoji = document.getElementById(config.currentStageEmojiId);
@@ -6237,16 +6460,69 @@ function updateVisaJourneyWidget(config, journeyData) {
     const nextStepText = document.getElementById(config.nextStepTextId);
     const nextStepHint = document.getElementById(config.nextStepHintId);
 
-    if (currentStageEmoji) currentStageEmoji.textContent = stageInfo.emoji;
-    if (currentStageName) currentStageName.textContent = `Stage ${currentStage}: ${stageInfo.name}`;
-    if (currentStageDesc) currentStageDesc.textContent = stageInfo.description;
-    if (nextStepText) nextStepText.textContent = stageInfo.nextStep;
+    if (currentStageEmoji) currentStageEmoji.textContent = selectedStageInfo?.emoji || '•';
+    if (currentStageName) currentStageName.textContent = `Stage ${selectedStage}: ${selectedStageInfo?.name || ''}`;
+    if (currentStageDesc) currentStageDesc.textContent = selectedStageInfo?.description || '';
+    if (nextStepText) nextStepText.textContent = selectedStageInfo?.nextStep || '';
 
     if (nextStepHint) {
-        if (allStagesComplete) {
+        if (allStagesComplete && selectedStage === currentStage) {
             nextStepHint.innerHTML = '<span style="color: #34d399; font-weight: 600;">🎉 Congratulations! You\'re all set for your journey!</span>';
         } else {
-            nextStepHint.innerHTML = `<strong>Next step:</strong> <span id="${config.nextStepTextId}">${escapeHtml(stageInfo.nextStep)}</span>`;
+            nextStepHint.innerHTML = `<strong>Next step:</strong> <span id="${config.nextStepTextId}">${escapeHtml(selectedStageInfo?.nextStep || '')}</span>`;
+        }
+    }
+
+    const selectedStats = stageStatsMap[selectedStage];
+    const stageSummaryEl = config.stageMandatorySummaryId ? document.getElementById(config.stageMandatorySummaryId) : null;
+    if (stageSummaryEl) {
+        if (selectedStats?.mandatoryTotal > 0) {
+            stageSummaryEl.textContent =
+                `Mandatory ready: ${selectedStats.mandatoryReady}/${selectedStats.mandatoryTotal} • ` +
+                `Uploaded: ${selectedStats.mandatoryUploaded}/${selectedStats.mandatoryTotal} • ` +
+                `Validated: ${selectedStats.mandatoryValidated}/${selectedStats.mandatoryTotal}`;
+        } else {
+            stageSummaryEl.textContent = 'No mandatory documents configured for this stage.';
+        }
+    }
+
+    const stageListEl = config.stageMandatoryListId ? document.getElementById(config.stageMandatoryListId) : null;
+    if (stageListEl) {
+        if (selectedStats?.items?.length) {
+            stageListEl.innerHTML = selectedStats.items
+                .map((item) => `
+                    <div class="journey-stage-list-item">
+                        <div class="journey-stage-list-label">${escapeHtml(item.label)}</div>
+                        <span class="journey-stage-list-status ${escapeHtml(item.statusClass)}">${escapeHtml(item.status)}</span>
+                    </div>
+                `)
+                .join('');
+        } else {
+            stageListEl.innerHTML = '<div class="journey-stage-summary">No mandatory requirements in this stage.</div>';
+        }
+    }
+
+    const stageInfoCard = config.stageInfoCardId ? document.getElementById(config.stageInfoCardId) : null;
+    const stageActionHint = config.stageActionHintId ? document.getElementById(config.stageActionHintId) : null;
+    const canJumpToDocuments = selectedStage === 1 && stageInfoCard;
+
+    if (stageInfoCard) {
+        if (canJumpToDocuments) {
+            stageInfoCard.classList.add('journey-stage-card-clickable');
+            stageInfoCard.onclick = () => switchDashboardTab('documents');
+        } else {
+            stageInfoCard.classList.remove('journey-stage-card-clickable');
+            stageInfoCard.onclick = null;
+        }
+    }
+
+    if (stageActionHint) {
+        if (canJumpToDocuments) {
+            stageActionHint.style.display = 'block';
+            stageActionHint.textContent = 'Tip: Click this stage card to open Documents and upload Stage 1 files.';
+        } else {
+            stageActionHint.style.display = 'none';
+            stageActionHint.textContent = '';
         }
     }
 }
