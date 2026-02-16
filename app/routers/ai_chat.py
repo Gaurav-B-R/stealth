@@ -10,6 +10,7 @@ from app.utils import gemini_service as gemini_utils
 from typing import Optional, List
 import os
 import json
+from pathlib import Path
 import boto3
 from botocore.config import Config
 from pydantic import BaseModel
@@ -54,6 +55,19 @@ def get_student_profile_raw_text(user_id: int) -> str | None:
         return decrypt_artifact_bytes(encrypted_blob).decode('utf-8')
     except Exception:
         return None
+
+
+def get_user_navigation_guide_text() -> str:
+    """
+    Read the user navigation guide that should be attached to Gemini prompts.
+    """
+    try:
+        guide_path = Path(__file__).resolve().parents[1] / "prompts" / "USER_NAVIGATION_GUIDE.md"
+        if not guide_path.exists():
+            return "User navigation guide file is not available."
+        return guide_path.read_text(encoding="utf-8")
+    except Exception:
+        return "User navigation guide file could not be loaded."
 
 
 def get_student_profile_and_status(user_id: int) -> dict:
@@ -187,7 +201,15 @@ def get_user_document_files(user_id: int, db: Session) -> List[dict]:
         print(f"Error fetching document files: {str(e)}")
         return []
 
-def generate_ai_response(user_message: str, user_name: str, documents_context: str, student_profile_context: str, document_files: List[dict] = None, conversation_history: Optional[List[dict]] = None) -> str:
+def generate_ai_response(
+    user_message: str,
+    user_name: str,
+    documents_context: str,
+    student_profile_context: str,
+    navigation_guide_text: str,
+    document_files: List[dict] = None,
+    conversation_history: Optional[List[dict]] = None,
+) -> str:
     """
     Generate AI response using Gemini with system prompt, document context, attached document files, and comprehensive student profile.
     """
@@ -234,6 +256,10 @@ Your role:
 {documents_context}
 {attached_docs_text}
 
+=== ATTACHED USER NAVIGATION GUIDE ===
+{navigation_guide_text}
+=== END ATTACHED USER NAVIGATION GUIDE ===
+
 Instructions:
 - IMPORTANT: Read and use the ATTACHED RAW STUDENT PROFILE FILE directly to personalize your responses
 - Reference the student's name, university, and current visa journey stage when giving advice
@@ -246,6 +272,7 @@ Instructions:
 - If you don't have information about a specific document, let the user know and guide them on what they need
 - Always maintain a helpful and encouraging tone
 - When suggesting next steps, be specific about what documents they need to upload or actions to take
+- For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps
 
 Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance."""
 
@@ -372,6 +399,7 @@ async def chat_with_ai(
         # Keep profile file fresh when needed, then attach the full raw decrypted JSON directly.
         refresh_student_profile_if_stale(current_user, db)
         student_profile_raw_text = get_student_profile_raw_text(current_user.id)
+        navigation_guide_text = get_user_navigation_guide_text()
         if not student_profile_raw_text:
             student_profile_raw_text = (
                 '{"note":"STUDENT_PROFILE_AND_F1_VISA_STATUS.json not found. '
@@ -390,6 +418,7 @@ async def chat_with_ai(
             user_name=user_name,
             documents_context=documents_context,
             student_profile_context=student_profile_raw_text,
+            navigation_guide_text=navigation_guide_text,
             document_files=document_files,
             conversation_history=chat_message.conversation_history
         )
