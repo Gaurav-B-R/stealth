@@ -646,7 +646,6 @@
                         <div id="dashboardUploadUsage" class="sidebar-subscription-usage">Uploads: 0/5 used</div>
                         <div id="dashboardPrepUsage" class="sidebar-subscription-usage">Prep: 0/3 used</div>
                         <div id="dashboardMockUsage" class="sidebar-subscription-usage">Mock: 0/2 used</div>
-                        <input id="dashboardCouponCode" type="text" class="coupon-code-input" placeholder="Coupon code (optional)" autocomplete="off">
                         <button id="dashboardUpgradeButton" type="button" class="btn btn-primary sidebar-upgrade-btn" onclick="handleUpgradeToPro('dashboard')">
                             Upgrade to Pro
                         </button>
@@ -1146,6 +1145,17 @@
                                         </div>
                                     </div>
                                 </div>
+
+                                <div class="dashboard-widget documents-list-widget">
+                                    <div class="widget-header">
+                                        <h3>📁 My Documents</h3>
+                                    </div>
+                                    <div class="widget-content">
+                                        <div id="documentsContainer">
+                                            <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">Loading documents...</p>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
                             <div class="documents-right-column">
@@ -1170,13 +1180,6 @@
                                                 </small>
                                             </div>
                                             <div class="form-group">
-                                                <label for="documentPassword">Your Password *</label>
-                                                <input type="password" id="documentPassword" required placeholder="Enter your login password to encrypt">
-                                                <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                                    Required to encrypt your document. We use Zero-Knowledge encryption - your password is never stored.
-                                                </small>
-                                            </div>
-                                            <div class="form-group">
                                                 <label for="documentTypeSearch">Document Type <span style="color: var(--danger-color);">*</span></label>
                                                 <div class="searchable-dropdown" id="documentTypeDropdown">
                                                     <input type="text" id="documentTypeSearch" class="dropdown-search" placeholder="Search or select document type..." autocomplete="off">
@@ -1193,20 +1196,16 @@
                                                     💡 Rilono AI reads this description to better understand and process your document.
                                                 </small>
                                             </div>
+                                            <div class="form-group">
+                                                <label for="documentPassword">Your Password <span style="color: var(--danger-color);">*</span></label>
+                                                <input type="password" id="documentPassword" required placeholder="Enter your login password to encrypt">
+                                                <small style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
+                                                    Required to encrypt your document. We use Zero-Knowledge encryption - your password is never stored.
+                                                </small>
+                                            </div>
                                             <button type="submit" class="btn btn-primary" style="width: 100%;">Upload Document</button>
                                         </form>
                                     </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="dashboard-widget documents-list-widget">
-                            <div class="widget-header">
-                                <h3>📁 My Documents</h3>
-                            </div>
-                            <div class="widget-content">
-                                <div id="documentsContainer">
-                                    <p style="color: var(--text-secondary); text-align: center; padding: 1rem;">Loading documents...</p>
                                 </div>
                             </div>
                         </div>
@@ -1529,7 +1528,6 @@
                         <li>Unlimited F-1 mock interviews</li>
                         <li>Priority support</li>
                     </ul>
-                    <input id="pricingCouponCode" type="text" class="coupon-code-input pricing-coupon-input" placeholder="Coupon code (optional)" autocomplete="off">
                     <button id="pricingProUpgradeButton" type="button" class="btn btn-primary" onclick="upgradeToProFromPricing()">Upgrade to Pro</button>
                 </div>
             </div>
@@ -2224,7 +2222,11 @@
                 <div class="checkout-launch-summary">
                     <div class="checkout-launch-plan-name">Rilono Pro</div>
                     <div id="checkoutLaunchAmount" class="checkout-launch-plan-price">₹699 / month</div>
-                    <p id="checkoutLaunchCoupon" class="checkout-launch-coupon-note" style="display: none;"></p>
+                    <div class="checkout-launch-coupon-block">
+                        <label for="checkoutLaunchCouponCode" class="checkout-launch-coupon-label">Coupon code (optional)</label>
+                        <input id="checkoutLaunchCouponCode" type="text" class="checkout-launch-coupon-input" placeholder="Enter coupon at checkout" autocomplete="off" maxlength="40">
+                        <p class="checkout-launch-coupon-help">If valid, discount is applied before Razorpay opens.</p>
+                    </div>
                     <p id="checkoutLaunchMode" class="checkout-launch-plan-note">Auto-renew enabled. Cancel anytime from Profile > Subscription.</p>
                 </div>
             </div>

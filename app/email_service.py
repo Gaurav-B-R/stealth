@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+from html import escape
 from typing import Optional
 import resend
 from dotenv import load_dotenv
@@ -599,4 +601,237 @@ def send_contact_form_email(
     except Exception as e:
         error_msg = str(e)
         print(f"Error sending contact form email: {error_msg}")
+        return False
+
+
+def _format_datetime_for_subscription_email(value: Optional[datetime]) -> str:
+    if not value:
+        return "N/A"
+    return value.strftime("%b %d, %Y %I:%M %p UTC")
+
+
+def _format_amount_for_subscription_email(amount_paise: Optional[int], currency: str) -> str:
+    if amount_paise is None:
+        return "N/A"
+    normalized_currency = (currency or "INR").upper()
+    amount = amount_paise / 100
+    symbols = {
+        "INR": "₹",
+        "USD": "$",
+        "EUR": "€",
+        "GBP": "£",
+        "JPY": "¥",
+    }
+    symbol = symbols.get(normalized_currency, f"{normalized_currency} ")
+    return f"{symbol}{amount:,.2f}"
+
+
+def send_subscription_change_email(
+    email: str,
+    full_name: Optional[str],
+    event_type: str,
+    plan: str,
+    status: str,
+    auto_renew_enabled: Optional[bool] = None,
+    access_until: Optional[datetime] = None,
+    next_renewal_at: Optional[datetime] = None,
+    payment_amount_paise: Optional[int] = None,
+    payment_currency: str = "INR",
+    payment_status: Optional[str] = None,
+    base_url: str = DEFAULT_PUBLIC_BASE_URL,
+) -> bool:
+    """
+    Send subscription/plan update email with a modern, structured template.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send subscription change email - Resend not configured")
+        return False
+
+    event_key = (event_type or "subscription_updated").strip().lower()
+    event_content = {
+        "pro_activated": {
+            "subject": "Rilono Pro Activated",
+            "title": "Your Pro plan is active",
+            "summary": "Payment is verified and your Pro features are now unlocked.",
+            "accent_bg": "#ecfdf5",
+            "accent_fg": "#065f46",
+        },
+        "subscription_renewed": {
+            "subject": "Rilono Subscription Renewed",
+            "title": "Your subscription has renewed",
+            "summary": "We received your latest recurring payment and your Pro access continues.",
+            "accent_bg": "#eff6ff",
+            "accent_fg": "#1e3a8a",
+        },
+        "auto_renew_cancelled": {
+            "subject": "Rilono Auto-Renew Cancelled",
+            "title": "Auto-renew has been turned off",
+            "summary": "Your Pro plan remains active until the current access period ends.",
+            "accent_bg": "#fffbeb",
+            "accent_fg": "#92400e",
+        },
+        "downgraded_to_free": {
+            "subject": "Rilono Plan Changed to Free",
+            "title": "Your account is now on Free plan",
+            "summary": "Your Pro access period has ended and your account is now on Free plan.",
+            "accent_bg": "#fff7ed",
+            "accent_fg": "#9a3412",
+        },
+        "payment_failed": {
+            "subject": "Rilono Subscription Payment Failed",
+            "title": "We could not process your payment",
+            "summary": "Please update your payment method or retry to avoid service disruption.",
+            "accent_bg": "#fef2f2",
+            "accent_fg": "#991b1b",
+        },
+        "subscription_updated": {
+            "subject": "Rilono Subscription Update",
+            "title": "Your subscription details were updated",
+            "summary": "A change was made to your subscription details.",
+            "accent_bg": "#f5f3ff",
+            "accent_fg": "#5b21b6",
+        },
+    }.get(event_key, {
+        "subject": "Rilono Subscription Update",
+        "title": "Your subscription details were updated",
+        "summary": "A change was made to your subscription details.",
+        "accent_bg": "#f5f3ff",
+        "accent_fg": "#5b21b6",
+    })
+
+    safe_name = escape((full_name or "").strip() or "there")
+    safe_plan = escape((plan or "free").strip().title())
+    safe_status = escape((status or "active").strip().title())
+    safe_payment_status = escape((payment_status or "N/A").strip().title())
+    safe_payment_amount = escape(_format_amount_for_subscription_email(payment_amount_paise, payment_currency))
+    safe_access_until = escape(_format_datetime_for_subscription_email(access_until))
+    safe_next_renewal = escape(_format_datetime_for_subscription_email(next_renewal_at))
+    auto_renew_text = "N/A" if auto_renew_enabled is None else ("Enabled" if auto_renew_enabled else "Disabled")
+    safe_auto_renew = escape(auto_renew_text)
+    manage_url = f"{base_url.rstrip('/')}/dashboard"
+    safe_manage_url = escape(manage_url)
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{escape(event_content['subject'])}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+            <tr>
+                <td align="center">
+                    <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+                        <tr>
+                            <td style="padding:26px 28px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;">
+                                <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">Rilono Subscription</div>
+                                <h1 style="margin:10px 0 0 0;font-size:28px;line-height:1.2;">{escape(event_content['title'])}</h1>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding:26px 28px;">
+                                <p style="margin:0 0 14px 0;font-size:15px;color:#0f172a;">Hi {safe_name},</p>
+                                <div style="background:{event_content['accent_bg']};color:{event_content['accent_fg']};padding:12px 14px;border-radius:10px;font-size:14px;line-height:1.5;margin-bottom:18px;">
+                                    {escape(event_content['summary'])}
+                                </div>
+                                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0 10px;">
+                                    <tr>
+                                        <td style="width:50%;padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Plan</div>
+                                            <div style="font-size:18px;font-weight:700;color:#0f172a;margin-top:4px;">{safe_plan}</div>
+                                        </td>
+                                        <td style="width:50%;padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Status</div>
+                                            <div style="font-size:18px;font-weight:700;color:#0f172a;margin-top:4px;">{safe_status}</div>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Auto-Renew</div>
+                                            <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_auto_renew}</div>
+                                        </td>
+                                        <td style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Access Until</div>
+                                            <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_access_until}</div>
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Next Renewal</div>
+                                            <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_next_renewal}</div>
+                                        </td>
+                                        <td style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Latest Payment</div>
+                                            <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_payment_amount} • {safe_payment_status}</div>
+                                        </td>
+                                    </tr>
+                                </table>
+
+                                <div style="text-align:center;margin-top:20px;">
+                                    <a href="{safe_manage_url}" style="display:inline-block;padding:12px 22px;border-radius:10px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;">
+                                        Manage Subscription
+                                    </a>
+                                </div>
+
+                                <p style="margin:20px 0 0 0;font-size:13px;color:#64748b;">
+                                    If this change wasn't made by you, contact us immediately at
+                                    <a href="mailto:contact@rilono.com" style="color:#4f46e5;text-decoration:none;">contact@rilono.com</a>.
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    text_content = (
+        f"{event_content['title']} - Rilono\n\n"
+        f"Hi {full_name or 'there'},\n\n"
+        f"{event_content['summary']}\n\n"
+        f"Plan: {(plan or 'free').title()}\n"
+        f"Status: {(status or 'active').title()}\n"
+        f"Auto-Renew: {auto_renew_text}\n"
+        f"Access Until: {_format_datetime_for_subscription_email(access_until)}\n"
+        f"Next Renewal: {_format_datetime_for_subscription_email(next_renewal_at)}\n"
+        f"Latest Payment: {_format_amount_for_subscription_email(payment_amount_paise, payment_currency)} • {(payment_status or 'N/A').title()}\n\n"
+        f"Manage Subscription: {manage_url}\n\n"
+        "If this change wasn't made by you, contact contact@rilono.com.\n\n"
+        "© 2026 Rilono. All rights reserved."
+    )
+
+    try:
+        if USE_TEST_EMAIL or DEV_MODE:
+            from_email = "delivered@resend.dev"
+            print("DEV MODE: Using test email sender (delivered@resend.dev)")
+        else:
+            from_email = RESEND_FROM_EMAIL
+
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{from_email}>",
+            "to": [email],
+            "subject": event_content["subject"],
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+
+        email_id = None
+        if isinstance(email_response, dict):
+            email_id = email_response.get("id")
+        elif email_response and hasattr(email_response, "id"):
+            email_id = email_response.id
+
+        if email_id:
+            print(f"Subscription update email sent to {email} (ID: {email_id})")
+            return True
+
+        print(f"Failed to send subscription update email to {email}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending subscription update email to {email}: {str(e)}")
         return False

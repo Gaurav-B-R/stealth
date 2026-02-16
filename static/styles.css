@@ -5649,11 +5649,38 @@ body.chat-expanded-lock {
     font-size: 0.84rem;
 }
 
-.checkout-launch-coupon-note {
-    margin: 0.4rem 0 0 0;
-    color: #34d399;
-    font-size: 0.84rem;
-    font-weight: 600;
+.checkout-launch-coupon-block {
+    margin-top: 0.7rem;
+}
+
+.checkout-launch-coupon-label {
+    display: block;
+    color: #cbd5e1;
+    font-size: 0.78rem;
+    margin-bottom: 0.35rem;
+    letter-spacing: 0.01em;
+}
+
+.checkout-launch-coupon-input {
+    width: 100%;
+    padding: 0.58rem 0.75rem;
+    border-radius: 10px;
+    border: 1px solid rgba(99, 102, 241, 0.45);
+    background: rgba(15, 23, 42, 0.68);
+    color: #f8fafc;
+    font-size: 0.9rem;
+    outline: none;
+}
+
+.checkout-launch-coupon-input:focus {
+    border-color: #818cf8;
+    box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.18);
+}
+
+.checkout-launch-coupon-help {
+    margin: 0.35rem 0 0 0;
+    color: #94a3b8;
+    font-size: 0.75rem;
 }
 
 .checkout-launch-benefits {

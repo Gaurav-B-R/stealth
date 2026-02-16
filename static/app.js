@@ -35,6 +35,8 @@ let expandedChatWidgetId = null;
 let floatingChatExpanded = false;
 let expandedChatOriginalParent = null;
 let expandedChatPlaceholder = null;
+let runtimeSubscriptionNotifyState = null;
+let subscriptionNotifyStateUserId = null;
 
 const PRICING_BASE_USD = {
     free: 0,
@@ -1668,7 +1670,10 @@ async function loadSubscriptionStatus(silent = true) {
             return null;
         }
 
-        currentSubscription = await response.json();
+        const nextSubscription = await response.json();
+        const previousSubscription = currentSubscription;
+        currentSubscription = nextSubscription;
+        maybeAddSubscriptionChangeNotifications(previousSubscription, currentSubscription);
         updateSubscriptionUI();
         return currentSubscription;
     } catch (error) {
@@ -1692,6 +1697,206 @@ function formatSubscriptionDateTime(value) {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '-';
     return date.toLocaleString();
+}
+
+function getSubscriptionNotifyStorageKeyForUser(userId) {
+    if (!userId) return null;
+    return `rilono_subscription_notify_state_${userId}`;
+}
+
+function readStoredSubscriptionNotifyState(userId) {
+    const key = getSubscriptionNotifyStorageKeyForUser(userId);
+    if (!key) return null;
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+    } catch (error) {
+        console.warn('Failed to read subscription notification state:', error);
+        return null;
+    }
+}
+
+function writeStoredSubscriptionNotifyState(userId, snapshot) {
+    const key = getSubscriptionNotifyStorageKeyForUser(userId);
+    if (!key) return;
+    try {
+        if (snapshot) {
+            localStorage.setItem(key, JSON.stringify(snapshot));
+        } else {
+            localStorage.removeItem(key);
+        }
+    } catch (error) {
+        console.warn('Failed to persist subscription notification state:', error);
+    }
+}
+
+function buildSubscriptionNotifySnapshot(subscription) {
+    if (!subscription) return null;
+    return {
+        plan: subscription.is_pro ? 'pro' : 'free',
+        status: String(subscription.status || 'active').toLowerCase(),
+        autoRenewEnabled: typeof subscription.auto_renew_enabled === 'boolean'
+            ? subscription.auto_renew_enabled
+            : null,
+        accessSource: String(subscription.access_source || ''),
+        endsAt: subscription.ends_at || null,
+        nextRenewalAt: subscription.next_renewal_at || null,
+        referralBonusActive: Boolean(subscription.referral_bonus_active),
+        referralBonusGrantedAt: subscription.referral_bonus_granted_at || null,
+        latestPaymentStatus: String(subscription.latest_payment_status || '').toLowerCase(),
+        latestPaymentAmountPaise: Number(subscription.latest_payment_amount_paise || 0),
+        latestPaymentCurrency: String(subscription.latest_payment_currency || 'INR').toUpperCase()
+    };
+}
+
+function syncSubscriptionNotificationStateUser() {
+    const activeUserId = currentUser?.id ? String(currentUser.id) : null;
+    if (activeUserId === subscriptionNotifyStateUserId) {
+        return;
+    }
+    subscriptionNotifyStateUserId = activeUserId;
+    runtimeSubscriptionNotifyState = activeUserId
+        ? readStoredSubscriptionNotifyState(activeUserId)
+        : null;
+}
+
+function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubscription) {
+    syncSubscriptionNotificationStateUser();
+    const activeUserId = subscriptionNotifyStateUserId;
+    if (!activeUserId) return;
+
+    const previousSnapshot = buildSubscriptionNotifySnapshot(previousSubscription)
+        || runtimeSubscriptionNotifyState;
+    const nextSnapshot = buildSubscriptionNotifySnapshot(nextSubscription);
+
+    if (!nextSnapshot) {
+        runtimeSubscriptionNotifyState = null;
+        writeStoredSubscriptionNotifyState(activeUserId, null);
+        return;
+    }
+
+    if (!previousSnapshot) {
+        runtimeSubscriptionNotifyState = nextSnapshot;
+        writeStoredSubscriptionNotifyState(activeUserId, nextSnapshot);
+        return;
+    }
+
+    const prevEncoded = JSON.stringify(previousSnapshot);
+    const nextEncoded = JSON.stringify(nextSnapshot);
+    if (prevEncoded === nextEncoded) {
+        runtimeSubscriptionNotifyState = nextSnapshot;
+        writeStoredSubscriptionNotifyState(activeUserId, nextSnapshot);
+        return;
+    }
+
+    let emitted = false;
+    const accessUntilText = nextSnapshot.endsAt ? formatSubscriptionDateTime(nextSnapshot.endsAt) : '';
+
+    if (previousSnapshot.plan !== nextSnapshot.plan) {
+        emitted = true;
+        if (nextSnapshot.plan === 'pro') {
+            addNotification(
+                'Plan Upgraded',
+                'Your subscription is now Pro. Unlimited features are active.',
+                'success'
+            );
+        } else {
+            addNotification(
+                'Plan Changed',
+                'Your account is now on Free Plan.',
+                'warning'
+            );
+        }
+    }
+
+    if (previousSnapshot.autoRenewEnabled !== nextSnapshot.autoRenewEnabled && nextSnapshot.plan === 'pro') {
+        emitted = true;
+        if (nextSnapshot.autoRenewEnabled === false) {
+            addNotification(
+                'Auto-Renew Disabled',
+                accessUntilText
+                    ? `Auto-renew is cancelled. Pro access continues until ${accessUntilText}.`
+                    : 'Auto-renew is cancelled for your Pro plan.',
+                'warning'
+            );
+        } else if (nextSnapshot.autoRenewEnabled === true) {
+            addNotification(
+                'Auto-Renew Enabled',
+                'Your Pro auto-renew is enabled again.',
+                'success'
+            );
+        }
+    }
+
+    if (previousSnapshot.status !== nextSnapshot.status) {
+        emitted = true;
+        if (nextSnapshot.status === 'active') {
+            addNotification('Subscription Active', 'Your subscription status is active.', 'success');
+        } else if (nextSnapshot.status === 'canceled') {
+            addNotification(
+                'Subscription Cancellation Scheduled',
+                accessUntilText
+                    ? `Your subscription will end on ${accessUntilText}.`
+                    : 'Your subscription cancellation is scheduled.',
+                'warning'
+            );
+        } else {
+            addNotification(
+                'Subscription Status Updated',
+                `Your subscription status is now ${nextSnapshot.status}.`,
+                'info'
+            );
+        }
+    }
+
+    if (!previousSnapshot.referralBonusActive && nextSnapshot.referralBonusActive) {
+        emitted = true;
+        addNotification(
+            'Referral Bonus Applied',
+            '1 month Pro referral bonus is active on your account.',
+            'success'
+        );
+    }
+
+    if (previousSnapshot.latestPaymentStatus !== nextSnapshot.latestPaymentStatus && nextSnapshot.latestPaymentStatus) {
+        emitted = true;
+        const paymentAmount = nextSnapshot.latestPaymentAmountPaise > 0
+            ? formatCurrencyAmount(nextSnapshot.latestPaymentAmountPaise / 100, nextSnapshot.latestPaymentCurrency)
+            : '';
+        const paymentText = paymentAmount ? ` (${paymentAmount})` : '';
+        if (['verified', 'captured', 'paid', 'authorized'].includes(nextSnapshot.latestPaymentStatus)) {
+            addNotification('Payment Verified', `Subscription payment verified${paymentText}.`, 'success');
+        } else if (['failed', 'cancelled', 'refunded'].includes(nextSnapshot.latestPaymentStatus)) {
+            addNotification('Payment Update', `Latest payment status: ${nextSnapshot.latestPaymentStatus}${paymentText}.`, 'error');
+        } else {
+            addNotification('Payment Update', `Latest payment status: ${nextSnapshot.latestPaymentStatus}${paymentText}.`, 'info');
+        }
+    }
+
+    if (previousSnapshot.nextRenewalAt !== nextSnapshot.nextRenewalAt && nextSnapshot.autoRenewEnabled && nextSnapshot.nextRenewalAt) {
+        emitted = true;
+        addNotification(
+            'Renewal Date Updated',
+            `Your next renewal is on ${formatSubscriptionDateTime(nextSnapshot.nextRenewalAt)}.`,
+            'info'
+        );
+    }
+
+    if (previousSnapshot.endsAt !== nextSnapshot.endsAt && !nextSnapshot.autoRenewEnabled && nextSnapshot.endsAt) {
+        emitted = true;
+        addNotification(
+            'Access Period Updated',
+            `Your Pro access is active until ${formatSubscriptionDateTime(nextSnapshot.endsAt)}.`,
+            'info'
+        );
+    }
+
+    if (!emitted) {
+        addNotification('Subscription Updated', 'Your subscription details were updated.', 'info');
+    }
+
+    runtimeSubscriptionNotifyState = nextSnapshot;
+    writeStoredSubscriptionNotifyState(activeUserId, nextSnapshot);
 }
 
 function updateSubscriptionUI() {
@@ -1951,17 +2156,8 @@ function maybeShowPlanLimitPopup(statusCode, detailText = '') {
     return true;
 }
 
-function getEnteredCouponCode(source = '') {
-    const sourceKey = String(source || '').toLowerCase();
-    const fromDashboard = (document.getElementById('dashboardCouponCode')?.value || '').trim();
-    const fromPricing = (document.getElementById('pricingCouponCode')?.value || '').trim();
-
-    const selected = sourceKey === 'dashboard'
-        ? fromDashboard
-        : sourceKey === 'pricing'
-            ? fromPricing
-            : (fromDashboard || fromPricing);
-    return selected.toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+function normalizeCouponCode(rawValue = '') {
+    return String(rawValue || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
 }
 
 async function handleUpgradeToPro(source = '') {
@@ -2002,7 +2198,17 @@ async function handleUpgradeToPro(source = '') {
     });
 
     try {
-        const couponCode = getEnteredCouponCode(source);
+        const launchResult = await openCheckoutLaunchModal({
+            amountPaise: Math.round(PRO_PRICE_INR * 100),
+            currency: 'INR',
+            checkoutMode: 'subscription'
+        });
+        if (!launchResult?.proceed) {
+            showMessage('Upgrade cancelled.', 'error');
+            return;
+        }
+
+        const couponCode = normalizeCouponCode(launchResult.couponCode);
         const response = await fetch(`${API_BASE}/api/subscription/upgrade`, {
             method: 'POST',
             headers: {
@@ -2094,15 +2300,8 @@ async function handleUpgradeToPro(source = '') {
             showMessage(reason, 'error');
         });
 
-        const proceedToCheckout = await openCheckoutLaunchModal({
-            amountPaise: data.amount,
-            currency: data.currency,
-            checkoutMode: data.checkout_mode || 'order',
-            couponText: data.coupon_applied_text || ''
-        });
-        if (!proceedToCheckout) {
-            showMessage('Upgrade cancelled.', 'error');
-            return;
+        if (data.coupon_applied_text) {
+            showMessage(data.coupon_applied_text, 'success');
         }
 
         razorpay.open();
@@ -2129,23 +2328,27 @@ function closeCheckoutLaunchModal(shouldProceed = false) {
     const resolver = checkoutLaunchResolver;
     checkoutLaunchResolver = null;
     if (resolver) {
-        resolver(Boolean(shouldProceed));
+        if (typeof shouldProceed === 'object' && shouldProceed !== null) {
+            resolver(shouldProceed);
+        } else {
+            resolver({ proceed: Boolean(shouldProceed), couponCode: '' });
+        }
     }
 }
 
-async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode, couponText }) {
+async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode }) {
     const modal = document.getElementById('checkoutLaunchModal');
     if (!modal) {
-        return true;
+        return { proceed: true, couponCode: '' };
     }
 
     const amountEl = document.getElementById('checkoutLaunchAmount');
-    const couponEl = document.getElementById('checkoutLaunchCoupon');
     const modeEl = document.getElementById('checkoutLaunchMode');
     const continueBtn = document.getElementById('checkoutLaunchContinueBtn');
+    const couponInput = document.getElementById('checkoutLaunchCouponCode');
 
     if (!continueBtn) {
-        return true;
+        return { proceed: true, couponCode: '' };
     }
 
     const normalizedCurrency = (currency || 'INR').toUpperCase();
@@ -2161,21 +2364,21 @@ async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode, co
             : 'One-time checkout for your current billing cycle.';
     }
 
-    if (couponEl) {
-        if (couponText) {
-            couponEl.textContent = couponText;
-            couponEl.style.display = 'block';
-        } else {
-            couponEl.textContent = '';
-            couponEl.style.display = 'none';
-        }
+    if (couponInput) {
+        couponInput.value = '';
+        couponInput.focus();
     }
 
     modal.style.display = 'flex';
 
     return new Promise((resolve) => {
         checkoutLaunchResolver = resolve;
-        continueBtn.onclick = () => closeCheckoutLaunchModal(true);
+        continueBtn.onclick = () => {
+            closeCheckoutLaunchModal({
+                proceed: true,
+                couponCode: normalizeCouponCode(couponInput?.value || '')
+            });
+        };
     });
 }
 
@@ -2232,7 +2435,9 @@ async function verifyRazorpayPayment(paymentResponse, checkoutMode = 'order') {
             return;
         }
 
+        const previousSubscription = currentSubscription;
         currentSubscription = data;
+        maybeAddSubscriptionChangeNotifications(previousSubscription, currentSubscription);
         updateSubscriptionUI();
         showMessage(isRecurringMode
             ? 'Payment successful. Pro subscription activated with auto-renew.'
@@ -2273,7 +2478,9 @@ async function handleCancelSubscription() {
             showMessage(data.detail || 'Failed to cancel subscription.', 'error');
             return;
         }
+        const previousSubscription = currentSubscription;
         currentSubscription = data;
+        maybeAddSubscriptionChangeNotifications(previousSubscription, currentSubscription);
         updateSubscriptionUI();
         showMessage('Auto-renew cancel request submitted. Your Pro access remains active until current cycle end.', 'success');
     } catch (error) {
@@ -2304,7 +2511,9 @@ async function consumeInterviewSession(sessionType) {
             }
             return false;
         }
+        const previousSubscription = currentSubscription;
         currentSubscription = data;
+        maybeAddSubscriptionChangeNotifications(previousSubscription, currentSubscription);
         updateSubscriptionUI();
         return true;
     } catch (error) {
@@ -4274,6 +4483,8 @@ async function logout() {
     persistAuthToken(null);
     currentUser = null;
     currentSubscription = null;
+    runtimeSubscriptionNotifyState = null;
+    subscriptionNotifyStateUserId = null;
     closeReferralPromoModal();
     floatingChatOpen = false;
     rilonoAiConversationHistory = [];  // Clear shared chat history

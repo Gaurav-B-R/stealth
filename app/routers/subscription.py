@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.auth import get_current_active_user
 from app.database import get_db
+from app.email_service import send_subscription_change_email
 from app.subscriptions import (
     PLAN_FREE,
     PLAN_PRO,
@@ -732,6 +733,49 @@ def _downgrade_to_free(subscription: models.Subscription) -> None:
     subscription.mock_interviews_used = 0
 
 
+def _subscription_change_snapshot(subscription: models.Subscription) -> dict[str, Any]:
+    return {
+        "plan": (subscription.plan or PLAN_FREE).strip().lower(),
+        "status": (subscription.status or STATUS_ACTIVE).strip().lower(),
+        "ends_at": _normalize_datetime(subscription.ends_at),
+    }
+
+
+def _send_subscription_change_email_safe(
+    *,
+    user: models.User,
+    event_type: str,
+    subscription: models.Subscription,
+    auto_renew_enabled: bool | None = None,
+    next_renewal_at: datetime | None = None,
+    payment_status: str | None = None,
+    payment_amount_paise: int | None = None,
+    payment_currency: str | None = None,
+) -> None:
+    if not user.email:
+        return
+    try:
+        send_subscription_change_email(
+            email=user.email,
+            full_name=user.full_name,
+            event_type=event_type,
+            plan=subscription.plan,
+            status=subscription.status,
+            auto_renew_enabled=auto_renew_enabled,
+            access_until=_normalize_datetime(subscription.ends_at),
+            next_renewal_at=_normalize_datetime(next_renewal_at),
+            payment_amount_paise=payment_amount_paise,
+            payment_currency=(payment_currency or "INR"),
+            payment_status=payment_status,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send subscription change email user_id=%s event_type=%s",
+            user.id,
+            event_type,
+        )
+
+
 @router.get("/me", response_model=schemas.SubscriptionResponse)
 def get_my_subscription(
     current_user: models.User = Depends(get_current_active_user),
@@ -1105,6 +1149,9 @@ def verify_payment_and_activate_pro(
     if payment_row.razorpay_payment_id and payment_row.razorpay_payment_id != payload.razorpay_payment_id:
         raise HTTPException(status_code=400, detail="Order is already linked to a different payment.")
 
+    before_subscription = get_or_create_user_subscription(db, current_user.id, commit=False)
+    before_snapshot = _subscription_change_snapshot(before_subscription)
+
     try:
         _validate_razorpay_order_payment(
             current_user=current_user,
@@ -1125,6 +1172,19 @@ def verify_payment_and_activate_pro(
         invoice_id=None,
         provider_subscription_data=None,
     )
+    after_snapshot = _subscription_change_snapshot(subscription)
+    if before_snapshot != after_snapshot:
+        event_type = "pro_activated" if before_snapshot["plan"] != PLAN_PRO else "subscription_renewed"
+        _send_subscription_change_email_safe(
+            user=current_user,
+            event_type=event_type,
+            subscription=subscription,
+            auto_renew_enabled=False,
+            next_renewal_at=_normalize_datetime(subscription.ends_at),
+            payment_status="verified",
+            payment_amount_paise=int(payment_row.amount_paise or 0),
+            payment_currency=_normalize_currency(payment_row.currency or "INR"),
+        )
     return _build_subscription_response(subscription)
 
 
@@ -1142,6 +1202,9 @@ def verify_recurring_payment_and_activate_pro(
         window_seconds=VERIFY_RATE_WINDOW_SECONDS,
         extra_key=str(current_user.id),
     )
+
+    before_subscription = get_or_create_user_subscription(db, current_user.id, commit=False)
+    before_snapshot = _subscription_change_snapshot(before_subscription)
 
     existing_payment = db.query(models.SubscriptionPayment).filter(
         models.SubscriptionPayment.razorpay_payment_id == payload.razorpay_payment_id,
@@ -1268,6 +1331,19 @@ def verify_recurring_payment_and_activate_pro(
         invoice_id=invoice_id,
         provider_subscription_data=subscription_data,
     )
+    after_snapshot = _subscription_change_snapshot(subscription)
+    if before_snapshot != after_snapshot:
+        event_type = "pro_activated" if before_snapshot["plan"] != PLAN_PRO else "subscription_renewed"
+        _send_subscription_change_email_safe(
+            user=current_user,
+            event_type=event_type,
+            subscription=subscription,
+            auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
+            next_renewal_at=_subscription_next_renewal_at(subscription_data),
+            payment_status=str(payment_data.get("status") or "verified"),
+            payment_amount_paise=int(payment_data.get("amount", 0) or 0),
+            payment_currency=_normalize_currency(payment_data.get("currency", "")),
+        )
     return _build_subscription_response(subscription)
 
 
@@ -1321,6 +1397,9 @@ def _handle_recurring_payment_webhook(
 
     if not user:
         return {"status": "ignored", "reason": "user_not_found"}
+
+    before_subscription = get_or_create_user_subscription(db, user.id, commit=False)
+    before_snapshot = _subscription_change_snapshot(before_subscription)
 
     if not seed_row:
         seed_row = models.SubscriptionPayment(
@@ -1381,6 +1460,20 @@ def _handle_recurring_payment_webhook(
         invoice_id=invoice_id,
         provider_subscription_data=subscription_data,
     )
+    refreshed_subscription = get_or_create_user_subscription(db, user.id)
+    after_snapshot = _subscription_change_snapshot(refreshed_subscription)
+    if before_snapshot != after_snapshot:
+        event_type = "pro_activated" if before_snapshot["plan"] != PLAN_PRO else "subscription_renewed"
+        _send_subscription_change_email_safe(
+            user=user,
+            event_type=event_type,
+            subscription=refreshed_subscription,
+            auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
+            next_renewal_at=_subscription_next_renewal_at(subscription_data),
+            payment_status=str(payment_data.get("status") or "verified"),
+            payment_amount_paise=int(payment_data.get("amount", 0) or 0),
+            payment_currency=_normalize_currency(payment_data.get("currency", "")),
+        )
     return {"status": "ok"}
 
 
@@ -1425,9 +1518,12 @@ def _handle_subscription_lifecycle_webhook(
     if not user:
         return {"status": "ignored", "reason": "user_not_found"}
 
+    before_subscription = get_or_create_user_subscription(db, user.id, commit=False)
+    before_snapshot = _subscription_change_snapshot(before_subscription)
+
     status = str(subscription_data.get("status") or "").strip().lower()
     if status in {"cancelled", "completed", "expired", "halted"}:
-        subscription = get_or_create_user_subscription(db, user.id, commit=False)
+        subscription = before_subscription
         provider_period_end = _subscription_period_end(subscription_data)
         if provider_period_end and provider_period_end > datetime.utcnow():
             subscription.plan = PLAN_PRO
@@ -1436,14 +1532,42 @@ def _handle_subscription_lifecycle_webhook(
         else:
             _downgrade_to_free(subscription)
         db.commit()
+        db.refresh(subscription)
+        after_snapshot = _subscription_change_snapshot(subscription)
+        if before_snapshot != after_snapshot:
+            event_type = "downgraded_to_free" if subscription.plan == PLAN_FREE else "auto_renew_cancelled"
+            _send_subscription_change_email_safe(
+                user=user,
+                event_type=event_type,
+                subscription=subscription,
+                auto_renew_enabled=False,
+                next_renewal_at=_subscription_next_renewal_at(subscription_data),
+                payment_status=str(status or "updated"),
+            )
         return {"status": "ok"}
 
-    _apply_pro_access_from_provider_period(
+    updated_subscription = _apply_pro_access_from_provider_period(
         db=db,
         user_id=user.id,
         razorpay_subscription_data=subscription_data,
         commit=True,
     )
+    after_snapshot = _subscription_change_snapshot(updated_subscription)
+    if before_snapshot != after_snapshot:
+        if after_snapshot["status"] == "canceled" and before_snapshot["status"] != "canceled":
+            event_type = "auto_renew_cancelled"
+        elif before_snapshot["plan"] != PLAN_PRO:
+            event_type = "pro_activated"
+        else:
+            event_type = "subscription_updated"
+        _send_subscription_change_email_safe(
+            user=user,
+            event_type=event_type,
+            subscription=updated_subscription,
+            auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
+            next_renewal_at=_subscription_next_renewal_at(subscription_data),
+            payment_status=str(status or "updated"),
+        )
     return {"status": "ok"}
 
 
@@ -1475,7 +1599,20 @@ def _handle_payment_failed_webhook(
     if not payment_row:
         return {"status": "ignored", "reason": "payment_not_found"}
 
+    previous_status = str(payment_row.status or "").strip().lower()
     _mark_payment_failed(db, payment_row, "provider_payment_failed")
+    if previous_status != "failed":
+        user = db.query(models.User).filter(models.User.id == payment_row.user_id).first()
+        subscription = get_or_create_user_subscription(db, payment_row.user_id)
+        if user and subscription:
+            _send_subscription_change_email_safe(
+                user=user,
+                event_type="payment_failed",
+                subscription=subscription,
+                payment_status="failed",
+                payment_amount_paise=int(payment_entity.get("amount", 0) or 0),
+                payment_currency=_normalize_currency(payment_entity.get("currency", "")),
+            )
     return {"status": "ok"}
 
 
@@ -1545,6 +1682,8 @@ async def razorpay_webhook(
     user = db.query(models.User).filter(models.User.id == payment_row.user_id).first()
     if not user:
         return {"status": "ignored", "reason": "user_not_found"}
+    before_subscription = get_or_create_user_subscription(db, user.id, commit=False)
+    before_snapshot = _subscription_change_snapshot(before_subscription)
 
     payload = schemas.RazorpayPaymentVerifyRequest(
         razorpay_order_id=order_id,
@@ -1558,7 +1697,7 @@ async def razorpay_webhook(
             payload=payload,
             verify_checkout_signature=False,
         )
-        _finalize_verified_payment(
+        updated_subscription = _finalize_verified_payment(
             db=db,
             user_id=user.id,
             payment_row=payment_row,
@@ -1567,6 +1706,19 @@ async def razorpay_webhook(
             invoice_id=None,
             provider_subscription_data=None,
         )
+        after_snapshot = _subscription_change_snapshot(updated_subscription)
+        if before_snapshot != after_snapshot:
+            event_type = "pro_activated" if before_snapshot["plan"] != PLAN_PRO else "subscription_renewed"
+            _send_subscription_change_email_safe(
+                user=user,
+                event_type=event_type,
+                subscription=updated_subscription,
+                auto_renew_enabled=False,
+                next_renewal_at=_normalize_datetime(updated_subscription.ends_at),
+                payment_status=str(payment_entity.get("status") or "verified"),
+                payment_amount_paise=int(payment_entity.get("amount", 0) or 0),
+                payment_currency=_normalize_currency(payment_entity.get("currency", "")),
+            )
     except HTTPException:
         _mark_payment_failed(db, payment_row, "webhook_validation_failed")
         return {"status": "ignored", "reason": "validation_failed"}
@@ -1580,6 +1732,7 @@ def cancel_my_subscription(
     db: Session = Depends(get_db),
 ):
     subscription = get_or_create_user_subscription(db, current_user.id)
+    before_snapshot = _subscription_change_snapshot(subscription)
 
     if subscription.plan != PLAN_PRO:
         return _build_subscription_response(subscription, auto_renew_enabled=False, recurring_subscription_status=None)
@@ -1613,6 +1766,15 @@ def cancel_my_subscription(
             razorpay_subscription_data=subscription_data,
             commit=True,
         )
+        after_snapshot = _subscription_change_snapshot(updated_subscription)
+        if before_snapshot != after_snapshot:
+            _send_subscription_change_email_safe(
+                user=current_user,
+                event_type="auto_renew_cancelled",
+                subscription=updated_subscription,
+                auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
+                next_renewal_at=_subscription_next_renewal_at(subscription_data),
+            )
         return _build_subscription_response(
             updated_subscription,
             auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
@@ -1623,6 +1785,14 @@ def cancel_my_subscription(
     _downgrade_to_free(subscription)
     db.commit()
     db.refresh(subscription)
+    after_snapshot = _subscription_change_snapshot(subscription)
+    if before_snapshot != after_snapshot:
+        _send_subscription_change_email_safe(
+            user=current_user,
+            event_type="downgraded_to_free",
+            subscription=subscription,
+            auto_renew_enabled=False,
+        )
     return _build_subscription_response(subscription, auto_renew_enabled=False, recurring_subscription_status=None)
 
 
