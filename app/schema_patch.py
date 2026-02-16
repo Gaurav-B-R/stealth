@@ -76,3 +76,42 @@ def ensure_subscription_payment_recurring_columns():
 
         if "razorpay_plan_id" not in columns:
             conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN razorpay_plan_id VARCHAR"))
+
+        if "coupon_code" not in columns:
+            conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN coupon_code VARCHAR"))
+
+        if "coupon_percent_off" not in columns:
+            conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN coupon_percent_off NUMERIC(5,2)"))
+
+
+def ensure_coupon_percent_column():
+    """
+    Ensure coupon_codes.percent_off supports decimal discounts and normalized codes.
+    """
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "coupon_codes")
+        if "coupon_code" not in columns or "percent_off" not in columns:
+            return
+
+        if engine.dialect.name == "postgresql":
+            # Support decimal discounts (example: 99.99%).
+            conn.execute(
+                text(
+                    "ALTER TABLE coupon_codes "
+                    "ALTER COLUMN percent_off TYPE NUMERIC(5,2) "
+                    "USING percent_off::numeric"
+                )
+            )
+
+
+def ensure_coupon_usage_limit_column():
+    """
+    Allow configuring per-user usage limits for coupon codes.
+    """
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "coupon_codes")
+        if "coupon_code" not in columns:
+            return
+
+        if "max_uses_per_user" not in columns:
+            conn.execute(text("ALTER TABLE coupon_codes ADD COLUMN max_uses_per_user INTEGER"))

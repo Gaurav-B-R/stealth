@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -135,6 +135,8 @@ class SubscriptionPayment(Base):
     razorpay_subscription_id = Column(String, nullable=True, index=True)
     razorpay_invoice_id = Column(String, nullable=True, index=True)
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
+    coupon_code = Column(String, nullable=True, index=True)
+    coupon_percent_off = Column(Numeric(5, 2), nullable=True)
     status = Column(String, nullable=False, default="created")  # created | verified | failed
     signature_verified_at = Column(DateTime(timezone=True), nullable=True)
     verified_at = Column(DateTime(timezone=True), nullable=True)
@@ -149,4 +151,5 @@ class CouponCode(Base):
     __tablename__ = "coupon_codes"
 
     coupon_code = Column(String, primary_key=True, index=True, nullable=False)
-    percent_off = Column(Integer, nullable=False)
+    percent_off = Column(Numeric(5, 2), nullable=False)
+    max_uses_per_user = Column(Integer, nullable=True)

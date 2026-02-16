@@ -41,6 +41,21 @@ class ChatMessage(BaseModel):
 class ChatResponse(BaseModel):
     response: str
 
+
+def get_student_profile_raw_text(user_id: int) -> str | None:
+    """
+    Fetch decrypted STUDENT_PROFILE_AND_F1_VISA_STATUS.json raw text from R2.
+    Returns raw JSON string or None if not found.
+    """
+    try:
+        r2_key = f"user_{user_id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
+        response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=r2_key)
+        encrypted_blob = response['Body'].read()
+        return decrypt_artifact_bytes(encrypted_blob).decode('utf-8')
+    except Exception:
+        return None
+
+
 def get_student_profile_and_status(user_id: int) -> dict:
     """
     Fetch student's comprehensive profile and visa status from R2.
@@ -202,7 +217,7 @@ def generate_ai_response(user_message: str, user_name: str, documents_context: s
                 attached_docs_text += f"Extracted Data:\n{doc_file['content']}\n"
             attached_docs_text += "\n=== END OF ATTACHED DOCUMENTS ===\n"
         
-        # Build system prompt with comprehensive student profile
+        # Attach the raw decrypted student profile JSON directly (no field-level extraction).
         system_prompt = f"""You are Rilono AI, a F1 student visa expert assistant. You are guiding the student through the F1 student visa process and documentation.
 
 Your role:
@@ -212,13 +227,15 @@ Your role:
 - Assist with understanding visa documentation requirements
 - Be friendly, supportive, and professional
 
+=== ATTACHED RAW STUDENT PROFILE FILE ===
 {student_profile_context}
+=== END ATTACHED RAW STUDENT PROFILE FILE ===
 
 {documents_context}
 {attached_docs_text}
 
 Instructions:
-- IMPORTANT: Use the STUDENT PROFILE AND F1 VISA STATUS information above to personalize your responses
+- IMPORTANT: Read and use the ATTACHED RAW STUDENT PROFILE FILE directly to personalize your responses
 - Reference the student's name, university, and current visa journey stage when giving advice
 - Guide them based on their current stage and what the next step is
 - Consider their intake semester/year when providing timeline guidance
@@ -230,7 +247,7 @@ Instructions:
 - Always maintain a helpful and encouraging tone
 - When suggesting next steps, be specific about what documents they need to upload or actions to take
 
-Remember: You have access to the student's complete profile including their name, university, documentation preferences, current visa journey status, AND their full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance."""
+Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance."""
 
         # Build conversation context
         conversation_text = ""
@@ -315,7 +332,7 @@ def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
     # Refresh the profile
     try:
         status_data = calculate_visa_journey_stage(actual_documents, db)
-        save_student_profile_to_r2(user, status_data, actual_documents)
+        save_student_profile_to_r2(user, status_data, actual_documents, db=db)
         # Return the fresh profile
         return get_student_profile_and_status(user.id)
     except Exception as e:
@@ -352,9 +369,14 @@ async def chat_with_ai(
         # Get user's name
         user_name = current_user.full_name or current_user.username or "Student"
         
-        # Get comprehensive student profile from R2, auto-refresh if stale
-        student_profile = refresh_student_profile_if_stale(current_user, db)
-        student_profile_context = format_student_profile_context(student_profile)
+        # Keep profile file fresh when needed, then attach the full raw decrypted JSON directly.
+        refresh_student_profile_if_stale(current_user, db)
+        student_profile_raw_text = get_student_profile_raw_text(current_user.id)
+        if not student_profile_raw_text:
+            student_profile_raw_text = (
+                '{"note":"STUDENT_PROFILE_AND_F1_VISA_STATUS.json not found. '
+                'Ask user to open dashboard once or run /api/documents/visa-status/refresh."}'
+            )
         
         # Get documents context (summary list of uploaded documents)
         documents_context = get_user_documents_context(current_user.id, db)
@@ -367,7 +389,7 @@ async def chat_with_ai(
             user_message=chat_message.message,
             user_name=user_name,
             documents_context=documents_context,
-            student_profile_context=student_profile_context,
+            student_profile_context=student_profile_raw_text,
             document_files=document_files,
             conversation_history=chat_message.conversation_history
         )

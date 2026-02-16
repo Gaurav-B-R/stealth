@@ -424,6 +424,8 @@ function handleRoute(skipURLUpdate = false) {
         handleResetPasswordPage(skipURLUpdate);
     } else if (path === '/dashboard') {
         showDashboard(skipURLUpdate);
+    } else if (path === '/subscription') {
+        showSubscription(skipURLUpdate);
     } else if (path === '/pricing') {
         showPricing(skipURLUpdate);
     } else if (path === '/about-us') {
@@ -1648,6 +1650,21 @@ function showDashboard(skipURLUpdate = false) {
     }
 }
 
+function showSubscription(skipURLUpdate = false) {
+    if (!currentUser) {
+        showMessage('Please login to manage your subscription', 'error');
+        showLogin();
+        return;
+    }
+
+    showDashboard(true);
+    switchDashboardTab('subscription');
+
+    if (!skipURLUpdate) {
+        updateURL('/subscription', false);
+    }
+}
+
 async function loadSubscriptionStatus(silent = true) {
     if (!authToken) {
         currentSubscription = null;
@@ -2025,7 +2042,9 @@ function updateSubscriptionUI() {
     if (profileEndsAtEl) profileEndsAtEl.textContent = formatSubscriptionDateTime(currentSubscription.ends_at);
     if (profileStartedAtEl) profileStartedAtEl.textContent = formatSubscriptionDateTime(currentSubscription.started_at);
     if (profileLatestPaymentEl) {
-        if (currentSubscription.latest_payment_amount_paise && currentSubscription.latest_payment_currency) {
+        const hasPaymentAmount = currentSubscription.latest_payment_amount_paise !== null
+            && currentSubscription.latest_payment_amount_paise !== undefined;
+        if (hasPaymentAmount && currentSubscription.latest_payment_currency) {
             const amount = Number(currentSubscription.latest_payment_amount_paise) / 100;
             const status = String(currentSubscription.latest_payment_status || '').toLowerCase() || 'created';
             profileLatestPaymentEl.textContent = `${formatCurrencyAmount(amount, currentSubscription.latest_payment_currency)} (${status})`;
@@ -2230,6 +2249,19 @@ async function handleUpgradeToPro(source = '') {
             currentSubscription = data.subscription || currentSubscription;
             updateSubscriptionUI();
             showMessage(data.message || 'Your account is already on Pro.', 'success');
+            return;
+        }
+
+        if (data.action === 'coupon_activated') {
+            currentSubscription = data.subscription || currentSubscription;
+            updateSubscriptionUI();
+            showMessage(
+                data.message || data.coupon_applied_text || 'Coupon applied successfully. Pro is now active.',
+                'success'
+            );
+            if (document.getElementById('pricingSection')?.style.display === 'block') {
+                showPricing(true);
+            }
             return;
         }
 

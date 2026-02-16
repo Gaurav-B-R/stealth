@@ -333,7 +333,7 @@ async def upload_document(
             models.Document.user_id == current_user.id
         ).all()
         status_data = calculate_visa_journey_stage(all_documents, db)
-        save_student_profile_to_r2(current_user, status_data, all_documents)
+        save_student_profile_to_r2(current_user, status_data, all_documents, db=db)
     except Exception as e:
         # Don't fail the upload if profile refresh fails
         print(f"Warning: Failed to refresh student profile after upload: {str(e)}")
@@ -532,7 +532,75 @@ def calculate_visa_journey_stage(documents: List[models.Document], db: Optional[
     }
 
 
-def save_student_profile_to_r2(user: models.User, status_data: dict, documents: List[models.Document]) -> str:
+def _build_subscription_snapshot_for_profile(user_id: int, db: Session) -> dict:
+    subscription = get_or_create_user_subscription(db, user_id, commit=False)
+    limits = get_plan_limits(subscription.plan)
+    latest_payment = (
+        db.query(models.SubscriptionPayment)
+        .filter(models.SubscriptionPayment.user_id == user_id)
+        .order_by(desc(models.SubscriptionPayment.id))
+        .first()
+    )
+    latest_razorpay_subscription = (
+        db.query(models.SubscriptionPayment)
+        .filter(
+            models.SubscriptionPayment.user_id == user_id,
+            models.SubscriptionPayment.provider == "razorpay",
+            models.SubscriptionPayment.razorpay_subscription_id.isnot(None),
+        )
+        .order_by(desc(models.SubscriptionPayment.id))
+        .first()
+    )
+
+    return {
+        "plan": (subscription.plan or "free").lower(),
+        "status": (subscription.status or "active").lower(),
+        "started_at": subscription.started_at.isoformat() if subscription.started_at else None,
+        "ends_at": subscription.ends_at.isoformat() if subscription.ends_at else None,
+        "usage": {
+            "ai_messages_used": int(subscription.ai_messages_used or 0),
+            "document_uploads_used": int(subscription.document_uploads_used or 0),
+            "prep_sessions_used": int(subscription.prep_sessions_used or 0),
+            "mock_interviews_used": int(subscription.mock_interviews_used or 0),
+        },
+        "limits": {
+            "ai_messages_limit": int(limits.get("ai_messages_limit", 0)),
+            "document_uploads_limit": int(limits.get("document_uploads_limit", 0)),
+            "prep_sessions_limit": int(limits.get("prep_sessions_limit", 0)),
+            "mock_interviews_limit": int(limits.get("mock_interviews_limit", 0)),
+        },
+        "latest_payment": (
+            {
+                "provider": latest_payment.provider,
+                "status": latest_payment.status,
+                "amount_paise": int(latest_payment.amount_paise or 0),
+                "currency": latest_payment.currency,
+                "coupon_code": latest_payment.coupon_code,
+                "coupon_percent_off": (
+                    float(latest_payment.coupon_percent_off)
+                    if latest_payment.coupon_percent_off is not None
+                    else None
+                ),
+                "verified_at": latest_payment.verified_at.isoformat() if latest_payment.verified_at else None,
+                "created_at": latest_payment.created_at.isoformat() if latest_payment.created_at else None,
+            }
+            if latest_payment
+            else None
+        ),
+        "latest_razorpay_subscription_id": (
+            latest_razorpay_subscription.razorpay_subscription_id
+            if latest_razorpay_subscription
+            else None
+        ),
+    }
+
+
+def save_student_profile_to_r2(
+    user: models.User,
+    status_data: dict,
+    documents: List[models.Document],
+    db: Optional[Session] = None,
+) -> str:
     """
     Save comprehensive student profile and visa status as a JSON file to R2.
     This file contains all information about the student for LLM context.
@@ -551,6 +619,8 @@ def save_student_profile_to_r2(user: models.User, status_data: dict, documents: 
             if doc.year and not preferred_year:
                 preferred_year = doc.year
     
+    subscription_snapshot = _build_subscription_snapshot_for_profile(user.id, db) if db else {}
+
     # Build comprehensive student profile
     comprehensive_data = {
         # File metadata for LLM understanding
@@ -574,6 +644,9 @@ def save_student_profile_to_r2(user: models.User, status_data: dict, documents: 
             "intake_semester": preferred_intake,
             "intake_year": preferred_year
         },
+
+        # Subscription Details
+        "subscription": subscription_snapshot,
         
         # Visa Journey Status (from existing calculation)
         "visa_journey": {
@@ -624,6 +697,24 @@ def save_student_profile_to_r2(user: models.User, status_data: dict, documents: 
         return r2_key
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save student profile to R2: {str(e)}")
+
+
+def refresh_student_profile_snapshot_for_user(
+    user: models.User,
+    db: Session,
+) -> str:
+    documents = db.query(models.Document).filter(
+        models.Document.user_id == user.id
+    ).all()
+    status_data = calculate_visa_journey_stage(documents, db)
+    return save_student_profile_to_r2(user, status_data, documents, db=db)
+
+
+def refresh_student_profile_snapshot_for_user_id(user_id: int, db: Session) -> Optional[str]:
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        return None
+    return refresh_student_profile_snapshot_for_user(user=user, db=db)
 
 
 def get_student_profile_from_r2(user_id: int) -> Optional[dict]:
@@ -681,7 +772,7 @@ async def get_visa_journey_status(
     status_data = calculate_visa_journey_stage(documents, db)
     
     # Create the R2 file for the first time
-    r2_key = save_student_profile_to_r2(current_user, status_data, documents)
+    r2_key = save_student_profile_to_r2(current_user, status_data, documents, db=db)
     
     status_data["r2_key"] = r2_key
     status_data["user_email"] = current_user.email
@@ -709,7 +800,7 @@ async def refresh_visa_journey_status(
     status_data = calculate_visa_journey_stage(documents, db)
     
     # Save comprehensive student profile to R2
-    r2_key = save_student_profile_to_r2(current_user, status_data, documents)
+    r2_key = save_student_profile_to_r2(current_user, status_data, documents, db=db)
     
     # Add metadata to response
     status_data["r2_key"] = r2_key
@@ -1041,7 +1132,7 @@ async def delete_document(
                 models.Document.user_id == current_user.id
             ).all()
             status_data = calculate_visa_journey_stage(all_documents, db)
-            save_student_profile_to_r2(current_user, status_data, all_documents)
+            save_student_profile_to_r2(current_user, status_data, all_documents, db=db)
         except Exception as refresh_error:
             # Don't fail the delete if profile refresh fails
             print(f"Warning: Failed to refresh student profile after delete: {str(refresh_error)}")
@@ -1090,7 +1181,7 @@ async def delete_document_admin(
                     models.Document.user_id == document_owner_id
                 ).all()
                 status_data = calculate_visa_journey_stage(all_documents, db)
-                save_student_profile_to_r2(document_owner, status_data, all_documents)
+                save_student_profile_to_r2(document_owner, status_data, all_documents, db=db)
         except Exception as refresh_error:
             # Don't fail the delete if profile refresh fails
             print(f"Warning: Failed to refresh student profile after admin delete: {str(refresh_error)}")

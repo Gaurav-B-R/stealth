@@ -63,7 +63,7 @@
                         <a href="#" onclick="event.preventDefault(); showDashboard(); switchDashboardTab('profile'); toggleUserMenu(); return false;">
                             <span>👤</span> Profile
                         </a>
-                        <a href="#" onclick="event.preventDefault(); showDashboard(); switchDashboardTab('subscription'); toggleUserMenu(); return false;">
+                        <a href="/subscription" onclick="event.preventDefault(); showSubscription(); toggleUserMenu(); return false;">
                             <span>💳</span> Manage Subscription
                         </a>
                         <a href="#" onclick="event.preventDefault(); openFeatureRequestModal(); toggleUserMenu(); return false;">
@@ -1073,7 +1073,6 @@
                                 <div class="profile-subscription-actions">
                                     <button id="profileSubscriptionUpgradeBtn" type="button" class="btn btn-primary" onclick="handleUpgradeToPro('profile')">Upgrade to Pro</button>
                                     <button id="profileSubscriptionCancelBtn" type="button" class="btn btn-secondary" onclick="handleCancelSubscription()" style="display: none;">Cancel Auto-Renew</button>
-                                    <button type="button" class="btn btn-secondary" onclick="loadSubscriptionStatus(false)">Refresh Details</button>
                                 </div>
                             </div>
                         </div>

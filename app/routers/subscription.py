@@ -2,15 +2,16 @@ import hashlib
 import hmac
 import json
 import logging
-import math
 import os
 import re
 import secrets
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime
 from typing import Any
 
 import requests
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -127,31 +128,91 @@ def _normalize_coupon_code(raw_code: str | None) -> str:
     return re.sub(r"[^A-Z0-9_-]", "", code)
 
 
-def _get_coupon_percent_off(db: Session, coupon_code: str) -> int:
+def _format_percent_off(percent_off: Decimal | int | float) -> str:
+    value = Decimal(str(percent_off)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return format(value, "f").rstrip("0").rstrip(".")
+
+
+def _parse_coupon_percent_off(raw_value: Any) -> Decimal:
+    try:
+        value = Decimal(str(raw_value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Coupon configuration is invalid.")
+    if value < Decimal("0") or value > Decimal("100"):
+        raise HTTPException(status_code=400, detail="Coupon must be between 0% and 100% off.")
+    return value
+
+
+def _parse_coupon_max_uses_per_user(raw_value: Any) -> int | None:
+    if raw_value is None:
+        return None
+    if str(raw_value).strip() == "":
+        return None
+    try:
+        value = int(raw_value)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Coupon usage limit configuration is invalid.")
+    if value <= 0:
+        raise HTTPException(status_code=400, detail="Coupon usage limit must be greater than 0.")
+    return value
+
+
+def _coupon_verified_uses_for_user(db: Session, *, user_id: int, coupon_code: str) -> int:
     normalized_code = _normalize_coupon_code(coupon_code)
     if not normalized_code:
         return 0
+    return int(
+        db.query(func.count(models.SubscriptionPayment.id))
+        .filter(
+            models.SubscriptionPayment.user_id == user_id,
+            models.SubscriptionPayment.status == "verified",
+            func.upper(models.SubscriptionPayment.coupon_code) == normalized_code,
+        )
+        .scalar()
+        or 0
+    )
+
+
+def _get_coupon_details(db: Session, coupon_code: str, user_id: int) -> tuple[Decimal, int | None]:
+    normalized_code = _normalize_coupon_code(coupon_code)
+    if not normalized_code:
+        return Decimal("0"), None
 
     coupon_row = db.query(models.CouponCode).filter(
-        models.CouponCode.coupon_code == normalized_code
+        func.upper(models.CouponCode.coupon_code) == normalized_code
     ).first()
+    if not coupon_row:
+        # Fallback for legacy rows that might have mixed case or extra symbols.
+        legacy_rows = db.query(models.CouponCode).all()
+        coupon_row = next(
+            (row for row in legacy_rows if _normalize_coupon_code(row.coupon_code) == normalized_code),
+            None,
+        )
     if not coupon_row:
         raise HTTPException(status_code=400, detail="Invalid coupon code.")
 
-    try:
-        percent_off = int(coupon_row.percent_off)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Coupon configuration is invalid.")
-    if percent_off <= 0 or percent_off >= 100:
-        raise HTTPException(status_code=400, detail="Coupon must be between 1% and 99% off.")
-    return percent_off
+    percent_off = _parse_coupon_percent_off(coupon_row.percent_off)
+    max_uses_per_user = _parse_coupon_max_uses_per_user(coupon_row.max_uses_per_user)
+    if max_uses_per_user is not None:
+        used_count = _coupon_verified_uses_for_user(
+            db=db,
+            user_id=user_id,
+            coupon_code=normalized_code,
+        )
+        if used_count >= max_uses_per_user:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Coupon usage limit reached. This coupon can be used {max_uses_per_user} time(s) per user.",
+            )
+    return percent_off, max_uses_per_user
 
 
-def _compute_discounted_amount_paise(base_amount_paise: int, percent_off: int) -> int:
-    if percent_off <= 0:
+def _compute_discounted_amount_paise(base_amount_paise: int, percent_off: Decimal) -> int:
+    if percent_off <= Decimal("0"):
         return base_amount_paise
-    discounted = int(math.floor((base_amount_paise * (100 - percent_off)) / 100))
-    return max(discounted, 1)
+    multiplier = (Decimal("100") - percent_off) / Decimal("100")
+    discounted = (Decimal(base_amount_paise) * multiplier).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return max(int(discounted), 0)
 
 
 def _create_discounted_plan_id(
@@ -161,20 +222,21 @@ def _create_discounted_plan_id(
     currency: str,
     base_plan_id: str,
     discounted_amount_paise: int,
-    percent_off: int,
+    percent_off: Decimal,
 ) -> str:
+    percent_text = _format_percent_off(percent_off)
     payload = {
         "period": "monthly",
         "interval": 1,
         "item": {
-            "name": f"Rilono Pro Monthly ({percent_off}% OFF)",
+            "name": f"Rilono Pro Monthly ({percent_text}% OFF)",
             "description": f"Auto-generated discounted plan from {base_plan_id}",
             "amount": discounted_amount_paise,
             "currency": currency,
         },
         "notes": {
             "source_plan_id": base_plan_id,
-            "discount_percent_off": str(percent_off),
+            "discount_percent_off": percent_text,
         },
     }
     plan_data = _razorpay_request(
@@ -634,10 +696,7 @@ def _find_latest_subscription_id_for_user(db: Session, user_id: int) -> str | No
 def _find_latest_payment_for_user(db: Session, user_id: int) -> models.SubscriptionPayment | None:
     return (
         db.query(models.SubscriptionPayment)
-        .filter(
-            models.SubscriptionPayment.user_id == user_id,
-            models.SubscriptionPayment.provider == "razorpay",
-        )
+        .filter(models.SubscriptionPayment.user_id == user_id)
         .order_by(models.SubscriptionPayment.id.desc())
         .first()
     )
@@ -723,6 +782,21 @@ def _resolve_user_from_subscription_notes(db: Session, subscription_data: dict[s
     return None
 
 
+def _coupon_fields_from_subscription_notes(subscription_data: dict[str, Any] | None) -> tuple[str | None, Decimal | None]:
+    notes = (subscription_data or {}).get("notes") or {}
+    coupon_code = _normalize_coupon_code(notes.get("coupon_code"))
+    if not coupon_code:
+        return None, None
+    raw_percent = str(notes.get("coupon_percent_off") or "").strip()
+    if not raw_percent:
+        return coupon_code, None
+    try:
+        percent_off = Decimal(raw_percent).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError, TypeError):
+        return coupon_code, None
+    return coupon_code, percent_off
+
+
 def _downgrade_to_free(subscription: models.Subscription) -> None:
     subscription.plan = PLAN_FREE
     subscription.status = STATUS_ACTIVE
@@ -776,6 +850,22 @@ def _send_subscription_change_email_safe(
         )
 
 
+def _refresh_student_profile_snapshot_safe(db: Session, user_id: int) -> None:
+    """
+    Best-effort sync of STUDENT_PROFILE_AND_F1_VISA_STATUS.json after subscription changes.
+    Never raises to avoid breaking payment/subscription flows.
+    """
+    try:
+        from app.routers.documents import refresh_student_profile_snapshot_for_user_id
+
+        refresh_student_profile_snapshot_for_user_id(user_id=user_id, db=db)
+    except Exception:
+        logger.exception(
+            "Failed to refresh STUDENT_PROFILE_AND_F1_VISA_STATUS.json for user_id=%s",
+            user_id,
+        )
+
+
 @router.get("/me", response_model=schemas.SubscriptionResponse)
 def get_my_subscription(
     current_user: models.User = Depends(get_current_active_user),
@@ -785,43 +875,53 @@ def get_my_subscription(
     auto_renew_enabled: bool | None = None
     recurring_subscription_status: str | None = None
     next_renewal_at: datetime | None = None
-    recurring_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
-
-    if subscription.plan == PLAN_PRO:
-        if str(subscription.status or "").strip().lower() == "canceled":
-            auto_renew_enabled = False
-            recurring_subscription_status = "cancelled"
-        key_id, key_secret = _razorpay_credentials()
-        if (
-            recurring_subscription_id
-            and _looks_like_razorpay_id(recurring_subscription_id, "sub")
-            and key_id
-            and key_secret
-        ):
-            try:
-                subscription_data = _razorpay_request(
-                    method="GET",
-                    path=f"/subscriptions/{recurring_subscription_id}",
-                    key_id=key_id,
-                    key_secret=key_secret,
-                )
-                recurring_subscription_status = str(subscription_data.get("status") or "").strip().lower() or None
-                auto_renew_enabled = _is_provider_auto_renew_enabled(subscription_data)
-                next_renewal_at = _subscription_next_renewal_at(subscription_data)
-            except HTTPException:
-                pass
-
     latest_payment = _find_latest_payment_for_user(db, current_user.id)
     latest_verified_payment = (
         db.query(models.SubscriptionPayment)
         .filter(
             models.SubscriptionPayment.user_id == current_user.id,
-            models.SubscriptionPayment.provider == "razorpay",
             models.SubscriptionPayment.status == "verified",
         )
         .order_by(models.SubscriptionPayment.id.desc())
         .first()
     )
+    latest_verified_provider = (
+        str(latest_verified_payment.provider or "").strip().lower()
+        if latest_verified_payment and latest_verified_payment.provider
+        else ""
+    )
+    recurring_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
+
+    if subscription.plan == PLAN_PRO:
+        if latest_verified_provider == "coupon":
+            # Coupon-based 100% upgrades are non-recurring by design.
+            auto_renew_enabled = False
+            recurring_subscription_status = "coupon"
+            recurring_subscription_id = None
+            next_renewal_at = _normalize_datetime(subscription.ends_at)
+        elif str(subscription.status or "").strip().lower() == "canceled":
+            auto_renew_enabled = False
+            recurring_subscription_status = "cancelled"
+        else:
+            key_id, key_secret = _razorpay_credentials()
+            if (
+                recurring_subscription_id
+                and _looks_like_razorpay_id(recurring_subscription_id, "sub")
+                and key_id
+                and key_secret
+            ):
+                try:
+                    subscription_data = _razorpay_request(
+                        method="GET",
+                        path=f"/subscriptions/{recurring_subscription_id}",
+                        key_id=key_id,
+                        key_secret=key_secret,
+                    )
+                    recurring_subscription_status = str(subscription_data.get("status") or "").strip().lower() or None
+                    auto_renew_enabled = _is_provider_auto_renew_enabled(subscription_data)
+                    next_renewal_at = _subscription_next_renewal_at(subscription_data)
+                except HTTPException:
+                    pass
 
     has_verified_payment = latest_verified_payment is not None
     ends_at = _normalize_datetime(subscription.ends_at)
@@ -840,7 +940,9 @@ def get_my_subscription(
     elif referral_bonus_active:
         access_source = "Referral Bonus (1 Month Pro)"
     elif has_verified_payment:
-        if auto_renew_enabled is False:
+        if latest_verified_provider == "coupon":
+            access_source = "Coupon Pro (Auto-Renew Off)"
+        elif auto_renew_enabled is False:
             access_source = "Paid Pro (Auto-Renew Off)"
         elif auto_renew_enabled is True:
             access_source = "Paid Pro (Auto-Renew On)"
@@ -927,24 +1029,77 @@ def upgrade_to_pro(
                 ).model_dump(),
             }
 
+    base_amount = _pro_amount_paise()
+    currency = _pro_plan_currency()
+    base_plan_id = _razorpay_plan_id()
+
+    coupon_code = _normalize_coupon_code(payload.coupon_code if payload else "")
+    percent_off, _coupon_max_uses_per_user = (
+        _get_coupon_details(db=db, coupon_code=coupon_code, user_id=current_user.id)
+        if coupon_code
+        else (Decimal("0"), None)
+    )
+    percent_off_text = _format_percent_off(percent_off)
+    effective_amount = _compute_discounted_amount_paise(base_amount, percent_off)
+    effective_plan_id = base_plan_id
+    coupon_applied_text = (
+        f"Coupon {coupon_code} applied ({percent_off_text}% OFF)." if percent_off > Decimal("0") else None
+    )
+
+    if effective_amount <= 0:
+        before_snapshot = _subscription_change_snapshot(subscription)
+        subscription = grant_pro_access_for_days(
+            db=db,
+            user_id=current_user.id,
+            days=_pro_duration_days(),
+            commit=False,
+        )
+        payment_row = models.SubscriptionPayment(
+            user_id=current_user.id,
+            provider="coupon",
+            plan=PLAN_PRO,
+            amount_paise=0,
+            currency=currency,
+            razorpay_plan_id=None,
+            razorpay_order_id=f"coupon_{current_user.id}_{secrets.token_hex(8)}",
+            coupon_code=coupon_code or None,
+            coupon_percent_off=percent_off,
+            status="verified",
+            signature_verified_at=datetime.utcnow(),
+            verified_at=datetime.utcnow(),
+            error_message=f"Coupon {coupon_code} applied ({percent_off_text}% OFF).",
+        )
+        db.add(payment_row)
+        db.commit()
+        db.refresh(subscription)
+
+        after_snapshot = _subscription_change_snapshot(subscription)
+        if before_snapshot != after_snapshot:
+            _send_subscription_change_email_safe(
+                user=current_user,
+                event_type="pro_activated",
+                subscription=subscription,
+                auto_renew_enabled=False,
+                next_renewal_at=_normalize_datetime(subscription.ends_at),
+                payment_status="verified",
+                payment_amount_paise=0,
+                payment_currency=currency,
+            )
+        _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
+
+        return {
+            "action": "coupon_activated",
+            "message": f"Coupon {coupon_code} applied. Pro activated with 100% discount.",
+            "subscription": _build_subscription_response(subscription).model_dump(),
+            "coupon_applied_text": coupon_applied_text,
+        }
+
     if not _razorpay_checkout_enabled():
         return {
             "action": "contact_support",
             "message": "Pro checkout is being enabled. Please contact support to activate billing.",
             "contact_path": "/contact",
         }
-
-    base_amount = _pro_amount_paise()
-    currency = _pro_plan_currency()
-    base_plan_id = _razorpay_plan_id()
-
-    coupon_code = _normalize_coupon_code(payload.coupon_code if payload else "")
-    percent_off = _get_coupon_percent_off(db, coupon_code) if coupon_code else 0
-    effective_amount = _compute_discounted_amount_paise(base_amount, percent_off)
-    effective_plan_id = base_plan_id
-    coupon_applied_text = (
-        f"Coupon {coupon_code} applied ({percent_off}% OFF)." if percent_off > 0 else None
-    )
 
     if _razorpay_recurring_enabled():
         existing_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
@@ -964,14 +1119,14 @@ def upgrade_to_pro(
                 existing_coupon_code = _normalize_coupon_code(existing_notes.get("coupon_code"))
                 existing_coupon_percent = str(existing_notes.get("coupon_percent_off") or "").strip()
                 existing_coupon_match = (
-                    percent_off > 0
+                    percent_off > Decimal("0")
                     and existing_coupon_code == coupon_code
-                    and existing_coupon_percent == str(percent_off)
+                    and existing_coupon_percent == percent_off_text
                 )
                 if (
                     existing_status in {"created", "authenticated", "active", "pending"}
                     and (
-                        (percent_off <= 0 and existing_plan_id == base_plan_id)
+                        (percent_off <= Decimal("0") and existing_plan_id == base_plan_id)
                         or existing_coupon_match
                     )
                     and existing_notes_user_id == str(current_user.id)
@@ -991,7 +1146,7 @@ def upgrade_to_pro(
             except HTTPException:
                 pass
 
-        if percent_off > 0:
+        if percent_off > Decimal("0"):
             effective_plan_id = _create_discounted_plan_id(
                 key_id=key_id,
                 key_secret=key_secret,
@@ -1011,7 +1166,7 @@ def upgrade_to_pro(
                 "user_email": current_user.email,
                 "plan": PLAN_PRO,
                 "coupon_code": coupon_code,
-                "coupon_percent_off": str(percent_off),
+                "coupon_percent_off": percent_off_text,
             },
         }
         recurring_data = _razorpay_request(
@@ -1035,6 +1190,8 @@ def upgrade_to_pro(
             razorpay_plan_id=effective_plan_id,
             razorpay_order_id=subscription_id,
             razorpay_subscription_id=subscription_id,
+            coupon_code=coupon_code or None,
+            coupon_percent_off=(percent_off if percent_off > Decimal("0") else None),
             status="created",
         )
         db.add(payment_row)
@@ -1062,7 +1219,7 @@ def upgrade_to_pro(
             "user_email": current_user.email,
             "plan": PLAN_PRO,
             "coupon_code": coupon_code,
-            "coupon_percent_off": str(percent_off),
+            "coupon_percent_off": percent_off_text,
         },
     }
 
@@ -1086,6 +1243,8 @@ def upgrade_to_pro(
         currency=currency,
         razorpay_plan_id=effective_plan_id or None,
         razorpay_order_id=order_id,
+        coupon_code=coupon_code or None,
+        coupon_percent_off=(percent_off if percent_off > Decimal("0") else None),
         status="created",
     )
     db.add(payment_row)
@@ -1185,6 +1344,7 @@ def verify_payment_and_activate_pro(
             payment_amount_paise=int(payment_row.amount_paise or 0),
             payment_currency=_normalize_currency(payment_row.currency or "INR"),
         )
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     return _build_subscription_response(subscription)
 
 
@@ -1237,6 +1397,8 @@ def verify_recurring_payment_and_activate_pro(
             razorpay_plan_id=None,
             razorpay_order_id=payload.razorpay_subscription_id,
             razorpay_subscription_id=payload.razorpay_subscription_id,
+            coupon_code=None,
+            coupon_percent_off=None,
             status="created",
         )
         db.add(seed_row)
@@ -1268,6 +1430,11 @@ def verify_recurring_payment_and_activate_pro(
         raise
 
     target_row = seed_row
+    notes_coupon_code, notes_coupon_percent_off = _coupon_fields_from_subscription_notes(subscription_data)
+    if notes_coupon_code:
+        seed_row.coupon_code = notes_coupon_code
+    if notes_coupon_percent_off is not None:
+        seed_row.coupon_percent_off = notes_coupon_percent_off
     if (target_row.razorpay_subscription_id or "").strip() != effective_subscription_id:
         existing_row = (
             db.query(models.SubscriptionPayment)
@@ -1298,6 +1465,8 @@ def verify_recurring_payment_and_activate_pro(
                     ),
                 ),
                 razorpay_subscription_id=effective_subscription_id,
+                coupon_code=seed_row.coupon_code,
+                coupon_percent_off=seed_row.coupon_percent_off,
                 status="created",
             )
             db.add(target_row)
@@ -1317,9 +1486,16 @@ def verify_recurring_payment_and_activate_pro(
             razorpay_plan_id=seed_row.razorpay_plan_id,
             razorpay_order_id=_ensure_unique_order_ref(db, proposed_order_ref),
             razorpay_subscription_id=effective_subscription_id,
+            coupon_code=seed_row.coupon_code,
+            coupon_percent_off=seed_row.coupon_percent_off,
             status="created",
         )
         db.add(target_row)
+
+    if notes_coupon_code and not target_row.coupon_code:
+        target_row.coupon_code = notes_coupon_code
+    if notes_coupon_percent_off is not None and target_row.coupon_percent_off is None:
+        target_row.coupon_percent_off = notes_coupon_percent_off
 
     invoice_id = str(payment_data.get("invoice_id") or "").strip() or None
     subscription = _finalize_verified_payment(
@@ -1344,6 +1520,7 @@ def verify_recurring_payment_and_activate_pro(
             payment_amount_paise=int(payment_data.get("amount", 0) or 0),
             payment_currency=_normalize_currency(payment_data.get("currency", "")),
         )
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     return _build_subscription_response(subscription)
 
 
@@ -1402,6 +1579,7 @@ def _handle_recurring_payment_webhook(
     before_snapshot = _subscription_change_snapshot(before_subscription)
 
     if not seed_row:
+        notes_coupon_code, notes_coupon_percent_off = _coupon_fields_from_subscription_notes(subscription_data)
         seed_row = models.SubscriptionPayment(
             user_id=user.id,
             provider="razorpay",
@@ -1411,6 +1589,8 @@ def _handle_recurring_payment_webhook(
             razorpay_plan_id=str(subscription_data.get("plan_id") or "").strip() or None,
             razorpay_order_id=subscription_id,
             razorpay_subscription_id=subscription_id,
+            coupon_code=notes_coupon_code,
+            coupon_percent_off=notes_coupon_percent_off,
             status="created",
         )
         db.add(seed_row)
@@ -1431,6 +1611,11 @@ def _handle_recurring_payment_webhook(
         return {"status": "ignored", "reason": "validation_failed"}
 
     target_row = existing_payment or seed_row
+    notes_coupon_code, notes_coupon_percent_off = _coupon_fields_from_subscription_notes(subscription_data)
+    if notes_coupon_code:
+        seed_row.coupon_code = notes_coupon_code
+    if notes_coupon_percent_off is not None:
+        seed_row.coupon_percent_off = notes_coupon_percent_off
     if target_row is seed_row and seed_row.razorpay_payment_id and seed_row.razorpay_payment_id != payment_id:
         proposed_order_ref = _order_ref_for_subscription_payment(
             payment_data=payment_data,
@@ -1446,9 +1631,16 @@ def _handle_recurring_payment_webhook(
             razorpay_plan_id=seed_row.razorpay_plan_id,
             razorpay_order_id=_ensure_unique_order_ref(db, proposed_order_ref),
             razorpay_subscription_id=effective_subscription_id,
+            coupon_code=seed_row.coupon_code,
+            coupon_percent_off=seed_row.coupon_percent_off,
             status="created",
         )
         db.add(target_row)
+
+    if notes_coupon_code and not target_row.coupon_code:
+        target_row.coupon_code = notes_coupon_code
+    if notes_coupon_percent_off is not None and target_row.coupon_percent_off is None:
+        target_row.coupon_percent_off = notes_coupon_percent_off
 
     invoice_id = str(payment_data.get("invoice_id") or "").strip() or None
     _finalize_verified_payment(
@@ -1474,6 +1666,7 @@ def _handle_recurring_payment_webhook(
             payment_amount_paise=int(payment_data.get("amount", 0) or 0),
             payment_currency=_normalize_currency(payment_data.get("currency", "")),
         )
+    _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     return {"status": "ok"}
 
 
@@ -1544,6 +1737,7 @@ def _handle_subscription_lifecycle_webhook(
                 next_renewal_at=_subscription_next_renewal_at(subscription_data),
                 payment_status=str(status or "updated"),
             )
+        _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
         return {"status": "ok"}
 
     updated_subscription = _apply_pro_access_from_provider_period(
@@ -1568,6 +1762,7 @@ def _handle_subscription_lifecycle_webhook(
             next_renewal_at=_subscription_next_renewal_at(subscription_data),
             payment_status=str(status or "updated"),
         )
+    _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     return {"status": "ok"}
 
 
@@ -1719,6 +1914,7 @@ async def razorpay_webhook(
                 payment_amount_paise=int(payment_entity.get("amount", 0) or 0),
                 payment_currency=_normalize_currency(payment_entity.get("currency", "")),
             )
+        _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     except HTTPException:
         _mark_payment_failed(db, payment_row, "webhook_validation_failed")
         return {"status": "ignored", "reason": "validation_failed"}
@@ -1775,6 +1971,7 @@ def cancel_my_subscription(
                 auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
                 next_renewal_at=_subscription_next_renewal_at(subscription_data),
             )
+        _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
         return _build_subscription_response(
             updated_subscription,
             auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
@@ -1793,6 +1990,7 @@ def cancel_my_subscription(
             subscription=subscription,
             auto_renew_enabled=False,
         )
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     return _build_subscription_response(subscription, auto_renew_enabled=False, recurring_subscription_status=None)
 
 
@@ -1834,4 +2032,5 @@ def consume_session_quota(
 
     db.commit()
     db.refresh(subscription)
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     return _build_subscription_response(subscription)
