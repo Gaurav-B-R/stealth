@@ -257,10 +257,11 @@ async def upload_document(
     try:
         # Validate document type and extract information
         validation_result = validate_and_extract_document(
-            contents, 
-            original_filename, 
+            contents,
+            original_filename,
             content_type,
-            document_type  # Pass the document type for validation
+            document_type,  # Pass the document type for validation
+            current_date_for_evaluation=datetime.now().isoformat(),
         )
         
         if validation_result:

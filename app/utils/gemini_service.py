@@ -7,6 +7,7 @@ from typing import Optional
 import io
 from PIL import Image
 from pathlib import Path
+from datetime import datetime
 
 # Try to import Vertex AI libraries
 try:
@@ -82,7 +83,13 @@ if not USE_VERTEX_AI:
 SUPPORTED_IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 SUPPORTED_DOCUMENT_TYPES = {".pdf", ".txt"}
 
-def validate_and_extract_document(file_contents: bytes, filename: str, mime_type: str, document_type: Optional[str] = None) -> Optional[dict]:
+def validate_and_extract_document(
+    file_contents: bytes,
+    filename: str,
+    mime_type: str,
+    document_type: Optional[str] = None,
+    current_date_for_evaluation: Optional[str] = None,
+) -> Optional[dict]:
     """
     Validate document type and extract information using Gemini AI.
     Returns a JSON dict with validation result and extracted information, or None if extraction fails.
@@ -114,6 +121,32 @@ def validate_and_extract_document(file_contents: bytes, filename: str, mime_type
             print("Error: Neither Vertex AI nor standard Gemini API available")
             return None
         
+        evaluation_date_value = (current_date_for_evaluation or "").strip() or datetime.now().isoformat()
+
+        timeline_rules_block = f"""
+Current Date for Evaluation: {evaluation_date_value}
+
+STRICT DATE/TIMELINE COMPLIANCE RULES (MANDATORY):
+1. Cross-reference all document dates against the Current Date for Evaluation.
+2. Bank statements / financial liquid-funds proofs:
+   - Flag as invalid if the statement date is older than 6 months from the Current Date for Evaluation.
+   - Include the detected age in months in the reason.
+3. Passport:
+   - Flag as invalid if passport expiry is less than 6 months from expected travel/program-start date.
+   - If expected travel/program-start date is unavailable, compare expiry against Current Date for Evaluation and state that assumption explicitly.
+4. I-20 / university offer / university admission letters:
+   - Flag as invalid if intake term, program start date, or reporting date is already in the past relative to Current Date for Evaluation.
+5. DS-160 and appointment/payment artifacts (DS-160 confirmation/application, SEVIS/MRV receipts, biometric/consular confirmations, interview confirmations):
+   - Flag as invalid if dates are expired, stale, or clearly not compliant for the current visa cycle.
+6. Other date-sensitive documents:
+   - Apply the same timeline-compliance logic; if expiry/validity is past, mark invalid.
+7. If any date check fails:
+   - Set "Document Validation" to "No"
+   - Put a clear failure explanation in "Message" (this is the review reason field shown to the user).
+   - Example: "Bank statement is 8 months old. US Consulates require statements to be no older than 6 months."
+8. If the document does not contain enough date evidence, do NOT invent dates; mention the assumption/limitation clearly.
+"""
+
         # Build validation prompt based on document type
         validation_prompt = ""
         if document_type:
@@ -124,6 +157,8 @@ TASK:
 2. Determine if it actually matches a {document_type.upper()}
 3. If YES: Set "Document Validation" to "Yes" and extract all information
 4. If NO: Set "Document Validation" to "No", identify what document type it actually is, and provide a helpful message asking the user to upload the correct document
+
+{timeline_rules_block}
 
 REQUIREMENTS:
 - You MUST respond with ONLY valid JSON, no markdown, no code blocks, no explanations
@@ -147,6 +182,16 @@ REQUIRED JSON FORMAT:
 Remember: Output ONLY the JSON object, nothing else."""
         else:
             validation_prompt = """Extract all information from this document.
+
+IMPORTANT DATE CONTEXT:
+Use the following Current Date for Evaluation while extracting and validating date relevance.
+Current Date for Evaluation: """ + evaluation_date_value + """
+
+For date-sensitive docs, explicitly check expiration and timeline compliance:
+- Bank statements older than 6 months should be treated as invalid.
+- Passport with less than 6 months remaining validity should be treated as invalid.
+- I-20/Offer/Admission date in the past should be treated as invalid.
+- For other visa docs, flag stale/expired dates as invalid.
 
 REQUIREMENTS:
 - You MUST respond with ONLY valid JSON, no markdown, no code blocks, no explanations
@@ -611,4 +656,3 @@ def create_extracted_text_file(extracted_text: str, original_filename: str) -> b
     
     full_text = header + extracted_text
     return full_text.encode('utf-8')
-
