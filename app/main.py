@@ -3,9 +3,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
+from app.services.daily_ai_notifications import (
+    start_daily_ai_notification_scheduler,
+    stop_daily_ai_notification_scheduler,
+)
 from app.schema_patch import (
     ensure_coupon_percent_column,
     ensure_coupon_usage_limit_column,
@@ -117,6 +121,7 @@ app.include_router(ai_chat.router)
 app.include_router(pricing.router)
 app.include_router(subscription.router)
 app.include_router(news.router)
+app.include_router(notifications.router)
 
 
 @app.on_event("startup")
@@ -136,6 +141,12 @@ def startup_backfill_subscriptions():
         backfill_hashed_auth_tokens(db)
     finally:
         db.close()
+    start_daily_ai_notification_scheduler()
+
+
+@app.on_event("shutdown")
+def shutdown_background_services():
+    stop_daily_ai_notification_scheduler()
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

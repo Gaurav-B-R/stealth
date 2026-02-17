@@ -99,6 +99,25 @@ class SubscriptionUpgradeRequest(BaseModel):
 class SubscriptionSessionConsumeRequest(BaseModel):
     session_type: str  # prep | mock
 
+
+class NotificationResponse(BaseModel):
+    id: int
+    title: str
+    message: str
+    notification_type: str
+    source: Optional[str] = None
+    is_read: bool
+    created_at: datetime
+    read_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class NotificationListResponse(BaseModel):
+    notifications: List[NotificationResponse]
+    unread_count: int
+
 class Token(BaseModel):
     access_token: str
     token_type: str

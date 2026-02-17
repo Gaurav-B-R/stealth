@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Numeric
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -43,6 +43,7 @@ class User(Base):
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
     subscription = relationship("Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan")
     subscription_payments = relationship("SubscriptionPayment", back_populates="user", cascade="all, delete-orphan")
+    notifications = relationship("UserNotification", back_populates="user", cascade="all, delete-orphan")
 
 class USUniversity(Base):
     __tablename__ = "us_universities"
@@ -153,3 +154,32 @@ class CouponCode(Base):
     coupon_code = Column(String, primary_key=True, index=True, nullable=False)
     percent_off = Column(Numeric(5, 2), nullable=False)
     max_uses_per_user = Column(Integer, nullable=True)
+
+
+class UserNotification(Base):
+    __tablename__ = "user_notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    notification_type = Column(String, nullable=False, default="info")  # success | error | warning | info
+    source = Column(String, nullable=True)  # ai_daily_assistant | subscription | system
+    is_read = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User", back_populates="notifications")
+
+
+class AIDailyNotificationRun(Base):
+    __tablename__ = "ai_daily_notification_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_date = Column(Date, nullable=False, unique=True, index=True)
+    status = Column(String, nullable=False, default="running")  # running | completed | failed
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    users_scanned = Column(Integer, nullable=False, default=0)
+    notifications_sent = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)

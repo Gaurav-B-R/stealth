@@ -28,7 +28,9 @@ const LEGAL_LAST_UPDATED = {
 };
 
 // Notification System
-let notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
+const NOTIFICATION_STORAGE_PREFIX = 'notifications_user_';
+const LEGACY_NOTIFICATION_STORAGE_KEY = 'notifications';
+let notifications = [];
 let notificationDropdownOpen = false;
 let messageHideTimer = null;
 let expandedChatWidgetId = null;
@@ -918,7 +920,7 @@ function updateUIForAuth() {
         document.getElementById('registerLink').style.display = 'none';
         document.getElementById('userMenu').style.display = 'block';
         document.getElementById('notificationContainer').style.display = 'block';
-        updateNotificationBadge();
+        loadNotifications();
         updateFloatingChatVisibility();
         
         // Update homepage buttons
@@ -941,6 +943,9 @@ function updateUIForAuth() {
         document.getElementById('registerLink').style.display = 'block';
         document.getElementById('userMenu').style.display = 'none';
         document.getElementById('notificationContainer').style.display = 'none';
+        notifications = [];
+        updateNotificationBadge();
+        renderNotifications();
         updateFloatingChatVisibility();
         
         // Update homepage buttons
@@ -963,13 +968,14 @@ function toggleUserMenu() {
 // Notification Functions
 function addNotification(title, message, type = 'info', data = null) {
     const notification = {
-        id: Date.now(),
+        id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
         title: title,
         message: message,
         type: type, // 'success', 'error', 'warning', 'info'
         data: data,
         timestamp: new Date().toISOString(),
-        read: false
+        read: false,
+        origin: 'local'
     };
     notifications.unshift(notification);
     // Keep only last 50 notifications
@@ -982,12 +988,115 @@ function addNotification(title, message, type = 'info', data = null) {
     return notification;
 }
 
-function saveNotifications() {
-    localStorage.setItem('notifications', JSON.stringify(notifications));
+function getNotificationStorageKey() {
+    if (currentUser?.id) {
+        return `${NOTIFICATION_STORAGE_PREFIX}${currentUser.id}`;
+    }
+    return LEGACY_NOTIFICATION_STORAGE_KEY;
 }
 
-function loadNotifications() {
-    notifications = JSON.parse(localStorage.getItem('notifications') || '[]');
+function readLocalNotifications() {
+    const userScopedKey = getNotificationStorageKey();
+    const rawUserScoped = localStorage.getItem(userScopedKey);
+    if (rawUserScoped) {
+        try {
+            const parsed = JSON.parse(rawUserScoped);
+            if (Array.isArray(parsed)) {
+                return parsed.map((notif) => ({
+                    ...notif,
+                    origin: 'local'
+                }));
+            }
+        } catch (error) {
+            console.warn('Failed to parse local notifications:', error);
+        }
+    }
+
+    if (userScopedKey !== LEGACY_NOTIFICATION_STORAGE_KEY) {
+        const legacyRaw = localStorage.getItem(LEGACY_NOTIFICATION_STORAGE_KEY);
+        if (legacyRaw) {
+            try {
+                const parsedLegacy = JSON.parse(legacyRaw);
+                if (Array.isArray(parsedLegacy)) {
+                    return parsedLegacy.map((notif) => ({
+                        ...notif,
+                        origin: 'local'
+                    }));
+                }
+            } catch (error) {
+                console.warn('Failed to parse legacy notifications:', error);
+            }
+        }
+    }
+
+    return [];
+}
+
+function saveNotifications() {
+    const localOnlyNotifications = notifications
+        .filter((notif) => notif.origin !== 'server')
+        .slice(0, 50)
+        .map((notif) => ({
+            id: notif.id,
+            title: notif.title,
+            message: notif.message,
+            type: notif.type,
+            data: notif.data || null,
+            timestamp: notif.timestamp,
+            read: Boolean(notif.read),
+            origin: 'local'
+        }));
+    localStorage.setItem(getNotificationStorageKey(), JSON.stringify(localOnlyNotifications));
+}
+
+function normalizeServerNotification(rawNotification) {
+    return {
+        id: `srv-${rawNotification.id}`,
+        serverId: rawNotification.id,
+        title: rawNotification.title || 'Notification',
+        message: rawNotification.message || '',
+        type: rawNotification.notification_type || 'info',
+        timestamp: rawNotification.created_at || new Date().toISOString(),
+        read: Boolean(rawNotification.is_read),
+        origin: 'server',
+        data: null
+    };
+}
+
+function mergeNotificationLists(serverNotifications, localNotifications) {
+    const mergedByKey = new Map();
+    [...serverNotifications, ...localNotifications].forEach((notif) => {
+        if (!notif || !notif.id) return;
+        mergedByKey.set(String(notif.id), notif);
+    });
+    return Array.from(mergedByKey.values())
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 100);
+}
+
+async function loadNotifications() {
+    const localNotifications = readLocalNotifications();
+    let serverNotifications = [];
+
+    if (currentUser && authToken) {
+        try {
+            const response = await fetch(`${API_BASE}/api/notifications?limit=100`, {
+                headers: {
+                    'Authorization': `Bearer ${authToken}`
+                }
+            });
+            if (response.ok) {
+                const payload = await response.json();
+                if (Array.isArray(payload.notifications)) {
+                    serverNotifications = payload.notifications.map(normalizeServerNotification);
+                }
+            }
+        } catch (error) {
+            console.warn('Failed to load server notifications:', error);
+        }
+    }
+
+    notifications = mergeNotificationLists(serverNotifications, localNotifications);
     updateNotificationBadge();
     renderNotifications();
 }
@@ -1019,12 +1128,13 @@ function renderNotifications() {
         const timeAgo = getTimeAgo(date);
         const icon = getNotificationIcon(notif.type);
         const readClass = notif.read ? 'read' : '';
+        const escapedId = String(notif.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         
         // Format message with line breaks
         const formattedMessage = escapeHtml(notif.message).replace(/\n/g, '<br>');
         
         return `
-            <div class="notification-item ${readClass}" onclick="markNotificationRead(${notif.id})">
+            <div class="notification-item ${readClass}" onclick="markNotificationRead('${escapedId}')">
                 <div class="notification-icon ${notif.type}">${icon}</div>
                 <div class="notification-content">
                     <div class="notification-title">${escapeHtml(notif.title)}</div>
@@ -1112,9 +1222,21 @@ function toggleNotifications() {
     }
 }
 
-function markNotificationRead(id) {
-    const notif = notifications.find(n => n.id === id);
+async function markNotificationRead(id) {
+    const notif = notifications.find(n => String(n.id) === String(id));
     if (notif && !notif.read) {
+        if (notif.origin === 'server' && notif.serverId && authToken) {
+            try {
+                await fetch(`${API_BASE}/api/notifications/${notif.serverId}/read`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+            } catch (error) {
+                console.warn('Failed to mark server notification as read:', error);
+            }
+        }
         notif.read = true;
         saveNotifications();
         updateNotificationBadge();
@@ -1122,10 +1244,33 @@ function markNotificationRead(id) {
     }
 }
 
-function clearAllNotifications() {
+async function clearAllNotifications() {
     if (confirm('Clear all notifications?')) {
-        notifications = [];
+        const localNotifications = notifications.filter((notif) => notif.origin !== 'server');
+        notifications = notifications
+            .filter((notif) => notif.origin === 'server')
+            .map((notif) => ({ ...notif, read: true }));
         saveNotifications();
+
+        if (currentUser && authToken) {
+            try {
+                await fetch(`${API_BASE}/api/notifications/read-all`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+            } catch (error) {
+                console.warn('Failed to clear server notifications:', error);
+                // Restore local notifications if backend clear failed.
+                notifications = mergeNotificationLists(
+                    notifications.filter((notif) => notif.origin === 'server'),
+                    localNotifications
+                );
+                saveNotifications();
+            }
+        }
+
         updateNotificationBadge();
         renderNotifications();
     }
