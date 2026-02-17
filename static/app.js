@@ -4093,16 +4093,7 @@ function updatePricingByCountry(countryCode) {
         proPriceEl.innerHTML = `${formatCurrencyAmount(convertedPro, config.currency)}<span>/month</span>`;
     }
     if (hintEl) {
-        let hintText = `Currency: ${config.currency} (${config.country})`;
-        if (pricingRatesMeta.source === 'fallback') {
-            hintText += ' • Using fallback rates';
-        } else if (pricingRatesMeta.missingCurrencies.includes(config.currency)) {
-            hintText += ` • Using fallback for ${config.currency}`;
-        } else if (pricingRatesMeta.stale) {
-            hintText += ' • Using cached rates';
-        }
-        hintText += ` • Converted from base ₹${PRO_PRICE_INR}/month`;
-        hintEl.textContent = hintText;
+        hintEl.textContent = `Currency: ${config.currency} (${config.country})`;
     }
 }
 
