@@ -31,6 +31,7 @@ class UserResponse(UserBase):
     email_verified: bool
     referral_code: Optional[str] = None
     accepted_terms_privacy_at: Optional[datetime] = None
+    email_notifications_enabled: bool = True
     created_at: datetime
     
     class Config:
@@ -78,6 +79,7 @@ class SubscriptionResponse(BaseModel):
     latest_payment_verified_at: Optional[datetime] = None
     auto_renew_enabled: Optional[bool] = None
     recurring_subscription_status: Optional[str] = None
+    email_notifications_enabled: bool = True
 
 
 class RazorpayPaymentVerifyRequest(BaseModel):

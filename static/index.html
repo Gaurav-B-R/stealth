@@ -203,6 +203,13 @@
                         <input type="hidden" id="emailUnsubToken" value="">
                         <div class="form-group">
                             <label for="emailUnsubReason">Reason for unsubscribing *</label>
+                            <div id="emailUnsubQuickReasons" class="email-unsub-quick-reasons">
+                                <button type="button" class="email-unsub-reason-chip" data-reason="Too many emails">Too many emails</button>
+                                <button type="button" class="email-unsub-reason-chip" data-reason="Content is not relevant for me">Not relevant</button>
+                                <button type="button" class="email-unsub-reason-chip" data-reason="I only want in-app bell notifications">Bell only</button>
+                                <button type="button" class="email-unsub-reason-chip" data-reason="I have completed my visa process">Visa completed</button>
+                                <button type="button" class="email-unsub-reason-chip" data-reason="">Other reason</button>
+                            </div>
                             <textarea id="emailUnsubReason" required rows="4" placeholder="Tell us why you want to stop email notifications..."></textarea>
                             <small id="emailUnsubInvalidReason" class="email-unsub-invalid-reason"></small>
                         </div>
@@ -990,6 +997,13 @@
                                 </div>
                                 <button type="submit" id="profileChangePasswordBtn" class="btn btn-secondary" style="width: 100%;">Change Password</button>
                             </form>
+                        </div>
+                        <div id="profileEmailNotificationsCard" style="display: none; margin-top: 1rem; padding: 1rem; border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 12px; background: rgba(245, 158, 11, 0.08);">
+                            <div style="font-weight: 700; color: #fde68a; margin-bottom: 0.2rem;">Email Notifications</div>
+                            <div id="profileEmailNotificationsText" style="color: #fcd34d; font-size: 0.85rem; margin-bottom: 0.85rem;">
+                                Email notifications are currently disabled for this account.
+                            </div>
+                            <button id="profileEmailNotificationsEnableBtn" type="button" class="btn btn-secondary" style="width: 100%;" onclick="handleEnableEmailNotifications()">Enable Email Notifications</button>
                         </div>
                         <div style="margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(99, 102, 241, 0.08);">
                             <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap;">

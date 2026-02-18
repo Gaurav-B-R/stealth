@@ -6,6 +6,7 @@ This guide helps users navigate the Rilono web app UI quickly.
 - `/` : Home page
 - `/dashboard` : Main dashboard
 - `/subscription` : Subscription Management view
+- `/unsubscribe-email?token=...` : Email notifications unsubscribe flow
 - `/pricing` : Pricing page
 - `/about-us` : About page
 - `/contact` : Contact form
@@ -30,6 +31,14 @@ This guide helps users navigate the Rilono web app UI quickly.
 - `Manage Subscription` : Opens `/subscription`
 - `Feature Request` : Opens feature request modal
 - `Logout` : Signs out
+
+## Email Notification Controls
+- Unsubscribe link is present in email footer (small and low-visibility) for notification emails.
+- Unsubscribe page asks for reason before confirmation.
+- In-app bell notifications continue even after email unsubscribe.
+- Re-enable location:
+  - Dashboard → `Profile` tab → `Email Notifications` card.
+  - `Enable Email Notifications` button is shown only when email notifications are currently disabled.
 
 ## Subscription Management (`/subscription`)
 - Shows:
@@ -65,4 +74,3 @@ This guide helps users navigate the Rilono web app UI quickly.
 - "Why can’t I use this feature?" → Free tier quota may be exhausted; suggest Pro.
 - "How do I change my subscription?" → Open `/subscription`.
 - "Where do I see document issues?" → Documents tab + Overview > Document Health.
-

@@ -207,6 +207,24 @@ def update_documentation_preferences(
         }
     }
 
+
+@router.post("/email-notifications/subscribe")
+def subscribe_email_notifications(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Re-enable email notifications for the current user."""
+    if current_user.email_notifications_enabled:
+        return {"message": "Email notifications are already enabled."}
+
+    current_user.email_notifications_enabled = True
+    current_user.email_notifications_unsubscribed_at = None
+    current_user.email_notifications_unsubscribe_reason = None
+    db.commit()
+    db.refresh(current_user)
+
+    return {"message": "Email notifications enabled successfully."}
+
 # Note: This route must come AFTER specific paths like /documentation-preferences
 # because {user_id} would otherwise match any path segment
 @router.get("/{user_id}", response_model=schemas.PublicUserResponse)

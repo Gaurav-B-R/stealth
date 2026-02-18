@@ -307,6 +307,7 @@ def _build_subscription_response(
     latest_payment_amount_paise: int | None = None,
     latest_payment_currency: str | None = None,
     latest_payment_verified_at: datetime | None = None,
+    email_notifications_enabled: bool | None = None,
 ) -> schemas.SubscriptionResponse:
     limits = get_plan_limits(subscription.plan)
     ai_limit = limits["ai_messages_limit"]
@@ -318,6 +319,13 @@ def _build_subscription_response(
     docs_remaining = -1 if doc_limit < 0 else max(doc_limit - subscription.document_uploads_used, 0)
     prep_remaining = -1 if prep_limit < 0 else max(prep_limit - subscription.prep_sessions_used, 0)
     mock_remaining = -1 if mock_limit < 0 else max(mock_limit - subscription.mock_interviews_used, 0)
+
+    if email_notifications_enabled is None:
+        user_obj = getattr(subscription, "user", None)
+        if user_obj is not None:
+            email_notifications_enabled = bool(user_obj.email_notifications_enabled)
+        else:
+            email_notifications_enabled = True
 
     return schemas.SubscriptionResponse(
         plan=subscription.plan,
@@ -348,6 +356,7 @@ def _build_subscription_response(
         latest_payment_verified_at=_normalize_datetime(latest_payment_verified_at),
         auto_renew_enabled=auto_renew_enabled,
         recurring_subscription_status=recurring_subscription_status,
+        email_notifications_enabled=bool(email_notifications_enabled),
     )
 
 

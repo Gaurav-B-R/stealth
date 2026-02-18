@@ -6062,6 +6062,37 @@ body.chat-expanded-lock {
     min-height: 1rem;
 }
 
+.email-unsub-quick-reasons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    margin: 0.25rem 0 0.8rem 0;
+}
+
+.email-unsub-reason-chip {
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    background: rgba(99, 102, 241, 0.08);
+    color: #c7d2fe;
+    border-radius: 999px;
+    padding: 0.42rem 0.7rem;
+    font-size: 0.85rem;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.email-unsub-reason-chip:hover {
+    border-color: rgba(129, 140, 248, 0.65);
+    background: rgba(129, 140, 248, 0.16);
+}
+
+.email-unsub-reason-chip.active {
+    color: #eef2ff;
+    border-color: rgba(139, 92, 246, 0.8);
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(168, 85, 247, 0.35));
+    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.2) inset;
+}
+
 .email-unsub-success {
     margin-top: 1rem;
     background: rgba(16, 185, 129, 0.12);
@@ -6074,6 +6105,10 @@ body.chat-expanded-lock {
 @media (max-width: 640px) {
     .email-unsub-actions {
         flex-direction: column;
+    }
+
+    .email-unsub-reason-chip {
+        font-size: 0.82rem;
     }
 }
 

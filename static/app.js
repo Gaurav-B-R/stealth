@@ -576,6 +576,10 @@ function setupEventListeners() {
     if (featureRequestForm) featureRequestForm.addEventListener('submit', handleFeatureRequestSubmit);
     const emailUnsubscribeForm = document.getElementById('emailUnsubscribeForm');
     if (emailUnsubscribeForm) emailUnsubscribeForm.addEventListener('submit', handleEmailUnsubscribeSubmit);
+    const emailUnsubQuickReasons = document.getElementById('emailUnsubQuickReasons');
+    if (emailUnsubQuickReasons) {
+        emailUnsubQuickReasons.addEventListener('click', handleEmailUnsubQuickReasonClick);
+    }
     const registerPasswordInput = document.getElementById('registerPassword');
     if (registerPasswordInput) registerPasswordInput.addEventListener('input', updateRegisterPasswordHint);
     const resetPasswordNewInput = document.getElementById('resetPasswordNew');
@@ -2087,10 +2091,13 @@ function updateSubscriptionUI() {
     const profileStartedAtEl = document.getElementById('profileSubscriptionStartedAt');
     const profileLatestPaymentEl = document.getElementById('profileSubscriptionLatestPayment');
     const profileReferralInfoEl = document.getElementById('profileSubscriptionReferralInfo');
+    const profileEmailCardEl = document.getElementById('profileEmailNotificationsCard');
+    const profileEmailInfoEl = document.getElementById('profileEmailNotificationsText');
     const profileUsageAiEl = document.getElementById('profileSubscriptionUsageAi');
     const profileUsageUploadsEl = document.getElementById('profileSubscriptionUsageUploads');
     const profileUsagePrepEl = document.getElementById('profileSubscriptionUsagePrep');
     const profileUsageMockEl = document.getElementById('profileSubscriptionUsageMock');
+    const profileEnableEmailButton = document.getElementById('profileEmailNotificationsEnableBtn');
 
     if (!currentSubscription) {
         if (planNameEl) planNameEl.textContent = 'Free';
@@ -2122,10 +2129,13 @@ function updateSubscriptionUI() {
         if (profileStartedAtEl) profileStartedAtEl.textContent = '-';
         if (profileLatestPaymentEl) profileLatestPaymentEl.textContent = '-';
         if (profileReferralInfoEl) profileReferralInfoEl.textContent = 'Referral bonus: Not active';
+        if (profileEmailCardEl) profileEmailCardEl.style.display = 'none';
+        if (profileEmailInfoEl) profileEmailInfoEl.textContent = '';
         if (profileUsageAiEl) profileUsageAiEl.textContent = 'AI: 0/25 used';
         if (profileUsageUploadsEl) profileUsageUploadsEl.textContent = 'Uploads: 0/5 used';
         if (profileUsagePrepEl) profileUsagePrepEl.textContent = 'Prep: 0/3 used';
         if (profileUsageMockEl) profileUsageMockEl.textContent = 'Mock: 0/2 used';
+        if (profileEnableEmailButton) profileEnableEmailButton.disabled = false;
         return;
     }
 
@@ -2211,6 +2221,18 @@ function updateSubscriptionUI() {
         } else {
             profileReferralInfoEl.textContent = 'Referral bonus: Not active';
         }
+    }
+    const emailNotificationsEnabled = currentSubscription.email_notifications_enabled !== false;
+    if (profileEmailCardEl) {
+        profileEmailCardEl.style.display = emailNotificationsEnabled ? 'none' : 'block';
+    }
+    if (profileEmailInfoEl) {
+        profileEmailInfoEl.textContent = emailNotificationsEnabled
+            ? ''
+            : 'Email notifications are currently disabled for this account.';
+    }
+    if (profileEnableEmailButton) {
+        profileEnableEmailButton.disabled = false;
     }
     if (profileUsageAiEl) profileUsageAiEl.textContent = formatUsageText(currentSubscription.ai_messages_used, currentSubscription.ai_messages_limit, 'AI');
     if (profileUsageUploadsEl) profileUsageUploadsEl.textContent = formatUsageText(currentSubscription.document_uploads_used, currentSubscription.document_uploads_limit, 'Uploads');
@@ -2668,6 +2690,52 @@ async function handleCancelSubscription() {
     } catch (error) {
         console.error('Subscription cancellation failed:', error);
         showMessage('Failed to cancel subscription. Please try again.', 'error');
+    }
+}
+
+async function handleEnableEmailNotifications() {
+    if (!authToken) {
+        showLogin();
+        return;
+    }
+
+    const enableBtn = document.getElementById('profileEmailNotificationsEnableBtn');
+    if (enableBtn) {
+        enableBtn.disabled = true;
+        enableBtn.textContent = 'Enabling...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/profile/email-notifications/subscribe`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showMessage(data.detail || 'Failed to enable email notifications.', 'error');
+            return;
+        }
+
+        if (currentSubscription) {
+            currentSubscription.email_notifications_enabled = true;
+        }
+        if (currentUser) {
+            currentUser.email_notifications_enabled = true;
+        }
+
+        await loadSubscriptionStatus(true);
+        updateSubscriptionUI();
+        showMessage('Email notifications are enabled again.', 'success');
+    } catch (error) {
+        console.error('Enable email notifications failed:', error);
+        showMessage('Failed to enable email notifications. Please try again.', 'error');
+    } finally {
+        if (enableBtn) {
+            enableBtn.disabled = false;
+            enableBtn.textContent = 'Enable Email Notifications';
+        }
     }
 }
 
@@ -4189,6 +4257,7 @@ async function showEmailUnsubscribe(skipURLUpdate = false) {
     const tokenInput = document.getElementById('emailUnsubToken');
     const reasonInput = document.getElementById('emailUnsubReason');
     const invalidReasonEl = document.getElementById('emailUnsubInvalidReason');
+    const quickReasonContainer = document.getElementById('emailUnsubQuickReasons');
 
     if (loadingEl) loadingEl.style.display = 'block';
     if (invalidEl) invalidEl.style.display = 'none';
@@ -4199,6 +4268,11 @@ async function showEmailUnsubscribe(skipURLUpdate = false) {
     if (alreadyEl) alreadyEl.style.display = 'none';
     if (invalidReasonEl) invalidReasonEl.textContent = '';
     if (reasonInput) reasonInput.value = '';
+    if (quickReasonContainer) {
+        quickReasonContainer.querySelectorAll('.email-unsub-reason-chip').forEach((chip) => {
+            chip.classList.remove('active');
+        });
+    }
 
     const token = (new URLSearchParams(window.location.search).get('token') || '').trim();
     if (tokenInput) tokenInput.value = token;
@@ -4243,6 +4317,33 @@ function openEmailUnsubscribeReasonForm() {
     const formEl = document.getElementById('emailUnsubscribeForm');
     if (actionsEl) actionsEl.style.display = 'none';
     if (formEl) formEl.style.display = 'block';
+}
+
+function handleEmailUnsubQuickReasonClick(event) {
+    const chip = event.target.closest('.email-unsub-reason-chip');
+    if (!chip) return;
+
+    const reasonInput = document.getElementById('emailUnsubReason');
+    const invalidReasonEl = document.getElementById('emailUnsubInvalidReason');
+    const container = document.getElementById('emailUnsubQuickReasons');
+    if (invalidReasonEl) invalidReasonEl.textContent = '';
+
+    if (container) {
+        container.querySelectorAll('.email-unsub-reason-chip').forEach((item) => {
+            item.classList.remove('active');
+        });
+    }
+    chip.classList.add('active');
+
+    const selectedReason = (chip.dataset.reason || '').trim();
+    if (!reasonInput) return;
+
+    if (selectedReason) {
+        reasonInput.value = selectedReason;
+    } else {
+        reasonInput.value = '';
+        reasonInput.focus();
+    }
 }
 
 function cancelEmailUnsubscribeFlow() {
