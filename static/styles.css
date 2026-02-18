@@ -6008,6 +6008,75 @@ body.chat-expanded-lock {
     font-size: 1.02rem;
 }
 
+.email-unsubscribe-card {
+    max-width: 560px;
+}
+
+.email-unsub-loading {
+    text-align: center;
+    color: var(--text-secondary);
+    margin: 0.5rem 0 1rem 0;
+}
+
+.email-unsub-invalid {
+    background: rgba(239, 68, 68, 0.14);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    color: #fca5a5;
+    border-radius: 10px;
+    padding: 0.8rem 0.9rem;
+    margin-top: 0.8rem;
+}
+
+.email-unsub-warning {
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: #fde68a;
+    border-radius: 12px;
+    padding: 1rem;
+    margin-top: 0.2rem;
+}
+
+.email-unsub-warning h3 {
+    margin: 0 0 0.55rem 0;
+    color: #fef3c7;
+}
+
+.email-unsub-warning p {
+    margin: 0.45rem 0;
+}
+
+.email-unsub-actions {
+    margin-top: 1rem;
+    display: flex;
+    gap: 0.7rem;
+}
+
+.email-unsub-actions .btn {
+    flex: 1;
+}
+
+.email-unsub-invalid-reason {
+    display: block;
+    color: #fca5a5;
+    margin-top: 0.5rem;
+    min-height: 1rem;
+}
+
+.email-unsub-success {
+    margin-top: 1rem;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    color: #86efac;
+    border-radius: 10px;
+    padding: 0.8rem 0.9rem;
+}
+
+@media (max-width: 640px) {
+    .email-unsub-actions {
+        flex-direction: column;
+    }
+}
+
 @keyframes documentUploadSpin {
     from {
         transform: rotate(0deg);

@@ -38,6 +38,9 @@ class User(Base):
     first_login_at = Column(DateTime(timezone=True), nullable=True)
     referral_reward_granted_at = Column(DateTime(timezone=True), nullable=True)
     accepted_terms_privacy_at = Column(DateTime(timezone=True), nullable=True)
+    email_notifications_enabled = Column(Boolean, nullable=False, default=True)
+    email_notifications_unsubscribed_at = Column(DateTime(timezone=True), nullable=True)
+    email_notifications_unsubscribe_reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")

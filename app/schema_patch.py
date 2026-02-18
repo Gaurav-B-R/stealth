@@ -30,6 +30,17 @@ def ensure_user_legal_consent_column():
         if "accepted_terms_privacy_at" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_at TIMESTAMP"))
 
+        if "email_notifications_enabled" not in columns:
+            conn.execute(
+                text("ALTER TABLE users ADD COLUMN email_notifications_enabled BOOLEAN NOT NULL DEFAULT TRUE")
+            )
+
+        if "email_notifications_unsubscribed_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_notifications_unsubscribed_at TIMESTAMP"))
+
+        if "email_notifications_unsubscribe_reason" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN email_notifications_unsubscribe_reason TEXT"))
+
 
 def ensure_subscription_usage_columns():
     """

@@ -13,7 +13,13 @@ from app.auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     validate_password_strength,
 )
-from app.email_service import generate_verification_token, send_verification_email, send_password_reset_email
+from app.email_service import (
+    generate_verification_token,
+    send_verification_email,
+    send_password_reset_email,
+    send_contact_form_email,
+    verify_email_notifications_unsubscribe_token,
+)
 from app.utils.turnstile import verify_turnstile_token
 from app.subscriptions import get_or_create_user_subscription
 from app.referrals import (
@@ -875,8 +881,6 @@ async def submit_contact_form(
         window_seconds=CONTACT_RATE_WINDOW_SECONDS,
     )
 
-    from ..email_service import send_contact_form_email
-    
     # Basic validation
     if not name or len(name.strip()) < 2:
         raise HTTPException(status_code=400, detail="Please provide your name")
@@ -906,3 +910,68 @@ async def submit_contact_form(
             status_code=500,
             detail="Failed to send your message. Please try again or email us directly at contact@rilono.com"
         )
+
+
+@router.get("/email-notifications/unsubscribe-preview", response_model=schemas.EmailNotificationUnsubscribePreview)
+def get_email_unsubscribe_preview(
+    token: str,
+    db: Session = Depends(get_db),
+):
+    email = verify_email_notifications_unsubscribe_token(token)
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link.")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found for this unsubscribe link.")
+
+    return schemas.EmailNotificationUnsubscribePreview(
+        email=user.email,
+        subscribed=bool(user.email_notifications_enabled),
+    )
+
+
+@router.post("/email-notifications/unsubscribe")
+def unsubscribe_email_notifications(
+    payload: schemas.EmailNotificationUnsubscribeRequest,
+    db: Session = Depends(get_db),
+):
+    email = verify_email_notifications_unsubscribe_token(payload.token)
+    if not email:
+        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link.")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found for this unsubscribe link.")
+
+    reason = (payload.reason or "").strip()
+    if len(reason) < 3:
+        raise HTTPException(status_code=400, detail="Please provide a short reason for unsubscribing.")
+    if len(reason) > 2000:
+        raise HTTPException(status_code=400, detail="Reason is too long.")
+
+    user.email_notifications_enabled = False
+    user.email_notifications_unsubscribed_at = datetime.utcnow()
+    user.email_notifications_unsubscribe_reason = reason or None
+    db.commit()
+
+    feedback_subject = "Email Notification Unsubscribe Feedback"
+    feedback_message = (
+        f"User email: {user.email}\n"
+        f"User id: {user.id}\n"
+        f"Unsubscribed at (UTC): {user.email_notifications_unsubscribed_at.isoformat() if user.email_notifications_unsubscribed_at else 'N/A'}\n"
+        f"Reason: {reason or 'No reason provided'}"
+    )
+    # Best-effort feedback forwarding; unsubscribe should succeed regardless.
+    try:
+        send_contact_form_email(
+            name=user.full_name or user.username or user.email.split("@")[0],
+            email=user.email,
+            subject=feedback_subject,
+            message=feedback_message,
+            user_type="student",
+        )
+    except Exception:
+        pass
+
+    return {"message": "You have unsubscribed from email notifications successfully."}

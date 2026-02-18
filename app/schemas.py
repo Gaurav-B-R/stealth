@@ -147,6 +147,16 @@ class PasswordChangeRequest(BaseModel):
     current_password: str
     new_password: str
 
+
+class EmailNotificationUnsubscribeRequest(BaseModel):
+    token: str
+    reason: Optional[str] = None
+
+
+class EmailNotificationUnsubscribePreview(BaseModel):
+    email: str
+    subscribed: bool
+
 class UniversityChangeRequest(BaseModel):
     new_email: str
     new_university: str

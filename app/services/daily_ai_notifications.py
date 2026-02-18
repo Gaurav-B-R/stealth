@@ -11,7 +11,10 @@ from sqlalchemy.exc import IntegrityError
 
 from app import models
 from app.database import SessionLocal
-from app.email_service import send_proactive_assistant_email
+from app.email_service import (
+    build_email_notifications_unsubscribe_url,
+    send_proactive_assistant_email,
+)
 from app.notification_center import create_user_notification
 from app.routers.documents import refresh_student_profile_snapshot_for_user
 from app.utils import gemini_service as gemini_utils
@@ -318,12 +321,14 @@ def _process_single_user(user_id: int, model: Any, r2_client) -> bool:
             commit=True,
         )
 
-        if user.email:
+        if user.email and user.email_notifications_enabled is not False:
+            unsubscribe_url = build_email_notifications_unsubscribe_url(email=user.email)
             send_proactive_assistant_email(
                 email=user.email,
                 full_name=user.full_name,
                 subject=subject,
                 html_body=decision.email_body,
+                unsubscribe_url=unsubscribe_url,
             )
 
         print(f"Daily AI notifier: sent proactive notification for user_id={user.id}")

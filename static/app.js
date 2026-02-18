@@ -442,6 +442,8 @@ function handleRoute(skipURLUpdate = false) {
         showDeliveryPolicy(skipURLUpdate);
     } else if (path === '/contact') {
         showContact(skipURLUpdate);
+    } else if (path === '/unsubscribe-email') {
+        showEmailUnsubscribe(skipURLUpdate);
     } else {
         // Unknown route, redirect to homepage
         if (!skipURLUpdate) {
@@ -571,6 +573,8 @@ function setupEventListeners() {
     if (contactForm) contactForm.addEventListener('submit', handleContactSubmit);
     const featureRequestForm = document.getElementById('featureRequestForm');
     if (featureRequestForm) featureRequestForm.addEventListener('submit', handleFeatureRequestSubmit);
+    const emailUnsubscribeForm = document.getElementById('emailUnsubscribeForm');
+    if (emailUnsubscribeForm) emailUnsubscribeForm.addEventListener('submit', handleEmailUnsubscribeSubmit);
     const registerPasswordInput = document.getElementById('registerPassword');
     if (registerPasswordInput) registerPasswordInput.addEventListener('input', updateRegisterPasswordHint);
     const resetPasswordNewInput = document.getElementById('resetPasswordNew');
@@ -4163,6 +4167,129 @@ function showContact(skipURLUpdate = false) {
     
     if (!skipURLUpdate) {
         updateURL('/contact', false);
+    }
+}
+
+async function showEmailUnsubscribe(skipURLUpdate = false) {
+    hideAllSections();
+    const section = document.getElementById('emailUnsubscribeSection');
+    if (!section) return;
+    section.style.display = 'block';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    const loadingEl = document.getElementById('emailUnsubLoading');
+    const invalidEl = document.getElementById('emailUnsubInvalid');
+    const contentEl = document.getElementById('emailUnsubContent');
+    const successEl = document.getElementById('emailUnsubSuccess');
+    const actionsEl = document.getElementById('emailUnsubActions');
+    const formEl = document.getElementById('emailUnsubscribeForm');
+    const alreadyEl = document.getElementById('emailUnsubAlready');
+    const emailEl = document.getElementById('emailUnsubEmail');
+    const tokenInput = document.getElementById('emailUnsubToken');
+    const reasonInput = document.getElementById('emailUnsubReason');
+    const invalidReasonEl = document.getElementById('emailUnsubInvalidReason');
+
+    if (loadingEl) loadingEl.style.display = 'block';
+    if (invalidEl) invalidEl.style.display = 'none';
+    if (contentEl) contentEl.style.display = 'none';
+    if (successEl) successEl.style.display = 'none';
+    if (actionsEl) actionsEl.style.display = 'none';
+    if (formEl) formEl.style.display = 'none';
+    if (alreadyEl) alreadyEl.style.display = 'none';
+    if (invalidReasonEl) invalidReasonEl.textContent = '';
+    if (reasonInput) reasonInput.value = '';
+
+    const token = (new URLSearchParams(window.location.search).get('token') || '').trim();
+    if (tokenInput) tokenInput.value = token;
+
+    if (!token) {
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (invalidEl) {
+            invalidEl.textContent = 'Invalid unsubscribe link. Please use the latest link from your email.';
+            invalidEl.style.display = 'block';
+        }
+        if (!skipURLUpdate) updateURL('/unsubscribe-email', false);
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/email-notifications/unsubscribe-preview?token=${encodeURIComponent(token)}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.detail || 'Invalid or expired unsubscribe link.');
+        }
+
+        if (emailEl) emailEl.textContent = data.email || 'your account';
+        if (contentEl) contentEl.style.display = 'block';
+        if (actionsEl) actionsEl.style.display = data.subscribed ? 'flex' : 'none';
+        if (alreadyEl) alreadyEl.style.display = data.subscribed ? 'none' : 'block';
+    } catch (error) {
+        if (invalidEl) {
+            invalidEl.textContent = error.message || 'Invalid or expired unsubscribe link.';
+            invalidEl.style.display = 'block';
+        }
+    } finally {
+        if (loadingEl) loadingEl.style.display = 'none';
+    }
+
+    if (!skipURLUpdate) {
+        updateURL(`/unsubscribe-email?token=${encodeURIComponent(token)}`, false);
+    }
+}
+
+function openEmailUnsubscribeReasonForm() {
+    const actionsEl = document.getElementById('emailUnsubActions');
+    const formEl = document.getElementById('emailUnsubscribeForm');
+    if (actionsEl) actionsEl.style.display = 'none';
+    if (formEl) formEl.style.display = 'block';
+}
+
+function cancelEmailUnsubscribeFlow() {
+    if (currentUser) {
+        showDashboard();
+        return;
+    }
+    showHomepage();
+}
+
+async function handleEmailUnsubscribeSubmit(e) {
+    e.preventDefault();
+
+    const token = (document.getElementById('emailUnsubToken')?.value || '').trim();
+    const reason = (document.getElementById('emailUnsubReason')?.value || '').trim();
+    const invalidReasonEl = document.getElementById('emailUnsubInvalidReason');
+    const formEl = document.getElementById('emailUnsubscribeForm');
+    const successEl = document.getElementById('emailUnsubSuccess');
+    const actionsEl = document.getElementById('emailUnsubActions');
+
+    if (invalidReasonEl) invalidReasonEl.textContent = '';
+
+    if (!token) {
+        showMessage('Invalid unsubscribe token. Please use the link from your email.', 'error');
+        return;
+    }
+    if (reason.length < 3) {
+        if (invalidReasonEl) invalidReasonEl.textContent = 'Please share a short reason before unsubscribing.';
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/email-notifications/unsubscribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, reason }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.detail || 'Unable to unsubscribe right now.');
+        }
+
+        if (formEl) formEl.style.display = 'none';
+        if (actionsEl) actionsEl.style.display = 'none';
+        if (successEl) successEl.style.display = 'block';
+        showMessage('You have unsubscribed from email notifications.', 'success');
+    } catch (error) {
+        showMessage(error.message || 'Unable to unsubscribe right now.', 'error');
     }
 }
 

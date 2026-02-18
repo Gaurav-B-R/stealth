@@ -17,7 +17,10 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.auth import get_current_active_user
 from app.database import get_db
-from app.email_service import send_subscription_change_email
+from app.email_service import (
+    build_email_notifications_unsubscribe_url,
+    send_subscription_change_email,
+)
 from app.subscriptions import (
     PLAN_FREE,
     PLAN_PRO,
@@ -828,7 +831,10 @@ def _send_subscription_change_email_safe(
 ) -> None:
     if not user.email:
         return
+    if user.email_notifications_enabled is False:
+        return
     try:
+        unsubscribe_url = build_email_notifications_unsubscribe_url(email=user.email)
         send_subscription_change_email(
             email=user.email,
             full_name=user.full_name,
@@ -841,6 +847,7 @@ def _send_subscription_change_email_safe(
             payment_amount_paise=payment_amount_paise,
             payment_currency=(payment_currency or "INR"),
             payment_status=payment_status,
+            unsubscribe_url=unsubscribe_url,
         )
     except Exception:
         logger.exception(
