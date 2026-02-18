@@ -405,7 +405,8 @@ function buildSearchURL(search, category, minPrice, maxPrice) {
 
 function handleRoute(skipURLUpdate = false) {
     isNavigating = true; // Set flag to prevent URL updates during route handling
-    const path = getPathFromURL();
+    const rawPath = getPathFromURL();
+    const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
     const queryParams = getQueryParams();
     
     // Handle routes
@@ -522,9 +523,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Handle initial route (use replaceState for initial load)
     handleRoute(true);
-    // Update URL once after initial route is handled
-    const path = getPathFromURL();
-    updateURL(path || '/', true);
+    // Preserve full URL (including query params like unsubscribe token) on initial load.
+    const initialPathWithQuery = `${window.location.pathname}${window.location.search || ''}`;
+    updateURL(initialPathWithQuery || '/', true);
 });
 
 function initializeRegisterCountrySelector() {

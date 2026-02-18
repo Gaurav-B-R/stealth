@@ -23,7 +23,7 @@ if RESEND_API_KEY:
 else:
     print("WARNING: RESEND_API_KEY not found. Email functionality will be disabled.")
 
-DEFAULT_PUBLIC_BASE_URL = "https://rilono.com"
+DEFAULT_PUBLIC_BASE_URL = (os.getenv("BASE_URL", "https://rilono.com").strip() or "https://rilono.com")
 SECRET_KEY = os.getenv("SECRET_KEY", "")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 EMAIL_NOTIFICATIONS_UNSUB_TOKEN_HOURS = int(
