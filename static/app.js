@@ -3406,14 +3406,14 @@ function renderMockInterviewModeUI() {
         modeBadge.classList.remove('visa-hub-tag-mode-chat');
         modeBadge.classList.add('visa-hub-tag-mode-voice');
         guide.textContent = state.active
-            ? 'Use Speak Answer for each response. The AI officer ends the interview automatically.'
+            ? 'Use Speak Answer for each response.'
             : 'Click Start Interview and choose Voice to run a microphone-based simulation.';
     } else if (state.channel === 'chat') {
         modeBadge.textContent = 'Mode: Chat';
         modeBadge.classList.remove('visa-hub-tag-mode-voice');
         modeBadge.classList.add('visa-hub-tag-mode-chat');
         guide.textContent = state.active
-            ? 'Type each answer in the input below. The AI officer ends the interview automatically.'
+            ? 'Type each answer in the input below.'
             : 'Click Start Interview and choose Chat to run a typed interview simulation.';
     } else {
         modeBadge.textContent = 'Mode: not selected';
@@ -3831,9 +3831,157 @@ function renderVisaMockInterviewReport(reportText) {
     if (!reportEl) return;
     reportEl.style.display = 'block';
     reportEl.innerHTML = `
-        <div class="visa-mock-report-title">Final Interview Report</div>
+        <div class="visa-mock-report-header">
+            <div class="visa-mock-report-title">Final Interview Report</div>
+            <button type="button" class="btn btn-secondary visa-mock-report-download-btn" onclick="downloadMockInterviewReportPdf()">
+                📥 Download PDF
+            </button>
+        </div>
         <div class="visa-mock-report-body">${buildMockInterviewReportHtml(reportText)}</div>
     `;
+}
+
+function downloadMockInterviewReportPdf() {
+    const reportEl = document.getElementById('visaMockInterviewReport');
+    if (!reportEl) return;
+
+    const bodyContent = reportEl.querySelector('.visa-mock-report-body');
+    if (!bodyContent) return;
+
+    const printWindow = window.open('', '_blank', 'width=800,height=900');
+    if (!printWindow) {
+        showMessage('Please allow pop-ups to download the PDF.', 'error');
+        return;
+    }
+
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+    printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+    <title>Rilono - Mock Interview Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #1e293b;
+            padding: 2.5rem 2rem;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .pdf-header {
+            border-bottom: 2px solid #6366f1;
+            padding-bottom: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .pdf-header h1 {
+            font-size: 1.4rem;
+            color: #312e81;
+            margin-bottom: 0.25rem;
+        }
+        .pdf-header .pdf-meta {
+            font-size: 0.82rem;
+            color: #64748b;
+        }
+        .pdf-header .pdf-brand {
+            font-size: 0.78rem;
+            color: #6366f1;
+            font-weight: 600;
+            margin-top: 0.15rem;
+        }
+        .pdf-body h4 {
+            font-size: 1rem;
+            color: #312e81;
+            margin: 1.2rem 0 0.4rem;
+            font-weight: 700;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 0.25rem;
+        }
+        .pdf-body p {
+            margin: 0.4rem 0;
+            font-size: 0.92rem;
+        }
+        .pdf-body ul {
+            margin: 0.35rem 0 0.6rem 1.2rem;
+            font-size: 0.92rem;
+        }
+        .pdf-body li {
+            margin-bottom: 0.25rem;
+        }
+        .pdf-metrics {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.2rem;
+        }
+        .pdf-metric {
+            flex: 1;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            text-align: center;
+        }
+        .pdf-metric-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #64748b;
+            margin-bottom: 0.15rem;
+        }
+        .pdf-metric-value {
+            font-size: 1.3rem;
+            font-weight: 800;
+            color: #1e293b;
+        }
+        .pdf-footer {
+            margin-top: 2rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #e2e8f0;
+            font-size: 0.75rem;
+            color: #94a3b8;
+            text-align: center;
+        }
+        @media print {
+            body { padding: 1rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="pdf-header">
+        <h1>F1 Mock Interview Report</h1>
+        <div class="pdf-meta">${dateStr} at ${timeStr}</div>
+        <div class="pdf-brand">Generated by Rilono AI</div>
+    </div>
+    <div class="pdf-body">${bodyContent.innerHTML}</div>
+    <div class="pdf-footer">This report was generated by Rilono AI Mock Interview. For educational purposes only.</div>
+</body>
+</html>`);
+    printWindow.document.close();
+
+    /* Replace dark-theme classes with PDF-friendly ones */
+    const metricCards = printWindow.document.querySelectorAll('.visa-mock-report-metric-card');
+    if (metricCards.length) {
+        const metricsWrap = printWindow.document.createElement('div');
+        metricsWrap.className = 'pdf-metrics';
+        metricCards[0].parentNode.parentNode.insertBefore(metricsWrap, metricCards[0].parentNode);
+        metricCards.forEach(card => {
+            const label = card.querySelector('.visa-mock-report-metric-label');
+            const value = card.querySelector('.visa-mock-report-metric-value');
+            const pdfMetric = printWindow.document.createElement('div');
+            pdfMetric.className = 'pdf-metric';
+            pdfMetric.innerHTML = `<div class="pdf-metric-label">${label ? label.textContent : ''}</div><div class="pdf-metric-value">${value ? value.textContent : ''}</div>`;
+            metricsWrap.appendChild(pdfMetric);
+        });
+        const oldMetrics = printWindow.document.querySelector('.visa-mock-report-metrics');
+        if (oldMetrics) oldMetrics.remove();
+    }
+
+    setTimeout(() => {
+        printWindow.focus();
+        printWindow.print();
+    }, 400);
 }
 
 async function finishVoiceMockInterview() {
@@ -4055,7 +4203,7 @@ async function startVoiceInterviewSession(mode, options = {}) {
             reportEl.style.display = 'none';
             reportEl.innerHTML = '';
         }
-        appendVisaInterviewLog('mock', 'system', 'Session started. Rilono AI is now acting as your Visa Officer.');
+        appendVisaInterviewLog('mock', 'system', 'Session started.');
     }
 
     setVisaInterviewStatus(mode, 'Starting interview...');
