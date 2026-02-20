@@ -36,6 +36,10 @@
                     <h1 style="margin: 0;">Rilono</h1>
                 </a>
             </div>
+            <button class="mobile-nav-toggle" id="mobileNavToggle" type="button" aria-expanded="false"
+                aria-controls="navLinks" aria-label="Open navigation menu">
+                ☰
+            </button>
             <div class="nav-links" id="navLinks">
                 <a href="/pricing" onclick="event.preventDefault(); showPricing(); return false;"
                     id="pricingLink">Pricing</a>
@@ -370,7 +374,7 @@
                 </div>
                 <div class="hero-stats">
                     <div class="stat-item">
-                        <div class="stat-number">5K+</div>
+                        <div class="stat-number">1K+</div>
                         <div class="stat-label">Students Helped</div>
                     </div>
                     <div class="stat-item">
@@ -1828,9 +1832,6 @@
                                             <button type="button" class="btn btn-primary"
                                                 onclick="loadF1InterviewExperiences(true)">Fetch Latest
                                                 Experiences</button>
-                                            <button type="button" class="btn btn-secondary"
-                                                onclick="openVisaAiPrompt('Share recent F1 interview experiences and key patterns I should prepare for.')">Ask
-                                                Rilono AI</button>
                                         </div>
                                     </div>
                                 </div>

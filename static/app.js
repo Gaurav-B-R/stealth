@@ -36,10 +36,12 @@ let notificationDropdownOpen = false;
 let messageHideTimer = null;
 let expandedChatWidgetId = null;
 let floatingChatExpanded = false;
+let mobileNavOpen = false;
 let expandedChatOriginalParent = null;
 let expandedChatPlaceholder = null;
 let runtimeSubscriptionNotifyState = null;
 let subscriptionNotifyStateUserId = null;
+const MOBILE_NAV_BREAKPOINT = 900;
 const RILONO_REEL_SCENE_DURATION_MS = 5200;
 const RILONO_REEL_PROGRESS_INTERVAL_MS = 90;
 const RILONO_REEL_PREFERS_REDUCED_MOTION = window.matchMedia
@@ -511,6 +513,7 @@ async function initializeTurnstile() {
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
+    syncMobileNavState();
     await initializeDocumentCatalog();
     initializeSearchableDropdowns();
     initializePricingSelector();
@@ -544,6 +547,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     const initialPathWithQuery = `${window.location.pathname}${window.location.search || ''}`;
     updateURL(initialPathWithQuery || '/', true);
 });
+
+function isMobileViewport() {
+    return window.matchMedia(`(max-width: ${MOBILE_NAV_BREAKPOINT}px)`).matches;
+}
+
+function syncMobileNavState() {
+    const navLinks = document.getElementById('navLinks');
+    const navToggle = document.getElementById('mobileNavToggle');
+    if (!navLinks || !navToggle) return;
+
+    if (!isMobileViewport()) {
+        mobileNavOpen = false;
+    }
+
+    navLinks.classList.toggle('mobile-open', mobileNavOpen);
+    navToggle.setAttribute('aria-expanded', mobileNavOpen ? 'true' : 'false');
+    navToggle.setAttribute('aria-label', mobileNavOpen ? 'Close navigation menu' : 'Open navigation menu');
+    navToggle.textContent = mobileNavOpen ? '✕' : '☰';
+}
+
+function toggleMobileNav(forceState = null) {
+    if (!isMobileViewport()) return;
+    mobileNavOpen = typeof forceState === 'boolean' ? forceState : !mobileNavOpen;
+    syncMobileNavState();
+}
+
+function closeMobileNav() {
+    if (!mobileNavOpen) return;
+    mobileNavOpen = false;
+    syncMobileNavState();
+}
 
 function initializeRegisterCountrySelector() {
     const countrySelect = document.getElementById('registerCountry');
@@ -609,6 +643,27 @@ function setupEventListeners() {
             if (e.key === 'Enter') loadItems();
         });
     }
+    const mobileNavToggle = document.getElementById('mobileNavToggle');
+    if (mobileNavToggle) {
+        mobileNavToggle.addEventListener('click', () => {
+            toggleMobileNav();
+        });
+    }
+    const navLinks = document.getElementById('navLinks');
+    if (navLinks) {
+        navLinks.addEventListener('click', (e) => {
+            if (e.target.closest('a')) {
+                closeMobileNav();
+            }
+        });
+    }
+    window.addEventListener('resize', syncMobileNavState);
+    window.addEventListener('orientationchange', syncMobileNavState);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeMobileNav();
+        }
+    });
 
     // Image preview for multiple file upload
     const imageFileInput = document.getElementById('itemImageFiles');
@@ -1338,6 +1393,11 @@ document.addEventListener('click', (e) => {
         notificationDropdown.style.display = 'none';
         notificationDropdownOpen = false;
     }
+
+    const navContainer = document.querySelector('.nav-container');
+    if (mobileNavOpen && navContainer && !navContainer.contains(e.target)) {
+        closeMobileNav();
+    }
 });
 
 function getRilonoReelElements() {
@@ -1535,6 +1595,10 @@ function showMessage(text, type = 'success') {
 function showHomepage(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('homepageSection').style.display = 'block';
+    const pageContainer = document.querySelector('.container');
+    if (pageContainer) {
+        pageContainer.classList.add('homepage-layout');
+    }
     // Update button visibility based on auth status
     const heroRegisterBtn = document.getElementById('heroRegisterBtn');
     const heroLoginBtn = document.getElementById('heroLoginBtn');
@@ -4975,12 +5039,14 @@ function hideAllSections() {
     stopVoiceMockInterview(true);
     stopVoicePrepInterview(true);
     closeExpandedChatView();
+    closeMobileNav();
     pauseRilonoProductReel(false);
     document.querySelectorAll('.section').forEach(section => {
         section.style.display = 'none';
     });
     const pageContainer = document.querySelector('.container');
     if (pageContainer) {
+        pageContainer.classList.remove('homepage-layout');
         pageContainer.classList.remove('dashboard-fluid');
     }
 }

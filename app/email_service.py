@@ -917,7 +917,6 @@ def send_proactive_assistant_email(
         return False
 
     safe_subject = (subject or "").strip()[:140] or "Rilono F1 Visa Update"
-    safe_name = escape((full_name or "").strip() or "there")
     sanitized_body = _sanitize_ai_email_html(html_body)
     manage_url = f"{base_url.rstrip('/')}/dashboard"
     safe_unsubscribe_url = escape((unsubscribe_url or "").strip())
@@ -943,7 +942,6 @@ def send_proactive_assistant_email(
               </tr>
               <tr>
                 <td style="padding:26px 28px;color:#0f172a;">
-                  <p style="margin:0 0 14px 0;font-size:15px;">Hi {safe_name},</p>
                   <div style="font-size:15px;line-height:1.6;color:#0f172a;">
                     {sanitized_body}
                   </div>
@@ -972,7 +970,6 @@ def send_proactive_assistant_email(
     text_body = re.sub(r"\\s+", " ", text_body).strip()
     text_content = (
         f"{safe_subject}\n\n"
-        f"Hi {(full_name or 'there').strip() or 'there'},\n\n"
         f"{text_body}\n\n"
         f"Open Dashboard: {manage_url}\n"
         + (f"\nUnsubscribe from email notifications: {unsubscribe_url}\n" if unsubscribe_url else "")
