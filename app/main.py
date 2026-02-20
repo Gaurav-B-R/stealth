@@ -56,7 +56,7 @@ DEFAULT_CONTENT_SECURITY_POLICY = (
     "img-src 'self' data: https: blob:; "
     "font-src 'self' data: https:; "
     "connect-src 'self' https://api.razorpay.com https://checkout.razorpay.com https://www.google-analytics.com https://region1.google-analytics.com https://stats.g.doubleclick.net https://challenges.cloudflare.com; "
-    "frame-src 'self' https://checkout.razorpay.com https://api.razorpay.com https://challenges.cloudflare.com; "
+    "frame-src 'self' blob: https://checkout.razorpay.com https://api.razorpay.com https://challenges.cloudflare.com; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "frame-ancestors 'none'; "

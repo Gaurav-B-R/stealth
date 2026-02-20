@@ -13,6 +13,7 @@ let visaInterviewRequestInFlight = false;
 let visaInterviewFiltersInitialized = false;
 let documentUploadInProgress = false;
 let documentUploadStatusTimer = null;
+let documentUploadScanStartedAt = 0;
 let proUpgradeInFlight = false;
 let checkoutLaunchResolver = null;
 let currentVisaSubTab = 'prep';
@@ -51,6 +52,9 @@ let rilonoReelPausedElapsed = 0;
 let rilonoReelIsPlaying = false;
 let rilonoReelUserPaused = false;
 let rilonoReelInitialized = false;
+const DOCUMENT_UPLOAD_ENCRYPTING_MS = 1200;
+const DOCUMENT_UPLOAD_UPLOADING_MS = 700;
+const DOCUMENT_UPLOAD_MIN_SCAN_MS = 8000;
 
 const PRICING_BASE_USD = {
     free: 0,
@@ -8311,8 +8315,9 @@ async function handleDocumentUpload(e) {
     }
 
     try {
-        setDocumentUploadLoading(true, 'Encrypting document...');
+        setDocumentUploadLoading(true, 'Encrypting document...', file);
         showMessage('Encrypting and uploading document...', 'success');
+        await new Promise((resolve) => setTimeout(resolve, DOCUMENT_UPLOAD_ENCRYPTING_MS));
 
         const formData = new FormData();
         formData.append('file', file);
@@ -8323,15 +8328,25 @@ async function handleDocumentUpload(e) {
         if (year) formData.append('year', year);
         if (description) formData.append('description', description);
 
-        const response = await fetch(`${API_BASE}/api/documents/upload`, {
+        setDocumentUploadLoading(true, 'Uploading to secure storage...');
+        const uploadRequest = fetch(`${API_BASE}/api/documents/upload`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${authToken}`
             },
             body: formData
         });
+        await new Promise((resolve) => setTimeout(resolve, DOCUMENT_UPLOAD_UPLOADING_MS));
 
+        setDocumentUploadLoading(true, 'Rilono AI is scanning and validating...');
+        const response = await uploadRequest;
         const data = await response.json();
+        if (documentUploadScanStartedAt > 0) {
+            const scanElapsed = Date.now() - documentUploadScanStartedAt;
+            if (scanElapsed < DOCUMENT_UPLOAD_MIN_SCAN_MS) {
+                await new Promise((resolve) => setTimeout(resolve, DOCUMENT_UPLOAD_MIN_SCAN_MS - scanElapsed));
+            }
+        }
 
         if (response.ok) {
             const documentName = file.name;
@@ -8416,7 +8431,93 @@ async function handleDocumentUpload(e) {
     }
 }
 
-function setDocumentUploadLoading(isLoading, message = '') {
+function resetDocumentUploadPreviewElements() {
+    const previewImg = document.getElementById('docUploadPreviewImg');
+    const previewFrame = document.getElementById('docUploadPreviewFrame');
+    const previewText = document.getElementById('docUploadPreviewText');
+    const placeholder = document.getElementById('docUploadPlaceholder');
+
+    if (previewImg) {
+        if (previewImg._objectUrl) {
+            URL.revokeObjectURL(previewImg._objectUrl);
+            previewImg._objectUrl = null;
+        }
+        previewImg.src = '';
+        previewImg.style.display = 'none';
+    }
+    if (previewFrame) {
+        if (previewFrame._objectUrl) {
+            URL.revokeObjectURL(previewFrame._objectUrl);
+            previewFrame._objectUrl = null;
+        }
+        previewFrame.removeAttribute('src');
+        previewFrame.style.display = 'none';
+    }
+    if (previewText) {
+        previewText.textContent = '';
+        previewText.style.display = 'none';
+    }
+    if (placeholder) {
+        placeholder.style.display = 'grid';
+    }
+}
+
+function updateDocumentUploadPreview(file) {
+    if (!file) return;
+
+    const previewImg = document.getElementById('docUploadPreviewImg');
+    const previewFrame = document.getElementById('docUploadPreviewFrame');
+    const previewText = document.getElementById('docUploadPreviewText');
+    const placeholder = document.getElementById('docUploadPlaceholder');
+    const extension = (file.name.split('.').pop() || '').toLowerCase();
+    const mimeType = (file.type || '').toLowerCase();
+
+    resetDocumentUploadPreviewElements();
+
+    const isImage = mimeType.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(extension);
+    const isPdf = mimeType === 'application/pdf' || extension === 'pdf';
+    const isText =
+        mimeType.startsWith('text/')
+        || ['txt', 'md', 'json', 'xml', 'yaml', 'yml', 'log'].includes(extension);
+
+    if (isImage && previewImg) {
+        const imageUrl = URL.createObjectURL(file);
+        previewImg._objectUrl = imageUrl;
+        previewImg.src = imageUrl;
+        previewImg.style.display = 'block';
+        if (placeholder) placeholder.style.display = 'none';
+        return;
+    }
+
+    if (isPdf && previewFrame) {
+        const pdfUrl = URL.createObjectURL(file);
+        previewFrame._objectUrl = pdfUrl;
+        previewFrame.src = `${pdfUrl}#toolbar=0&navpanes=0&scrollbar=0`;
+        previewFrame.style.display = 'block';
+        if (placeholder) placeholder.style.display = 'none';
+        return;
+    }
+
+    if (isText && previewText) {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const rawContent = String(reader.result || '');
+            const clippedContent = rawContent.length > 12000
+                ? `${rawContent.slice(0, 12000)}\n\n...[preview truncated]`
+                : rawContent;
+            previewText.textContent = clippedContent;
+            previewText.style.display = 'block';
+            if (placeholder) placeholder.style.display = 'none';
+        };
+        reader.onerror = () => {
+            if (placeholder) placeholder.style.display = 'grid';
+        };
+        reader.readAsText(file);
+        return;
+    }
+}
+
+function setDocumentUploadLoading(isLoading, message = '', file = null) {
     const form = document.getElementById('documentUploadForm');
     const modal = document.getElementById('documentUploadProgressModal');
     const modalTextEl = document.getElementById('documentUploadProgressText');
@@ -8440,8 +8541,30 @@ function setDocumentUploadLoading(isLoading, message = '') {
             field.disabled = true;
         });
         submitButton.textContent = 'Uploading...';
+
+        /* Populate file info and preview if available */
+        if (file) {
+            const nameEl = document.getElementById('docUploadFileName');
+            const metaEl = document.getElementById('docUploadFileMeta');
+            if (nameEl) nameEl.textContent = file.name;
+            if (metaEl) {
+                const ext = file.name.split('.').pop().toUpperCase();
+                const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+                metaEl.textContent = `${ext} · ${sizeMB} MB`;
+            }
+            updateDocumentUploadPreview(file);
+        }
+
+        /* Set active step based on message */
+        updateDocUploadStep(message);
+        if (/scanning|validat|analyz/i.test((message || '').toLowerCase())) {
+            if (!documentUploadScanStartedAt) {
+                documentUploadScanStartedAt = Date.now();
+            }
+        }
+
         if (modalTextEl) {
-            modalTextEl.textContent = message || 'Uploading document...';
+            modalTextEl.textContent = message || 'Processing document...';
         }
         if (modal) {
             modal.style.display = 'flex';
@@ -8450,6 +8573,7 @@ function setDocumentUploadLoading(isLoading, message = '') {
     }
 
     documentUploadInProgress = false;
+    documentUploadScanStartedAt = 0;
     const fields = form.querySelectorAll('input, textarea, button, select');
     fields.forEach((field) => {
         field.disabled = false;
@@ -8460,16 +8584,76 @@ function setDocumentUploadLoading(isLoading, message = '') {
         if (modalTextEl) {
             modalTextEl.textContent = message;
         }
+        updateDocUploadStep(message);
         documentUploadStatusTimer = setTimeout(() => {
             if (modal) {
                 modal.style.display = 'none';
             }
-        }, 900);
+            resetDocUploadSteps();
+        }, 1200);
     } else {
         if (modal) {
             modal.style.display = 'none';
         }
+        resetDocUploadSteps();
     }
+}
+
+function updateDocUploadStep(msg) {
+    const steps = [
+        document.getElementById('docUploadStep1'),
+        document.getElementById('docUploadStep2'),
+        document.getElementById('docUploadStep3'),
+        document.getElementById('docUploadStep4')
+    ];
+    const scanArea = document.querySelector('.doc-upload-scan-area');
+    if (!steps[0]) return;
+
+    let activeIdx = 0;
+    const lower = (msg || '').toLowerCase();
+    if (/complete|syncing|visible|done/i.test(lower)) {
+        activeIdx = 3;
+    } else if (/scanning|validat|analyz/i.test(lower)) {
+        activeIdx = 2;
+    } else if (/upload/i.test(lower)) {
+        activeIdx = 1;
+    }
+
+    steps.forEach((step, i) => {
+        if (!step) return;
+        step.classList.remove('active', 'completed');
+        if (i < activeIdx) {
+            step.classList.add('completed');
+        } else if (i === activeIdx) {
+            step.classList.add('active');
+        }
+    });
+
+    /* Add scanning class for AI step animation */
+    if (scanArea) {
+        scanArea.classList.toggle('scanning', activeIdx === 2);
+        scanArea.classList.toggle('complete', activeIdx === 3);
+    }
+}
+
+function resetDocUploadSteps() {
+    const steps = [
+        document.getElementById('docUploadStep1'),
+        document.getElementById('docUploadStep2'),
+        document.getElementById('docUploadStep3'),
+        document.getElementById('docUploadStep4')
+    ];
+    steps.forEach(step => {
+        if (step) {
+            step.classList.remove('active', 'completed');
+        }
+    });
+    if (steps[0]) steps[0].classList.add('active');
+    const scanArea = document.querySelector('.doc-upload-scan-area');
+    if (scanArea) {
+        scanArea.classList.remove('scanning', 'complete');
+    }
+    resetDocumentUploadPreviewElements();
 }
 
 function showDocumentListLoading(message = 'Loading your documents...') {
