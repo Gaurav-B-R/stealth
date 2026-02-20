@@ -338,6 +338,105 @@
                 </div>
             </div>
 
+            <!-- Remotion-Style Product Reel -->
+            <div class="homepage-remotion-video">
+                <div class="remotion-video-shell">
+                    <div class="remotion-copy">
+                        <div class="remotion-tag">Product Reel</div>
+                        <h2>See Rilono AI in Action</h2>
+                        <p>
+                            A fast walkthrough of how students use Rilono to validate documents, prepare for F1 interviews,
+                            and stay ahead of timeline risks with confidence.
+                        </p>
+                        <div class="remotion-highlights">
+                            <span>📄 Document Intelligence</span>
+                            <span>🤖 Context-Aware AI</span>
+                            <span>🎯 Mock Interview Coaching</span>
+                            <span>🔔 Risk & Deadline Alerts</span>
+                        </div>
+                        <div class="remotion-copy-actions">
+                            <a href="/register" onclick="event.preventDefault(); showRegister(); return false;" class="btn btn-primary btn-large" id="reelRegisterBtn">
+                                <span>Start Free</span>
+                                <span class="btn-icon">→</span>
+                            </a>
+                            <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); return false;" class="btn btn-primary btn-large" id="reelDashboardBtn" style="display: none;">
+                                <span>Open Dashboard</span>
+                                <span class="btn-icon">→</span>
+                            </a>
+                        </div>
+                    </div>
+
+                    <div class="remotion-player-wrap">
+                        <div class="rilono-reel-player" id="rilonoRemotionPlayer" aria-label="Rilono AI product walkthrough">
+                            <div class="rilono-reel-ambient rilono-reel-ambient-a"></div>
+                            <div class="rilono-reel-ambient rilono-reel-ambient-b"></div>
+                            <div class="rilono-reel-noise"></div>
+
+                            <div class="rilono-reel-scene is-active" data-scene-label="Document Intelligence">
+                                <div class="reel-scene-badge">Scene 1 · Document Engine</div>
+                                <h3>Upload once. Rilono maps every file to your visa stage.</h3>
+                                <p>Get AI validation notes, missing-document warnings, and clear progress from starter docs to visa-ready.</p>
+                                <div class="reel-scene-metrics">
+                                    <div><strong>20+</strong><span>Document Types</span></div>
+                                    <div><strong>Stage-Wise</strong><span>Checklist Tracking</span></div>
+                                    <div><strong>Instant</strong><span>Validation Feedback</span></div>
+                                </div>
+                            </div>
+
+                            <div class="rilono-reel-scene" data-scene-label="Rilono AI Assistant">
+                                <div class="reel-scene-badge">Scene 2 · Personalized AI</div>
+                                <h3>Ask anything. Rilono AI answers with your context in mind.</h3>
+                                <p>Chat guidance adapts to your profile, uploaded documents, and current journey stage for better decisions.</p>
+                                <div class="reel-scene-metrics">
+                                    <div><strong>24/7</strong><span>AI Assistance</span></div>
+                                    <div><strong>Profile-Aware</strong><span>Recommendations</span></div>
+                                    <div><strong>Focused</strong><span>F1 Visa Scope</span></div>
+                                </div>
+                            </div>
+
+                            <div class="rilono-reel-scene" data-scene-label="Interview Training">
+                                <div class="reel-scene-badge">Scene 3 · Interview Prep</div>
+                                <h3>Train for VO questions before your real interview day.</h3>
+                                <p>Practice with structured prep sessions and realistic mock interview flows to improve confidence and clarity.</p>
+                                <div class="reel-scene-metrics">
+                                    <div><strong>VO-Style</strong><span>Mock Simulation</span></div>
+                                    <div><strong>Actionable</strong><span>Feedback Loops</span></div>
+                                    <div><strong>Repeatable</strong><span>Practice Runs</span></div>
+                                </div>
+                            </div>
+
+                            <div class="rilono-reel-scene" data-scene-label="Smart Notifications">
+                                <div class="reel-scene-badge">Scene 4 · Risk Radar</div>
+                                <h3>Stay ahead with deadline alerts, news signals, and private access.</h3>
+                                <p>Rilono highlights timeline risks, document gaps, and key F1 updates inside a student-only ecosystem.</p>
+                                <div class="reel-scene-metrics">
+                                    <div><strong>Real-Time</strong><span>Alerting</span></div>
+                                    <div><strong>Latest</strong><span>F1 News Tracking</span></div>
+                                    <div><strong>.edu</strong><span>Student-Only Access</span></div>
+                                </div>
+                            </div>
+
+                            <div class="rilono-reel-footer">
+                                <div class="rilono-reel-status">
+                                    <span class="rilono-live-dot"></span>
+                                    <span id="rilonoReelSceneLabel">Document Intelligence</span>
+                                </div>
+                                <div class="rilono-reel-progress-track">
+                                    <span id="rilonoReelProgress"></span>
+                                </div>
+                                <div class="rilono-reel-controls">
+                                    <button type="button" class="rilono-reel-playpause" id="rilonoReelPlayPause" aria-label="Pause product reel">❚❚</button>
+                                    <button type="button" class="rilono-reel-dot is-active" data-scene-target="0" aria-label="Show scene 1"></button>
+                                    <button type="button" class="rilono-reel-dot" data-scene-target="1" aria-label="Show scene 2"></button>
+                                    <button type="button" class="rilono-reel-dot" data-scene-target="2" aria-label="Show scene 3"></button>
+                                    <button type="button" class="rilono-reel-dot" data-scene-target="3" aria-label="Show scene 4"></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- How It Works Section -->
             <div class="homepage-how-it-works">
                 <div class="section-header">
@@ -887,7 +986,13 @@
                                             <div class="rilono-ai-message assistant">
                                                 <div class="message-avatar">🤖</div>
                                                 <div class="message-bubble">
-                                                    <p>Hello! I can help with your visa docs, profile status, and next steps.</p>
+                                                    <p><strong>Welcome! I'm Rilono AI.</strong> I'm here to guide your F1 visa journey with practical, step-by-step help.</p>
+                                                    <p>I can help you with:</p>
+                                                    <p>• What to upload next (document checklist)</p>
+                                                    <p>• Profile and visa-stage gaps you should fix first</p>
+                                                    <p>• Interview prep, mock questions, and answer quality</p>
+                                                    <p>• Important deadlines, risks, and updates</p>
+                                                    <p>Tell me your current stage (I-20, DS-160, fees, or interview), and I'll suggest your best next step.</p>
                                                 </div>
                                             </div>
                                         </div>
@@ -1481,14 +1586,13 @@
                                         <div class="rilono-ai-message assistant">
                                             <div class="message-avatar">🤖</div>
                                             <div class="message-bubble">
-                                                <p>👋 Hello! I'm Rilono AI, your personal assistant for visa documentation and guidance. I can help you with:</p>
-                                                <ul>
-                                                    <li>Document requirements and checklists</li>
-                                                    <li>Visa application guidance</li>
-                                                    <li>Profile completion status</li>
-                                                    <li>Answering questions about your documents</li>
-                                                </ul>
-                                                <p>How can I assist you today?</p>
+                                                <p><strong>Welcome! I'm Rilono AI.</strong> I'm here to guide your F1 visa journey with practical, step-by-step help.</p>
+                                                <p>I can help you with:</p>
+                                                <p>• What to upload next (document checklist)</p>
+                                                <p>• Profile and visa-stage gaps you should fix first</p>
+                                                <p>• Interview prep, mock questions, and answer quality</p>
+                                                <p>• Important deadlines, risks, and updates</p>
+                                                <p>Tell me your current stage (I-20, DS-160, fees, or interview), and I'll suggest your best next step.</p>
                                             </div>
                                         </div>
                                     </div>

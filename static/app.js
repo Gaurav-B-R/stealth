@@ -39,6 +39,18 @@ let expandedChatOriginalParent = null;
 let expandedChatPlaceholder = null;
 let runtimeSubscriptionNotifyState = null;
 let subscriptionNotifyStateUserId = null;
+const RILONO_REEL_SCENE_DURATION_MS = 5200;
+const RILONO_REEL_PROGRESS_INTERVAL_MS = 90;
+const RILONO_REEL_PREFERS_REDUCED_MOTION = window.matchMedia
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let rilonoReelTimer = null;
+let rilonoReelProgressTimer = null;
+let rilonoReelCurrentScene = 0;
+let rilonoReelSceneStartedAt = 0;
+let rilonoReelPausedElapsed = 0;
+let rilonoReelIsPlaying = false;
+let rilonoReelUserPaused = false;
+let rilonoReelInitialized = false;
 
 const PRICING_BASE_USD = {
     free: 0,
@@ -499,6 +511,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializeSearchableDropdowns();
     initializePricingSelector();
     initializeRegisterCountrySelector();
+    initializeRilonoProductReel();
     
     // Initialize Turnstile
     await initializeTurnstile();
@@ -1301,6 +1314,180 @@ document.addEventListener('click', (e) => {
     }
 });
 
+function getRilonoReelElements() {
+    const player = document.getElementById('rilonoRemotionPlayer');
+    const progressBar = document.getElementById('rilonoReelProgress');
+    const sceneLabel = document.getElementById('rilonoReelSceneLabel');
+    const playPauseBtn = document.getElementById('rilonoReelPlayPause');
+    if (!player || !progressBar || !sceneLabel || !playPauseBtn) return null;
+
+    const scenes = Array.from(player.querySelectorAll('.rilono-reel-scene'));
+    const dots = Array.from(player.querySelectorAll('.rilono-reel-dot'));
+    if (!scenes.length || !dots.length) return null;
+
+    return {
+        player,
+        progressBar,
+        sceneLabel,
+        playPauseBtn,
+        scenes,
+        dots
+    };
+}
+
+function stopRilonoProductReelTimers() {
+    if (rilonoReelTimer) {
+        clearTimeout(rilonoReelTimer);
+        rilonoReelTimer = null;
+    }
+    if (rilonoReelProgressTimer) {
+        clearInterval(rilonoReelProgressTimer);
+        rilonoReelProgressTimer = null;
+    }
+}
+
+function syncRilonoReelControls() {
+    const elements = getRilonoReelElements();
+    if (!elements) return;
+    elements.playPauseBtn.textContent = rilonoReelIsPlaying ? '❚❚' : '▶';
+    elements.playPauseBtn.setAttribute('aria-label', rilonoReelIsPlaying ? 'Pause product reel' : 'Play product reel');
+}
+
+function updateRilonoReelProgress() {
+    const elements = getRilonoReelElements();
+    if (!elements) return;
+    if (!rilonoReelSceneStartedAt) {
+        elements.progressBar.style.transform = 'scaleX(0)';
+        return;
+    }
+
+    const elapsed = Math.max(Date.now() - rilonoReelSceneStartedAt, 0);
+    const ratio = Math.min(elapsed / RILONO_REEL_SCENE_DURATION_MS, 1);
+    elements.progressBar.style.transform = `scaleX(${ratio})`;
+}
+
+function setRilonoReelScene(sceneIndex, restartPlayback = true) {
+    const elements = getRilonoReelElements();
+    if (!elements) return;
+
+    const sceneCount = elements.scenes.length;
+    const normalizedIndex = ((sceneIndex % sceneCount) + sceneCount) % sceneCount;
+
+    rilonoReelCurrentScene = normalizedIndex;
+    rilonoReelSceneStartedAt = Date.now();
+    rilonoReelPausedElapsed = 0;
+
+    elements.scenes.forEach((scene, index) => {
+        scene.classList.toggle('is-active', index === normalizedIndex);
+    });
+    elements.dots.forEach((dot, index) => {
+        dot.classList.toggle('is-active', index === normalizedIndex);
+    });
+
+    const activeSceneLabel = elements.scenes[normalizedIndex].getAttribute('data-scene-label') || 'Rilono Product Reel';
+    elements.sceneLabel.textContent = activeSceneLabel;
+    elements.progressBar.style.transform = 'scaleX(0)';
+
+    if (restartPlayback && rilonoReelIsPlaying) {
+        startRilonoProductReel(true);
+    }
+}
+
+function startRilonoProductReel(resetSceneClock = true) {
+    const elements = getRilonoReelElements();
+    if (!elements) return;
+
+    stopRilonoProductReelTimers();
+    rilonoReelIsPlaying = true;
+
+    if (resetSceneClock || !rilonoReelSceneStartedAt) {
+        rilonoReelSceneStartedAt = Date.now();
+        rilonoReelPausedElapsed = 0;
+    } else if (rilonoReelPausedElapsed > 0) {
+        rilonoReelSceneStartedAt = Date.now() - Math.min(rilonoReelPausedElapsed, RILONO_REEL_SCENE_DURATION_MS - 120);
+    }
+
+    const elapsed = Math.max(Date.now() - rilonoReelSceneStartedAt, 0);
+    const remaining = Math.max(RILONO_REEL_SCENE_DURATION_MS - elapsed, 250);
+
+    rilonoReelTimer = window.setTimeout(() => {
+        const nextScene = (rilonoReelCurrentScene + 1) % elements.scenes.length;
+        setRilonoReelScene(nextScene, false);
+        startRilonoProductReel(true);
+    }, remaining);
+
+    rilonoReelProgressTimer = window.setInterval(updateRilonoReelProgress, RILONO_REEL_PROGRESS_INTERVAL_MS);
+    updateRilonoReelProgress();
+    syncRilonoReelControls();
+}
+
+function pauseRilonoProductReel(userInitiated = false) {
+    if (rilonoReelSceneStartedAt) {
+        rilonoReelPausedElapsed = Math.max(Date.now() - rilonoReelSceneStartedAt, 0);
+    }
+    updateRilonoReelProgress();
+    stopRilonoProductReelTimers();
+    rilonoReelIsPlaying = false;
+    if (userInitiated) {
+        rilonoReelUserPaused = true;
+    }
+    syncRilonoReelControls();
+}
+
+function resumeRilonoProductReelIfAllowed() {
+    if (!rilonoReelInitialized || rilonoReelUserPaused || RILONO_REEL_PREFERS_REDUCED_MOTION) return;
+    startRilonoProductReel(false);
+}
+
+function initializeRilonoProductReel() {
+    const elements = getRilonoReelElements();
+    if (!elements || rilonoReelInitialized) return;
+
+    rilonoReelInitialized = true;
+    setRilonoReelScene(0, false);
+    syncRilonoReelControls();
+
+    elements.dots.forEach((dot) => {
+        dot.addEventListener('click', () => {
+            const nextScene = Number.parseInt(dot.getAttribute('data-scene-target') || '0', 10);
+            if (Number.isNaN(nextScene)) return;
+            rilonoReelUserPaused = false;
+            rilonoReelIsPlaying = true;
+            setRilonoReelScene(nextScene, true);
+        });
+    });
+
+    elements.playPauseBtn.addEventListener('click', () => {
+        if (rilonoReelIsPlaying) {
+            pauseRilonoProductReel(true);
+            return;
+        }
+        rilonoReelUserPaused = false;
+        startRilonoProductReel(false);
+    });
+
+    if (window.IntersectionObserver) {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+                if (!entry.isIntersecting) {
+                    pauseRilonoProductReel(false);
+                    return;
+                }
+                const homepageSection = document.getElementById('homepageSection');
+                if (homepageSection && homepageSection.style.display !== 'none') {
+                    resumeRilonoProductReelIfAllowed();
+                }
+            });
+        }, { threshold: 0.35 });
+        observer.observe(elements.player);
+    }
+
+    if (RILONO_REEL_PREFERS_REDUCED_MOTION) {
+        rilonoReelUserPaused = true;
+        syncRilonoReelControls();
+    }
+}
+
 function showMessage(text, type = 'success') {
     const messageEl = document.getElementById('message');
     if (!messageEl) return;
@@ -1326,6 +1513,8 @@ function showHomepage(skipURLUpdate = false) {
     const heroRegisterBtn = document.getElementById('heroRegisterBtn');
     const heroLoginBtn = document.getElementById('heroLoginBtn');
     const heroDashboardBtn = document.getElementById('heroDashboardBtn');
+    const reelRegisterBtn = document.getElementById('reelRegisterBtn');
+    const reelDashboardBtn = document.getElementById('reelDashboardBtn');
     const ctaRegisterBtn = document.getElementById('ctaRegisterBtn');
     const ctaDashboardBtn = document.getElementById('ctaDashboardBtn');
     
@@ -1334,6 +1523,8 @@ function showHomepage(skipURLUpdate = false) {
         if (heroRegisterBtn) heroRegisterBtn.style.display = 'none';
         if (heroLoginBtn) heroLoginBtn.style.display = 'none';
         if (heroDashboardBtn) heroDashboardBtn.style.display = 'inline-flex';
+        if (reelRegisterBtn) reelRegisterBtn.style.display = 'none';
+        if (reelDashboardBtn) reelDashboardBtn.style.display = 'inline-flex';
         if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'none';
         if (ctaDashboardBtn) ctaDashboardBtn.style.display = 'inline-flex';
     } else {
@@ -1341,9 +1532,13 @@ function showHomepage(skipURLUpdate = false) {
         if (heroRegisterBtn) heroRegisterBtn.style.display = 'inline-flex';
         if (heroLoginBtn) heroLoginBtn.style.display = 'inline-flex';
         if (heroDashboardBtn) heroDashboardBtn.style.display = 'none';
+        if (reelRegisterBtn) reelRegisterBtn.style.display = 'inline-flex';
+        if (reelDashboardBtn) reelDashboardBtn.style.display = 'none';
         if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'inline-flex';
         if (ctaDashboardBtn) ctaDashboardBtn.style.display = 'none';
     }
+
+    resumeRilonoProductReelIfAllowed();
     
     if (!skipURLUpdate) {
         updateURL('/', false); // Use pushState for navigation
@@ -4591,6 +4786,7 @@ function hideAllSections() {
     stopVoiceMockInterview(true);
     stopVoicePrepInterview(true);
     closeExpandedChatView();
+    pauseRilonoProductReel(false);
     document.querySelectorAll('.section').forEach(section => {
         section.style.display = 'none';
     });
@@ -8478,7 +8674,26 @@ function getMainChatWelcomeMarkup() {
         <div class="rilono-ai-message assistant">
             <div class="message-avatar">🤖</div>
             <div class="message-bubble">
-                <p>Hello! I can help with your visa docs, profile status, and next steps.</p>
+                <p><strong>Welcome! I'm Rilono AI.</strong> I'm here to guide your F1 visa journey with practical, step-by-step help.</p>
+                <p>I can help you with:</p>
+                <p>• What to upload next (document checklist)</p>
+                <p>• Profile and visa-stage gaps you should fix first</p>
+                <p>• Interview prep, mock questions, and answer quality</p>
+                <p>• Important deadlines, risks, and updates</p>
+                <p>Tell me your current stage (I-20, DS-160, fees, or interview), and I'll suggest your best next step.</p>
+            </div>
+        </div>
+    `;
+}
+
+function getFloatingChatWelcomeMarkup() {
+    return `
+        <div class="chat-welcome-message">
+            <div class="chat-avatar">🤖</div>
+            <div class="welcome-bubble">
+                <p><strong>Welcome! I'm Rilono AI.</strong></p>
+                <p>I can help with documents, visa-stage progress, interview prep, and next actions based on your profile.</p>
+                <p>Share your current stage, and I'll guide you step by step.</p>
             </div>
         </div>
     `;
@@ -8984,24 +9199,13 @@ function syncFloatingChatFromHistory() {
     
     // Clear existing messages
     messagesContainer.innerHTML = '';
-    
-    // Show welcome message if no conversation history
-    if (rilonoAiConversationHistory.length === 0) {
-        const welcomeDiv = document.createElement('div');
-        welcomeDiv.className = 'chat-welcome-message';
-        welcomeDiv.innerHTML = `
-            <div class="chat-avatar">🤖</div>
-            <div class="welcome-bubble">
-                <p><strong>Hello! I'm Rilono AI</strong></p>
-                <p>I'm here to help you with your F1 student visa process and documentation. How can I assist you today?</p>
-            </div>
-        `;
-        messagesContainer.appendChild(welcomeDiv);
-    } else {
-        // Rebuild messages from shared history
-        for (const msg of rilonoAiConversationHistory) {
-            addMessageToFloatingChat(msg.content, msg.role === 'user');
-        }
+
+    // Always render intro as pinned first message.
+    messagesContainer.innerHTML = getFloatingChatWelcomeMarkup();
+
+    // Rebuild messages from shared history
+    for (const msg of rilonoAiConversationHistory) {
+        addMessageToFloatingChat(msg.content, msg.role === 'user');
     }
     
     scrollFloatingChatToBottom();
@@ -9013,15 +9217,9 @@ function syncMainChatFromHistory() {
     if (messagesContainers.length === 0) return;
 
     messagesContainers.forEach((messagesContainer) => {
-        messagesContainer.innerHTML = '';
+        // Keep intro pinned as first message in every main chat panel.
+        messagesContainer.innerHTML = getMainChatWelcomeMarkup();
     });
-
-    if (rilonoAiConversationHistory.length === 0) {
-        messagesContainers.forEach((messagesContainer) => {
-            messagesContainer.innerHTML = getMainChatWelcomeMarkup();
-        });
-        return;
-    }
 
     // Rebuild messages from shared history in all main chat panels
     for (const msg of rilonoAiConversationHistory) {
@@ -9060,14 +9258,6 @@ function scrollFloatingChatToBottom() {
 function addMessageToFloatingChat(message, isUser = false) {
     const messagesContainer = document.getElementById('floatingChatMessages');
     if (!messagesContainer) return;  // Guard: container might not exist
-    
-    // Remove welcome message if it exists (only when adding first user message)
-    if (isUser) {
-        const welcomeMsg = messagesContainer.querySelector('.chat-welcome-message');
-        if (welcomeMsg) {
-            welcomeMsg.remove();
-        }
-    }
     
     const messageDiv = document.createElement('div');
     messageDiv.className = `chat-message ${isUser ? 'user' : 'assistant'}`;
