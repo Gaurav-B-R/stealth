@@ -420,7 +420,7 @@ function handleRoute(skipURLUpdate = false) {
     const rawPath = getPathFromURL();
     const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
     const queryParams = getQueryParams();
-    
+
     // Handle routes
     if (path === '/' || path === '') {
         // Homepage - landing page
@@ -479,7 +479,7 @@ async function initializeTurnstile() {
         if (response.ok) {
             const data = await response.json();
             turnstileSiteKey = data.site_key;
-            
+
             if (!turnstileSiteKey) {
                 // Hide widgets if no site key is configured
                 const loginWidget = document.getElementById('turnstile-login');
@@ -488,7 +488,7 @@ async function initializeTurnstile() {
                 if (registerWidget) registerWidget.style.display = 'none';
                 return;
             }
-            
+
             // Set site key attribute - Turnstile will auto-render when script loads
             const loginWidget = document.getElementById('turnstile-login');
             const registerWidget = document.getElementById('turnstile-register');
@@ -512,10 +512,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializePricingSelector();
     initializeRegisterCountrySelector();
     initializeRilonoProductReel();
-    
+
     // Initialize Turnstile
     await initializeTurnstile();
-    
+
     // Set explicit legal revision dates (stable, not per-page-load dynamic values).
     const aboutLastUpdated = document.getElementById('aboutLastUpdated');
     const privacyLastUpdated = document.getElementById('privacyLastUpdated');
@@ -527,13 +527,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (termsLastUpdated) termsLastUpdated.textContent = LEGAL_LAST_UPDATED.terms;
     if (refundLastUpdated) refundLastUpdated.textContent = LEGAL_LAST_UPDATED.refund;
     if (deliveryLastUpdated) deliveryLastUpdated.textContent = LEGAL_LAST_UPDATED.delivery;
-    
+
     // Restore token for same-tab refresh persistence and check authentication.
     restoreAuthToken();
     await checkAuth();
     loadNotifications();
     updateFloatingChatVisibility();
-    
+
     // Handle initial route (use replaceState for initial load)
     handleRoute(true);
     // Preserve full URL (including query params like unsubscribe token) on initial load.
@@ -605,31 +605,31 @@ function setupEventListeners() {
             if (e.key === 'Enter') loadItems();
         });
     }
-    
+
     // Image preview for multiple file upload
     const imageFileInput = document.getElementById('itemImageFiles');
     if (imageFileInput) {
         imageFileInput.addEventListener('change', handleMultipleImagePreview);
     }
-    
+
     // Profile picture upload
     const profilePictureInput = document.getElementById('profilePictureInput');
     if (profilePictureInput) {
         profilePictureInput.addEventListener('change', handleProfilePicturePreview);
     }
-    
+
     // Update price label when category changes
     const itemCategorySelect = document.getElementById('itemCategory');
     if (itemCategorySelect) {
         itemCategorySelect.addEventListener('change', updatePriceLabel);
     }
-    
+
     // Update price filter placeholders when category filter changes
     const categoryFilter = document.getElementById('categoryFilter');
     if (categoryFilter) {
         categoryFilter.addEventListener('change', updatePriceFilterPlaceholders);
     }
-    
+
     // Documentation form
     const documentationForm = document.getElementById('documentationForm');
     if (documentationForm) {
@@ -637,13 +637,13 @@ function setupEventListeners() {
         initializeYearDropdown();
         loadDocumentationPreferences();
     }
-    
+
     // Document upload form
     const documentUploadForm = document.getElementById('documentUploadForm');
     if (documentUploadForm) {
         documentUploadForm.addEventListener('submit', handleDocumentUpload);
     }
-    
+
     // University email validation and autofill
     const registerEmailInput = document.getElementById('registerEmail');
     if (registerEmailInput) {
@@ -652,7 +652,7 @@ function setupEventListeners() {
             clearTimeout(emailCheckTimeout);
             const email = e.target.value.trim();
             updateRegisterPasswordHint();
-            
+
             // Only check if email looks valid (contains @)
             if (email && email.includes('@')) {
                 emailCheckTimeout = setTimeout(() => {
@@ -676,7 +676,7 @@ function updatePriceLabel() {
     const categorySelect = document.getElementById('itemCategory');
     const priceLabel = document.querySelector('label[for="itemPrice"]');
     const priceInput = document.getElementById('itemPrice');
-    
+
     if (categorySelect && priceLabel && priceInput) {
         if (categorySelect.value === 'sublease') {
             priceLabel.textContent = 'Price ($/month) *';
@@ -692,7 +692,7 @@ function updatePriceFilterPlaceholders() {
     const categoryFilter = document.getElementById('categoryFilter');
     const minPriceInput = document.getElementById('minPrice');
     const maxPriceInput = document.getElementById('maxPrice');
-    
+
     if (categoryFilter && minPriceInput && maxPriceInput) {
         if (categoryFilter.value === 'sublease') {
             minPriceInput.placeholder = 'Min $/month';
@@ -830,17 +830,17 @@ function updateProfilePasswordHint() {
 async function checkUniversityByEmail(email) {
     const universityInput = document.getElementById('registerUniversity');
     const messageEl = document.getElementById('emailValidationMessage');
-    
+
     if (!email || !email.includes('@')) {
         universityInput.value = '';
         messageEl.style.display = 'none';
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/university-by-email?email=${encodeURIComponent(email)}`);
         const data = await response.json();
-        
+
         if (data.is_valid && data.university_name) {
             // Valid university email - autofill university
             universityInput.value = data.university_name;
@@ -944,7 +944,7 @@ function updateUIForAuth() {
         document.getElementById('notificationContainer').style.display = 'block';
         loadNotifications();
         updateFloatingChatVisibility();
-        
+
         // Update homepage buttons
         const heroSellBtn = document.getElementById('heroSellBtn');
         const heroRegisterBtn = document.getElementById('heroRegisterBtn');
@@ -952,7 +952,7 @@ function updateUIForAuth() {
         if (heroSellBtn) heroSellBtn.style.display = 'inline-block';
         if (heroRegisterBtn) heroRegisterBtn.style.display = 'none';
         if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'none';
-        
+
         renderUserInfo(currentUser);
         // Only load profile data if we're on the dashboard section
         const currentSection = sessionStorage.getItem('currentSection');
@@ -969,7 +969,7 @@ function updateUIForAuth() {
         updateNotificationBadge();
         renderNotifications();
         updateFloatingChatVisibility();
-        
+
         // Update homepage buttons
         const heroSellBtn = document.getElementById('heroSellBtn');
         const heroRegisterBtn = document.getElementById('heroRegisterBtn');
@@ -1139,22 +1139,22 @@ function updateNotificationBadge() {
 function renderNotifications() {
     const list = document.getElementById('notificationList');
     if (!list) return;
-    
+
     if (notifications.length === 0) {
         list.innerHTML = '<p style="text-align: center; padding: 1rem; color: var(--text-secondary);">No notifications</p>';
         return;
     }
-    
+
     list.innerHTML = notifications.map(notif => {
         const date = new Date(notif.timestamp);
         const timeAgo = getTimeAgo(date);
         const icon = getNotificationIcon(notif.type);
         const readClass = notif.read ? 'read' : '';
         const escapedId = String(notif.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-        
+
         // Format message with line breaks
         const formattedMessage = escapeHtml(notif.message).replace(/\n/g, '<br>');
-        
+
         return `
             <div class="notification-item ${readClass}" onclick="markNotificationRead('${escapedId}')">
                 <div class="notification-icon ${notif.type}">${icon}</div>
@@ -1199,39 +1199,39 @@ function escapeHtml(text) {
 // Convert markdown to HTML for AI responses
 function markdownToHtml(text) {
     if (!text) return '';
-    
+
     // Escape HTML first to prevent XSS
     let html = escapeHtml(text);
-    
+
     // Convert **bold** to <strong>
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    
+
     // Convert *italic* to <em> (but not if it's part of **)
     html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-    
+
     // Convert `code` to <code>
     html = html.replace(/`([^`]+)`/g, '<code style="background: rgba(139, 92, 246, 0.2); padding: 2px 6px; border-radius: 4px; font-family: monospace;">$1</code>');
-    
+
     // Convert bullet points (lines starting with - or •)
     html = html.replace(/^[\-•]\s+(.+)$/gm, '<li>$1</li>');
-    
+
     // Convert numbered lists (lines starting with 1. 2. etc)
     html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-    
+
     // Wrap consecutive <li> elements in <ul>
     html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => {
         return '<ul style="margin: 8px 0; padding-left: 20px; list-style-type: disc;">' + match + '</ul>';
     });
-    
+
     // Convert line breaks to <br> but not inside lists
     html = html.replace(/\n(?!<)/g, '<br>');
-    
+
     // Clean up extra <br> before/after lists
     html = html.replace(/<br><ul/g, '<ul');
     html = html.replace(/<\/ul><br>/g, '</ul>');
     html = html.replace(/<br><li>/g, '<li>');
     html = html.replace(/<\/li><br>/g, '</li>');
-    
+
     return html;
 }
 
@@ -1305,7 +1305,7 @@ document.addEventListener('click', (e) => {
     if (userMenu && dropdown && !userMenu.contains(e.target)) {
         dropdown.style.display = 'none';
     }
-    
+
     const notificationContainer = document.getElementById('notificationContainer');
     const notificationDropdown = document.getElementById('notificationDropdown');
     if (notificationContainer && notificationDropdown && !notificationContainer.contains(e.target)) {
@@ -1517,7 +1517,7 @@ function showHomepage(skipURLUpdate = false) {
     const reelDashboardBtn = document.getElementById('reelDashboardBtn');
     const ctaRegisterBtn = document.getElementById('ctaRegisterBtn');
     const ctaDashboardBtn = document.getElementById('ctaDashboardBtn');
-    
+
     if (currentUser) {
         // Logged in: show dashboard buttons, hide login/register
         if (heroRegisterBtn) heroRegisterBtn.style.display = 'none';
@@ -1539,7 +1539,7 @@ function showHomepage(skipURLUpdate = false) {
     }
 
     resumeRilonoProductReelIfAllowed();
-    
+
     if (!skipURLUpdate) {
         updateURL('/', false); // Use pushState for navigation
     }
@@ -1559,7 +1559,7 @@ function showLogin(skipURLUpdate = false) {
 
     hideAllSections();
     document.getElementById('loginSection').style.display = 'block';
-    
+
     // Ensure Turnstile widget is properly initialized
     const loginWidget = document.getElementById('turnstile-login');
     if (loginWidget) {
@@ -1570,7 +1570,7 @@ function showLogin(skipURLUpdate = false) {
             if (!loginWidget.getAttribute('data-sitekey')) {
                 loginWidget.setAttribute('data-sitekey', turnstileSiteKey);
             }
-            
+
             // Wait a bit for Turnstile script to load, then render
             const renderWidget = () => {
                 if (window.turnstile) {
@@ -1612,7 +1612,7 @@ function showLogin(skipURLUpdate = false) {
             loginWidget.style.display = 'none';
         }
     }
-    
+
     if (!skipURLUpdate) {
         updateURL('/login', false); // Use pushState for navigation
     }
@@ -1639,11 +1639,11 @@ function showResetPassword(token, skipURLUpdate = false) {
 async function handleResetPasswordPage(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('resetPasswordSection').style.display = 'block';
-    
+
     // Get token from URL
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token');
-    
+
     if (token) {
         document.getElementById('resetToken').value = token;
         updateResetPasswordHint();
@@ -1663,7 +1663,7 @@ async function handleResetPasswordPage(skipURLUpdate = false) {
             </div>
         `;
     }
-    
+
     if (!skipURLUpdate) {
         updateURL('/reset-password' + (token ? `?token=${encodeURIComponent(token)}` : ''), false);
     }
@@ -1672,7 +1672,7 @@ async function handleResetPasswordPage(skipURLUpdate = false) {
 function showRegister(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('registerSection').style.display = 'block';
-    
+
     // Clear university field and validation message when showing register form
     const universityInput = document.getElementById('registerUniversity');
     const messageEl = document.getElementById('emailValidationMessage');
@@ -1689,7 +1689,7 @@ function showRegister(skipURLUpdate = false) {
     const registerPasswordInput = document.getElementById('registerPassword');
     if (registerPasswordInput) registerPasswordInput.value = '';
     updateRegisterPasswordHint();
-    
+
     // Ensure Turnstile widget is properly initialized
     const registerWidget = document.getElementById('turnstile-register');
     if (registerWidget) {
@@ -1700,7 +1700,7 @@ function showRegister(skipURLUpdate = false) {
             if (!registerWidget.getAttribute('data-sitekey')) {
                 registerWidget.setAttribute('data-sitekey', turnstileSiteKey);
             }
-            
+
             // Wait a bit for Turnstile script to load, then render
             const renderWidget = () => {
                 if (window.turnstile) {
@@ -1742,7 +1742,7 @@ function showRegister(skipURLUpdate = false) {
             registerWidget.style.display = 'none';
         }
     }
-    
+
     if (!skipURLUpdate) {
         updateURL('/register', false); // Use pushState for navigation
     }
@@ -1782,17 +1782,17 @@ function showVerification(email = null, expiryHours = 24) {
 async function handleEmailVerification(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('verificationSection').style.display = 'block';
-    
+
     // Get token from URL
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token');
-    
+
     if (token) {
         // Verify the token
         try {
             const response = await fetch(`${API_BASE}/api/auth/verify-email?token=${encodeURIComponent(token)}`);
             const data = await response.json();
-            
+
             if (response.ok) {
                 document.getElementById('verificationContent').innerHTML = `
                     <div style="text-align: center;">
@@ -1833,7 +1833,7 @@ async function handleEmailVerification(skipURLUpdate = false) {
         // No token, show resend option
         showVerification();
     }
-    
+
     if (!skipURLUpdate) {
         updateURL('/verify-email' + (token ? `?token=${token}` : ''), false);
     }
@@ -1842,11 +1842,11 @@ async function handleEmailVerification(skipURLUpdate = false) {
 async function handleUniversityChangeVerification(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('verificationSection').style.display = 'block';
-    
+
     // Get token from URL
     const urlParams = new URLSearchParams(window.location.search);
     const token = urlParams.get('token');
-    
+
     if (token) {
         // Show loading
         document.getElementById('verificationContent').innerHTML = `
@@ -1856,12 +1856,12 @@ async function handleUniversityChangeVerification(skipURLUpdate = false) {
                 <p style="color: var(--text-secondary);">Please wait while we verify your request.</p>
             </div>
         `;
-        
+
         // Verify the token
         try {
             const response = await fetch(`${API_BASE}/api/auth/verify-university-change?token=${encodeURIComponent(token)}`);
             const data = await response.json();
-            
+
             if (response.ok) {
                 document.getElementById('verificationContent').innerHTML = `
                     <div style="text-align: center;">
@@ -1918,7 +1918,7 @@ async function handleUniversityChangeVerification(skipURLUpdate = false) {
             </div>
         `;
     }
-    
+
     if (!skipURLUpdate) {
         updateURL('/verify-university-change' + (token ? `?token=${token}` : ''), false);
     }
@@ -1929,7 +1929,7 @@ async function resendVerificationEmail(email = null) {
         email = prompt('Please enter your email address:');
         if (!email) return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/resend-verification`, {
             method: 'POST',
@@ -1938,10 +1938,10 @@ async function resendVerificationEmail(email = null) {
             },
             body: JSON.stringify({ email: email })
         });
-        
+
         const data = await response.json();
         const expiryHours = Number(response.headers.get('X-Verification-Link-Expires-Hours') || 24);
-        
+
         if (response.ok) {
             showMessage(data.message || `Verification email sent. The link expires in ${expiryHours} hours.`, 'success');
             showVerification(email, expiryHours);
@@ -1987,13 +1987,13 @@ function showDashboard(skipURLUpdate = false) {
     loadMyDocuments();
     loadSubscriptionStatus(true);
     renderReferralPromotions();
-    
+
     // Set default tab to overview if no tab is active
     const activeTab = document.querySelector('.dashboard-tab.active');
     if (!activeTab) {
         switchDashboardTab('overview');
     }
-    
+
     if (!skipURLUpdate) {
         updateURL('/dashboard', false); // Use pushState for navigation
     }
@@ -3271,6 +3271,8 @@ function setVisaInterviewStatus(mode, statusText) {
     const statusEl = document.getElementById(cfg.statusId);
     if (statusEl) {
         statusEl.textContent = statusText;
+        const isGenerating = /generating final/i.test(statusText);
+        statusEl.classList.toggle('report-generating-badge', isGenerating);
     }
 }
 
@@ -3293,9 +3295,12 @@ function appendVisaInterviewLog(mode, role, text) {
     if (!logEl) return;
 
     const item = document.createElement('div');
-    item.className = `visa-mock-log-item ${role}`;
+    const isReportGenerating = role === 'system' && /generating final/i.test(text);
+    item.className = `visa-mock-log-item ${role}${isReportGenerating ? ' report-generating' : ''}`;
     if (mode === 'prep' && role === 'assistant') {
         item.innerHTML = formatPrepInterviewLogHtml(text);
+    } else if (isReportGenerating) {
+        item.innerHTML = `<span class="report-generating-spinner"></span><span>${escapeHtml(text)}</span>`;
     } else {
         item.textContent = text;
     }
@@ -3705,8 +3710,6 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
 
         if (mode === 'mock' && completionDetected) {
             state.active = false;
-            setVisaInterviewStatus('mock', 'Interview complete');
-            appendVisaInterviewLog('mock', 'system', 'Interview completed by Visa Officer. Generating final report...');
             shouldAutoFinish = true;
         } else if (state.active) {
             if (state.channel === 'chat' && (mode === 'mock' || mode === 'prep')) {
@@ -3877,6 +3880,18 @@ async function finishVoiceMockInterview() {
         const data = await response.json();
         const report = data.response || 'Could not generate a report right now.';
         renderVisaMockInterviewReport(report);
+
+        /* Convert the "generating" log item into a "done" state */
+        const logEl = document.getElementById('visaMockInterviewLog');
+        if (logEl) {
+            const genItem = logEl.querySelector('.visa-mock-log-item.report-generating');
+            if (genItem) {
+                genItem.classList.remove('report-generating');
+                genItem.classList.add('report-done');
+                genItem.innerHTML = `<span class="report-done-icon">✓</span><span>Report generated successfully.</span>`;
+            }
+        }
+
         appendVisaInterviewLog('mock', 'assistant', 'Visa Officer: Final report is ready below.');
         void loadSubscriptionStatus(true);
     } catch (error) {
@@ -4171,18 +4186,18 @@ function switchDashboardTab(tabName) {
     document.querySelectorAll('.dashboard-tab').forEach(tab => {
         tab.classList.remove('active');
     });
-    
+
     // Remove active class from all nav items
     document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.remove('active');
     });
-    
+
     // Show selected tab
     const selectedTab = document.getElementById(`dashboardTab-${tabName}`);
     if (selectedTab) {
         selectedTab.classList.add('active');
     }
-    
+
     // Activate corresponding nav item
     const navItem = document.querySelector(`.nav-item[data-tab="${tabName}"]`);
     if (navItem) {
@@ -4190,7 +4205,7 @@ function switchDashboardTab(tabName) {
     }
 
     setVisaSubNavVisibility(tabName === 'visa');
-    
+
     // Load data for specific tabs
     if (tabName === 'documents') {
         loadMyDocuments();
@@ -4208,7 +4223,7 @@ function switchDashboardTab(tabName) {
     } else if (tabName === 'news') {
         loadF1VisaNews();
     }
-    
+
     // Scroll to top of dashboard content
     const dashboardContent = document.querySelector('.dashboard-content');
     if (dashboardContent) {
@@ -4411,13 +4426,13 @@ function showContact(skipURLUpdate = false) {
     document.getElementById('contactSection').style.display = 'block';
     // Scroll to top
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    
+
     // Pre-fill email if user is logged in
     if (currentUser) {
         const emailField = document.getElementById('contactEmail');
         const nameField = document.getElementById('contactName');
         const userTypeField = document.getElementById('contactUserType');
-        
+
         if (emailField && currentUser.email) {
             emailField.value = currentUser.email;
         }
@@ -4428,7 +4443,7 @@ function showContact(skipURLUpdate = false) {
             userTypeField.value = 'student';
         }
     }
-    
+
     if (!skipURLUpdate) {
         updateURL('/contact', false);
     }
@@ -4706,39 +4721,39 @@ async function handleFeatureRequestSubmit(e) {
 
 async function handleContactSubmit(e) {
     e.preventDefault();
-    
+
     const name = document.getElementById('contactName').value.trim();
     const email = document.getElementById('contactEmail').value.trim();
     const userType = document.getElementById('contactUserType').value;
     const subject = document.getElementById('contactSubject').value.trim();
     const message = document.getElementById('contactMessage').value.trim();
     const submitBtn = document.getElementById('contactSubmitBtn');
-    
+
     // Validation
     if (!name || name.length < 2) {
         showMessage('Please enter your name', 'error');
         return;
     }
-    
+
     if (!email || !email.includes('@')) {
         showMessage('Please enter a valid email address', 'error');
         return;
     }
-    
+
     if (!subject || subject.length < 3) {
         showMessage('Please enter a subject', 'error');
         return;
     }
-    
+
     if (!message || message.length < 10) {
         showMessage('Please enter a message (at least 10 characters)', 'error');
         return;
     }
-    
+
     // Disable button and show loading state
     submitBtn.disabled = true;
     submitBtn.innerHTML = '<span>Sending...</span>';
-    
+
     try {
         const formData = new FormData();
         formData.append('name', name);
@@ -4746,14 +4761,14 @@ async function handleContactSubmit(e) {
         formData.append('user_type', userType);
         formData.append('subject', subject);
         formData.append('message', message);
-        
+
         const response = await fetch(`${API_BASE}/api/auth/contact`, {
             method: 'POST',
             body: formData
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             showMessage(data.message || 'Message sent successfully! We\'ll get back to you soon.', 'success');
             // Clear the form
@@ -4817,17 +4832,17 @@ async function handleLogin(e) {
                 // Use the element directly (more reliable than ID string)
                 turnstileToken = window.turnstile.getResponse(loginWidget);
             }
-            
+
             // Fallback: try using stored widget ID
             if (!turnstileToken && turnstileWidgetIds.login) {
                 turnstileToken = window.turnstile.getResponse(turnstileWidgetIds.login);
             }
-            
+
             // Last fallback: try using ID string
             if (!turnstileToken) {
                 turnstileToken = window.turnstile.getResponse('turnstile-login');
             }
-            
+
             if (!turnstileToken) {
                 showMessage('Please complete the security verification', 'error');
                 return;
@@ -4904,7 +4919,7 @@ async function handleLogin(e) {
                     errorMessage = data.detail;
                 }
             }
-            
+
             // Check if it's an email verification error
             if (data.detail && data.detail.includes('verify your email')) {
                 const email = document.getElementById('loginEmail').value.trim();
@@ -4934,13 +4949,13 @@ async function handleRegister(e) {
         showMessage('Please accept the Terms & Conditions and Privacy Policy to continue.', 'error');
         return;
     }
-    
+
     // Get form values and convert empty strings to null
     const getValue = (id) => {
         const value = document.getElementById(id).value.trim();
         return value === '' ? null : value;
     };
-    
+
     const userData = {
         email: getValue('registerEmail'),
         password: getValue('registerPassword'),
@@ -4968,7 +4983,7 @@ async function handleRegister(e) {
         showMessage('Password and confirm password do not match.', 'error');
         return;
     }
-    
+
     // Validate that university email domain is valid
     const universityInput = document.getElementById('registerUniversity');
     if (!universityInput.value.trim()) {
@@ -4977,7 +4992,7 @@ async function handleRegister(e) {
         await checkUniversityByEmail(userData.email);
         return;
     }
-    
+
     const registerPasswordErrors = getPasswordValidationErrors(userData.password, userData.email || '');
     if (registerPasswordErrors.length > 0) {
         showMessage(`Please use a stronger password: ${registerPasswordErrors[0]}.`, 'error');
@@ -4995,17 +5010,17 @@ async function handleRegister(e) {
                 // Use the element directly (more reliable than ID string)
                 turnstileToken = window.turnstile.getResponse(registerWidget);
             }
-            
+
             // Fallback: try using stored widget ID
             if (!turnstileToken && turnstileWidgetIds.register) {
                 turnstileToken = window.turnstile.getResponse(turnstileWidgetIds.register);
             }
-            
+
             // Last fallback: try using ID string
             if (!turnstileToken) {
                 turnstileToken = window.turnstile.getResponse('turnstile-register');
             }
-            
+
             if (!turnstileToken) {
                 showMessage('Please complete the security verification', 'error');
                 return;
@@ -5016,7 +5031,7 @@ async function handleRegister(e) {
             return;
         }
     }
-    
+
     if (turnstileToken) {
         userData.cf_turnstile_token = turnstileToken;
     }
@@ -5101,12 +5116,12 @@ async function logout() {
 async function handleForgotPassword(e) {
     e.preventDefault();
     const email = document.getElementById('forgotPasswordEmail').value.trim();
-    
+
     if (!email) {
         showMessage('Please enter your email address', 'error');
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
             method: 'POST',
@@ -5115,9 +5130,9 @@ async function handleForgotPassword(e) {
             },
             body: JSON.stringify({ email: email })
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             showMessage(data.message || 'Password reset link has been sent to your email.', 'success');
             // Show success message in the form
@@ -5139,7 +5154,7 @@ async function handleForgotPassword(e) {
             `;
         } else {
             let errorMessage = data.detail || 'Failed to send password reset email';
-            
+
             // If account doesn't exist, show helpful message with link to register
             if (response.status === 404) {
                 showMessage(errorMessage, 'error');
@@ -5174,24 +5189,24 @@ async function handleResetPassword(e) {
     const token = document.getElementById('resetToken').value;
     const newPassword = document.getElementById('resetPasswordNew').value;
     const confirmPassword = document.getElementById('resetPasswordConfirm').value;
-    
+
     if (!token) {
         showMessage('Invalid reset token', 'error');
         return;
     }
-    
+
     const resetPasswordErrors = getPasswordValidationErrors(newPassword);
     if (resetPasswordErrors.length > 0) {
         showMessage(`Please use a stronger password: ${resetPasswordErrors[0]}.`, 'error');
         updateResetPasswordHint();
         return;
     }
-    
+
     if (newPassword !== confirmPassword) {
         showMessage('Passwords do not match', 'error');
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
             method: 'POST',
@@ -5203,9 +5218,9 @@ async function handleResetPassword(e) {
                 new_password: newPassword
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             showMessage(data.message || 'Password reset successfully! You can now log in.', 'success');
             // Show success and redirect to login
@@ -5260,7 +5275,7 @@ async function loadItems(skipURLUpdate = false) {
     if (category) params.append('category', category);
     if (minPrice) params.append('min_price', minPrice);
     if (maxPrice) params.append('max_price', maxPrice);
-    
+
     url += params.toString();
 
     try {
@@ -5337,21 +5352,21 @@ function displayItems(items, containerId, showActions = false) {
 
     container.innerHTML = items.map((item, itemIndex) => {
         // Get images - prefer new images array, fallback to image_url
-        const images = item.images && item.images.length > 0 
+        const images = item.images && item.images.length > 0
             ? item.images.map(img => img.image_url)
             : (item.image_url ? [item.image_url] : []);
-        
+
         const firstImage = images.length > 0 ? images[0] : null;
         const imageUrl = firstImage ? getImageUrl(firstImage) : null;
         const imageCount = images.length;
-        
+
         // Store images in a global map for easy access
         const imageKey = `item_${item.id}_${itemIndex}`;
         if (!window.itemImagesMap) {
             window.itemImagesMap = {};
         }
         window.itemImagesMap[imageKey] = images.map((img) => getImageUrl(img)).filter(Boolean);
-        
+
         return `
         <div class="item-card" style="cursor: pointer;" onclick="showItemDetail(${item.id})" data-item-id="${item.id}">
             <div class="item-image" style="position: relative; cursor: ${imageCount > 0 ? 'pointer' : 'default'};" ${imageCount > 0 ? `data-image-key="${imageKey}" data-item-id="${item.id}" data-item-title="${escapeHtml(item.title)}" onclick="event.stopPropagation(); handleItemImageClick(this)"` : ''}>
@@ -5389,18 +5404,18 @@ let selectedImages = [];
 function handleMultipleImagePreview(e) {
     const files = Array.from(e.target.files);
     const previewsContainer = document.getElementById('imagePreviews');
-    
+
     if (files.length === 0) {
         return;
     }
-    
+
     // Limit to 10 images
     if (files.length > 10) {
         showMessage('Maximum 10 images allowed', 'error');
         e.target.value = '';
         return;
     }
-    
+
     // Validate and add files
     files.forEach((file, index) => {
         // Validate file type
@@ -5408,13 +5423,13 @@ function handleMultipleImagePreview(e) {
             showMessage(`File ${index + 1} is not an image`, 'error');
             return;
         }
-        
+
         // Validate file size (5MB)
         if (file.size > 5 * 1024 * 1024) {
             showMessage(`Image ${index + 1} is too large (max 5MB)`, 'error');
             return;
         }
-        
+
         // Add to selected images
         const imageId = `img_${Date.now()}_${index}`;
         selectedImages.push({
@@ -5423,7 +5438,7 @@ function handleMultipleImagePreview(e) {
             type: 'file',
             url: null
         });
-        
+
         // Show preview
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -5431,7 +5446,7 @@ function handleMultipleImagePreview(e) {
         };
         reader.readAsDataURL(file);
     });
-    
+
     previewsContainer.style.display = 'grid';
 }
 
@@ -5445,7 +5460,7 @@ function addImagePreview(imageId, src, type) {
     previewDiv.style.overflow = 'hidden';
     previewDiv.style.borderRadius = '0.5rem';
     previewDiv.style.border = '2px solid var(--border-color)';
-    
+
     const img = document.createElement('img');
     img.src = src;
     img.style.width = '100%';
@@ -5456,7 +5471,7 @@ function addImagePreview(imageId, src, type) {
         selectedImages = selectedImages.filter(img => img.id !== imageId);
         showMessage('Failed to load image', 'error');
     };
-    
+
     const removeBtn = document.createElement('button');
     removeBtn.textContent = '×';
     removeBtn.type = 'button';
@@ -5473,7 +5488,7 @@ function addImagePreview(imageId, src, type) {
     removeBtn.style.fontSize = '1.25rem';
     removeBtn.style.fontWeight = 'bold';
     removeBtn.onclick = () => removeImage(imageId);
-    
+
     previewDiv.appendChild(img);
     previewDiv.appendChild(removeBtn);
     previewsContainer.appendChild(previewDiv);
@@ -5485,7 +5500,7 @@ function removeImage(imageId) {
     if (preview) {
         preview.remove();
     }
-    
+
     const previewsContainer = document.getElementById('imagePreviews');
     if (selectedImages.length === 0) {
         previewsContainer.style.display = 'none';
@@ -5497,7 +5512,7 @@ let addressAutocomplete = null;
 function initializeAddressAutocomplete() {
     const addressInput = document.getElementById('itemAddress');
     if (!addressInput) return;
-    
+
     // Check if Google Maps API is loaded
     const checkGoogleMaps = () => {
         if (typeof google !== 'undefined' && google.maps && google.maps.places) {
@@ -5506,24 +5521,24 @@ function initializeAddressAutocomplete() {
                 types: ['address'],
                 fields: ['formatted_address', 'address_components', 'geometry']
             });
-            
+
             // Handle place selection
             addressAutocomplete.addListener('place_changed', () => {
                 const place = addressAutocomplete.getPlace();
-                
+
                 if (!place.geometry) {
                     showMessage('No details available for the selected address', 'error');
                     return;
                 }
-                
+
                 // Extract address components
                 let city = '';
                 let state = '';
                 let zipCode = '';
-                
+
                 place.address_components.forEach(component => {
                     const types = component.types;
-                    
+
                     if (types.includes('locality')) {
                         city = component.long_name;
                     } else if (types.includes('administrative_area_level_1')) {
@@ -5532,7 +5547,7 @@ function initializeAddressAutocomplete() {
                         zipCode = component.long_name;
                     }
                 });
-                
+
                 // Update form fields
                 document.getElementById('itemAddress').value = place.formatted_address;
                 document.getElementById('itemCity').value = city;
@@ -5540,7 +5555,7 @@ function initializeAddressAutocomplete() {
                 document.getElementById('itemZipCode').value = zipCode;
                 document.getElementById('itemLatitude').value = place.geometry.location.lat();
                 document.getElementById('itemLongitude').value = place.geometry.location.lng();
-                
+
                 // Show address details
                 document.getElementById('addressDetails').style.display = 'grid';
             });
@@ -5549,7 +5564,7 @@ function initializeAddressAutocomplete() {
             setTimeout(checkGoogleMaps, 500);
         }
     };
-    
+
     // Start checking for Google Maps API
     checkGoogleMaps();
 }
@@ -5558,53 +5573,53 @@ function initializeSearchableDropdowns() {
     // Initialize document type searchable dropdown
     const documentTypeDropdown = document.getElementById('documentTypeDropdown');
     if (!documentTypeDropdown) return;
-    
+
     const searchInput = documentTypeDropdown.querySelector('.dropdown-search');
     const hiddenInput = documentTypeDropdown.querySelector('input[type="hidden"]');
     const dropdownList = documentTypeDropdown.querySelector('.dropdown-list');
     const items = Array.from(dropdownList.querySelectorAll('.dropdown-item'));
-    
+
     // Open dropdown on focus
     searchInput.addEventListener('focus', () => {
         documentTypeDropdown.classList.add('open');
         filterItems('');
     });
-    
+
     // Filter items on input
     searchInput.addEventListener('input', (e) => {
         const searchTerm = e.target.value.toLowerCase();
         filterItems(searchTerm);
-        
+
         // Clear selection if user is typing
         if (searchTerm) {
             hiddenInput.value = '';
             items.forEach(item => item.classList.remove('selected'));
         }
     });
-    
+
     // Handle item selection
     items.forEach(item => {
         item.addEventListener('click', () => {
             if (item.classList.contains('rule-hidden')) return;
             const value = item.dataset.value;
             const text = item.textContent;
-            
+
             searchInput.value = text;
             hiddenInput.value = value;
-            
+
             // Update selected state
             items.forEach(i => i.classList.remove('selected'));
             item.classList.add('selected');
-            
+
             documentTypeDropdown.classList.remove('open');
         });
     });
-    
+
     // Close dropdown on click outside
     document.addEventListener('click', (e) => {
         if (!documentTypeDropdown.contains(e.target)) {
             documentTypeDropdown.classList.remove('open');
-            
+
             // If no valid selection, clear the input
             if (!hiddenInput.value && searchInput.value) {
                 // Try to find an exact match
@@ -5624,12 +5639,12 @@ function initializeSearchableDropdowns() {
             }
         }
     });
-    
+
     // Handle keyboard navigation
     searchInput.addEventListener('keydown', (e) => {
         const visibleItems = Array.from(items).filter(item => !item.classList.contains('hidden'));
         const currentIndex = visibleItems.findIndex(item => item.classList.contains('highlighted'));
-        
+
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             if (!documentTypeDropdown.classList.contains('open')) {
@@ -5653,7 +5668,7 @@ function initializeSearchableDropdowns() {
             documentTypeDropdown.classList.remove('open');
         }
     });
-    
+
     function filterItems(searchTerm) {
         let hasResults = false;
         items.forEach(item => {
@@ -5664,7 +5679,7 @@ function initializeSearchableDropdowns() {
             item.classList.toggle('hidden', shouldHide);
             if (!shouldHide) hasResults = true;
         });
-        
+
         // Show "no results" message
         let noResultsEl = dropdownList.querySelector('.no-results');
         if (!hasResults) {
@@ -5679,7 +5694,7 @@ function initializeSearchableDropdowns() {
             noResultsEl.style.display = 'none';
         }
     }
-    
+
     function highlightItem(visibleItems, index) {
         items.forEach(item => item.classList.remove('highlighted'));
         if (visibleItems[index]) {
@@ -5747,7 +5762,7 @@ async function uploadImages(files) {
     files.forEach(file => {
         formData.append('files', file);
     });
-    
+
     const response = await fetch(`${API_BASE}/api/upload/images`, {
         method: 'POST',
         headers: {
@@ -5755,12 +5770,12 @@ async function uploadImages(files) {
         },
         body: formData
     });
-    
+
     if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         throw new Error(error.detail || 'Failed to upload images');
     }
-    
+
     const data = await response.json();
     return data.images.map(img => img.url);
 }
@@ -5812,13 +5827,13 @@ async function editItem(itemId) {
 
         // Load existing images
         selectedImages = [];
-        const images = item.images && item.images.length > 0 
+        const images = item.images && item.images.length > 0
             ? item.images.map(img => img.image_url)
             : (item.image_url ? [item.image_url] : []);
 
         const previewsContainer = document.getElementById('imagePreviews');
         previewsContainer.innerHTML = '';
-        
+
         if (images.length > 0) {
             previewsContainer.style.display = 'grid';
             images.forEach((imageUrl, index) => {
@@ -5873,14 +5888,14 @@ async function handleCreateItem(e) {
 
     // Collect all image URLs
     let imageUrls = [];
-    
+
     // Keep existing images (from URLs)
     const existingImages = selectedImages.filter(img => img.type === 'url').map(img => img.src);
     imageUrls.push(...existingImages);
-    
+
     // Get files to upload
     const filesToUpload = selectedImages.filter(img => img.type === 'file').map(img => img.file);
-    
+
     // Upload new files if any
     if (filesToUpload.length > 0) {
         try {
@@ -5918,7 +5933,7 @@ async function handleCreateItem(e) {
     };
 
     try {
-        const url = editingItemId 
+        const url = editingItemId
             ? `${API_BASE}/api/items/${editingItemId}`
             : `${API_BASE}/api/items/`;
         const method = editingItemId ? 'PUT' : 'POST';
@@ -6027,7 +6042,7 @@ let currentConversation = null;
 
 async function checkUnreadMessages() {
     if (!authToken) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/messages/unread-count`, {
             headers: {
@@ -6051,7 +6066,7 @@ async function checkUnreadMessages() {
 
 async function loadConversations() {
     if (!authToken) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/messages/conversations`, {
             headers: {
@@ -6072,27 +6087,27 @@ async function loadConversations() {
 
 function displayConversations(conversations) {
     const container = document.getElementById('conversationsList');
-    
+
     if (conversations.length === 0) {
         container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 2rem;">No conversations yet. Start messaging sellers about items!</p>';
         return;
     }
-    
+
     container.innerHTML = conversations.map(conv => {
         const lastMessage = conv.last_message;
         const preview = lastMessage ? (lastMessage.content.length > 50 ? lastMessage.content.substring(0, 50) + '...' : lastMessage.content) : 'No messages yet';
         const time = lastMessage ? formatTime(lastMessage.created_at) : '';
         const unreadClass = conv.unread_count > 0 ? 'unread' : '';
-        
+
         // Get display name (full name if available, otherwise username)
         const displayName = conv.other_user.full_name || conv.other_user.username;
         const university = conv.other_user.university || '';
-        
+
         const avatarUrl = getImageUrl(conv.other_user.profile_picture);
         const avatarContent = avatarUrl
             ? `<img src="${avatarUrl}" alt="${escapeHtml(displayName)}" style="width: 100%; height: 100%; border-radius: 50%; object-fit: cover;">`
             : displayName.charAt(0).toUpperCase();
-        
+
         return `
             <div class="conversation-item ${unreadClass}" onclick="openConversation(${conv.item.id}, ${conv.other_user.id}, '${escapeHtml(conv.other_user.username)}', '${escapeHtml(conv.item.title)}')">
                 <div class="conversation-avatar">${avatarContent}</div>
@@ -6117,7 +6132,7 @@ function displayConversations(conversations) {
 
 async function openConversation(itemId, otherUserId, otherUsername, itemTitle) {
     currentConversation = { itemId, otherUserId, otherUsername, itemTitle };
-    
+
     // Fetch other user details to show name and university
     let userDetails = '';
     try {
@@ -6134,7 +6149,7 @@ async function openConversation(itemId, otherUserId, otherUsername, itemTitle) {
     } catch (error) {
         console.error('Failed to fetch user details:', error);
     }
-    
+
     // Update chat header - will be updated with full details after loading messages
     document.getElementById('chatHeaderInfo').innerHTML = `
         <div>
@@ -6142,17 +6157,17 @@ async function openConversation(itemId, otherUserId, otherUsername, itemTitle) {
             <div style="font-size: 0.875rem; color: var(--text-secondary);">${escapeHtml(itemTitle)}</div>
         </div>
     `;
-    
+
     // Show delete button
     document.getElementById('deleteChatBtn').style.display = 'block';
-    
+
     // Show chat, hide no chat selected
     document.getElementById('noChatSelected').style.display = 'none';
     document.getElementById('chatContainer').style.display = 'flex';
-    
+
     // Load messages (which will include user details)
     await loadMessages(itemId, otherUserId);
-    
+
     // Scroll to bottom
     scrollChatToBottom();
 }
@@ -6168,17 +6183,17 @@ async function handleDeleteConversation() {
     if (!currentConversation || !authToken) {
         return;
     }
-    
+
     // First confirmation
     if (!confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
         return;
     }
-    
+
     // Second confirmation
     if (!confirm('This will permanently delete all messages in this conversation. Are you absolutely sure?')) {
         return;
     }
-    
+
     try {
         const { itemId, otherUserId } = currentConversation;
         const response = await fetch(`${API_BASE}/api/messages/conversation/${itemId}/${otherUserId}`, {
@@ -6187,7 +6202,7 @@ async function handleDeleteConversation() {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         if (response.ok || response.status === 204) {
             showMessage('Conversation deleted successfully', 'success');
             // Close the chat
@@ -6208,7 +6223,7 @@ async function handleDeleteConversation() {
 
 async function loadMessages(itemId, otherUserId) {
     if (!authToken) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/messages/conversation/${itemId}/${otherUserId}`, {
             headers: {
@@ -6218,7 +6233,7 @@ async function loadMessages(itemId, otherUserId) {
         if (response.ok) {
             const messages = await response.json();
             displayMessages(messages);
-            
+
             // Update chat header with user details from first message
             if (messages.length > 0) {
                 const otherUser = messages[0].sender_id === otherUserId ? messages[0].sender : messages[0].receiver;
@@ -6226,7 +6241,7 @@ async function loadMessages(itemId, otherUserId) {
                 // Show delete button
                 document.getElementById('deleteChatBtn').style.display = 'block';
             }
-            
+
             checkUnreadMessages(); // Update badge
         } else {
             showMessage('Failed to load messages', 'error');
@@ -6239,16 +6254,16 @@ async function loadMessages(itemId, otherUserId) {
 
 function updateChatHeader(otherUser, itemTitle) {
     if (!otherUser) return;
-    
+
     const name = otherUser.full_name || otherUser.username;
     const university = otherUser.university || '';
-    
+
     // Create avatar for header
     const avatarUrl = getImageUrl(otherUser.profile_picture);
     const avatarHtml = avatarUrl
         ? `<img src="${avatarUrl}" alt="${escapeHtml(name)}" style="width: 2.5rem; height: 2.5rem; border-radius: 50%; object-fit: cover; margin-right: 0.75rem; border: 2px solid var(--primary-color);">`
         : `<div style="width: 2.5rem; height: 2.5rem; border-radius: 50%; background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%); display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; margin-right: 0.75rem; border: 2px solid var(--primary-color);">${name.charAt(0).toUpperCase()}</div>`;
-    
+
     document.getElementById('chatHeaderInfo').innerHTML = `
         <div style="display: flex; align-items: center;">
             ${avatarHtml}
@@ -6264,16 +6279,16 @@ function updateChatHeader(otherUser, itemTitle) {
 
 function displayMessages(messages) {
     const container = document.getElementById('chatMessages');
-    
+
     if (messages.length === 0) {
         container.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 2rem;">No messages yet. Start the conversation!</p>';
         return;
     }
-    
+
     container.innerHTML = messages.map(msg => {
         const isSent = msg.sender_id === currentUser.id;
         const time = formatTime(msg.created_at);
-        
+
         return `
             <div class="message ${isSent ? 'sent' : 'received'}">
                 <div class="message-content">
@@ -6283,7 +6298,7 @@ function displayMessages(messages) {
             </div>
         `;
     }).join('');
-    
+
     scrollChatToBottom();
 }
 
@@ -6316,12 +6331,12 @@ document.addEventListener('click', (e) => {
 async function sendMessage(e) {
     e.preventDefault();
     if (!authToken || !currentConversation) return;
-    
+
     const input = document.getElementById('messageInput');
     const content = input.value.trim();
-    
+
     if (!content) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/messages/`, {
             method: 'POST',
@@ -6335,7 +6350,7 @@ async function sendMessage(e) {
                 content: content
             })
         });
-        
+
         if (response.ok) {
             input.value = '';
             // Reload messages to show the new one
@@ -6358,12 +6373,12 @@ function startConversation(itemId, sellerId) {
         showLogin();
         return;
     }
-    
+
     if (currentUser.id === sellerId) {
         showMessage('You cannot message yourself', 'error');
         return;
     }
-    
+
     // Redirect to messages page with query parameters
     window.location.href = `/messages?itemId=${itemId}&sellerId=${sellerId}`;
 }
@@ -6375,14 +6390,14 @@ function scrollChatToBottom() {
 
 function formatTime(dateString) {
     if (!dateString) return 'Just now';
-    
+
     // Parse the date string - FastAPI returns ISO 8601 format
     let date;
     try {
         // If date has no timezone info, JavaScript will parse it as local time
         // This is usually correct for server times stored in local timezone
         date = new Date(dateString);
-        
+
         // If parsing failed, try adding UTC timezone
         if (isNaN(date.getTime())) {
             // Try treating as UTC if no timezone specified
@@ -6397,16 +6412,16 @@ function formatTime(dateString) {
         console.error('Error parsing date:', dateString, e);
         return 'Just now';
     }
-    
+
     // Check if date is valid
     if (isNaN(date.getTime())) {
         console.error('Invalid date string:', dateString, 'Type:', typeof dateString);
         return 'Just now';
     }
-    
+
     const now = new Date();
     let diff = now.getTime() - date.getTime();
-    
+
     // If date appears to be in the future (more than 1 hour), likely timezone issue
     // Try parsing as local time without timezone
     if (diff < -3600000) { // More than 1 hour in the future
@@ -6426,13 +6441,13 @@ function formatTime(dateString) {
             // Keep original date
         }
     }
-    
+
     // If still in the future after correction, show as "Just now" to avoid confusion
     if (diff < 0) {
         console.warn('Date in future after parsing:', dateString, 'Parsed:', date.toISOString(), 'Now:', now.toISOString());
         return 'Just now';
     }
-    
+
     const seconds = Math.floor(diff / 1000);
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
@@ -6440,7 +6455,7 @@ function formatTime(dateString) {
     const weeks = Math.floor(days / 7);
     const months = Math.floor(days / 30);
     const years = Math.floor(days / 365);
-    
+
     if (seconds < 60) return 'Just now';
     if (minutes < 60) return `${minutes}m ago`;
     if (hours < 24) return `${hours}h ago`;
@@ -6448,10 +6463,10 @@ function formatTime(dateString) {
     if (weeks < 4) return `${weeks}w ago`;
     if (months < 12) return `${months}mo ago`;
     if (years >= 1) return `${years}y ago`;
-    
+
     // For dates older than a year, show the actual date
-    return date.toLocaleDateString('en-US', { 
-        month: 'short', 
+    return date.toLocaleDateString('en-US', {
+        month: 'short',
         day: 'numeric',
         year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
     });
@@ -6460,7 +6475,7 @@ function formatTime(dateString) {
 // Profile functions
 async function loadProfile() {
     if (!authToken) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/profile/`, {
             headers: {
@@ -6498,11 +6513,11 @@ function displayProfile(profile) {
         referralLinkInput.value = buildReferralInviteLink(referralCode);
     }
     renderReferralPromotions();
-    
+
     // Display profile picture
     const preview = document.getElementById('profilePicturePreview');
     const placeholder = document.getElementById('profilePicturePlaceholder');
-    
+
     if (profile.profile_picture) {
         preview.src = getImageUrl(profile.profile_picture);
         preview.style.display = 'block';
@@ -6512,11 +6527,11 @@ function displayProfile(profile) {
         placeholder.style.display = 'flex';
         placeholder.textContent = (profile.full_name || profile.username || 'U').charAt(0).toUpperCase();
     }
-    
+
     // Check for pending university change
     checkPendingUniversityChange();
     loadReferralSummary();
-    
+
     // Load documentation preferences
     loadDocumentationPreferences();
 
@@ -6665,22 +6680,22 @@ async function copyReferralLink() {
 
 async function loadDocumentationPreferences() {
     if (!authToken) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/profile/documentation-preferences`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         if (response.ok) {
             const prefs = await response.json();
-            
+
             // Populate the form fields
             const countryField = document.getElementById('documentationCountry');
             const intakeField = document.getElementById('documentationIntake');
             const yearField = document.getElementById('documentationYear');
-            
+
             if (countryField && prefs.country) {
                 countryField.value = prefs.country;
             }
@@ -6707,7 +6722,7 @@ async function loadDocumentationPreferences() {
 
 async function loadDashboardStats() {
     if (!authToken) return;
-    
+
     try {
         // Load profile completion and pending documents (main dashboard content)
         await loadProfileCompletion();
@@ -6718,7 +6733,7 @@ async function loadDashboardStats() {
 
 async function loadProfileCompletion() {
     if (!authToken) return;
-    
+
     try {
         // Load profile data
         const profileResponse = await fetch(`${API_BASE}/api/profile/`, {
@@ -6726,36 +6741,36 @@ async function loadProfileCompletion() {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         // Load documents
         const documentsResponse = await fetch(`${API_BASE}/api/documents/my-documents`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         let profile = null;
         let documents = [];
-        
+
         if (profileResponse.ok) {
             profile = await profileResponse.json();
         }
-        
+
         if (documentsResponse.ok) {
             documents = await documentsResponse.json();
         }
-        
+
         // Calculate profile completion
         const completionData = calculateProfileCompletion(profile, documents);
-        
+
         // Update UI
         updateProfileCompletionUI(completionData);
-        
+
         // Update visa journey tracker
         updateVisaJourneyUI(documents);
         updateOverviewDocumentHealthUI(documents);
         updateDocumentsTabHealthUI(documents);
-        
+
         // NOTE: We no longer save to R2 on every dashboard load
         // R2 is only updated when data actually changes (document upload/delete, profile update, preferences update)
     } catch (error) {
@@ -6930,7 +6945,7 @@ async function jumpToDocumentInDocumentsTab(documentId, encodedDocumentType = ''
 
 async function saveVisaStatusToR2() {
     if (!authToken) return;
-    
+
     try {
         // Use POST /refresh endpoint to actually write to R2
         // GET /visa-status only reads (doesn't write)
@@ -6940,7 +6955,7 @@ async function saveVisaStatusToR2() {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         if (response.ok) {
             const data = await response.json();
             console.log('Visa status saved to R2:', data.r2_key);
@@ -6958,30 +6973,30 @@ function calculateProfileCompletion(profile, documents) {
         'phone': profile?.phone,
         'profile_picture': profile?.profile_picture
     };
-    
+
     // Required document types come from database-backed catalog.
     const requiredDocuments = requiredDocumentTypeValues.length
         ? [...requiredDocumentTypeValues]
         : FALLBACK_DOCUMENT_TYPES.filter((row) => row.is_required).map((row) => row.value);
-    
+
     // Count completed profile fields
     let completedFields = 0;
     const totalFields = Object.keys(profileFields).length;
-    
+
     for (const field of Object.values(profileFields)) {
         if (field && field.trim() !== '') {
             completedFields++;
         }
     }
-    
+
     // Get uploaded document types
     const uploadedDocTypes = new Set(
         documents.map(doc => doc.document_type).filter(type => type)
     );
-    
+
     // Find pending documents
     const pendingDocuments = requiredDocuments.filter(docType => !uploadedDocTypes.has(docType));
-    
+
     // Calculate completion percentage
     // Profile fields: 40% weight, Documents: 60% weight
     const profileCompletion = (completedFields / totalFields) * 100;
@@ -6989,7 +7004,7 @@ function calculateProfileCompletion(profile, documents) {
         ? ((requiredDocuments.length - pendingDocuments.length) / requiredDocuments.length) * 100
         : 100;
     const overallCompletion = Math.round((profileCompletion * 0.4) + (documentsCompletion * 0.6));
-    
+
     return {
         overallCompletion,
         profileCompletion: Math.round(profileCompletion),
@@ -7005,15 +7020,15 @@ function updateProfileCompletionUI(data) {
     const percentEl = document.getElementById('profileCompletionPercent');
     const barEl = document.getElementById('profileCompletionBar');
     const pendingListEl = document.getElementById('pendingDocumentsList');
-    
+
     if (percentEl) {
         percentEl.textContent = `${data.overallCompletion}%`;
     }
-    
+
     if (barEl) {
         barEl.style.width = `${data.overallCompletion}%`;
     }
-    
+
     // Update pending documents list
     if (pendingListEl) {
         if (data.pendingDocuments.length === 0) {
@@ -7032,9 +7047,9 @@ function updateProfileCompletionUI(data) {
                     </div>
                 `;
             }).join('');
-            
+
             const moreCount = data.pendingDocuments.length > 5 ? data.pendingDocuments.length - 5 : 0;
-            
+
             pendingListEl.innerHTML = `
                 ${pendingList}
                 ${moreCount > 0 ? `
@@ -7443,7 +7458,7 @@ function handleProfilePicturePreview(e) {
     const file = e.target.files[0];
     const preview = document.getElementById('profilePicturePreview');
     const placeholder = document.getElementById('profilePicturePlaceholder');
-    
+
     if (file) {
         // Validate file type
         if (!file.type.startsWith('image/')) {
@@ -7451,14 +7466,14 @@ function handleProfilePicturePreview(e) {
             e.target.value = '';
             return;
         }
-        
+
         // Validate file size (2MB)
         if (file.size > 2 * 1024 * 1024) {
             showMessage('Image size must be less than 2MB', 'error');
             e.target.value = '';
             return;
         }
-        
+
         // Show preview
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -7473,7 +7488,7 @@ function handleProfilePicturePreview(e) {
 async function uploadProfilePicture(file) {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     const response = await fetch(`${API_BASE}/api/upload/profile-picture`, {
         method: 'POST',
         headers: {
@@ -7481,12 +7496,12 @@ async function uploadProfilePicture(file) {
         },
         body: formData
     });
-    
+
     if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         throw new Error(error.detail || 'Failed to upload profile picture');
     }
-    
+
     const data = await response.json();
     return data.url;
 }
@@ -7497,12 +7512,12 @@ async function handleUpdateProfile(e) {
         showMessage('Please login to update profile', 'error');
         return;
     }
-    
+
     const getValue = (id) => {
         const value = document.getElementById(id).value.trim();
         return value === '' ? null : value;
     };
-    
+
     // Handle profile picture upload if a file is selected
     let profilePictureUrl = null;
     const profilePictureInput = document.getElementById('profilePictureInput');
@@ -7516,14 +7531,14 @@ async function handleUpdateProfile(e) {
             return;
         }
     }
-    
+
     const profileData = {
         full_name: getValue('profileFullName'),
         // university is not editable - derived from .edu email at registration
         phone: getValue('profilePhone'),
         profile_picture: profilePictureUrl || currentUser.profile_picture || null
     };
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/profile/`, {
             method: 'PUT',
@@ -7533,9 +7548,9 @@ async function handleUpdateProfile(e) {
             },
             body: JSON.stringify(profileData)
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             showMessage('Profile updated successfully!', 'success');
             currentUser = data;
@@ -7543,7 +7558,7 @@ async function handleUpdateProfile(e) {
             renderUserInfo(currentUser);
             // Reload profile display if on dashboard
             displayProfile(data);
-            
+
             // Update R2 with new profile data
             await saveVisaStatusToR2();
         } else {
@@ -7659,7 +7674,7 @@ function showChangeUniversityModal() {
     document.getElementById('newUniversityEmail').value = '';
     document.getElementById('newUniversityName').value = '';
     document.getElementById('universityChangeError').style.display = 'none';
-    
+
     // Add email input listener for auto-fill
     const emailInput = document.getElementById('newUniversityEmail');
     emailInput.addEventListener('input', debounce(checkNewUniversityEmail, 500));
@@ -7686,16 +7701,16 @@ async function checkNewUniversityEmail() {
     const email = document.getElementById('newUniversityEmail').value.trim();
     const universityInput = document.getElementById('newUniversityName');
     const errorDiv = document.getElementById('universityChangeError');
-    
+
     if (!email || !email.includes('@')) {
         universityInput.value = '';
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/university-by-email?email=${encodeURIComponent(email)}`);
         const data = await response.json();
-        
+
         if (data.is_valid && data.university_name) {
             universityInput.value = data.university_name;
             errorDiv.style.display = 'none';
@@ -7712,23 +7727,23 @@ async function checkNewUniversityEmail() {
 
 async function handleChangeUniversity(e) {
     e.preventDefault();
-    
+
     const email = document.getElementById('newUniversityEmail').value.trim();
     const university = document.getElementById('newUniversityName').value.trim();
     const errorDiv = document.getElementById('universityChangeError');
     const submitBtn = document.getElementById('changeUniversitySubmitBtn');
     const btnText = document.getElementById('changeUniversityBtnText');
-    
+
     if (!email || !university) {
         errorDiv.textContent = 'Please enter a valid university email.';
         errorDiv.style.display = 'block';
         return;
     }
-    
+
     // Disable button and show loading
     submitBtn.disabled = true;
     btnText.textContent = 'Sending...';
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/request-university-change`, {
             method: 'POST',
@@ -7741,9 +7756,9 @@ async function handleChangeUniversity(e) {
                 new_university: university
             })
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             closeChangeUniversityModal();
             showMessage(data.message || 'Verification email sent! Check your inbox.', 'success');
@@ -7765,18 +7780,18 @@ async function handleChangeUniversity(e) {
 
 async function checkPendingUniversityChange() {
     if (!authToken) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/pending-university-change`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         const data = await response.json();
         const pendingDiv = document.getElementById('pendingUniversityChange');
         const pendingName = document.getElementById('pendingUniversityName');
-        
+
         if (data.has_pending_change) {
             pendingName.textContent = data.pending_university;
             pendingDiv.style.display = 'block';
@@ -7790,11 +7805,11 @@ async function checkPendingUniversityChange() {
 
 async function cancelUniversityChange() {
     if (!authToken) return;
-    
+
     if (!confirm('Are you sure you want to cancel the university change request?')) {
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/cancel-university-change`, {
             method: 'POST',
@@ -7802,7 +7817,7 @@ async function cancelUniversityChange() {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         if (response.ok) {
             showMessage('University change request cancelled.', 'success');
             document.getElementById('pendingUniversityChange').style.display = 'none';
@@ -7823,23 +7838,23 @@ async function handleDeleteAccount() {
         showMessage('Please login to delete your account', 'error');
         return;
     }
-    
+
     // Double confirmation
     const confirmText = 'DELETE';
     const userInput = prompt(`This action cannot be undone. All your data including documents and profile will be permanently deleted.\n\nType "${confirmText}" to confirm account deletion:`);
-    
+
     if (userInput !== confirmText) {
         if (userInput !== null) {
             showMessage('Account deletion cancelled. The confirmation text did not match.', 'error');
         }
         return;
     }
-    
+
     // Final confirmation
     if (!confirm('Are you absolutely sure you want to delete your account? This action is permanent and cannot be undone.')) {
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/profile/`, {
             method: 'DELETE',
@@ -7847,7 +7862,7 @@ async function handleDeleteAccount() {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         if (response.ok || response.status === 204) {
             showMessage('Your account has been deleted successfully.', 'success');
             // Clear auth state and logout
@@ -7880,11 +7895,11 @@ function handleItemImageClick(element) {
     const imageKey = element.getAttribute('data-image-key');
     const itemId = element.getAttribute('data-item-id');
     const itemTitle = element.getAttribute('data-item-title');
-    
+
     if (!imageKey || !window.itemImagesMap || !window.itemImagesMap[imageKey]) {
         return;
     }
-    
+
     openImageGallery(itemId, itemTitle, window.itemImagesMap[imageKey]);
 }
 
@@ -7894,15 +7909,15 @@ function openImageGallery(itemId, itemTitle, images) {
         currentGalleryItemId = itemId;
         currentGalleryItemTitle = itemTitle;
         currentGalleryIndex = 0;
-        
+
         if (currentGalleryImages.length === 0) {
             return;
         }
-        
+
         const modal = document.getElementById('imageGalleryModal');
         modal.style.display = 'flex';
         document.body.style.overflow = 'hidden'; // Prevent background scrolling
-        
+
         updateGalleryDisplay();
         setupGalleryKeyboardNavigation();
     } catch (error) {
@@ -7919,33 +7934,33 @@ function closeImageGallery() {
 
 function navigateGallery(direction) {
     if (currentGalleryImages.length === 0) return;
-    
+
     currentGalleryIndex += direction;
-    
+
     // Wrap around
     if (currentGalleryIndex < 0) {
         currentGalleryIndex = currentGalleryImages.length - 1;
     } else if (currentGalleryIndex >= currentGalleryImages.length) {
         currentGalleryIndex = 0;
     }
-    
+
     updateGalleryDisplay();
 }
 
 function updateGalleryDisplay() {
     if (currentGalleryImages.length === 0) return;
-    
+
     const mainImage = document.getElementById('galleryMainImage');
     const counter = document.getElementById('galleryImageCounter');
     const thumbnails = document.getElementById('galleryThumbnails');
-    
+
     // Update main image
     mainImage.src = currentGalleryImages[currentGalleryIndex];
     mainImage.alt = `${currentGalleryItemTitle} - Image ${currentGalleryIndex + 1}`;
-    
+
     // Update counter
     counter.textContent = `${currentGalleryIndex + 1} / ${currentGalleryImages.length}`;
-    
+
     // Update thumbnails
     thumbnails.innerHTML = currentGalleryImages.map((img, index) => {
         const isActive = index === currentGalleryIndex ? 'active' : '';
@@ -7955,11 +7970,11 @@ function updateGalleryDisplay() {
             </div>
         `;
     }).join('');
-    
+
     // Show/hide navigation arrows
     const prevBtn = document.querySelector('.image-gallery-prev');
     const nextBtn = document.querySelector('.image-gallery-next');
-    
+
     if (currentGalleryImages.length <= 1) {
         prevBtn.style.display = 'none';
         nextBtn.style.display = 'none';
@@ -7988,13 +8003,13 @@ function removeGalleryKeyboardNavigation() {
 function initializeYearDropdown() {
     const yearSelect = document.getElementById('documentationYear');
     if (!yearSelect) return;
-    
+
     // Clear existing options except the first one
     yearSelect.innerHTML = '<option value="">Select Year</option>';
-    
+
     // Get current year
     const currentYear = new Date().getFullYear();
-    
+
     // Add years from current year to 5 years in the future
     for (let i = 0; i <= 5; i++) {
         const year = currentYear + i;
@@ -8013,7 +8028,7 @@ function loadDocumentationPreferences() {
             const prefs = JSON.parse(savedPreferences);
             const intakeSelect = document.getElementById('documentationIntake');
             const yearSelect = document.getElementById('documentationYear');
-            
+
             if (intakeSelect && prefs.intake) {
                 intakeSelect.value = prefs.intake;
             }
@@ -8028,21 +8043,21 @@ function loadDocumentationPreferences() {
 
 async function handleDocumentationForm(e) {
     e.preventDefault();
-    
+
     const intake = document.getElementById('documentationIntake').value;
     const year = document.getElementById('documentationYear').value;
     const country = document.getElementById('documentationCountry').value;
-    
+
     if (!intake || !year) {
         showMessage('Please select both intake and year', 'error');
         return;
     }
-    
+
     if (!authToken) {
         showMessage('Please login to save preferences', 'error');
         return;
     }
-    
+
     try {
         // Save to backend API
         const response = await fetch(`${API_BASE}/api/profile/documentation-preferences`, {
@@ -8057,7 +8072,7 @@ async function handleDocumentationForm(e) {
                 year: parseInt(year)
             })
         });
-        
+
         if (response.ok) {
             // Also save to localStorage as backup
             const preferences = {
@@ -8067,9 +8082,9 @@ async function handleDocumentationForm(e) {
                 savedAt: new Date().toISOString()
             };
             localStorage.setItem('documentationPreferences', JSON.stringify(preferences));
-            
+
             showMessage(`Preferences saved: ${intake} ${year}`, 'success');
-            
+
             // Refresh the R2 student profile file
             await saveVisaStatusToR2();
         } else {
@@ -8092,7 +8107,7 @@ async function handleDocumentUpload(e) {
         showMessage('Please login to upload documents', 'error');
         return;
     }
-    
+
     const fileInput = document.getElementById('documentFile');
     const password = document.getElementById('documentPassword').value;
     const documentType = document.getElementById('documentType').value;
@@ -8100,35 +8115,35 @@ async function handleDocumentUpload(e) {
     const country = document.getElementById('documentationCountry').value;
     const intake = document.getElementById('documentationIntake').value;
     const year = document.getElementById('documentationYear').value ? parseInt(document.getElementById('documentationYear').value) : null;
-    
+
     if (!fileInput.files || fileInput.files.length === 0) {
         showMessage('Please select a file to upload', 'error');
         return;
     }
-    
+
     if (!password) {
         showMessage('Please enter your password to encrypt the document', 'error');
         return;
     }
-    
+
     if (!documentType) {
         showMessage('Please select a document type', 'error');
         return;
     }
-    
+
     const file = fileInput.files[0];
-    
+
     // Validate file size (5MB)
     const maxSize = 5 * 1024 * 1024;
     if (file.size > maxSize) {
         showMessage('File is too large. Maximum size is 5MB', 'error');
         return;
     }
-    
+
     try {
         setDocumentUploadLoading(true, 'Encrypting document...');
         showMessage('Encrypting and uploading document...', 'success');
-        
+
         const formData = new FormData();
         formData.append('file', file);
         formData.append('password', password);  // Required for Zero-Knowledge encryption
@@ -8137,7 +8152,7 @@ async function handleDocumentUpload(e) {
         if (intake) formData.append('intake', intake);
         if (year) formData.append('year', year);
         if (description) formData.append('description', description);
-        
+
         const response = await fetch(`${API_BASE}/api/documents/upload`, {
             method: 'POST',
             headers: {
@@ -8145,13 +8160,13 @@ async function handleDocumentUpload(e) {
             },
             body: formData
         });
-        
+
         const data = await response.json();
-        
+
         if (response.ok) {
             const documentName = file.name;
             const docType = documentType;
-            
+
             // Check for validation results
             if (data.validation) {
                 const validation = data.validation;
@@ -8159,7 +8174,7 @@ async function handleDocumentUpload(e) {
                     // Document validation failed
                     const docTypeText = docType ? ` (${docType})` : '';
                     const notificationMessage = `File: ${documentName}${docTypeText}\n\n${validation.message || 'The uploaded document does not match the specified type. Please verify and upload the correct document.'}`;
-                    
+
                     addNotification(
                         'Rilono AI: Document Validation Failed',
                         notificationMessage,
@@ -8172,7 +8187,7 @@ async function handleDocumentUpload(e) {
                     const name = validation.details?.Name || '';
                     const docTypeText = docType ? ` (${docType})` : '';
                     const successMsg = `File: ${documentName}${docTypeText}\n\n${name ? `Extracted name: ${name}\n\n` : ''}Document validated successfully! All information has been extracted.`;
-                    
+
                     addNotification(
                         'Rilono AI: Document Validated',
                         successMsg,
@@ -8192,7 +8207,7 @@ async function handleDocumentUpload(e) {
                 );
                 showMessage('Document encrypted and uploaded successfully!', 'success');
             }
-            
+
             setDocumentUploadLoading(true, 'Upload complete. Syncing your documents...');
             document.getElementById('documentUploadForm').reset();
             // Also reset the searchable dropdown
@@ -8202,7 +8217,7 @@ async function handleDocumentUpload(e) {
             dropdownItems.forEach(item => item.classList.remove('selected'));
             await loadMyDocuments(true, 'Refreshing your uploaded documents...');
             setDocumentUploadLoading(false, 'Document is now visible in your list.');
-            
+
             // Refresh visa status after document upload
             await saveVisaStatusToR2();
             await loadDashboardStats(); // Refresh the journey tracker
@@ -8311,7 +8326,7 @@ async function loadMyDocuments(showLoadingState = false, loadingMessage = 'Loadi
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         if (response.ok) {
             const documents = await response.json();
             displayDocuments(documents);
@@ -8543,18 +8558,18 @@ async function downloadEncryptedDocument(documentId) {
         showMessage('Please login to download documents', 'error');
         return;
     }
-    
+
     const password = prompt('Enter your password to decrypt and download this document:');
     if (!password) {
         return; // User cancelled
     }
-    
+
     try {
         showMessage('Decrypting document...', 'success');
-        
+
         const formData = new FormData();
         formData.append('password', password);
-        
+
         const response = await fetch(`${API_BASE}/api/documents/${documentId}/download`, {
             method: 'POST',
             headers: {
@@ -8562,11 +8577,11 @@ async function downloadEncryptedDocument(documentId) {
             },
             body: formData
         });
-        
+
         if (response.ok) {
             // Get the file blob
             const blob = await response.blob();
-            
+
             // Get filename from response headers or use default
             const contentDisposition = response.headers.get('Content-Disposition');
             let filename = 'document';
@@ -8576,7 +8591,7 @@ async function downloadEncryptedDocument(documentId) {
                     filename = filenameMatch[1];
                 }
             }
-            
+
             // Create download link
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -8586,7 +8601,7 @@ async function downloadEncryptedDocument(documentId) {
             a.click();
             window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
-            
+
             showMessage('Document decrypted and downloaded successfully!', 'success');
         } else {
             const error = await response.json().catch(() => ({}));
@@ -8607,28 +8622,28 @@ async function deleteDocument(documentId, filename) {
         showMessage('Please login to delete documents', 'error');
         return;
     }
-    
+
     // Confirm deletion
     const confirmed = confirm(`Are you sure you want to delete "${filename}"?\n\nThis action cannot be undone. The file will be permanently deleted from R2 storage.`);
     if (!confirmed) {
         return; // User cancelled
     }
-    
+
     try {
         showMessage('Deleting document...', 'success');
-        
+
         const response = await fetch(`${API_BASE}/api/documents/${documentId}`, {
             method: 'DELETE',
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
         });
-        
+
         if (response.ok || response.status === 204) {
             showMessage('Document deleted successfully', 'success');
             // Reload documents list
             await loadMyDocuments();
-            
+
             // Refresh visa status after document deletion
             await saveVisaStatusToR2();
             await loadDashboardStats();
@@ -8811,30 +8826,30 @@ async function handleRilonoAiChatSubmit(e) {
     const input = form ? form.querySelector('.rilono-ai-input') : null;
     if (!input) return;
     const message = input.value.trim();
-    
+
     if (!message) return;
-    
+
     if (!authToken) {
         showMessage('Please login to chat with Rilono AI', 'error');
         return;
     }
-    
+
     // Add user message to both chats
     addMessageToRilonoAiChat(message, true);
     addMessageToFloatingChat(message, true);
-    
+
     // Add to shared conversation history
     rilonoAiConversationHistory.push({
         role: 'user',
         content: message
     });
-    
+
     input.value = '';
     autoResizeRilonoAiInput(input);
-    
+
     // Show typing indicator
     showRilonoAiTypingIndicator();
-    
+
     try {
         // Call the AI chat API
         const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
@@ -8849,24 +8864,24 @@ async function handleRilonoAiChatSubmit(e) {
                 source: 'rilono_ai_chat'
             })
         });
-        
+
         removeRilonoAiTypingIndicator();
-        
+
         if (response.ok) {
             const data = await response.json();
             const aiResponse = data.response;
-            
+
             // Add AI response to shared conversation history
             rilonoAiConversationHistory.push({
                 role: 'assistant',
                 content: aiResponse
             });
-            
+
             // Keep only last 20 messages in history
             if (rilonoAiConversationHistory.length > 20) {
                 rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-20);
             }
-            
+
             // Add to both chats
             addMessageToRilonoAiChat(aiResponse, false);
             addMessageToFloatingChat(aiResponse, false);
@@ -8888,7 +8903,7 @@ async function handleRilonoAiChatSubmit(e) {
 
 function generateRilonoAiResponse(userMessage) {
     const message = userMessage.toLowerCase();
-    
+
     if (message.includes('document') || message.includes('checklist') || message.includes('upload')) {
         return `Here are the key documents you need to upload for your US visa application:
 
@@ -9142,10 +9157,10 @@ function toggleFloatingChat() {
     const chatWindow = document.getElementById('floatingChatWindow');
     const chatToggle = document.getElementById('floatingChatToggle');
     const messagesContainer = document.getElementById('floatingChatMessages');
-    
+
     // Toggle the state
     floatingChatOpen = !floatingChatOpen;
-    
+
     // If closing, hide window and show toggle button
     if (!floatingChatOpen) {
         closeExpandedChatView();
@@ -9153,10 +9168,10 @@ function toggleFloatingChat() {
         if (chatToggle) chatToggle.style.display = 'flex';
         return;
     }
-    
+
     // Hide toggle button when chat is open
     if (chatToggle) chatToggle.style.display = 'none';
-    
+
     if (!currentUser) {
         // Show login prompt
         document.getElementById('floatingChatLoginPrompt').style.display = 'flex';
@@ -9165,17 +9180,17 @@ function toggleFloatingChat() {
         chatWindow.style.display = 'flex';
         return;
     }
-    
+
     if (floatingChatOpen) {
         chatWindow.style.display = 'flex';
         updateFloatingExpandButton(false);
         document.getElementById('floatingChatLoginPrompt').style.display = 'none';
         document.getElementById('floatingChatInputContainer').style.display = 'block';
         messagesContainer.style.display = 'flex';
-        
+
         // Sync conversation from shared history
         syncFloatingChatFromHistory();
-        
+
         // Ensure proper layout and scrolling
         setTimeout(() => {
             const messagesContainer = document.getElementById('floatingChatMessages');
@@ -9196,7 +9211,7 @@ function toggleFloatingChat() {
 function syncFloatingChatFromHistory() {
     const messagesContainer = document.getElementById('floatingChatMessages');
     if (!messagesContainer) return;
-    
+
     // Clear existing messages
     messagesContainer.innerHTML = '';
 
@@ -9207,7 +9222,7 @@ function syncFloatingChatFromHistory() {
     for (const msg of rilonoAiConversationHistory) {
         addMessageToFloatingChat(msg.content, msg.role === 'user');
     }
-    
+
     scrollFloatingChatToBottom();
 }
 
@@ -9242,10 +9257,10 @@ function autoResizeFloatingChatInput(textarea) {
 function scrollFloatingChatToBottom() {
     const messagesContainer = document.getElementById('floatingChatMessages');
     if (!messagesContainer) return;
-    
+
     // Force immediate scroll first
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    
+
     // Then smooth scroll with requestAnimationFrame for better performance
     requestAnimationFrame(() => {
         messagesContainer.scrollTo({
@@ -9258,20 +9273,20 @@ function scrollFloatingChatToBottom() {
 function addMessageToFloatingChat(message, isUser = false) {
     const messagesContainer = document.getElementById('floatingChatMessages');
     if (!messagesContainer) return;  // Guard: container might not exist
-    
+
     const messageDiv = document.createElement('div');
     messageDiv.className = `chat-message ${isUser ? 'user' : 'assistant'}`;
-    
+
     if (!isUser) {
         const avatar = document.createElement('div');
         avatar.className = 'chat-avatar';
         avatar.textContent = '🤖';
         messageDiv.appendChild(avatar);
     }
-    
+
     const bubble = document.createElement('div');
     bubble.className = 'chat-message-bubble';
-    
+
     if (isUser) {
         // User messages: plain text
         bubble.textContent = message;
@@ -9280,14 +9295,14 @@ function addMessageToFloatingChat(message, isUser = false) {
         bubble.innerHTML = markdownToHtml(message);
     }
     messageDiv.appendChild(bubble);
-    
+
     if (isUser) {
         const avatar = document.createElement('div');
         avatar.className = 'chat-avatar';
         avatar.textContent = currentUser?.full_name?.charAt(0).toUpperCase() || currentUser?.username?.charAt(0).toUpperCase() || 'U';
         messageDiv.appendChild(avatar);
     }
-    
+
     messagesContainer.appendChild(messageDiv);
     // Scroll to bottom with smooth behavior after DOM update
     scrollFloatingChatToBottom();
@@ -9309,31 +9324,31 @@ async function handleFloatingChatSubmit(e) {
     e.preventDefault();
     const input = document.getElementById('floatingChatInput');
     const message = input.value.trim();
-    
+
     if (!message) return;
-    
+
     if (!authToken) {
         showMessage('Please login to chat with Rilono AI', 'error');
         toggleFloatingChat();
         return;
     }
-    
+
     // Add user message to both chats
     addMessageToFloatingChat(message, true);
     addMessageToRilonoAiChat(message, true);
-    
+
     // Add to shared conversation history
     rilonoAiConversationHistory.push({
         role: 'user',
         content: message
     });
-    
+
     input.value = '';
     autoResizeFloatingChatInput(input);
-    
+
     // Show typing indicator
     showFloatingChatTyping();
-    
+
     try {
         // Call the AI chat API
         const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
@@ -9348,24 +9363,24 @@ async function handleFloatingChatSubmit(e) {
                 source: 'rilono_ai_chat'
             })
         });
-        
+
         removeFloatingChatTyping();
-        
+
         if (response.ok) {
             const data = await response.json();
             const aiResponse = data.response;
-            
+
             // Add AI response to shared conversation history
             rilonoAiConversationHistory.push({
                 role: 'assistant',
                 content: aiResponse
             });
-            
+
             // Keep only last 20 messages in history
             if (rilonoAiConversationHistory.length > 20) {
                 rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-20);
             }
-            
+
             // Add to both chats
             addMessageToFloatingChat(aiResponse, false);
             addMessageToRilonoAiChat(aiResponse, false);
@@ -9416,8 +9431,8 @@ document.addEventListener('keydown', (event) => {
 function handleGalleryKeyPress(e) {
     const modal = document.getElementById('imageGalleryModal');
     if (modal.style.display === 'none') return;
-    
-    switch(e.key) {
+
+    switch (e.key) {
         case 'ArrowLeft':
             e.preventDefault();
             navigateGallery(-1);
