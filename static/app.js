@@ -1241,6 +1241,28 @@ function toggleNotifications() {
     dropdown.style.display = notificationDropdownOpen ? 'block' : 'none';
     if (notificationDropdownOpen) {
         renderNotifications();
+        markAllNotificationsRead();
+    }
+}
+
+async function markAllNotificationsRead() {
+    const unread = notifications.filter(n => !n.read);
+    if (unread.length === 0) return;
+
+    unread.forEach(n => { n.read = true; });
+    saveNotifications();
+    updateNotificationBadge();
+    renderNotifications();
+
+    if (authToken) {
+        try {
+            await fetch(`${API_BASE}/api/notifications/read-all`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${authToken}` }
+            });
+        } catch (error) {
+            console.warn('Failed to mark server notifications as read:', error);
+        }
     }
 }
 
