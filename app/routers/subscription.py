@@ -43,6 +43,9 @@ WEBHOOK_RATE_LIMIT = int(os.getenv("SUBSCRIPTION_WEBHOOK_RATE_LIMIT", "120"))
 WEBHOOK_RATE_WINDOW_SECONDS = int(os.getenv("SUBSCRIPTION_WEBHOOK_RATE_WINDOW_SECONDS", "60"))
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "").strip()
 
+PRICING_MODEL_MONTHLY = "pro_monthly"
+PRICING_MODEL_SIX_MONTH = "pro_six_month"
+
 
 def _enforce_rate_limit_or_429(
     request: Request,
@@ -94,8 +97,13 @@ def _razorpay_checkout_enabled() -> bool:
     return bool(key_id and key_secret)
 
 
-def _razorpay_plan_id() -> str:
+def _razorpay_monthly_plan_id() -> str:
     return os.getenv("RAZORPAY_PLAN_ID", "").strip()
+
+
+def _razorpay_plan_id() -> str:
+    # Backward-compatible alias for existing call sites.
+    return _razorpay_monthly_plan_id()
 
 
 def _razorpay_recurring_total_count() -> int:
@@ -110,10 +118,10 @@ def _razorpay_recurring_total_count() -> int:
 
 
 def _razorpay_recurring_enabled() -> bool:
-    return _razorpay_checkout_enabled() and bool(_razorpay_plan_id())
+    return _razorpay_checkout_enabled() and bool(_razorpay_monthly_plan_id())
 
 
-def _pro_amount_paise() -> int:
+def _pro_monthly_amount_paise() -> int:
     raw = os.getenv("PRO_MONTHLY_AMOUNT_PAISE", "69900").strip()
     try:
         amount = int(raw)
@@ -122,6 +130,22 @@ def _pro_amount_paise() -> int:
         return amount
     except ValueError:
         return 69900
+
+
+def _pro_amount_paise() -> int:
+    # Backward-compatible alias for existing call sites.
+    return _pro_monthly_amount_paise()
+
+
+def _pro_six_month_amount_paise() -> int:
+    raw = os.getenv("PRO_SIX_MONTH_AMOUNT_PAISE", "249900").strip()
+    try:
+        amount = int(raw)
+        if amount <= 0:
+            raise ValueError
+        return amount
+    except ValueError:
+        return 249900
 
 
 def _normalize_coupon_code(raw_code: str | None) -> str:
@@ -259,7 +283,7 @@ def _pro_plan_currency() -> str:
     return _normalize_currency(os.getenv("PRO_PLAN_CURRENCY", "INR"))
 
 
-def _pro_duration_days() -> int:
+def _pro_monthly_duration_days() -> int:
     raw = os.getenv("PRO_PLAN_DURATION_DAYS", "30").strip()
     try:
         days = int(raw)
@@ -268,6 +292,75 @@ def _pro_duration_days() -> int:
         return days
     except ValueError:
         return 30
+
+
+def _pro_duration_days() -> int:
+    # Backward-compatible alias for existing call sites.
+    return _pro_monthly_duration_days()
+
+
+def _pro_six_month_duration_days() -> int:
+    raw = os.getenv("PRO_SIX_MONTH_DURATION_DAYS", "180").strip()
+    try:
+        days = int(raw)
+        if days <= 0:
+            raise ValueError
+        return days
+    except ValueError:
+        return 180
+
+
+def _normalize_pricing_model(raw_model: str | None) -> str:
+    normalized = str(raw_model or "").strip().lower()
+    if normalized in {
+        PRICING_MODEL_SIX_MONTH,
+        "pro_6_month",
+        "pro_6month",
+        "6_month",
+        "6month",
+        "six_month",
+        "one_time_6_month",
+    }:
+        return PRICING_MODEL_SIX_MONTH
+    if normalized in {
+        PRICING_MODEL_MONTHLY,
+        "monthly",
+        "pro",
+        "default",
+    }:
+        return PRICING_MODEL_MONTHLY
+    return PRICING_MODEL_MONTHLY
+
+
+def _pricing_model_amount_paise(pricing_model: str) -> int:
+    if pricing_model == PRICING_MODEL_SIX_MONTH:
+        return _pro_six_month_amount_paise()
+    return _pro_monthly_amount_paise()
+
+
+def _pricing_model_duration_days(pricing_model: str) -> int:
+    if pricing_model == PRICING_MODEL_SIX_MONTH:
+        return _pro_six_month_duration_days()
+    return _pro_monthly_duration_days()
+
+
+def _pricing_model_prefers_recurring(pricing_model: str) -> bool:
+    return pricing_model == PRICING_MODEL_MONTHLY
+
+
+def _pricing_model_description(pricing_model: str, recurring: bool) -> str:
+    if pricing_model == PRICING_MODEL_SIX_MONTH:
+        return "Journey Pass (Best Value) - 6 Months One-Time"
+    if recurring:
+        return "Rilono Pro Subscription (Auto-renew, cancel anytime)"
+    return "Rilono Pro Monthly (One-Time Payment)"
+
+
+def _pricing_model_from_payment_row(payment_row: models.SubscriptionPayment | None) -> str:
+    if payment_row is None:
+        return PRICING_MODEL_MONTHLY
+    raw_model = getattr(payment_row, "pricing_model", None)
+    return _normalize_pricing_model(raw_model)
 
 
 def _is_provider_auto_renew_enabled(subscription_data: dict[str, Any]) -> bool:
@@ -751,6 +844,7 @@ def _finalize_verified_payment(
     invoice_id: str | None,
     provider_subscription_data: dict[str, Any] | None,
 ) -> models.Subscription:
+    now = datetime.utcnow()
     _mark_payment_verified(
         payment_row=payment_row,
         payment_id=payment_id,
@@ -766,13 +860,16 @@ def _finalize_verified_payment(
             commit=False,
         )
     else:
+        duration_days = _pricing_model_duration_days(_pricing_model_from_payment_row(payment_row))
         subscription = grant_pro_access_for_days(
             db=db,
             user_id=user_id,
-            days=_pro_duration_days(),
+            days=duration_days,
             commit=False,
         )
 
+    # Reflect the latest successful paid activation/renewal event in UI.
+    subscription.started_at = now
     db.commit()
     db.refresh(subscription)
     return subscription
@@ -807,6 +904,11 @@ def _coupon_fields_from_subscription_notes(subscription_data: dict[str, Any] | N
     except (InvalidOperation, ValueError, TypeError):
         return coupon_code, None
     return coupon_code, percent_off
+
+
+def _pricing_model_from_subscription_notes(subscription_data: dict[str, Any] | None) -> str:
+    notes = (subscription_data or {}).get("notes") or {}
+    return _normalize_pricing_model(notes.get("pricing_model"))
 
 
 def _downgrade_to_free(subscription: models.Subscription) -> None:
@@ -906,6 +1008,7 @@ def get_my_subscription(
         if latest_verified_payment and latest_verified_payment.provider
         else ""
     )
+    latest_verified_pricing_model = _pricing_model_from_payment_row(latest_verified_payment)
     recurring_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
 
     if subscription.plan == PLAN_PRO:
@@ -956,7 +1059,9 @@ def get_my_subscription(
     elif referral_bonus_active:
         access_source = "Referral Bonus (1 Month Pro)"
     elif has_verified_payment:
-        if latest_verified_provider == "coupon":
+        if latest_verified_pricing_model == PRICING_MODEL_SIX_MONTH:
+            access_source = "Journey Pass (Best Value)"
+        elif latest_verified_provider == "coupon":
             access_source = "Coupon Pro (Auto-Renew Off)"
         elif auto_renew_enabled is False:
             access_source = "Paid Pro (Auto-Renew Off)"
@@ -1010,10 +1115,37 @@ def upgrade_to_pro(
 
     subscription = get_or_create_user_subscription(db, current_user.id)
     key_id, key_secret = _razorpay_credentials()
+    pricing_model = _normalize_pricing_model(payload.pricing_model if payload else None)
+    prefers_recurring = _pricing_model_prefers_recurring(pricing_model)
 
     if subscription.plan == PLAN_PRO and subscription.status == STATUS_ACTIVE:
         auto_renew_enabled: bool | None = None
         recurring_subscription_status: str | None = None
+        latest_verified_payment = (
+            db.query(models.SubscriptionPayment)
+            .filter(
+                models.SubscriptionPayment.user_id == current_user.id,
+                models.SubscriptionPayment.status == "verified",
+            )
+            .order_by(models.SubscriptionPayment.id.desc())
+            .first()
+        )
+        latest_verified_pricing_model = (
+            _pricing_model_from_payment_row(latest_verified_payment) if latest_verified_payment else None
+        )
+
+        # Journey Pass is intentionally one-way from paid-plan perspective:
+        # Pro Monthly -> Journey Pass is allowed, Journey Pass -> Pro Monthly is blocked.
+        if latest_verified_pricing_model == PRICING_MODEL_SIX_MONTH and pricing_model == PRICING_MODEL_MONTHLY:
+            return {
+                "action": "already_pro",
+                "message": "Journey Pass members cannot switch to Pro Monthly while Journey Pass is active.",
+                "subscription": _build_subscription_response(
+                    subscription,
+                    auto_renew_enabled=auto_renew_enabled,
+                    recurring_subscription_status=recurring_subscription_status,
+                ).model_dump(),
+            }
 
         if _razorpay_recurring_enabled() and key_id and key_secret:
             existing_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
@@ -1034,10 +1166,17 @@ def upgrade_to_pro(
                     recurring_subscription_status = None
 
         # If user is already Pro but auto-renew is OFF, allow renewing from checkout.
-        if auto_renew_enabled is not False:
+        # Allow only Pro Monthly -> Journey Pass switching while active.
+        allow_paid_model_switch = bool(
+            latest_verified_pricing_model
+            and latest_verified_pricing_model == PRICING_MODEL_MONTHLY
+            and pricing_model == PRICING_MODEL_SIX_MONTH
+        )
+        # Only block when we know recurring auto-renew is actively enabled.
+        if auto_renew_enabled is True and not allow_paid_model_switch:
             return {
                 "action": "already_pro",
-                "message": "Your account is already on Pro.",
+                "message": "Your account already has an active paid plan.",
                 "subscription": _build_subscription_response(
                     subscription,
                     auto_renew_enabled=auto_renew_enabled,
@@ -1045,9 +1184,9 @@ def upgrade_to_pro(
                 ).model_dump(),
             }
 
-    base_amount = _pro_amount_paise()
+    base_amount = _pricing_model_amount_paise(pricing_model)
     currency = _pro_plan_currency()
-    base_plan_id = _razorpay_plan_id()
+    base_plan_id = _razorpay_monthly_plan_id() if prefers_recurring else ""
 
     coupon_code = _normalize_coupon_code(payload.coupon_code if payload else "")
     percent_off, _coupon_max_uses_per_user = (
@@ -1063,11 +1202,12 @@ def upgrade_to_pro(
     )
 
     if effective_amount <= 0:
+        now = datetime.utcnow()
         before_snapshot = _subscription_change_snapshot(subscription)
         subscription = grant_pro_access_for_days(
             db=db,
             user_id=current_user.id,
-            days=_pro_duration_days(),
+            days=_pricing_model_duration_days(pricing_model),
             commit=False,
         )
         payment_row = models.SubscriptionPayment(
@@ -1080,11 +1220,13 @@ def upgrade_to_pro(
             razorpay_order_id=f"coupon_{current_user.id}_{secrets.token_hex(8)}",
             coupon_code=coupon_code or None,
             coupon_percent_off=percent_off,
+            pricing_model=pricing_model,
             status="verified",
-            signature_verified_at=datetime.utcnow(),
-            verified_at=datetime.utcnow(),
+            signature_verified_at=now,
+            verified_at=now,
             error_message=f"Coupon {coupon_code} applied ({percent_off_text}% OFF).",
         )
+        subscription.started_at = now
         db.add(payment_row)
         db.commit()
         db.refresh(subscription)
@@ -1108,6 +1250,7 @@ def upgrade_to_pro(
             "message": f"Coupon {coupon_code} applied. Pro activated with 100% discount.",
             "subscription": _build_subscription_response(subscription).model_dump(),
             "coupon_applied_text": coupon_applied_text,
+            "pricing_model": pricing_model,
         }
 
     if not _razorpay_checkout_enabled():
@@ -1117,7 +1260,7 @@ def upgrade_to_pro(
             "contact_path": "/contact",
         }
 
-    if _razorpay_recurring_enabled():
+    if prefers_recurring and _razorpay_recurring_enabled():
         existing_subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
         if existing_subscription_id and _looks_like_razorpay_id(existing_subscription_id, "sub"):
             try:
@@ -1156,8 +1299,9 @@ def upgrade_to_pro(
                         "amount": effective_amount,
                         "currency": currency,
                         "name": "Rilono",
-                        "description": "Rilono Pro Subscription (Auto-renew, cancel anytime)",
+                        "description": _pricing_model_description(pricing_model, recurring=True),
                         "coupon_applied_text": coupon_applied_text,
+                        "pricing_model": pricing_model,
                     }
             except HTTPException:
                 pass
@@ -1181,6 +1325,7 @@ def upgrade_to_pro(
                 "user_id": str(current_user.id),
                 "user_email": current_user.email,
                 "plan": PLAN_PRO,
+                "pricing_model": pricing_model,
                 "coupon_code": coupon_code,
                 "coupon_percent_off": percent_off_text,
             },
@@ -1208,6 +1353,7 @@ def upgrade_to_pro(
             razorpay_subscription_id=subscription_id,
             coupon_code=coupon_code or None,
             coupon_percent_off=(percent_off if percent_off > Decimal("0") else None),
+            pricing_model=pricing_model,
             status="created",
         )
         db.add(payment_row)
@@ -1221,8 +1367,9 @@ def upgrade_to_pro(
             "amount": effective_amount,
             "currency": currency,
             "name": "Rilono",
-            "description": "Rilono Pro Subscription (Auto-renew, cancel anytime)",
+            "description": _pricing_model_description(pricing_model, recurring=True),
             "coupon_applied_text": coupon_applied_text,
+            "pricing_model": pricing_model,
         }
 
     receipt = _create_receipt(current_user.id)
@@ -1234,6 +1381,7 @@ def upgrade_to_pro(
             "user_id": str(current_user.id),
             "user_email": current_user.email,
             "plan": PLAN_PRO,
+            "pricing_model": pricing_model,
             "coupon_code": coupon_code,
             "coupon_percent_off": percent_off_text,
         },
@@ -1261,6 +1409,7 @@ def upgrade_to_pro(
         razorpay_order_id=order_id,
         coupon_code=coupon_code or None,
         coupon_percent_off=(percent_off if percent_off > Decimal("0") else None),
+        pricing_model=pricing_model,
         status="created",
     )
     db.add(payment_row)
@@ -1274,8 +1423,9 @@ def upgrade_to_pro(
         "amount": int(order_data.get("amount", effective_amount) or effective_amount),
         "currency": _normalize_currency(order_data.get("currency", currency)),
         "name": "Rilono",
-        "description": "Rilono Pro Subscription",
+        "description": _pricing_model_description(pricing_model, recurring=False),
         "coupon_applied_text": coupon_applied_text,
+        "pricing_model": pricing_model,
     }
 
 
@@ -1415,6 +1565,7 @@ def verify_recurring_payment_and_activate_pro(
             razorpay_subscription_id=payload.razorpay_subscription_id,
             coupon_code=None,
             coupon_percent_off=None,
+            pricing_model=PRICING_MODEL_MONTHLY,
             status="created",
         )
         db.add(seed_row)
@@ -1447,6 +1598,8 @@ def verify_recurring_payment_and_activate_pro(
 
     target_row = seed_row
     notes_coupon_code, notes_coupon_percent_off = _coupon_fields_from_subscription_notes(subscription_data)
+    notes_pricing_model = _pricing_model_from_subscription_notes(subscription_data)
+    seed_row.pricing_model = notes_pricing_model or seed_row.pricing_model or PRICING_MODEL_MONTHLY
     if notes_coupon_code:
         seed_row.coupon_code = notes_coupon_code
     if notes_coupon_percent_off is not None:
@@ -1483,6 +1636,7 @@ def verify_recurring_payment_and_activate_pro(
                 razorpay_subscription_id=effective_subscription_id,
                 coupon_code=seed_row.coupon_code,
                 coupon_percent_off=seed_row.coupon_percent_off,
+                pricing_model=seed_row.pricing_model or PRICING_MODEL_MONTHLY,
                 status="created",
             )
             db.add(target_row)
@@ -1504,6 +1658,7 @@ def verify_recurring_payment_and_activate_pro(
             razorpay_subscription_id=effective_subscription_id,
             coupon_code=seed_row.coupon_code,
             coupon_percent_off=seed_row.coupon_percent_off,
+            pricing_model=seed_row.pricing_model or PRICING_MODEL_MONTHLY,
             status="created",
         )
         db.add(target_row)
@@ -1512,6 +1667,8 @@ def verify_recurring_payment_and_activate_pro(
         target_row.coupon_code = notes_coupon_code
     if notes_coupon_percent_off is not None and target_row.coupon_percent_off is None:
         target_row.coupon_percent_off = notes_coupon_percent_off
+    if not target_row.pricing_model:
+        target_row.pricing_model = seed_row.pricing_model or notes_pricing_model or PRICING_MODEL_MONTHLY
 
     invoice_id = str(payment_data.get("invoice_id") or "").strip() or None
     subscription = _finalize_verified_payment(
@@ -1596,6 +1753,7 @@ def _handle_recurring_payment_webhook(
 
     if not seed_row:
         notes_coupon_code, notes_coupon_percent_off = _coupon_fields_from_subscription_notes(subscription_data)
+        notes_pricing_model = _pricing_model_from_subscription_notes(subscription_data)
         seed_row = models.SubscriptionPayment(
             user_id=user.id,
             provider="razorpay",
@@ -1607,6 +1765,7 @@ def _handle_recurring_payment_webhook(
             razorpay_subscription_id=subscription_id,
             coupon_code=notes_coupon_code,
             coupon_percent_off=notes_coupon_percent_off,
+            pricing_model=notes_pricing_model or PRICING_MODEL_MONTHLY,
             status="created",
         )
         db.add(seed_row)
@@ -1628,6 +1787,8 @@ def _handle_recurring_payment_webhook(
 
     target_row = existing_payment or seed_row
     notes_coupon_code, notes_coupon_percent_off = _coupon_fields_from_subscription_notes(subscription_data)
+    notes_pricing_model = _pricing_model_from_subscription_notes(subscription_data)
+    seed_row.pricing_model = notes_pricing_model or seed_row.pricing_model or PRICING_MODEL_MONTHLY
     if notes_coupon_code:
         seed_row.coupon_code = notes_coupon_code
     if notes_coupon_percent_off is not None:
@@ -1649,6 +1810,7 @@ def _handle_recurring_payment_webhook(
             razorpay_subscription_id=effective_subscription_id,
             coupon_code=seed_row.coupon_code,
             coupon_percent_off=seed_row.coupon_percent_off,
+            pricing_model=seed_row.pricing_model or PRICING_MODEL_MONTHLY,
             status="created",
         )
         db.add(target_row)
@@ -1657,6 +1819,8 @@ def _handle_recurring_payment_webhook(
         target_row.coupon_code = notes_coupon_code
     if notes_coupon_percent_off is not None and target_row.coupon_percent_off is None:
         target_row.coupon_percent_off = notes_coupon_percent_off
+    if not target_row.pricing_model:
+        target_row.pricing_model = seed_row.pricing_model or notes_pricing_model or PRICING_MODEL_MONTHLY
 
     invoice_id = str(payment_data.get("invoice_id") or "").strip() or None
     _finalize_verified_payment(

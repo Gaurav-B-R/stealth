@@ -96,6 +96,7 @@ class RazorpayRecurringPaymentVerifyRequest(BaseModel):
 
 class SubscriptionUpgradeRequest(BaseModel):
     coupon_code: Optional[str] = None
+    pricing_model: Optional[str] = None
 
 
 class SubscriptionSessionConsumeRequest(BaseModel):

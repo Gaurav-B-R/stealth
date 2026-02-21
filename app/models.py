@@ -141,6 +141,7 @@ class SubscriptionPayment(Base):
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
     coupon_code = Column(String, nullable=True, index=True)
     coupon_percent_off = Column(Numeric(5, 2), nullable=True)
+    pricing_model = Column(String, nullable=True, default="pro_monthly")
     status = Column(String, nullable=False, default="created")  # created | verified | failed
     signature_verified_at = Column(DateTime(timezone=True), nullable=True)
     verified_at = Column(DateTime(timezone=True), nullable=True)

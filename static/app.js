@@ -59,10 +59,49 @@ const DOCUMENT_UPLOAD_UPLOADING_MS = 700;
 const DOCUMENT_UPLOAD_MIN_SCAN_MS = 8000;
 
 const PRICING_BASE_USD = {
-    free: 0,
-    pro: 19
+    free: 0
 };
-const PRO_PRICE_INR = 699;
+const PRICING_MODEL_MONTHLY = 'pro_monthly';
+const PRICING_MODEL_SIX_MONTH = 'pro_six_month';
+const PRO_PRICING_MODELS = {
+    [PRICING_MODEL_MONTHLY]: {
+        id: PRICING_MODEL_MONTHLY,
+        label: 'Rilono Pro Monthly',
+        amountInr: 699,
+        cycleLabel: '/month',
+        checkoutMode: 'subscription',
+        autoRenewText: 'Auto-renew enabled. Cancel anytime from Profile > Subscription.'
+    },
+    [PRICING_MODEL_SIX_MONTH]: {
+        id: PRICING_MODEL_SIX_MONTH,
+        label: 'Journey Pass (Best Value)',
+        amountInr: 2499,
+        cycleLabel: '/6 months',
+        checkoutMode: 'order',
+        autoRenewText: 'One-time payment. Access remains active for 6 months from activation.'
+    }
+};
+
+function normalizePricingModel(rawModel) {
+    const value = String(rawModel || '').trim().toLowerCase();
+    if (
+        value === PRICING_MODEL_SIX_MONTH
+        || value === 'pro_6_month'
+        || value === 'pro_6month'
+        || value === '6_month'
+        || value === '6month'
+        || value === 'one_time_6_month'
+        || value === 'six_month'
+    ) {
+        return PRICING_MODEL_SIX_MONTH;
+    }
+    return PRICING_MODEL_MONTHLY;
+}
+
+function getPricingModelConfig(rawModel) {
+    const model = normalizePricingModel(rawModel);
+    return PRO_PRICING_MODELS[model] || PRO_PRICING_MODELS[PRICING_MODEL_MONTHLY];
+}
 
 const nativeFetch = window.fetch.bind(window);
 window.fetch = function secureFetch(input, init = {}) {
@@ -2365,13 +2404,17 @@ function updateSubscriptionUI() {
     const sidebarCancelButton = document.getElementById('dashboardCancelButton');
     const profileUpgradeButton = document.getElementById('profileSubscriptionUpgradeBtn');
     const profileCancelButton = document.getElementById('profileSubscriptionCancelBtn');
-    const pricingUpgradeButton = document.getElementById('pricingProUpgradeButton');
+    const profileSwitchMonthlyButton = document.getElementById('profileSubscriptionSwitchMonthlyBtn');
+    const profileSwitchJourneyButton = document.getElementById('profileSubscriptionSwitchJourneyBtn');
+    const profileSwitchHintEl = document.getElementById('profileSubscriptionSwitchHint');
+    const pricingMonthlyUpgradeButton = document.getElementById('pricingProUpgradeButton');
+    const pricingSixMonthUpgradeButton = document.getElementById('pricingProSixMonthUpgradeButton');
     const profilePlanEl = document.getElementById('profileSubscriptionPlan');
-    const profileSourceEl = document.getElementById('profileSubscriptionSource');
     const profileStatusEl = document.getElementById('profileSubscriptionStatus');
     const profileAutoRenewEl = document.getElementById('profileSubscriptionAutoRenew');
     const profileRenewalLabelEl = document.getElementById('profileSubscriptionRenewalLabel');
     const profileRenewalValueEl = document.getElementById('profileSubscriptionRenewalValue');
+    const profileEndsLabelEl = document.getElementById('profileSubscriptionEndsLabel');
     const profileEndsAtEl = document.getElementById('profileSubscriptionEndsAt');
     const profileStartedAtEl = document.getElementById('profileSubscriptionStartedAt');
     const profileLatestPaymentEl = document.getElementById('profileSubscriptionLatestPayment');
@@ -2399,17 +2442,26 @@ function updateSubscriptionUI() {
         [sidebarCancelButton, profileCancelButton].filter(Boolean).forEach((button) => {
             button.style.display = 'none';
         });
-        if (pricingUpgradeButton) {
-            pricingUpgradeButton.disabled = !PRO_UPGRADE_ENABLED;
-            pricingUpgradeButton.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
-        }
+        const pricingUpgradeButtons = [pricingMonthlyUpgradeButton, pricingSixMonthUpgradeButton].filter(Boolean);
+        pricingUpgradeButtons.forEach((button) => {
+            button.disabled = !PRO_UPGRADE_ENABLED;
+            if (!PRO_UPGRADE_ENABLED) {
+                button.textContent = 'Pro Coming Soon';
+                return;
+            }
+            if (button.id === 'pricingProSixMonthUpgradeButton') {
+                button.textContent = 'Get Journey Pass';
+            } else {
+                button.textContent = 'Upgrade Monthly';
+            }
+        });
 
         if (profilePlanEl) profilePlanEl.textContent = 'Free Plan';
-        if (profileSourceEl) profileSourceEl.textContent = 'Free Plan';
         if (profileStatusEl) profileStatusEl.textContent = 'Active';
         if (profileAutoRenewEl) profileAutoRenewEl.textContent = 'N/A';
         if (profileRenewalLabelEl) profileRenewalLabelEl.textContent = 'Next Renewal';
         if (profileRenewalValueEl) profileRenewalValueEl.textContent = '-';
+        if (profileEndsLabelEl) profileEndsLabelEl.textContent = 'Access Ends';
         if (profileEndsAtEl) profileEndsAtEl.textContent = '-';
         if (profileStartedAtEl) profileStartedAtEl.textContent = '-';
         if (profileLatestPaymentEl) profileLatestPaymentEl.textContent = '-';
@@ -2420,16 +2472,36 @@ function updateSubscriptionUI() {
         if (profileUsageUploadsEl) profileUsageUploadsEl.textContent = 'Uploads: 0/5 used';
         if (profileUsagePrepEl) profileUsagePrepEl.textContent = 'Prep: 0/3 used';
         if (profileUsageMockEl) profileUsageMockEl.textContent = 'Mock: 0/2 used';
+        if (profileSwitchMonthlyButton) {
+            profileSwitchMonthlyButton.style.display = 'inline-flex';
+            profileSwitchMonthlyButton.style.gridColumn = '';
+            profileSwitchMonthlyButton.disabled = !PRO_UPGRADE_ENABLED;
+            profileSwitchMonthlyButton.textContent = PRO_UPGRADE_ENABLED ? 'Choose Pro Monthly' : 'Coming Soon';
+        }
+        if (profileSwitchJourneyButton) {
+            profileSwitchJourneyButton.style.display = 'inline-flex';
+            profileSwitchJourneyButton.style.gridColumn = '';
+            profileSwitchJourneyButton.disabled = !PRO_UPGRADE_ENABLED;
+            profileSwitchJourneyButton.textContent = PRO_UPGRADE_ENABLED ? 'Choose Journey Pass' : 'Coming Soon';
+        }
+        if (profileSwitchHintEl) {
+            profileSwitchHintEl.style.display = 'block';
+            profileSwitchHintEl.textContent = PRO_UPGRADE_ENABLED
+                ? 'Pick a paid plan to unlock unlimited access.'
+                : 'Paid plans are currently unavailable.';
+        }
         if (profileEnableEmailButton) profileEnableEmailButton.disabled = false;
         return;
     }
 
     const isPro = Boolean(currentSubscription.is_pro);
+    const accessSourceText = String(currentSubscription.access_source || '');
+    const isJourneyPassActive = isPro && accessSourceText.toLowerCase().includes('journey pass');
     const subscriptionStatus = (currentSubscription.status || '').toLowerCase();
     const isCancellationScheduled = subscriptionStatus === 'canceled';
     const hasAutoRenewInfo = typeof currentSubscription.auto_renew_enabled === 'boolean';
     const autoRenewEnabled = hasAutoRenewInfo ? Boolean(currentSubscription.auto_renew_enabled) : isPro;
-    const planLabel = isPro ? 'Pro' : 'Free';
+    const planLabel = isPro ? (isJourneyPassActive ? 'Journey Pass' : 'Pro') : 'Free';
 
     if (planNameEl) {
         planNameEl.textContent = `${planLabel} Plan`;
@@ -2463,8 +2535,9 @@ function updateSubscriptionUI() {
         );
     }
 
-    if (profilePlanEl) profilePlanEl.textContent = isPro ? 'Pro Plan' : 'Free Plan';
-    if (profileSourceEl) profileSourceEl.textContent = currentSubscription.access_source || (isPro ? 'Pro Access' : 'Free Plan');
+    if (profilePlanEl) profilePlanEl.textContent = isPro
+        ? (isJourneyPassActive ? 'Journey Pass' : 'Pro Plan')
+        : 'Free Plan';
     if (profileStatusEl) profileStatusEl.textContent = currentSubscription.status || 'active';
     if (profileAutoRenewEl) {
         if (!isPro) {
@@ -2484,8 +2557,28 @@ function updateSubscriptionUI() {
             : currentSubscription.ends_at;
         profileRenewalValueEl.textContent = formatSubscriptionDateTime(renewalDate);
     }
-    if (profileEndsAtEl) profileEndsAtEl.textContent = formatSubscriptionDateTime(currentSubscription.ends_at);
-    if (profileStartedAtEl) profileStartedAtEl.textContent = formatSubscriptionDateTime(currentSubscription.started_at);
+    if (profileEndsLabelEl) {
+        profileEndsLabelEl.textContent = autoRenewEnabled ? 'Access Ends' : 'Renewal';
+    }
+    if (profileEndsAtEl) {
+        if (!isPro) {
+            profileEndsAtEl.textContent = '-';
+        } else if (autoRenewEnabled) {
+            profileEndsAtEl.textContent = 'Not scheduled (auto-renew on)';
+        } else {
+            profileEndsAtEl.textContent = isJourneyPassActive ? 'Not applicable (one-time pass)' : 'Disabled';
+        }
+    }
+    let activatedAt = currentSubscription.started_at;
+    if (isPro && currentSubscription.latest_payment_verified_at) {
+        const startedTimestamp = Date.parse(currentSubscription.started_at || '');
+        const latestVerifiedTimestamp = Date.parse(currentSubscription.latest_payment_verified_at || '');
+        if (Number.isFinite(latestVerifiedTimestamp)
+            && (!Number.isFinite(startedTimestamp) || latestVerifiedTimestamp > startedTimestamp)) {
+            activatedAt = currentSubscription.latest_payment_verified_at;
+        }
+    }
+    if (profileStartedAtEl) profileStartedAtEl.textContent = formatSubscriptionDateTime(activatedAt);
     if (profileLatestPaymentEl) {
         const hasPaymentAmount = currentSubscription.latest_payment_amount_paise !== null
             && currentSubscription.latest_payment_amount_paise !== undefined;
@@ -2524,6 +2617,61 @@ function updateSubscriptionUI() {
     if (profileUsagePrepEl) profileUsagePrepEl.textContent = formatUsageText(currentSubscription.prep_sessions_used, currentSubscription.prep_sessions_limit, 'Prep');
     if (profileUsageMockEl) profileUsageMockEl.textContent = formatUsageText(currentSubscription.mock_interviews_used, currentSubscription.mock_interviews_limit, 'Mock');
 
+    if (profileSwitchMonthlyButton) {
+        profileSwitchMonthlyButton.style.display = 'inline-flex';
+        profileSwitchMonthlyButton.style.gridColumn = '';
+        if (!PRO_UPGRADE_ENABLED) {
+            profileSwitchMonthlyButton.disabled = true;
+            profileSwitchMonthlyButton.textContent = 'Coming Soon';
+        } else if (isJourneyPassActive) {
+            profileSwitchMonthlyButton.style.display = 'none';
+            profileSwitchMonthlyButton.disabled = true;
+            profileSwitchMonthlyButton.textContent = 'Choose Pro Monthly';
+        } else if (isPro && !((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled)) {
+            profileSwitchMonthlyButton.disabled = true;
+            profileSwitchMonthlyButton.textContent = 'Pro Monthly Active';
+        } else if (isPro) {
+            profileSwitchMonthlyButton.disabled = false;
+            profileSwitchMonthlyButton.textContent = 'Renew Pro Monthly';
+        } else {
+            profileSwitchMonthlyButton.disabled = false;
+            profileSwitchMonthlyButton.textContent = 'Choose Pro Monthly';
+        }
+    }
+
+    if (profileSwitchJourneyButton) {
+        profileSwitchJourneyButton.style.display = 'inline-flex';
+        profileSwitchJourneyButton.style.gridColumn = '';
+        if (!PRO_UPGRADE_ENABLED) {
+            profileSwitchJourneyButton.disabled = true;
+            profileSwitchJourneyButton.textContent = 'Coming Soon';
+        } else if (isJourneyPassActive) {
+            profileSwitchJourneyButton.disabled = true;
+            profileSwitchJourneyButton.textContent = 'Journey Pass Active';
+            profileSwitchJourneyButton.style.gridColumn = '1 / -1';
+        } else if (isPro) {
+            profileSwitchJourneyButton.disabled = false;
+            profileSwitchJourneyButton.textContent = 'Switch to Journey Pass';
+        } else {
+            profileSwitchJourneyButton.disabled = false;
+            profileSwitchJourneyButton.textContent = 'Choose Journey Pass';
+        }
+    }
+
+    if (profileSwitchHintEl) {
+        profileSwitchHintEl.style.display = 'block';
+        if (!PRO_UPGRADE_ENABLED) {
+            profileSwitchHintEl.textContent = 'Paid plans are currently unavailable.';
+        } else if (!isPro) {
+            profileSwitchHintEl.textContent = 'Pick your preferred paid plan to unlock unlimited access.';
+        } else if (isJourneyPassActive) {
+            profileSwitchHintEl.textContent = '';
+            profileSwitchHintEl.style.display = 'none';
+        } else {
+            profileSwitchHintEl.textContent = 'Pro Monthly is active. Switch to Journey Pass anytime.';
+        }
+    }
+
     [sidebarUpgradeButton, profileUpgradeButton].filter(Boolean).forEach((button) => {
         const canRenew = isPro && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled) && PRO_UPGRADE_ENABLED;
         const canUpgrade = (!isPro && PRO_UPGRADE_ENABLED) || canRenew;
@@ -2531,7 +2679,7 @@ function updateSubscriptionUI() {
         if (canRenew) {
             button.textContent = 'Renew Subscription';
         } else if (isPro) {
-            button.textContent = 'You are on Pro';
+            button.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'You are on Pro';
         } else {
             button.textContent = canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon';
         }
@@ -2544,18 +2692,31 @@ function updateSubscriptionUI() {
         button.style.display = showCancel ? 'block' : 'none';
     });
 
-    if (pricingUpgradeButton) {
+    [pricingMonthlyUpgradeButton, pricingSixMonthUpgradeButton].filter(Boolean).forEach((pricingUpgradeButton) => {
         const canRenew = isPro && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled) && PRO_UPGRADE_ENABLED;
-        const canUpgrade = (!isPro && PRO_UPGRADE_ENABLED) || canRenew;
+        const isJourneyButton = pricingUpgradeButton.id === 'pricingProSixMonthUpgradeButton';
+        const canUpgrade = isJourneyButton
+            ? PRO_UPGRADE_ENABLED
+            : ((!isPro && PRO_UPGRADE_ENABLED) || canRenew);
         pricingUpgradeButton.disabled = !canUpgrade;
         if (canRenew) {
-            pricingUpgradeButton.textContent = 'Renew Pro';
+            pricingUpgradeButton.textContent = isJourneyButton ? 'Get Journey Pass' : 'Renew Pro';
         } else if (isPro) {
-            pricingUpgradeButton.textContent = 'You are on Pro';
+            if (isJourneyButton) {
+                pricingUpgradeButton.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'Switch to Journey Pass';
+            } else {
+                pricingUpgradeButton.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'You are on Pro';
+            }
         } else {
-            pricingUpgradeButton.textContent = canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon';
+            if (!canUpgrade) {
+                pricingUpgradeButton.textContent = 'Pro Coming Soon';
+            } else if (pricingUpgradeButton.id === 'pricingProSixMonthUpgradeButton') {
+                pricingUpgradeButton.textContent = 'Get Journey Pass';
+            } else {
+                pricingUpgradeButton.textContent = 'Upgrade Monthly';
+            }
         }
-    }
+    });
 }
 
 function extractErrorDetailText(detail) {
@@ -2636,24 +2797,48 @@ function normalizeCouponCode(rawValue = '') {
     return String(rawValue || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
 }
 
-async function handleUpgradeToPro(source = '') {
+async function handleUpgradeToPro(source = '', preferredPricingModel = PRICING_MODEL_MONTHLY) {
     if (!authToken) {
         showRegister();
         return;
     }
+
+    const requestedPricingModel = normalizePricingModel(preferredPricingModel);
 
     if (proUpgradeInFlight) {
         return;
     }
 
     const subscriptionStatus = String(currentSubscription?.status || '').toLowerCase();
+    const isJourneyPassActive = String(currentSubscription?.access_source || '').toLowerCase().includes('journey pass');
+    if (currentSubscription?.is_pro && isJourneyPassActive && requestedPricingModel === PRICING_MODEL_MONTHLY) {
+        showMessage('Journey Pass members cannot switch to Pro Monthly while Journey Pass is active.', 'error');
+        return;
+    }
+    const activePricingModel = currentSubscription?.is_pro
+        ? (isJourneyPassActive ? PRICING_MODEL_SIX_MONTH : PRICING_MODEL_MONTHLY)
+        : null;
     const hasAutoRenewInfo = typeof currentSubscription?.auto_renew_enabled === 'boolean';
     const canRenewExistingPro = Boolean(
         currentSubscription?.is_pro
-        && ((hasAutoRenewInfo && currentSubscription.auto_renew_enabled === false) || subscriptionStatus === 'canceled')
+        && (
+            !hasAutoRenewInfo
+            || (hasAutoRenewInfo && currentSubscription.auto_renew_enabled === false)
+            || subscriptionStatus === 'canceled'
+        )
     );
-    if (currentSubscription?.is_pro && !canRenewExistingPro) {
-        showMessage('Your account is already on Pro.', 'success');
+    const canSwitchPaidModel = Boolean(
+        currentSubscription?.is_pro
+        && activePricingModel
+        && requestedPricingModel !== activePricingModel
+    );
+    if (currentSubscription?.is_pro && !canRenewExistingPro && !canSwitchPaidModel) {
+        showMessage(
+            isJourneyPassActive
+                ? 'Your Journey Pass is already active.'
+                : 'Your account already has an active paid plan.',
+            'success'
+        );
         return;
     }
 
@@ -2665,8 +2850,18 @@ async function handleUpgradeToPro(source = '') {
     proUpgradeInFlight = true;
     const dashboardUpgradeButton = document.getElementById('dashboardUpgradeButton');
     const profileUpgradeButton = document.getElementById('profileSubscriptionUpgradeBtn');
-    const pricingUpgradeButton = document.getElementById('pricingProUpgradeButton');
-    const upgradeButtons = [dashboardUpgradeButton, profileUpgradeButton, pricingUpgradeButton].filter(Boolean);
+    const profileSwitchMonthlyButton = document.getElementById('profileSubscriptionSwitchMonthlyBtn');
+    const profileSwitchJourneyButton = document.getElementById('profileSubscriptionSwitchJourneyBtn');
+    const pricingMonthlyUpgradeButton = document.getElementById('pricingProUpgradeButton');
+    const pricingSixMonthUpgradeButton = document.getElementById('pricingProSixMonthUpgradeButton');
+    const upgradeButtons = [
+        dashboardUpgradeButton,
+        profileUpgradeButton,
+        profileSwitchMonthlyButton,
+        profileSwitchJourneyButton,
+        pricingMonthlyUpgradeButton,
+        pricingSixMonthUpgradeButton
+    ].filter(Boolean);
     upgradeButtons.forEach((button) => {
         button.dataset.prevText = button.textContent;
         button.disabled = true;
@@ -2675,15 +2870,14 @@ async function handleUpgradeToPro(source = '') {
 
     try {
         const launchResult = await openCheckoutLaunchModal({
-            amountPaise: Math.round(PRO_PRICE_INR * 100),
-            currency: 'INR',
-            checkoutMode: 'subscription'
+            pricingModel: requestedPricingModel
         });
         if (!launchResult?.proceed) {
             showMessage('Upgrade cancelled.', 'error');
             return;
         }
 
+        const selectedPricingModel = normalizePricingModel(launchResult.pricingModel || requestedPricingModel);
         const couponCode = normalizeCouponCode(launchResult.couponCode);
         const response = await fetch(`${API_BASE}/api/subscription/upgrade`, {
             method: 'POST',
@@ -2692,7 +2886,8 @@ async function handleUpgradeToPro(source = '') {
                 'Authorization': `Bearer ${authToken}`
             },
             body: JSON.stringify({
-                coupon_code: couponCode || null
+                coupon_code: couponCode || null,
+                pricing_model: selectedPricingModel
             }),
         });
 
@@ -2705,7 +2900,7 @@ async function handleUpgradeToPro(source = '') {
         if (data.action === 'already_pro') {
             currentSubscription = data.subscription || currentSubscription;
             updateSubscriptionUI();
-            showMessage(data.message || 'Your account is already on Pro.', 'success');
+            showMessage(data.message || 'Your account already has an active paid plan.', 'success');
             return;
         }
 
@@ -2814,43 +3009,46 @@ function closeCheckoutLaunchModal(shouldProceed = false) {
         modal.style.display = 'none';
     }
 
+    const fallbackPricingModel = normalizePricingModel(modal?.dataset?.activePricingModel || PRICING_MODEL_MONTHLY);
+
     const resolver = checkoutLaunchResolver;
     checkoutLaunchResolver = null;
     if (resolver) {
         if (typeof shouldProceed === 'object' && shouldProceed !== null) {
             resolver(shouldProceed);
         } else {
-            resolver({ proceed: Boolean(shouldProceed), couponCode: '' });
+            resolver({ proceed: Boolean(shouldProceed), couponCode: '', pricingModel: fallbackPricingModel });
         }
     }
 }
 
-async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode }) {
+async function openCheckoutLaunchModal({ pricingModel = PRICING_MODEL_MONTHLY } = {}) {
     const modal = document.getElementById('checkoutLaunchModal');
     if (!modal) {
-        return { proceed: true, couponCode: '' };
+        return { proceed: true, couponCode: '', pricingModel: normalizePricingModel(pricingModel) };
     }
 
+    const config = getPricingModelConfig(pricingModel);
+    modal.dataset.activePricingModel = config.id;
+
+    const planNameEl = document.getElementById('checkoutLaunchPlanName');
     const amountEl = document.getElementById('checkoutLaunchAmount');
     const modeEl = document.getElementById('checkoutLaunchMode');
     const continueBtn = document.getElementById('checkoutLaunchContinueBtn');
     const couponInput = document.getElementById('checkoutLaunchCouponCode');
 
     if (!continueBtn) {
-        return { proceed: true, couponCode: '' };
+        return { proceed: true, couponCode: '', pricingModel: config.id };
     }
 
-    const normalizedCurrency = (currency || 'INR').toUpperCase();
-    const parsedAmount = Number(amountPaise);
-    const amountValue = Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount / 100 : PRO_PRICE_INR;
+    if (planNameEl) {
+        planNameEl.textContent = config.label;
+    }
     if (amountEl) {
-        amountEl.textContent = `${formatCurrencyAmount(amountValue, normalizedCurrency)} / month`;
+        amountEl.textContent = `${formatCurrencyAmount(config.amountInr, 'INR')} ${config.cycleLabel.replace('/', '/ ')}`;
     }
-
     if (modeEl) {
-        modeEl.textContent = String(checkoutMode || '').toLowerCase() === 'subscription'
-            ? 'Auto-renew enabled. Cancel anytime from Profile > Subscription.'
-            : 'One-time checkout for your current billing cycle.';
+        modeEl.textContent = config.autoRenewText;
     }
 
     if (couponInput) {
@@ -2865,18 +3063,19 @@ async function openCheckoutLaunchModal({ amountPaise, currency, checkoutMode }) 
         continueBtn.onclick = () => {
             closeCheckoutLaunchModal({
                 proceed: true,
-                couponCode: normalizeCouponCode(couponInput?.value || '')
+                couponCode: normalizeCouponCode(couponInput?.value || ''),
+                pricingModel: config.id
             });
         };
     });
 }
 
-async function upgradeToProFromPricing() {
+async function upgradeToProFromPricing(pricingModel = PRICING_MODEL_MONTHLY) {
     if (!authToken) {
         showRegister();
         return;
     }
-    await handleUpgradeToPro('pricing');
+    await handleUpgradeToPro('pricing', pricingModel);
 }
 
 async function verifyRazorpayPayment(paymentResponse, checkoutMode = 'order') {
@@ -4599,19 +4798,26 @@ function ensurePricingExchangeRates(forceRefresh = false) {
 function updatePricingByCountry(countryCode) {
     const config = PRICING_COUNTRY_CONFIG[countryCode] || PRICING_COUNTRY_CONFIG.US;
     const freePriceEl = document.getElementById('pricingFreePrice');
-    const proPriceEl = document.getElementById('pricingProPrice');
+    const proMonthlyPriceEl = document.getElementById('pricingProPrice');
+    const proSixMonthPriceEl = document.getElementById('pricingProSixMonthPrice');
     const hintEl = document.getElementById('pricingCurrencyHint');
     const rate = pricingRatesByCurrency[config.currency] || PRICING_FALLBACK_RATES[config.currency] || 1;
     const inrRate = pricingRatesByCurrency.INR || PRICING_FALLBACK_RATES.INR || 1;
 
+    const monthlyConfig = getPricingModelConfig(PRICING_MODEL_MONTHLY);
+    const sixMonthConfig = getPricingModelConfig(PRICING_MODEL_SIX_MONTH);
     const convertedFree = PRICING_BASE_USD.free * rate;
-    const convertedPro = (PRO_PRICE_INR / inrRate) * rate;
+    const convertedMonthly = (monthlyConfig.amountInr / inrRate) * rate;
+    const convertedSixMonth = (sixMonthConfig.amountInr / inrRate) * rate;
 
     if (freePriceEl) {
         freePriceEl.innerHTML = `${formatCurrencyAmount(convertedFree, config.currency)}<span>/month</span>`;
     }
-    if (proPriceEl) {
-        proPriceEl.innerHTML = `${formatCurrencyAmount(convertedPro, config.currency)}<span>/month</span>`;
+    if (proMonthlyPriceEl) {
+        proMonthlyPriceEl.innerHTML = `${formatCurrencyAmount(convertedMonthly, config.currency)}<span>/month</span>`;
+    }
+    if (proSixMonthPriceEl) {
+        proSixMonthPriceEl.innerHTML = `${formatCurrencyAmount(convertedSixMonth, config.currency)}<span>/6 months</span>`;
     }
     if (hintEl) {
         hintEl.textContent = `Currency: ${config.currency} (${config.country})`;

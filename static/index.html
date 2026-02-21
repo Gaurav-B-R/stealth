@@ -1415,35 +1415,36 @@
                         </div>
                         <div style="max-width: 980px; margin: 0 auto;">
                             <div class="profile-subscription-manager" style="margin-top: 0;">
-                                <div class="profile-subscription-grid">
-                                    <div class="profile-subscription-card">
-                                        <span>Plan</span>
-                                        <strong id="profileSubscriptionPlan">Free</strong>
+                                <div class="profile-subscription-hero">
+                                    <div class="profile-subscription-hero-content">
+                                        <span class="profile-subscription-kicker">Current Membership</span>
+                                        <h3 id="profileSubscriptionPlan">Free Plan</h3>
+                                        <p id="profileSubscriptionSwitchHint" class="profile-subscription-switch-hint">
+                                            Pick a plan to switch instantly at checkout.</p>
                                     </div>
-                                    <div class="profile-subscription-card">
-                                        <span>Access Source</span>
-                                        <strong id="profileSubscriptionSource">Free Plan</strong>
-                                    </div>
-                                    <div class="profile-subscription-card">
-                                        <span>Status</span>
-                                        <strong id="profileSubscriptionStatus">Active</strong>
-                                    </div>
-                                    <div class="profile-subscription-card">
-                                        <span>Auto-Renew</span>
-                                        <strong id="profileSubscriptionAutoRenew">N/A</strong>
+                                    <div class="profile-subscription-status-wrap">
+                                        <div class="profile-subscription-pill">
+                                            <span>Status</span>
+                                            <strong id="profileSubscriptionStatus">Active</strong>
+                                        </div>
+                                        <div class="profile-subscription-pill">
+                                            <span>Auto-Renew</span>
+                                            <strong id="profileSubscriptionAutoRenew">N/A</strong>
+                                        </div>
                                     </div>
                                 </div>
+                                <div class="profile-subscription-section-heading">Billing Details</div>
                                 <div class="profile-subscription-grid">
                                     <div class="profile-subscription-card">
                                         <span id="profileSubscriptionRenewalLabel">Next Renewal</span>
                                         <strong id="profileSubscriptionRenewalValue">-</strong>
                                     </div>
                                     <div class="profile-subscription-card">
-                                        <span>Access Ends</span>
+                                        <span id="profileSubscriptionEndsLabel">Access Ends</span>
                                         <strong id="profileSubscriptionEndsAt">-</strong>
                                     </div>
                                     <div class="profile-subscription-card">
-                                        <span>Started On</span>
+                                        <span>Activated On</span>
                                         <strong id="profileSubscriptionStartedAt">-</strong>
                                     </div>
                                     <div class="profile-subscription-card">
@@ -1453,6 +1454,7 @@
                                 </div>
                                 <div id="profileSubscriptionReferralInfo" class="profile-subscription-referral">Referral
                                     bonus: Not active</div>
+                                <div class="profile-subscription-section-heading">Included Usage</div>
                                 <div class="profile-subscription-usage-grid">
                                     <div class="profile-subscription-usage-item" id="profileSubscriptionUsageAi">AI:
                                         0/25 used</div>
@@ -1463,9 +1465,18 @@
                                     <div class="profile-subscription-usage-item" id="profileSubscriptionUsageMock">Mock:
                                         0/2 used</div>
                                 </div>
+                                <div class="profile-subscription-section-heading">Plan Actions</div>
                                 <div class="profile-subscription-actions">
-                                    <button id="profileSubscriptionUpgradeBtn" type="button" class="btn btn-primary"
-                                        onclick="handleUpgradeToPro('profile')">Upgrade to Pro</button>
+                                    <div class="profile-subscription-switcher">
+                                        <button id="profileSubscriptionSwitchMonthlyBtn" type="button"
+                                            class="btn btn-secondary"
+                                            onclick="handleUpgradeToPro('profile', 'pro_monthly')">Choose Pro
+                                            Monthly</button>
+                                        <button id="profileSubscriptionSwitchJourneyBtn" type="button"
+                                            class="btn btn-primary"
+                                            onclick="handleUpgradeToPro('profile', 'pro_six_month')">Choose Journey
+                                            Pass</button>
+                                    </div>
                                     <button id="profileSubscriptionCancelBtn" type="button" class="btn btn-secondary"
                                         onclick="handleCancelSubscription()" style="display: none;">Cancel
                                         Auto-Renew</button>
@@ -1989,12 +2000,13 @@
                             class="btn btn-primary">Start Free</a>
                     </div>
 
-                    <div class="pricing-card pricing-card-pro">
-                        <div class="pricing-badge">Pro</div>
+                    <div class="pricing-card pricing-card-pro pricing-card-pro-monthly">
+                        <div class="pricing-badge pricing-badge-monthly">Pro Monthly</div>
                         <div class="pricing-card-head">
-                            <h2>Pro</h2>
-                            <p>For serious applicants</p>
+                            <h2>Pro Monthly</h2>
+                            <p>Monthly recurring plan</p>
                         </div>
+                        <div class="pricing-plan-meta">Recurring billing. Cancel anytime.</div>
                         <div id="pricingProPrice" class="pricing-price">₹699<span>/month</span></div>
                         <ul class="pricing-features">
                             <li>Unlimited messages with Rilono AI</li>
@@ -2004,7 +2016,27 @@
                             <li>Priority support</li>
                         </ul>
                         <button id="pricingProUpgradeButton" type="button" class="btn btn-primary"
-                            onclick="upgradeToProFromPricing()">Upgrade to Pro</button>
+                            onclick="upgradeToProFromPricing('pro_monthly')">Upgrade Monthly</button>
+                    </div>
+
+                    <div class="pricing-card pricing-card-pro pricing-card-journey">
+                        <div class="pricing-badge pricing-badge-value">Best Value</div>
+                        <div class="pricing-card-head">
+                            <h2>Journey Pass</h2>
+                            <p>One-time payment, 6 months access</p>
+                        </div>
+                        <div class="pricing-plan-meta pricing-plan-meta-value">One-time pass. No auto-renew.</div>
+                        <div class="pricing-plan-savings">Save ~40% compared to 6 months of Pro Monthly.</div>
+                        <div id="pricingProSixMonthPrice" class="pricing-price">₹2,499<span>/6 months</span></div>
+                        <ul class="pricing-features">
+                            <li>Unlimited messages with Rilono AI</li>
+                            <li>Unlimited document uploads</li>
+                            <li>Unlimited F-1 interview prep sessions</li>
+                            <li>Unlimited F-1 mock interviews</li>
+                            <li>Priority support</li>
+                        </ul>
+                        <button id="pricingProSixMonthUpgradeButton" type="button" class="btn btn-primary"
+                            onclick="upgradeToProFromPricing('pro_six_month')">Get Journey Pass</button>
                     </div>
                 </div>
                 <p class="pricing-disclaimer">Prices are shown in local currency and updated daily using exchange rates.
@@ -2432,8 +2464,8 @@
                     <h3>6.1 Subscription Plans</h3>
                     <p>Rilono offers free and paid "Pro" subscription plans. By selecting a paid plan, you agree to pay
                         the fees indicated at the time of purchase. You authorize us (through our payment processors
-                        like Razorpay or Apple/Google In-App Purchase) to charge your payment method on a recurring
-                        monthly or annual basis until you cancel.</p>
+                        like Razorpay or Apple/Google In-App Purchase) to charge your payment method either as a
+                        one-time plan (fixed access period) or as a recurring plan until you cancel.</p>
 
                     <h3>6.2 Cancellation Policy</h3>
                     <p>You may cancel your subscription at any time through your account dashboard or App Store
@@ -2874,7 +2906,7 @@
                         </ul>
                     </div>
                     <div class="checkout-launch-summary">
-                        <div class="checkout-launch-plan-name">Rilono Pro</div>
+                        <div id="checkoutLaunchPlanName" class="checkout-launch-plan-name">Rilono Pro Monthly</div>
                         <div id="checkoutLaunchAmount" class="checkout-launch-plan-price">₹699 / month</div>
                         <div class="checkout-launch-coupon-block">
                             <label for="checkoutLaunchCouponCode" class="checkout-launch-coupon-label">Coupon code

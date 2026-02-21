@@ -94,6 +94,9 @@ def ensure_subscription_payment_recurring_columns():
         if "coupon_percent_off" not in columns:
             conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN coupon_percent_off NUMERIC(5,2)"))
 
+        if "pricing_model" not in columns:
+            conn.execute(text("ALTER TABLE subscription_payments ADD COLUMN pricing_model VARCHAR"))
+
 
 def ensure_coupon_percent_column():
     """
