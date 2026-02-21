@@ -1667,6 +1667,8 @@ function showHomepage(skipURLUpdate = false) {
         if (ctaDashboardBtn) ctaDashboardBtn.style.display = 'none';
     }
 
+    window.scrollTo({ top: 0, behavior: 'auto' });
+
     resumeRilonoProductReelIfAllowed();
 
     if (!skipURLUpdate) {
