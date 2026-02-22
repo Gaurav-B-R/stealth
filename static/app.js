@@ -4624,18 +4624,20 @@ function stopVoicePrepInterview(silent = false) {
 
 function setVisaSubNavVisibility(isVisible) {
     const subNav = document.getElementById('visaSubNav');
+    const isMobileDashboardNav = window.matchMedia(`(max-width: ${MOBILE_NAV_BREAKPOINT}px)`).matches;
+    const showInlineSubNav = isVisible && !isMobileDashboardNav;
     if (subNav) {
-        subNav.style.display = isVisible ? 'grid' : 'none';
+        subNav.style.display = showInlineSubNav ? 'grid' : 'none';
     }
 
     const visaNavItem = document.querySelector('.nav-item[data-tab="visa"]');
     if (visaNavItem) {
-        visaNavItem.classList.toggle('expanded', isVisible);
+        visaNavItem.classList.toggle('expanded', showInlineSubNav);
     }
 
     const caret = document.getElementById('visaNavCaret');
     if (caret) {
-        caret.textContent = isVisible ? '▴' : '▾';
+        caret.textContent = showInlineSubNav ? '▴' : '▾';
     }
 }
 
@@ -4654,6 +4656,9 @@ function switchVisaSubTab(subTab) {
 
     document.querySelectorAll('.visa-subnav-item').forEach(item => {
         item.classList.toggle('active', item.dataset.visaSubtab === targetSubTab);
+    });
+    document.querySelectorAll('.visa-mobile-subnav-btn').forEach(button => {
+        button.classList.toggle('active', button.dataset.visaSubtab === targetSubTab);
     });
 
     document.querySelectorAll('.visa-subtab-panel').forEach(panel => {

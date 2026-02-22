@@ -8308,6 +8308,10 @@ svg {
     background: var(--card-bg-hover);
 }
 
+.visa-mobile-subnav {
+    display: none;
+}
+
 @media (max-width: 900px) {
     :root {
         --section-pad-y: 4.5rem;
@@ -8444,6 +8448,120 @@ svg {
         width: 100%;
     }
 
+    #dashboardSection .sidebar-subscription-card {
+        display: none !important;
+    }
+
+    #dashboardReferralBanner {
+        display: none !important;
+    }
+
+    #dashboardSection .sidebar-nav {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding: 0 0.2rem 0.1rem;
+        gap: 0.55rem;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+
+    #dashboardSection .sidebar-nav::-webkit-scrollbar {
+        display: none;
+    }
+
+    #dashboardSection .nav-item {
+        flex: 0 0 auto;
+        min-width: 88px;
+        max-width: 104px;
+        padding: 0.62rem 0.5rem;
+        border-radius: 0.82rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 0.34rem;
+        white-space: normal;
+        text-align: center;
+    }
+
+    #dashboardSection .nav-item-parent {
+        justify-content: center;
+    }
+
+    #dashboardSection .nav-icon {
+        width: auto;
+        font-size: 1.15rem;
+        line-height: 1;
+    }
+
+    #dashboardSection .nav-label {
+        display: block;
+        flex: none;
+        width: 100%;
+        font-size: 0.68rem;
+        line-height: 1.2;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+        color: inherit;
+    }
+
+    #dashboardSection .nav-caret {
+        display: none;
+    }
+
+    #dashboardSection .visa-subnav {
+        display: none !important;
+    }
+
+    #dashboardTab-overview .overview-chat-column {
+        display: none !important;
+    }
+
+    #dashboardTab-overview .overview-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .visa-mobile-subnav {
+        display: flex;
+        gap: 0.5rem;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        margin: 0.2rem 0 0.9rem;
+        padding-bottom: 0.2rem;
+    }
+
+    .visa-mobile-subnav::-webkit-scrollbar {
+        display: none;
+    }
+
+    .visa-mobile-subnav-btn {
+        flex: 0 0 auto;
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        background: rgba(15, 23, 42, 0.55);
+        color: var(--text-secondary);
+        border-radius: 999px;
+        padding: 0.46rem 0.82rem;
+        font-size: 0.78rem;
+        font-weight: 600;
+        line-height: 1.2;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        white-space: nowrap;
+    }
+
+    .visa-mobile-subnav-btn:hover {
+        border-color: rgba(129, 140, 248, 0.52);
+        color: var(--text-primary);
+    }
+
+    .visa-mobile-subnav-btn.active {
+        color: #f8fafc;
+        border-color: rgba(124, 58, 237, 0.46);
+        background: linear-gradient(90deg, rgba(99, 102, 241, 0.34), rgba(168, 85, 247, 0.38));
+        box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.2) inset;
+    }
+
     .dashboard-referral-strip {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8483,6 +8601,164 @@ svg {
         padding: 0.55rem 0.7rem;
     }
 
+    #dashboardTab-documents .documents-health-widget .widget-content {
+        padding: 1rem;
+    }
+
+    #dashboardTab-documents .overview-health-head {
+        align-items: flex-start;
+        gap: 0.6rem;
+        margin-bottom: 0.75rem;
+    }
+
+    #dashboardTab-documents .overview-health-title {
+        font-size: 0.95rem;
+    }
+
+    #dashboardTab-documents .overview-health-subtitle {
+        font-size: 0.82rem;
+        line-height: 1.35;
+    }
+
+    #dashboardTab-documents .overview-health-badge {
+        font-size: 0.74rem;
+        padding: 0.28rem 0.62rem;
+    }
+
+    #dashboardTab-documents .overview-health-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem;
+        margin-bottom: 0.8rem;
+    }
+
+    #dashboardTab-documents .overview-health-stat {
+        padding: 0.65rem 0.72rem;
+        border-radius: 0.68rem;
+    }
+
+    #dashboardTab-documents .overview-health-label {
+        font-size: 0.74rem;
+        margin-bottom: 0.2rem;
+    }
+
+    #dashboardTab-documents .overview-health-value {
+        font-size: 1.05rem;
+    }
+
+    #dashboardTab-documents .overview-health-rate {
+        margin-bottom: 0.8rem;
+    }
+
+    #dashboardTab-documents .overview-health-rate-header {
+        font-size: 0.8rem;
+    }
+
+    #dashboardTab-documents .overview-health-list-wrap {
+        padding: 0.62rem;
+    }
+
+    #dashboardTab-documents .overview-health-list-title {
+        font-size: 0.8rem;
+    }
+
+    #dashboardTab-documents .overview-health-list {
+        gap: 0.35rem;
+        max-height: 170px;
+        overflow-y: auto;
+        padding-right: 0.1rem;
+    }
+
+    #dashboardTab-documents .overview-health-item {
+        padding: 0.5rem 0.58rem;
+        gap: 0.5rem;
+    }
+
+    #dashboardTab-documents .overview-health-item-name {
+        font-size: 0.76rem;
+    }
+
+    #dashboardTab-documents .overview-health-item-status {
+        font-size: 0.7rem;
+        padding: 0.18rem 0.48rem;
+    }
+
+    #dashboardTab-overview .overview-health-head {
+        align-items: flex-start;
+        gap: 0.6rem;
+        margin-bottom: 0.75rem;
+    }
+
+    #dashboardTab-overview .overview-health-title {
+        font-size: 0.95rem;
+    }
+
+    #dashboardTab-overview .overview-health-subtitle {
+        font-size: 0.82rem;
+        line-height: 1.35;
+    }
+
+    #dashboardTab-overview .overview-health-badge {
+        font-size: 0.74rem;
+        padding: 0.28rem 0.62rem;
+    }
+
+    #dashboardTab-overview .overview-health-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem;
+        margin-bottom: 0.8rem;
+    }
+
+    #dashboardTab-overview .overview-health-stat {
+        padding: 0.65rem 0.72rem;
+        border-radius: 0.68rem;
+    }
+
+    #dashboardTab-overview .overview-health-label {
+        font-size: 0.74rem;
+        margin-bottom: 0.2rem;
+    }
+
+    #dashboardTab-overview .overview-health-value {
+        font-size: 1.05rem;
+    }
+
+    #dashboardTab-overview .overview-health-rate {
+        margin-bottom: 0.8rem;
+    }
+
+    #dashboardTab-overview .overview-health-rate-header {
+        font-size: 0.8rem;
+    }
+
+    #dashboardTab-overview .overview-health-list-wrap {
+        padding: 0.62rem;
+    }
+
+    #dashboardTab-overview .overview-health-list-title {
+        font-size: 0.8rem;
+    }
+
+    #dashboardTab-overview .overview-health-list {
+        gap: 0.35rem;
+        max-height: 170px;
+        overflow-y: auto;
+        padding-right: 0.1rem;
+    }
+
+    #dashboardTab-overview .overview-health-item {
+        padding: 0.5rem 0.58rem;
+        gap: 0.5rem;
+    }
+
+    #dashboardTab-overview .overview-health-item-name {
+        font-size: 0.76rem;
+    }
+
+    #dashboardTab-overview .overview-health-item-status {
+        font-size: 0.7rem;
+        padding: 0.18rem 0.48rem;
+    }
+
     input,
     select,
     textarea {
@@ -8516,11 +8792,52 @@ svg {
         max-height: 52vh;
     }
 
+    #dashboardSection .nav-item {
+        min-width: 82px;
+        max-width: 96px;
+        padding: 0.55rem 0.45rem;
+    }
+
+    #dashboardSection .nav-label {
+        font-size: 0.64rem;
+    }
+
+    .visa-mobile-subnav-btn {
+        font-size: 0.75rem;
+        padding: 0.42rem 0.72rem;
+    }
+
+    #dashboardTab-documents .overview-health-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    #dashboardTab-overview .overview-health-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    #dashboardTab-documents .overview-health-list {
+        max-height: 145px;
+    }
+
+    #dashboardTab-overview .overview-health-list {
+        max-height: 145px;
+    }
+
     .dashboard-referral-strip {
         grid-template-columns: 1fr;
     }
 
     .dashboard-referral-strip-btn {
         width: 100%;
+    }
+}
+
+@media (max-width: 380px) {
+    #dashboardTab-documents .overview-health-grid {
+        grid-template-columns: 1fr;
+    }
+
+    #dashboardTab-overview .overview-health-grid {
+        grid-template-columns: 1fr;
     }
 }

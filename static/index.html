@@ -1924,8 +1924,15 @@
                     <div id="dashboardTab-visa" class="dashboard-tab">
                         <div class="tab-header">
                             <h2>F1-Visa (Interviews)</h2>
-                            <p class="tab-subtitle">Choose a module from the sidebar and work in a dedicated standalone
-                                view.</p>
+                            <p class="tab-subtitle">Choose a module to work in a dedicated standalone view.</p>
+                        </div>
+                        <div id="visaMobileSubNav" class="visa-mobile-subnav" aria-label="F1 Visa modules">
+                            <button type="button" class="visa-mobile-subnav-btn active" data-visa-subtab="prep"
+                                onclick="openVisaSubTab('prep')">🎯 Prep</button>
+                            <button type="button" class="visa-mobile-subnav-btn" data-visa-subtab="mock"
+                                onclick="openVisaSubTab('mock')">🧠 Mock</button>
+                            <button type="button" class="visa-mobile-subnav-btn" data-visa-subtab="experiences"
+                                onclick="openVisaSubTab('experiences')">📚 Experiences</button>
                         </div>
                         <div id="visaSubTab-prep" class="visa-subtab-panel active">
                             <div class="dashboard-grid">
