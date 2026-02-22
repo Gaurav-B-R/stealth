@@ -8444,6 +8444,45 @@ svg {
         width: 100%;
     }
 
+    .dashboard-referral-strip {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: start;
+        gap: 0.7rem;
+        padding: 0.75rem;
+    }
+
+    .dashboard-referral-strip-chip,
+    .dashboard-referral-strip-text {
+        grid-column: 1 / -1;
+    }
+
+    .dashboard-referral-strip-text {
+        display: block;
+        font-size: 0.9rem;
+        line-height: 1.45;
+    }
+
+    .dashboard-referral-strip-code {
+        display: inline-flex;
+        margin-left: 0.32rem;
+        vertical-align: middle;
+    }
+
+    .dashboard-referral-strip-stats {
+        display: block;
+        margin-top: 0.45rem;
+        font-size: 0.83rem;
+        line-height: 1.35;
+    }
+
+    .dashboard-referral-strip-btn {
+        width: 100%;
+        min-width: 0;
+        justify-content: center;
+        padding: 0.55rem 0.7rem;
+    }
+
     input,
     select,
     textarea {
@@ -8475,5 +8514,13 @@ svg {
 
     .notification-dropdown {
         max-height: 52vh;
+    }
+
+    .dashboard-referral-strip {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard-referral-strip-btn {
+        width: 100%;
     }
 }
