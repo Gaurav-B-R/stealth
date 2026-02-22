@@ -1871,6 +1871,13 @@ body {
     background: rgba(22, 101, 52, 0.32);
 }
 
+.visa-hub-tag-timer {
+    color: #fde68a;
+    border-color: rgba(245, 158, 11, 0.45);
+    background: rgba(120, 53, 15, 0.32);
+    font-variant-numeric: tabular-nums;
+}
+
 .visa-mock-toolbar {
     display: block;
 }

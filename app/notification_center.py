@@ -113,3 +113,18 @@ def mark_all_user_notifications_read(db: Session, user_id: int, commit: bool = T
     else:
         db.flush()
     return len(notifications)
+
+
+def delete_all_user_notifications(db: Session, user_id: int, commit: bool = True) -> int:
+    deleted_count = (
+        db.query(models.UserNotification)
+        .filter(models.UserNotification.user_id == user_id)
+        .delete(synchronize_session=False)
+    )
+
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+    return int(deleted_count or 0)

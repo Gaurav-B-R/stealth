@@ -284,7 +284,10 @@ let visaMockInterviewState = {
     history: [],
     recognition: null,
     channel: null,
-    showModePicker: false
+    showModePicker: false,
+    timerIntervalId: null,
+    timerStartedAt: null,
+    elapsedMs: 0
 };
 
 let visaPrepInterviewState = {
@@ -296,6 +299,8 @@ let visaPrepInterviewState = {
     channel: null,
     showModePicker: false
 };
+
+const MOCK_INTERVIEW_TIMER_INTERVAL_MS = 1000;
 
 const PRICING_FALLBACK_RATES = {
     USD: 1.0,
@@ -1388,33 +1393,31 @@ async function markNotificationRead(id) {
 
 async function clearAllNotifications() {
     if (confirm('Clear all notifications?')) {
-        const localNotifications = notifications.filter((notif) => notif.origin !== 'server');
-        notifications = notifications
-            .filter((notif) => notif.origin === 'server')
-            .map((notif) => ({ ...notif, read: true }));
+        const previousNotifications = [...notifications];
+        notifications = [];
         saveNotifications();
+        updateNotificationBadge();
+        renderNotifications();
 
         if (currentUser && authToken) {
             try {
-                await fetch(`${API_BASE}/api/notifications/read-all`, {
-                    method: 'POST',
+                const response = await fetch(`${API_BASE}/api/notifications`, {
+                    method: 'DELETE',
                     headers: {
                         'Authorization': `Bearer ${authToken}`
                     }
                 });
+                if (!response.ok) {
+                    throw new Error(`clear-all failed: ${response.status}`);
+                }
             } catch (error) {
                 console.warn('Failed to clear server notifications:', error);
-                // Restore local notifications if backend clear failed.
-                notifications = mergeNotificationLists(
-                    notifications.filter((notif) => notif.origin === 'server'),
-                    localNotifications
-                );
+                notifications = previousNotifications;
                 saveNotifications();
+                updateNotificationBadge();
+                renderNotifications();
             }
         }
-
-        updateNotificationBadge();
-        renderNotifications();
     }
 }
 
@@ -3557,6 +3560,63 @@ function getVisaInterviewState(mode) {
     return mode === 'prep' ? visaPrepInterviewState : visaMockInterviewState;
 }
 
+function formatInterviewElapsedTime(elapsedMs) {
+    const totalSeconds = Math.max(0, Math.floor((elapsedMs || 0) / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function renderMockInterviewTimer() {
+    const timerEl = document.getElementById('visaMockInterviewTimer');
+    if (!timerEl) return;
+    timerEl.textContent = `Time: ${formatInterviewElapsedTime(visaMockInterviewState.elapsedMs)}`;
+}
+
+function updateMockInterviewElapsed() {
+    const state = visaMockInterviewState;
+    if (state.timerStartedAt !== null) {
+        state.elapsedMs = Math.max(0, Date.now() - state.timerStartedAt);
+    }
+    renderMockInterviewTimer();
+}
+
+function startMockInterviewTimer() {
+    const state = visaMockInterviewState;
+    if (state.timerStartedAt === null) {
+        state.timerStartedAt = Date.now() - (state.elapsedMs || 0);
+    }
+    if (state.timerIntervalId) {
+        return;
+    }
+    updateMockInterviewElapsed();
+    state.timerIntervalId = window.setInterval(updateMockInterviewElapsed, MOCK_INTERVIEW_TIMER_INTERVAL_MS);
+}
+
+function stopMockInterviewTimer() {
+    const state = visaMockInterviewState;
+    if (state.timerStartedAt !== null) {
+        state.elapsedMs = Math.max(0, Date.now() - state.timerStartedAt);
+        state.timerStartedAt = null;
+    }
+    if (state.timerIntervalId) {
+        window.clearInterval(state.timerIntervalId);
+        state.timerIntervalId = null;
+    }
+    renderMockInterviewTimer();
+}
+
+function resetMockInterviewTimer() {
+    stopMockInterviewTimer();
+    visaMockInterviewState.elapsedMs = 0;
+    renderMockInterviewTimer();
+}
+
 function setVisaInterviewStatus(mode, statusText) {
     const cfg = getVisaInterviewSessionConfig(mode);
     const statusEl = document.getElementById(cfg.statusId);
@@ -3798,6 +3858,11 @@ function initializeVisaPrepInterviewUI() {
 
 function initializeVisaMockInterviewUI() {
     initializeVisaInterviewUI('mock');
+    if (visaMockInterviewState.active) {
+        startMockInterviewTimer();
+    } else {
+        stopMockInterviewTimer();
+    }
 }
 
 function stopVisaInterviewRecognition(mode) {
@@ -4001,6 +4066,7 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
 
         if (mode === 'mock' && completionDetected) {
             state.active = false;
+            stopMockInterviewTimer();
             shouldAutoFinish = true;
         } else if (state.active) {
             if (state.channel === 'chat' && (mode === 'mock' || mode === 'prep')) {
@@ -4287,6 +4353,7 @@ async function finishVoiceMockInterview() {
 
     stopVisaInterviewRecognition('mock');
     state.active = false;
+    stopMockInterviewTimer();
     state.pending = true;
     setVisaInterviewStatus('mock', 'Generating final report...');
     updateVisaInterviewControls('mock');
@@ -4481,6 +4548,10 @@ async function startVoiceInterviewSession(mode, options = {}) {
     state.active = true;
     state.pending = false;
     state.history = [];
+    if (mode === 'mock') {
+        resetMockInterviewTimer();
+        startMockInterviewTimer();
+    }
 
     const logEl = document.getElementById(cfg.logId);
     if (logEl) {
@@ -4516,6 +4587,7 @@ async function startVoiceMockInterview() {
 function stopVoiceMockInterview(silent = false) {
     clearVisaInterviewPendingBubble('mock');
     stopVisaInterviewRecognition('mock');
+    stopMockInterviewTimer();
     visaMockInterviewState.active = false;
     visaMockInterviewState.pending = false;
     visaMockInterviewState.channel = null;

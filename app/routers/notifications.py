@@ -5,6 +5,7 @@ from app import models, schemas
 from app.auth import get_current_active_user, get_current_admin_user
 from app.database import get_db
 from app.notification_center import (
+    delete_all_user_notifications,
     get_unread_notification_count,
     list_user_notifications,
     mark_all_user_notifications_read,
@@ -53,6 +54,19 @@ def mark_all_notifications_read(
     return {
         "ok": True,
         "updated": updated_count,
+        "unread_count": 0,
+    }
+
+
+@router.delete("")
+def clear_all_notifications(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    deleted_count = delete_all_user_notifications(db, current_user.id)
+    return {
+        "ok": True,
+        "deleted": deleted_count,
         "unread_count": 0,
     }
 
