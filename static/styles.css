@@ -8682,6 +8682,20 @@ svg {
         padding: 0.18rem 0.48rem;
     }
 
+    #dashboardTab-documents .documents-layout {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    #dashboardTab-documents .documents-right-column {
+        order: -1;
+    }
+
+    #dashboardTab-documents .documents-main-column {
+        order: 0;
+    }
+
     #dashboardTab-overview .overview-health-head {
         align-items: flex-start;
         gap: 0.6rem;
