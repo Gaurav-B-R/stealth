@@ -279,7 +279,7 @@ Remember: You have access to the student's full raw profile file plus full uploa
         # Build conversation context
         conversation_text = ""
         if conversation_history:
-            for msg in conversation_history[-10:]:  # Last 10 messages for context
+            for msg in conversation_history[-200:]:  # Last 200 messages for context
                 role = msg.get('role', 'user')
                 content = msg.get('content', '')
                 if role == 'user':

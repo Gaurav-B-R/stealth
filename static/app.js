@@ -1627,10 +1627,11 @@ function showMessage(text, type = 'success') {
 
     messageEl.textContent = text;
     messageEl.className = `message ${type} show`;
+    const hideDelayMs = type === 'error' ? 15000 : 10000;
     messageHideTimer = setTimeout(() => {
         messageEl.classList.remove('show');
         messageHideTimer = null;
-    }, 10000);
+    }, hideDelayMs);
 }
 
 // Navigation
@@ -4012,7 +4013,8 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
     const userTurnContent = isInitialTurn ? initialTurnPrompt : `Student answer: ${studentMessage}`;
     const geminiMessage = `${instruction}\n\n${userTurnContent}`;
 
-    const conversationHistory = state.history.slice(-14);
+    const conversationWindow = 200;
+    const conversationHistory = state.history.slice(-conversationWindow);
     conversationHistory.push({
         role: 'user',
         content: studentMessage
@@ -4052,8 +4054,9 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
 
         state.history.push({ role: 'user', content: studentMessage });
         state.history.push({ role: 'assistant', content: aiResponse });
-        if (state.history.length > 40) {
-            state.history = state.history.slice(-40);
+        const retainedHistoryWindow = 200;
+        if (state.history.length > retainedHistoryWindow) {
+            state.history = state.history.slice(-retainedHistoryWindow);
         }
 
         clearVisaInterviewPendingBubble(mode);
@@ -9560,7 +9563,7 @@ async function handleRilonoAiChatSubmit(e) {
             },
             body: JSON.stringify({
                 message: message,
-                conversation_history: rilonoAiConversationHistory.slice(-10),  // Last 10 messages for context
+                conversation_history: rilonoAiConversationHistory.slice(-200),  // Last 200 messages for context
                 source: 'rilono_ai_chat'
             })
         });
@@ -9577,9 +9580,9 @@ async function handleRilonoAiChatSubmit(e) {
                 content: aiResponse
             });
 
-            // Keep only last 20 messages in history
-            if (rilonoAiConversationHistory.length > 20) {
-                rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-20);
+            // Keep only last 200 messages in history
+            if (rilonoAiConversationHistory.length > 200) {
+                rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-200);
             }
 
             // Add to both chats
@@ -10059,7 +10062,7 @@ async function handleFloatingChatSubmit(e) {
             },
             body: JSON.stringify({
                 message: message,
-                conversation_history: rilonoAiConversationHistory.slice(-10),
+                conversation_history: rilonoAiConversationHistory.slice(-200),
                 source: 'rilono_ai_chat'
             })
         });
@@ -10076,9 +10079,9 @@ async function handleFloatingChatSubmit(e) {
                 content: aiResponse
             });
 
-            // Keep only last 20 messages in history
-            if (rilonoAiConversationHistory.length > 20) {
-                rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-20);
+            // Keep only last 200 messages in history
+            if (rilonoAiConversationHistory.length > 200) {
+                rilonoAiConversationHistory = rilonoAiConversationHistory.slice(-200);
             }
 
             // Add to both chats
