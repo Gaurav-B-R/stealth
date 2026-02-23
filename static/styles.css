@@ -429,14 +429,27 @@ body {
     border-radius: 50%;
 }
 
-.user-menu-dropdown a>span:first-child {
-    font-size: 1.125rem;
+.user-menu-dropdown a>span.menu-icon {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
     width: 1.5rem;
-    text-align: center;
+    height: 1.5rem;
     flex-shrink: 0;
+    color: var(--text-secondary);
+    transition: color 0.2s ease;
 }
 
-.user-menu-dropdown a>span:not(:first-child) {
+.user-menu-dropdown a:hover>span.menu-icon {
+    color: var(--primary-light);
+}
+
+.user-menu-dropdown a>span.menu-icon svg {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.user-menu-dropdown a>span:not(.menu-icon) {
     flex: 1;
 }
 
@@ -7975,13 +7988,16 @@ body.chat-expanded-lock {
         opacity: 0;
         transform: scaleX(0.32);
     }
+
     18% {
         opacity: 0.9;
         transform: scaleX(1);
     }
+
     40% {
         opacity: 0.2;
     }
+
     100% {
         opacity: 0;
         transform: scaleX(0.3);
