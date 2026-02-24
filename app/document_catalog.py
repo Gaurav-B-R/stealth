@@ -44,7 +44,7 @@ DEFAULT_JOURNEY_STAGES: list[dict[str, Any]] = [
     },
     {
         "stage": 6,
-        "name": "Visa Stage",
+        "name": "Visa",
         "emoji": "🛂",
         "description": "Prepare your visa interview packet and supporting documents.",
         "next_step": "Review final interview checklist and confidence prep",

@@ -1453,31 +1453,33 @@ body {
 }
 
 #dashboardSection .sidebar-header {
-    padding: 0 1.5rem 1.5rem;
+    padding: 0 1.35rem 1.2rem;
     border-bottom: 1px solid var(--border-color);
-    margin-bottom: 1rem;
+    margin-bottom: 0.85rem;
 }
 
 #dashboardSection .sidebar-header h2 {
     margin: 0;
-    font-size: 1.5rem;
+    font-size: 1.45rem;
     font-weight: 700;
+    letter-spacing: -0.01em;
     color: var(--text-primary);
 }
 
 #dashboardSection .sidebar-nav {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    padding: 0 0.75rem;
+    gap: 0.42rem;
+    padding: 0 0.85rem;
 }
 
 #dashboardSection .sidebar-subscription-card {
-    margin: 1rem 0.75rem 0;
-    border: 1px solid var(--border-color);
-    border-radius: 0.85rem;
-    background: var(--bg-secondary);
-    padding: 0.85rem;
+    margin: 1.1rem 0.85rem 0;
+    border: 1px solid rgba(99, 102, 241, 0.22);
+    border-radius: 0.95rem;
+    background: linear-gradient(160deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.62));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    padding: 0.95rem;
 }
 
 #dashboardSection .sidebar-subscription-label {
@@ -1498,11 +1500,15 @@ body {
 #dashboardSection .sidebar-subscription-usage {
     color: var(--text-secondary);
     font-size: 0.8rem;
-    line-height: 1.3;
+    line-height: 1.35;
+}
+
+#dashboardSection .sidebar-subscription-usage+.sidebar-subscription-usage {
+    margin-top: 0.12rem;
 }
 
 #dashboardSection .sidebar-upgrade-btn {
-    margin-top: 0.75rem;
+    margin-top: 0.85rem;
     width: 100%;
     font-size: 0.85rem;
     padding: 0.55rem 0.8rem;
@@ -1530,27 +1536,29 @@ body {
 #dashboardSection .nav-item {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.875rem 1rem;
+    gap: 0.82rem;
+    padding: 0.74rem 0.84rem;
     color: var(--text-secondary);
     text-decoration: none;
-    border-radius: 0.75rem;
+    border-radius: 0.78rem;
     transition: all 0.2s ease;
     cursor: pointer;
     font-weight: 500;
     border: 1px solid transparent;
+    position: relative;
 }
 
 #dashboardSection .nav-item:hover {
-    background: var(--bg-tertiary);
+    background: linear-gradient(90deg, rgba(99, 102, 241, 0.12), rgba(99, 102, 241, 0.04));
     color: var(--text-primary);
-    border-color: var(--border-color);
+    border-color: rgba(148, 163, 184, 0.24);
+    transform: translateX(2px);
 }
 
 #dashboardSection .nav-item.active {
-    background: var(--gradient-primary);
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
     color: white;
-    box-shadow: var(--shadow-accent);
+    box-shadow: 0 10px 26px rgba(99, 102, 241, 0.3);
     border-color: transparent;
 }
 
@@ -1558,24 +1566,36 @@ body {
     display: inline-flex;
     justify-content: center;
     align-items: center;
-    width: 1.5rem;
-    height: 1.5rem;
+    width: 1.68rem;
+    height: 1.68rem;
     flex-shrink: 0;
-    color: var(--text-secondary);
-    transition: color 0.2s ease;
+    color: #9ca3af;
+    border-radius: 0.5rem;
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
 }
 
 #dashboardSection .nav-item:hover .nav-icon {
-    color: var(--primary-light);
+    color: #c4b5fd;
+    background: rgba(99, 102, 241, 0.2);
+    border-color: rgba(129, 140, 248, 0.38);
 }
 
 #dashboardSection .nav-item.active .nav-icon {
-    color: white;
+    color: #eef2ff;
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.34);
 }
 
 #dashboardSection .nav-icon svg {
-    width: 1.25rem;
-    height: 1.25rem;
+    width: 0.98rem;
+    height: 0.98rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 #dashboardSection .nav-label {
@@ -1588,7 +1608,7 @@ body {
 
 #dashboardSection .nav-caret {
     color: var(--text-secondary);
-    font-size: 0.82rem;
+    font-size: 0.76rem;
     margin-left: auto;
     transition: transform 0.2s ease;
 }
@@ -1601,9 +1621,9 @@ body {
 #dashboardSection .visa-subnav {
     display: grid;
     gap: 0.35rem;
-    margin: 0.2rem 0 0.6rem 2rem;
-    padding: 0.2rem 0 0.2rem 0.75rem;
-    border-left: 1px solid var(--border-color);
+    margin: 0.18rem 0 0.6rem 2.18rem;
+    padding: 0.2rem 0 0.2rem 0.8rem;
+    border-left: 1px solid rgba(148, 163, 184, 0.25);
 }
 
 #dashboardSection .visa-subnav-item {
@@ -1613,7 +1633,7 @@ body {
     text-decoration: none;
     color: var(--text-secondary);
     border: 1px solid transparent;
-    border-radius: 0.65rem;
+    border-radius: 0.62rem;
     padding: 0.52rem 0.65rem;
     font-size: 0.82rem;
     line-height: 1.35;
@@ -1627,21 +1647,33 @@ body {
     width: 1.25rem;
     height: 1.25rem;
     flex-shrink: 0;
-    color: var(--text-muted);
-    transition: color 0.2s ease;
+    color: #9ca3af;
+    border-radius: 0.4rem;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    background: rgba(148, 163, 184, 0.1);
+    transition: color 0.2s ease, border-color 0.2s ease, background-color 0.2s ease;
 }
 
 #dashboardSection .subnav-icon svg {
-    width: 1rem;
-    height: 1rem;
+    width: 0.82rem;
+    height: 0.82rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 #dashboardSection .visa-subnav-item:hover .subnav-icon {
-    color: var(--primary-light);
+    color: #c4b5fd;
+    border-color: rgba(129, 140, 248, 0.36);
+    background: rgba(99, 102, 241, 0.18);
 }
 
 #dashboardSection .visa-subnav-item.active .subnav-icon {
-    color: var(--primary-color);
+    color: #f3e8ff;
+    border-color: rgba(167, 139, 250, 0.45);
+    background: rgba(124, 58, 237, 0.22);
 }
 
 #dashboardSection .subnav-label {
@@ -1656,7 +1688,7 @@ body {
 
 #dashboardSection .visa-subnav-item.active {
     color: #f8fafc;
-    border-color: rgba(124, 58, 237, 0.35);
+    border-color: rgba(124, 58, 237, 0.3);
     background: linear-gradient(90deg, rgba(99, 102, 241, 0.22), rgba(168, 85, 247, 0.24));
 }
 
@@ -5091,16 +5123,16 @@ body {
 }
 
 .community-private-badge {
-    position: absolute;
-    top: 24px;
-    right: 24px;
+    position: static;
     background: linear-gradient(135deg, #6366f1, #8b5cf6);
     padding: 0.5rem 1.15rem;
     border-radius: 2rem;
     font-size: 0.875rem;
     font-weight: 600;
     color: white;
-    display: inline-flex;
+    display: flex;
+    width: fit-content;
+    margin: 0 auto 1.5rem;
     align-items: center;
     gap: 0.5rem;
     box-shadow: 0 4px 16px rgba(99, 102, 241, 0.25);
@@ -6152,7 +6184,8 @@ body {
     }
 
     #dashboardSection .nav-icon {
-        font-size: 1.5rem;
+        width: 1.55rem;
+        height: 1.55rem;
     }
 
     #dashboardSection .visa-subnav {
@@ -8553,9 +8586,14 @@ svg {
     }
 
     #dashboardSection .nav-icon {
-        width: auto;
-        font-size: 1.15rem;
-        line-height: 1;
+        width: 1.55rem;
+        height: 1.55rem;
+        border-radius: 0.48rem;
+    }
+
+    #dashboardSection .nav-icon svg {
+        width: 0.9rem;
+        height: 0.9rem;
     }
 
     #dashboardSection .nav-label {
