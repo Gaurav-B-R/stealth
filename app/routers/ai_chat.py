@@ -368,7 +368,7 @@ def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_with_ai(
+def chat_with_ai(
     chat_message: ChatMessage,
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)

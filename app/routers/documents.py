@@ -123,7 +123,7 @@ def get_document_catalog(db: Session = Depends(get_db)):
     return schemas.DocumentCatalogResponse(**payload)
 
 @router.post("/upload", response_model=schemas.DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_document(
+def upload_document(
     file: UploadFile = File(...),
     password: str = Form(...),  # User's password for Zero-Knowledge encryption
     document_type: str = Form(...),  # Required - document type must be specified
@@ -206,8 +206,8 @@ async def upload_document(
             detail=f"File type not allowed. Allowed types: {', '.join(ALLOWED_DOCUMENT_EXTENSIONS)}"
         )
     
-    # Read file content
-    contents = await file.read()
+    # Read file content in sync context (this route runs in FastAPI's threadpool).
+    contents = file.file.read()
     
     # Validate file size
     if len(contents) > MAX_DOCUMENT_SIZE:
