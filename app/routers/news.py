@@ -3,12 +3,23 @@ from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 import json
 import os
+import re
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app import models
 from app.auth import get_current_active_user
 from app.utils import gemini_service as gemini_utils
+
+try:
+    from google import genai as latest_genai
+    from google.genai import types as latest_genai_types
+    LATEST_GENAI_AVAILABLE = True
+except Exception:
+    latest_genai = None
+    latest_genai_types = None
+    LATEST_GENAI_AVAILABLE = False
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
@@ -18,6 +29,18 @@ _news_lock = Lock()
 _news_cache: Dict[str, Dict[str, Any]] = {}
 _interview_lock = Lock()
 _interview_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+NEWS_MAX_ITEM_AGE_DAYS = int(os.getenv("NEWS_MAX_ITEM_AGE_DAYS", "365") or "365")
+ALLOW_NON_GROUNDED_NEWS_FALLBACK = _env_flag("NEWS_ALLOW_NON_GROUNDED_FALLBACK", False)
+ALLOW_NON_GROUNDED_INTERVIEW_FALLBACK = _env_flag("INTERVIEW_ALLOW_NON_GROUNDED_FALLBACK", False)
 
 INTERVIEW_COUNTRY_CONSULATE_MAP: Dict[str, List[str]] = {
     "India": ["New Delhi", "Mumbai", "Chennai", "Hyderabad", "Kolkata"],
@@ -97,6 +120,102 @@ def _normalize_items(items: Any) -> List[Dict[str, str]]:
             "published_date": published_date,
         })
     return normalized
+
+
+def _parse_published_date(value: str) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw or raw.lower() == "unknown":
+        return None
+
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        pass
+
+    supported_formats = ("%Y-%m-%d", "%Y/%m/%d", "%b %d, %Y", "%B %d, %Y")
+    for fmt in supported_formats:
+        try:
+            parsed = datetime.strptime(raw, fmt)
+            return parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _infer_published_date_from_url(url: str) -> Optional[datetime]:
+    path = urlparse(str(url or "")).path or ""
+    patterns = [
+        r"/(20\d{2})[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])(?:/|$)",
+        r"/(20\d{2})[/-](0[1-9]|1[0-2])(?:/|$)",
+        r"/(20\d{2})(?:/|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, path)
+        if not match:
+            continue
+        year = int(match.group(1))
+        month = int(match.group(2)) if match.lastindex and match.lastindex >= 2 else 1
+        day = int(match.group(3)) if match.lastindex and match.lastindex >= 3 else 1
+        try:
+            return datetime(year, month, day, tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _sanitize_item_published_date(item: Dict[str, str], now_utc: datetime) -> Dict[str, str]:
+    updated = dict(item)
+    parsed = _parse_published_date(updated.get("published_date", ""))
+    inferred = _infer_published_date_from_url(updated.get("source_url", ""))
+
+    # If model date is missing, use URL-inferred date when available.
+    if not parsed and inferred:
+        updated["published_date"] = inferred.strftime("%Y-%m-%d")
+        return updated
+
+    if not parsed:
+        updated["published_date"] = "unknown"
+        return updated
+
+    # Reject clearly invalid dates.
+    if parsed > (now_utc + timedelta(days=2)):
+        updated["published_date"] = "unknown"
+        return updated
+
+    # If source URL strongly indicates another year, distrust model date.
+    if inferred and abs(parsed.year - inferred.year) >= 2:
+        updated["published_date"] = "unknown"
+        return updated
+
+    updated["published_date"] = parsed.strftime("%Y-%m-%d")
+    return updated
+
+
+def _filter_recent_news_items(
+    items: List[Dict[str, str]],
+    now_utc: datetime,
+) -> Tuple[List[Dict[str, str]], int, int]:
+    cutoff = now_utc - timedelta(days=NEWS_MAX_ITEM_AGE_DAYS)
+    kept: List[Tuple[datetime, Dict[str, str]]] = []
+    stale_count = 0
+    undated_count = 0
+
+    for item in items:
+        published_at = _parse_published_date(item.get("published_date", ""))
+        if not published_at:
+            undated_count += 1
+            continue
+        if published_at < cutoff:
+            stale_count += 1
+            continue
+        kept.append((published_at, item))
+
+    kept.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _, item in kept], stale_count, undated_count
 
 
 def _normalize_filter_inputs(country: str, consulates: Optional[List[str]]) -> Tuple[str, List[str]]:
@@ -211,7 +330,47 @@ def _log_gemini_response(label: str, model_name: str, response: Any, extra: str 
     print("-" * 90 + "\n")
 
 
-def _generate_content_with_grounding(model: Any, prompt: str, model_name: str, label: str) -> Any:
+def _resolve_vertex_project_id() -> str:
+    if os.getenv("GCP_PROJECT", "").strip():
+        return os.getenv("GCP_PROJECT", "").strip()
+
+    service_account_path = gemini_utils.SERVICE_ACCOUNT_PATH
+    if not os.path.exists(service_account_path):
+        return ""
+
+    try:
+        with open(service_account_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+            return str(payload.get("project_id", "")).strip()
+    except Exception:
+        return ""
+
+
+def _build_latest_genai_client() -> Tuple[Any, str]:
+    if not LATEST_GENAI_AVAILABLE or not latest_genai:
+        raise HTTPException(status_code=503, detail="google-genai SDK is not installed")
+
+    api_key = str(gemini_utils.GEMINI_API_KEY or "").strip()
+    if api_key.startswith("AIza"):
+        return latest_genai.Client(api_key=api_key), "api_key"
+
+    service_account_path = gemini_utils.SERVICE_ACCOUNT_PATH
+    if os.path.exists(service_account_path):
+        project_id = _resolve_vertex_project_id()
+        location = os.getenv("GCP_LOCATION", "us-central1")
+        if project_id:
+            return latest_genai.Client(vertexai=True, project=project_id, location=location), "vertex"
+
+    raise HTTPException(status_code=503, detail="Gemini is not configured on the server")
+
+
+def _generate_content_with_grounding(
+    client: Any,
+    prompt: str,
+    model_name: str,
+    label: str,
+    allow_non_grounded_fallback: bool,
+) -> Tuple[Any, Dict[str, Any]]:
     """
     Generate content with Google Search grounding enabled.
     Falls back to regular generation if grounded call path is unavailable.
@@ -220,63 +379,77 @@ def _generate_content_with_grounding(model: Any, prompt: str, model_name: str, l
     grounding_errors: List[str] = []
     _log_gemini_prompt(label, model_name, prompt, extra="grounding=enabled")
 
-    # Vertex AI grounding path
-    if gemini_utils.USE_VERTEX_AI and gemini_utils.VERTEX_AI_AVAILABLE:
+    # Primary latest SDK path: google_search tool.
+    if latest_genai_types:
         try:
-            from vertexai.generative_models import Tool
-            from vertexai.generative_models import grounding
-            tool = Tool.from_google_search_retrieval(
-                grounding.GoogleSearchRetrieval()
+            config = latest_genai_types.GenerateContentConfig(
+                tools=[latest_genai_types.Tool(google_search=latest_genai_types.GoogleSearch())],
+                response_mime_type="application/json",
             )
-            response = model.generate_content(prompt, tools=[tool])
-            _log_gemini_response(label, model_name, response, extra="grounding_method=vertex_google_search_retrieval")
-            return response
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=config,
+            )
+            _log_gemini_response(label, model_name, response, extra="grounding_method=google_genai_google_search")
+            return response, {
+                "grounded": True,
+                "grounding_method": "google_genai_google_search",
+                "grounding_errors": grounding_errors,
+            }
         except Exception as exc:
-            grounding_errors.append(f"vertex_grounding_error={str(exc)}")
-    else:
-        # google.generativeai grounding path
-        if gemini_utils.GENAI_AVAILABLE and gemini_utils.genai:
-            try:
-                tool = gemini_utils.genai.protos.Tool(
-                    google_search_retrieval=gemini_utils.genai.protos.GoogleSearchRetrieval()
-                )
-                response = model.generate_content(prompt, tools=[tool])
-                _log_gemini_response(label, model_name, response, extra="grounding_method=genai_protos_tool")
-                return response
-            except Exception as exc:
-                grounding_errors.append(f"genai_proto_grounding_error={str(exc)}")
+            grounding_errors.append(f"google_genai_google_search_error={str(exc)}")
 
-            # Alternate dict-style tool format for compatibility with some SDK builds.
-            try:
-                response = model.generate_content(prompt, tools=[{"google_search_retrieval": {}}])
-                _log_gemini_response(label, model_name, response, extra="grounding_method=genai_dict_tool")
-                return response
-            except Exception as exc:
-                grounding_errors.append(f"genai_dict_grounding_error={str(exc)}")
+        # Compatibility path for model/provider combinations expecting google_search_retrieval.
+        try:
+            config = latest_genai_types.GenerateContentConfig(
+                tools=[latest_genai_types.Tool(google_search_retrieval=latest_genai_types.GoogleSearchRetrieval())],
+                response_mime_type="application/json",
+            )
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=config,
+            )
+            _log_gemini_response(label, model_name, response, extra="grounding_method=google_genai_google_search_retrieval")
+            return response, {
+                "grounded": True,
+                "grounding_method": "google_genai_google_search_retrieval",
+                "grounding_errors": grounding_errors,
+            }
+        except Exception as exc:
+            grounding_errors.append(f"google_genai_google_search_retrieval_error={str(exc)}")
 
-    # Fallback to non-grounded generation if grounding tool failed.
+    if not allow_non_grounded_fallback:
+        details = "; ".join(grounding_errors) if grounding_errors else "grounding_unavailable"
+        raise RuntimeError(f"grounding_required_but_unavailable: {details}")
+
+    # Fallback to non-grounded generation only when explicitly allowed.
     try:
-        response = model.generate_content(prompt)
+        config = latest_genai_types.GenerateContentConfig(response_mime_type="application/json") if latest_genai_types else None
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=config,
+        )
         _log_gemini_response(
             label,
             model_name,
             response,
             extra=f"grounding_method=fallback_non_grounded; errors={' | '.join(grounding_errors) if grounding_errors else 'none'}"
         )
-        return response
+        return response, {
+            "grounded": False,
+            "grounding_method": "fallback_non_grounded",
+            "grounding_errors": grounding_errors,
+        }
     except Exception as exc:
         details = "; ".join(grounding_errors) if grounding_errors else "grounding_unavailable"
         raise RuntimeError(f"generation_failed_after_grounding_attempts: {details}; base_error={str(exc)}")
 
 
 def _generate_f1_news_with_gemini(user_country: str) -> Dict[str, Any]:
-    has_service_account = os.path.exists(gemini_utils.SERVICE_ACCOUNT_PATH)
-    has_valid_api_key = gemini_utils.GEMINI_API_KEY and gemini_utils.GEMINI_API_KEY.startswith("AIza")
-    if not has_service_account and not has_valid_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Gemini is not configured on the server"
-        )
+    client, auth_mode = _build_latest_genai_client()
 
     now_utc_iso = datetime.now(timezone.utc).isoformat()
 
@@ -291,9 +464,11 @@ Requirements:
 - Focus on recent and relevant updates for F1 student visa applicants in this country context.
 - Prioritize updates that materially affect students from or residing in {user_country}.
 - Treat the current UTC date/time above as "now" when determining recency.
+- Include only updates published within the last {NEWS_MAX_ITEM_AGE_DAYS} days.
 - Include source links for each update
 - Keep summaries clear and concise
-- If uncertain, prefer official sources and major publications
+- Use a mix of official updates and credible reporting/community coverage when relevant.
+- Do not invent links. Only return source URLs that came from grounded web search results.
 - Return ONLY valid JSON
 
 Output JSON format:
@@ -311,49 +486,75 @@ Output JSON format:
   ]
 }}
 
-Provide 4 to 8 items."""
+Provide 4 to 8 items. If no qualifying recent updates exist, return an empty items array."""
 
     model_candidates = [
+        "gemini-3-pro-preview",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
         "gemini-2.0-flash-exp",
         "gemini-1.5-flash",
-        "gemini-3-pro-preview",
     ]
     last_error = None
+    empty_result: Optional[Dict[str, Any]] = None
 
     for model_name in model_candidates:
         try:
-            if gemini_utils.USE_VERTEX_AI and gemini_utils.VERTEX_AI_AVAILABLE:
-                from vertexai.generative_models import GenerativeModel
-                model = GenerativeModel(model_name)
-            elif gemini_utils.GENAI_AVAILABLE and gemini_utils.genai:
-                model = gemini_utils.genai.GenerativeModel(model_name)
-            else:
-                raise HTTPException(status_code=503, detail="Gemini library is not available")
-
-            response = _generate_content_with_grounding(model, prompt, model_name=model_name, label="news.f1_latest")
+            response, generation_meta = _generate_content_with_grounding(
+                client,
+                prompt,
+                model_name=model_name,
+                label="news.f1_latest",
+                allow_non_grounded_fallback=ALLOW_NON_GROUNDED_NEWS_FALLBACK,
+            )
             data = _clean_and_parse_json(getattr(response, "text", ""))
             items = _normalize_items(data.get("items", []))
+            items = [_sanitize_item_published_date(item, now_utc=datetime.now(timezone.utc)) for item in items]
+            items, stale_removed, undated_removed = _filter_recent_news_items(
+                items=items,
+                now_utc=datetime.now(timezone.utc),
+            )
             if not items:
-                raise ValueError("Gemini returned no usable news items")
-            return {"items": items, "model_used": model_name}
+                empty_result = empty_result or {
+                    "items": [],
+                    "model_used": model_name,
+                    "grounded": bool(generation_meta.get("grounded")),
+                    "grounding_method": str(generation_meta.get("grounding_method") or ""),
+                    "auth_mode": auth_mode,
+                    "stale_items_removed": stale_removed,
+                    "undated_items_removed": undated_removed,
+                }
+                continue
+            return {
+                "items": items,
+                "model_used": model_name,
+                "grounded": bool(generation_meta.get("grounded")),
+                "grounding_method": str(generation_meta.get("grounding_method") or ""),
+                "auth_mode": auth_mode,
+                "stale_items_removed": stale_removed,
+                "undated_items_removed": undated_removed,
+            }
         except Exception as exc:
             last_error = exc
+            print(f"⚠ News model attempt failed [{model_name}] auth={auth_mode}: {str(exc)}")
             continue
 
-    raise HTTPException(
-        status_code=502,
-        detail=f"Failed to generate news from Gemini: {str(last_error)}"
-    )
+    if empty_result is not None:
+        return empty_result
+
+    print(f"⚠ News generation fallback: returning empty items after model failures: {str(last_error)}")
+    return {
+        "items": [],
+        "model_used": "none",
+        "grounded": False,
+        "grounding_method": "none",
+        "stale_items_removed": 0,
+        "undated_items_removed": 0,
+    }
 
 
 def _generate_f1_interview_experiences_with_gemini(country: str, consulates: List[str]) -> Dict[str, Any]:
-    has_service_account = os.path.exists(gemini_utils.SERVICE_ACCOUNT_PATH)
-    has_valid_api_key = gemini_utils.GEMINI_API_KEY and gemini_utils.GEMINI_API_KEY.startswith("AIza")
-    if not has_service_account and not has_valid_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Gemini is not configured on the server"
-        )
+    client, auth_mode = _build_latest_genai_client()
 
     consulate_text = ", ".join(consulates)
     now_utc_iso = datetime.now(timezone.utc).isoformat()
@@ -400,35 +601,37 @@ Output JSON format:
 Provide 5 to 10 items."""
 
     model_candidates = [
+        "gemini-3-pro-preview",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
         "gemini-2.0-flash-exp",
         "gemini-1.5-flash",
-        "gemini-3-pro-preview",
     ]
     last_error = None
 
     for model_name in model_candidates:
         try:
-            if gemini_utils.USE_VERTEX_AI and gemini_utils.VERTEX_AI_AVAILABLE:
-                from vertexai.generative_models import GenerativeModel
-                model = GenerativeModel(model_name)
-            elif gemini_utils.GENAI_AVAILABLE and gemini_utils.genai:
-                model = gemini_utils.genai.GenerativeModel(model_name)
-            else:
-                raise HTTPException(status_code=503, detail="Gemini library is not available")
-
-            response = _generate_content_with_grounding(
-                model,
+            response, generation_meta = _generate_content_with_grounding(
+                client,
                 prompt,
                 model_name=model_name,
-                label="news.f1_interview_experiences"
+                label="news.f1_interview_experiences",
+                allow_non_grounded_fallback=ALLOW_NON_GROUNDED_INTERVIEW_FALLBACK,
             )
             data = _clean_and_parse_json(getattr(response, "text", ""))
             items = _normalize_interview_items(data.get("items", []), consulates)
             if not items:
                 raise ValueError("Gemini returned no usable interview experiences")
-            return {"items": items, "model_used": model_name}
+            return {
+                "items": items,
+                "model_used": model_name,
+                "grounded": bool(generation_meta.get("grounded")),
+                "grounding_method": str(generation_meta.get("grounding_method") or ""),
+                "auth_mode": auth_mode,
+            }
         except Exception as exc:
             last_error = exc
+            print(f"⚠ Interview model attempt failed [{model_name}] auth={auth_mode}: {str(exc)}")
             continue
 
     raise HTTPException(
@@ -455,6 +658,11 @@ def get_f1_latest_news(
                 "cached": True,
                 "fetched_at": cache_entry["fetched_at"].isoformat() if cache_entry.get("fetched_at") else None,
                 "model_used": cache_entry.get("model_used"),
+                "auth_mode": cache_entry.get("auth_mode"),
+                "grounded": cache_entry.get("grounded"),
+                "grounding_method": cache_entry.get("grounding_method"),
+                "stale_items_removed": cache_entry.get("stale_items_removed", 0),
+                "undated_items_removed": cache_entry.get("undated_items_removed", 0),
             }
 
         generated = _generate_f1_news_with_gemini(user_country)
@@ -463,6 +671,11 @@ def get_f1_latest_news(
             "items": generated["items"],
             "fetched_at": now_utc,
             "model_used": generated["model_used"],
+            "auth_mode": generated.get("auth_mode"),
+            "grounded": generated.get("grounded"),
+            "grounding_method": generated.get("grounding_method"),
+            "stale_items_removed": generated.get("stale_items_removed", 0),
+            "undated_items_removed": generated.get("undated_items_removed", 0),
         }
 
         return {
@@ -471,6 +684,11 @@ def get_f1_latest_news(
             "cached": False,
             "fetched_at": now_utc.isoformat(),
             "model_used": generated["model_used"],
+            "auth_mode": generated.get("auth_mode"),
+            "grounded": generated.get("grounded"),
+            "grounding_method": generated.get("grounding_method"),
+            "stale_items_removed": generated.get("stale_items_removed", 0),
+            "undated_items_removed": generated.get("undated_items_removed", 0),
         }
 
 
@@ -497,6 +715,9 @@ def get_f1_interview_experiences(
                 "cached": True,
                 "fetched_at": cache_entry["fetched_at"].isoformat(),
                 "model_used": cache_entry.get("model_used"),
+                "auth_mode": cache_entry.get("auth_mode"),
+                "grounded": cache_entry.get("grounded"),
+                "grounding_method": cache_entry.get("grounding_method"),
             }
 
     generated = _generate_f1_interview_experiences_with_gemini(selected_country, selected_consulates)
@@ -506,6 +727,9 @@ def get_f1_interview_experiences(
         "items": generated["items"],
         "fetched_at": now_utc,
         "model_used": generated["model_used"],
+        "auth_mode": generated.get("auth_mode"),
+        "grounded": generated.get("grounded"),
+        "grounding_method": generated.get("grounding_method"),
     }
 
     with _interview_lock:
@@ -518,4 +742,7 @@ def get_f1_interview_experiences(
         "cached": False,
         "fetched_at": now_utc.isoformat(),
         "model_used": generated["model_used"],
+        "auth_mode": generated.get("auth_mode"),
+        "grounded": generated.get("grounded"),
+        "grounding_method": generated.get("grounding_method"),
     }
