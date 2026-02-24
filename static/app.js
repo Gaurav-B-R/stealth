@@ -2250,6 +2250,32 @@ function buildSubscriptionNotifySnapshot(subscription) {
     };
 }
 
+function mergeSubscriptionNotifySnapshots(previousSnapshot, nextSnapshot) {
+    if (!nextSnapshot) return null;
+    if (!previousSnapshot) return nextSnapshot;
+
+    const merged = { ...nextSnapshot };
+
+    // Some endpoints return partial subscription payloads and omit renewal/payment metadata.
+    // Preserve known values so follow-up /me fetches do not emit duplicate transition notifications.
+    if (merged.autoRenewEnabled === null && typeof previousSnapshot.autoRenewEnabled === 'boolean') {
+        merged.autoRenewEnabled = previousSnapshot.autoRenewEnabled;
+    }
+    if (!merged.accessSource && previousSnapshot.accessSource) {
+        merged.accessSource = previousSnapshot.accessSource;
+    }
+    if (!merged.nextRenewalAt && previousSnapshot.nextRenewalAt) {
+        merged.nextRenewalAt = previousSnapshot.nextRenewalAt;
+    }
+    if (!merged.latestPaymentStatus && previousSnapshot.latestPaymentStatus) {
+        merged.latestPaymentStatus = previousSnapshot.latestPaymentStatus;
+        merged.latestPaymentAmountPaise = previousSnapshot.latestPaymentAmountPaise;
+        merged.latestPaymentCurrency = previousSnapshot.latestPaymentCurrency;
+    }
+
+    return merged;
+}
+
 function syncSubscriptionNotificationStateUser() {
     const activeUserId = currentUser?.id ? String(currentUser.id) : null;
     if (activeUserId === subscriptionNotifyStateUserId) {
@@ -2266,9 +2292,11 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     const activeUserId = subscriptionNotifyStateUserId;
     if (!activeUserId) return;
 
-    const previousSnapshot = buildSubscriptionNotifySnapshot(previousSubscription)
-        || runtimeSubscriptionNotifyState;
-    const nextSnapshot = buildSubscriptionNotifySnapshot(nextSubscription);
+    // Prefer runtime snapshot to avoid stale "previous" values from overlapping async loads.
+    const previousSnapshot = runtimeSubscriptionNotifyState
+        || buildSubscriptionNotifySnapshot(previousSubscription);
+    const rawNextSnapshot = buildSubscriptionNotifySnapshot(nextSubscription);
+    const nextSnapshot = mergeSubscriptionNotifySnapshots(previousSnapshot, rawNextSnapshot);
 
     if (!nextSnapshot) {
         runtimeSubscriptionNotifyState = null;
@@ -2311,8 +2339,8 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     }
 
     if (previousSnapshot.autoRenewEnabled !== nextSnapshot.autoRenewEnabled && nextSnapshot.plan === 'pro') {
-        emitted = true;
         if (nextSnapshot.autoRenewEnabled === false) {
+            emitted = true;
             addNotification(
                 'Auto-Renew Disabled',
                 accessUntilText
@@ -2321,6 +2349,7 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
                 'warning'
             );
         } else if (nextSnapshot.autoRenewEnabled === true) {
+            emitted = true;
             addNotification(
                 'Auto-Renew Enabled',
                 'Your Pro auto-renew is enabled again.',
@@ -2679,7 +2708,10 @@ function updateSubscriptionUI() {
     }
 
     [sidebarUpgradeButton, profileUpgradeButton].filter(Boolean).forEach((button) => {
-        const canRenew = isPro && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled) && PRO_UPGRADE_ENABLED;
+        const canRenew = isPro
+            && !isJourneyPassActive
+            && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled)
+            && PRO_UPGRADE_ENABLED;
         const canUpgrade = (!isPro && PRO_UPGRADE_ENABLED) || canRenew;
         button.disabled = !canUpgrade;
         if (canRenew) {
@@ -2699,7 +2731,10 @@ function updateSubscriptionUI() {
     });
 
     [pricingMonthlyUpgradeButton, pricingSixMonthUpgradeButton].filter(Boolean).forEach((pricingUpgradeButton) => {
-        const canRenew = isPro && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled) && PRO_UPGRADE_ENABLED;
+        const canRenew = isPro
+            && !isJourneyPassActive
+            && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled)
+            && PRO_UPGRADE_ENABLED;
         const isJourneyButton = pricingUpgradeButton.id === 'pricingProSixMonthUpgradeButton';
         const canUpgrade = isJourneyButton
             ? PRO_UPGRADE_ENABLED
@@ -2827,6 +2862,7 @@ async function handleUpgradeToPro(source = '', preferredPricingModel = PRICING_M
     const hasAutoRenewInfo = typeof currentSubscription?.auto_renew_enabled === 'boolean';
     const canRenewExistingPro = Boolean(
         currentSubscription?.is_pro
+        && !isJourneyPassActive
         && (
             !hasAutoRenewInfo
             || (hasAutoRenewInfo && currentSubscription.auto_renew_enabled === false)
