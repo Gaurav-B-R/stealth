@@ -5705,6 +5705,31 @@ body {
     gap: 1.35rem;
 }
 
+.pricing-grid.pricing-grid-journey-focus .pricing-card:not(.pricing-card-journey) {
+    opacity: 0.5;
+    filter: saturate(0.45) brightness(0.82);
+    border-color: rgba(100, 116, 139, 0.22);
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.22);
+}
+
+.pricing-grid.pricing-grid-journey-focus .pricing-card:not(.pricing-card-journey):hover {
+    transform: none;
+}
+
+.pricing-grid.pricing-grid-journey-focus .pricing-card:not(.pricing-card-journey) .pricing-badge {
+    opacity: 0.45;
+}
+
+.pricing-grid.pricing-grid-journey-focus .pricing-card:not(.pricing-card-journey) .btn {
+    opacity: 0.72;
+}
+
+.pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
+    border-color: rgba(251, 191, 36, 0.82);
+    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.42), 0 26px 44px rgba(28, 14, 30, 0.66);
+    transform: translateY(-3px);
+}
+
 .pricing-card {
     position: relative;
     border: 1px solid rgba(129, 140, 248, 0.2);

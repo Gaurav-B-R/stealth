@@ -2429,6 +2429,12 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     writeStoredSubscriptionNotifyState(activeUserId, nextSnapshot);
 }
 
+function updatePricingFocusMode(isJourneyPassActive) {
+    const pricingGridEl = document.querySelector('#pricingSection .pricing-grid');
+    if (!pricingGridEl) return;
+    pricingGridEl.classList.toggle('pricing-grid-journey-focus', Boolean(isJourneyPassActive));
+}
+
 function updateSubscriptionUI() {
     const planNameEl = document.getElementById('dashboardPlanName');
     const aiUsageEl = document.getElementById('dashboardPlanUsage');
@@ -2463,6 +2469,7 @@ function updateSubscriptionUI() {
     const profileEnableEmailButton = document.getElementById('profileEmailNotificationsEnableBtn');
 
     if (!currentSubscription) {
+        updatePricingFocusMode(false);
         if (planNameEl) planNameEl.textContent = 'Free';
         if (aiUsageEl) aiUsageEl.textContent = 'AI: 0/25 used';
         if (uploadUsageEl) uploadUsageEl.textContent = 'Uploads: 0/5 used';
@@ -2537,6 +2544,8 @@ function updateSubscriptionUI() {
     const hasAutoRenewInfo = typeof currentSubscription.auto_renew_enabled === 'boolean';
     const autoRenewEnabled = hasAutoRenewInfo ? Boolean(currentSubscription.auto_renew_enabled) : isPro;
     const planLabel = isPro ? (isJourneyPassActive ? 'Journey Pass' : 'Pro') : 'Free';
+
+    updatePricingFocusMode(isJourneyPassActive);
 
     if (planNameEl) {
         planNameEl.textContent = `${planLabel} Plan`;
