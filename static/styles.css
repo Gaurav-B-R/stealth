@@ -1555,9 +1555,27 @@ body {
 }
 
 #dashboardSection .nav-icon {
-    font-size: 1.25rem;
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
     width: 1.5rem;
-    text-align: center;
+    height: 1.5rem;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    transition: color 0.2s ease;
+}
+
+#dashboardSection .nav-item:hover .nav-icon {
+    color: var(--primary-light);
+}
+
+#dashboardSection .nav-item.active .nav-icon {
+    color: white;
+}
+
+#dashboardSection .nav-icon svg {
+    width: 1.25rem;
+    height: 1.25rem;
 }
 
 #dashboardSection .nav-label {
@@ -1589,7 +1607,9 @@ body {
 }
 
 #dashboardSection .visa-subnav-item {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
     text-decoration: none;
     color: var(--text-secondary);
     border: 1px solid transparent;
@@ -1598,6 +1618,34 @@ body {
     font-size: 0.82rem;
     line-height: 1.35;
     transition: all 0.2s ease;
+}
+
+#dashboardSection .subnav-icon {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    flex-shrink: 0;
+    color: var(--text-muted);
+    transition: color 0.2s ease;
+}
+
+#dashboardSection .subnav-icon svg {
+    width: 1rem;
+    height: 1rem;
+}
+
+#dashboardSection .visa-subnav-item:hover .subnav-icon {
+    color: var(--primary-light);
+}
+
+#dashboardSection .visa-subnav-item.active .subnav-icon {
+    color: var(--primary-color);
+}
+
+#dashboardSection .subnav-label {
+    flex: 1;
 }
 
 #dashboardSection .visa-subnav-item:hover {
