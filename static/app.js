@@ -1904,7 +1904,7 @@ function showVerification(email = null, expiryHours = 24) {
                 </p>
             </div>
             <div style="text-align: center;">
-                <button onclick="resendVerificationEmail('${escapeHtml(email)}')" class="btn btn-primary">Resend Verification Email</button>
+                <button onclick="resendVerificationEmailFromButton(this)" data-email="${escapeHtml(email)}" class="btn btn-primary">Resend Verification Email</button>
                 <p style="margin-top: 1rem;">
                     <a href="#" onclick="showLogin(); return false;">Back to Login</a>
                 </p>
@@ -1912,6 +1912,11 @@ function showVerification(email = null, expiryHours = 24) {
         `;
     }
     updateURL('/verify-email', false);
+}
+
+function resendVerificationEmailFromButton(buttonEl) {
+    const email = buttonEl?.dataset?.email || '';
+    resendVerificationEmail(email);
 }
 
 async function handleEmailVerification(skipURLUpdate = false) {
@@ -6676,7 +6681,7 @@ function displayConversations(conversations) {
             : displayName.charAt(0).toUpperCase();
 
         return `
-            <div class="conversation-item ${unreadClass}" onclick="openConversation(${conv.item.id}, ${conv.other_user.id}, '${escapeHtml(conv.other_user.username)}', '${escapeHtml(conv.item.title)}')">
+            <div class="conversation-item ${unreadClass}" onclick="openConversationFromCard(this)" data-item-id="${conv.item.id}" data-other-user-id="${conv.other_user.id}" data-other-username="${escapeHtml(conv.other_user.username)}" data-item-title="${escapeHtml(conv.item.title)}">
                 <div class="conversation-avatar">${avatarContent}</div>
                 <div class="conversation-info">
                     <div class="conversation-header">
@@ -6695,6 +6700,18 @@ function displayConversations(conversations) {
             </div>
         `;
     }).join('');
+}
+
+function openConversationFromCard(cardEl) {
+    if (!cardEl?.dataset) return;
+
+    const itemId = Number.parseInt(cardEl.dataset.itemId || '', 10);
+    const otherUserId = Number.parseInt(cardEl.dataset.otherUserId || '', 10);
+    if (!Number.isFinite(itemId) || !Number.isFinite(otherUserId)) return;
+
+    const otherUsername = cardEl.dataset.otherUsername || '';
+    const itemTitle = cardEl.dataset.itemTitle || '';
+    openConversation(itemId, otherUserId, otherUsername, itemTitle);
 }
 
 async function openConversation(itemId, otherUserId, otherUsername, itemTitle) {
@@ -9250,7 +9267,7 @@ function displayDocuments(documents) {
                                 <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
                                 <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
                             `}
-                            <button onclick="deleteDocument(${doc.id}, '${escapeHtml(doc.original_filename || 'document')}')" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">Delete</button>
+                            <button onclick="deleteDocumentFromButton(this)" data-document-id="${doc.id}" data-document-name="${escapeHtml(doc.original_filename || 'document')}" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">Delete</button>
                         </div>
                     </div>
                 </div>
@@ -9298,6 +9315,16 @@ function displayDocuments(documents) {
     }
 
     container.innerHTML = `${summaryLine}${cardsHtml}`;
+}
+
+function deleteDocumentFromButton(buttonEl) {
+    if (!buttonEl?.dataset) return;
+
+    const documentId = Number.parseInt(buttonEl.dataset.documentId || '', 10);
+    if (!Number.isFinite(documentId)) return;
+
+    const filename = buttonEl.dataset.documentName || 'document';
+    deleteDocument(documentId, filename);
 }
 
 async function downloadEncryptedDocument(documentId) {

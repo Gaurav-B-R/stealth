@@ -2,6 +2,7 @@ import os
 import re
 from datetime import datetime, timedelta
 from html import escape
+from urllib.parse import quote
 from typing import Optional
 import resend
 from dotenv import load_dotenv
@@ -505,7 +506,24 @@ def send_contact_form_email(
     if not RESEND_API_KEY:
         print(f"ERROR: Cannot send contact form email - Resend not configured")
         return False
-    
+
+    sender_name = re.sub(r"[\r\n]+", " ", (name or "").strip()) or "Unknown"
+    sender_email = re.sub(r"[\r\n]+", " ", (email or "").strip())
+    sender_subject = re.sub(r"[\r\n]+", " ", (subject or "").strip()) or "(No subject)"
+    sender_message = (message or "").strip()
+    sender_user_type = re.sub(r"[\r\n]+", " ", (user_type or "visitor").strip()) or "visitor"
+
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", sender_email):
+        print("ERROR: Invalid sender email in contact form payload")
+        return False
+
+    safe_name = escape(sender_name)
+    safe_email = escape(sender_email)
+    safe_subject = escape(sender_subject)
+    safe_message = escape(sender_message)
+    safe_user_type = escape(sender_user_type.title())
+    safe_reply_subject = quote(f"Re: {sender_subject}", safe="")
+
     # Email to contact@rilono.com
     contact_email = "contact@rilono.com"
     
@@ -590,27 +608,27 @@ def send_contact_form_email(
         <div class="content">
             <div class="field">
                 <div class="field-label">From</div>
-                <div class="field-value">{name}</div>
+                <div class="field-value">{safe_name}</div>
             </div>
             <div class="field">
                 <div class="field-label">Email</div>
-                <div class="field-value"><a href="mailto:{email}">{email}</a></div>
+                <div class="field-value"><a href="mailto:{safe_email}">{safe_email}</a></div>
             </div>
             <div class="field">
                 <div class="field-label">User Type</div>
-                <div class="field-value">{user_type.title()}</div>
+                <div class="field-value">{safe_user_type}</div>
             </div>
             <div class="field">
                 <div class="field-label">Subject</div>
-                <div class="field-value">{subject}</div>
+                <div class="field-value">{safe_subject}</div>
             </div>
             <div class="field">
                 <div class="field-label">Message</div>
-                <div class="message-content">{message}</div>
+                <div class="message-content">{safe_message}</div>
             </div>
             
             <div style="text-align: center;">
-                <a href="mailto:{email}?subject=Re: {subject}" class="reply-btn">Reply to {name}</a>
+                <a href="mailto:{safe_email}?subject={safe_reply_subject}" class="reply-btn">Reply to {safe_name}</a>
             </div>
         </div>
         <div class="footer">
@@ -626,8 +644,8 @@ def send_contact_form_email(
         params = {
             "from": from_email,
             "to": [contact_email],
-            "reply_to": email,  # So you can reply directly to the sender
-            "subject": f"[Rilono Contact] {subject}",
+            "reply_to": sender_email,  # So you can reply directly to the sender
+            "subject": f"[Rilono Contact] {sender_subject}",
             "html": html_content
         }
         
