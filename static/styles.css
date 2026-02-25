@@ -6613,6 +6613,88 @@ body {
     color: rgba(255, 255, 255, 0.9);
 }
 
+.rilono-chat-sent-attachments {
+    display: grid;
+    gap: 0.55rem;
+    margin-bottom: 0.6rem;
+}
+
+.rilono-chat-sent-attachment {
+    border-radius: 0.8rem;
+    overflow: hidden;
+}
+
+.rilono-chat-sent-attachment-image {
+    max-width: min(240px, 100%);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.55);
+}
+
+.rilono-chat-sent-attachment-image img {
+    display: block;
+    width: 100%;
+    max-height: 190px;
+    object-fit: cover;
+}
+
+.rilono-chat-sent-attachment-caption {
+    padding: 0.34rem 0.5rem;
+    font-size: 0.73rem;
+    line-height: 1.3;
+    word-break: break-word;
+    background: rgba(15, 23, 42, 0.45);
+    color: #e5e7eb;
+}
+
+.rilono-chat-sent-attachment-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    background: rgba(15, 23, 42, 0.48);
+    color: #e5e7eb;
+    padding: 0.36rem 0.56rem;
+    max-width: min(260px, 100%);
+}
+
+.rilono-chat-sent-file-icon {
+    flex: 0 0 auto;
+    font-size: 0.86rem;
+}
+
+.rilono-chat-sent-file-name {
+    font-size: 0.76rem;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rilono-chat-sent-file-size {
+    font-size: 0.7rem;
+    opacity: 0.85;
+    margin-left: auto;
+}
+
+.rilono-ai-message.user .rilono-chat-sent-attachment-image,
+.chat-message.user .rilono-chat-sent-attachment-image {
+    border-color: rgba(255, 255, 255, 0.34);
+    background: rgba(13, 18, 34, 0.3);
+}
+
+.rilono-ai-message.user .rilono-chat-sent-attachment-caption,
+.chat-message.user .rilono-chat-sent-attachment-caption {
+    background: rgba(13, 18, 34, 0.4);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.rilono-ai-message.user .rilono-chat-sent-attachment-file,
+.chat-message.user .rilono-chat-sent-attachment-file {
+    border-color: rgba(255, 255, 255, 0.34);
+    background: rgba(13, 18, 34, 0.35);
+    color: rgba(255, 255, 255, 0.95);
+}
+
 /* Chat Input Area */
 .rilono-ai-input-area {
     padding: 1.25rem 1.5rem;

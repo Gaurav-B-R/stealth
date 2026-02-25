@@ -1084,6 +1084,7 @@ function updateUIForAuth() {
         currentSubscription = null;
         updateSubscriptionUI();
         clearRilonoAiSessionAttachments(false);
+        rilonoAiAttachmentRegistry = new Map();
     }
 }
 
@@ -5701,6 +5702,7 @@ async function logout() {
     floatingChatOpen = false;
     rilonoAiConversationHistory = [];  // Clear shared chat history
     clearRilonoAiSessionAttachments(false);
+    rilonoAiAttachmentRegistry = new Map();
     stopVoiceMockInterview(true);
     stopVoicePrepInterview(true);
     document.getElementById('floatingChatWindow').style.display = 'none';
@@ -9565,19 +9567,105 @@ function sendQuickMessage(message, triggerElement = null) {
     form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 }
 
-function addMessageToRilonoAiChat(message, isUser = false) {
+function registerRilonoAiAttachmentMetadata(attachment) {
+    const attachmentId = String(attachment?.id || '').trim();
+    if (!attachmentId || rilonoAiAttachmentRegistry.has(attachmentId)) {
+        return;
+    }
+
+    const mimeType = String(attachment?.mime_type || '').trim().toLowerCase();
+    const attachmentMeta = {
+        id: attachmentId,
+        name: String(attachment?.name || 'Attachment').trim() || 'Attachment',
+        mime_type: mimeType,
+        size_bytes: Number(attachment?.size_bytes || 0),
+        preview_url: null
+    };
+
+    if (mimeType.startsWith('image/') && attachment?.content_base64) {
+        attachmentMeta.preview_url = `data:${mimeType};base64,${attachment.content_base64}`;
+    }
+
+    rilonoAiAttachmentRegistry.set(attachmentId, attachmentMeta);
+}
+
+function registerRilonoAiAttachmentBatch(attachments) {
+    const list = Array.isArray(attachments) ? attachments : [];
+    list.forEach((attachment) => registerRilonoAiAttachmentMetadata(attachment));
+}
+
+function getRilonoAiMessageAttachmentMetaList(attachmentIds = []) {
+    if (!Array.isArray(attachmentIds) || attachmentIds.length === 0) {
+        return [];
+    }
+
+    const seenIds = new Set();
+    const metaList = [];
+    attachmentIds.forEach((rawId) => {
+        const attachmentId = String(rawId || '').trim();
+        if (!attachmentId || seenIds.has(attachmentId)) return;
+        seenIds.add(attachmentId);
+        const metadata = rilonoAiAttachmentRegistry.get(attachmentId);
+        if (metadata) {
+            metaList.push(metadata);
+        }
+    });
+    return metaList;
+}
+
+function renderRilonoAiUserMessageAttachmentsHtml(attachmentIds = []) {
+    const attachments = getRilonoAiMessageAttachmentMetaList(attachmentIds);
+    if (attachments.length === 0) {
+        return '';
+    }
+
+    const cards = attachments.map((attachment) => {
+        const name = escapeHtml(attachment.name || 'Attachment');
+        const sizeText = escapeHtml(formatRilonoAiAttachmentSize(Number(attachment.size_bytes || 0)));
+        const isImage = String(attachment.mime_type || '').startsWith('image/') && attachment.preview_url;
+        if (isImage) {
+            return `
+                <div class="rilono-chat-sent-attachment rilono-chat-sent-attachment-image">
+                    <img src="${attachment.preview_url}" alt="${name}" loading="lazy">
+                    <div class="rilono-chat-sent-attachment-caption">${name}</div>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="rilono-chat-sent-attachment rilono-chat-sent-attachment-file" title="${name}">
+                <span class="rilono-chat-sent-file-icon">📄</span>
+                <span class="rilono-chat-sent-file-name">${name}</span>
+                <span class="rilono-chat-sent-file-size">${sizeText}</span>
+            </div>
+        `;
+    }).join('');
+
+    return `<div class="rilono-chat-sent-attachments">${cards}</div>`;
+}
+
+function buildRilonoAiUserBubbleHtml(message, attachmentIds = []) {
+    const attachmentMarkup = renderRilonoAiUserMessageAttachmentsHtml(attachmentIds);
+    const trimmedMessage = String(message || '').trim();
+    const messageMarkup = trimmedMessage ? `<p>${escapeHtml(trimmedMessage)}</p>` : '';
+    return `${attachmentMarkup}${messageMarkup}`;
+}
+
+function addMessageToRilonoAiChat(message, isUser = false, options = {}) {
     const messagesContainers = getMainChatContainers();
     if (messagesContainers.length === 0) return;
 
+    const attachmentIds = Array.isArray(options.attachmentIds) ? options.attachmentIds : [];
     messagesContainers.forEach((messagesContainer) => {
         const messageDiv = document.createElement('div');
         messageDiv.className = `rilono-ai-message ${isUser ? 'user' : 'assistant'}`;
 
         if (isUser) {
+            const userBubbleHtml = buildRilonoAiUserBubbleHtml(message, attachmentIds);
             messageDiv.innerHTML = `
                 <div class="message-avatar">${currentUser?.full_name?.charAt(0) || currentUser?.username?.charAt(0) || 'U'}</div>
                 <div class="message-bubble">
-                    <p>${escapeHtml(message)}</p>
+                    ${userBubbleHtml}
                 </div>
             `;
         } else {
@@ -9627,6 +9715,7 @@ function removeRilonoAiTypingIndicator() {
 // Store conversation history for Rilono AI
 let rilonoAiConversationHistory = [];
 let rilonoAiSessionAttachments = [];
+let rilonoAiAttachmentRegistry = new Map();
 const RILONO_AI_MAX_SESSION_ATTACHMENTS = 8;
 const RILONO_AI_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const RILONO_AI_MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -9796,6 +9885,7 @@ async function addFilesToRilonoAiSession(files, source = 'upload') {
     }
 
     if (acceptedAttachments.length > 0) {
+        registerRilonoAiAttachmentBatch(acceptedAttachments);
         rilonoAiSessionAttachments = rilonoAiSessionAttachments.concat(acceptedAttachments);
         renderRilonoAiSessionAttachments();
         const verb = source === 'paste' ? 'Pasted' : 'Attached';
@@ -9917,15 +10007,57 @@ function initializeRilonoAiAttachmentUi() {
     renderRilonoAiSessionAttachments();
 }
 
-function getRilonoAiChatRequestPayload(message) {
+function dequeueRilonoAiSessionAttachmentsForSend() {
+    if (rilonoAiSessionAttachments.length === 0) {
+        return [];
+    }
+    const attachmentsToSend = rilonoAiSessionAttachments.map((attachment) => ({ ...attachment }));
+    rilonoAiSessionAttachments = [];
+    renderRilonoAiSessionAttachments();
+    return attachmentsToSend;
+}
+
+function restoreRilonoAiSessionAttachments(attachments = []) {
+    if (!Array.isArray(attachments) || attachments.length === 0) {
+        return;
+    }
+    const existingById = new Map();
+    rilonoAiSessionAttachments.forEach((attachment) => {
+        const id = String(attachment?.id || '').trim();
+        if (id) existingById.set(id, attachment);
+    });
+    attachments.forEach((attachment) => {
+        const id = String(attachment?.id || '').trim();
+        if (id && existingById.has(id)) return;
+        rilonoAiSessionAttachments.push(attachment);
+    });
+    renderRilonoAiSessionAttachments();
+}
+
+function getRilonoAiMessageAttachmentIdsFromList(attachments = []) {
+    const seen = new Set();
+    const ids = [];
+    (Array.isArray(attachments) ? attachments : []).forEach((attachment) => {
+        const attachmentId = String(attachment?.id || '').trim();
+        if (!attachmentId || seen.has(attachmentId)) return;
+        seen.add(attachmentId);
+        ids.push(attachmentId);
+    });
+    return ids;
+}
+
+function getRilonoAiChatRequestPayload(message, attachmentsOverride = null) {
+    const attachmentsToSend = Array.isArray(attachmentsOverride)
+        ? attachmentsOverride
+        : rilonoAiSessionAttachments;
     const payload = {
         message: message,
         conversation_history: rilonoAiConversationHistory.slice(-200),
         source: 'rilono_ai_chat'
     };
 
-    if (rilonoAiSessionAttachments.length > 0) {
-        payload.session_attachments = rilonoAiSessionAttachments.map((attachment) => ({
+    if (attachmentsToSend.length > 0) {
+        payload.session_attachments = attachmentsToSend.map((attachment) => ({
             id: attachment.id,
             name: attachment.name,
             mime_type: attachment.mime_type,
@@ -9951,14 +10083,18 @@ async function handleRilonoAiChatSubmit(e) {
         return;
     }
 
+    const attachmentsForSend = dequeueRilonoAiSessionAttachmentsForSend();
+    const sentAttachmentIds = getRilonoAiMessageAttachmentIdsFromList(attachmentsForSend);
+
     // Add user message to both chats
-    addMessageToRilonoAiChat(message, true);
-    addMessageToFloatingChat(message, true);
+    addMessageToRilonoAiChat(message, true, { attachmentIds: sentAttachmentIds });
+    addMessageToFloatingChat(message, true, { attachmentIds: sentAttachmentIds });
 
     // Add to shared conversation history
     rilonoAiConversationHistory.push({
         role: 'user',
-        content: message
+        content: message,
+        attachment_ids: sentAttachmentIds
     });
 
     input.value = '';
@@ -9975,7 +10111,7 @@ async function handleRilonoAiChatSubmit(e) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
             },
-            body: JSON.stringify(getRilonoAiChatRequestPayload(message))
+            body: JSON.stringify(getRilonoAiChatRequestPayload(message, attachmentsForSend))
         });
 
         removeRilonoAiTypingIndicator();
@@ -10002,6 +10138,7 @@ async function handleRilonoAiChatSubmit(e) {
         } else {
             const errorData = await response.json();
             const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
+            restoreRilonoAiSessionAttachments(attachmentsForSend);
             maybeShowPlanLimitPopup(response.status, errorMsg);
             addMessageToRilonoAiChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
             if (response.status === 403) {
@@ -10009,6 +10146,7 @@ async function handleRilonoAiChatSubmit(e) {
             }
         }
     } catch (error) {
+        restoreRilonoAiSessionAttachments(attachmentsForSend);
         removeRilonoAiTypingIndicator();
         console.error('Rilono AI chat error:', error);
         addMessageToRilonoAiChat('Sorry, I encountered an error. Please try again later.', false);
@@ -10336,7 +10474,11 @@ function syncFloatingChatFromHistory() {
 
     // Rebuild messages from shared history
     for (const msg of rilonoAiConversationHistory) {
-        addMessageToFloatingChat(msg.content, msg.role === 'user');
+        addMessageToFloatingChat(
+            msg.content,
+            msg.role === 'user',
+            { attachmentIds: msg.attachment_ids || [] }
+        );
     }
 
     scrollFloatingChatToBottom();
@@ -10354,7 +10496,11 @@ function syncMainChatFromHistory() {
 
     // Rebuild messages from shared history in all main chat panels
     for (const msg of rilonoAiConversationHistory) {
-        addMessageToRilonoAiChat(msg.content, msg.role === 'user');
+        addMessageToRilonoAiChat(
+            msg.content,
+            msg.role === 'user',
+            { attachmentIds: msg.attachment_ids || [] }
+        );
     }
 }
 
@@ -10386,12 +10532,13 @@ function scrollFloatingChatToBottom() {
     });
 }
 
-function addMessageToFloatingChat(message, isUser = false) {
+function addMessageToFloatingChat(message, isUser = false, options = {}) {
     const messagesContainer = document.getElementById('floatingChatMessages');
     if (!messagesContainer) return;  // Guard: container might not exist
 
     const messageDiv = document.createElement('div');
     messageDiv.className = `chat-message ${isUser ? 'user' : 'assistant'}`;
+    const attachmentIds = Array.isArray(options.attachmentIds) ? options.attachmentIds : [];
 
     if (!isUser) {
         const avatar = document.createElement('div');
@@ -10404,8 +10551,8 @@ function addMessageToFloatingChat(message, isUser = false) {
     bubble.className = 'chat-message-bubble';
 
     if (isUser) {
-        // User messages: plain text
-        bubble.textContent = message;
+        // User messages: text + sent-attachment preview block (if any)
+        bubble.innerHTML = buildRilonoAiUserBubbleHtml(message, attachmentIds);
     } else {
         // AI responses: parse markdown
         bubble.innerHTML = markdownToHtml(message);
@@ -10449,14 +10596,18 @@ async function handleFloatingChatSubmit(e) {
         return;
     }
 
+    const attachmentsForSend = dequeueRilonoAiSessionAttachmentsForSend();
+    const sentAttachmentIds = getRilonoAiMessageAttachmentIdsFromList(attachmentsForSend);
+
     // Add user message to both chats
-    addMessageToFloatingChat(message, true);
-    addMessageToRilonoAiChat(message, true);
+    addMessageToFloatingChat(message, true, { attachmentIds: sentAttachmentIds });
+    addMessageToRilonoAiChat(message, true, { attachmentIds: sentAttachmentIds });
 
     // Add to shared conversation history
     rilonoAiConversationHistory.push({
         role: 'user',
-        content: message
+        content: message,
+        attachment_ids: sentAttachmentIds
     });
 
     input.value = '';
@@ -10473,7 +10624,7 @@ async function handleFloatingChatSubmit(e) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
             },
-            body: JSON.stringify(getRilonoAiChatRequestPayload(message))
+            body: JSON.stringify(getRilonoAiChatRequestPayload(message, attachmentsForSend))
         });
 
         removeFloatingChatTyping();
@@ -10500,6 +10651,7 @@ async function handleFloatingChatSubmit(e) {
         } else {
             const errorData = await response.json();
             const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
+            restoreRilonoAiSessionAttachments(attachmentsForSend);
             maybeShowPlanLimitPopup(response.status, errorMsg);
             addMessageToFloatingChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
             if (response.status === 403) {
@@ -10507,6 +10659,7 @@ async function handleFloatingChatSubmit(e) {
             }
         }
     } catch (error) {
+        restoreRilonoAiSessionAttachments(attachmentsForSend);
         removeFloatingChatTyping();
         console.error('Floating chat error:', error);
         addMessageToFloatingChat('Sorry, I encountered an error. Please try again later.', false);
