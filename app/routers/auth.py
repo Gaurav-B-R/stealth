@@ -64,14 +64,47 @@ AUTH_COOKIE_DOMAIN = (os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None)
 _cookie_samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "strict").strip().lower()
 AUTH_COOKIE_SAMESITE = _cookie_samesite_raw if _cookie_samesite_raw in {"lax", "strict", "none"} else "strict"
 
+if not AUTH_COOKIE_SECURE and _cookie_secure_default():
+    raise RuntimeError(
+        "AUTH_COOKIE_SECURE must be true outside development. "
+        "Refusing to start with insecure auth cookies."
+    )
 
-def _set_auth_cookie(response: Response, access_token: str, max_age_seconds: int) -> None:
+
+def _is_local_hostname(hostname: str) -> bool:
+    host = (hostname or "").strip().lower()
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _request_uses_https(request: Request) -> bool:
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if forwarded_proto:
+        return forwarded_proto == "https"
+    return request.url.scheme == "https"
+
+
+def _resolve_auth_cookie_secure(request: Request) -> bool:
+    if AUTH_COOKIE_SECURE:
+        return True
+
+    # Fail-safe: in non-development deployments, never issue insecure auth cookies.
+    if _cookie_secure_default():
+        return True
+
+    # Development-only exception: allow insecure cookies only for local HTTP usage.
+    if _is_local_hostname(request.url.hostname) and not _request_uses_https(request):
+        return False
+    return True
+
+
+def _set_auth_cookie(request: Request, response: Response, access_token: str, max_age_seconds: int) -> None:
+    secure_cookie = _resolve_auth_cookie_secure(request)
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
         value=access_token,
         max_age=max_age_seconds,
         httponly=True,
-        secure=AUTH_COOKIE_SECURE,
+        secure=secure_cookie,
         samesite=AUTH_COOKIE_SAMESITE,
         domain=AUTH_COOKIE_DOMAIN,
         path="/",
@@ -409,7 +442,7 @@ async def login(
     access_token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
-    _set_auth_cookie(response, access_token, int(access_token_expires.total_seconds()))
+    _set_auth_cookie(request, response, access_token, int(access_token_expires.total_seconds()))
     return {
         "access_token": access_token,
         "token_type": "bearer",
