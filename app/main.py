@@ -10,10 +10,15 @@ from app.services.daily_ai_notifications import (
     start_daily_ai_notification_scheduler,
     stop_daily_ai_notification_scheduler,
 )
+from app.services.f1_visa_news_ingestion import (
+    start_f1_news_ingestion_scheduler,
+    stop_f1_news_ingestion_scheduler,
+)
 from app.schema_patch import (
     ensure_coupon_percent_column,
     ensure_coupon_usage_limit_column,
     ensure_document_catalog_columns,
+    ensure_f1_visa_news_table,
     ensure_subscription_payment_recurring_columns,
     ensure_subscription_usage_columns,
     ensure_user_legal_consent_column,
@@ -133,6 +138,7 @@ def startup_backfill_subscriptions():
     ensure_document_catalog_columns()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
+    ensure_f1_visa_news_table()
     db = SessionLocal()
     try:
         ensure_default_document_type_catalog(db)
@@ -142,11 +148,13 @@ def startup_backfill_subscriptions():
     finally:
         db.close()
     start_daily_ai_notification_scheduler()
+    start_f1_news_ingestion_scheduler()
 
 
 @app.on_event("shutdown")
 def shutdown_background_services():
     stop_daily_ai_notification_scheduler()
+    stop_f1_news_ingestion_scheduler()
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

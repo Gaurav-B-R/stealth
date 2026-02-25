@@ -3308,7 +3308,7 @@ async function consumeInterviewSession(sessionType) {
     }
 }
 
-async function loadF1VisaNews(forceRefresh = false) {
+async function loadF1VisaNews() {
     if (!authToken) return;
 
     const newsContainer = document.getElementById('newsContainer');
@@ -3318,17 +3318,10 @@ async function loadF1VisaNews(forceRefresh = false) {
     if (newsRequestInFlight) return;
     newsRequestInFlight = true;
 
-    if (!forceRefresh) {
-        newsContainer.innerHTML = '<div class="news-loading">Fetching latest F1 visa news...</div>';
-    } else {
-        metaInfo.textContent = 'Refreshing...';
-    }
+    newsContainer.innerHTML = '<div class="news-loading">Loading F1 visa news...</div>';
 
     try {
-        const endpoint = forceRefresh
-            ? `${API_BASE}/api/news/f1-latest?refresh=1`
-            : `${API_BASE}/api/news/f1-latest`;
-        const response = await fetch(endpoint, {
+        const response = await fetch(`${API_BASE}/api/news/f1-latest`, {
             headers: {
                 'Authorization': `Bearer ${authToken}`
             }
@@ -3341,7 +3334,7 @@ async function loadF1VisaNews(forceRefresh = false) {
 
         const items = Array.isArray(data.items) ? data.items : [];
         if (items.length === 0) {
-            newsContainer.innerHTML = '<div class="news-loading">No recent F1 visa updates were found.</div>';
+            newsContainer.innerHTML = '<div class="news-loading">No recent F1 visa updates available.</div>';
         } else {
             newsContainer.innerHTML = items.map((item) => {
                 const title = escapeHtml(item.title || 'Update');
@@ -3374,12 +3367,13 @@ async function loadF1VisaNews(forceRefresh = false) {
         const fetchedAt = data.fetched_at ? new Date(data.fetched_at) : null;
         const fetchedText = fetchedAt && !Number.isNaN(fetchedAt.getTime())
             ? fetchedAt.toLocaleString()
-            : 'just now';
-        const cacheText = data.cached ? 'cached' : 'fresh';
-        metaInfo.textContent = `Last updated: ${fetchedText} (${cacheText})`;
+            : '';
+        metaInfo.textContent = fetchedText
+            ? `Last updated: ${fetchedText}`
+            : `${data.count || 0} updates available`;
     } catch (error) {
         console.error('Error loading F1 visa news:', error);
-        newsContainer.innerHTML = '<div class="news-loading">Unable to load F1 visa news right now. Try refresh in a moment.</div>';
+        newsContainer.innerHTML = '<div class="news-loading">Unable to load F1 visa news right now.</div>';
         metaInfo.textContent = 'Failed to load updates';
     } finally {
         newsRequestInFlight = false;

@@ -8,8 +8,11 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from sqlalchemy.orm import Session
+
 from app import models
 from app.auth import get_current_active_user
+from app.database import get_db
 from app.utils import gemini_service as gemini_utils
 
 try:
@@ -23,10 +26,7 @@ except Exception:
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
-NEWS_CACHE_TTL = timedelta(hours=6)
 INTERVIEW_CACHE_TTL = timedelta(hours=6)
-_news_lock = Lock()
-_news_cache: Dict[str, Dict[str, Any]] = {}
 _interview_lock = Lock()
 _interview_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -216,6 +216,134 @@ def _filter_recent_news_items(
 
     kept.sort(key=lambda pair: pair[0], reverse=True)
     return [item for _, item in kept], stale_count, undated_count
+
+
+def _extract_grounding_urls(response: Any) -> List[Dict[str, str]]:
+    """
+    Extract real source URLs from Gemini grounding metadata.
+
+    When Google Search grounding is enabled, the response includes
+    ``candidates[0].grounding_metadata.grounding_chunks`` which contain the
+    actual URLs (not the broken ``vertexaisearch.cloud.google.com`` redirect
+    proxies that Gemini sometimes embeds in its JSON text output).
+    """
+    urls: List[Dict[str, str]] = []
+    try:
+        candidates = getattr(response, "candidates", None)
+        if not candidates:
+            return urls
+        metadata = getattr(candidates[0], "grounding_metadata", None)
+        if not metadata:
+            return urls
+        chunks = getattr(metadata, "grounding_chunks", None)
+        if not chunks:
+            return urls
+        for chunk in chunks:
+            web = getattr(chunk, "web", None)
+            if web:
+                uri = getattr(web, "uri", None) or ""
+                title = getattr(web, "title", None) or ""
+                if uri and uri.startswith(("http://", "https://")):
+                    urls.append({"uri": uri, "title": title})
+            ctx = getattr(chunk, "retrieved_context", None)
+            if ctx:
+                uri = getattr(ctx, "uri", None) or ""
+                title = getattr(ctx, "title", None) or ""
+                if uri and uri.startswith(("http://", "https://")):
+                    urls.append({"uri": uri, "title": title})
+    except Exception:  # noqa: BLE001
+        pass
+    return urls
+
+
+def _is_redirect_url(url: str) -> bool:
+    """Return True if *url* looks like a Vertex AI grounding-redirect proxy."""
+    return bool(
+        url
+        and (
+            "vertexaisearch.cloud.google.com" in url
+            or "grounding-api-redirect" in url
+        )
+    )
+
+
+def _enrich_items_with_grounding_urls(
+    items: List[Dict[str, str]],
+    grounding_urls: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    """
+    Replace broken redirect ``source_url`` values in *items* with real URLs
+    extracted from the Gemini grounding metadata.
+
+    Matching strategy (in priority order):
+      1. ``source_name`` ↔ grounding chunk ``title`` (case-insensitive substring)
+      2. Keyword overlap between item ``title`` and chunk ``title``
+      3. Assign the next unused grounding URL (positional fallback)
+
+    Items whose ``source_url`` is already a real URL are left untouched.
+    """
+    if not grounding_urls:
+        return items
+
+    # Track which grounding URLs have been assigned so we don't reuse them.
+    used_indices: set = set()
+
+    def _find_match_by_source_name(source_name: str) -> Optional[int]:
+        sn = source_name.lower()
+        for idx, g in enumerate(grounding_urls):
+            if idx in used_indices:
+                continue
+            gt = g["title"].lower()
+            if sn and gt and (sn in gt or gt in sn):
+                return idx
+        return None
+
+    def _find_match_by_title_keywords(item_title: str) -> Optional[int]:
+        words = {w.lower() for w in item_title.split() if len(w) > 3}
+        if not words:
+            return None
+        best_idx: Optional[int] = None
+        best_overlap = 0
+        for idx, g in enumerate(grounding_urls):
+            if idx in used_indices:
+                continue
+            gt_words = {w.lower() for w in g["title"].split() if len(w) > 3}
+            overlap = len(words & gt_words)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_idx = idx
+        return best_idx if best_overlap >= 2 else None
+
+    def _next_unused() -> Optional[int]:
+        for idx in range(len(grounding_urls)):
+            if idx not in used_indices:
+                return idx
+        return None
+
+    enriched: List[Dict[str, str]] = []
+    for item in items:
+        item = dict(item)
+        source_url = item.get("source_url", "")
+
+        if source_url and not _is_redirect_url(source_url):
+            # Already a real URL — keep it.
+            enriched.append(item)
+            continue
+
+        # Try matching strategies in priority order.
+        match_idx = _find_match_by_source_name(item.get("source_name", ""))
+        if match_idx is None:
+            match_idx = _find_match_by_title_keywords(item.get("title", ""))
+        if match_idx is None:
+            match_idx = _next_unused()
+
+        if match_idx is not None:
+            item["source_url"] = grounding_urls[match_idx]["uri"]
+            used_indices.add(match_idx)
+
+        enriched.append(item)
+
+    return enriched
 
 
 def _normalize_filter_inputs(country: str, consulates: Optional[List[str]]) -> Tuple[str, List[str]]:
@@ -642,54 +770,43 @@ Provide 5 to 10 items."""
 
 @router.get("/f1-latest")
 def get_f1_latest_news(
-    refresh: bool = Query(default=False),
     current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
 ):
-    user_country = _resolve_user_residence_country(current_user)
-    now_utc = datetime.now(timezone.utc)
-    country_cache_key = user_country.lower()
+    """
+    Return stored F1 visa news items from the database.
+    Items are ingested by the background scheduler every 24 hours.
+    """
+    items = (
+        db.query(models.F1VisaNewsItem)
+        .order_by(
+            models.F1VisaNewsItem.ingested_at.desc(),
+            models.F1VisaNewsItem.id.desc(),
+        )
+        .limit(50)
+        .all()
+    )
 
-    with _news_lock:
-        cache_entry = _news_cache.get(country_cache_key)
-        if cache_entry and not refresh and _cache_entry_is_fresh(cache_entry, now_utc, NEWS_CACHE_TTL):
-            return {
-                "country_context": user_country,
-                "items": cache_entry["items"],
-                "cached": True,
-                "fetched_at": cache_entry["fetched_at"].isoformat() if cache_entry.get("fetched_at") else None,
-                "model_used": cache_entry.get("model_used"),
-                "auth_mode": cache_entry.get("auth_mode"),
-                "grounded": cache_entry.get("grounded"),
-                "grounding_method": cache_entry.get("grounding_method"),
-                "stale_items_removed": cache_entry.get("stale_items_removed", 0),
-                "undated_items_removed": cache_entry.get("undated_items_removed", 0),
+    last_ingested_at = (
+        items[0].ingested_at.isoformat() if items and items[0].ingested_at else None
+    )
+
+    return {
+        "items": [
+            {
+                "title": item.title,
+                "summary": item.summary,
+                "why_it_matters": item.why_it_matters or "",
+                "source_name": item.source_name,
+                "source_url": item.source_url or "",
+                "published_date": item.published_date or "unknown",
             }
-
-        generated = _generate_f1_news_with_gemini(user_country)
-        _news_cache[country_cache_key] = {
-            "country_context": user_country,
-            "items": generated["items"],
-            "fetched_at": now_utc,
-            "model_used": generated["model_used"],
-            "auth_mode": generated.get("auth_mode"),
-            "grounded": generated.get("grounded"),
-            "grounding_method": generated.get("grounding_method"),
-            "stale_items_removed": generated.get("stale_items_removed", 0),
-            "undated_items_removed": generated.get("undated_items_removed", 0),
-        }
-
-        return {
-            "country_context": user_country,
-            "items": generated["items"],
-            "cached": False,
-            "fetched_at": now_utc.isoformat(),
-            "model_used": generated["model_used"],
-            "auth_mode": generated.get("auth_mode"),
-            "grounded": generated.get("grounded"),
-            "grounding_method": generated.get("grounding_method"),
-            "stale_items_removed": generated.get("stale_items_removed", 0),
-            "undated_items_removed": generated.get("undated_items_removed", 0),
-        }
+            for item in items
+        ],
+        "fetched_at": last_ingested_at,
+        "source": "stored",
+        "count": len(items),
+    }
 
 
 @router.get("/f1-interview-experiences")
