@@ -68,6 +68,10 @@ class SubscriptionResponse(BaseModel):
     mock_interviews_used: int
     mock_interviews_limit: int
     mock_interviews_remaining: int
+    rilono_ai_chat_uploads_used: int
+    rilono_ai_chat_uploads_limit: int
+    rilono_ai_chat_uploads_remaining: int
+    rilono_ai_chat_upload_window_hours: int
     is_pro: bool
     access_source: Optional[str] = None
     referral_bonus_active: bool = False

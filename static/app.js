@@ -584,6 +584,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await checkAuth();
     loadNotifications();
     updateFloatingChatVisibility();
+    initializeRilonoAiAttachmentUi();
 
     // Handle initial route (use replaceState for initial load)
     handleRoute(true);
@@ -1082,6 +1083,7 @@ function updateUIForAuth() {
         if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'inline-block';
         currentSubscription = null;
         updateSubscriptionUI();
+        clearRilonoAiSessionAttachments(false);
     }
 }
 
@@ -2198,6 +2200,13 @@ function formatUsageText(used, limit, metricLabel) {
     return `${metricLabel}: ${used}/${limit} used`;
 }
 
+function formatWindowUsageText(used, limit, metricLabel, windowHours = 24) {
+    if (limit < 0) {
+        return `${metricLabel}: Unlimited`;
+    }
+    return `${metricLabel} (${windowHours}h): ${used}/${limit} used`;
+}
+
 function formatSubscriptionDateTime(value) {
     if (!value) return '-';
     const date = new Date(value);
@@ -2443,6 +2452,7 @@ function updatePricingFocusMode(isJourneyPassActive) {
 function updateSubscriptionUI() {
     const planNameEl = document.getElementById('dashboardPlanName');
     const aiUsageEl = document.getElementById('dashboardPlanUsage');
+    const chatUploadUsageEl = document.getElementById('dashboardChatUploadUsage');
     const uploadUsageEl = document.getElementById('dashboardUploadUsage');
     const prepUsageEl = document.getElementById('dashboardPrepUsage');
     const mockUsageEl = document.getElementById('dashboardMockUsage');
@@ -2468,6 +2478,7 @@ function updateSubscriptionUI() {
     const profileEmailCardEl = document.getElementById('profileEmailNotificationsCard');
     const profileEmailInfoEl = document.getElementById('profileEmailNotificationsText');
     const profileUsageAiEl = document.getElementById('profileSubscriptionUsageAi');
+    const profileUsageChatUploadsEl = document.getElementById('profileSubscriptionUsageChatUploads');
     const profileUsageUploadsEl = document.getElementById('profileSubscriptionUsageUploads');
     const profileUsagePrepEl = document.getElementById('profileSubscriptionUsagePrep');
     const profileUsageMockEl = document.getElementById('profileSubscriptionUsageMock');
@@ -2477,6 +2488,7 @@ function updateSubscriptionUI() {
         updatePricingFocusMode(false);
         if (planNameEl) planNameEl.textContent = 'Free';
         if (aiUsageEl) aiUsageEl.textContent = 'AI: 0/25 used';
+        if (chatUploadUsageEl) chatUploadUsageEl.textContent = 'AI Chat Uploads (24h): 0/7 used';
         if (uploadUsageEl) uploadUsageEl.textContent = 'Uploads: 0/5 used';
         if (prepUsageEl) prepUsageEl.textContent = 'Prep: 0/3 used';
         if (mockUsageEl) mockUsageEl.textContent = 'Mock: 0/2 used';
@@ -2516,6 +2528,7 @@ function updateSubscriptionUI() {
         if (profileEmailCardEl) profileEmailCardEl.style.display = 'none';
         if (profileEmailInfoEl) profileEmailInfoEl.textContent = '';
         if (profileUsageAiEl) profileUsageAiEl.textContent = 'AI: 0/25 used';
+        if (profileUsageChatUploadsEl) profileUsageChatUploadsEl.textContent = 'AI Chat Uploads (24h): 0/7 used';
         if (profileUsageUploadsEl) profileUsageUploadsEl.textContent = 'Uploads: 0/5 used';
         if (profileUsagePrepEl) profileUsagePrepEl.textContent = 'Prep: 0/3 used';
         if (profileUsageMockEl) profileUsageMockEl.textContent = 'Mock: 0/2 used';
@@ -2549,6 +2562,7 @@ function updateSubscriptionUI() {
     const hasAutoRenewInfo = typeof currentSubscription.auto_renew_enabled === 'boolean';
     const autoRenewEnabled = hasAutoRenewInfo ? Boolean(currentSubscription.auto_renew_enabled) : isPro;
     const planLabel = isPro ? (isJourneyPassActive ? 'Journey Pass' : 'Pro') : 'Free';
+    const chatUploadWindowHours = Number(currentSubscription.rilono_ai_chat_upload_window_hours) || 24;
 
     updatePricingFocusMode(isJourneyPassActive);
 
@@ -2560,6 +2574,14 @@ function updateSubscriptionUI() {
             currentSubscription.ai_messages_used,
             currentSubscription.ai_messages_limit,
             'AI'
+        );
+    }
+    if (chatUploadUsageEl) {
+        chatUploadUsageEl.textContent = formatWindowUsageText(
+            currentSubscription.rilono_ai_chat_uploads_used ?? 0,
+            currentSubscription.rilono_ai_chat_uploads_limit ?? 7,
+            'AI Chat Uploads',
+            chatUploadWindowHours
         );
     }
     if (uploadUsageEl) {
@@ -2662,6 +2684,14 @@ function updateSubscriptionUI() {
         profileEnableEmailButton.disabled = false;
     }
     if (profileUsageAiEl) profileUsageAiEl.textContent = formatUsageText(currentSubscription.ai_messages_used, currentSubscription.ai_messages_limit, 'AI');
+    if (profileUsageChatUploadsEl) {
+        profileUsageChatUploadsEl.textContent = formatWindowUsageText(
+            currentSubscription.rilono_ai_chat_uploads_used ?? 0,
+            currentSubscription.rilono_ai_chat_uploads_limit ?? 7,
+            'AI Chat Uploads',
+            chatUploadWindowHours
+        );
+    }
     if (profileUsageUploadsEl) profileUsageUploadsEl.textContent = formatUsageText(currentSubscription.document_uploads_used, currentSubscription.document_uploads_limit, 'Uploads');
     if (profileUsagePrepEl) profileUsagePrepEl.textContent = formatUsageText(currentSubscription.prep_sessions_used, currentSubscription.prep_sessions_limit, 'Prep');
     if (profileUsageMockEl) profileUsageMockEl.textContent = formatUsageText(currentSubscription.mock_interviews_used, currentSubscription.mock_interviews_limit, 'Mock');
@@ -2800,6 +2830,8 @@ function extractErrorDetailText(detail) {
 function resolveFeatureLabelFromLimitMessage(detailText = '') {
     const text = String(detailText || '').toLowerCase();
     if (text.includes('message limit')) return 'Rilono AI messages';
+    if (text.includes('chat upload limit')) return 'Rilono AI chat uploads';
+    if (text.includes('chat upload')) return 'Rilono AI chat uploads';
     if (text.includes('upload limit')) return 'document uploads';
     if (text.includes('prep limit')) return 'F-1 interview prep sessions';
     if (text.includes('mock interview limit')) return 'F-1 mock interview sessions';
@@ -5668,6 +5700,7 @@ async function logout() {
     closeReferralPromoModal();
     floatingChatOpen = false;
     rilonoAiConversationHistory = [];  // Clear shared chat history
+    clearRilonoAiSessionAttachments(false);
     stopVoiceMockInterview(true);
     stopVoicePrepInterview(true);
     document.getElementById('floatingChatWindow').style.display = 'none';
@@ -9593,6 +9626,316 @@ function removeRilonoAiTypingIndicator() {
 
 // Store conversation history for Rilono AI
 let rilonoAiConversationHistory = [];
+let rilonoAiSessionAttachments = [];
+const RILONO_AI_MAX_SESSION_ATTACHMENTS = 8;
+const RILONO_AI_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const RILONO_AI_MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+const RILONO_AI_SUPPORTED_ATTACHMENT_MIME_TYPES = new Set([
+    'application/pdf',
+    'application/json',
+    'application/csv',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/rtf',
+    'text/rtf',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/plain',
+    'text/markdown',
+    'text/csv'
+]);
+const RILONO_AI_SUPPORTED_ATTACHMENT_EXTENSIONS = new Set([
+    'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'heic', 'heif',
+    'pdf', 'txt', 'md', 'csv', 'json', 'doc', 'docx', 'rtf', 'xls', 'xlsx'
+]);
+
+function getRilonoAiAttachmentInputs() {
+    return Array.from(document.querySelectorAll('.rilono-ai-attachment-input[data-rilono-attachment-input="true"]'));
+}
+
+function getRilonoAiAttachmentSessionContainers() {
+    return Array.from(document.querySelectorAll('.rilono-ai-attachment-session[data-rilono-attachment-session="true"]'));
+}
+
+function getRilonoAiAttachmentTotalBytes() {
+    return rilonoAiSessionAttachments.reduce((total, attachment) => total + (attachment.size_bytes || 0), 0);
+}
+
+function formatRilonoAiAttachmentSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB';
+    if (bytes >= 1024 * 1024) {
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function getRilonoAiFileExtension(filename) {
+    const parts = String(filename || '').toLowerCase().split('.');
+    return parts.length > 1 ? parts.pop() : '';
+}
+
+function inferRilonoAiMimeType(file) {
+    const rawType = String(file?.type || '').trim().toLowerCase();
+    if (rawType) {
+        return rawType;
+    }
+    const extension = getRilonoAiFileExtension(file?.name || '');
+    const extensionToMime = {
+        pdf: 'application/pdf',
+        txt: 'text/plain',
+        md: 'text/markdown',
+        csv: 'text/csv',
+        json: 'application/json',
+        doc: 'application/msword',
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        rtf: 'application/rtf',
+        xls: 'application/vnd.ms-excel',
+        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        webp: 'image/webp',
+        gif: 'image/gif',
+        bmp: 'image/bmp',
+        heic: 'image/heic',
+        heif: 'image/heif'
+    };
+    return extensionToMime[extension] || 'application/octet-stream';
+}
+
+function isRilonoAiAttachmentSupported(file, mimeType) {
+    if (!file) return false;
+    if (String(mimeType || '').startsWith('image/')) return true;
+    if (RILONO_AI_SUPPORTED_ATTACHMENT_MIME_TYPES.has(mimeType)) return true;
+    const extension = getRilonoAiFileExtension(file.name || '');
+    return RILONO_AI_SUPPORTED_ATTACHMENT_EXTENSIONS.has(extension);
+}
+
+function createRilonoAiAttachmentId() {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).slice(2, 9);
+    return `att_${timestamp}_${random}`;
+}
+
+function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = String(reader.result || '');
+            const base64Index = result.indexOf(',');
+            if (base64Index === -1) {
+                reject(new Error('Invalid file encoding'));
+                return;
+            }
+            resolve(result.slice(base64Index + 1));
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+    });
+}
+
+async function addFilesToRilonoAiSession(files, source = 'upload') {
+    const pendingFiles = Array.isArray(files) ? files.filter(Boolean) : [];
+    if (pendingFiles.length === 0) return;
+
+    const acceptedAttachments = [];
+    let totalBytes = getRilonoAiAttachmentTotalBytes();
+
+    for (const file of pendingFiles) {
+        if (rilonoAiSessionAttachments.length + acceptedAttachments.length >= RILONO_AI_MAX_SESSION_ATTACHMENTS) {
+            showMessage(`You can attach up to ${RILONO_AI_MAX_SESSION_ATTACHMENTS} files per chat session.`, 'error');
+            break;
+        }
+
+        const mimeType = inferRilonoAiMimeType(file);
+        if (!isRilonoAiAttachmentSupported(file, mimeType)) {
+            showMessage(`Unsupported file type: ${file.name || 'attachment'}`, 'error');
+            continue;
+        }
+
+        if ((file.size || 0) > RILONO_AI_MAX_ATTACHMENT_BYTES) {
+            showMessage(`"${file.name || 'Attachment'}" is too large (max ${formatRilonoAiAttachmentSize(RILONO_AI_MAX_ATTACHMENT_BYTES)}).`, 'error');
+            continue;
+        }
+
+        if (totalBytes + (file.size || 0) > RILONO_AI_MAX_TOTAL_ATTACHMENT_BYTES) {
+            showMessage(`Total attached size cannot exceed ${formatRilonoAiAttachmentSize(RILONO_AI_MAX_TOTAL_ATTACHMENT_BYTES)}.`, 'error');
+            break;
+        }
+
+        const duplicate = rilonoAiSessionAttachments.some((attachment) => (
+            attachment.name === (file.name || '')
+            && attachment.size_bytes === (file.size || 0)
+            && attachment.mime_type === mimeType
+        )) || acceptedAttachments.some((attachment) => (
+            attachment.name === (file.name || '')
+            && attachment.size_bytes === (file.size || 0)
+            && attachment.mime_type === mimeType
+        ));
+        if (duplicate) {
+            continue;
+        }
+
+        try {
+            const base64Content = await readFileAsBase64(file);
+            const fallbackExtension = mimeType.startsWith('image/') ? mimeType.split('/')[1] || 'png' : 'bin';
+            const normalizedName = (file.name || `attachment-${Date.now()}.${fallbackExtension}`).trim().slice(0, 200);
+            acceptedAttachments.push({
+                id: createRilonoAiAttachmentId(),
+                name: normalizedName || `attachment-${Date.now()}`,
+                mime_type: mimeType,
+                size_bytes: file.size || 0,
+                content_base64: base64Content,
+                source
+            });
+            totalBytes += (file.size || 0);
+        } catch (error) {
+            console.error('Failed to read attachment:', error);
+            showMessage(`Failed to process "${file.name || 'attachment'}". Please try again.`, 'error');
+        }
+    }
+
+    if (acceptedAttachments.length > 0) {
+        rilonoAiSessionAttachments = rilonoAiSessionAttachments.concat(acceptedAttachments);
+        renderRilonoAiSessionAttachments();
+        const verb = source === 'paste' ? 'Pasted' : 'Attached';
+        showMessage(`${verb} ${acceptedAttachments.length} file${acceptedAttachments.length === 1 ? '' : 's'} to this chat session.`, 'success');
+    }
+}
+
+function removeRilonoAiSessionAttachment(attachmentId) {
+    const beforeCount = rilonoAiSessionAttachments.length;
+    rilonoAiSessionAttachments = rilonoAiSessionAttachments.filter((attachment) => attachment.id !== attachmentId);
+    if (rilonoAiSessionAttachments.length !== beforeCount) {
+        renderRilonoAiSessionAttachments();
+    }
+}
+
+function clearRilonoAiSessionAttachments(showToast = true) {
+    if (rilonoAiSessionAttachments.length === 0) {
+        renderRilonoAiSessionAttachments();
+        return;
+    }
+    rilonoAiSessionAttachments = [];
+    renderRilonoAiSessionAttachments();
+    if (showToast) {
+        showMessage('Removed all chat session attachments.', 'success');
+    }
+}
+
+function renderRilonoAiSessionAttachments() {
+    const containers = getRilonoAiAttachmentSessionContainers();
+    if (containers.length === 0) return;
+
+    if (rilonoAiSessionAttachments.length === 0) {
+        containers.forEach((container) => {
+            container.classList.remove('has-items');
+            container.innerHTML = '';
+        });
+        return;
+    }
+
+    const totalBytesLabel = formatRilonoAiAttachmentSize(getRilonoAiAttachmentTotalBytes());
+    const chipsHtml = rilonoAiSessionAttachments.map((attachment) => `
+        <span class="rilono-ai-attachment-chip" title="${escapeHtml(attachment.name)}">
+            <span class="rilono-ai-attachment-chip-name">${escapeHtml(attachment.name)}</span>
+            <button type="button" class="rilono-ai-attachment-chip-remove"
+                onclick="removeRilonoAiSessionAttachment('${attachment.id}')" aria-label="Remove ${escapeHtml(attachment.name)}">×</button>
+        </span>
+    `).join('');
+
+    const content = `
+        <div class="rilono-ai-attachment-header">
+            <div class="rilono-ai-attachment-meta">${rilonoAiSessionAttachments.length} attached • ${totalBytesLabel} • Session only</div>
+            <button type="button" class="rilono-ai-attachment-clear" onclick="clearRilonoAiSessionAttachments(true)">Clear all</button>
+        </div>
+        <div class="rilono-ai-attachment-list">${chipsHtml}</div>
+    `;
+
+    containers.forEach((container) => {
+        container.classList.add('has-items');
+        container.innerHTML = content;
+    });
+}
+
+function initializeRilonoAiAttachmentInputs() {
+    const inputs = getRilonoAiAttachmentInputs();
+    inputs.forEach((input) => {
+        if (input.dataset.boundAttachmentInput === '1') return;
+        input.dataset.boundAttachmentInput = '1';
+        input.addEventListener('change', async (event) => {
+            const selectedFiles = Array.from(event.target.files || []);
+            event.target.value = '';
+            await addFilesToRilonoAiSession(selectedFiles, 'upload');
+        });
+    });
+}
+
+function handleRilonoAiInputPaste(event) {
+    const clipboardItems = Array.from(event.clipboardData?.items || []);
+    const fileItems = clipboardItems.filter((item) => item.kind === 'file');
+    if (fileItems.length === 0) {
+        return;
+    }
+
+    const files = fileItems.map((item, index) => {
+        const rawFile = item.getAsFile();
+        if (!rawFile) return null;
+        if (rawFile.name) return rawFile;
+        const mimeType = inferRilonoAiMimeType(rawFile);
+        const extension = mimeType.startsWith('image/') ? (mimeType.split('/')[1] || 'png') : 'bin';
+        return new File(
+            [rawFile],
+            `pasted-file-${Date.now()}-${index + 1}.${extension}`,
+            { type: mimeType, lastModified: Date.now() }
+        );
+    }).filter(Boolean);
+
+    if (files.length > 0) {
+        event.preventDefault();
+        void addFilesToRilonoAiSession(files, 'paste');
+    }
+}
+
+function initializeRilonoAiPasteHandlers() {
+    const textareas = Array.from(document.querySelectorAll('.rilono-ai-input'));
+    const floatingInput = document.getElementById('floatingChatInput');
+    if (floatingInput) {
+        textareas.push(floatingInput);
+    }
+
+    textareas.forEach((textarea) => {
+        if (!textarea || textarea.dataset.boundAttachmentPaste === '1') return;
+        textarea.dataset.boundAttachmentPaste = '1';
+        textarea.addEventListener('paste', handleRilonoAiInputPaste);
+    });
+}
+
+function initializeRilonoAiAttachmentUi() {
+    initializeRilonoAiAttachmentInputs();
+    initializeRilonoAiPasteHandlers();
+    renderRilonoAiSessionAttachments();
+}
+
+function getRilonoAiChatRequestPayload(message) {
+    const payload = {
+        message: message,
+        conversation_history: rilonoAiConversationHistory.slice(-200),
+        source: 'rilono_ai_chat'
+    };
+
+    if (rilonoAiSessionAttachments.length > 0) {
+        payload.session_attachments = rilonoAiSessionAttachments.map((attachment) => ({
+            id: attachment.id,
+            name: attachment.name,
+            mime_type: attachment.mime_type,
+            size_bytes: attachment.size_bytes,
+            content_base64: attachment.content_base64
+        }));
+    }
+
+    return payload;
+}
 
 async function handleRilonoAiChatSubmit(e) {
     e.preventDefault();
@@ -9632,11 +9975,7 @@ async function handleRilonoAiChatSubmit(e) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
             },
-            body: JSON.stringify({
-                message: message,
-                conversation_history: rilonoAiConversationHistory.slice(-200),  // Last 200 messages for context
-                source: 'rilono_ai_chat'
-            })
+            body: JSON.stringify(getRilonoAiChatRequestPayload(message))
         });
 
         removeRilonoAiTypingIndicator();
@@ -9663,6 +10002,7 @@ async function handleRilonoAiChatSubmit(e) {
         } else {
             const errorData = await response.json();
             const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
+            maybeShowPlanLimitPopup(response.status, errorMsg);
             addMessageToRilonoAiChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
             if (response.status === 403) {
                 void loadSubscriptionStatus(true);
@@ -9762,6 +10102,7 @@ function initializeRilonoAiChat() {
         chatForm.removeEventListener('submit', handleRilonoAiChatSubmit);
         chatForm.addEventListener('submit', handleRilonoAiChatSubmit);
     });
+    initializeRilonoAiAttachmentUi();
     // Sync messages from shared history
     syncMainChatFromHistory();
 }
@@ -9958,6 +10299,7 @@ function toggleFloatingChat() {
     if (floatingChatOpen) {
         chatWindow.style.display = 'flex';
         updateFloatingExpandButton(false);
+        initializeRilonoAiAttachmentUi();
         document.getElementById('floatingChatLoginPrompt').style.display = 'none';
         document.getElementById('floatingChatInputContainer').style.display = 'block';
         messagesContainer.style.display = 'flex';
@@ -10131,11 +10473,7 @@ async function handleFloatingChatSubmit(e) {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`
             },
-            body: JSON.stringify({
-                message: message,
-                conversation_history: rilonoAiConversationHistory.slice(-200),
-                source: 'rilono_ai_chat'
-            })
+            body: JSON.stringify(getRilonoAiChatRequestPayload(message))
         });
 
         removeFloatingChatTyping();
@@ -10162,6 +10500,7 @@ async function handleFloatingChatSubmit(e) {
         } else {
             const errorData = await response.json();
             const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
+            maybeShowPlanLimitPopup(response.status, errorMsg);
             addMessageToFloatingChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
             if (response.status === 403) {
                 void loadSubscriptionStatus(true);
@@ -10184,6 +10523,7 @@ function updateFloatingChatVisibility() {
         if (messagesContainer) {
             messagesContainer.style.display = 'flex';
         }
+        initializeRilonoAiAttachmentUi();
     } else {
         widget.style.display = 'block'; // Still show widget but with login prompt
         if (floatingChatOpen) {

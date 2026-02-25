@@ -19,6 +19,7 @@ from app.schema_patch import (
     ensure_coupon_usage_limit_column,
     ensure_document_catalog_columns,
     ensure_f1_visa_news_table,
+    ensure_rilono_ai_chat_upload_events_table,
     ensure_subscription_payment_recurring_columns,
     ensure_subscription_usage_columns,
     ensure_user_legal_consent_column,
@@ -139,6 +140,7 @@ def startup_backfill_subscriptions():
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_f1_visa_news_table()
+    ensure_rilono_ai_chat_upload_events_table()
     db = SessionLocal()
     try:
         ensure_default_document_type_catalog(db)

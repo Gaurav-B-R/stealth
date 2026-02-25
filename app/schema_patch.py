@@ -186,3 +186,48 @@ def ensure_f1_visa_news_table():
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS ix_f1_visa_news_ingested_at ON f1_visa_news (ingested_at)"
             ))
+
+
+def ensure_rilono_ai_chat_upload_events_table():
+    """
+    Ensure 24-hour Rilono AI chat upload usage table exists for quota tracking.
+    """
+    with engine.begin() as conn:
+        if _table_exists(conn, "rilono_ai_chat_upload_events"):
+            return
+
+        if engine.dialect.name == "sqlite":
+            conn.execute(text("""
+                CREATE TABLE rilono_ai_chat_upload_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    attachment_id VARCHAR NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_rilono_ai_chat_upload_events_user_attachment "
+                "ON rilono_ai_chat_upload_events (user_id, attachment_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_rilono_ai_chat_upload_events_created_at "
+                "ON rilono_ai_chat_upload_events (created_at)"
+            ))
+        else:
+            conn.execute(text("""
+                CREATE TABLE rilono_ai_chat_upload_events (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    attachment_id VARCHAR NOT NULL,
+                    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_rilono_ai_chat_upload_events_user_attachment "
+                "ON rilono_ai_chat_upload_events (user_id, attachment_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_rilono_ai_chat_upload_events_created_at "
+                "ON rilono_ai_chat_upload_events (created_at)"
+            ))

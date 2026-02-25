@@ -24,9 +24,11 @@ from app.email_service import (
 from app.subscriptions import (
     PLAN_FREE,
     PLAN_PRO,
+    RILONO_AI_CHAT_UPLOAD_WINDOW_HOURS,
     STATUS_ACTIVE,
     get_or_create_user_subscription,
     get_plan_limits,
+    get_rilono_ai_chat_upload_quota_snapshot,
     grant_pro_access_for_days,
 )
 from app.utils.rate_limiter import check_ip_rate_limit
@@ -389,6 +391,7 @@ def _is_provider_auto_renew_enabled(subscription_data: dict[str, Any]) -> bool:
 def _build_subscription_response(
     subscription: models.Subscription,
     *,
+    db: Session | None = None,
     auto_renew_enabled: bool | None = None,
     recurring_subscription_status: str | None = None,
     next_renewal_at: datetime | None = None,
@@ -407,11 +410,26 @@ def _build_subscription_response(
     doc_limit = limits["document_uploads_limit"]
     prep_limit = limits["prep_sessions_limit"]
     mock_limit = limits["mock_interviews_limit"]
+    chat_upload_limit = limits["rilono_ai_chat_uploads_limit"]
 
     ai_remaining = -1 if ai_limit < 0 else max(ai_limit - subscription.ai_messages_used, 0)
     docs_remaining = -1 if doc_limit < 0 else max(doc_limit - subscription.document_uploads_used, 0)
     prep_remaining = -1 if prep_limit < 0 else max(prep_limit - subscription.prep_sessions_used, 0)
     mock_remaining = -1 if mock_limit < 0 else max(mock_limit - subscription.mock_interviews_used, 0)
+
+    if db is not None:
+        chat_upload_snapshot = get_rilono_ai_chat_upload_quota_snapshot(
+            db,
+            user_id=subscription.user_id,
+            plan=subscription.plan,
+        )
+        chat_upload_used = chat_upload_snapshot["used"]
+        chat_upload_remaining = chat_upload_snapshot["remaining"]
+        chat_upload_window_hours = chat_upload_snapshot["window_hours"]
+    else:
+        chat_upload_used = 0
+        chat_upload_remaining = -1 if chat_upload_limit < 0 else max(chat_upload_limit, 0)
+        chat_upload_window_hours = RILONO_AI_CHAT_UPLOAD_WINDOW_HOURS
 
     if email_notifications_enabled is None:
         user_obj = getattr(subscription, "user", None)
@@ -438,6 +456,10 @@ def _build_subscription_response(
         mock_interviews_used=subscription.mock_interviews_used,
         mock_interviews_limit=mock_limit,
         mock_interviews_remaining=mock_remaining,
+        rilono_ai_chat_uploads_used=chat_upload_used,
+        rilono_ai_chat_uploads_limit=chat_upload_limit,
+        rilono_ai_chat_uploads_remaining=chat_upload_remaining,
+        rilono_ai_chat_upload_window_hours=chat_upload_window_hours,
         is_pro=subscription.plan == PLAN_PRO,
         access_source=access_source,
         referral_bonus_active=referral_bonus_active,
@@ -1076,6 +1098,7 @@ def get_my_subscription(
 
     return _build_subscription_response(
         subscription,
+        db=db,
         auto_renew_enabled=auto_renew_enabled,
         recurring_subscription_status=recurring_subscription_status,
         next_renewal_at=next_renewal_at,
@@ -1142,6 +1165,7 @@ def upgrade_to_pro(
                 "message": "Journey Pass members cannot switch to Pro Monthly while Journey Pass is active.",
                 "subscription": _build_subscription_response(
                     subscription,
+                    db=db,
                     auto_renew_enabled=auto_renew_enabled,
                     recurring_subscription_status=recurring_subscription_status,
                 ).model_dump(),
@@ -1179,6 +1203,7 @@ def upgrade_to_pro(
                 "message": "Your account already has an active paid plan.",
                 "subscription": _build_subscription_response(
                     subscription,
+                    db=db,
                     auto_renew_enabled=auto_renew_enabled,
                     recurring_subscription_status=recurring_subscription_status,
                 ).model_dump(),
@@ -1248,7 +1273,7 @@ def upgrade_to_pro(
         return {
             "action": "coupon_activated",
             "message": f"Coupon {coupon_code} applied. Pro activated with 100% discount.",
-            "subscription": _build_subscription_response(subscription).model_dump(),
+            "subscription": _build_subscription_response(subscription, db=db).model_dump(),
             "coupon_applied_text": coupon_applied_text,
             "pricing_model": pricing_model,
         }
@@ -1464,12 +1489,12 @@ def verify_payment_and_activate_pro(
             raise HTTPException(status_code=403, detail="Payment id is not valid for this user.")
         if existing_payment.status == "verified":
             subscription = get_or_create_user_subscription(db, current_user.id)
-            return _build_subscription_response(subscription)
+            return _build_subscription_response(subscription, db=db)
         raise HTTPException(status_code=400, detail="Payment is already tied to another order.")
 
     if payment_row.status == "verified":
         subscription = get_or_create_user_subscription(db, current_user.id)
-        return _build_subscription_response(subscription)
+        return _build_subscription_response(subscription, db=db)
 
     if payment_row.razorpay_payment_id and payment_row.razorpay_payment_id != payload.razorpay_payment_id:
         raise HTTPException(status_code=400, detail="Order is already linked to a different payment.")
@@ -1511,7 +1536,7 @@ def verify_payment_and_activate_pro(
             payment_currency=_normalize_currency(payment_row.currency or "INR"),
         )
     _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
-    return _build_subscription_response(subscription)
+    return _build_subscription_response(subscription, db=db)
 
 
 @router.post("/verify-recurring-payment", response_model=schemas.SubscriptionResponse)
@@ -1540,7 +1565,7 @@ def verify_recurring_payment_and_activate_pro(
         raise HTTPException(status_code=403, detail="Payment id is not valid for this user.")
     if existing_payment and existing_payment.status == "verified":
         subscription = get_or_create_user_subscription(db, current_user.id)
-        return _build_subscription_response(subscription)
+        return _build_subscription_response(subscription, db=db)
 
     seed_row = existing_payment
     if not seed_row:
@@ -1694,7 +1719,7 @@ def verify_recurring_payment_and_activate_pro(
             payment_currency=_normalize_currency(payment_data.get("currency", "")),
         )
     _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
-    return _build_subscription_response(subscription)
+    return _build_subscription_response(subscription, db=db)
 
 
 def _handle_recurring_payment_webhook(
@@ -2111,7 +2136,12 @@ def cancel_my_subscription(
     before_snapshot = _subscription_change_snapshot(subscription)
 
     if subscription.plan != PLAN_PRO:
-        return _build_subscription_response(subscription, auto_renew_enabled=False, recurring_subscription_status=None)
+        return _build_subscription_response(
+            subscription,
+            db=db,
+            auto_renew_enabled=False,
+            recurring_subscription_status=None,
+        )
 
     subscription_id = _find_latest_subscription_id_for_user(db, current_user.id)
     key_id, key_secret = _razorpay_credentials()
@@ -2154,6 +2184,7 @@ def cancel_my_subscription(
         _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
         return _build_subscription_response(
             updated_subscription,
+            db=db,
             auto_renew_enabled=_is_provider_auto_renew_enabled(subscription_data),
             recurring_subscription_status=str(subscription_data.get("status") or "").strip().lower() or None,
         )
@@ -2171,7 +2202,12 @@ def cancel_my_subscription(
             auto_renew_enabled=False,
         )
     _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
-    return _build_subscription_response(subscription, auto_renew_enabled=False, recurring_subscription_status=None)
+    return _build_subscription_response(
+        subscription,
+        db=db,
+        auto_renew_enabled=False,
+        recurring_subscription_status=None,
+    )
 
 
 @router.post("/consume-session", response_model=schemas.SubscriptionResponse)
@@ -2213,4 +2249,4 @@ def consume_session_quota(
     db.commit()
     db.refresh(subscription)
     _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
-    return _build_subscription_response(subscription)
+    return _build_subscription_response(subscription, db=db)

@@ -1255,6 +1255,8 @@
                         <div class="sidebar-subscription-label">Subscription</div>
                         <div id="dashboardPlanName" class="sidebar-subscription-plan">Free</div>
                         <div id="dashboardPlanUsage" class="sidebar-subscription-usage">AI: 0/25 used</div>
+                        <div id="dashboardChatUploadUsage" class="sidebar-subscription-usage">AI Chat Uploads (24h):
+                            0/7 used</div>
                         <div id="dashboardUploadUsage" class="sidebar-subscription-usage">Uploads: 0/5 used</div>
                         <div id="dashboardPrepUsage" class="sidebar-subscription-usage">Prep: 0/3 used</div>
                         <div id="dashboardMockUsage" class="sidebar-subscription-usage">Mock: 0/2 used</div>
@@ -1534,10 +1536,18 @@
                                                         placeholder="Ask a question..." class="rilono-ai-input"
                                                         onkeydown="handleRilonoAiChatKeyDown(event)"
                                                         oninput="autoResizeRilonoAiInput(this)"></textarea>
+                                                    <label class="rilono-ai-attach-btn" title="Attach files or screenshots">
+                                                        📎
+                                                        <input type="file" class="rilono-ai-attachment-input"
+                                                            data-rilono-attachment-input="true" accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.rtf,.xls,.xlsx"
+                                                            multiple>
+                                                    </label>
                                                     <button type="submit" id="overviewRilonoAiSendButton"
                                                         class="rilono-ai-send-btn">➤</button>
                                                 </div>
                                             </form>
+                                            <div class="rilono-ai-attachment-session"
+                                                data-rilono-attachment-session="true"></div>
                                             <div class="rilono-ai-quick-actions">
                                                 <button type="button" class="quick-action-chip"
                                                     onclick="sendQuickMessage('What documents do I need to upload?', this)">
@@ -1823,6 +1833,8 @@
                                 <div class="profile-subscription-usage-grid">
                                     <div class="profile-subscription-usage-item" id="profileSubscriptionUsageAi">AI:
                                         0/25 used</div>
+                                    <div class="profile-subscription-usage-item"
+                                        id="profileSubscriptionUsageChatUploads">AI Chat Uploads (24h): 0/7 used</div>
                                     <div class="profile-subscription-usage-item" id="profileSubscriptionUsageUploads">
                                         Uploads: 0/5 used</div>
                                     <div class="profile-subscription-usage-item" id="profileSubscriptionUsagePrep">Prep:
@@ -2300,10 +2312,18 @@
                                                     placeholder="Ask me anything about your visa documents or requirements..."
                                                     class="rilono-ai-input" onkeydown="handleRilonoAiChatKeyDown(event)"
                                                     oninput="autoResizeRilonoAiInput(this)"></textarea>
+                                                <label class="rilono-ai-attach-btn" title="Attach files or screenshots">
+                                                    📎
+                                                    <input type="file" class="rilono-ai-attachment-input"
+                                                        data-rilono-attachment-input="true" accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.rtf,.xls,.xlsx"
+                                                        multiple>
+                                                </label>
                                                 <button type="submit" id="rilonoAiSendButton"
                                                     class="rilono-ai-send-btn">➤</button>
                                             </div>
                                         </form>
+                                        <div class="rilono-ai-attachment-session"
+                                            data-rilono-attachment-session="true"></div>
                                         <div class="rilono-ai-quick-actions">
                                             <button type="button" class="quick-action-chip"
                                                 onclick="sendQuickMessage('What documents do I need to upload?', this)">
@@ -2360,6 +2380,7 @@
                         <div id="pricingFreePrice" class="pricing-price">$0<span>/month</span></div>
                         <ul class="pricing-features">
                             <li>Up to 25 messages with Rilono AI</li>
+                            <li>Up to 7 Rilono AI chat file uploads every 24 hours</li>
                             <li>Up to 5 document uploads</li>
                             <li>Up to 3 F-1 interview prep sessions</li>
                             <li>Up to 2 F-1 mock interviews</li>
@@ -2380,6 +2401,7 @@
                         <div id="pricingProPrice" class="pricing-price">₹699<span>/month</span></div>
                         <ul class="pricing-features">
                             <li>Unlimited messages with Rilono AI</li>
+                            <li>Unlimited Rilono AI chat file uploads</li>
                             <li>Unlimited document uploads</li>
                             <li>Unlimited F-1 interview prep sessions</li>
                             <li>Unlimited F-1 mock interviews</li>
@@ -2400,6 +2422,7 @@
                         <div id="pricingProSixMonthPrice" class="pricing-price">₹2,499<span>/6 months</span></div>
                         <ul class="pricing-features">
                             <li>Unlimited messages with Rilono AI</li>
+                            <li>Unlimited Rilono AI chat file uploads</li>
                             <li>Unlimited document uploads</li>
                             <li>Unlimited F-1 interview prep sessions</li>
                             <li>Unlimited F-1 mock interviews</li>
@@ -3261,14 +3284,15 @@
                 <div class="checkout-launch-header">
                     <div class="checkout-launch-badge">Pro Upgrade</div>
                     <h3 class="checkout-launch-title">Secure Checkout</h3>
-                    <p class="checkout-launch-subtitle">You're one step away from unlocking unlimited AI guidance and
-                        uploads.</p>
+                    <p class="checkout-launch-subtitle">You're one step away from unlocking unlimited AI guidance,
+                        unlimited Rilono AI chat uploads, and unlimited document uploads.</p>
                 </div>
                 <div class="checkout-launch-layout">
                     <div class="checkout-launch-benefits-card">
                         <div class="checkout-launch-benefits-title">What You Get</div>
                         <ul class="checkout-launch-benefits">
                             <li>Unlimited Rilono AI messages</li>
+                            <li>Unlimited Rilono AI chat file uploads</li>
                             <li>Unlimited document uploads</li>
                             <li>Unlimited interview prep and mock sessions</li>
                             <li>Priority support</li>
@@ -3441,6 +3465,11 @@
                         <textarea id="floatingChatInput" class="floating-chat-input" placeholder="Type your message..."
                             rows="1" onkeydown="handleFloatingChatKeyDown(event)"
                             oninput="autoResizeFloatingChatInput(this)"></textarea>
+                        <label class="floating-chat-attach-btn" title="Attach files or screenshots">
+                            <span aria-hidden="true">📎</span>
+                            <input type="file" class="rilono-ai-attachment-input" data-rilono-attachment-input="true"
+                                accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.rtf,.xls,.xlsx" multiple>
+                        </label>
                         <button type="submit" class="floating-chat-send-btn" title="Send">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                 stroke-width="2">
@@ -3449,6 +3478,8 @@
                             </svg>
                         </button>
                     </form>
+                    <div class="rilono-ai-attachment-session floating-chat-attachment-session"
+                        data-rilono-attachment-session="true"></div>
                 </div>
                 <div id="floatingChatTyping" class="chat-typing-indicator" style="display: none;">
                     <div class="typing-dots">

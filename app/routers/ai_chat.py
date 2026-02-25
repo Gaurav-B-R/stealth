@@ -3,13 +3,21 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_active_user
-from app.subscriptions import get_or_create_user_subscription, get_plan_limits
+from app.subscriptions import (
+    get_or_create_user_subscription,
+    get_plan_limits,
+    get_rilono_ai_chat_upload_quota_snapshot,
+)
 from app.utils.secure_artifacts import decrypt_artifact_bytes
 # Import Gemini configuration
 from app.utils import gemini_service as gemini_utils
 from typing import Optional, List
+import base64
+import binascii
+import hashlib
 import os
 import json
+import re
 from pathlib import Path
 import boto3
 from botocore.config import Config
@@ -34,9 +42,42 @@ r2_client = boto3.client(
     config=Config(signature_version='s3v4')
 )
 
+MAX_SESSION_ATTACHMENTS = 8
+MAX_SESSION_ATTACHMENT_BYTES = 8 * 1024 * 1024
+MAX_SESSION_ATTACHMENTS_TOTAL_BYTES = 20 * 1024 * 1024
+MAX_SESSION_ATTACHMENT_TEXT_CHARS = 12000
+ALLOWED_CHAT_ATTACHMENT_MIME_PREFIXES = ("image/", "text/")
+ALLOWED_CHAT_ATTACHMENT_MIME_TYPES = {
+    "application/pdf",
+    "application/json",
+    "application/csv",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/rtf",
+    "text/rtf",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+TEXT_ATTACHMENT_MIME_TYPES = {
+    "application/json",
+    "application/csv",
+    "application/rtf",
+    "text/rtf",
+}
+ATTACHMENT_ID_ALLOWED_PATTERN = re.compile(r"[^A-Za-z0-9._:-]+")
+
+class ChatSessionAttachment(BaseModel):
+    id: Optional[str] = None
+    name: str
+    mime_type: str
+    size_bytes: Optional[int] = None
+    content_base64: str
+
 class ChatMessage(BaseModel):
     message: str
     conversation_history: Optional[List[dict]] = None
+    session_attachments: Optional[List[ChatSessionAttachment]] = None
     source: Optional[str] = "rilono_ai_chat"
 
 class ChatResponse(BaseModel):
@@ -201,6 +242,194 @@ def get_user_document_files(user_id: int, db: Session) -> List[dict]:
         print(f"Error fetching document files: {str(e)}")
         return []
 
+
+def _decode_session_attachments(session_attachments: Optional[List[ChatSessionAttachment]]) -> List[dict]:
+    """
+    Decode in-session attachments from the chat request.
+    These files are never persisted; they are only used for the current request lifecycle.
+    """
+    if not session_attachments:
+        return []
+
+    decoded_attachments: List[dict] = []
+    total_bytes = 0
+
+    for index, attachment in enumerate(session_attachments[:MAX_SESSION_ATTACHMENTS], start=1):
+        try:
+            name = (attachment.name or f"attachment_{index}").strip()[:200]
+            if not name:
+                name = f"attachment_{index}"
+
+            mime_type = (attachment.mime_type or "application/octet-stream").strip().lower()[:150]
+            if not (
+                any(mime_type.startswith(prefix) for prefix in ALLOWED_CHAT_ATTACHMENT_MIME_PREFIXES)
+                or mime_type in ALLOWED_CHAT_ATTACHMENT_MIME_TYPES
+            ):
+                continue
+
+            decoded_bytes = base64.b64decode(attachment.content_base64, validate=True)
+            byte_size = len(decoded_bytes)
+            if byte_size <= 0:
+                continue
+            if byte_size > MAX_SESSION_ATTACHMENT_BYTES:
+                continue
+            if total_bytes + byte_size > MAX_SESSION_ATTACHMENTS_TOTAL_BYTES:
+                break
+
+            total_bytes += byte_size
+            decoded_attachments.append(
+                {
+                    "name": name,
+                    "mime_type": mime_type,
+                    "size_bytes": byte_size,
+                    "bytes": decoded_bytes,
+                }
+            )
+        except (binascii.Error, ValueError):
+            continue
+        except Exception:
+            continue
+
+    return decoded_attachments
+
+
+def _extract_text_from_attachment_bytes(attachment_bytes: bytes, mime_type: str) -> Optional[str]:
+    if not attachment_bytes:
+        return None
+    if not (mime_type.startswith("text/") or mime_type in TEXT_ATTACHMENT_MIME_TYPES):
+        return None
+
+    try:
+        text = attachment_bytes.decode("utf-8", errors="replace").strip()
+        if not text:
+            return None
+        return text[:MAX_SESSION_ATTACHMENT_TEXT_CHARS]
+    except Exception:
+        return None
+
+
+def build_session_attachments_context(session_attachments: Optional[List[ChatSessionAttachment]]) -> tuple[str, List[dict]]:
+    """
+    Build text context for chat-session attachments and prepare inline multimodal parts when possible.
+    """
+    decoded_attachments = _decode_session_attachments(session_attachments)
+    if not decoded_attachments:
+        return "", []
+
+    context_lines = [
+        f"=== ATTACHED CHAT SESSION FILES ({len(decoded_attachments)} files) ===",
+        "These files were attached in this chat session only and are not persisted.",
+    ]
+    inline_parts: List[dict] = []
+
+    for index, attachment in enumerate(decoded_attachments, start=1):
+        name = attachment["name"]
+        mime_type = attachment["mime_type"]
+        size_bytes = attachment["size_bytes"]
+        attachment_bytes = attachment["bytes"]
+
+        context_lines.append(f"\n--- CHAT FILE {index}: {name} ({mime_type}, {size_bytes} bytes) ---")
+
+        # Gemini handles image and PDF inline parts reliably in current setup.
+        if mime_type.startswith("image/") or mime_type == "application/pdf":
+            inline_parts.append({"mime_type": mime_type, "data": attachment_bytes})
+            context_lines.append("File is attached inline for model-level analysis.")
+
+        extracted_text = _extract_text_from_attachment_bytes(attachment_bytes, mime_type)
+        if extracted_text:
+            context_lines.append("Extracted text preview:")
+            context_lines.append(extracted_text)
+        elif not (mime_type.startswith("image/") or mime_type == "application/pdf"):
+            context_lines.append("Binary/structured file attached. Use filename and mime type as context.")
+
+    context_lines.append("\n=== END ATTACHED CHAT SESSION FILES ===")
+    return "\n".join(context_lines), inline_parts
+
+
+def _build_attachment_tracking_id(attachment: ChatSessionAttachment, index: int) -> str:
+    raw_id = str(attachment.id or "").strip()
+    if raw_id:
+        normalized_id = ATTACHMENT_ID_ALLOWED_PATTERN.sub("", raw_id)[:128]
+        if normalized_id:
+            return normalized_id
+
+    seed = (
+        f"{attachment.name}|{attachment.mime_type}|{attachment.size_bytes or 0}|"
+        f"{str(attachment.content_base64 or '')[:256]}|{index}"
+    )
+    return f"att_{hashlib.sha256(seed.encode('utf-8')).hexdigest()[:48]}"
+
+
+def get_session_attachment_tracking_ids(session_attachments: Optional[List[ChatSessionAttachment]]) -> List[str]:
+    if not session_attachments:
+        return []
+
+    attachment_ids: List[str] = []
+    seen_ids = set()
+    for index, attachment in enumerate(session_attachments[:MAX_SESSION_ATTACHMENTS], start=1):
+        tracking_id = _build_attachment_tracking_id(attachment, index)
+        if tracking_id in seen_ids:
+            continue
+        seen_ids.add(tracking_id)
+        attachment_ids.append(tracking_id)
+    return attachment_ids
+
+
+def enforce_and_track_session_upload_quota(
+    db: Session,
+    *,
+    user_id: int,
+    plan: str,
+    session_attachments: Optional[List[ChatSessionAttachment]],
+) -> None:
+    """
+    Enforce and persist 24-hour upload quota events for Rilono AI chat attachments.
+    """
+    attachment_ids = get_session_attachment_tracking_ids(session_attachments)
+    if not attachment_ids:
+        return
+
+    quota_snapshot = get_rilono_ai_chat_upload_quota_snapshot(
+        db,
+        user_id=user_id,
+        plan=plan,
+    )
+    limit = quota_snapshot["limit"]
+    if limit < 0:
+        # Paid plans stay unlimited and do not consume/record free-tier counters.
+        return
+
+    existing_ids = {
+        row[0]
+        for row in db.query(models.RilonoAiChatUploadEvent.attachment_id)
+        .filter(
+            models.RilonoAiChatUploadEvent.user_id == user_id,
+            models.RilonoAiChatUploadEvent.attachment_id.in_(attachment_ids),
+        )
+        .all()
+    }
+    new_ids = [attachment_id for attachment_id in attachment_ids if attachment_id not in existing_ids]
+    if not new_ids:
+        return
+
+    window_hours = quota_snapshot["window_hours"]
+    if limit >= 0 and quota_snapshot["used"] + len(new_ids) > limit:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Free plan Rilono AI chat upload limit reached ({limit} uploads per {window_hours} hours). "
+                "Upgrade to Pro or Journey Pass for unlimited Rilono AI chat uploads."
+            ),
+        )
+
+    for attachment_id in new_ids:
+        db.add(
+            models.RilonoAiChatUploadEvent(
+                user_id=user_id,
+                attachment_id=attachment_id,
+            )
+        )
+
 def generate_ai_response(
     user_message: str,
     user_name: str,
@@ -208,20 +437,24 @@ def generate_ai_response(
     student_profile_context: str,
     navigation_guide_text: str,
     document_files: List[dict] = None,
+    session_attachments: Optional[List[ChatSessionAttachment]] = None,
     conversation_history: Optional[List[dict]] = None,
 ) -> str:
     """
     Generate AI response using Gemini with system prompt, document context, attached document files, and comprehensive student profile.
     """
     try:
+        provider = "none"
         # Initialize model based on available service
         if hasattr(gemini_utils, 'USE_VERTEX_AI') and gemini_utils.USE_VERTEX_AI and hasattr(gemini_utils, 'VERTEX_AI_AVAILABLE') and gemini_utils.VERTEX_AI_AVAILABLE:
             from vertexai.generative_models import GenerativeModel
             model = GenerativeModel('gemini-3-pro-preview')
+            provider = "vertex"
         elif hasattr(gemini_utils, 'GENAI_AVAILABLE') and gemini_utils.GENAI_AVAILABLE:
             try:
                 import google.generativeai as genai
                 model = genai.GenerativeModel('gemini-3-pro-preview')
+                provider = "genai"
             except:
                 raise Exception("Gemini API not properly configured")
         else:
@@ -238,6 +471,8 @@ def generate_ai_response(
                     attached_docs_text += f"Validation Note: {doc_file['validation_message']}\n"
                 attached_docs_text += f"Extracted Data:\n{doc_file['content']}\n"
             attached_docs_text += "\n=== END OF ATTACHED DOCUMENTS ===\n"
+
+        session_attachments_text, inline_session_attachment_parts = build_session_attachments_context(session_attachments)
         
         # Attach the raw decrypted student profile JSON directly (no field-level extraction).
         system_prompt = f"""You are Rilono AI, a F1 student visa expert assistant. You are guiding the student through the F1 student visa process and documentation.
@@ -273,6 +508,7 @@ Instructions:
 - Always maintain a helpful and encouraging tone
 - When suggesting next steps, be specific about what documents they need to upload or actions to take
 - For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps
+- If ATTACHED CHAT SESSION FILES are present, use them for this chat session context only
 
 Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance."""
 
@@ -290,6 +526,8 @@ Remember: You have access to the student's full raw profile file plus full uploa
         # Build full prompt
         full_prompt = f"""{system_prompt}
 
+{session_attachments_text if session_attachments_text else ""}
+
 {conversation_text if conversation_text else ""}
 
 Current user message: {user_message}
@@ -300,17 +538,50 @@ Please provide a helpful response to the user's question:"""
         print(f"🔵 GEMINI API CALL: generate_ai_response() - AI CHAT")
         print(f"👤 User: {user_name}")
         print(f"📎 Attached Documents: {len(document_files) if document_files else 0}")
+        print(f"📎 Session Attachments: {len(session_attachments) if session_attachments else 0}")
         print("-"*80)
         print("📤 SENDING PROMPT TO GEMINI:")
         print("-"*80)
-        print(full_prompt[:2000] + ("..." if len(full_prompt) > 2000 else ""))
-        if len(full_prompt) > 2000:
-            print(f"\n[... {len(full_prompt) - 2000} more characters ...]")
+        log_prompt_preview = full_prompt
+        if session_attachments_text:
+            log_prompt_preview = log_prompt_preview.replace(
+                session_attachments_text,
+                "[ATTACHED CHAT SESSION FILES REDACTED IN LOGS]"
+            )
+
+        print(log_prompt_preview[:2000] + ("..." if len(log_prompt_preview) > 2000 else ""))
+        if len(log_prompt_preview) > 2000:
+            print(f"\n[... {len(log_prompt_preview) - 2000} more characters ...]")
         print("-"*80)
         print("⏳ Waiting for Gemini response...")
         
-        # Generate response
-        response = model.generate_content(full_prompt)
+        # Generate response with optional inline multimodal attachment parts
+        if inline_session_attachment_parts:
+            if provider == "vertex":
+                from vertexai.generative_models import Part
+                prompt_parts = [full_prompt]
+                for file_part in inline_session_attachment_parts:
+                    prompt_parts.append(
+                        Part.from_data(
+                            data=file_part["data"],
+                            mime_type=file_part["mime_type"],
+                        )
+                    )
+                response = model.generate_content(prompt_parts)
+            elif provider == "genai":
+                prompt_parts = [full_prompt]
+                for file_part in inline_session_attachment_parts:
+                    prompt_parts.append(
+                        {
+                            "mime_type": file_part["mime_type"],
+                            "data": file_part["data"],
+                        }
+                    )
+                response = model.generate_content(prompt_parts)
+            else:
+                response = model.generate_content(full_prompt)
+        else:
+            response = model.generate_content(full_prompt)
         
         print("✅ RECEIVED RESPONSE FROM GEMINI:")
         print("-"*80)
@@ -393,6 +664,14 @@ def chat_with_ai(
                 )
             )
 
+        if count_toward_rilono_chat_limit:
+            enforce_and_track_session_upload_quota(
+                db,
+                user_id=current_user.id,
+                plan=subscription.plan,
+                session_attachments=chat_message.session_attachments,
+            )
+
         # Get user's name
         user_name = current_user.full_name or current_user.username or "Student"
         
@@ -420,6 +699,7 @@ def chat_with_ai(
             student_profile_context=student_profile_raw_text,
             navigation_guide_text=navigation_guide_text,
             document_files=document_files,
+            session_attachments=chat_message.session_attachments,
             conversation_history=chat_message.conversation_history
         )
 

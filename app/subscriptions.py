@@ -1,6 +1,7 @@
 from typing import Dict
 from datetime import datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
@@ -13,6 +14,8 @@ FREE_AI_MESSAGE_LIMIT = 25
 FREE_DOCUMENT_UPLOAD_LIMIT = 5
 FREE_PREP_SESSION_LIMIT = 3
 FREE_MOCK_INTERVIEW_LIMIT = 2
+FREE_RILONO_AI_CHAT_UPLOAD_LIMIT = 7
+RILONO_AI_CHAT_UPLOAD_WINDOW_HOURS = 24
 
 
 def _normalize_datetime(value):
@@ -53,12 +56,52 @@ def get_plan_limits(plan: str) -> Dict[str, int]:
             "document_uploads_limit": -1,
             "prep_sessions_limit": -1,
             "mock_interviews_limit": -1,
+            "rilono_ai_chat_uploads_limit": -1,
         }
     return {
         "ai_messages_limit": FREE_AI_MESSAGE_LIMIT,
         "document_uploads_limit": FREE_DOCUMENT_UPLOAD_LIMIT,
         "prep_sessions_limit": FREE_PREP_SESSION_LIMIT,
         "mock_interviews_limit": FREE_MOCK_INTERVIEW_LIMIT,
+        "rilono_ai_chat_uploads_limit": FREE_RILONO_AI_CHAT_UPLOAD_LIMIT,
+    }
+
+
+def get_rilono_ai_chat_upload_quota_snapshot(
+    db: Session,
+    *,
+    user_id: int,
+    plan: str,
+    now: datetime | None = None,
+) -> Dict[str, int]:
+    """
+    Return 24-hour rolling usage for Rilono AI chat attachments.
+    """
+    limit = get_plan_limits(plan)["rilono_ai_chat_uploads_limit"]
+    if limit < 0:
+        return {
+            "used": 0,
+            "limit": -1,
+            "remaining": -1,
+            "window_hours": RILONO_AI_CHAT_UPLOAD_WINDOW_HOURS,
+        }
+
+    current_time = now or datetime.utcnow()
+    window_start = current_time - timedelta(hours=RILONO_AI_CHAT_UPLOAD_WINDOW_HOURS)
+    used = int(
+        db.query(func.count(models.RilonoAiChatUploadEvent.id))
+        .filter(
+            models.RilonoAiChatUploadEvent.user_id == user_id,
+            models.RilonoAiChatUploadEvent.created_at >= window_start,
+        )
+        .scalar()
+        or 0
+    )
+    return {
+        "used": used,
+        "limit": limit,
+        "remaining": max(limit - used, 0),
+        "window_hours": RILONO_AI_CHAT_UPLOAD_WINDOW_HOURS,
     }
 
 

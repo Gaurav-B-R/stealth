@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -187,6 +187,19 @@ class AIDailyNotificationRun(Base):
     users_scanned = Column(Integer, nullable=False, default=0)
     notifications_sent = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
+
+
+class RilonoAiChatUploadEvent(Base):
+    __tablename__ = "rilono_ai_chat_upload_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    attachment_id = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_rilono_ai_chat_upload_events_user_attachment", "user_id", "attachment_id"),
+    )
 
 
 class F1VisaNewsItem(Base):
