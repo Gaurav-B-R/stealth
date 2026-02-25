@@ -129,3 +129,60 @@ def ensure_coupon_usage_limit_column():
 
         if "max_uses_per_user" not in columns:
             conn.execute(text("ALTER TABLE coupon_codes ADD COLUMN max_uses_per_user INTEGER"))
+
+
+def _table_exists(conn, table_name: str) -> bool:
+    if engine.dialect.name == "sqlite":
+        result = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name=:tbl"),
+            {"tbl": table_name},
+        )
+        return result.fetchone() is not None
+
+    result = conn.execute(
+        text(
+            "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = :tbl)"
+        ),
+        {"tbl": table_name},
+    )
+    return bool(result.scalar())
+
+
+def ensure_f1_visa_news_table():
+    """
+    Ensure f1_visa_news table exists for environments without full migrations.
+    Defence-in-depth alongside Base.metadata.create_all().
+    """
+    with engine.begin() as conn:
+        if _table_exists(conn, "f1_visa_news"):
+            return
+
+        if engine.dialect.name == "sqlite":
+            conn.execute(text("""
+                CREATE TABLE f1_visa_news (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title VARCHAR NOT NULL,
+                    summary TEXT NOT NULL,
+                    why_it_matters TEXT,
+                    source_name VARCHAR NOT NULL DEFAULT 'Source',
+                    source_url VARCHAR,
+                    published_date VARCHAR,
+                    ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE f1_visa_news (
+                    id SERIAL PRIMARY KEY,
+                    title VARCHAR NOT NULL,
+                    summary TEXT NOT NULL,
+                    why_it_matters TEXT,
+                    source_name VARCHAR NOT NULL DEFAULT 'Source',
+                    source_url VARCHAR,
+                    published_date VARCHAR,
+                    ingested_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_f1_visa_news_ingested_at ON f1_visa_news (ingested_at)"
+            ))

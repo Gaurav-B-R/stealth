@@ -187,3 +187,16 @@ class AIDailyNotificationRun(Base):
     users_scanned = Column(Integer, nullable=False, default=0)
     notifications_sent = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
+
+
+class F1VisaNewsItem(Base):
+    __tablename__ = "f1_visa_news"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, nullable=False)
+    summary = Column(Text, nullable=False)
+    why_it_matters = Column(Text, nullable=True)
+    source_name = Column(String, nullable=False, default="Source")
+    source_url = Column(String, nullable=True)
+    published_date = Column(String, nullable=True)  # "YYYY-MM-DD" or "unknown"
+    ingested_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
