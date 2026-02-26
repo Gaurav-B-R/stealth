@@ -45,7 +45,7 @@ r2_client = boto3.client(
 MAX_SESSION_ATTACHMENTS = 8
 MAX_SESSION_ATTACHMENT_BYTES = 8 * 1024 * 1024
 MAX_SESSION_ATTACHMENTS_TOTAL_BYTES = 20 * 1024 * 1024
-MAX_SESSION_ATTACHMENT_TEXT_CHARS = 12000
+MAX_SESSION_ATTACHMENT_TEXT_CHARS = 40000
 ALLOWED_CHAT_ATTACHMENT_MIME_PREFIXES = ("image/", "text/")
 ALLOWED_CHAT_ATTACHMENT_MIME_TYPES = {
     "application/pdf",
@@ -430,6 +430,89 @@ def enforce_and_track_session_upload_quota(
             )
         )
 
+
+def build_system_prompt(
+    *,
+    source: str,
+    student_profile_context: str,
+    documents_context: str,
+    attached_docs_text: str,
+    navigation_guide_text: str,
+) -> str:
+    normalized_source = (source or "rilono_ai_chat").strip().lower()
+    is_copilot = normalized_source == "rilono_ai_copilot"
+
+    if is_copilot:
+        assistant_intro = (
+            "You are Rilono AI Copilot, an application assistant for students on the F-1 visa journey."
+        )
+        role_lines = [
+            "- Assist ongoing applications like I-20 forms, health forms, DS-160 applications, and related F-1 workflow tasks",
+            "- Help the student fill application fields and prepare responses with utmost accuracy",
+            "- Ask clarifying questions whenever required details are missing, ambiguous, or inconsistent",
+            "- Cross-check answers against student profile details, uploaded documents, and page context before final guidance",
+            "- Keep responses practical, structured, and professional",
+        ]
+        source_specific_instructions = [
+            "- Prioritize correctness over speed; never guess if details are missing",
+            "- If page/form context is attached, reference specific field labels and explain what should be entered",
+            "- If multiple valid options exist, explain tradeoffs and ask which one applies to the student",
+        ]
+    else:
+        assistant_intro = (
+            "You are Rilono AI, a F1 student visa expert assistant. "
+            "You are guiding the student through the F1 student visa process and documentation."
+        )
+        role_lines = [
+            "- Provide expert guidance on F1 student visa requirements and processes",
+            "- Help with document preparation and verification",
+            "- Answer questions about visa application steps (DS-160, I-20, SEVIS, interview, etc.)",
+            "- Assist with understanding visa documentation requirements",
+            "- Be friendly, supportive, and professional",
+        ]
+        source_specific_instructions = [
+            "- Always maintain a helpful and encouraging tone",
+            "- When suggesting next steps, be specific about what documents they need to upload or actions to take",
+        ]
+
+    common_instructions = [
+        "- IMPORTANT: Read and use the ATTACHED RAW STUDENT PROFILE FILE directly to personalize your responses",
+        "- Reference the student's name, university, and current visa journey stage when giving advice",
+        "- Guide them based on their current stage and what the next step is",
+        "- Consider their intake semester/year when providing timeline guidance",
+        "- USE THE ATTACHED DOCUMENT FILES to provide detailed, personalized guidance based on the actual extracted data",
+        "- If a document has validation issues (marked as NEEDS REVIEW), proactively mention what might need to be corrected",
+        "- If the user asks about specific documents, reference the attached document data when relevant",
+        "- Be concise but thorough in your responses",
+        "- If you don't have information about a specific document, let the user know and guide them on what they need",
+        "- For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps",
+        "- If ATTACHED CHAT SESSION FILES are present, use them for this chat session context only",
+    ]
+
+    role_text = "\n".join(role_lines)
+    instruction_text = "\n".join(common_instructions + source_specific_instructions)
+
+    return f"""{assistant_intro}
+
+Your role:
+{role_text}
+
+=== ATTACHED RAW STUDENT PROFILE FILE ===
+{student_profile_context}
+=== END ATTACHED RAW STUDENT PROFILE FILE ===
+
+{documents_context}
+{attached_docs_text}
+
+=== ATTACHED USER NAVIGATION GUIDE ===
+{navigation_guide_text}
+=== END ATTACHED USER NAVIGATION GUIDE ===
+
+Instructions:
+{instruction_text}
+
+Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance."""
+
 def generate_ai_response(
     user_message: str,
     user_name: str,
@@ -439,6 +522,7 @@ def generate_ai_response(
     document_files: List[dict] = None,
     session_attachments: Optional[List[ChatSessionAttachment]] = None,
     conversation_history: Optional[List[dict]] = None,
+    source: str = "rilono_ai_chat",
 ) -> str:
     """
     Generate AI response using Gemini with system prompt, document context, attached document files, and comprehensive student profile.
@@ -474,43 +558,13 @@ def generate_ai_response(
 
         session_attachments_text, inline_session_attachment_parts = build_session_attachments_context(session_attachments)
         
-        # Attach the raw decrypted student profile JSON directly (no field-level extraction).
-        system_prompt = f"""You are Rilono AI, a F1 student visa expert assistant. You are guiding the student through the F1 student visa process and documentation.
-
-Your role:
-- Provide expert guidance on F1 student visa requirements and processes
-- Help with document preparation and verification
-- Answer questions about visa application steps (DS-160, I-20, SEVIS, interview, etc.)
-- Assist with understanding visa documentation requirements
-- Be friendly, supportive, and professional
-
-=== ATTACHED RAW STUDENT PROFILE FILE ===
-{student_profile_context}
-=== END ATTACHED RAW STUDENT PROFILE FILE ===
-
-{documents_context}
-{attached_docs_text}
-
-=== ATTACHED USER NAVIGATION GUIDE ===
-{navigation_guide_text}
-=== END ATTACHED USER NAVIGATION GUIDE ===
-
-Instructions:
-- IMPORTANT: Read and use the ATTACHED RAW STUDENT PROFILE FILE directly to personalize your responses
-- Reference the student's name, university, and current visa journey stage when giving advice
-- Guide them based on their current stage and what the next step is
-- Consider their intake semester/year when providing timeline guidance
-- USE THE ATTACHED DOCUMENT FILES to provide detailed, personalized guidance based on the actual extracted data
-- If a document has validation issues (marked as NEEDS REVIEW), proactively mention what might need to be corrected
-- If the user asks about specific documents, reference the attached document data when relevant
-- Be concise but thorough in your responses
-- If you don't have information about a specific document, let the user know and guide them on what they need
-- Always maintain a helpful and encouraging tone
-- When suggesting next steps, be specific about what documents they need to upload or actions to take
-- For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps
-- If ATTACHED CHAT SESSION FILES are present, use them for this chat session context only
-
-Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance."""
+        system_prompt = build_system_prompt(
+            source=source,
+            student_profile_context=student_profile_context,
+            documents_context=documents_context,
+            attached_docs_text=attached_docs_text,
+            navigation_guide_text=navigation_guide_text,
+        )
 
         # Build conversation context
         conversation_text = ""
@@ -536,6 +590,7 @@ Please provide a helpful response to the user's question:"""
         
         print("\n" + "="*80)
         print(f"🔵 GEMINI API CALL: generate_ai_response() - AI CHAT")
+        print(f"🧭 Chat Source: {source}")
         print(f"👤 User: {user_name}")
         print(f"📎 Attached Documents: {len(document_files) if document_files else 0}")
         print(f"📎 Session Attachments: {len(session_attachments) if session_attachments else 0}")
@@ -700,7 +755,8 @@ def chat_with_ai(
             navigation_guide_text=navigation_guide_text,
             document_files=document_files,
             session_attachments=chat_message.session_attachments,
-            conversation_history=chat_message.conversation_history
+            conversation_history=chat_message.conversation_history,
+            source=source
         )
 
         # Only the main Rilono AI chat consumes the free AI message quota.
