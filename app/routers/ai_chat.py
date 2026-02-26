@@ -83,6 +83,16 @@ class ChatMessage(BaseModel):
 class ChatResponse(BaseModel):
     response: str
 
+ALLOWED_CHAT_SOURCES = {
+    "rilono_ai_chat",
+    "rilono_ai_copilot",
+}
+
+QUOTA_TRACKED_CHAT_SOURCES = {
+    "rilono_ai_chat",
+    "rilono_ai_copilot",
+}
+
 
 def get_student_profile_raw_text(user_id: int) -> str | None:
     """
@@ -705,7 +715,13 @@ def chat_with_ai(
     """
     try:
         source = (chat_message.source or "rilono_ai_chat").strip().lower()
-        count_toward_rilono_chat_limit = source == "rilono_ai_chat"
+        if source not in ALLOWED_CHAT_SOURCES:
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported chat source.",
+            )
+
+        count_toward_rilono_chat_limit = source in QUOTA_TRACKED_CHAT_SOURCES
 
         subscription = get_or_create_user_subscription(db, current_user.id)
         limits = get_plan_limits(subscription.plan)
@@ -759,7 +775,7 @@ def chat_with_ai(
             source=source
         )
 
-        # Only the main Rilono AI chat consumes the free AI message quota.
+        # Track free-tier usage for all chat sources that are quota-tracked.
         if count_toward_rilono_chat_limit:
             subscription.ai_messages_used += 1
             db.commit()
