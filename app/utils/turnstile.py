@@ -8,6 +8,37 @@ from fastapi import HTTPException, status
 
 # Cloudflare Turnstile verification endpoint
 TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+TURNSTILE_FLAG_NAMES = ("TURNSTILE", "TURNSTILE_ENABLED")
+TRUTHY_VALUES = {"1", "true", "yes", "on", "enabled"}
+FALSY_VALUES = {"0", "false", "no", "off", "disabled"}
+
+
+def _parse_optional_bool(raw_value: Optional[str]) -> Optional[bool]:
+    if raw_value is None:
+        return None
+    value = raw_value.strip().lower()
+    if value in TRUTHY_VALUES:
+        return True
+    if value in FALSY_VALUES:
+        return False
+    return None
+
+
+def is_turnstile_enabled() -> bool:
+    """
+    Return True when Turnstile checks should run.
+
+    Supported env toggles:
+    - TURNSTILE=ON/OFF (preferred)
+    - TURNSTILE_ENABLED=true/false (backward-compatible alias)
+
+    If neither toggle is set (or value is invalid), defaults to enabled.
+    """
+    for env_name in TURNSTILE_FLAG_NAMES:
+        parsed = _parse_optional_bool(os.getenv(env_name))
+        if parsed is not None:
+            return parsed
+    return True
 
 def verify_turnstile_token(token: str, remote_ip: Optional[str] = None) -> bool:
     """
@@ -23,6 +54,9 @@ def verify_turnstile_token(token: str, remote_ip: Optional[str] = None) -> bool:
     Raises:
         HTTPException: If verification fails or secret key is not configured
     """
+    if not is_turnstile_enabled():
+        return True
+
     secret_key = os.getenv("TURNSTILE_SECRET_KEY")
     
     if not secret_key:

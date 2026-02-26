@@ -20,7 +20,7 @@ from app.email_service import (
     send_contact_form_email,
     verify_email_notifications_unsubscribe_token,
 )
-from app.utils.turnstile import verify_turnstile_token
+from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 from app.subscriptions import get_or_create_user_subscription
 from app.referrals import (
     ensure_user_referral_code,
@@ -57,6 +57,14 @@ def _bool_env(name: str, default: bool) -> bool:
 def _cookie_secure_default() -> bool:
     env = os.getenv("ENVIRONMENT", "production").strip().lower()
     return env != "development"
+
+
+def _is_development_env() -> bool:
+    return os.getenv("ENVIRONMENT", "production").strip().lower() == "development"
+
+
+def _is_turnstile_required() -> bool:
+    return is_turnstile_enabled() and not _is_development_env()
 
 
 AUTH_COOKIE_SECURE = _bool_env("AUTH_COOKIE_SECURE", _cookie_secure_default())
@@ -143,6 +151,8 @@ def _enforce_rate_limit_or_429(
 @router.get("/turnstile-site-key")
 def get_turnstile_site_key():
     """Get the Cloudflare Turnstile site key for frontend use."""
+    if not is_turnstile_enabled():
+        return {"site_key": ""}
     site_key = os.getenv("TURNSTILE_SITE_KEY", "")
     return {"site_key": site_key}
 
@@ -209,16 +219,15 @@ def register(
 
     # Verify Turnstile token if provided
     turnstile_token = user.cf_turnstile_token
-    if turnstile_token:
-        client_ip = request.client.host if request else None
-        if not verify_turnstile_token(turnstile_token, client_ip):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Security verification failed. Please try again."
-            )
-    else:
-        # In production, require Turnstile token
-        if os.getenv("ENVIRONMENT", "production").lower() != "development":
+    if is_turnstile_enabled():
+        if turnstile_token:
+            client_ip = request.client.host if request else None
+            if not verify_turnstile_token(turnstile_token, client_ip):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Security verification failed. Please try again."
+                )
+        elif _is_turnstile_required():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Security verification is required"
@@ -369,16 +378,15 @@ async def login(
         turnstile_token = turnstile_token[0]
     
     # Verify Turnstile token
-    if turnstile_token:
-        client_ip = request.client.host if request else None
-        if not verify_turnstile_token(turnstile_token, client_ip):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Security verification failed. Please try again."
-            )
-    else:
-        # In production, require Turnstile token
-        if os.getenv("ENVIRONMENT", "production").lower() != "development":
+    if is_turnstile_enabled():
+        if turnstile_token:
+            client_ip = request.client.host if request else None
+            if not verify_turnstile_token(turnstile_token, client_ip):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Security verification failed. Please try again."
+                )
+        elif _is_turnstile_required():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Security verification is required"

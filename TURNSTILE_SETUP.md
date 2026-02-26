@@ -48,6 +48,7 @@ This application uses Cloudflare Turnstile for bot protection on login and regis
 
 ```bash
 # Cloudflare Turnstile Configuration
+TURNSTILE=ON  # ON (default) or OFF to disable Turnstile checks
 TURNSTILE_SITE_KEY=0x4AAAAAAABkMYinukE8K5O0  # Replace with your actual Site Key
 TURNSTILE_SECRET_KEY=0x4AAAAAAABkMYinukE8K5O0  # Replace with your actual Secret Key
 
@@ -57,6 +58,7 @@ ENVIRONMENT=development
 ```
 
 3. **Important Notes**:
+   - **Turnstile toggle**: `TURNSTILE=ON` enables verification, `TURNSTILE=OFF` disables it (including in production)
    - **Site Key**: This is public and will be sent to the frontend (it's safe to expose)
    - **Secret Key**: This is private and should NEVER be committed to version control
    - Make sure your `.env` file is in `.gitignore` (it should be by default)
@@ -64,16 +66,17 @@ ENVIRONMENT=development
 
 4. **For Production**:
    - Set `ENVIRONMENT=production` (or remove it, as production is the default)
-   - Make sure both keys are set, otherwise authentication will fail
+   - Keep `TURNSTILE=ON` and set both keys for normal bot protection
+   - To temporarily disable Turnstile without code changes, set `TURNSTILE=OFF`
    - Consider using environment variables from your hosting provider (Heroku, Railway, etc.)
 
 ### 3. Production vs Development
 
 - **Production**: 
-  - Turnstile verification is **required**
+  - With `TURNSTILE=ON`, verification is **required**
   - Users must complete the challenge to login or register
-  - Both `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` must be set
-  - If keys are missing, authentication requests will be rejected
+  - With `TURNSTILE=ON`, both `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` must be set
+  - With `TURNSTILE=OFF`, frontend widgets are hidden and auth does not require Turnstile tokens
 
 - **Development**: 
   - If `ENVIRONMENT=development` and Turnstile keys are not set, verification will be bypassed
