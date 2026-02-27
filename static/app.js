@@ -22,7 +22,7 @@ const PRO_UPGRADE_ENABLED = true;
 const PUBLIC_APP_ORIGIN = 'https://rilono.com';
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
-    privacy: 'February 12, 2026',
+    privacy: 'February 27, 2026',
     terms: 'February 12, 2026',
     refund: 'February 12, 2026',
     delivery: 'February 12, 2026'
@@ -2254,11 +2254,9 @@ function buildSubscriptionNotifySnapshot(subscription) {
         autoRenewEnabled: typeof subscription.auto_renew_enabled === 'boolean'
             ? subscription.auto_renew_enabled
             : null,
-        accessSource: String(subscription.access_source || ''),
         endsAt: subscription.ends_at || null,
         nextRenewalAt: subscription.next_renewal_at || null,
         referralBonusActive: Boolean(subscription.referral_bonus_active),
-        referralBonusGrantedAt: subscription.referral_bonus_granted_at || null,
         latestPaymentStatus: String(subscription.latest_payment_status || '').toLowerCase(),
         latestPaymentAmountPaise: Number(subscription.latest_payment_amount_paise || 0),
         latestPaymentCurrency: String(subscription.latest_payment_currency || 'INR').toUpperCase()
@@ -2275,9 +2273,6 @@ function mergeSubscriptionNotifySnapshots(previousSnapshot, nextSnapshot) {
     // Preserve known values so follow-up /me fetches do not emit duplicate transition notifications.
     if (merged.autoRenewEnabled === null && typeof previousSnapshot.autoRenewEnabled === 'boolean') {
         merged.autoRenewEnabled = previousSnapshot.autoRenewEnabled;
-    }
-    if (!merged.accessSource && previousSnapshot.accessSource) {
-        merged.accessSource = previousSnapshot.accessSource;
     }
     if (!merged.nextRenewalAt && previousSnapshot.nextRenewalAt) {
         merged.nextRenewalAt = previousSnapshot.nextRenewalAt;
@@ -2333,11 +2328,9 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
         return;
     }
 
-    let emitted = false;
     const accessUntilText = nextSnapshot.endsAt ? formatSubscriptionDateTime(nextSnapshot.endsAt) : '';
 
     if (previousSnapshot.plan !== nextSnapshot.plan) {
-        emitted = true;
         if (nextSnapshot.plan === 'pro') {
             addNotification(
                 'Plan Upgraded',
@@ -2355,7 +2348,6 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
 
     if (previousSnapshot.autoRenewEnabled !== nextSnapshot.autoRenewEnabled && nextSnapshot.plan === 'pro') {
         if (nextSnapshot.autoRenewEnabled === false) {
-            emitted = true;
             addNotification(
                 'Auto-Renew Disabled',
                 accessUntilText
@@ -2364,7 +2356,6 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
                 'warning'
             );
         } else if (nextSnapshot.autoRenewEnabled === true) {
-            emitted = true;
             addNotification(
                 'Auto-Renew Enabled',
                 'Your Pro auto-renew is enabled again.',
@@ -2374,7 +2365,6 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     }
 
     if (previousSnapshot.status !== nextSnapshot.status) {
-        emitted = true;
         if (nextSnapshot.status === 'active') {
             addNotification('Subscription Active', 'Your subscription status is active.', 'success');
         } else if (nextSnapshot.status === 'canceled') {
@@ -2395,7 +2385,6 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     }
 
     if (!previousSnapshot.referralBonusActive && nextSnapshot.referralBonusActive) {
-        emitted = true;
         addNotification(
             'Referral Bonus Applied',
             '1 month Pro referral bonus is active on your account.',
@@ -2404,7 +2393,6 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     }
 
     if (previousSnapshot.latestPaymentStatus !== nextSnapshot.latestPaymentStatus && nextSnapshot.latestPaymentStatus) {
-        emitted = true;
         const paymentAmount = nextSnapshot.latestPaymentAmountPaise > 0
             ? formatCurrencyAmount(nextSnapshot.latestPaymentAmountPaise / 100, nextSnapshot.latestPaymentCurrency)
             : '';
@@ -2419,7 +2407,6 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     }
 
     if (previousSnapshot.nextRenewalAt !== nextSnapshot.nextRenewalAt && nextSnapshot.autoRenewEnabled && nextSnapshot.nextRenewalAt) {
-        emitted = true;
         addNotification(
             'Renewal Date Updated',
             `Your next renewal is on ${formatSubscriptionDateTime(nextSnapshot.nextRenewalAt)}.`,
@@ -2428,7 +2415,6 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     }
 
     if (previousSnapshot.endsAt !== nextSnapshot.endsAt && !nextSnapshot.autoRenewEnabled && nextSnapshot.endsAt) {
-        emitted = true;
         addNotification(
             'Access Period Updated',
             `Your Pro access is active until ${formatSubscriptionDateTime(nextSnapshot.endsAt)}.`,
@@ -2436,9 +2422,8 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
         );
     }
 
-    if (!emitted) {
-        addNotification('Subscription Updated', 'Your subscription details were updated.', 'info');
-    }
+    // Do not emit a generic fallback notification.
+    // Only explicit, user-meaningful subscription changes should create notifications.
 
     runtimeSubscriptionNotifyState = nextSnapshot;
     writeStoredSubscriptionNotifyState(activeUserId, nextSnapshot);
