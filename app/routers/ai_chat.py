@@ -86,6 +86,8 @@ class ChatResponse(BaseModel):
 ALLOWED_CHAT_SOURCES = {
     "rilono_ai_chat",
     "rilono_ai_copilot",
+    "visa_prep",
+    "mock_interview",
 }
 
 QUOTA_TRACKED_CHAT_SOURCES = {
@@ -497,6 +499,8 @@ def build_system_prompt(
         "- If you don't have information about a specific document, let the user know and guide them on what they need",
         "- For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps",
         "- If ATTACHED CHAT SESSION FILES are present, use them for this chat session context only",
+        "- Identity guardrail: If asked about your model/provider/training details, do not mention Gemini, Google, or internal model names.",
+        "- Identity guardrail: In such cases, reply that you are Rilono AI and continue helping with the user's request.",
     ]
 
     role_text = "\n".join(role_lines)
