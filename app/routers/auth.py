@@ -28,7 +28,11 @@ from app.referrals import (
     get_user_by_referral_code,
     maybe_award_referral_bonus_on_login,
 )
-from app.utils.rate_limiter import check_ip_rate_limit
+from app.utils.rate_limiter import (
+    check_ip_rate_limit,
+    extract_client_ip,
+    is_request_ip_whitelisted,
+)
 from app.utils.token_security import hash_token, token_matches
 import os
 
@@ -217,11 +221,12 @@ def register(
             detail="You must accept the Terms & Conditions and Privacy Policy to register."
         )
 
-    # Verify Turnstile token if provided
+    # Whitelisted IPs (configured via IP_WHITELIST) can bypass Turnstile gating.
     turnstile_token = user.cf_turnstile_token
-    if is_turnstile_enabled():
+    ip_whitelisted = is_request_ip_whitelisted(request)
+    if is_turnstile_enabled() and not ip_whitelisted:
         if turnstile_token:
-            client_ip = request.client.host if request else None
+            client_ip = extract_client_ip(request) if request else None
             if not verify_turnstile_token(turnstile_token, client_ip):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -377,10 +382,10 @@ async def login(
     if isinstance(turnstile_token, list) and turnstile_token:
         turnstile_token = turnstile_token[0]
     
-    # Verify Turnstile token
-    if is_turnstile_enabled():
+    ip_whitelisted = is_request_ip_whitelisted(request)
+    if is_turnstile_enabled() and not ip_whitelisted:
         if turnstile_token:
-            client_ip = request.client.host if request else None
+            client_ip = extract_client_ip(request) if request else None
             if not verify_turnstile_token(turnstile_token, client_ip):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

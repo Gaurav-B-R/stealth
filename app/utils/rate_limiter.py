@@ -1,4 +1,5 @@
 import os
+import ipaddress
 import random
 import threading
 import time
@@ -22,6 +23,26 @@ def _parse_csv_set(raw: str) -> set[str]:
 TRUST_PROXY_HEADERS = _is_truthy(os.getenv("TRUST_PROXY_HEADERS", "false"))
 TRUSTED_PROXY_IPS = _parse_csv_set(os.getenv("TRUSTED_PROXY_IPS", ""))
 RATE_LIMIT_BACKEND = (os.getenv("RATE_LIMIT_BACKEND", "database").strip().lower() or "database")
+IP_WHITELIST = _parse_csv_set(os.getenv("IP_WHITELIST", ""))
+
+
+def _parse_whitelisted_networks(values: set[str]) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for value in values:
+        try:
+            if "/" in value:
+                networks.append(ipaddress.ip_network(value, strict=False))
+            else:
+                ip_obj = ipaddress.ip_address(value)
+                suffix = "32" if ip_obj.version == 4 else "128"
+                networks.append(ipaddress.ip_network(f"{ip_obj}/{suffix}", strict=False))
+        except ValueError:
+            # Invalid entries are ignored to avoid breaking startup from one bad value.
+            print(f"Warning: Ignoring invalid IP_WHITELIST entry: {value}")
+    return networks
+
+
+WHITELISTED_NETWORKS = _parse_whitelisted_networks(IP_WHITELIST)
 
 
 class InMemoryRateLimiter:
@@ -204,6 +225,29 @@ def extract_client_ip(request: Request) -> str:
     return "unknown"
 
 
+def is_ip_whitelisted(ip: str) -> bool:
+    if not WHITELISTED_NETWORKS:
+        return False
+
+    candidate = (ip or "").strip()
+    if not candidate:
+        return False
+
+    try:
+        ip_obj = ipaddress.ip_address(candidate)
+    except ValueError:
+        return False
+
+    for network in WHITELISTED_NETWORKS:
+        if ip_obj.version == network.version and ip_obj in network:
+            return True
+    return False
+
+
+def is_request_ip_whitelisted(request: Request) -> bool:
+    return is_ip_whitelisted(extract_client_ip(request))
+
+
 def check_ip_rate_limit(
     request: Request,
     scope: str,
@@ -212,6 +256,9 @@ def check_ip_rate_limit(
     extra_key: Optional[str] = None,
 ) -> Tuple[bool, int]:
     ip = extract_client_ip(request)
+    if is_ip_whitelisted(ip):
+        return True, 0
+
     key = f"{scope}:{ip}"
     if extra_key:
         key = f"{key}:{extra_key}"
