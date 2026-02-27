@@ -25,14 +25,18 @@ from typing import Optional, List
 import os
 import uuid
 from pathlib import Path
+import logging
+import zipfile
 import boto3
 from botocore.config import Config
 from io import BytesIO
 import base64
 import json
 from datetime import datetime
+from PIL import Image, UnidentifiedImageError
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
+logger = logging.getLogger(__name__)
 
 # R2 Configuration for documents
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
@@ -62,6 +66,15 @@ ALLOWED_DOCUMENT_EXTENSIONS = {
 }
 MAX_DOCUMENT_SIZE_MB = int(os.getenv("DOCUMENT_MAX_SIZE_MB", "5") or "5")
 MAX_DOCUMENT_SIZE = MAX_DOCUMENT_SIZE_MB * 1024 * 1024
+READ_CHUNK_SIZE = 1024 * 1024
+OLE_DOCUMENT_MAGIC = bytes.fromhex("D0CF11E0A1B11AE1")
+IMAGE_FORMATS_BY_EXTENSION = {
+    ".jpg": {"JPEG"},
+    ".jpeg": {"JPEG"},
+    ".png": {"PNG"},
+    ".gif": {"GIF"},
+    ".webp": {"WEBP"},
+}
 
 def is_allowed_document(filename: str) -> bool:
     """Check if file extension is allowed"""
@@ -83,6 +96,98 @@ def get_content_type(filename: str) -> str:
     }
     return content_types.get(ext, "application/octet-stream")
 
+
+def read_upload_file_with_limit(file: UploadFile, max_bytes: int) -> bytes:
+    """
+    Read upload content in chunks and stop as soon as it exceeds max_bytes.
+    """
+    total = 0
+    chunks: list[bytes] = []
+
+    while True:
+        chunk = file.file.read(READ_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Maximum size is {max_bytes // 1024 // 1024}MB",
+            )
+        chunks.append(chunk)
+
+    return b"".join(chunks)
+
+
+def validate_image_content(file_contents: bytes, file_extension: str) -> None:
+    expected_formats = IMAGE_FORMATS_BY_EXTENSION.get(file_extension, set())
+    if not expected_formats:
+        raise HTTPException(status_code=400, detail="Unsupported image format.")
+
+    try:
+        with Image.open(BytesIO(file_contents)) as image:
+            image.verify()
+        with Image.open(BytesIO(file_contents)) as image:
+            detected_format = str(image.format or "").upper()
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid or corrupted image file.")
+
+    if detected_format not in expected_formats:
+        raise HTTPException(
+            status_code=400,
+            detail="Image content does not match the file extension.",
+        )
+
+
+def validate_document_content(filename: str, file_contents: bytes) -> None:
+    ext = Path(filename).suffix.lower()
+    if ext in IMAGE_FORMATS_BY_EXTENSION:
+        validate_image_content(file_contents, ext)
+        return
+
+    if ext == ".pdf":
+        if not file_contents.startswith(b"%PDF-"):
+            raise HTTPException(status_code=400, detail="Invalid PDF file.")
+        return
+
+    if ext == ".doc":
+        if not file_contents.startswith(OLE_DOCUMENT_MAGIC):
+            raise HTTPException(status_code=400, detail="Invalid DOC file.")
+        return
+
+    if ext == ".docx":
+        try:
+            with zipfile.ZipFile(BytesIO(file_contents)) as archive:
+                names = set(archive.namelist())
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Invalid DOCX file.")
+
+        if "[Content_Types].xml" not in names or not any(name.startswith("word/") for name in names):
+            raise HTTPException(status_code=400, detail="Invalid DOCX file structure.")
+        return
+
+    if ext == ".txt":
+        decoded_text = None
+        for encoding in ("utf-8", "utf-16"):
+            try:
+                decoded_text = file_contents.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+
+        if decoded_text is None:
+            raise HTTPException(status_code=400, detail="Invalid TXT file encoding.")
+
+        sample = decoded_text[:4096]
+        if not sample.strip():
+            raise HTTPException(status_code=400, detail="Text file is empty.")
+        non_text_chars = sum(1 for ch in sample if ord(ch) < 32 and ch not in {"\n", "\r", "\t"})
+        if sample and (non_text_chars / len(sample)) > 0.05:
+            raise HTTPException(status_code=400, detail="Text file appears to be binary data.")
+        return
+
+    raise HTTPException(status_code=400, detail="Unsupported document format.")
+
 def upload_document_to_r2(file_contents: bytes, filename: str, content_type: str, encrypted: bool = False) -> str:
     """Upload document to R2 and return the R2 key/path"""
     try:
@@ -100,8 +205,9 @@ def upload_document_to_r2(file_contents: bytes, filename: str, content_type: str
         
         # Return the R2 key (we'll use presigned URLs for access)
         return filename
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload document to R2: {str(e)}")
+    except Exception:
+        logger.exception("Failed to upload document to R2 key=%s", filename)
+        raise HTTPException(status_code=500, detail="Failed to store document securely. Please try again.")
 
 def get_presigned_url(r2_key: str, expiration: int = 3600) -> str:
     """Generate a presigned URL for secure document access"""
@@ -112,8 +218,9 @@ def get_presigned_url(r2_key: str, expiration: int = 3600) -> str:
             ExpiresIn=expiration
         )
         return url
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate presigned URL: {str(e)}")
+    except Exception:
+        logger.exception("Failed to generate presigned URL for key=%s", r2_key)
+        raise HTTPException(status_code=500, detail="Document link is temporarily unavailable.")
 
 
 @router.get("/catalog", response_model=schemas.DocumentCatalogResponse)
@@ -199,22 +306,18 @@ def upload_document(
                 )
             )
     
+    upload_filename = file.filename or ""
+
     # Validate file extension
-    if not is_allowed_document(file.filename):
+    if not is_allowed_document(upload_filename):
         raise HTTPException(
             status_code=400,
             detail=f"File type not allowed. Allowed types: {', '.join(ALLOWED_DOCUMENT_EXTENSIONS)}"
         )
-    
-    # Read file content in sync context (this route runs in FastAPI's threadpool).
-    contents = file.file.read()
-    
-    # Validate file size
-    if len(contents) > MAX_DOCUMENT_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large. Maximum size is {MAX_DOCUMENT_SIZE_MB}MB"
-        )
+
+    # Read file content in bounded chunks and validate binary signature/content.
+    contents = read_upload_file_with_limit(file, MAX_DOCUMENT_SIZE)
+    validate_document_content(upload_filename, contents)
     
     # Generate or get user's encryption salt
     if not current_user.encryption_salt:
@@ -230,19 +333,20 @@ def upload_document(
         encrypted_file_data, encrypted_file_key = encrypt_file_with_user_password(
             contents, password, salt_bytes
         )
-    except Exception as e:
+    except Exception:
+        logger.exception("Failed to encrypt document for user_id=%s", current_user.id)
         raise HTTPException(
             status_code=500,
-            detail=f"Encryption failed: {str(e)}"
+            detail="Failed to encrypt document. Please try again."
         )
     
     # Generate unique filename with user ID prefix for organization
-    file_extension = Path(file.filename).suffix.lower()
+    file_extension = Path(upload_filename).suffix.lower()
     unique_filename = f"user_{current_user.id}/{uuid.uuid4()}{file_extension}"
-    original_filename = file.filename
+    original_filename = upload_filename
     
     # Get content type
-    content_type = get_content_type(file.filename)
+    content_type = get_content_type(upload_filename)
     
     # Upload ENCRYPTED file to R2 (stored as encrypted blob)
     r2_key = upload_document_to_r2(encrypted_file_data, unique_filename, content_type, encrypted=True)
@@ -696,8 +800,9 @@ def save_student_profile_to_r2(
             }
         )
         return r2_key
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save student profile to R2: {str(e)}")
+    except Exception:
+        logger.exception("Failed to save student profile snapshot for user_id=%s", user.id)
+        raise HTTPException(status_code=500, detail="Failed to refresh profile snapshot. Please try again.")
 
 
 def refresh_student_profile_snapshot_for_user(
@@ -904,8 +1009,13 @@ async def download_document(
                     "Content-Disposition": f'attachment; filename="{document.original_filename}"'
                 }
             )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to download document: {str(e)}")
+        except Exception:
+            logger.exception(
+                "Failed to download legacy document document_id=%s user_id=%s",
+                document_id,
+                current_user.id,
+            )
+            raise HTTPException(status_code=500, detail="Failed to download document. Please try again.")
     
     # Zero-Knowledge encrypted document - decrypt it
     try:
@@ -939,14 +1049,19 @@ async def download_document(
                 "Content-Disposition": f'attachment; filename="{document.original_filename}"'
             }
         )
-    except ValueError as e:
+    except ValueError:
         # Decryption failed (wrong password or corrupted data)
         raise HTTPException(
             status_code=401,
-            detail=f"Decryption failed: {str(e)}"
+            detail="Decryption failed. Please verify your password and try again."
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to download document: {str(e)}")
+    except Exception:
+        logger.exception(
+            "Failed to decrypt/download document document_id=%s user_id=%s",
+            document_id,
+            current_user.id,
+        )
+        raise HTTPException(status_code=500, detail="Failed to download document. Please try again.")
 
 @router.get("/{document_id}/extracted-text")
 async def get_extracted_text(
@@ -988,8 +1103,13 @@ async def get_extracted_text(
                 "Content-Disposition": f'attachment; filename="{document.original_filename}_extracted.txt"'
             }
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to download extracted text: {str(e)}")
+    except Exception:
+        logger.exception(
+            "Failed to download extracted text document_id=%s user_id=%s",
+            document_id,
+            current_user.id,
+        )
+        raise HTTPException(status_code=500, detail="Failed to download extracted text. Please try again.")
 
 # ========== ADMIN/DEVELOPER ENDPOINTS ==========
 
@@ -1084,8 +1204,9 @@ async def download_document_admin(
                 "Content-Disposition": f'attachment; filename="{document.original_filename}"'
             }
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to download document: {str(e)}")
+    except Exception:
+        logger.exception("Admin download failed for document_id=%s", document_id)
+        raise HTTPException(status_code=500, detail="Failed to download document. Please try again.")
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document(
@@ -1139,9 +1260,10 @@ async def delete_document(
             print(f"Warning: Failed to refresh student profile after delete: {str(refresh_error)}")
         
         return None
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+        logger.exception("Failed to delete document document_id=%s user_id=%s", document_id, current_user.id)
+        raise HTTPException(status_code=500, detail="Failed to delete document. Please try again.")
 
 @router.delete("/admin/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_document_admin(
@@ -1188,6 +1310,7 @@ async def delete_document_admin(
             print(f"Warning: Failed to refresh student profile after admin delete: {str(refresh_error)}")
         
         return None
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
+        logger.exception("Admin failed to delete document document_id=%s", document_id)
+        raise HTTPException(status_code=500, detail="Failed to delete document. Please try again.")

@@ -6,10 +6,14 @@ from typing import List
 import os
 import uuid
 from pathlib import Path
+from io import BytesIO
+import logging
 import boto3
 from botocore.config import Config
+from PIL import Image, UnidentifiedImageError
 
 router = APIRouter(prefix="/api/upload", tags=["upload"])
+logger = logging.getLogger(__name__)
 
 # R2 Configuration from environment variables
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "1dfccbb465ae188db13dc9f92cc60b3b")
@@ -38,10 +42,64 @@ if not R2_PUBLIC_URL:
 # Allowed image extensions
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+READ_CHUNK_SIZE = 1024 * 1024
+IMAGE_FORMATS_BY_EXTENSION = {
+    ".jpg": {"JPEG"},
+    ".jpeg": {"JPEG"},
+    ".png": {"PNG"},
+    ".gif": {"GIF"},
+    ".webp": {"WEBP"},
+}
 
 def is_allowed_file(filename: str) -> bool:
     """Check if file extension is allowed"""
     return Path(filename).suffix.lower() in ALLOWED_EXTENSIONS
+
+
+async def read_upload_bytes_with_limit(file: UploadFile, max_bytes: int) -> bytes:
+    """
+    Read upload content in chunks and hard-stop once max_bytes is exceeded.
+    """
+    total = 0
+    chunks: list[bytes] = []
+
+    while True:
+        chunk = await file.read(READ_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large. Maximum size is {max_bytes / 1024 / 1024}MB",
+            )
+        chunks.append(chunk)
+
+    return b"".join(chunks)
+
+
+def validate_image_content(file_contents: bytes, file_extension: str) -> None:
+    """
+    Validate that bytes are a real image and match the declared extension.
+    """
+    expected_formats = IMAGE_FORMATS_BY_EXTENSION.get(file_extension, set())
+    if not expected_formats:
+        raise HTTPException(status_code=400, detail="Unsupported image format.")
+
+    try:
+        with Image.open(BytesIO(file_contents)) as image:
+            image.verify()
+        with Image.open(BytesIO(file_contents)) as image:
+            detected_format = str(image.format or "").upper()
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid or corrupted image file.")
+
+    if detected_format not in expected_formats:
+        raise HTTPException(
+            status_code=400,
+            detail="Image content does not match the file extension.",
+        )
+
 
 def upload_to_r2(file_contents: bytes, filename: str) -> str:
     """Upload file to R2 and return public URL"""
@@ -64,8 +122,9 @@ def upload_to_r2(file_contents: bytes, filename: str) -> str:
         else:
             # Fallback to endpoint URL (may require authentication)
             return f"{R2_ENDPOINT_URL}/{R2_BUCKET_NAME}/{filename}"
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload to R2: {str(e)}")
+    except Exception:
+        logger.exception("Failed to upload image to R2 key=%s", filename)
+        raise HTTPException(status_code=500, detail="Failed to upload image. Please try again.")
 
 @router.post("/image")
 async def upload_image(
@@ -73,25 +132,21 @@ async def upload_image(
     current_user: models.User = Depends(get_current_active_user)
 ):
     """Upload a single image file"""
+    upload_filename = file.filename or ""
+
     # Validate file extension
-    if not is_allowed_file(file.filename):
+    if not is_allowed_file(upload_filename):
         raise HTTPException(
             status_code=400,
             detail=f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
         )
     
-    # Read file content
-    contents = await file.read()
-    
-    # Validate file size
-    if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large. Maximum size is {MAX_FILE_SIZE / 1024 / 1024}MB"
-        )
+    # Read file content with hard memory/size bounds
+    contents = await read_upload_bytes_with_limit(file, MAX_FILE_SIZE)
+    validate_image_content(contents, Path(upload_filename).suffix.lower())
     
     # Generate unique filename
-    file_extension = Path(file.filename).suffix.lower()
+    file_extension = Path(upload_filename).suffix.lower()
     unique_filename = f"{uuid.uuid4()}{file_extension}"
     
     # Upload to R2 (required)
@@ -114,19 +169,21 @@ async def upload_images(
     uploaded_images = []
     
     for file in files:
+        upload_filename = file.filename or ""
+
         # Validate file extension
-        if not is_allowed_file(file.filename):
+        if not is_allowed_file(upload_filename):
             continue  # Skip invalid files
         
-        # Read file content
-        contents = await file.read()
-        
-        # Validate file size
-        if len(contents) > MAX_FILE_SIZE:
-            continue  # Skip files that are too large
+        try:
+            # Read file content with hard memory/size bounds
+            contents = await read_upload_bytes_with_limit(file, MAX_FILE_SIZE)
+            validate_image_content(contents, Path(upload_filename).suffix.lower())
+        except HTTPException:
+            continue
         
         # Generate unique filename
-        file_extension = Path(file.filename).suffix.lower()
+        file_extension = Path(upload_filename).suffix.lower()
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         
         # Upload to R2 (required)
@@ -142,26 +199,22 @@ async def upload_profile_picture(
     current_user: models.User = Depends(get_current_active_user)
 ):
     """Upload a profile picture"""
+    upload_filename = file.filename or ""
+
     # Validate file extension
-    if not is_allowed_file(file.filename):
+    if not is_allowed_file(upload_filename):
         raise HTTPException(
             status_code=400,
             detail=f"File type not allowed. Allowed types: {', '.join(ALLOWED_EXTENSIONS)}"
         )
     
-    # Read file content
-    contents = await file.read()
-    
     # Validate file size (smaller for profile pictures - 2MB)
     max_profile_size = 2 * 1024 * 1024  # 2MB
-    if len(contents) > max_profile_size:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large. Maximum size is {max_profile_size / 1024 / 1024}MB"
-        )
+    contents = await read_upload_bytes_with_limit(file, max_profile_size)
+    validate_image_content(contents, Path(upload_filename).suffix.lower())
     
     # Generate unique filename
-    file_extension = Path(file.filename).suffix.lower()
+    file_extension = Path(upload_filename).suffix.lower()
     unique_filename = f"profile_{current_user.id}_{uuid.uuid4()}{file_extension}"
     
     # Upload to R2 (required)
@@ -190,4 +243,3 @@ async def get_image(filename: str):
         raise HTTPException(status_code=404, detail="Image not found")
     
     return FileResponse(file_path)
-
