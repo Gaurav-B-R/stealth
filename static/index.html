@@ -506,56 +506,162 @@
     <div id="homepageSection" class="section" style="display: none;">
         <!-- Hero Section -->
         <div class="homepage-hero">
-            <div class="hero-background">
-                <div class="hero-blob hero-blob-1"></div>
-                <div class="hero-blob hero-blob-2"></div>
-                <div class="hero-blob hero-blob-3"></div>
+            <!-- Animated Gradient Mesh Background -->
+            <div class="hero-background-mesh">
+                <div class="mesh-blob mesh-blob-1"></div>
+                <div class="mesh-blob mesh-blob-2"></div>
+                <div class="mesh-blob mesh-blob-3"></div>
+                <div class="mesh-blob mesh-blob-4"></div>
             </div>
-            <div class="hero-content">
-                <div class="hero-badge">
-                    <span class="badge-icon" aria-hidden="true">
-                        <svg class="home-icon-svg" viewBox="0 0 64 64" role="presentation">
-                            <use href="#icon-cap"></use>
-                        </svg>
-                    </span>
-                    <span>AI-Powered F1 Student Visa Assistant</span>
-                </div>
-                <h1 class="hero-title">
-                    <span class="title-gradient">Your AI F1 Visa Agent</span><br>
-                    <span class="title-main">Student Visa Made Simple</span>
-                </h1>
-                <p class="hero-subtitle">Navigate the F1 student visa process with confidence. Our AI agent helps you
-                    organize documents, track requirements, and ace your visa interview.</p>
-                <div class="hero-buttons">
-                    <!-- Buttons for logged-out users -->
-                    <a href="/register" onclick="event.preventDefault(); showRegister(); return false;"
-                        class="btn btn-primary btn-large btn-hero-primary" id="heroRegisterBtn">
-                        <span>Get Started Free</span>
-                        <span class="btn-icon">→</span>
-                    </a>
-                    <a href="/login" onclick="event.preventDefault(); showLogin(); return false;"
-                        class="btn btn-secondary btn-large btn-hero-secondary" id="heroLoginBtn">
-                        <span>Login to Dashboard</span>
-                    </a>
-                    <!-- Button for logged-in users -->
-                    <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); return false;"
-                        class="btn btn-primary btn-large btn-hero-primary" id="heroDashboardBtn" style="display: none;">
-                        <span>Go to Dashboard</span>
-                        <span class="btn-icon">→</span>
-                    </a>
-                </div>
-                <div class="hero-stats">
-                    <div class="stat-item">
-                        <div class="stat-number">1K+</div>
-                        <div class="stat-label">Students Helped</div>
+
+            <!-- Floating Particles/Icons -->
+            <div class="hero-particles">
+                <div class="particle p-1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg></div>
+                <div class="particle p-2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path
+                            d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z">
+                        </path>
+                        <path d="M2 12h20"></path>
+                    </svg></div>
+                <div class="particle p-3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                    </svg></div>
+                <div class="particle p-4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                    </svg></div>
+            </div>
+
+            <div class="hero-container">
+                <!-- Left Column: Content -->
+                <div class="hero-content-left">
+                    <div class="hero-badge reveal">
+                        <span class="badge-icon" aria-hidden="true">
+                            <span class="glowing-dot"></span>
+                        </span>
+                        <span>AI-Powered F1 Student Visa Assistant</span>
                     </div>
-                    <div class="stat-item">
-                        <div class="stat-number">20+</div>
-                        <div class="stat-label">Document Types</div>
+                    <h1 class="hero-title reveal reveal-delay-1">
+                        <span class="title-gradient shimmer-text">Your AI F1 Visa Agent</span><br>
+                        <span class="title-main">Student Visa Made Simple</span>
+                    </h1>
+                    <p class="hero-subtitle reveal reveal-delay-2">Navigate the F1 student visa process with confidence.
+                        Our AI agent helps you
+                        organize documents, track requirements, and ace your visa interview.</p>
+                    <div class="hero-buttons reveal reveal-delay-3">
+                        <!-- Buttons for logged-out users -->
+                        <a href="/register" onclick="event.preventDefault(); showRegister(); return false;"
+                            class="btn btn-primary btn-large btn-hero-primary premium-btn" id="heroRegisterBtn">
+                            <span>Get Started Free</span>
+                            <span class="btn-icon">→</span>
+                            <div class="btn-glow"></div>
+                        </a>
+                        <a href="/login" onclick="event.preventDefault(); showLogin(); return false;"
+                            class="btn btn-secondary btn-large btn-hero-secondary glass-btn" id="heroLoginBtn">
+                            <span>Login to Dashboard</span>
+                        </a>
+                        <!-- Button for logged-in users -->
+                        <a href="/dashboard" onclick="event.preventDefault(); showDashboard(); return false;"
+                            class="btn btn-primary btn-large btn-hero-primary premium-btn" id="heroDashboardBtn"
+                            style="display: none;">
+                            <span>Go to Dashboard</span>
+                            <span class="btn-icon">→</span>
+                            <div class="btn-glow"></div>
+                        </a>
                     </div>
-                    <div class="stat-item">
-                        <div class="stat-number">24/7</div>
-                        <div class="stat-label">AI Assistance</div>
+
+                    <div class="hero-stats reveal reveal-delay-4">
+                        <div class="stat-item glass-stat">
+                            <div class="stat-number stat-gradient">1K+</div>
+                            <div class="stat-label">Students Helped</div>
+                        </div>
+                        <div class="stat-item glass-stat">
+                            <div class="stat-number stat-gradient">20+</div>
+                            <div class="stat-label">Document Types</div>
+                        </div>
+                        <div class="stat-item glass-stat">
+                            <div class="stat-number stat-gradient">24/7</div>
+                            <div class="stat-label">AI Assistance</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Visuals -->
+                <div class="hero-visual-right reveal reveal-delay-2">
+                    <div class="floating-cards-container">
+                        <!-- Card 1: Document Validation -->
+                        <div class="hero-glass-card float-card-1">
+                            <div class="card-glass-shine"></div>
+                            <div class="card-header">
+                                <div class="card-icon blue-glow"><svg viewBox="0 0 24 24" fill="none"
+                                        stroke="currentColor" stroke-width="2">
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                        <polyline points="14 2 14 8 20 8"></polyline>
+                                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                                        <polyline points="10 9 9 9 8 9"></polyline>
+                                    </svg></div>
+                                <span>I-20 Form</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="skeleton-line"></div>
+                                <div class="skeleton-line short"></div>
+                            </div>
+                            <div class="card-status status-success">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                Verified
+                            </div>
+                        </div>
+
+                        <!-- Card 2: AI Interview Prep -->
+                        <div class="hero-glass-card float-card-2">
+                            <div class="card-glass-shine"></div>
+                            <div class="card-header">
+                                <div class="card-icon purple-glow"><svg viewBox="0 0 24 24" fill="none"
+                                        stroke="currentColor" stroke-width="2">
+                                        <path
+                                            d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z">
+                                        </path>
+                                    </svg></div>
+                                <span>Mock Interview</span>
+                            </div>
+                            <div class="card-body">
+                                <div class="chat-bubble user-bubble">Why this university?</div>
+                                <div class="chat-bubble ai-bubble typing-indicator">
+                                    <span></span><span></span><span></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Card 3: Visa Probability Tracker -->
+                        <div class="hero-glass-card float-card-3">
+                            <div class="card-glass-shine"></div>
+                            <div class="card-header">
+                                <div class="card-icon green-glow"><svg viewBox="0 0 24 24" fill="none"
+                                        stroke="currentColor" stroke-width="2">
+                                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                                    </svg></div>
+                                <span>Readiness Score</span>
+                            </div>
+                            <div class="card-progress">
+                                <div class="progress-info">
+                                    <span>Excellent</span>
+                                    <span class="score">94%</span>
+                                </div>
+                                <div class="progress-bar-bg">
+                                    <div class="progress-bar-fill"></div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1229,9 +1335,11 @@
                         <a href="#" class="nav-item" data-tab="news"
                             onclick="switchDashboardTab('news'); return false;">
                             <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <path d="M5 5.5A1.5 1.5 0 0 1 6.5 4H20v14.5a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 18.5z">
+                                    <path
+                                        d="M5 5.5A1.5 1.5 0 0 1 6.5 4H20v14.5a1.5 1.5 0 0 1-1.5 1.5H6.5A1.5 1.5 0 0 1 5 18.5z">
                                     </path>
-                                    <path d="M5 18.5A1.5 1.5 0 0 1 3.5 20A1.5 1.5 0 0 1 2 18.5V8.5A1.5 1.5 0 0 1 3.5 7H5">
+                                    <path
+                                        d="M5 18.5A1.5 1.5 0 0 1 3.5 20A1.5 1.5 0 0 1 2 18.5V8.5A1.5 1.5 0 0 1 3.5 7H5">
                                     </path>
                                     <path d="M8.5 9h8"></path>
                                     <path d="M8.5 12h8"></path>
@@ -1536,10 +1644,12 @@
                                                         placeholder="Ask a question..." class="rilono-ai-input"
                                                         onkeydown="handleRilonoAiChatKeyDown(event)"
                                                         oninput="autoResizeRilonoAiInput(this)"></textarea>
-                                                    <label class="rilono-ai-attach-btn" title="Attach files or screenshots">
+                                                    <label class="rilono-ai-attach-btn"
+                                                        title="Attach files or screenshots">
                                                         📎
                                                         <input type="file" class="rilono-ai-attachment-input"
-                                                            data-rilono-attachment-input="true" accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.rtf,.xls,.xlsx"
+                                                            data-rilono-attachment-input="true"
+                                                            accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.rtf,.xls,.xlsx"
                                                             multiple>
                                                     </label>
                                                     <button type="submit" id="overviewRilonoAiSendButton"
@@ -2315,15 +2425,16 @@
                                                 <label class="rilono-ai-attach-btn" title="Attach files or screenshots">
                                                     📎
                                                     <input type="file" class="rilono-ai-attachment-input"
-                                                        data-rilono-attachment-input="true" accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.rtf,.xls,.xlsx"
+                                                        data-rilono-attachment-input="true"
+                                                        accept="image/*,.pdf,.txt,.md,.csv,.json,.doc,.docx,.rtf,.xls,.xlsx"
                                                         multiple>
                                                 </label>
                                                 <button type="submit" id="rilonoAiSendButton"
                                                     class="rilono-ai-send-btn">➤</button>
                                             </div>
                                         </form>
-                                        <div class="rilono-ai-attachment-session"
-                                            data-rilono-attachment-session="true"></div>
+                                        <div class="rilono-ai-attachment-session" data-rilono-attachment-session="true">
+                                        </div>
                                         <div class="rilono-ai-quick-actions">
                                             <button type="button" class="quick-action-chip"
                                                 onclick="sendQuickMessage('What documents do I need to upload?', this)">
@@ -2643,7 +2754,8 @@
                             content in the background. Page context is captured only when you explicitly trigger
                             inspection.</li>
                         <li><strong>Operational Metadata:</strong> We may process technical metadata such as timestamp,
-                            page URL/title, and request status for security, troubleshooting, and service reliability.</li>
+                            page URL/title, and request status for security, troubleshooting, and service reliability.
+                        </li>
                     </ul>
                 </section>
 
