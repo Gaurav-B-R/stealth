@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from urllib.parse import urlparse
 import os
+import logging
 from app.database import get_db
 from app import models, schemas
 from app.auth import (
@@ -14,6 +15,7 @@ from app.referrals import ensure_user_referral_code
 from app.utils.rate_limiter import check_ip_rate_limit
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
+logger = logging.getLogger(__name__)
 CHANGE_PASSWORD_RATE_LIMIT = int(os.getenv("CHANGE_PASSWORD_RATE_LIMIT", "5"))
 CHANGE_PASSWORD_RATE_WINDOW_SECONDS = int(os.getenv("CHANGE_PASSWORD_RATE_WINDOW_SECONDS", "900"))
 
@@ -54,6 +56,18 @@ def _enforce_rate_limit_or_429(
             detail="Too many requests. Please try again later.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+def _refresh_student_profile_snapshot_safe(db: Session, user_id: int) -> None:
+    try:
+        from app.routers.documents import refresh_student_profile_snapshot_for_user_id
+        refresh_student_profile_snapshot_for_user_id(user_id=user_id, db=db)
+    except Exception:
+        logger.exception(
+            "Failed to refresh STUDENT_PROFILE_AND_F1_VISA_STATUS.json for user_id=%s",
+            user_id,
+        )
+
 
 @router.get("/", response_model=schemas.UserResponse)
 def get_profile(
@@ -112,6 +126,7 @@ def update_profile(
     
     db.commit()
     db.refresh(current_user)
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     return current_user
 
 
@@ -197,6 +212,7 @@ def update_documentation_preferences(
     
     db.commit()
     db.refresh(current_user)
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     
     return {
         "message": "Documentation preferences updated successfully",
@@ -222,6 +238,7 @@ def subscribe_email_notifications(
     current_user.email_notifications_unsubscribe_reason = None
     db.commit()
     db.refresh(current_user)
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
 
     return {"message": "Email notifications enabled successfully."}
 

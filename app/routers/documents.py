@@ -15,6 +15,7 @@ from app.utils.security import (
 from app.utils.secure_artifacts import encrypt_artifact_bytes, decrypt_artifact_bytes
 from app.utils.gemini_service import extract_text_from_document, create_extracted_text_file, validate_and_extract_document
 from app.subscriptions import get_or_create_user_subscription, get_plan_limits
+from app.subscriptions import PLAN_PRO
 from app.document_catalog import (
     build_document_catalog_response,
     build_journey_stages,
@@ -37,6 +38,11 @@ from PIL import Image, UnidentifiedImageError
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
+
+USER_ACCOUNT_SNAPSHOT_VERSION = "1.0"
+SUBSCRIPTION_SNAPSHOT_VERSION = "1.0"
+PROFILE_PRICING_MODEL_MONTHLY = "pro_monthly"
+PROFILE_PRICING_MODEL_SIX_MONTH = "pro_six_month"
 
 # R2 Configuration for documents
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
@@ -208,6 +214,99 @@ def upload_document_to_r2(file_contents: bytes, filename: str, content_type: str
     except Exception:
         logger.exception("Failed to upload document to R2 key=%s", filename)
         raise HTTPException(status_code=500, detail="Failed to store document securely. Please try again.")
+
+
+def _datetime_to_iso(value) -> Optional[str]:
+    if not value:
+        return None
+    try:
+        return value.isoformat()
+    except Exception:
+        return str(value)
+
+
+def build_user_account_snapshot(user: models.User) -> dict:
+    """
+    Build a stable, non-sensitive account snapshot used for profile JSON freshness checks.
+    """
+    return {
+        "snapshot_version": USER_ACCOUNT_SNAPSHOT_VERSION,
+        "user_id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "full_name": user.full_name,
+        "university": user.university,
+        "phone": user.phone,
+        "current_residence_country": user.current_residence_country or "United States",
+        "profile_picture": user.profile_picture,
+        "is_active": bool(user.is_active),
+        "email_verified": bool(user.email_verified),
+        "is_admin": bool(getattr(user, "is_admin", False)),
+        "is_developer": bool(getattr(user, "is_developer", False)),
+        "preferred_country": user.preferred_country or "United States",
+        "preferred_intake": user.preferred_intake,
+        "preferred_year": user.preferred_year,
+        "referral_code": user.referral_code,
+        "referred_by_user_id": user.referred_by_user_id,
+        "first_login_at": _datetime_to_iso(user.first_login_at),
+        "referral_reward_granted_at": _datetime_to_iso(user.referral_reward_granted_at),
+        "accepted_terms_privacy_at": _datetime_to_iso(user.accepted_terms_privacy_at),
+        "email_notifications_enabled": bool(user.email_notifications_enabled),
+        "email_notifications_unsubscribed_at": _datetime_to_iso(user.email_notifications_unsubscribed_at),
+        "email_notifications_unsubscribe_reason": user.email_notifications_unsubscribe_reason,
+        "pending_email": user.pending_email,
+        "pending_university": user.pending_university,
+        "university_change_token_expires": _datetime_to_iso(user.university_change_token_expires),
+        "created_at": _datetime_to_iso(user.created_at),
+    }
+
+
+def is_student_profile_snapshot_stale(
+    cached_profile: Optional[dict],
+    user: models.User,
+    document_count: int,
+    db: Optional[Session] = None,
+) -> bool:
+    """
+    A profile snapshot is stale if document count or user-account snapshot differs.
+    """
+    if not cached_profile:
+        return True
+
+    cached_doc_count = cached_profile.get("documents_summary", {}).get("total_documents_uploaded", 0)
+    if cached_doc_count != document_count:
+        return True
+
+    cached_user_snapshot = cached_profile.get("user_account")
+    if not isinstance(cached_user_snapshot, dict):
+        return True
+
+    current_snapshot = build_user_account_snapshot(user)
+    if cached_user_snapshot != current_snapshot:
+        return True
+
+    cached_subscription = cached_profile.get("subscription")
+    if not isinstance(cached_subscription, dict):
+        return True
+
+    if cached_subscription.get("snapshot_version") != SUBSCRIPTION_SNAPSHOT_VERSION:
+        return True
+
+    if db is not None:
+        current_subscription = _build_subscription_snapshot_for_profile(user, db)
+        subscription_identity_keys = (
+            "plan",
+            "status",
+            "ends_at",
+            "access_source",
+            "plan_display_name",
+            "pricing_model",
+        )
+        for key in subscription_identity_keys:
+            if cached_subscription.get(key) != current_subscription.get(key):
+                return True
+
+    return False
 
 def get_presigned_url(r2_key: str, expiration: int = 3600) -> str:
     """Generate a presigned URL for secure document access"""
@@ -431,18 +530,6 @@ def upload_document(
     # Users will need to provide password to decrypt when viewing/downloading
     db_document.file_url = ""  # Empty URL - requires password to decrypt
     
-    # Refresh the student profile in R2 to include the new document
-    # This ensures the AI chat has accurate document counts
-    try:
-        all_documents = db.query(models.Document).filter(
-            models.Document.user_id == current_user.id
-        ).all()
-        status_data = calculate_visa_journey_stage(all_documents, db)
-        save_student_profile_to_r2(current_user, status_data, all_documents, db=db)
-    except Exception as e:
-        # Don't fail the upload if profile refresh fails
-        print(f"Warning: Failed to refresh student profile after upload: {str(e)}")
-    
     # Prepare response with validation information
     response_data = schemas.DocumentUploadResponse(
         document=db_document,
@@ -456,6 +543,17 @@ def upload_document(
     # Count this successful upload toward subscription usage.
     subscription.document_uploads_used += 1
     db.commit()
+
+    # Refresh profile snapshot after both document + usage updates are committed.
+    try:
+        all_documents = db.query(models.Document).filter(
+            models.Document.user_id == current_user.id
+        ).all()
+        status_data = calculate_visa_journey_stage(all_documents, db)
+        save_student_profile_to_r2(current_user, status_data, all_documents, db=db)
+    except Exception as e:
+        # Don't fail the upload if profile refresh fails.
+        print(f"Warning: Failed to refresh student profile after upload: {str(e)}")
     
     return response_data
 
@@ -637,12 +735,44 @@ def calculate_visa_journey_stage(documents: List[models.Document], db: Optional[
     }
 
 
-def _build_subscription_snapshot_for_profile(user_id: int, db: Session) -> dict:
+def _normalize_profile_pricing_model(raw_model: str | None) -> str:
+    normalized = str(raw_model or "").strip().lower()
+    if normalized in {
+        PROFILE_PRICING_MODEL_SIX_MONTH,
+        "pro_6_month",
+        "pro_6month",
+        "6_month",
+        "6month",
+        "six_month",
+        "one_time_6_month",
+    }:
+        return PROFILE_PRICING_MODEL_SIX_MONTH
+    if normalized in {
+        PROFILE_PRICING_MODEL_MONTHLY,
+        "monthly",
+        "pro",
+        "default",
+    }:
+        return PROFILE_PRICING_MODEL_MONTHLY
+    return PROFILE_PRICING_MODEL_MONTHLY
+
+
+def _build_subscription_snapshot_for_profile(user: models.User, db: Session) -> dict:
+    user_id = user.id
     subscription = get_or_create_user_subscription(db, user_id, commit=False)
     limits = get_plan_limits(subscription.plan)
     latest_payment = (
         db.query(models.SubscriptionPayment)
         .filter(models.SubscriptionPayment.user_id == user_id)
+        .order_by(desc(models.SubscriptionPayment.id))
+        .first()
+    )
+    latest_verified_payment = (
+        db.query(models.SubscriptionPayment)
+        .filter(
+            models.SubscriptionPayment.user_id == user_id,
+            models.SubscriptionPayment.status == "verified",
+        )
         .order_by(desc(models.SubscriptionPayment.id))
         .first()
     )
@@ -656,10 +786,57 @@ def _build_subscription_snapshot_for_profile(user_id: int, db: Session) -> dict:
         .order_by(desc(models.SubscriptionPayment.id))
         .first()
     )
+    latest_verified_provider = (
+        str(latest_verified_payment.provider or "").strip().lower()
+        if latest_verified_payment and latest_verified_payment.provider
+        else ""
+    )
+    latest_verified_pricing_model = _normalize_profile_pricing_model(
+        getattr(latest_verified_payment, "pricing_model", None)
+    )
+    has_verified_payment = latest_verified_payment is not None
+    ends_at = subscription.ends_at
+    now = datetime.utcnow()
+    referral_bonus_active = bool(
+        subscription.plan == PLAN_PRO
+        and user.referral_reward_granted_at
+        and ends_at
+        and ends_at > now
+        and not has_verified_payment
+        and not latest_razorpay_subscription
+    )
+    if subscription.plan != PLAN_PRO:
+        access_source = "Free Plan"
+    elif referral_bonus_active:
+        access_source = "Referral Bonus (1 Month Pro)"
+    elif has_verified_payment:
+        if latest_verified_pricing_model == PROFILE_PRICING_MODEL_SIX_MONTH:
+            access_source = "Journey Pass (Best Value)"
+        elif latest_verified_provider == "coupon":
+            access_source = "Coupon Pro (Auto-Renew Off)"
+        else:
+            access_source = "Paid Pro"
+    elif ends_at and ends_at > now:
+        access_source = "Pro Access (Time-Limited)"
+    else:
+        access_source = "Pro Access"
+
+    if subscription.plan != PLAN_PRO:
+        plan_display_name = "Free"
+    elif "journey pass" in access_source.lower():
+        plan_display_name = "Journey Pass"
+    else:
+        plan_display_name = "Pro"
 
     return {
+        "snapshot_version": SUBSCRIPTION_SNAPSHOT_VERSION,
         "plan": (subscription.plan or "free").lower(),
         "status": (subscription.status or "active").lower(),
+        "plan_display_name": plan_display_name,
+        "access_source": access_source,
+        "pricing_model": (
+            latest_verified_pricing_model if subscription.plan == PLAN_PRO and has_verified_payment else None
+        ),
         "started_at": subscription.started_at.isoformat() if subscription.started_at else None,
         "ends_at": subscription.ends_at.isoformat() if subscription.ends_at else None,
         "usage": {
@@ -686,6 +863,7 @@ def _build_subscription_snapshot_for_profile(user_id: int, db: Session) -> dict:
                     if latest_payment.coupon_percent_off is not None
                     else None
                 ),
+                "pricing_model": _normalize_profile_pricing_model(getattr(latest_payment, "pricing_model", None)),
                 "verified_at": latest_payment.verified_at.isoformat() if latest_payment.verified_at else None,
                 "created_at": latest_payment.created_at.isoformat() if latest_payment.created_at else None,
             }
@@ -724,7 +902,8 @@ def save_student_profile_to_r2(
             if doc.year and not preferred_year:
                 preferred_year = doc.year
     
-    subscription_snapshot = _build_subscription_snapshot_for_profile(user.id, db) if db else {}
+    subscription_snapshot = _build_subscription_snapshot_for_profile(user, db) if db else {}
+    user_account_snapshot = build_user_account_snapshot(user)
 
     # Build comprehensive student profile
     comprehensive_data = {
@@ -737,15 +916,21 @@ def save_student_profile_to_r2(
             "user_id": user.id,
             "full_name": user.full_name,
             "email": user.email,
+            "username": user.username,
             "university": user.university,
             "phone": user.phone,
+            "current_residence_country": user.current_residence_country or "United States",
+            "profile_picture": user.profile_picture,
             "account_created": user.created_at.isoformat() if user.created_at else None,
-            "email_verified": user.email_verified
+            "email_verified": user.email_verified,
+            "is_active": bool(user.is_active),
         },
+        "user_account": user_account_snapshot,
         
         # Documentation Preferences
         "documentation_preferences": {
             "target_country": preferred_country,
+            "current_residence_country": user.current_residence_country or "United States",
             "intake_semester": preferred_intake,
             "intake_year": preferred_year
         },
@@ -851,18 +1036,22 @@ async def get_visa_journey_status(
     Reads from R2 if exists, otherwise creates it (for new users).
     Does NOT write to R2 on every load - only reads.
     """
+    documents = db.query(models.Document).filter(
+        models.Document.user_id == current_user.id
+    ).all()
+    status_data = calculate_visa_journey_stage(documents, db)
+
     # First, try to get existing profile from R2
     existing_profile = get_student_profile_from_r2(current_user.id)
     
-    if existing_profile:
+    if existing_profile and not is_student_profile_snapshot_stale(
+        existing_profile,
+        current_user,
+        len(documents),
+        db=db,
+    ):
         # Profile exists in R2 - just return it (no write needed)
-        # Calculate fresh stage data for UI display
-        documents = db.query(models.Document).filter(
-            models.Document.user_id == current_user.id
-        ).all()
-        status_data = calculate_visa_journey_stage(documents, db)
-        
-        # Merge with existing profile data
+        # Merge with fresh stage data for UI display
         status_data["r2_key"] = f"user_{current_user.id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
         status_data["user_email"] = current_user.email
         status_data["user_name"] = current_user.full_name
@@ -870,14 +1059,7 @@ async def get_visa_journey_status(
         
         return JSONResponse(content=status_data)
     
-    # Profile doesn't exist in R2 - create it for the first time
-    documents = db.query(models.Document).filter(
-        models.Document.user_id == current_user.id
-    ).all()
-    
-    status_data = calculate_visa_journey_stage(documents, db)
-    
-    # Create the R2 file for the first time
+    # Profile missing or stale - create/refresh R2 snapshot
     r2_key = save_student_profile_to_r2(current_user, status_data, documents, db=db)
     
     status_data["r2_key"] = r2_key

@@ -35,8 +35,10 @@ from app.utils.rate_limiter import (
 )
 from app.utils.token_security import hash_token, token_matches
 import os
+import logging
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
+logger = logging.getLogger(__name__)
 DEFAULT_PUBLIC_BASE_URL = "https://rilono.com"
 
 REGISTER_RATE_LIMIT = int(os.getenv("REGISTER_RATE_LIMIT", "5"))
@@ -56,6 +58,20 @@ def _bool_env(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _refresh_student_profile_snapshot_safe(db: Session, user_id: int) -> None:
+    """
+    Best-effort sync of STUDENT_PROFILE_AND_F1_VISA_STATUS.json after account changes.
+    """
+    try:
+        from app.routers.documents import refresh_student_profile_snapshot_for_user_id
+        refresh_student_profile_snapshot_for_user_id(user_id=user_id, db=db)
+    except Exception:
+        logger.exception(
+            "Failed to refresh STUDENT_PROFILE_AND_F1_VISA_STATUS.json for user_id=%s",
+            user_id,
+        )
 
 
 def _cookie_secure_default() -> bool:
@@ -333,6 +349,7 @@ def register(
     db.commit()
     db.refresh(db_user)
     get_or_create_user_subscription(db, db_user.id)
+    _refresh_student_profile_snapshot_safe(db=db, user_id=db_user.id)
     
     # Send verification email
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
@@ -449,6 +466,7 @@ async def login(
 
     if changes_pending:
         db.commit()
+        _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     # Store email in token instead of username
@@ -469,7 +487,10 @@ def read_users_me(
     db: Session = Depends(get_db)
 ):
     get_or_create_user_subscription(db, current_user.id)
+    had_referral_code = bool(current_user.referral_code)
     ensure_user_referral_code(db, current_user, commit=True)
+    if not had_referral_code and current_user.referral_code:
+        _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     return current_user
 
 
@@ -632,6 +653,7 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     user.verification_token = None  # Clear the token after verification
     user.verification_token_expires = None
     db.commit()
+    _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     
     return {
         "message": "Email verified successfully! You can now log in.",
@@ -773,6 +795,7 @@ def request_university_change(
     current_user.university_change_token_expires = token_expires
     
     db.commit()
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     
     # Use configured public base URL only (do not trust request Host header).
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL).rstrip("/")
@@ -828,6 +851,7 @@ def verify_university_change(token: str, db: Session = Depends(get_db)):
         user.university_change_token = None
         user.university_change_token_expires = None
         db.commit()
+        _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
         
         raise HTTPException(
             status_code=400,
@@ -855,6 +879,7 @@ def verify_university_change(token: str, db: Session = Depends(get_db)):
     user.university_change_token_expires = None
     
     db.commit()
+    _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     
     return {
         "message": f"University successfully changed to {user.university}!",
@@ -903,6 +928,7 @@ def cancel_university_change(
     current_user.university_change_token_expires = None
     
     db.commit()
+    _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     
     return {"message": "University change request cancelled."}
 
@@ -1000,6 +1026,7 @@ def unsubscribe_email_notifications(
     user.email_notifications_unsubscribed_at = datetime.utcnow()
     user.email_notifications_unsubscribe_reason = reason or None
     db.commit()
+    _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
 
     feedback_subject = "Email Notification Unsubscribe Feedback"
     feedback_message = (

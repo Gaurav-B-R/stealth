@@ -498,6 +498,7 @@ def build_system_prompt(
         "- Be concise but thorough in your responses",
         "- If you don't have information about a specific document, let the user know and guide them on what they need",
         "- For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps",
+        "- For subscription questions, treat `subscription.plan` as an internal code (free/pro). Use `subscription.plan_display_name` or `subscription.access_source` for user-facing plan names (e.g., Journey Pass).",
         "- If ATTACHED CHAT SESSION FILES are present, use them for this chat session context only",
         "- Identity guardrail: If asked about your model/provider/training details, do not mention Gemini, Google, or internal model names.",
         "- Identity guardrail: In such cases, reply that you are Rilono AI and continue helping with the user's request.",
@@ -673,7 +674,11 @@ def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
     Check if the cached student profile is stale (document count mismatch) and refresh if needed.
     Returns the up-to-date profile data.
     """
-    from app.routers.documents import calculate_visa_journey_stage, save_student_profile_to_r2
+    from app.routers.documents import (
+        calculate_visa_journey_stage,
+        is_student_profile_snapshot_stale,
+        save_student_profile_to_r2,
+    )
     
     # Get actual document count from database
     actual_documents = db.query(models.Document).filter(
@@ -685,14 +690,14 @@ def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
     cached_profile = get_student_profile_and_status(user.id)
     
     if cached_profile:
-        cached_count = cached_profile.get('documents_summary', {}).get('total_documents_uploaded', 0)
-        
-        # If counts match, profile is up-to-date
-        if cached_count == actual_count:
+        if not is_student_profile_snapshot_stale(cached_profile, user, actual_count, db=db):
             return cached_profile
-        
-        # Profile is stale - refresh it
-        print(f"🔄 Refreshing stale profile for user {user.id}: cached={cached_count}, actual={actual_count}")
+
+        cached_count = cached_profile.get('documents_summary', {}).get('total_documents_uploaded', 0)
+        print(
+            f"🔄 Refreshing stale profile for user {user.id}: "
+            f"cached_docs={cached_count}, actual_docs={actual_count}"
+        )
     else:
         print(f"🔄 Creating new profile for user {user.id}")
     
@@ -783,6 +788,11 @@ def chat_with_ai(
         if count_toward_rilono_chat_limit:
             subscription.ai_messages_used += 1
             db.commit()
+            try:
+                from app.routers.documents import refresh_student_profile_snapshot_for_user_id
+                refresh_student_profile_snapshot_for_user_id(user_id=current_user.id, db=db)
+            except Exception:
+                pass
         
         return ChatResponse(response=response_text)
         
