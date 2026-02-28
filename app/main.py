@@ -31,10 +31,13 @@ import os
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
+APP_NAME = os.getenv("APP_NAME", "Rilono").strip() or "Rilono"
+APP_VERSION = os.getenv("APP_VERSION", "1.3.2").strip() or "1.3.2"
+
 app = FastAPI(
-    title="Rilono",
+    title=APP_NAME,
     description="AI-powered F1 student visa documentation assistant",
-    version="1.0.0"
+    version=APP_VERSION
 )
 
 DEFAULT_CORS_ORIGINS = [
@@ -179,6 +182,11 @@ async def read_root():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/api/meta")
+def app_meta():
+    return {"name": APP_NAME, "version": APP_VERSION}
 
 # Catch-all route for client-side routing
 # This must be last to allow API routes to work

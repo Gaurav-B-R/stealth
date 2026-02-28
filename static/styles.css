@@ -4769,7 +4769,7 @@ body {
 
 .rilono-reel-scene {
     position: absolute;
-    inset: 1.1rem 1.1rem 6.3rem;
+    inset: 1.1rem 1.1rem 4.5rem;
     border-radius: 1rem;
     background: linear-gradient(145deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.68));
     border: 1px solid rgba(148, 163, 184, 0.22);
@@ -5295,17 +5295,19 @@ body {
 
 .rilono-reel-footer {
     position: absolute;
-    left: 1rem;
-    right: 1rem;
-    bottom: 1rem;
-    border-radius: 0.9rem;
-    padding: 0.75rem 0.88rem;
+    left: 1.1rem;
+    right: 1.1rem;
+    bottom: 1.1rem;
+    border-radius: 0.8rem;
+    padding: 0.6rem 1.2rem;
     border: 1px solid rgba(148, 163, 184, 0.25);
     background: rgba(2, 6, 23, 0.72);
     backdrop-filter: blur(8px);
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    z-index: 10;
 }
 
 .rilono-reel-status {
@@ -5315,6 +5317,9 @@ body {
     color: #cbd5e1;
     font-size: 0.82rem;
     font-weight: 600;
+    white-space: nowrap;
+    width: 200px;
+    flex-shrink: 0;
 }
 
 .rilono-live-dot {
@@ -5331,6 +5336,7 @@ body {
     border-radius: 999px;
     background: rgba(148, 163, 184, 0.24);
     overflow: hidden;
+    flex-grow: 1;
 }
 
 #rilonoReelProgress {
@@ -5347,7 +5353,10 @@ body {
 .rilono-reel-controls {
     display: flex;
     align-items: center;
+    justify-content: flex-end;
     gap: 0.52rem;
+    width: 200px;
+    flex-shrink: 0;
 }
 
 .rilono-reel-playpause {
@@ -5395,6 +5404,7 @@ body {
     .rilono-reel-scene {
         grid-template-columns: 1fr;
         gap: 1.5rem;
+        inset: 1rem 1rem 7.5rem;
     }
 
     .reel-scene-visual-right {
@@ -5405,6 +5415,19 @@ body {
         flex-direction: column;
         align-items: flex-start;
         height: auto;
+        gap: 0.75rem;
+        padding: 1rem;
+    }
+
+    .rilono-reel-status,
+    .rilono-reel-controls {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .rilono-reel-progress-track {
+        width: 100%;
+        margin: 0;
     }
 }
 

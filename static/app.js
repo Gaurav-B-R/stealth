@@ -560,6 +560,24 @@ async function initializeTurnstile() {
     }
 }
 
+async function initializeFooterVersion() {
+    const footerVersion = document.getElementById('footerVersion');
+    if (!footerVersion) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/meta`);
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const version = String(data?.version || '').trim();
+        if (!version) return;
+
+        footerVersion.textContent = `v${version}`;
+    } catch (error) {
+        console.warn('Error loading app version:', error);
+    }
+}
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
@@ -569,6 +587,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializePricingSelector();
     initializeRegisterCountrySelector();
     initializeRilonoProductReel();
+    void initializeFooterVersion();
 
     // Initialize Turnstile
     await initializeTurnstile();
