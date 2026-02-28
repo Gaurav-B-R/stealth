@@ -174,6 +174,7 @@
                 ☰
             </button>
             <div class="nav-links" id="navLinks">
+                <a href="/" onclick="event.preventDefault(); showHomepage(); return false;" id="homeLink">Home</a>
                 <a href="/pricing" onclick="event.preventDefault(); showPricing(); return false;"
                     id="pricingLink">Pricing</a>
                 <a href="/about-us" onclick="event.preventDefault(); showAboutUs(); return false;"
@@ -725,50 +726,106 @@
                         <div class="rilono-reel-noise"></div>
 
                         <div class="rilono-reel-scene is-active" data-scene-label="Document Intelligence">
-                            <div class="reel-scene-badge">Scene 1 · Document Engine</div>
-                            <h3>Upload once. Rilono maps every file to your visa stage.</h3>
-                            <p>Get AI validation notes, missing-document warnings, and clear progress from starter docs
-                                to visa-ready.</p>
-                            <div class="reel-scene-metrics">
-                                <div><strong>20+</strong><span>Document Types</span></div>
-                                <div><strong>Stage-Wise</strong><span>Checklist Tracking</span></div>
-                                <div><strong>Instant</strong><span>Validation Feedback</span></div>
+                            <div class="reel-scene-content-left">
+                                <div class="reel-scene-badge">Scene 1 · Document Engine</div>
+                                <h3>Upload once. Rilono maps every file to your visa stage.</h3>
+                                <p>Get AI validation notes, missing-document warnings, and clear progress from starter
+                                    docs
+                                    to visa-ready.</p>
+                                <div class="reel-scene-metrics">
+                                    <div><strong>20+</strong><span>Document Types</span></div>
+                                    <div><strong>Stage-Wise</strong><span>Checklist Tracking</span></div>
+                                    <div><strong>Instant</strong><span>Validation Feedback</span></div>
+                                </div>
+                            </div>
+                            <div class="reel-scene-visual-right">
+                                <div class="mockup-container mockup-doc-scanner">
+                                    <div class="mockup-doc">
+                                        <div class="doc-header"></div>
+                                        <div class="doc-line"></div>
+                                        <div class="doc-line short"></div>
+                                        <div class="doc-photo"></div>
+                                        <div class="doc-line"></div>
+                                        <div class="doc-line"></div>
+                                    </div>
+                                    <div class="mockup-scanner-line"></div>
+                                    <div class="mockup-status-badge">✅ Validated</div>
+                                </div>
                             </div>
                         </div>
 
                         <div class="rilono-reel-scene" data-scene-label="Rilono AI Assistant">
-                            <div class="reel-scene-badge">Scene 2 · Personalized AI</div>
-                            <h3>Ask anything. Rilono AI answers with your context in mind.</h3>
-                            <p>Chat guidance adapts to your profile, uploaded documents, and current journey stage for
-                                better decisions.</p>
-                            <div class="reel-scene-metrics">
-                                <div><strong>24/7</strong><span>AI Assistance</span></div>
-                                <div><strong>Profile-Aware</strong><span>Recommendations</span></div>
-                                <div><strong>Focused</strong><span>F1 Visa Scope</span></div>
+                            <div class="reel-scene-content-left">
+                                <div class="reel-scene-badge">Scene 2 · Personalized AI</div>
+                                <h3>Ask anything. Rilono AI answers with your context in mind.</h3>
+                                <p>Chat guidance adapts to your profile, uploaded documents, and current journey stage
+                                    for
+                                    better decisions.</p>
+                                <div class="reel-scene-metrics">
+                                    <div><strong>24/7</strong><span>AI Assistance</span></div>
+                                    <div><strong>Profile-Aware</strong><span>Recommendations</span></div>
+                                    <div><strong>Focused</strong><span>F1 Visa Scope</span></div>
+                                </div>
+                            </div>
+                            <div class="reel-scene-visual-right">
+                                <div class="mockup-container mockup-ai-chat">
+                                    <div class="chat-bubble user">How much funding do I need to show?</div>
+                                    <div class="chat-bubble ai typing">
+                                        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                                    </div>
+                                    <div class="chat-bubble ai answer">Based on your I-20 from NYU, you need to show
+                                        $72,500 for the first year.</div>
+                                </div>
                             </div>
                         </div>
 
                         <div class="rilono-reel-scene" data-scene-label="Interview Training">
-                            <div class="reel-scene-badge">Scene 3 · Interview Prep</div>
-                            <h3>Train for VO questions before your real interview day.</h3>
-                            <p>Practice with structured prep sessions and realistic mock interview flows to improve
-                                confidence and clarity.</p>
-                            <div class="reel-scene-metrics">
-                                <div><strong>VO-Style</strong><span>Mock Simulation</span></div>
-                                <div><strong>Actionable</strong><span>Feedback Loops</span></div>
-                                <div><strong>Repeatable</strong><span>Practice Runs</span></div>
+                            <div class="reel-scene-content-left">
+                                <div class="reel-scene-badge">Scene 3 · Interview Prep</div>
+                                <h3>Train for VO questions before your real interview day.</h3>
+                                <p>Practice with structured prep sessions and realistic mock interview flows to improve
+                                    confidence and clarity.</p>
+                                <div class="reel-scene-metrics">
+                                    <div><strong>VO-Style</strong><span>Mock Simulation</span></div>
+                                    <div><strong>Actionable</strong><span>Feedback Loops</span></div>
+                                    <div><strong>Repeatable</strong><span>Practice Runs</span></div>
+                                </div>
+                            </div>
+                            <div class="reel-scene-visual-right">
+                                <div class="mockup-container mockup-interview">
+                                    <div class="vo-avatar">🧑‍💼</div>
+                                    <div class="vo-question">"Why are you choosing this specific university?"</div>
+                                    <div class="audio-waves">
+                                        <span></span><span></span><span></span><span></span><span></span>
+                                    </div>
+                                    <div class="feedback-toast">Good detail on faculty research!</div>
+                                </div>
                             </div>
                         </div>
 
                         <div class="rilono-reel-scene" data-scene-label="Smart Notifications">
-                            <div class="reel-scene-badge">Scene 4 · Risk Radar</div>
-                            <h3>Stay ahead with deadline alerts, news signals, and private access.</h3>
-                            <p>Rilono highlights timeline risks, document gaps, and key F1 updates inside a student-only
-                                ecosystem.</p>
-                            <div class="reel-scene-metrics">
-                                <div><strong>Real-Time</strong><span>Alerting</span></div>
-                                <div><strong>Latest</strong><span>F1 News Tracking</span></div>
-                                <div><strong>.edu</strong><span>Student-Only Access</span></div>
+                            <div class="reel-scene-content-left">
+                                <div class="reel-scene-badge">Scene 4 · Risk Radar</div>
+                                <h3>Stay ahead with deadline alerts, news signals, and private access.</h3>
+                                <p>Rilono highlights timeline risks, document gaps, and key F1 updates inside a
+                                    student-only
+                                    ecosystem.</p>
+                                <div class="reel-scene-metrics">
+                                    <div><strong>Real-Time</strong><span>Alerting</span></div>
+                                    <div><strong>Latest</strong><span>F1 News Tracking</span></div>
+                                    <div><strong>.edu</strong><span>Student-Only Access</span></div>
+                                </div>
+                            </div>
+                            <div class="reel-scene-visual-right">
+                                <div class="mockup-container mockup-radar">
+                                    <div class="radar-circle">
+                                        <div class="radar-sweep"></div>
+                                        <div class="radar-ping p1"></div>
+                                        <div class="radar-ping p2"></div>
+                                    </div>
+                                    <div class="alert-card danger">⚠️ I-20 expires in 15 days</div>
+                                    <div class="alert-card info">ℹ️ New F1 policy update</div>
+                                </div>
                             </div>
                         </div>
 

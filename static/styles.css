@@ -4773,21 +4773,30 @@ body {
     border-radius: 1rem;
     background: linear-gradient(145deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.68));
     border: 1px solid rgba(148, 163, 184, 0.22);
-    padding: 1.5rem 1.5rem 1.35rem;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 1rem;
+    padding: 1.5rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2rem;
     opacity: 0;
     transform: translateY(16px) scale(0.985);
     transition: opacity 0.55s ease, transform 0.55s ease;
     pointer-events: none;
     backdrop-filter: blur(4px);
+    overflow: hidden;
 }
 
 .rilono-reel-scene.is-active {
     opacity: 1;
     transform: translateY(0) scale(1);
+    pointer-events: auto;
+}
+
+.reel-scene-content-left {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1rem;
+    z-index: 2;
 }
 
 .reel-scene-badge {
@@ -4804,14 +4813,14 @@ body {
     font-weight: 600;
 }
 
-.rilono-reel-scene h3 {
+.reel-scene-content-left h3 {
     margin: 0;
     font-size: 1.65rem;
     line-height: 1.3;
     color: #f8fafc;
 }
 
-.rilono-reel-scene p {
+.reel-scene-content-left p {
     margin: 0;
     color: #cbd5e1;
     font-size: 1rem;
@@ -4845,6 +4854,443 @@ body {
     color: #94a3b8;
     font-size: 0.77rem;
     line-height: 1.4;
+}
+
+/* Right Column Mockups */
+.reel-scene-visual-right {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    z-index: 1;
+}
+
+.mockup-container {
+    width: 100%;
+    height: 100%;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+/* Scene 1: Document Scanner */
+.mockup-doc {
+    width: 200px;
+    height: 280px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.mockup-doc .doc-header {
+    width: 60%;
+    height: 20px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+}
+
+.mockup-doc .doc-line {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+.mockup-doc .doc-line.short {
+    width: 40%;
+}
+
+.mockup-doc .doc-photo {
+    width: 60px;
+    height: 80px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+    border: 1px dashed rgba(255, 255, 255, 0.3);
+}
+
+.mockup-scanner-line {
+    position: absolute;
+    top: 10%;
+    left: 15%;
+    right: 15%;
+    height: 2px;
+    background: #10b981;
+    box-shadow: 0 0 15px 5px rgba(16, 185, 129, 0.4);
+    z-index: 2;
+    opacity: 0;
+}
+
+.mockup-status-badge {
+    position: absolute;
+    bottom: 2rem;
+    background: rgba(16, 185, 129, 0.2);
+    border: 1px solid #34d399;
+    color: #10b981;
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    font-weight: bold;
+    opacity: 0;
+    transform: scale(0.8);
+}
+
+.is-active .mockup-scanner-line {
+    animation: scanMotion 3s ease-in-out infinite, fadeIn 0.5s forwards 0.5s;
+}
+
+.is-active .mockup-status-badge {
+    animation: popIn 0.5s forwards 2s;
+}
+
+@keyframes scanMotion {
+
+    0%,
+    100% {
+        top: 10%;
+    }
+
+    50% {
+        top: 90%;
+    }
+}
+
+@keyframes popIn {
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Scene 2: AI Chat */
+.mockup-ai-chat {
+    justify-content: flex-end;
+    gap: 1rem;
+    padding-bottom: 2rem;
+}
+
+.mockup-ai-chat .chat-bubble {
+    padding: 0.75rem 1rem;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    max-width: 85%;
+    opacity: 0;
+    transform: translateY(10px);
+}
+
+.mockup-ai-chat .chat-bubble.user {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    align-self: flex-end;
+    border-bottom-right-radius: 2px;
+}
+
+.mockup-ai-chat .chat-bubble.ai {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.2));
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: #e2e8f0;
+    align-self: flex-start;
+    border-bottom-left-radius: 2px;
+}
+
+.mockup-ai-chat .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    background: #a5b4fc;
+    border-radius: 50%;
+    margin: 0 2px;
+    animation: jump 1.4s infinite;
+}
+
+.mockup-ai-chat .dot:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.mockup-ai-chat .dot:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes jump {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-4px);
+    }
+}
+
+.is-active .chat-bubble.user {
+    animation: popInUp 0.4s forwards 0.5s;
+}
+
+.is-active .chat-bubble.ai.typing {
+    animation: popInUp 0.4s forwards 1.2s, fadeOut 0.4s forwards 3s;
+}
+
+.is-active .chat-bubble.ai.answer {
+    animation: popInUp 0.4s forwards 3.3s;
+}
+
+@keyframes popInUp {
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeOut {
+    to {
+        opacity: 0;
+        display: none;
+    }
+}
+
+/* Scene 3: Interview */
+.mockup-interview {
+    background: linear-gradient(to bottom, rgba(15, 23, 42, 0.9), rgba(2, 6, 23, 0.9));
+}
+
+.vo-avatar {
+    font-size: 4rem;
+    background: rgba(255, 255, 255, 0.1);
+    width: 100px;
+    height: 100px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 2px solid #8b5cf6;
+    box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+    margin-bottom: 1.5rem;
+    opacity: 0;
+}
+
+.vo-question {
+    font-style: italic;
+    color: white;
+    text-align: center;
+    font-size: 1.1rem;
+    margin-bottom: 2rem;
+    opacity: 0;
+}
+
+.audio-waves {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 40px;
+    opacity: 0;
+}
+
+.audio-waves span {
+    display: block;
+    width: 4px;
+    background: #34d399;
+    border-radius: 2px;
+    height: 10px;
+}
+
+.feedback-toast {
+    position: absolute;
+    bottom: -50px;
+    background: rgba(16, 185, 129, 0.9);
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: bold;
+}
+
+.is-active .vo-avatar {
+    animation: popIn 0.5s forwards 0.3s;
+}
+
+.is-active .vo-question {
+    animation: fadeIn 0.5s forwards 0.8s;
+}
+
+.is-active .audio-waves {
+    animation: fadeIn 0.5s forwards 1.5s;
+}
+
+.is-active .audio-waves span {
+    animation: wave 1s ease-in-out infinite alternate;
+}
+
+.is-active .audio-waves span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.is-active .audio-waves span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+.is-active .audio-waves span:nth-child(4) {
+    animation-delay: 0.1s;
+}
+
+.is-active .audio-waves span:nth-child(5) {
+    animation-delay: 0.3s;
+}
+
+.is-active .feedback-toast {
+    animation: slideUpToast 0.5s forwards 3s;
+}
+
+@keyframes fadeIn {
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes wave {
+    to {
+        height: 40px;
+    }
+}
+
+@keyframes slideUpToast {
+    to {
+        bottom: 20px;
+    }
+}
+
+/* Scene 4: Radar */
+.radar-circle {
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 2rem;
+    background: radial-gradient(circle, rgba(59, 130, 246, 0.1) 0%, transparent 70%);
+}
+
+.radar-sweep {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 75px;
+    height: 75px;
+    background: conic-gradient(from 0deg, transparent 70%, rgba(59, 130, 246, 0.6) 100%);
+    transform-origin: 0 0;
+    animation: sweep 4s linear infinite;
+    display: none;
+}
+
+.is-active .radar-sweep {
+    display: block;
+}
+
+@keyframes sweep {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.radar-ping {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ef4444;
+    box-shadow: 0 0 10px #ef4444;
+    opacity: 0;
+}
+
+.radar-ping.p1 {
+    top: 30%;
+    left: 60%;
+}
+
+.radar-ping.p2 {
+    top: 70%;
+    left: 30%;
+    background: #3b82f6;
+    box-shadow: 0 0 10px #3b82f6;
+}
+
+.is-active .radar-ping.p1 {
+    animation: ping 4s infinite 1s;
+}
+
+.is-active .radar-ping.p2 {
+    animation: ping 4s infinite 3s;
+}
+
+@keyframes ping {
+    0% {
+        opacity: 0;
+        transform: scale(0);
+    }
+
+    10% {
+        opacity: 1;
+        transform: scale(1.5);
+    }
+
+    30% {
+        opacity: 0;
+        transform: scale(1);
+    }
+
+    100% {
+        opacity: 0;
+    }
+}
+
+.mockup-radar .alert-card {
+    width: 90%;
+    padding: 0.75rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    opacity: 0;
+    transform: translateX(20px);
+}
+
+.alert-card.danger {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #fca5a5;
+}
+
+.alert-card.info {
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    color: #93c5fd;
+}
+
+.is-active .alert-card.danger {
+    animation: slideInRight 0.5s forwards 1.2s;
+}
+
+.is-active .alert-card.info {
+    animation: slideInRight 0.5s forwards 3.2s;
+}
+
+@keyframes slideInRight {
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
 }
 
 .rilono-reel-footer {
@@ -4936,6 +5382,30 @@ body {
 .rilono-reel-dot.is-active {
     background: #22d3ee;
     box-shadow: 0 0 8px rgba(34, 211, 238, 0.8);
+}
+
+@media (max-width: 1024px) {
+    .remotion-video-shell {
+        grid-template-columns: 1fr;
+        gap: 3rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .rilono-reel-scene {
+        grid-template-columns: 1fr;
+        gap: 1.5rem;
+    }
+
+    .reel-scene-visual-right {
+        display: none;
+    }
+
+    .rilono-reel-footer {
+        flex-direction: column;
+        align-items: flex-start;
+        height: auto;
+    }
 }
 
 /* Section Headers */
