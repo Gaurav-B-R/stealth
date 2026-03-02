@@ -82,6 +82,9 @@ if not USE_VERTEX_AI:
 # Supported file types for Gemini
 SUPPORTED_IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 SUPPORTED_DOCUMENT_TYPES = {".pdf", ".txt"}
+UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS = int(
+    os.getenv("UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS", "120000") or "120000"
+)
 
 def validate_and_extract_document(
     file_contents: bytes,
@@ -89,6 +92,8 @@ def validate_and_extract_document(
     mime_type: str,
     document_type: Optional[str] = None,
     current_date_for_evaluation: Optional[str] = None,
+    student_profile_context: Optional[str] = None,
+    related_documents_context: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Validate document type and extract information using Gemini AI.
@@ -122,6 +127,41 @@ def validate_and_extract_document(
             return None
         
         evaluation_date_value = (current_date_for_evaluation or "").strip() or datetime.now().isoformat()
+        profile_context_value = (student_profile_context or "").strip()
+        related_docs_context_value = (related_documents_context or "").strip()
+        if len(profile_context_value) > UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS:
+            profile_context_value = (
+                profile_context_value[:UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS]
+                + "\n... [student profile context truncated]"
+            )
+        if len(related_docs_context_value) > UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS:
+            related_docs_context_value = (
+                related_docs_context_value[:UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS]
+                + "\n... [related documents context truncated]"
+            )
+
+        cross_validation_block = f"""
+ADDITIONAL CROSS-VALIDATION CONTEXT:
+Use the following context to cross-check the uploaded document against the user's profile and previously uploaded documents.
+
+=== ATTACHED STUDENT PROFILE SNAPSHOT ===
+{profile_context_value or "Not available"}
+=== END ATTACHED STUDENT PROFILE SNAPSHOT ===
+
+=== ATTACHED PREVIOUS DOCUMENTS SNAPSHOT ===
+{related_docs_context_value or "Not available"}
+=== END ATTACHED PREVIOUS DOCUMENTS SNAPSHOT ===
+
+CROSS-VALIDATION REQUIREMENTS (MANDATORY):
+1. Compare this uploaded document with profile + previous documents for consistency.
+2. Check identity consistency across documents:
+   - Name, Date of Birth, passport/document numbers, country, issue/expiry dates.
+3. Check study-plan consistency:
+   - University name, intake term/year, and timeline against other available evidence.
+4. If there is a material conflict, set "Document Validation" to "No".
+5. Clearly state each detected inconsistency in "Message", and include structured details under "Cross Validation Flags".
+6. If evidence is insufficient, do not invent facts; explicitly state uncertainty.
+"""
 
         timeline_rules_block = f"""
 Current Date for Evaluation: {evaluation_date_value}
@@ -159,6 +199,7 @@ TASK:
 4. If NO: Set "Document Validation" to "No", identify what document type it actually is, and provide a helpful message asking the user to upload the correct document
 
 {timeline_rules_block}
+{cross_validation_block}
 
 REQUIREMENTS:
 - You MUST respond with ONLY valid JSON, no markdown, no code blocks, no explanations
@@ -176,16 +217,25 @@ REQUIRED JSON FORMAT:
     "Expiration Date": "extracted expiration date or null",
     "Issue Date": "extracted issue date or null",
     "Country": "extracted country or null",
-    "Other Information": "any other relevant extracted information or null"
+    "Other Information": "any other relevant extracted information or null",
+    "Cross Validation Flags": [
+        {{
+            "field": "name/date/document_number/university/intake/timeline/other",
+            "status": "match/conflict/unknown",
+            "current_document_value": "value from current doc or null",
+            "reference_value": "value from profile/other docs or null",
+            "note": "short explanation"
+        }}
+    ]
 }}
 
 Remember: Output ONLY the JSON object, nothing else."""
         else:
-            validation_prompt = """Extract all information from this document.
+            validation_prompt = f"""Extract all information from this document.
 
 IMPORTANT DATE CONTEXT:
 Use the following Current Date for Evaluation while extracting and validating date relevance.
-Current Date for Evaluation: """ + evaluation_date_value + """
+Current Date for Evaluation: {evaluation_date_value}
 
 For date-sensitive docs, explicitly check expiration and timeline compliance:
 - Bank statements older than 6 months should be treated as invalid.
@@ -193,14 +243,16 @@ For date-sensitive docs, explicitly check expiration and timeline compliance:
 - I-20/Offer/Admission date in the past should be treated as invalid.
 - For other visa docs, flag stale/expired dates as invalid.
 
+{cross_validation_block}
+
 REQUIREMENTS:
 - You MUST respond with ONLY valid JSON, no markdown, no code blocks, no explanations
-- Start your response directly with { and end with }
+- Start your response directly with {{ and end with }}
 - Do NOT include ```json or ``` markers
 - Do NOT include any text before or after the JSON
 
 REQUIRED JSON FORMAT:
-{
+{{
     "Document Validation": "Yes",
     "Message": "Document information extracted successfully",
     "Name": "extracted name or null",
@@ -209,8 +261,17 @@ REQUIRED JSON FORMAT:
     "Expiration Date": "extracted expiration date or null",
     "Issue Date": "extracted issue date or null",
     "Country": "extracted country or null",
-    "Other Information": "any other relevant extracted information or null"
-}
+    "Other Information": "any other relevant extracted information or null",
+    "Cross Validation Flags": [
+        {{
+            "field": "name/date/document_number/university/intake/timeline/other",
+            "status": "match/conflict/unknown",
+            "current_document_value": "value from current doc or null",
+            "reference_value": "value from profile/other docs or null",
+            "note": "short explanation"
+        }}
+    ]
+}}
 
 Remember: Output ONLY the JSON object, nothing else."""
         

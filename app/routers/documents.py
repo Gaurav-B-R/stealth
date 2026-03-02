@@ -74,6 +74,15 @@ MAX_DOCUMENT_SIZE_MB = int(os.getenv("DOCUMENT_MAX_SIZE_MB", "5") or "5")
 MAX_DOCUMENT_SIZE = MAX_DOCUMENT_SIZE_MB * 1024 * 1024
 READ_CHUNK_SIZE = 1024 * 1024
 OLE_DOCUMENT_MAGIC = bytes.fromhex("D0CF11E0A1B11AE1")
+UPLOAD_VALIDATION_MAX_PROFILE_CHARS = int(
+    os.getenv("UPLOAD_VALIDATION_MAX_PROFILE_CHARS", "45000") or "45000"
+)
+UPLOAD_VALIDATION_MAX_DOCS_CONTEXT_CHARS = int(
+    os.getenv("UPLOAD_VALIDATION_MAX_DOCS_CONTEXT_CHARS", "75000") or "75000"
+)
+UPLOAD_VALIDATION_MAX_RELATED_DOCS = int(
+    os.getenv("UPLOAD_VALIDATION_MAX_RELATED_DOCS", "10") or "10"
+)
 IMAGE_FORMATS_BY_EXTENSION = {
     ".jpg": {"JPEG"},
     ".jpeg": {"JPEG"},
@@ -214,6 +223,97 @@ def upload_document_to_r2(file_contents: bytes, filename: str, content_type: str
     except Exception:
         logger.exception("Failed to upload document to R2 key=%s", filename)
         raise HTTPException(status_code=500, detail="Failed to store document securely. Please try again.")
+
+
+def _truncate_text_for_upload_validation(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n... [truncated for upload-time cross-validation]"
+
+
+def build_upload_validation_context(
+    user_id: int,
+    db: Session,
+) -> tuple[str, str]:
+    """
+    Build bounded profile + prior-documents context for upload-time Gemini validation.
+    """
+    profile_context = "Student profile snapshot not available."
+    related_docs_context = "No previously uploaded documents are available for cross-validation."
+
+    try:
+        profile_data = get_student_profile_from_r2(user_id)
+        if profile_data:
+            profile_json = json.dumps(profile_data, indent=2, default=str)
+            profile_context = _truncate_text_for_upload_validation(
+                profile_json,
+                UPLOAD_VALIDATION_MAX_PROFILE_CHARS,
+            )
+    except Exception as exc:
+        print(f"Warning: Failed to load profile snapshot for upload validation: {str(exc)}")
+
+    try:
+        prior_documents = (
+            db.query(models.Document)
+            .filter(
+                models.Document.user_id == user_id,
+                models.Document.extracted_text_file_url.isnot(None),
+            )
+            .order_by(desc(models.Document.created_at))
+            .limit(UPLOAD_VALIDATION_MAX_RELATED_DOCS)
+            .all()
+        )
+
+        blocks = []
+        accumulated_chars = 0
+        for index, prior_doc in enumerate(prior_documents, start=1):
+            if not prior_doc.extracted_text_file_url:
+                continue
+
+            try:
+                response = r2_client.get_object(
+                    Bucket=R2_DOCUMENTS_BUCKET,
+                    Key=prior_doc.extracted_text_file_url,
+                )
+                encrypted_blob = response["Body"].read()
+                raw_content = decrypt_artifact_bytes(encrypted_blob).decode("utf-8")
+            except Exception as exc:
+                print(
+                    f"Warning: Failed to load prior document {prior_doc.id} for upload validation: {str(exc)}"
+                )
+                continue
+
+            doc_status = "VALID" if prior_doc.is_valid else "NEEDS REVIEW"
+            header = (
+                f"\n--- PRIOR DOCUMENT {index}: "
+                f"{(prior_doc.document_type or 'document').upper()} "
+                f"({prior_doc.original_filename}) [{doc_status}] ---\n"
+            )
+            note_line = f"Validation Note: {prior_doc.validation_message or 'N/A'}\n"
+            fixed_len = len(header) + len(note_line)
+            remaining = UPLOAD_VALIDATION_MAX_DOCS_CONTEXT_CHARS - accumulated_chars - fixed_len
+            if remaining <= 0:
+                break
+
+            bounded_content = _truncate_text_for_upload_validation(raw_content, remaining)
+            block = header + note_line + bounded_content + "\n"
+            blocks.append(block)
+            accumulated_chars += len(block)
+
+            if accumulated_chars >= UPLOAD_VALIDATION_MAX_DOCS_CONTEXT_CHARS:
+                break
+
+        if blocks:
+            related_docs_context = (
+                "Previously uploaded documents (decrypted extracted payloads) for cross-validation:\n"
+                + "".join(blocks)
+            )
+    except Exception as exc:
+        print(f"Warning: Failed to build related-documents context for upload validation: {str(exc)}")
+
+    return profile_context, related_docs_context
 
 
 def _datetime_to_iso(value) -> Optional[str]:
@@ -458,6 +558,11 @@ def upload_document(
     is_valid = True
     
     try:
+        student_profile_context, related_documents_context = build_upload_validation_context(
+            current_user.id,
+            db,
+        )
+
         # Validate document type and extract information
         validation_result = validate_and_extract_document(
             contents,
@@ -465,6 +570,8 @@ def upload_document(
             content_type,
             document_type,  # Pass the document type for validation
             current_date_for_evaluation=datetime.now().isoformat(),
+            student_profile_context=student_profile_context,
+            related_documents_context=related_documents_context,
         )
         
         if validation_result:
