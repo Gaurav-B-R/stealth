@@ -3667,6 +3667,12 @@
 
         <!-- Floating AI Chat Widget -->
         <div id="floatingAiChatWidget" class="floating-chat-widget" style="display: none;">
+            <div id="floatingChatPopup" class="floating-chat-popup" style="display: none;"
+                onclick="toggleFloatingChat()">
+                <div class="popup-message" id="popupMessageText"></div>
+                <button type="button" class="popup-close" onclick="closeFloatingChatPopup(event)"
+                    aria-label="Dismiss message">×</button>
+            </div>
             <div id="floatingChatToggle" class="floating-chat-toggle" onclick="toggleFloatingChat()">
                 <div class="chat-icon modern-ai-icon">
                     <div class="ai-icon-rings">

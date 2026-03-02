@@ -8239,6 +8239,80 @@ body {
     animation: pulse 2s ease-in-out infinite;
 }
 
+/* Floating Chat Popup */
+.floating-chat-popup {
+    position: absolute;
+    right: 80px;
+    bottom: 10px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    padding: 0.875rem 1.25rem;
+    border-radius: 1.25rem;
+    border-bottom-right-radius: 0.25rem;
+    box-shadow: var(--shadow-lg);
+    width: 260px;
+    cursor: pointer;
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    z-index: 10;
+    opacity: 0;
+    transform: translateX(20px) scale(0.95);
+    pointer-events: none;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.floating-chat-popup.show {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+    pointer-events: auto;
+}
+
+.floating-chat-popup:hover {
+    transform: translateX(-4px) scale(1.02);
+    border-color: rgba(99, 102, 241, 0.5);
+    box-shadow: var(--shadow-glow);
+}
+
+.popup-message {
+    flex: 1;
+    font-weight: 500;
+}
+
+.popup-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.25rem;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+    transition: color 0.2s ease;
+    margin-top: -2px;
+}
+
+.popup-close:hover {
+    color: var(--danger-color);
+}
+
+.floating-chat-popup::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    background: linear-gradient(135deg, rgba(79, 70, 229, 0.5), rgba(219, 39, 119, 0.5));
+    z-index: -1;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.floating-chat-popup.show:hover::after {
+    opacity: 1;
+}
+
 .floating-chat-window {
     position: absolute;
     bottom: 0;

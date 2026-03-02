@@ -610,6 +610,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadNotifications();
     updateFloatingChatVisibility();
     initializeRilonoAiAttachmentUi();
+    initializeFloatingChatPopup();
 
     // Handle initial route (use replaceState for initial load)
     handleRoute(true);
@@ -10424,6 +10425,11 @@ function toggleFloatingChat() {
     // Toggle the state
     floatingChatOpen = !floatingChatOpen;
 
+    // Dismiss popup if open
+    if (window.closeFloatingChatPopup) {
+        window.closeFloatingChatPopup();
+    }
+
     // If closing, hide window and show toggle button
     if (!floatingChatOpen) {
         closeExpandedChatView();
@@ -10724,3 +10730,94 @@ function handleGalleryKeyPress(e) {
             break;
     }
 }
+
+// ==============================================
+// Floating Chat Popup Messages Logic
+// ==============================================
+const floatingChatMessages = [
+    "Hey! I'm Rilono AI Assistant. Let's talk about your F-1 Visa journey.",
+    "Need help tracking your document progress?",
+    "I can validate your I-20 and financial documents instantly.",
+    "Ready to practice? Let's do a mock visa interview."
+];
+
+let popupMessageInterval;
+let currentPopupIndex = 0;
+let isPopupDismissed = false;
+
+function initializeFloatingChatPopup() {
+    const popup = document.getElementById('floatingChatPopup');
+    const toggle = document.getElementById('floatingChatToggle');
+    if (!popup || !toggle) return;
+
+    // Start interval for cycling messages
+    popupMessageInterval = setInterval(rotatePopupMessage, 15000);
+
+    // Show first message slightly after load
+    setTimeout(rotatePopupMessage, 3000);
+}
+
+function rotatePopupMessage() {
+    if (isPopupDismissed) return;
+
+    // Don't show if the chat widget itself isn't fully visible or if the chat window is already open
+    const widget = document.getElementById('floatingAiChatWidget');
+    const windowEl = document.getElementById('floatingChatWindow');
+    if (!widget || !windowEl || widget.style.display === 'none' || windowEl.style.display !== 'none') {
+        return;
+    }
+
+    const popup = document.getElementById('floatingChatPopup');
+    const messageEl = document.getElementById('popupMessageText');
+    if (!popup || !messageEl) return;
+
+    // Hide current message smoothly
+    popup.classList.remove('show');
+
+    setTimeout(() => {
+        if (isPopupDismissed || windowEl.style.display !== 'none') return;
+
+        // Change text
+        messageEl.textContent = floatingChatMessages[currentPopupIndex];
+
+        // Show
+        popup.style.display = 'flex';
+
+        // Force reflow
+        void popup.offsetWidth;
+
+        popup.classList.add('show');
+
+        currentPopupIndex = (currentPopupIndex + 1) % floatingChatMessages.length;
+
+        // Hide after 6 seconds automatically
+        setTimeout(() => {
+            if (popup.classList.contains('show')) {
+                popup.classList.remove('show');
+                setTimeout(() => {
+                    if (!popup.classList.contains('show')) {
+                        popup.style.display = 'none';
+                    }
+                }, 400); // Wait for transition
+            }
+        }, 6000);
+
+    }, 400); // Wait for hide transition
+}
+
+window.closeFloatingChatPopup = function (e) {
+    if (e) {
+        e.stopPropagation(); // Prevent opening the chat just by dismissing the popup
+    }
+    isPopupDismissed = true;
+    if (popupMessageInterval) {
+        clearInterval(popupMessageInterval);
+    }
+    const popup = document.getElementById('floatingChatPopup');
+    if (popup) {
+        popup.classList.remove('show');
+        setTimeout(() => {
+            popup.style.display = 'none';
+        }, 400);
+    }
+};
