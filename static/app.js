@@ -104,7 +104,7 @@ function getPricingModelConfig(rawModel) {
 }
 
 const nativeFetch = window.fetch.bind(window);
-window.fetch = function secureFetch(input, init = {}) {
+window.fetch = async function secureFetch(input, init = {}) {
     const nextInit = { ...init };
     const headers = new Headers(nextInit.headers || {});
     const authHeader = headers.get('Authorization');
@@ -119,7 +119,12 @@ window.fetch = function secureFetch(input, init = {}) {
     if (nextInit.credentials === undefined) {
         nextInit.credentials = 'same-origin';
     }
-    return nativeFetch(input, nextInit);
+    const response = await nativeFetch(input, nextInit);
+    const refreshedAccessToken = response.headers.get('X-Access-Token');
+    if (refreshedAccessToken) {
+        persistAuthToken(refreshedAccessToken);
+    }
+    return response;
 };
 
 const PRICING_COUNTRY_CONFIG = {

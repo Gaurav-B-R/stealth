@@ -3,7 +3,7 @@ from typing import Optional
 import re
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from app.database import get_db
@@ -22,6 +22,7 @@ ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 PASSWORD_MIN_LENGTH = int(os.getenv("PASSWORD_MIN_LENGTH", "10"))
 PASSWORD_MAX_BYTES = int(os.getenv("PASSWORD_MAX_BYTES", "200"))
+ACCESS_TOKEN_REFRESH_HEADER = "X-Access-Token"
 COMMON_WEAK_PASSWORDS = {
     "password",
     "password123",
@@ -39,8 +40,56 @@ COMMON_WEAK_PASSWORDS = {
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "rilono_access_token").strip() or "rilono_access_token"
+AUTH_COOKIE_DOMAIN = (os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None)
+_cookie_samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "strict").strip().lower()
+AUTH_COOKIE_SAMESITE = _cookie_samesite_raw if _cookie_samesite_raw in {"lax", "strict", "none"} else "strict"
+AUTH_COOKIE_SECURE = str(os.getenv("AUTH_COOKIE_SECURE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
+
+
+def _cookie_secure_default() -> bool:
+    env = os.getenv("ENVIRONMENT", "production").strip().lower()
+    return env != "development"
+
+
+def _is_local_hostname(hostname: str) -> bool:
+    host = (hostname or "").strip().lower()
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _request_uses_https(request: Request) -> bool:
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if forwarded_proto:
+        return forwarded_proto == "https"
+    return request.url.scheme == "https"
+
+
+def _resolve_auth_cookie_secure(request: Request) -> bool:
+    if AUTH_COOKIE_SECURE:
+        return True
+    if _cookie_secure_default():
+        return True
+    if _is_local_hostname(request.url.hostname) and not _request_uses_https(request):
+        return False
+    return True
+
+
+def _access_token_lifetime_seconds() -> int:
+    return max(int(ACCESS_TOKEN_EXPIRE_MINUTES * 60), 60)
+
+
+def set_auth_cookie(request: Request, response: Response, access_token: str) -> None:
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=access_token,
+        max_age=_access_token_lifetime_seconds(),
+        httponly=True,
+        secure=_resolve_auth_cookie_secure(request),
+        samesite=AUTH_COOKIE_SAMESITE,
+        domain=AUTH_COOKIE_DOMAIN,
+        path="/",
+    )
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     # Handle passwords longer than 72 bytes by hashing first
@@ -120,8 +169,12 @@ def authenticate_user(db: Session, email: str, password: str):
         return False
     return user
 
+def _decode_token_payload(token: str) -> dict:
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+
+
 def _decode_token_subject(token: str) -> Optional[str]:
-    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    payload = _decode_token_payload(token)
     email: str = payload.get("sub")
     if email is None:
         return None
@@ -130,6 +183,7 @@ def _decode_token_subject(token: str) -> Optional[str]:
 
 def get_current_user(
     request: Request,
+    response: Response,
     token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db),
 ):
@@ -164,6 +218,17 @@ def get_current_user(
         user = db.query(models.User).filter(models.User.username == email).first()
     if user is None:
         raise credentials_exception
+
+    # Sliding idle-timeout: refresh token on authenticated activity.
+    refreshed_token = create_access_token(
+        data={"sub": user.email},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    if cookie_token:
+        set_auth_cookie(request, response, refreshed_token)
+    else:
+        response.headers[ACCESS_TOKEN_REFRESH_HEADER] = refreshed_token
+
     return user
 
 def get_current_active_user(current_user: models.User = Depends(get_current_user)):
