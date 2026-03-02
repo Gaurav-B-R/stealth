@@ -27,6 +27,10 @@ def ensure_user_legal_consent_column():
     """
     with engine.begin() as conn:
         columns = _get_table_columns(conn, "users")
+        if "first_login_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN first_login_at TIMESTAMP"))
+        if "last_login_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP"))
         if "accepted_terms_privacy_at" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_at TIMESTAMP"))
 

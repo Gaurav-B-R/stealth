@@ -36,6 +36,7 @@ class User(Base):
     referral_code = Column(String, unique=True, index=True, nullable=True)
     referred_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     first_login_at = Column(DateTime(timezone=True), nullable=True)
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
     referral_reward_granted_at = Column(DateTime(timezone=True), nullable=True)
     accepted_terms_privacy_at = Column(DateTime(timezone=True), nullable=True)
     email_notifications_enabled = Column(Boolean, nullable=False, default=True)

@@ -452,21 +452,27 @@ async def login(
     get_or_create_user_subscription(db, user.id)
     had_referral_code = bool(user.referral_code)
     ensure_user_referral_code(db, user, commit=False)
+    refresh_profile_snapshot = not had_referral_code
 
     reward_payload = {"awarded": False, "message": None}
     now = datetime.utcnow()
-    changes_pending = not had_referral_code
+    changes_pending = False
     if user.first_login_at is None:
         user.first_login_at = now
         changes_pending = True
+        refresh_profile_snapshot = True
+    user.last_login_at = now
+    changes_pending = True
 
     reward_payload = maybe_award_referral_bonus_on_login(db, user, commit=False)
     if reward_payload.get("awarded"):
         changes_pending = True
+        refresh_profile_snapshot = True
 
     if changes_pending:
         db.commit()
-        _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
+        if refresh_profile_snapshot:
+            _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     # Store email in token instead of username
