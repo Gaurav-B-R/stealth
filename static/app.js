@@ -22,8 +22,8 @@ const PRO_UPGRADE_ENABLED = true;
 const PUBLIC_APP_ORIGIN = 'https://rilono.com';
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
-    privacy: 'February 27, 2026',
-    terms: 'February 12, 2026',
+    privacy: 'March 2, 2026',
+    terms: 'March 2, 2026',
     refund: 'February 12, 2026',
     delivery: 'February 12, 2026'
 };
