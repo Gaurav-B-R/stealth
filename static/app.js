@@ -9506,7 +9506,7 @@ function getMainChatForms() {
 function getMainChatWelcomeMarkup() {
     return `
         <div class="rilono-ai-message assistant">
-            <div class="message-avatar">🤖</div>
+            <div class="message-avatar"><svg viewBox="0 0 24 24" width="18" height="18" class="ai-sparkle"><use href="#icon-ai-sparkle"></use></svg></div>
             <div class="message-bubble">
                 <p><strong>Welcome! I'm Rilono AI.</strong> I'm here to guide your F1 visa journey with practical, step-by-step help.</p>
                 <p>I can help you with:</p>
@@ -9523,7 +9523,7 @@ function getMainChatWelcomeMarkup() {
 function getFloatingChatWelcomeMarkup() {
     return `
         <div class="chat-welcome-message">
-            <div class="chat-avatar">🤖</div>
+            <div class="chat-avatar"><svg viewBox="0 0 24 24" width="20" height="20" class="ai-sparkle"><use href="#icon-ai-sparkle"></use></svg></div>
             <div class="welcome-bubble">
                 <p><strong>Welcome! I'm Rilono AI.</strong></p>
                 <p>I can help with documents, visa-stage progress, interview prep, and next actions based on your profile.</p>
@@ -9681,7 +9681,7 @@ function addMessageToRilonoAiChat(message, isUser = false, options = {}) {
         } else {
             // Use markdown parser for AI responses
             messageDiv.innerHTML = `
-                <div class="message-avatar">🤖</div>
+                <div class="message-avatar"><svg viewBox="0 0 24 24" width="18" height="18" class="ai-sparkle"><use href="#icon-ai-sparkle"></use></svg></div>
                 <div class="message-bubble">
                     <div class="ai-response-content">${markdownToHtml(message)}</div>
                 </div>
@@ -9704,7 +9704,7 @@ function showRilonoAiTypingIndicator() {
         const typingDiv = document.createElement('div');
         typingDiv.className = 'rilono-ai-typing rilono-ai-typing-indicator';
         typingDiv.innerHTML = `
-            <div class="message-avatar">🤖</div>
+            <div class="message-avatar"><svg viewBox="0 0 24 24" width="18" height="18" class="ai-sparkle"><use href="#icon-ai-sparkle"></use></svg></div>
             <div class="typing-bubble">
                 <div class="typing-dot"></div>
                 <div class="typing-dot"></div>
@@ -10553,7 +10553,7 @@ function addMessageToFloatingChat(message, isUser = false, options = {}) {
     if (!isUser) {
         const avatar = document.createElement('div');
         avatar.className = 'chat-avatar';
-        avatar.textContent = '🤖';
+        avatar.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" class="ai-sparkle"><use href="#icon-ai-sparkle"></use></svg>';
         messageDiv.appendChild(avatar);
     }
 
