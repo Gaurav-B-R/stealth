@@ -591,6 +591,8 @@ Student context:
 Requirements:
 - Focus on recent and relevant updates for F1 student visa applicants in this country context.
 - Prioritize updates that materially affect students from or residing in {user_country}.
+- Include ONLY updates directly about U.S. F-1 visa policy, process, appointments, or documentation.
+- Exclude policy updates that are primarily about other countries (UK, Australia, Canada, etc.).
 - Treat the current UTC date/time above as "now" when determining recency.
 - Include only updates published within the last {NEWS_MAX_ITEM_AGE_DAYS} days.
 - Include source links for each update

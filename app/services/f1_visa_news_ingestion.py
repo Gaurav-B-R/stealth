@@ -275,7 +275,8 @@ Current date/time (UTC): {now_utc_iso}
 {existing_context}
 
 Requirements:
-- Focus on recent and relevant updates for F1 student visa applicants worldwide.
+- Focus only on recent and relevant updates directly about U.S. F-1 visa policy, process, appointments, or documentation.
+- Exclude policy updates primarily about other countries (UK, Australia, Canada, etc.).
 - Treat the current UTC date/time above as "now" when determining recency.
 - Include only updates published within the last {_NEWS_MAX_ITEM_AGE_DAYS} days.
 - Do NOT include any items that duplicate or substantially overlap with the existing items listed above.
