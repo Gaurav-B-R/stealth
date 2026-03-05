@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import timedelta, datetime
+from urllib.parse import urlparse
 from app.database import get_db
 from app import models, schemas
 from app.auth import (
@@ -91,6 +92,7 @@ AUTH_COOKIE_SECURE = _bool_env("AUTH_COOKIE_SECURE", _cookie_secure_default())
 AUTH_COOKIE_DOMAIN = (os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None)
 _cookie_samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "strict").strip().lower()
 AUTH_COOKIE_SAMESITE = _cookie_samesite_raw if _cookie_samesite_raw in {"lax", "strict", "none"} else "strict"
+ENFORCE_LOGOUT_CSRF_ORIGIN_CHECK = _bool_env("ENFORCE_LOGOUT_CSRF_ORIGIN_CHECK", True)
 
 if not AUTH_COOKIE_SECURE and _cookie_secure_default():
     raise RuntimeError(
@@ -145,6 +147,77 @@ def _clear_auth_cookie(response: Response) -> None:
         domain=AUTH_COOKIE_DOMAIN,
         path="/",
     )
+
+
+def _normalize_origin(value: str | None) -> str | None:
+    candidate = (value or "").split(",")[0].strip()
+    if not candidate:
+        return None
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
+def _parse_csrf_trusted_origins() -> set[str]:
+    raw = os.getenv("CSRF_TRUSTED_ORIGINS", "").strip()
+    if raw:
+        values = {_normalize_origin(item) for item in raw.split(",")}
+        return {item for item in values if item}
+
+    if _is_development_env():
+        return {
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        }
+
+    return {
+        "https://rilono.com",
+        "https://www.rilono.com",
+    }
+
+
+CSRF_TRUSTED_ORIGINS = _parse_csrf_trusted_origins()
+
+
+def _request_origin(request: Request) -> str | None:
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    scheme = forwarded_proto if forwarded_proto in {"http", "https"} else request.url.scheme.lower()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc).split(",")[0].strip().lower()
+    if not host:
+        return None
+    return f"{scheme}://{host}"
+
+
+def _origin_is_trusted_for_request(request: Request) -> bool:
+    request_origin = _request_origin(request)
+
+    origin = _normalize_origin(request.headers.get("origin"))
+    if origin:
+        return origin == request_origin or origin in CSRF_TRUSTED_ORIGINS
+
+    referer = _normalize_origin(request.headers.get("referer"))
+    if referer:
+        return referer == request_origin or referer in CSRF_TRUSTED_ORIGINS
+
+    return False
+
+
+def _enforce_logout_csrf_guard(request: Request) -> None:
+    """
+    Protect cookie-authenticated logout from cross-site form submissions.
+    """
+    if not ENFORCE_LOGOUT_CSRF_ORIGIN_CHECK:
+        return
+    if AUTH_COOKIE_NAME not in request.cookies:
+        return
+    if _is_development_env():
+        return
+    if _origin_is_trusted_for_request(request):
+        return
+    raise HTTPException(status_code=403, detail="Cross-site logout request blocked.")
 
 
 def _enforce_rate_limit_or_429(
@@ -501,7 +574,8 @@ def read_users_me(
 
 
 @router.post("/logout")
-def logout(response: Response):
+def logout(request: Request, response: Response):
+    _enforce_logout_csrf_guard(request)
     _clear_auth_cookie(response)
     return {"message": "Logged out successfully."}
 
