@@ -592,6 +592,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initializePricingSelector();
     initializeRegisterCountrySelector();
     initializeRilonoProductReel();
+    initChromeExtPlayer();
     void initializeFooterVersion();
 
     // Initialize Turnstile
@@ -1647,6 +1648,86 @@ function initializeRilonoProductReel() {
     if (RILONO_REEL_PREFERS_REDUCED_MOTION) {
         rilonoReelUserPaused = true;
         syncRilonoReelControls();
+    }
+}
+
+/* --- Chrome Extension Player --- */
+let chromeExtCurrentScene = 0;
+let chromeExtTimer = null;
+const CHROME_EXT_SCENE_DURATION_MS = 6500;
+let chromeExtInitialized = false;
+
+function getChromeExtElements() {
+    const player = document.getElementById('chromeExtPlayer');
+    if (!player) return null;
+    const scenes = Array.from(player.querySelectorAll('.chrome-ext-scene'));
+    if (!scenes.length) return null;
+    return { player, scenes };
+}
+
+function stopChromeExtTimer() {
+    if (chromeExtTimer) {
+        clearTimeout(chromeExtTimer);
+        chromeExtTimer = null;
+    }
+}
+
+function setChromeExtScene(sceneIndex) {
+    const elements = getChromeExtElements();
+    if (!elements) return;
+
+    const sceneCount = elements.scenes.length;
+    chromeExtCurrentScene = ((sceneIndex % sceneCount) + sceneCount) % sceneCount;
+
+    elements.scenes.forEach((scene, index) => {
+        if (index === chromeExtCurrentScene) {
+            // Force redraw to restart animations
+            scene.style.display = 'none';
+            void scene.offsetWidth;
+            scene.style.display = '';
+            scene.classList.add('is-active');
+        } else {
+            scene.classList.remove('is-active');
+        }
+    });
+}
+
+function startChromeExtPlayer() {
+    const elements = getChromeExtElements();
+    if (!elements) return;
+
+    if (RILONO_REEL_PREFERS_REDUCED_MOTION) return;
+
+    stopChromeExtTimer();
+
+    chromeExtTimer = window.setTimeout(() => {
+        const nextScene = (chromeExtCurrentScene + 1) % elements.scenes.length;
+        setChromeExtScene(nextScene);
+        startChromeExtPlayer();
+    }, CHROME_EXT_SCENE_DURATION_MS);
+}
+
+function initChromeExtPlayer() {
+    if (chromeExtInitialized) return;
+    const elements = getChromeExtElements();
+    if (!elements) return;
+
+    chromeExtInitialized = true;
+    setChromeExtScene(0);
+
+    if (window.IntersectionObserver) {
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+                if (entry.isIntersecting) {
+                    startChromeExtPlayer();
+                } else {
+                    stopChromeExtTimer();
+                }
+            });
+        }, { threshold: 0.25 });
+        observer.observe(elements.player);
+    } else {
+        startChromeExtPlayer();
     }
 }
 
@@ -10812,7 +10893,7 @@ function rotatePopupMessage() {
 
 window.closeFloatingChatPopup = function (e) {
     if (e) {
-        e.stopPropagation(); // Prevent opening the chat just by dismissing the popup
+        e.stopPropagation();
     }
     isPopupDismissed = true;
     if (popupMessageInterval) {
@@ -10826,3 +10907,18 @@ window.closeFloatingChatPopup = function (e) {
         }, 400);
     }
 };
+
+
+function scrollToChromeExtension() {
+    const section = document.getElementById('chromeExtensionSection');
+    const homepage = document.getElementById('homepageSection');
+    if (homepage && homepage.style.display === 'none') {
+        showHomepage();
+    }
+    if (section) {
+        setTimeout(() => {
+            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+    }
+}
+

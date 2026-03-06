@@ -277,6 +277,33 @@
                 </div>
             </div>
         </div>
+        <!-- Copilot Announcement Bar -->
+        <div class="announcement-bar" id="copilotAnnouncementBar">
+            <div class="announcement-bar-inner">
+                <span class="announcement-bar-text">
+                    <span class="announcement-bar-new">New</span>
+                    Rilono Copilot — AI-powered guidance for DS-160 &amp; visa application workflows, right in your
+                    browser.
+                </span>
+                <div class="announcement-bar-actions">
+                    <a href="https://chromewebstore.google.com/detail/rilono-copilot/ggfiafmfibondlacgdigbeigccnecplh"
+                        target="_blank" rel="noopener noreferrer"
+                        class="announcement-bar-btn announcement-bar-btn-primary">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"
+                            style="width:14px;height:14px;">
+                            <circle cx="12" cy="12" r="10" />
+                            <circle cx="12" cy="12" r="4" fill="currentColor" opacity="0.3" />
+                        </svg>
+                        Add to Chrome
+                    </a>
+                    <a href="#chromeExtensionSection"
+                        onclick="event.preventDefault(); scrollToChromeExtension(); return false;"
+                        class="announcement-bar-btn announcement-bar-btn-ghost">
+                        Learn More
+                    </a>
+                </div>
+            </div>
+        </div>
     </nav>
 
     <div class="container">
@@ -921,6 +948,420 @@
                     <h3>Stay Updated & Visa Ready</h3>
                     <p>Follow latest F1 news, real interview experiences, and smart risk/deadline alerts before your
                         final interview.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chrome Extension Section -->
+        <div class="homepage-chrome-extension" id="chromeExtensionSection">
+            <div class="chrome-ext-ambient chrome-ext-ambient-1"></div>
+            <div class="chrome-ext-ambient chrome-ext-ambient-2"></div>
+            <div class="chrome-ext-ambient chrome-ext-ambient-3"></div>
+
+            <div class="chrome-ext-inner">
+                <div class="chrome-ext-badge reveal">
+                    <span class="chrome-ext-badge-dot"></span>
+                    <span class="chrome-ext-badge-label">Now Live on Chrome Web Store</span>
+                </div>
+
+                <h2 class="chrome-ext-title reveal">
+                    Meet <span class="chrome-ext-title-gradient">Rilono Copilot</span> for Chrome
+                </h2>
+                <p class="chrome-ext-subtitle reveal">
+                    Your AI-powered side panel that reads any visa application page and gives you step-by-step guidance
+                    — right inside your browser.
+                </p>
+
+                <div class="chrome-ext-layout">
+                    <!-- Left: Animated Browser Mockup -->
+                    <div class="chrome-ext-demo reveal reveal-delay-1">
+                        <div class="chrome-ext-browser">
+                            <div class="browser-chrome">
+                                <div class="browser-dots">
+                                    <span class="dot-red"></span>
+                                    <span class="dot-yellow"></span>
+                                    <span class="dot-green"></span>
+                                </div>
+                                <div class="browser-url-bar">
+                                    <svg class="browser-lock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2" aria-hidden="true">
+                                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                    </svg>
+                                    <span>ceac.state.gov/genniv</span>
+                                </div>
+                            </div>
+                            <div class="browser-body" id="chromeExtPlayer">
+                                <!-- Scene 1: Inspect Page -->
+                                <div class="chrome-ext-scene is-active" data-scene="1">
+                                    <!-- Simulated DS-160 Page -->
+                                    <div class="mock-page">
+                                        <div class="mock-page-header">
+                                            <div class="mock-page-seal"></div>
+                                            <div class="mock-page-title-block">
+                                                <div class="mock-page-title"
+                                                    style="color: #1a4a7a; font-weight: 800; font-size: 0.8rem;">
+                                                    Consular Electronic Application Center</div>
+                                                <div class="mock-page-subtitle" style="font-weight: 700;">U.S.
+                                                    DEPARTMENT OF STATE</div>
+                                            </div>
+                                        </div>
+                                        <div
+                                            style="margin-bottom: 12px; font-size: 0.75rem; font-weight: 600; color: #1a1a2e; border-bottom: 1px solid #d1d5db; padding-bottom: 8px;">
+                                            Apply For a Nonimmigrant Visa</div>
+                                        <div class="mock-form">
+                                            <div class="mock-form-group">
+                                                <div class="mock-label">Select a location</div>
+                                                <div class="mock-select mock-scan-target" data-scan="1">
+                                                    <span>INDIA, NEW DELHI</span>
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                        stroke-width="2" aria-hidden="true">
+                                                        <polyline points="6 9 12 15 18 9"></polyline>
+                                                    </svg>
+                                                </div>
+                                            </div>
+                                            <div class="mock-form-group mock-scan-target" data-scan="2">
+                                                <div class="mock-label">Enter the code as shown</div>
+                                                <div class="mock-captcha">
+                                                    <div class="mock-captcha-img">T96CR3</div>
+                                                    <div class="mock-input"></div>
+                                                </div>
+                                            </div>
+                                            <div class="mock-form-actions mock-scan-target" data-scan="3">
+                                                <div class="mock-btn-start">Start Application</div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Simulated Side Panel -->
+                                    <div class="mock-sidepanel">
+                                        <div class="sidepanel-header sp-header-new">
+                                            <div class="sidepanel-brand sp-brand-new">
+                                                <div class="sidepanel-logo sp-logo-new">R</div>
+                                                <div class="sidepanel-brand-text sp-brand-text-new">
+                                                    <div class="sidepanel-name sp-name-new">Rilono AI</div>
+                                                    <div class="sidepanel-status sp-status-new">
+                                                        <span class="status-dot-green sp-dot-new"></span>
+                                                        Connected as Arjun on rilono.com
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="sp-header-actions">
+                                                <button class="sp-icon-btn"><svg viewBox="0 0 24 24" fill="none"
+                                                        stroke="currentColor" stroke-width="2">
+                                                        <line x1="12" y1="17" x2="12" y2="22"></line>
+                                                        <path
+                                                            d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.68V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3v4.68a2 2 0 0 1-1.11 1.87l-1.78.9A2 2 0 0 0 5 15.24Z">
+                                                        </path>
+                                                    </svg></button>
+                                                <button class="sp-icon-btn"><svg viewBox="0 0 24 24" fill="none"
+                                                        stroke="currentColor" stroke-width="2">
+                                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                    </svg></button>
+                                            </div>
+                                        </div>
+                                        <div class="sidepanel-tabs sp-tabs-new">
+                                            <div class="sp-tab sp-tab-new">Copilot</div>
+                                            <div class="sp-tab sp-tab-active sp-tab-new">Usage Guide</div>
+                                        </div>
+                                        <div class="sidepanel-toolbar">
+                                            <div class="sp-toolbar-badge">RILONO AI COPILOT</div>
+                                            <div class="sp-toolbar-actions">
+                                                <div class="sp-btn-sm">New Session</div>
+                                                <div class="sp-btn-sm sp-btn-accent sp-btn-pulse">Inspect Page</div>
+                                            </div>
+                                        </div>
+                                        <div class="sidepanel-chat">
+                                            <div class="sp-msg sp-msg-notice">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                    stroke-width="2" aria-hidden="true">
+                                                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                                </svg>
+                                                <span>Read-only. Rilono Copilot does not type, submit, or modify your
+                                                    form data.</span>
+                                            </div>
+                                            <div class="sp-msg sp-msg-ai sp-msg-anim-1">
+                                                <div class="sp-msg-content">Hi! I see you are on the <strong>DS-160
+                                                        application</strong> start page. Here's what to do:</div>
+                                            </div>
+                                            <div class="sp-msg sp-msg-ai sp-msg-anim-2">
+                                                <div class="sp-msg-content">
+                                                    <strong>Select a location:</strong> Choose <span
+                                                        class="sp-highlight">INDIA, NEW DELHI</span> from the dropdown —
+                                                    the consulate closest to you.
+                                                </div>
+                                            </div>
+                                            <div class="sp-msg sp-msg-ai sp-msg-anim-3">
+                                                <div class="sp-msg-content">
+                                                    <strong>Enter the Captcha</strong> exactly as shown, then click
+                                                    <span class="sp-highlight">Start Application</span>.
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <!-- Scanning Laser Effect for Scene 1 -->
+                                    <div class="scene-scanner"></div>
+                                </div>
+
+                                <!-- Scene 2: AI Copilot Chat -->
+                                <div class="chrome-ext-scene" data-scene="2">
+                                    <!-- Simulated University Portal Page -->
+                                    <div class="mock-page">
+                                        <div class="mock-page-header-i20">
+                                            <div class="mock-page-ribbon">Students Studying in The United States</div>
+                                            <div class="mock-page-title-block">
+                                                <div class="mock-title-i20">REQUESTING YOUR I-20 (F-1)</div>
+                                                <div class="mock-desc-i20">All admitted students who will be studying
+                                                    with an F-1 visa need an I-20 form in order to move forward with the
+                                                    visa process.</div>
+                                            </div>
+                                        </div>
+                                        <div class="mock-form">
+                                            <div class="mock-form-group">
+                                                <div class="mock-label">Funding Source</div>
+                                                <div class="mock-select">
+                                                    <span>Personal / Family Funds</span>
+                                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                        stroke-width="2" aria-hidden="true">
+                                                        <polyline points="6 9 12 15 18 9"></polyline>
+                                                    </svg>
+                                                </div>
+                                            </div>
+                                            <div class="mock-form-group">
+                                                <div class="mock-label">Proof of Funds Amount ($)</div>
+                                                <div class="mock-input" style="width: 100%;"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Simulated Side Panel -->
+                                    <div class="mock-sidepanel">
+                                        <div class="sidepanel-header sp-header-new">
+                                            <div class="sidepanel-brand sp-brand-new">
+                                                <div class="sidepanel-logo sp-logo-new">R</div>
+                                                <div class="sidepanel-brand-text sp-brand-text-new">
+                                                    <div class="sidepanel-name sp-name-new">Rilono AI</div>
+                                                    <div class="sidepanel-status sp-status-new">
+                                                        <span class="status-dot-green sp-dot-new"></span>
+                                                        Connected as Arjun on rilono.com
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="sp-header-actions">
+                                                <button class="sp-icon-btn"><svg viewBox="0 0 24 24" fill="none"
+                                                        stroke="currentColor" stroke-width="2">
+                                                        <line x1="12" y1="17" x2="12" y2="22"></line>
+                                                        <path
+                                                            d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.68V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3v4.68a2 2 0 0 1-1.11 1.87l-1.78.9A2 2 0 0 0 5 15.24Z">
+                                                        </path>
+                                                    </svg></button>
+                                                <button class="sp-icon-btn"><svg viewBox="0 0 24 24" fill="none"
+                                                        stroke="currentColor" stroke-width="2">
+                                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                    </svg></button>
+                                            </div>
+                                        </div>
+                                        <div class="sidepanel-chat chat-flex">
+                                            <div class="sp-msg sp-msg-ai sp-msg-anim-1">
+                                                <div class="sp-msg-content">
+                                                    To receive your I-20, you must show proof of
+                                                    <strong>$72,500</strong> for the first year.
+                                                </div>
+                                            </div>
+                                            <div class="sp-msg sp-msg-user sp-msg-anim-2">
+                                                <div class="sp-msg-content">Does this include living expenses?</div>
+                                            </div>
+                                            <div class="sp-msg sp-msg-ai sp-msg-anim-typing">
+                                                <div class="sp-msg-content typing-dots">
+                                                    <span></span><span></span><span></span>
+                                                </div>
+                                            </div>
+                                            <div class="sp-msg sp-msg-ai sp-msg-anim-3" style="display: none;">
+                                                <div class="sp-msg-content">
+                                                    Yes, the $72,500 estimate includes <strong>$45,000 tuition</strong>
+                                                    and <strong>$27,500 for living expenses</strong>.
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="sidepanel-composer sp-composer-new">
+                                            <div class="sp-composer-add">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                    stroke-width="2">
+                                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                                </svg>
+                                            </div>
+                                            <div class="sp-composer-input sp-input-new typing-input-anim">Does this
+                                                include li|</div>
+                                            <div class="sp-composer-send sp-send-new">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                    stroke-width="2">
+                                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                                </svg>
+                                            </div>
+                                        </div>
+                                        <div class="sp-footer-legal">Privacy Policy • Terms & Conditions</div>
+                                    </div>
+                                </div>
+
+                                <!-- Scene 3: Read-Only Safety -->
+                                <div class="chrome-ext-scene" data-scene="3">
+                                    <!-- Simulated Generic Form Page -->
+                                    <div class="mock-page blur-bg">
+                                        <div class="mock-page-header">
+                                            <div class="mock-page-seal seal-generic"></div>
+                                            <div class="mock-page-title-block">
+                                                <div class="mock-page-title">Student Profile Setup</div>
+                                                <div class="mock-page-subtitle">Security Enabled</div>
+                                            </div>
+                                        </div>
+                                        <div class="mock-form blur-form">
+                                            <div class="mock-form-group">
+                                                <div class="mock-label">Passport Number</div>
+                                                <div class="mock-input" style="width: 100%;"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Simulated Side Panel -->
+                                    <div class="mock-sidepanel">
+                                        <div class="sidepanel-header sp-header-new">
+                                            <div class="sidepanel-brand sp-brand-new">
+                                                <div class="sidepanel-logo sp-logo-new">R</div>
+                                                <div class="sidepanel-brand-text sp-brand-text-new">
+                                                    <div class="sidepanel-name sp-name-new">Rilono AI</div>
+                                                    <div class="sidepanel-status sp-status-new">
+                                                        <span class="status-dot-green sp-dot-new"></span>
+                                                        Connected as Arjun on rilono.com
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="sp-header-actions">
+                                                <button class="sp-icon-btn"><svg viewBox="0 0 24 24" fill="none"
+                                                        stroke="currentColor" stroke-width="2">
+                                                        <line x1="12" y1="17" x2="12" y2="22"></line>
+                                                        <path
+                                                            d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.68V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3v4.68a2 2 0 0 1-1.11 1.87l-1.78.9A2 2 0 0 0 5 15.24Z">
+                                                        </path>
+                                                    </svg></button>
+                                                <button class="sp-icon-btn"><svg viewBox="0 0 24 24" fill="none"
+                                                        stroke="currentColor" stroke-width="2">
+                                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                                                    </svg></button>
+                                            </div>
+                                        </div>
+                                        <div class="sidepanel-chat centered-notice">
+                                            <div class="sp-msg-shield shield-pulse">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                    stroke-width="2" aria-hidden="true">
+                                                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                                    <path d="M12 8v4"></path>
+                                                    <path d="M12 16h.01"></path>
+                                                </svg>
+                                            </div>
+                                            <div class="sp-msg-shield-title">100% Read-Only Safety</div>
+                                            <div class="sp-msg-shield-desc">Rilono Copilot <strong>never types, submits,
+                                                    or modifies</strong> your form data. Your application stays
+                                                completely in your control.</div>
+                                        </div>
+                                        <div class="sidepanel-composer sp-disabled sp-composer-new">
+                                            <div class="sp-composer-add">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                                    stroke-width="2">
+                                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                                </svg>
+                                            </div>
+                                            <div class="sp-composer-input sp-input-new">Input protected...</div>
+                                        </div>
+                                        <div class="sp-footer-legal">Privacy Policy • Terms & Conditions</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Features + CTA -->
+                    <div class="chrome-ext-content reveal reveal-delay-2">
+                        <div class="chrome-ext-features">
+                            <div class="chrome-ext-feature">
+                                <div class="chrome-ext-feature-icon cyan" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="11" cy="11" r="8"></circle>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                    </svg>
+                                </div>
+                                <div class="chrome-ext-feature-text">
+                                    <div class="chrome-ext-feature-title">Inspect Page</div>
+                                    <div class="chrome-ext-feature-desc">Reads on-screen context from any visa
+                                        application page and provides field-by-field guidance.</div>
+                                </div>
+                            </div>
+                            <div class="chrome-ext-feature">
+                                <div class="chrome-ext-feature-icon purple" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                    </svg>
+                                </div>
+                                <div class="chrome-ext-feature-text">
+                                    <div class="chrome-ext-feature-title">AI Copilot Chat</div>
+                                    <div class="chrome-ext-feature-desc">Ask questions about DS-160 fields, I-20
+                                        details, or any visa form — get instant, context-aware answers.</div>
+                                </div>
+                            </div>
+                            <div class="chrome-ext-feature">
+                                <div class="chrome-ext-feature-icon emerald" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                                    </svg>
+                                </div>
+                                <div class="chrome-ext-feature-text">
+                                    <div class="chrome-ext-feature-title">100% Read-Only</div>
+                                    <div class="chrome-ext-feature-desc">Rilono Copilot never types, submits, or
+                                        modifies your form data. Your application stays in your hands.</div>
+                                </div>
+                            </div>
+                            <div class="chrome-ext-feature">
+                                <div class="chrome-ext-feature-icon pink" aria-hidden="true">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                                    </svg>
+                                </div>
+                                <div class="chrome-ext-feature-text">
+                                    <div class="chrome-ext-feature-title">Works Everywhere</div>
+                                    <div class="chrome-ext-feature-desc">CEAC, university portals, I-20 request pages —
+                                        Copilot adapts to any page you're on.</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="chrome-ext-cta">
+                            <a href="https://chromewebstore.google.com/detail/rilono-copilot/ggfiafmfibondlacgdigbeigccnecplh"
+                                target="_blank" rel="noopener noreferrer" class="chrome-ext-install-btn">
+                                <svg class="chrome-icon" viewBox="0 0 24 24" aria-hidden="true">
+                                    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor"
+                                        stroke-width="1.5" />
+                                    <circle cx="12" cy="12" r="4" fill="currentColor" opacity="0.3" />
+                                    <path d="M12 2a10 10 0 0 1 8.66 5H12" stroke="currentColor" stroke-width="1.5"
+                                        fill="none" />
+                                    <path d="M2 12a10 10 0 0 1 3.34-7.47L9.17 12" stroke="currentColor"
+                                        stroke-width="1.5" fill="none" />
+                                    <path d="M12 22a10 10 0 0 1-6.83-2.68L12 12" stroke="currentColor"
+                                        stroke-width="1.5" fill="none" />
+                                </svg>
+                                <span>Add to Chrome — It's Free</span>
+                                <span class="btn-icon">→</span>
+                                <div class="btn-glow"></div>
+                            </a>
+                            <p class="chrome-ext-cta-note">Available on Chrome, Edge, Brave, and all Chromium browsers
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
