@@ -179,6 +179,24 @@ async def read_root():
         return FileResponse(html_path)
     return {"message": "Rilono API", "docs": "/docs"}
 
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    """Serve robots.txt for search engine crawlers."""
+    robots_path = os.path.join(os.path.dirname(__file__), "..", "static", "robots.txt")
+    if os.path.exists(robots_path):
+        return FileResponse(robots_path, media_type="text/plain")
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml():
+    """Serve sitemap.xml for search engine indexing."""
+    sitemap_path = os.path.join(os.path.dirname(__file__), "..", "static", "sitemap.xml")
+    if os.path.exists(sitemap_path):
+        return FileResponse(sitemap_path, media_type="application/xml")
+    raise HTTPException(status_code=404, detail="Not found")
+
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}

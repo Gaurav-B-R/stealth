@@ -141,8 +141,7 @@ body {
     padding: 0;
     margin-top: 0.85rem;
     overflow: hidden;
-    max-height: 60px;
-    transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1), margin 0.35s ease, opacity 0.25s ease;
+    transition: margin 0.35s ease, opacity 0.25s ease;
     opacity: 1;
 }
 
@@ -224,18 +223,29 @@ body {
 
 
 @media (max-width: 768px) {
+    .announcement-bar {
+        margin-top: 0.65rem;
+    }
+
     .announcement-bar-inner {
+        flex-wrap: wrap;
+        justify-content: center;
+        text-align: center;
         padding: 0.4rem 1rem;
         gap: 0.6rem;
     }
 
     .announcement-bar-text {
         font-size: 0.72rem;
-        flex: 1;
+        flex: 1 1 100%;
         min-width: 0;
+        justify-content: center;
     }
 
     .announcement-bar-actions {
+        width: 100%;
+        justify-content: center;
+        flex-wrap: wrap;
         gap: 0.35rem;
     }
 
@@ -12490,5 +12500,879 @@ svg {
 
     #dashboardTab-overview .overview-health-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+/* Homepage mobile optimization pass */
+@media (max-width: 900px) {
+    .homepage-hero {
+        padding: 5.25rem 1rem 3.25rem;
+        min-height: auto;
+    }
+
+    .homepage-hero .hero-particles {
+        display: none;
+    }
+
+    .homepage-hero .hero-container {
+        gap: 2rem;
+    }
+
+    .homepage-hero .hero-badge {
+        font-size: 0.78rem;
+        padding: 0.42rem 0.85rem;
+        margin-bottom: 1.2rem;
+    }
+
+    .homepage-hero .hero-title {
+        font-size: 2.8rem;
+        line-height: 1.12;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-hero .title-main {
+        font-size: 2.1rem;
+    }
+
+    .homepage-hero .hero-subtitle {
+        font-size: 1rem;
+        line-height: 1.6;
+        margin-bottom: 1.4rem;
+        max-width: 34ch;
+    }
+
+    .homepage-hero .hero-buttons {
+        flex-direction: column;
+        align-items: stretch;
+        width: min(100%, 420px);
+        margin: 0 auto 1.7rem;
+    }
+
+    .homepage-hero .hero-buttons .btn-large {
+        width: 100%;
+        justify-content: center;
+        font-size: 1rem;
+        padding: 0.9rem 1rem;
+    }
+
+    .homepage-hero .hero-stats {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.7rem;
+        width: min(100%, 540px);
+        margin: 0 auto;
+        padding-top: 1.2rem;
+    }
+
+    .homepage-hero .glass-stat {
+        text-align: center;
+        align-items: center;
+    }
+
+    .homepage-hero .stat-gradient {
+        font-size: 1.4rem;
+    }
+
+    .homepage-hero .stat-label {
+        font-size: 0.7rem;
+        letter-spacing: 0.03em;
+    }
+
+    .homepage-hero .hero-visual-right {
+        display: none;
+    }
+
+    .homepage-remotion-video {
+        padding-top: 2.6rem;
+        padding-bottom: 2rem;
+    }
+
+    .homepage-remotion-video .remotion-copy {
+        gap: 0.9rem;
+    }
+
+    .homepage-remotion-video .remotion-copy h2 {
+        font-size: 1.9rem;
+    }
+
+    .homepage-remotion-video .remotion-copy p {
+        font-size: 0.95rem;
+        line-height: 1.6;
+    }
+
+    .homepage-remotion-video .remotion-highlights span {
+        font-size: 0.74rem;
+        padding: 0.36rem 0.64rem;
+    }
+
+    .homepage-remotion-video .remotion-copy-actions {
+        gap: 0.6rem;
+    }
+
+    .homepage-remotion-video .remotion-copy-actions .btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .homepage-chrome-extension {
+        padding-top: 2.6rem;
+        padding-bottom: 3rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-badge {
+        margin-bottom: 1rem;
+        padding: 0.36rem 0.8rem;
+        font-size: 0.72rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-title {
+        font-size: 1.95rem;
+        line-height: 1.2;
+    }
+
+    .homepage-chrome-extension .chrome-ext-subtitle {
+        font-size: 0.97rem;
+        line-height: 1.6;
+        max-width: 34ch;
+        margin-bottom: 2rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-layout {
+        gap: 1.5rem;
+    }
+
+    .homepage-chrome-extension .browser-body {
+        display: flex;
+        flex-direction: column;
+        min-height: auto;
+    }
+
+    .homepage-chrome-extension .chrome-ext-scene.is-active {
+        flex-direction: column;
+    }
+
+    .homepage-chrome-extension .mock-page {
+        width: 100%;
+        min-height: 220px;
+    }
+
+    .homepage-chrome-extension .scene-scanner {
+        width: 100%;
+    }
+
+    .homepage-chrome-extension .mock-sidepanel {
+        width: 100%;
+        border-left: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .homepage-chrome-extension .sidepanel-chat {
+        max-height: 190px;
+    }
+
+    .homepage-chrome-extension .chrome-ext-feature {
+        padding: 0.8rem 0.9rem;
+        gap: 0.75rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-feature-title {
+        font-size: 0.9rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-feature-desc {
+        font-size: 0.8rem;
+        line-height: 1.5;
+    }
+
+    .homepage-chrome-extension .chrome-ext-install-btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .homepage-value-banner {
+        padding-top: 2.8rem;
+        padding-bottom: 2.9rem;
+    }
+
+    .homepage-value-banner .value-banner-content h2 {
+        font-size: 1.9rem;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-value-banner .value-banner-content p {
+        font-size: 0.96rem;
+        line-height: 1.65;
+    }
+
+    .homepage-value-banner .value-banner-content p.value-banner-sub {
+        font-size: 0.9rem;
+        line-height: 1.55;
+        margin-bottom: 1.4rem;
+    }
+
+    .homepage-value-banner .value-stats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem;
+        max-width: 430px;
+        margin: 0 auto;
+    }
+
+    .homepage-value-banner .value-stat:last-child {
+        grid-column: 1 / -1;
+    }
+
+    .homepage-value-banner .value-stat-number {
+        font-size: 1.5rem;
+    }
+
+    .homepage-students-only {
+        padding-top: 2.8rem;
+        padding-bottom: 2.9rem;
+    }
+
+    .homepage-students-only .community-private-badge {
+        font-size: 0.78rem;
+        padding: 0.42rem 0.95rem;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-students-only .community-tag {
+        padding: 0.55rem 1rem;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-students-only .community-title {
+        font-size: 1.85rem;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-students-only .community-desc {
+        font-size: 0.96rem;
+        line-height: 1.65;
+        margin-bottom: 1.2rem;
+    }
+
+    .homepage-students-only .community-features {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem;
+        margin-top: 1.2rem;
+    }
+
+    .homepage-students-only .community-feature:last-child {
+        grid-column: 1 / -1;
+    }
+
+    .homepage-students-only .community-feature {
+        padding: 0.8rem 0.7rem;
+        border-radius: 0.9rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(15, 23, 42, 0.35);
+    }
+
+    .homepage-students-only .community-feature-icon {
+        width: 58px;
+        height: 58px;
+        margin-bottom: 0.7rem;
+    }
+
+    .homepage-platform {
+        padding-top: 2.8rem;
+        padding-bottom: 2.9rem;
+    }
+
+    .homepage-platform .platform-badge {
+        padding: 0.42rem 0.9rem;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-platform .platform-badge-label {
+        font-size: 0.74rem;
+    }
+
+    .homepage-platform .platform-title {
+        font-size: 1.95rem;
+    }
+
+    .homepage-platform .platform-subtitle {
+        font-size: 1rem;
+    }
+
+    .homepage-platform .platform-desc {
+        font-size: 0.92rem;
+        line-height: 1.6;
+        margin-bottom: 1.5rem;
+    }
+
+    .homepage-platform .platform-grid {
+        grid-template-columns: 1fr;
+        gap: 0.85rem;
+        margin-bottom: 1.5rem;
+    }
+
+    .homepage-platform .platform-card {
+        padding: 1rem 0.95rem;
+        text-align: left;
+        border-radius: 1rem;
+    }
+
+    .homepage-platform .platform-card-icon {
+        margin: 0 0 0.6rem;
+    }
+
+    .homepage-platform .platform-card-title {
+        font-size: 0.92rem;
+    }
+
+    .homepage-platform .platform-card-desc {
+        font-size: 0.82rem;
+        line-height: 1.45;
+    }
+
+    .homepage-platform .platform-stats {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.85rem;
+        padding-top: 1.2rem;
+    }
+
+    .homepage-platform .platform-stats .value-stat:last-child {
+        grid-column: 1 / -1;
+    }
+
+    .homepage-platform .platform-stat-number {
+        font-size: 1.35rem;
+    }
+
+    .homepage-platform .platform-stat-label {
+        font-size: 0.78rem;
+    }
+
+    .homepage-features {
+        padding-top: 2.6rem;
+        padding-bottom: 2.8rem;
+    }
+
+    .homepage-features .section-header {
+        margin-bottom: 2rem;
+    }
+
+    .homepage-features .features-container {
+        grid-template-columns: 1fr;
+        gap: 0.9rem;
+        max-width: 680px;
+    }
+
+    .homepage-features .feature-card {
+        padding: 1.35rem 1rem;
+        text-align: left;
+        border-radius: 1.15rem;
+    }
+
+    .homepage-features .feature-icon-wrapper {
+        margin-bottom: 0.8rem;
+    }
+
+    .homepage-features .feature-icon {
+        width: 60px;
+        height: 60px;
+    }
+
+    .homepage-features .feature-icon .home-icon-svg {
+        width: 1.5rem;
+        height: 1.5rem;
+    }
+
+    .homepage-features .feature-card h3 {
+        font-size: 1.12rem;
+        margin-bottom: 0.45rem;
+    }
+
+    .homepage-features .feature-card p {
+        font-size: 0.88rem;
+        line-height: 1.5;
+    }
+
+    .homepage-cta {
+        padding-top: 2.8rem;
+        padding-bottom: 2.8rem;
+    }
+
+    .homepage-cta .cta-content h2 {
+        font-size: 1.9rem;
+        margin-bottom: 0.9rem;
+    }
+
+    .homepage-cta .cta-content p {
+        font-size: 0.96rem;
+        line-height: 1.6;
+        margin-bottom: 1.4rem;
+    }
+
+    .homepage-cta .cta-buttons {
+        gap: 0.75rem;
+        margin-bottom: 1.3rem;
+    }
+
+    .homepage-cta .cta-buttons .btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .homepage-cta .cta-features {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        gap: 0.7rem;
+    }
+
+    .homepage-cta .cta-feature {
+        justify-content: flex-start;
+        font-size: 0.84rem;
+    }
+}
+
+@media (max-width: 640px) {
+    #homepageSection .section-title {
+        font-size: 1.72rem;
+    }
+
+    #homepageSection .section-subtitle {
+        font-size: 0.95rem;
+        line-height: 1.5;
+    }
+
+    .homepage-hero {
+        padding: 4.7rem 0.9rem 2.7rem;
+    }
+
+    .homepage-hero .hero-badge {
+        padding: 0.36rem 0.7rem;
+        font-size: 0.7rem;
+        gap: 0.42rem;
+        margin-bottom: 0.9rem;
+        max-width: 100%;
+        line-height: 1.3;
+    }
+
+    .homepage-hero .hero-title {
+        font-size: 2.2rem;
+        margin-bottom: 0.85rem;
+    }
+
+    .homepage-hero .title-main {
+        font-size: 1.72rem;
+    }
+
+    .homepage-hero .hero-subtitle {
+        font-size: 0.92rem;
+        line-height: 1.5;
+        margin-bottom: 1.1rem;
+        max-width: 30ch;
+    }
+
+    .homepage-hero .hero-buttons {
+        width: 100%;
+        margin-bottom: 1.3rem;
+        gap: 0.6rem;
+    }
+
+    .homepage-hero .hero-buttons .btn-large {
+        font-size: 0.93rem;
+        padding: 0.82rem 0.9rem;
+    }
+
+    .homepage-hero .hero-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem;
+    }
+
+    .homepage-hero .hero-stats .glass-stat:last-child {
+        grid-column: 1 / -1;
+    }
+
+    .homepage-hero .stat-gradient {
+        font-size: 1.22rem;
+    }
+
+    .homepage-hero .stat-label {
+        font-size: 0.64rem;
+    }
+
+    .homepage-remotion-video {
+        padding-top: 2.2rem;
+        padding-bottom: 1.5rem;
+    }
+
+    .homepage-remotion-video .remotion-tag {
+        font-size: 0.66rem;
+        padding: 0.32rem 0.62rem;
+    }
+
+    .homepage-remotion-video .remotion-copy h2 {
+        font-size: 1.56rem;
+    }
+
+    .homepage-remotion-video .remotion-copy p {
+        font-size: 0.89rem;
+    }
+
+    .homepage-remotion-video .remotion-highlights {
+        gap: 0.45rem;
+    }
+
+    .homepage-remotion-video .remotion-highlights span {
+        font-size: 0.69rem;
+        padding: 0.28rem 0.5rem;
+    }
+
+    .homepage-remotion-video .rilono-reel-player {
+        min-height: 430px;
+    }
+
+    .homepage-remotion-video .rilono-reel-scene {
+        inset: 0.68rem 0.68rem 5.3rem;
+        padding: 0.76rem;
+    }
+
+    .homepage-remotion-video .rilono-reel-scene h3 {
+        font-size: 0.98rem;
+    }
+
+    .homepage-remotion-video .rilono-reel-scene p {
+        font-size: 0.78rem;
+    }
+
+    .homepage-remotion-video .reel-scene-badge {
+        font-size: 0.62rem;
+        padding: 0.28rem 0.5rem;
+    }
+
+    .homepage-remotion-video .reel-scene-metrics strong {
+        font-size: 0.76rem;
+    }
+
+    .homepage-remotion-video .reel-scene-metrics span {
+        font-size: 0.66rem;
+    }
+
+    .homepage-chrome-extension,
+    .homepage-value-banner,
+    .homepage-students-only,
+    .homepage-platform,
+    .homepage-features,
+    .homepage-cta {
+        padding-left: 0.9rem;
+        padding-right: 0.9rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-badge {
+        font-size: 0.66rem;
+        padding: 0.3rem 0.62rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-title {
+        font-size: 1.5rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-subtitle {
+        font-size: 0.88rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-feature {
+        padding: 0.7rem 0.72rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-feature-icon {
+        width: 34px;
+        height: 34px;
+    }
+
+    .homepage-chrome-extension .chrome-ext-feature-icon svg {
+        width: 14px;
+        height: 14px;
+    }
+
+    .homepage-chrome-extension .chrome-ext-feature-title {
+        font-size: 0.82rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-feature-desc {
+        font-size: 0.74rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-install-btn {
+        font-size: 0.84rem;
+        padding: 0.68rem 0.8rem;
+    }
+
+    .homepage-chrome-extension .chrome-ext-install-btn .chrome-icon {
+        width: 18px;
+        height: 18px;
+    }
+
+    .homepage-value-banner .value-banner-emoji {
+        width: 64px;
+        height: 64px;
+        border-radius: 0.95rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .homepage-value-banner .value-banner-emoji .home-icon-svg {
+        width: 1.85rem;
+        height: 1.85rem;
+    }
+
+    .homepage-value-banner .value-banner-content h2 {
+        font-size: 1.45rem;
+    }
+
+    .homepage-value-banner .value-banner-content p {
+        font-size: 0.88rem;
+        line-height: 1.52;
+        margin-bottom: 0.9rem;
+    }
+
+    .homepage-value-banner .value-banner-content p.value-banner-sub {
+        font-size: 0.83rem;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-value-banner .value-stats {
+        grid-template-columns: 1fr;
+        gap: 0.65rem;
+    }
+
+    .homepage-value-banner .value-stat-number {
+        font-size: 1.18rem;
+    }
+
+    .homepage-value-banner .value-stat-label {
+        font-size: 0.78rem;
+    }
+
+    .homepage-students-only .community-private-badge {
+        font-size: 0.7rem;
+        padding: 0.34rem 0.7rem;
+    }
+
+    .homepage-students-only .community-tag {
+        padding: 0.4rem 0.65rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .homepage-students-only .community-tag-label {
+        font-size: 0.76rem;
+    }
+
+    .homepage-students-only .community-tag-icon {
+        width: 1.2rem;
+        height: 1.2rem;
+    }
+
+    .homepage-students-only .community-title {
+        font-size: 1.45rem;
+        margin-bottom: 0.7rem;
+    }
+
+    .homepage-students-only .community-desc {
+        font-size: 0.88rem;
+        line-height: 1.52;
+    }
+
+    .homepage-students-only .community-features {
+        grid-template-columns: 1fr;
+        gap: 0.65rem;
+    }
+
+    .homepage-students-only .community-feature {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        align-items: center;
+        column-gap: 0.65rem;
+        text-align: left;
+        padding: 0.72rem 0.78rem;
+    }
+
+    .homepage-students-only .community-feature-icon {
+        width: 40px;
+        height: 40px;
+        margin: 0;
+        border-radius: 0.72rem;
+        grid-row: 1 / 3;
+    }
+
+    .homepage-students-only .community-feature-icon .home-icon-svg {
+        width: 1.2rem;
+        height: 1.2rem;
+    }
+
+    .homepage-students-only .community-feature-title {
+        margin-bottom: 0.1rem;
+        font-size: 0.86rem;
+    }
+
+    .homepage-students-only .community-feature-sub {
+        font-size: 0.74rem;
+    }
+
+    .homepage-platform .platform-badge {
+        padding: 0.35rem 0.7rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .homepage-platform .platform-badge-label {
+        font-size: 0.68rem;
+    }
+
+    .homepage-platform .platform-title {
+        font-size: 1.5rem;
+        margin-bottom: 0.6rem;
+    }
+
+    .homepage-platform .platform-subtitle {
+        font-size: 0.88rem;
+    }
+
+    .homepage-platform .platform-desc {
+        font-size: 0.84rem;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-platform .platform-grid {
+        gap: 0.7rem;
+    }
+
+    .homepage-platform .platform-card {
+        padding: 0.82rem 0.82rem 0.78rem;
+    }
+
+    .homepage-platform .platform-card-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 0.75rem;
+    }
+
+    .homepage-platform .platform-card-icon .home-icon-svg {
+        width: 1.2rem;
+        height: 1.2rem;
+    }
+
+    .homepage-platform .platform-card-title {
+        font-size: 0.86rem;
+        margin-bottom: 0.28rem;
+    }
+
+    .homepage-platform .platform-card-desc {
+        font-size: 0.76rem;
+        line-height: 1.35;
+    }
+
+    .homepage-platform .platform-stats {
+        grid-template-columns: 1fr;
+        gap: 0.6rem;
+        padding-top: 0.85rem;
+    }
+
+    .homepage-platform .platform-stats .value-stat {
+        text-align: left;
+    }
+
+    .homepage-platform .platform-stat-number {
+        font-size: 1.06rem;
+    }
+
+    .homepage-platform .platform-stat-label {
+        font-size: 0.72rem;
+        margin-top: 0.1rem;
+    }
+
+    .homepage-features .section-header {
+        margin-bottom: 1.4rem;
+    }
+
+    .homepage-features .section-title {
+        font-size: 1.65rem;
+    }
+
+    .homepage-features .section-subtitle {
+        font-size: 0.92rem;
+    }
+
+    .homepage-features .features-container {
+        gap: 0.7rem;
+    }
+
+    .homepage-features .feature-card {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        column-gap: 0.72rem;
+        row-gap: 0.12rem;
+        padding: 0.9rem 0.88rem;
+        text-align: left;
+    }
+
+    .homepage-features .feature-icon-wrapper {
+        margin: 0;
+        grid-row: 1 / 3;
+    }
+
+    .homepage-features .feature-icon {
+        width: 52px;
+        height: 52px;
+        border-radius: 0.84rem;
+    }
+
+    .homepage-features .feature-icon .home-icon-svg {
+        width: 1.28rem;
+        height: 1.28rem;
+    }
+
+    .homepage-features .feature-card h3 {
+        font-size: 0.98rem;
+        margin: 0;
+    }
+
+    .homepage-features .feature-card p {
+        font-size: 0.79rem;
+        line-height: 1.42;
+        margin: 0;
+    }
+
+    .homepage-cta .cta-content h2 {
+        font-size: 1.5rem;
+    }
+
+    .homepage-cta .cta-content p {
+        font-size: 0.88rem;
+        line-height: 1.5;
+        margin-bottom: 1rem;
+    }
+
+    .homepage-cta .cta-buttons {
+        margin-bottom: 0.95rem;
+    }
+
+    .homepage-cta .cta-features {
+        gap: 0.55rem;
+        margin-top: 0.8rem;
+        padding-top: 0.8rem;
+    }
+
+    .homepage-cta .cta-feature {
+        font-size: 0.78rem;
+    }
+
+    .homepage-cta .cta-check {
+        width: 1.22rem;
+        height: 1.22rem;
+        font-size: 0.63rem;
+    }
+
+    .chrome-ext-ambient,
+    .value-banner-orb,
+    .platform-ambient {
+        display: none;
     }
 }
