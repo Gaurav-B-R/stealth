@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
@@ -8,6 +8,7 @@ from app.subscriptions import (
     get_plan_limits,
     get_rilono_ai_chat_upload_quota_snapshot,
 )
+from app.utils.rate_limiter import check_ip_rate_limit
 from app.utils.secure_artifacts import decrypt_artifact_bytes
 # Import Gemini configuration
 from app.utils import gemini_service as gemini_utils
@@ -93,7 +94,35 @@ ALLOWED_CHAT_SOURCES = {
 QUOTA_TRACKED_CHAT_SOURCES = {
     "rilono_ai_chat",
     "rilono_ai_copilot",
+    "visa_prep",
+    "mock_interview",
 }
+
+AI_CHAT_RATE_LIMIT = int(os.getenv("AI_CHAT_RATE_LIMIT", "120"))
+AI_CHAT_RATE_WINDOW_SECONDS = int(os.getenv("AI_CHAT_RATE_WINDOW_SECONDS", "60"))
+AI_CHAT_USER_RATE_LIMIT = int(os.getenv("AI_CHAT_USER_RATE_LIMIT", "40"))
+
+
+def _enforce_rate_limit_or_429(
+    request: Request,
+    scope: str,
+    limit: int,
+    window_seconds: int,
+    extra_key: str | None = None,
+) -> None:
+    allowed, retry_after = check_ip_rate_limit(
+        request=request,
+        scope=scope,
+        limit=limit,
+        window_seconds=window_seconds,
+        extra_key=extra_key,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many chat requests. Please slow down and try again.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def get_student_profile_raw_text(user_id: int) -> str | None:
@@ -715,6 +744,7 @@ def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
 @router.post("/chat", response_model=ChatResponse)
 def chat_with_ai(
     chat_message: ChatMessage,
+    request: Request,
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
@@ -729,6 +759,20 @@ def chat_with_ai(
                 status_code=400,
                 detail="Unsupported chat source.",
             )
+
+        _enforce_rate_limit_or_429(
+            request=request,
+            scope="ai_chat.chat.ip",
+            limit=AI_CHAT_RATE_LIMIT,
+            window_seconds=AI_CHAT_RATE_WINDOW_SECONDS,
+        )
+        _enforce_rate_limit_or_429(
+            request=request,
+            scope="ai_chat.chat.user",
+            limit=AI_CHAT_USER_RATE_LIMIT,
+            window_seconds=AI_CHAT_RATE_WINDOW_SECONDS,
+            extra_key=str(current_user.id),
+        )
 
         count_toward_rilono_chat_limit = source in QUOTA_TRACKED_CHAT_SOURCES
 

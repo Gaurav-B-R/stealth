@@ -3792,6 +3792,69 @@ function resetMockInterviewTimer() {
     renderMockInterviewTimer();
 }
 
+function setMockOfficerVisualState(nextState = 'idle', customText = '') {
+    const officerAvatar = document.getElementById('visaMockOfficerAvatar');
+    const officerStateText = document.getElementById('visaMockOfficerStateText');
+    if (!officerAvatar) return;
+
+    officerAvatar.classList.remove('is-talking', 'is-thinking', 'is-listening');
+    if (nextState === 'talking') {
+        officerAvatar.classList.add('is-talking');
+    } else if (nextState === 'thinking') {
+        officerAvatar.classList.add('is-thinking');
+    } else if (nextState === 'listening') {
+        officerAvatar.classList.add('is-listening');
+    }
+
+    if (officerStateText) {
+        const defaultTextByState = {
+            idle: 'Awaiting candidate response',
+            thinking: 'Reviewing your response...',
+            listening: 'Your turn to answer',
+            talking: 'Officer speaking'
+        };
+        officerStateText.textContent = customText || defaultTextByState[nextState] || defaultTextByState.idle;
+    }
+}
+
+function syncMockOfficerVisualWithStatus(statusText) {
+    const isMockVoiceActive = visaMockInterviewState.active && visaMockInterviewState.channel === 'voice';
+    if (!isMockVoiceActive) {
+        if (!visaMockInterviewState.active) {
+            setMockOfficerVisualState('idle');
+        }
+        return;
+    }
+
+    const normalizedStatus = String(statusText || '').trim().toLowerCase();
+    if (
+        normalizedStatus.includes('listening')
+        || normalizedStatus.includes('speak your answer')
+        || normalizedStatus.includes('ready for answer')
+        || normalizedStatus.includes('no speech')
+    ) {
+        setMockOfficerVisualState('listening');
+        return;
+    }
+    if (
+        normalizedStatus.includes('thinking')
+        || normalizedStatus.includes('typing')
+        || normalizedStatus.includes('starting')
+        || normalizedStatus.includes('generating')
+    ) {
+        setMockOfficerVisualState('thinking');
+        return;
+    }
+    if (
+        normalizedStatus.includes('error')
+        || normalizedStatus.includes('stopped')
+        || normalizedStatus.includes('completed')
+        || normalizedStatus.includes('idle')
+    ) {
+        setMockOfficerVisualState('idle');
+    }
+}
+
 function setVisaInterviewStatus(mode, statusText) {
     const cfg = getVisaInterviewSessionConfig(mode);
     const statusEl = document.getElementById(cfg.statusId);
@@ -3799,6 +3862,9 @@ function setVisaInterviewStatus(mode, statusText) {
         statusEl.textContent = statusText;
         const isGenerating = /generating final/i.test(statusText);
         statusEl.classList.toggle('report-generating-badge', isGenerating);
+    }
+    if (mode === 'mock') {
+        syncMockOfficerVisualWithStatus(statusText);
     }
 }
 
@@ -4076,8 +4142,33 @@ async function speakVisaInterviewResponse(text) {
                 utterance.voice = preferredVoice;
             }
 
-            utterance.onend = () => resolve();
-            utterance.onerror = () => resolve();
+            const subtitles = document.getElementById('visaMockVideoSubtitles');
+            const isMockVoice = visaMockInterviewState.active && visaMockInterviewState.channel === 'voice';
+
+            utterance.onstart = () => {
+                if (isMockVoice) {
+                    setMockOfficerVisualState('talking');
+                    if (subtitles) {
+                        subtitles.textContent = utteranceText;
+                        subtitles.classList.add('active');
+                    }
+                }
+            };
+
+            const handleEnd = () => {
+                if (isMockVoice) {
+                    if (visaMockInterviewState.active && visaMockInterviewState.channel === 'voice') {
+                        setMockOfficerVisualState('listening');
+                    } else {
+                        setMockOfficerVisualState('idle');
+                    }
+                }
+                if (subtitles) subtitles.classList.remove('active');
+                resolve();
+            };
+
+            utterance.onend = handleEnd;
+            utterance.onerror = handleEnd;
             window.speechSynthesis.speak(utterance);
         } catch (error) {
             resolve();
@@ -4102,7 +4193,7 @@ function listenVisaInterviewAnswer(mode) {
     const recognition = new SpeechRecognitionCtor();
     state.recognition = recognition;
     recognition.lang = 'en-US';
-    recognition.interimResults = false;
+    recognition.interimResults = true;
     recognition.maxAlternatives = 1;
     recognition.continuous = false;
 
@@ -4110,6 +4201,14 @@ function listenVisaInterviewAnswer(mode) {
         state.listening = true;
         setVisaInterviewStatus(mode, 'Listening...');
         updateVisaInterviewControls(mode);
+        const subtitles = document.getElementById('visaMockVideoSubtitles');
+        if (state.active && state.channel === 'voice' && subtitles) {
+            subtitles.textContent = '';
+            subtitles.classList.remove('active');
+        }
+        if (mode === 'mock' && state.channel === 'voice') {
+            setMockOfficerVisualState('listening');
+        }
     };
 
     recognition.onerror = (event) => {
@@ -4119,10 +4218,16 @@ function listenVisaInterviewAnswer(mode) {
         if (event.error === 'no-speech') {
             setVisaInterviewStatus(mode, 'No speech detected');
             appendVisaInterviewLog(mode, 'system', 'No speech detected. Click "Speak Answer" and try again.');
+            if (mode === 'mock' && state.channel === 'voice') {
+                setMockOfficerVisualState('listening', 'Listening... please speak clearly');
+            }
             return;
         }
         setVisaInterviewStatus(mode, 'Mic error');
         appendVisaInterviewLog(mode, 'system', `Mic error: ${event.error}. Try again.`);
+        if (mode === 'mock' && state.channel === 'voice') {
+            setMockOfficerVisualState('idle', 'Audio issue detected');
+        }
     };
 
     recognition.onend = () => {
@@ -4131,16 +4236,45 @@ function listenVisaInterviewAnswer(mode) {
         if (state.active && !state.pending) {
             setVisaInterviewStatus(mode, 'Ready for answer');
         }
+        const subtitles = document.getElementById('visaMockVideoSubtitles');
+        if (state.active && state.channel === 'voice' && subtitles && !state.pending) {
+            subtitles.textContent = '';
+            subtitles.classList.remove('active');
+        }
+        if (mode === 'mock' && state.active && state.channel === 'voice' && !state.pending) {
+            setMockOfficerVisualState('listening');
+        }
     };
 
     recognition.onresult = async (event) => {
-        const transcript = event?.results?.[0]?.[0]?.transcript?.trim() || '';
-        if (!transcript) {
-            setVisaInterviewStatus(mode, 'No speech detected');
-            return;
+        let finalTranscript = '';
+        let interimTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+                finalTranscript += event.results[i][0].transcript;
+            } else {
+                interimTranscript += event.results[i][0].transcript;
+            }
         }
-        appendVisaInterviewLog(mode, 'user', `Student: ${transcript}`);
-        await sendVisaInterviewTurn(mode, transcript, false);
+
+        if (state.active && state.channel === 'voice') {
+            const subtitles = document.getElementById('visaMockVideoSubtitles');
+            if (subtitles) {
+                const currentText = (finalTranscript + ' ' + interimTranscript).trim();
+                subtitles.textContent = currentText;
+                if (currentText) {
+                    subtitles.classList.add('active');
+                } else {
+                    subtitles.classList.remove('active');
+                }
+            }
+        }
+
+        if (finalTranscript.trim()) {
+            appendVisaInterviewLog(mode, 'user', `Student: ${finalTranscript.trim()}`);
+            await sendVisaInterviewTurn(mode, finalTranscript.trim(), false);
+        }
     };
 
     try {
@@ -4150,6 +4284,9 @@ function listenVisaInterviewAnswer(mode) {
         updateVisaInterviewControls(mode);
         setVisaInterviewStatus(mode, 'Mic start failed');
         appendVisaInterviewLog(mode, 'system', 'Could not start microphone. Click "Speak Answer" again and allow mic permission.');
+        if (mode === 'mock' && state.channel === 'voice') {
+            setMockOfficerVisualState('idle', 'Microphone unavailable');
+        }
     }
 }
 
@@ -4179,6 +4316,9 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
     setVisaInterviewStatus(mode, waitingStatus);
     upsertVisaInterviewPendingBubble(mode, waitingStatus);
     updateVisaInterviewControls(mode);
+    if (mode === 'mock' && state.channel === 'voice') {
+        setMockOfficerVisualState('thinking');
+    }
 
     const initialTurnPrompt = mode === 'prep'
         ? 'Start the prep session now. Ask the first F-1 interview question.'
@@ -4263,10 +4403,16 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
         clearVisaInterviewPendingBubble(mode);
         appendVisaInterviewLog(mode, 'system', `Error: ${error.message || 'Unable to continue this session.'}`);
         setVisaInterviewStatus(mode, 'Error');
+        if (mode === 'mock' && state.channel === 'voice') {
+            setMockOfficerVisualState('idle', 'Connection interrupted');
+        }
     } finally {
         clearVisaInterviewPendingBubble(mode);
         state.pending = false;
         updateVisaInterviewControls(mode);
+        if (mode === 'mock' && !state.active) {
+            setMockOfficerVisualState('idle');
+        }
         if (mode === 'mock' && shouldAutoFinish) {
             await finishVoiceMockInterview();
         }
@@ -4743,6 +4889,36 @@ async function startVoiceInterviewSession(mode, options = {}) {
             reportEl.innerHTML = '';
         }
         appendVisaInterviewLog('mock', 'system', 'Session started.');
+
+        const videoContainer = document.getElementById('visaMockVideoContainer');
+        const mockLog = document.getElementById('visaMockInterviewLog');
+        if (options.channel === 'voice' && videoContainer) {
+            if (mockLog) mockLog.style.display = 'none';
+            videoContainer.style.display = 'block';
+            const joiningOverlay = document.getElementById('visaMockVideoJoining');
+            const videoFeed = document.getElementById('visaMockVideoFeed');
+            const subtitles = document.getElementById('visaMockVideoSubtitles');
+
+            if (joiningOverlay) joiningOverlay.style.display = 'flex';
+            if (videoFeed) videoFeed.style.display = 'none';
+            setMockOfficerVisualState('thinking', 'Connecting to secure consular line...');
+            if (subtitles) {
+                subtitles.textContent = '';
+                subtitles.classList.remove('active');
+            }
+
+            setTimeout(() => {
+                if (visaMockInterviewState.active && visaMockInterviewState.channel === 'voice') {
+                    if (joiningOverlay) joiningOverlay.style.display = 'none';
+                    if (videoFeed) videoFeed.style.display = 'flex';
+                    setMockOfficerVisualState('thinking', 'Session connected. Officer preparing first question');
+                }
+            }, 2000);
+        } else if (videoContainer) {
+            videoContainer.style.display = 'none';
+            if (mockLog) mockLog.style.display = 'block';
+            setMockOfficerVisualState('idle');
+        }
     }
 
     setVisaInterviewStatus(mode, 'Starting interview...');
@@ -4774,6 +4950,15 @@ function stopVoiceMockInterview(silent = false) {
     }
     setVisaInterviewStatus('mock', 'Stopped');
     updateVisaInterviewControls('mock');
+
+    const videoContainer = document.getElementById('visaMockVideoContainer');
+    const mockLog = document.getElementById('visaMockInterviewLog');
+    const subtitles = document.getElementById('visaMockVideoSubtitles');
+    if (videoContainer) videoContainer.style.display = 'none';
+    if (mockLog) mockLog.style.display = 'block';
+    setMockOfficerVisualState('idle');
+    if (subtitles) subtitles.classList.remove('active');
+
     if (!silent) {
         appendVisaInterviewLog('mock', 'system', 'Session stopped. Click "Finish & Report" to generate the final result.');
     }
@@ -10921,4 +11106,3 @@ function scrollToChromeExtension() {
         }, 100);
     }
 }
-
