@@ -161,6 +161,57 @@ uvicorn app.main:app --reload
 
 The `--reload` flag enables automatic reloading when code changes are detected.
 
+## Marketing Contacts Sync (Resend)
+
+Use this to sync eligible users from your Postgres `users` table to a Resend Audience.
+
+Eligibility filter:
+- `is_active = true`
+- `email_verified = true`
+- `email_notifications_enabled = true`
+- `email is not null`
+
+### Required env vars
+
+```bash
+RESEND_API_KEY=...
+RESEND_MARKETING_SEGMENT_ID=...
+```
+
+Backward compatibility: `RESEND_MARKETING_AUDIENCE_ID` is also accepted.
+
+Optional:
+
+```bash
+RESEND_CONTACTS_SYNC_BATCH_SIZE=100
+RESEND_CONTACTS_SYNC_TIMEOUT_SECONDS=30
+RESEND_CONTACTS_SYNC_UNSUBSCRIBE_INELIGIBLE=false
+RESEND_CONTACTS_SYNC_REQUEST_INTERVAL_SECONDS=0.55
+RESEND_CONTACTS_SYNC_MAX_RETRIES=4
+RESEND_CONTACTS_SYNC_RETRY_MAX_SECONDS=6
+```
+
+### Run manually
+
+```bash
+python -m app.services.resend_contacts_sync --dry-run
+python -m app.services.resend_contacts_sync
+```
+
+### Render Cron command
+
+Set a Cron Job command to:
+
+```bash
+python -m app.services.resend_contacts_sync
+```
+
+If you want to mark ineligible contacts as unsubscribed in Resend:
+
+```bash
+python -m app.services.resend_contacts_sync --unsubscribe-ineligible
+```
+
 ## License
 
 This project is open source and available for educational purposes.
