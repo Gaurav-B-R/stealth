@@ -19,6 +19,7 @@ from app.schema_patch import (
     ensure_coupon_usage_limit_column,
     ensure_document_catalog_columns,
     ensure_f1_visa_news_table,
+    ensure_referral_columns,
     ensure_rilono_ai_chat_upload_events_table,
     ensure_subscription_payment_recurring_columns,
     ensure_subscription_usage_columns,
@@ -137,6 +138,7 @@ app.include_router(notifications.router)
 def startup_backfill_subscriptions():
     """Ensure existing users have default subscription + referral records."""
     ensure_user_legal_consent_column()
+    ensure_referral_columns()
     ensure_subscription_usage_columns()
     ensure_subscription_payment_recurring_columns()
     ensure_document_catalog_columns()

@@ -135,6 +135,31 @@ def ensure_coupon_usage_limit_column():
             conn.execute(text("ALTER TABLE coupon_codes ADD COLUMN max_uses_per_user INTEGER"))
 
 
+def ensure_referral_columns():
+    """
+    Patch users table schema for referral program fields in environments without full migrations.
+    """
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "users")
+
+        if "referral_code" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN referral_code VARCHAR"))
+
+        if "referred_by_user_id" not in columns:
+            if engine.dialect.name == "sqlite":
+                conn.execute(text("ALTER TABLE users ADD COLUMN referred_by_user_id INTEGER"))
+            else:
+                conn.execute(
+                    text("ALTER TABLE users ADD COLUMN referred_by_user_id INTEGER REFERENCES users(id)")
+                )
+
+        if "referral_reward_granted_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN referral_reward_granted_at TIMESTAMP"))
+
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_referral_code ON users(referral_code)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_referred_by_user_id ON users(referred_by_user_id)"))
+
+
 def _table_exists(conn, table_name: str) -> bool:
     if engine.dialect.name == "sqlite":
         result = conn.execute(
