@@ -2809,9 +2809,6 @@
                                                     <div id="visaPrepSecondaryControls"
                                                         class="visa-mock-secondary-controls" style="display: none;">
                                                         <button type="button" class="btn btn-secondary"
-                                                            id="visaPrepSpeakBtn" onclick="listenPrepInterviewAnswer()"
-                                                            disabled>Speak Answer</button>
-                                                        <button type="button" class="btn btn-secondary"
                                                             id="visaPrepStopBtn" onclick="stopVoicePrepInterview()"
                                                             disabled>Stop</button>
                                                     </div>
@@ -2843,6 +2840,11 @@
                                             </div>
                                             <div id="visaPrepChatComposer" class="visa-mock-chat-composer"
                                                 style="display: none;">
+                                                <button type="button"
+                                                    class="btn visa-speak-answer-cta"
+                                                    id="visaPrepSpeakBottomBtn"
+                                                    onclick="listenPrepInterviewAnswer()"
+                                                    disabled>Speak Answer</button>
                                                 <input id="visaPrepChatInput" type="text"
                                                     placeholder="Type your prep answer..."
                                                     onkeydown="handlePrepChatInputKeydown(event)">
@@ -2889,9 +2891,6 @@
                                                     <div id="visaMockSecondaryControls"
                                                         class="visa-mock-secondary-controls" style="display: none;">
                                                         <button type="button" class="btn btn-secondary"
-                                                            id="visaMockSpeakBtn" onclick="listenMockInterviewAnswer()"
-                                                            disabled>Speak Answer</button>
-                                                        <button type="button" class="btn btn-secondary"
                                                             id="visaMockFinishBtn" onclick="finishVoiceMockInterview()"
                                                             disabled>Finish & Report</button>
                                                     </div>
@@ -2925,6 +2924,11 @@
                                             </div>
                                             <div id="visaMockChatComposer" class="visa-mock-chat-composer"
                                                 style="display: none;">
+                                                <button type="button"
+                                                    class="btn visa-speak-answer-cta"
+                                                    id="visaMockSpeakBottomBtn"
+                                                    onclick="listenMockInterviewAnswer()"
+                                                    disabled>Speak Answer</button>
                                                 <input id="visaMockChatInput" type="text"
                                                     placeholder="Type your interview answer..."
                                                     onkeydown="handleMockChatInputKeydown(event)">
@@ -3029,12 +3033,28 @@
                                             <span class="visa-hub-tag visa-hub-tag-muted">Inspect Page is
                                                 read-only</span>
                                         </div>
-                                        <div class="visa-hub-actions">
+                                        <div id="copilotInstallCtaWrap" class="visa-hub-actions">
                                             <a class="btn btn-primary"
                                                 href="https://chromewebstore.google.com/detail/rilono-copilot/ggfiafmfibondlacgdigbeigccnecplh"
                                                 target="_blank" rel="noopener noreferrer">
                                                 Add Chrome Extension for All Workflows
                                             </a>
+                                        </div>
+                                        <div id="copilotFreeUpgradePrompt" class="copilot-upgrade-prompt"
+                                            style="display: none;">
+                                            <p class="copilot-upgrade-title">Unlock Rilono Copilot Workflows</p>
+                                            <p class="copilot-upgrade-copy">Upgrade to Pro or Journey Pass to see the
+                                                power of Rilono Copilot in action across your application workflows.</p>
+                                            <div class="visa-hub-actions copilot-upgrade-actions">
+                                                <button id="copilotUpgradeProBtn" type="button"
+                                                    class="btn btn-secondary"
+                                                    onclick="handleUpgradeToPro('copilot_tab', 'pro_monthly')">Upgrade
+                                                    to Pro</button>
+                                                <button id="copilotUpgradeJourneyBtn" type="button"
+                                                    class="btn btn-primary"
+                                                    onclick="handleUpgradeToPro('copilot_tab', 'pro_six_month')">Get
+                                                    Journey Pass</button>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -3203,6 +3223,7 @@
                             <li>Up to 5 document uploads</li>
                             <li>Up to 3 F-1 interview prep sessions</li>
                             <li>Up to 2 F-1 mock interviews</li>
+                            <li class="feature-unavailable">Rilono Copilot workflows: No access</li>
                             <li>Dashboard and visa journey tracking</li>
                         </ul>
                         <a href="#"
@@ -3224,6 +3245,7 @@
                             <li>Unlimited document uploads</li>
                             <li>Unlimited F-1 interview prep sessions</li>
                             <li>Unlimited F-1 mock interviews</li>
+                            <li>Unlimited Rilono Copilot workflows</li>
                             <li>Priority support</li>
                         </ul>
                         <button id="pricingProUpgradeButton" type="button" class="btn btn-primary"
@@ -3245,6 +3267,7 @@
                             <li>Unlimited document uploads</li>
                             <li>Unlimited F-1 interview prep sessions</li>
                             <li>Unlimited F-1 mock interviews</li>
+                            <li>Unlimited Rilono Copilot workflows</li>
                             <li>Priority support</li>
                         </ul>
                         <button id="pricingProSixMonthUpgradeButton" type="button" class="btn btn-primary"
@@ -4158,6 +4181,7 @@
                             <li>Unlimited Rilono AI chat file uploads</li>
                             <li>Unlimited document uploads</li>
                             <li>Unlimited interview prep and mock sessions</li>
+                            <li>Unlimited Rilono Copilot workflows</li>
                             <li>Priority support</li>
                         </ul>
                     </div>

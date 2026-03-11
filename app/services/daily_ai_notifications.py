@@ -185,9 +185,11 @@ User context:
 - current_residence_country: {getattr(user, 'current_residence_country', None) or ''}
 
 Your task:
-- Cross-reference all raw files.
+- First perform critical cross-validation across the raw profile and document files.
+- Identify major mismatches, contradictions, or critical missing details first (for example: identity/name mismatch, country mismatch, key timeline/date mismatch, university/program mismatch).
 - Determine if the user has delayed, missing, invalid, or risky F1-visa-related items needing action.
 - Consider timeline urgency, mandatory stage documents, invalid document validations, and obvious inconsistencies.
+- If any major mismatch exists, treat it as the highest-priority issue before routine reminders.
 
 Return ONLY valid JSON (no markdown/code fences) with EXACTLY these keys:
 {{
@@ -203,6 +205,9 @@ Rules:
 - When notification_needed=false: keep email_subject, email_body, in_app_message as empty strings.
 - If action is needed, produce clear student-friendly content.
 - Keep in_app_message short (max 180 chars).
+- When notification_needed=true, email_body must start with a short "Critical checks & cross-verification" section.
+- In that section, list major mismatches first. If no major mismatch is found, explicitly state that critical checks are consistent based on currently available data.
+- After the critical checks section, include a "Recommended next steps" section in priority order.
 - email_body must be valid lightweight HTML and must not include markdown.
 
 RAW STUDENT PROFILE FILE (JSON):

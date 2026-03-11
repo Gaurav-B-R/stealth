@@ -4,6 +4,7 @@ from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_active_user
 from app.subscriptions import (
+    PLAN_PRO,
     get_or_create_user_subscription,
     get_plan_limits,
     get_rilono_ai_chat_upload_quota_snapshot,
@@ -515,6 +516,13 @@ def build_system_prompt(
             "- Always maintain a helpful and encouraging tone",
             "- When suggesting next steps, be specific about what documents they need to upload or actions to take",
         ]
+        if normalized_source == "rilono_ai_chat":
+            source_specific_instructions.extend([
+                "- For every response, first cross-verify the student's profile details and uploaded document details for consistency (based on available data).",
+                "- If you find any major mismatch, contradiction, or critical missing detail, flag those items first before giving any next-step guidance.",
+                "- If no major mismatch is found, clearly state that critical checks look consistent with the currently available profile and document data.",
+                "- After the critical checks section, provide the recommended next steps in clear priority order.",
+            ])
 
     common_instructions = [
         "- IMPORTANT: Read and use the ATTACHED RAW STUDENT PROFILE FILE directly to personalize your responses",
@@ -777,6 +785,15 @@ def chat_with_ai(
         count_toward_rilono_chat_limit = source in QUOTA_TRACKED_CHAT_SOURCES
 
         subscription = get_or_create_user_subscription(db, current_user.id)
+        if source == "rilono_ai_copilot" and (subscription.plan or "").strip().lower() != PLAN_PRO:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Rilono Copilot is available only on Pro and Journey Pass plans. "
+                    "Upgrade to continue."
+                ),
+            )
+
         limits = get_plan_limits(subscription.plan)
         ai_limit = limits["ai_messages_limit"]
         if count_toward_rilono_chat_limit and ai_limit >= 0 and subscription.ai_messages_used >= ai_limit:

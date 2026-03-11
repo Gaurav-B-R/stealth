@@ -1341,6 +1341,14 @@ function markdownToHtml(text) {
     // Escape HTML first to prevent XSS
     let html = escapeHtml(text);
 
+    // Normalize '*' bullet markers so they don't conflict with italic parsing
+    html = html.replace(/^\s*\*(?=\s+)/gm, '•');
+
+    // Convert markdown headings
+    html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+    html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>');
+    html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>');
+
     // Convert **bold** to <strong>
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 
@@ -1350,7 +1358,7 @@ function markdownToHtml(text) {
     // Convert `code` to <code>
     html = html.replace(/`([^`]+)`/g, '<code style="background: rgba(139, 92, 246, 0.2); padding: 2px 6px; border-radius: 4px; font-family: monospace;">$1</code>');
 
-    // Convert bullet points (lines starting with - or •)
+    // Convert bullet points (lines starting with -, •, or *)
     html = html.replace(/^[\-•]\s+(.+)$/gm, '<li>$1</li>');
 
     // Convert numbered lists (lines starting with 1. 2. etc)
@@ -2581,9 +2589,31 @@ function updateSubscriptionUI() {
     const profileUsagePrepEl = document.getElementById('profileSubscriptionUsagePrep');
     const profileUsageMockEl = document.getElementById('profileSubscriptionUsageMock');
     const profileEnableEmailButton = document.getElementById('profileEmailNotificationsEnableBtn');
+    const copilotInstallCtaWrap = document.getElementById('copilotInstallCtaWrap');
+    const copilotFreeUpgradePrompt = document.getElementById('copilotFreeUpgradePrompt');
+    const copilotUpgradeProBtn = document.getElementById('copilotUpgradeProBtn');
+    const copilotUpgradeJourneyBtn = document.getElementById('copilotUpgradeJourneyBtn');
+
+    const setCopilotPlanPromptState = (showUpgradePrompt) => {
+        if (copilotInstallCtaWrap) {
+            copilotInstallCtaWrap.style.display = showUpgradePrompt ? 'none' : 'flex';
+        }
+        if (copilotFreeUpgradePrompt) {
+            copilotFreeUpgradePrompt.style.display = showUpgradePrompt ? 'grid' : 'none';
+        }
+        if (copilotUpgradeProBtn) {
+            copilotUpgradeProBtn.disabled = !PRO_UPGRADE_ENABLED;
+            copilotUpgradeProBtn.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
+        }
+        if (copilotUpgradeJourneyBtn) {
+            copilotUpgradeJourneyBtn.disabled = !PRO_UPGRADE_ENABLED;
+            copilotUpgradeJourneyBtn.textContent = PRO_UPGRADE_ENABLED ? 'Get Journey Pass' : 'Journey Pass Coming Soon';
+        }
+    };
 
     if (!currentSubscription) {
         updatePricingFocusMode(false);
+        setCopilotPlanPromptState(true);
         if (planNameEl) planNameEl.textContent = 'Free';
         if (aiUsageEl) aiUsageEl.textContent = 'AI: 0/25 used';
         if (chatUploadUsageEl) chatUploadUsageEl.textContent = 'AI Chat Uploads (24h): 0/7 used';
@@ -2663,6 +2693,7 @@ function updateSubscriptionUI() {
     const chatUploadWindowHours = Number(currentSubscription.rilono_ai_chat_upload_window_hours) || 24;
 
     updatePricingFocusMode(isJourneyPassActive);
+    setCopilotPlanPromptState(!isPro);
 
     if (planNameEl) {
         planNameEl.textContent = `${planLabel} Plan`;
@@ -3714,7 +3745,7 @@ function getVisaInterviewSessionConfig(mode) {
             statusId: 'visaPrepInterviewStatus',
             logId: 'visaPrepInterviewLog',
             startSelector: '#visaPrepStartBtn',
-            speakId: 'visaPrepSpeakBtn',
+            bottomSpeakId: 'visaPrepSpeakBottomBtn',
             stopId: 'visaPrepStopBtn',
             finishId: null,
             assistantLabel: 'Prep Coach'
@@ -3724,7 +3755,7 @@ function getVisaInterviewSessionConfig(mode) {
         statusId: 'visaMockInterviewStatus',
         logId: 'visaMockInterviewLog',
         startSelector: '#visaMockStartBtn',
-        speakId: 'visaMockSpeakBtn',
+        bottomSpeakId: 'visaMockSpeakBottomBtn',
         stopId: null,
         finishId: 'visaMockFinishBtn',
         assistantLabel: 'Visa Officer'
@@ -3860,7 +3891,7 @@ function updateVisaInterviewControls(mode) {
     const cfg = getVisaInterviewSessionConfig(mode);
     const state = getVisaInterviewState(mode);
     const startBtn = document.querySelector(cfg.startSelector);
-    const speakBtn = document.getElementById(cfg.speakId);
+    const bottomSpeakBtn = cfg.bottomSpeakId ? document.getElementById(cfg.bottomSpeakId) : null;
     const stopBtn = document.getElementById(cfg.stopId);
     const finishBtn = cfg.finishId ? document.getElementById(cfg.finishId) : null;
     const speechSupported = Boolean(getSpeechRecognitionConstructor());
@@ -3872,13 +3903,8 @@ function updateVisaInterviewControls(mode) {
             startBtn.disabled = !speechSupported || state.active || state.pending;
         }
     }
-    if (speakBtn) {
-        if (mode === 'mock' || mode === 'prep') {
-            const voiceMode = state.channel === 'voice';
-            speakBtn.disabled = !speechSupported || !voiceMode || !state.active || state.pending || state.listening;
-        } else {
-            speakBtn.disabled = !speechSupported || !state.active || state.pending || state.listening;
-        }
+    if (bottomSpeakBtn) {
+        bottomSpeakBtn.disabled = !speechSupported || !state.active || state.pending || state.listening;
     }
     if (stopBtn) {
         stopBtn.disabled = !state.active && !state.pending;
@@ -3900,11 +3926,11 @@ function renderMockInterviewModeUI() {
     const chatSendBtn = document.getElementById('visaMockChatSendBtn');
     const startBtn = document.getElementById('visaMockStartBtn');
     const secondaryControls = document.getElementById('visaMockSecondaryControls');
-    const speakBtn = document.getElementById('visaMockSpeakBtn');
+    const bottomSpeakBtn = document.getElementById('visaMockSpeakBottomBtn');
     const modeBadge = document.getElementById('visaMockModeBadge');
     const guide = document.getElementById('visaMockInterviewGuide');
     const state = visaMockInterviewState;
-    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !speakBtn || !modeBadge || !guide) {
+    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !bottomSpeakBtn || !modeBadge || !guide) {
         return;
     }
 
@@ -3922,24 +3948,30 @@ function renderMockInterviewModeUI() {
         : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Interview' : 'Start Interview'));
 
     const chatModeActive = state.active && state.channel === 'chat';
-    chatComposer.style.display = chatModeActive ? 'flex' : 'none';
+    chatComposer.style.display = state.active ? 'flex' : 'none';
+    chatComposer.classList.toggle('voice-mode', state.channel === 'voice');
     chatInput.disabled = !chatModeActive || state.pending;
+    chatInput.placeholder = state.channel === 'voice'
+        ? 'Voice mode active. Click Speak Answer below to respond.'
+        : 'Type your interview answer...';
+    chatSendBtn.style.display = chatModeActive ? 'inline-flex' : 'none';
     chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
-    speakBtn.style.display = state.channel === 'chat' && state.active ? 'none' : 'inline-flex';
+    bottomSpeakBtn.style.display = state.active ? 'inline-flex' : 'none';
+    bottomSpeakBtn.classList.toggle('is-listening', state.listening);
 
     if (state.channel === 'voice') {
         modeBadge.textContent = 'Mode: Voice';
         modeBadge.classList.remove('visa-hub-tag-mode-chat');
         modeBadge.classList.add('visa-hub-tag-mode-voice');
         guide.textContent = state.active
-            ? 'Use Speak Answer for each response.'
+            ? 'Use the highlighted Speak Answer button at the bottom for each response.'
             : 'Click Start Interview and choose Voice to run a microphone-based simulation.';
     } else if (state.channel === 'chat') {
         modeBadge.textContent = 'Mode: Chat';
         modeBadge.classList.remove('visa-hub-tag-mode-voice');
         modeBadge.classList.add('visa-hub-tag-mode-chat');
         guide.textContent = state.active
-            ? 'Type each answer in the input below.'
+            ? 'Type and Send each answer below, or tap Speak Answer to reply by voice.'
             : 'Click Start Interview and choose Chat to run a typed interview simulation.';
     } else {
         modeBadge.textContent = 'Mode: not selected';
@@ -3959,11 +3991,11 @@ function renderPrepInterviewModeUI() {
     const chatSendBtn = document.getElementById('visaPrepChatSendBtn');
     const startBtn = document.getElementById('visaPrepStartBtn');
     const secondaryControls = document.getElementById('visaPrepSecondaryControls');
-    const speakBtn = document.getElementById('visaPrepSpeakBtn');
+    const bottomSpeakBtn = document.getElementById('visaPrepSpeakBottomBtn');
     const modeBadge = document.getElementById('visaPrepModeBadge');
     const guide = document.getElementById('visaPrepInterviewGuide');
     const state = visaPrepInterviewState;
-    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !speakBtn || !modeBadge || !guide) {
+    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !bottomSpeakBtn || !modeBadge || !guide) {
         return;
     }
 
@@ -3981,24 +4013,30 @@ function renderPrepInterviewModeUI() {
         : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Prep Session' : 'Start Prep Session'));
 
     const chatModeActive = state.active && state.channel === 'chat';
-    chatComposer.style.display = chatModeActive ? 'flex' : 'none';
+    chatComposer.style.display = state.active ? 'flex' : 'none';
+    chatComposer.classList.toggle('voice-mode', state.channel === 'voice');
     chatInput.disabled = !chatModeActive || state.pending;
+    chatInput.placeholder = state.channel === 'voice'
+        ? 'Voice mode active. Click Speak Answer below to respond.'
+        : 'Type your prep answer...';
+    chatSendBtn.style.display = chatModeActive ? 'inline-flex' : 'none';
     chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
-    speakBtn.style.display = state.channel === 'chat' && state.active ? 'none' : 'inline-flex';
+    bottomSpeakBtn.style.display = state.active ? 'inline-flex' : 'none';
+    bottomSpeakBtn.classList.toggle('is-listening', state.listening);
 
     if (state.channel === 'voice') {
         modeBadge.textContent = 'Mode: Voice';
         modeBadge.classList.remove('visa-hub-tag-mode-chat');
         modeBadge.classList.add('visa-hub-tag-mode-voice');
         guide.textContent = state.active
-            ? 'Use Speak Answer for each response. Rilono AI will coach and ask the next question.'
+            ? 'Use the highlighted Speak Answer button at the bottom for each response. Rilono AI will coach and ask the next question.'
             : 'Click Start Prep Session and choose Voice to practice with microphone input.';
     } else if (state.channel === 'chat') {
         modeBadge.textContent = 'Mode: Chat';
         modeBadge.classList.remove('visa-hub-tag-mode-voice');
         modeBadge.classList.add('visa-hub-tag-mode-chat');
         guide.textContent = state.active
-            ? 'Type each answer below. Rilono AI gives feedback and improvement on every turn.'
+            ? 'Type and Send each answer below, or tap Speak Answer to reply by voice. Rilono AI gives feedback on every turn.'
             : 'Click Start Prep Session and choose Chat to practice in typed mode.';
     } else {
         modeBadge.textContent = 'Mode: not selected';
