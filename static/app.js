@@ -4733,6 +4733,7 @@ async function startVoiceInterviewSession(mode, options = {}) {
     state.active = true;
     state.pending = false;
     state.history = [];
+    hideFloatingChatPopupImmediate();
     if (mode === 'mock') {
         resetMockInterviewTimer();
         startMockInterviewTimer();
@@ -10840,6 +10841,26 @@ let popupMessageInterval;
 let currentPopupIndex = 0;
 let isPopupDismissed = false;
 
+function isVisaInterviewInProgress() {
+    return Boolean(
+        visaMockInterviewState.active
+        || visaMockInterviewState.pending
+        || visaMockInterviewState.listening
+        || visaPrepInterviewState.active
+        || visaPrepInterviewState.pending
+        || visaPrepInterviewState.listening
+    );
+}
+
+function hideFloatingChatPopupImmediate() {
+    const popup = document.getElementById('floatingChatPopup');
+    if (!popup) {
+        return;
+    }
+    popup.classList.remove('show');
+    popup.style.display = 'none';
+}
+
 function initializeFloatingChatPopup() {
     const popup = document.getElementById('floatingChatPopup');
     const toggle = document.getElementById('floatingChatToggle');
@@ -10853,7 +10874,10 @@ function initializeFloatingChatPopup() {
 }
 
 function rotatePopupMessage() {
-    if (isPopupDismissed) return;
+    if (isPopupDismissed || isVisaInterviewInProgress()) {
+        hideFloatingChatPopupImmediate();
+        return;
+    }
 
     // Don't show if the chat widget itself isn't fully visible or if the chat window is already open
     const widget = document.getElementById('floatingAiChatWidget');
@@ -10870,7 +10894,7 @@ function rotatePopupMessage() {
     popup.classList.remove('show');
 
     setTimeout(() => {
-        if (isPopupDismissed || windowEl.style.display !== 'none') return;
+        if (isPopupDismissed || windowEl.style.display !== 'none' || isVisaInterviewInProgress()) return;
 
         // Change text
         messageEl.textContent = floatingChatMessages[currentPopupIndex];
