@@ -18,6 +18,7 @@ RESEND_FROM_NAME = os.getenv("RESEND_FROM_NAME", "Rilono")
 # For development: use Resend's test email (delivered@resend.dev) which doesn't require domain verification
 USE_TEST_EMAIL = os.getenv("USE_TEST_EMAIL", "false").lower() == "true"
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
+DEFAULT_FOUNDER_ALERT_RECIPIENTS = ["gauravbr@rilono.com", "kushalb@rilono.com"]
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
@@ -30,6 +31,37 @@ ALGORITHM = os.getenv("ALGORITHM", "HS256")
 EMAIL_NOTIFICATIONS_UNSUB_TOKEN_HOURS = int(
     os.getenv("EMAIL_NOTIFICATIONS_UNSUB_TOKEN_HOURS", "720")  # 30 days
 )
+
+
+def _parse_founder_alert_recipients(raw_value: str | None) -> list[str]:
+    items = [item.strip().lower() for item in str(raw_value or "").split(",") if item.strip()]
+    deduped: list[str] = []
+    for item in items:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+FOUNDER_ALERT_RECIPIENTS = _parse_founder_alert_recipients(
+    os.getenv("FOUNDER_ALERT_RECIPIENTS", ",".join(DEFAULT_FOUNDER_ALERT_RECIPIENTS))
+)
+if not FOUNDER_ALERT_RECIPIENTS:
+    FOUNDER_ALERT_RECIPIENTS = DEFAULT_FOUNDER_ALERT_RECIPIENTS.copy()
+
+
+def _resolve_resend_from_email() -> str:
+    if USE_TEST_EMAIL or DEV_MODE:
+        print("DEV MODE: Using test email sender (delivered@resend.dev)")
+        return "delivered@resend.dev"
+    return RESEND_FROM_EMAIL
+
+
+def _extract_resend_email_id(email_response) -> Optional[str]:
+    if isinstance(email_response, dict):
+        return email_response.get("id")
+    if email_response and hasattr(email_response, "id"):
+        return email_response.id
+    return None
 
 
 def generate_email_notifications_unsubscribe_token(
@@ -906,6 +938,173 @@ def send_subscription_change_email(
         return False
     except Exception as e:
         print(f"Error sending subscription update email to {email}: {str(e)}")
+        return False
+
+
+def _pricing_model_label_for_founder_email(pricing_model: Optional[str]) -> str:
+    normalized = str(pricing_model or "").strip().lower()
+    if normalized in {"pro_six_month", "pro_6_month", "pro_6month", "six_month", "6_month", "6month"}:
+        return "Journey Pass (6 Months)"
+    if normalized in {"pro_monthly", "pro", "monthly", ""}:
+        return "Pro Monthly"
+    return normalized.replace("_", " ").title()
+
+
+def send_founder_new_verified_user_alert(
+    *,
+    user_id: int,
+    user_email: str,
+    full_name: Optional[str] = None,
+    university: Optional[str] = None,
+    current_residence_country: Optional[str] = None,
+    verified_at: Optional[datetime] = None,
+) -> bool:
+    """
+    Notify founders when a user completes email verification.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send founder verified-user alert - Resend not configured")
+        return False
+    if not FOUNDER_ALERT_RECIPIENTS:
+        print("ERROR: Cannot send founder verified-user alert - no recipients configured")
+        return False
+
+    safe_email = escape((user_email or "").strip().lower() or "unknown")
+    safe_name = escape((full_name or "").strip() or "Not provided")
+    safe_university = escape((university or "").strip() or "Not provided")
+    safe_country = escape((current_residence_country or "").strip() or "Not provided")
+    safe_verified_at = escape(_format_datetime_for_subscription_email(verified_at or datetime.utcnow()))
+
+    subject = f"New Verified User: {safe_email}"
+    html_content = f"""
+    <html>
+      <body style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.5;">
+        <h2 style="margin:0 0 12px 0;">New user verified on Rilono</h2>
+        <p style="margin:0 0 14px 0;">A user has completed email verification.</p>
+        <table style="border-collapse:collapse;">
+          <tr><td style="padding:4px 10px 4px 0;"><strong>User ID</strong></td><td>{int(user_id)}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Email</strong></td><td>{safe_email}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Full Name</strong></td><td>{safe_name}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>University</strong></td><td>{safe_university}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Residence Country</strong></td><td>{safe_country}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Verified At</strong></td><td>{safe_verified_at}</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    text_content = (
+        "New user verified on Rilono\n\n"
+        f"User ID: {int(user_id)}\n"
+        f"Email: {(user_email or '').strip().lower() or 'unknown'}\n"
+        f"Full Name: {(full_name or '').strip() or 'Not provided'}\n"
+        f"University: {(university or '').strip() or 'Not provided'}\n"
+        f"Residence Country: {(current_residence_country or '').strip() or 'Not provided'}\n"
+        f"Verified At: {_format_datetime_for_subscription_email(verified_at or datetime.utcnow())}\n"
+    )
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": FOUNDER_ALERT_RECIPIENTS,
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            print(f"Founder verified-user alert sent (ID: {email_id})")
+            return True
+        print(f"Failed to send founder verified-user alert. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending founder verified-user alert: {str(e)}")
+        return False
+
+
+def send_founder_first_subscription_purchase_alert(
+    *,
+    user_id: int,
+    user_email: str,
+    full_name: Optional[str] = None,
+    university: Optional[str] = None,
+    pricing_model: Optional[str] = None,
+    payment_amount_paise: Optional[int] = None,
+    payment_currency: str = "INR",
+    payment_provider: Optional[str] = None,
+    payment_reference: Optional[str] = None,
+    purchased_at: Optional[datetime] = None,
+) -> bool:
+    """
+    Notify founders when a user completes their first paid subscription purchase.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send founder subscription alert - Resend not configured")
+        return False
+    if not FOUNDER_ALERT_RECIPIENTS:
+        print("ERROR: Cannot send founder subscription alert - no recipients configured")
+        return False
+
+    plan_label = _pricing_model_label_for_founder_email(pricing_model)
+    safe_plan = escape(plan_label)
+    safe_email = escape((user_email or "").strip().lower() or "unknown")
+    safe_name = escape((full_name or "").strip() or "Not provided")
+    safe_university = escape((university or "").strip() or "Not provided")
+    safe_provider = escape((payment_provider or "").strip() or "Unknown")
+    safe_reference = escape((payment_reference or "").strip() or "N/A")
+    safe_amount = escape(_format_amount_for_subscription_email(payment_amount_paise, payment_currency))
+    safe_purchased_at = escape(_format_datetime_for_subscription_email(purchased_at or datetime.utcnow()))
+
+    subject = f"First Paid Subscription: {safe_plan} by {safe_email}"
+    html_content = f"""
+    <html>
+      <body style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.5;">
+        <h2 style="margin:0 0 12px 0;">First paid subscription purchase</h2>
+        <p style="margin:0 0 14px 0;">A user completed their first paid subscription purchase.</p>
+        <table style="border-collapse:collapse;">
+          <tr><td style="padding:4px 10px 4px 0;"><strong>User ID</strong></td><td>{int(user_id)}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Email</strong></td><td>{safe_email}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Full Name</strong></td><td>{safe_name}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>University</strong></td><td>{safe_university}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Plan</strong></td><td>{safe_plan}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Amount</strong></td><td>{safe_amount}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Provider</strong></td><td>{safe_provider}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Reference</strong></td><td>{safe_reference}</td></tr>
+          <tr><td style="padding:4px 10px 4px 0;"><strong>Purchased At</strong></td><td>{safe_purchased_at}</td></tr>
+        </table>
+      </body>
+    </html>
+    """
+    text_content = (
+        "First paid subscription purchase\n\n"
+        f"User ID: {int(user_id)}\n"
+        f"Email: {(user_email or '').strip().lower() or 'unknown'}\n"
+        f"Full Name: {(full_name or '').strip() or 'Not provided'}\n"
+        f"University: {(university or '').strip() or 'Not provided'}\n"
+        f"Plan: {plan_label}\n"
+        f"Amount: {_format_amount_for_subscription_email(payment_amount_paise, payment_currency)}\n"
+        f"Provider: {(payment_provider or '').strip() or 'Unknown'}\n"
+        f"Reference: {(payment_reference or '').strip() or 'N/A'}\n"
+        f"Purchased At: {_format_datetime_for_subscription_email(purchased_at or datetime.utcnow())}\n"
+    )
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": FOUNDER_ALERT_RECIPIENTS,
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            print(f"Founder first-subscription alert sent (ID: {email_id})")
+            return True
+        print(f"Failed to send founder first-subscription alert. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending founder first-subscription alert: {str(e)}")
         return False
 
 

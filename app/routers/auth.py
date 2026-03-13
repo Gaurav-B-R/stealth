@@ -19,6 +19,7 @@ from app.email_service import (
     send_verification_email,
     send_password_reset_email,
     send_contact_form_email,
+    send_founder_new_verified_user_alert,
     verify_email_notifications_unsubscribe_token,
 )
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
@@ -73,6 +74,22 @@ def _refresh_student_profile_snapshot_safe(db: Session, user_id: int) -> None:
             "Failed to refresh STUDENT_PROFILE_AND_F1_VISA_STATUS.json for user_id=%s",
             user_id,
         )
+
+
+def _send_founder_verified_user_alert_safe(user: models.User) -> None:
+    if not user or not user.email:
+        return
+    try:
+        send_founder_new_verified_user_alert(
+            user_id=user.id,
+            user_email=user.email,
+            full_name=user.full_name,
+            university=user.university,
+            current_residence_country=getattr(user, "current_residence_country", None),
+            verified_at=datetime.utcnow(),
+        )
+    except Exception:
+        logger.exception("Failed to send founder verified-user alert for user_id=%s", user.id)
 
 
 def _cookie_secure_default() -> bool:
@@ -733,6 +750,7 @@ def verify_email(token: str, db: Session = Depends(get_db)):
     user.verification_token = None  # Clear the token after verification
     user.verification_token_expires = None
     db.commit()
+    _send_founder_verified_user_alert_safe(user)
     _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     
     return {

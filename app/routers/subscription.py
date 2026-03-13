@@ -19,6 +19,7 @@ from app.auth import get_current_active_user
 from app.database import get_db
 from app.email_service import (
     build_email_notifications_unsubscribe_url,
+    send_founder_first_subscription_purchase_alert,
     send_subscription_change_email,
 )
 from app.subscriptions import (
@@ -990,6 +991,59 @@ def _send_subscription_change_email_safe(
         )
 
 
+def _send_founder_first_purchase_alert_safe(
+    *,
+    db: Session,
+    user: models.User,
+    payment_row: models.SubscriptionPayment,
+    payment_reference: str | None = None,
+) -> None:
+    if not user.email or not payment_row:
+        return
+    try:
+        # Only notify on the user's first paid purchase.
+        paid_verified_count = int(
+            db.query(func.count(models.SubscriptionPayment.id))
+            .filter(
+                models.SubscriptionPayment.user_id == user.id,
+                models.SubscriptionPayment.status == "verified",
+                models.SubscriptionPayment.amount_paise.isnot(None),
+                models.SubscriptionPayment.amount_paise > 0,
+            )
+            .scalar()
+            or 0
+        )
+        if paid_verified_count != 1:
+            return
+
+        resolved_reference = (
+            payment_reference
+            or (payment_row.razorpay_payment_id or "").strip()
+            or (payment_row.razorpay_order_id or "").strip()
+            or (payment_row.razorpay_subscription_id or "").strip()
+            or str(payment_row.id)
+        )
+
+        send_founder_first_subscription_purchase_alert(
+            user_id=user.id,
+            user_email=user.email,
+            full_name=user.full_name,
+            university=user.university,
+            pricing_model=_pricing_model_from_payment_row(payment_row),
+            payment_amount_paise=int(payment_row.amount_paise or 0),
+            payment_currency=_normalize_currency(payment_row.currency or "INR"),
+            payment_provider=(payment_row.provider or "unknown"),
+            payment_reference=resolved_reference,
+            purchased_at=_normalize_datetime(payment_row.verified_at) or datetime.utcnow(),
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send founder first-purchase alert user_id=%s payment_row_id=%s",
+            user.id,
+            getattr(payment_row, "id", None),
+        )
+
+
 def _refresh_student_profile_snapshot_safe(db: Session, user_id: int) -> None:
     """
     Best-effort sync of STUDENT_PROFILE_AND_F1_VISA_STATUS.json after subscription changes.
@@ -1535,6 +1589,12 @@ def verify_payment_and_activate_pro(
             payment_amount_paise=int(payment_row.amount_paise or 0),
             payment_currency=_normalize_currency(payment_row.currency or "INR"),
         )
+    _send_founder_first_purchase_alert_safe(
+        db=db,
+        user=current_user,
+        payment_row=payment_row,
+        payment_reference=payload.razorpay_payment_id,
+    )
     _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     return _build_subscription_response(subscription, db=db)
 
@@ -1718,6 +1778,12 @@ def verify_recurring_payment_and_activate_pro(
             payment_amount_paise=int(payment_data.get("amount", 0) or 0),
             payment_currency=_normalize_currency(payment_data.get("currency", "")),
         )
+    _send_founder_first_purchase_alert_safe(
+        db=db,
+        user=current_user,
+        payment_row=target_row,
+        payment_reference=payload.razorpay_payment_id,
+    )
     _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
     return _build_subscription_response(subscription, db=db)
 
@@ -1871,6 +1937,12 @@ def _handle_recurring_payment_webhook(
             payment_amount_paise=int(payment_data.get("amount", 0) or 0),
             payment_currency=_normalize_currency(payment_data.get("currency", "")),
         )
+    _send_founder_first_purchase_alert_safe(
+        db=db,
+        user=user,
+        payment_row=target_row,
+        payment_reference=payment_id,
+    )
     _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     return {"status": "ok"}
 
@@ -2119,6 +2191,12 @@ async def razorpay_webhook(
                 payment_amount_paise=int(payment_entity.get("amount", 0) or 0),
                 payment_currency=_normalize_currency(payment_entity.get("currency", "")),
             )
+        _send_founder_first_purchase_alert_safe(
+            db=db,
+            user=user,
+            payment_row=payment_row,
+            payment_reference=payment_id,
+        )
         _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     except HTTPException:
         _mark_payment_failed(db, payment_row, "webhook_validation_failed")
