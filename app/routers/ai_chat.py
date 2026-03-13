@@ -190,6 +190,7 @@ STUDENT INFORMATION:
 - Email: {student_profile.get('email', 'Unknown')}
 - University: {student_profile.get('university', 'Not set')}
 - Phone: {student_profile.get('phone', 'Not provided')}
+- Current Situation / Story: {student_profile.get('current_situation_story', 'Not provided')}
 - Account Created: {student_profile.get('account_created', 'Unknown')}
 
 DOCUMENTATION PREFERENCES:

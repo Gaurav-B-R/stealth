@@ -7264,6 +7264,7 @@ function displayProfile(profile) {
     document.getElementById('profileFullName').value = profile.full_name || '';
     document.getElementById('profileUniversity').value = profile.university || '';
     document.getElementById('profilePhone').value = profile.phone || '';
+    document.getElementById('profileCurrentSituationStory').value = profile.current_situation_story || '';
     const referralCodeInput = document.getElementById('profileReferralCode');
     const referralLinkInput = document.getElementById('profileReferralLink');
     const referralCode = (profile.referral_code || '').trim().toUpperCase();
@@ -8300,6 +8301,7 @@ async function handleUpdateProfile(e) {
         full_name: getValue('profileFullName'),
         // university is not editable - derived from .edu email at registration
         phone: getValue('profilePhone'),
+        current_situation_story: getValue('profileCurrentSituationStory'),
         profile_picture: profilePictureUrl || currentUser.profile_picture || null
     };
 

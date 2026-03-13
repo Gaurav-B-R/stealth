@@ -33,6 +33,8 @@ def ensure_user_legal_consent_column():
             conn.execute(text("ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP"))
         if "accepted_terms_privacy_at" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_at TIMESTAMP"))
+        if "current_situation_story" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN current_situation_story TEXT"))
 
         if "email_notifications_enabled" not in columns:
             conn.execute(
