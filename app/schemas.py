@@ -8,6 +8,7 @@ class UserBase(BaseModel):
     full_name: Optional[str] = None
     university: Optional[str] = None
     phone: Optional[str] = None
+    visa_case_status: Optional[str] = None
     current_situation_story: Optional[str] = None
     current_residence_country: Optional[str] = "United States"
     preferred_country: Optional[str] = "United States"
@@ -23,6 +24,7 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     university: Optional[str] = None
     phone: Optional[str] = None
+    visa_case_status: Optional[str] = None
     current_situation_story: Optional[str] = None
     current_residence_country: Optional[str] = None
     profile_picture: Optional[str] = None

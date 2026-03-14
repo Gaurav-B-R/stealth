@@ -4954,6 +4954,9 @@ function switchDashboardTab(tabName) {
         loadDashboardStats();
     } else if (tabName === 'profile') {
         loadProfile();
+    } else if (tabName === 'referral') {
+        loadReferralSummary();
+        renderReferralPromotions();
     } else if (tabName === 'subscription') {
         void loadSubscriptionStatus(true);
     } else if (tabName === 'visa') {
@@ -7264,6 +7267,7 @@ function displayProfile(profile) {
     document.getElementById('profileFullName').value = profile.full_name || '';
     document.getElementById('profileUniversity').value = profile.university || '';
     document.getElementById('profilePhone').value = profile.phone || '';
+    document.getElementById('profileVisaCaseStatus').value = profile.visa_case_status || '';
     document.getElementById('profileCurrentSituationStory').value = profile.current_situation_story || '';
     const referralCodeInput = document.getElementById('profileReferralCode');
     const referralLinkInput = document.getElementById('profileReferralLink');
@@ -8301,6 +8305,7 @@ async function handleUpdateProfile(e) {
         full_name: getValue('profileFullName'),
         // university is not editable - derived from .edu email at registration
         phone: getValue('profilePhone'),
+        visa_case_status: getValue('profileVisaCaseStatus'),
         current_situation_story: getValue('profileCurrentSituationStory'),
         profile_picture: profilePictureUrl || currentUser.profile_picture || null
     };

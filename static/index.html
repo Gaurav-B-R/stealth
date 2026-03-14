@@ -318,6 +318,17 @@
                                 </svg></span> Manage Subscription
                         </a>
                         <a href="#"
+                            onclick="event.preventDefault(); showDashboard(); switchDashboardTab('referral'); toggleUserMenu(); return false;">
+                            <span class="menu-icon"><svg viewBox="0 0 24 24" fill="#FDE68A" stroke="#CA8A04"
+                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M12 3v4"></path>
+                                    <path d="M12 17v4"></path>
+                                    <path d="M5 10h14"></path>
+                                    <path d="M7 7h10v3a3 3 0 0 1-3 3h-4a3 3 0 0 1-3-3V7z" fill="#FACC15"></path>
+                                    <path d="M8 7c0-1.7 1.3-3 3-3h2c1.7 0 3 1.3 3 3"></path>
+                                </svg></span> Referral Program
+                        </a>
+                        <a href="#"
                             onclick="event.preventDefault(); openFeatureRequestModal(); toggleUserMenu(); return false;">
                             <span class="menu-icon"><svg viewBox="0 0 24 24" fill="#FEF08A" stroke="#CA8A04"
                                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2010,20 +2021,6 @@
 
                 <!-- Dashboard Content Area -->
                 <div class="dashboard-content">
-                    <div id="dashboardReferralBanner" class="dashboard-referral-strip" style="display: none;">
-                        <div class="dashboard-referral-strip-chip">Referral Bonus</div>
-                        <div class="dashboard-referral-strip-text">
-                            Invite friends and both get 1 month Pro.
-                            Code:
-                            <span id="dashboardReferralBannerCode" class="dashboard-referral-strip-code">--------</span>
-                            <span id="dashboardReferralBannerStats" class="dashboard-referral-strip-stats"></span>
-                        </div>
-                        <button type="button" class="btn btn-primary dashboard-referral-strip-btn"
-                            onclick="copyReferralLink()">Copy Invite Link</button>
-                        <button type="button" class="btn btn-secondary dashboard-referral-strip-btn"
-                            onclick="openReferralPromoModal()">Details</button>
-                    </div>
-
                     <!-- Overview Tab -->
                     <div id="dashboardTab-overview" class="dashboard-tab active">
                         <div class="tab-header">
@@ -2382,13 +2379,22 @@
                                             </div>
                                         </div>
                                         <div class="form-group">
-                                            <label for="profilePhone">Phone</label>
+                                            <label for="profilePhone">Phone <span
+                                                    style="font-size: 0.75rem; color: var(--text-secondary); font-weight: normal;">(Optional)</span></label>
                                             <input type="tel" id="profilePhone">
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="profileVisaCaseStatus">Visa Status</label>
+                                            <select id="profileVisaCaseStatus">
+                                                <option value="">Select status</option>
+                                                <option value="new">New</option>
+                                                <option value="refused">Refused</option>
+                                            </select>
                                         </div>
                                         <div class="form-group">
                                             <label for="profileCurrentSituationStory">Current Situation / Story</label>
                                             <textarea id="profileCurrentSituationStory"
-                                                placeholder="Share your current visa/application situation so guidance can be more personalized."
+                                                placeholder="Share your current situation or story here so we can understand your specific scenario and guide you with personalized advice."
                                                 rows="5"></textarea>
                                         </div>
                                         <button type="submit" class="btn btn-primary" style="width: 100%;">Update
@@ -2440,47 +2446,6 @@
                                             onclick="handleEnableEmailNotifications()">Enable Email
                                             Notifications</button>
                                     </div>
-                                    <div
-                                        style="margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: rgba(99, 102, 241, 0.08);">
-                                        <div
-                                            style="display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-                                            <div>
-                                                <div style="font-weight: 700; color: var(--text-primary);">Referral
-                                                    Program</div>
-                                                <div style="color: var(--text-secondary); font-size: 0.875rem;">Invite
-                                                    friends and both get 1 month Pro after they verify email and log in.
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div style="margin-top: 1rem; display: grid; gap: 0.75rem;">
-                                            <div>
-                                                <label
-                                                    style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.35rem;">Your
-                                                    Referral Code</label>
-                                                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                                                    <input type="text" id="profileReferralCode"
-                                                        class="referral-value-input referral-code-input" readonly
-                                                        spellcheck="false">
-                                                    <button type="button" class="btn btn-secondary referral-copy-btn"
-                                                        onclick="copyReferralCode()">Copy Code</button>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label
-                                                    style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.35rem;">Referral
-                                                    Link</label>
-                                                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                                                    <input type="text" id="profileReferralLink"
-                                                        class="referral-value-input referral-link-input" readonly
-                                                        spellcheck="false">
-                                                    <button type="button" class="btn btn-secondary referral-copy-btn"
-                                                        onclick="copyReferralLink()">Copy Link</button>
-                                                </div>
-                                            </div>
-                                            <div id="profileReferralStats"
-                                                style="font-size: 0.85rem; color: var(--text-secondary);"></div>
-                                        </div>
-                                    </div>
                                     <div class="danger-zone"
                                         style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
                                         <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">
@@ -2528,6 +2493,60 @@
                                         <button type="submit" class="btn btn-primary" style="width: 100%;">Save
                                             Preferences</button>
                                     </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Referral Program Tab -->
+                    <div id="dashboardTab-referral" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>Referral Program</h2>
+                            <p class="tab-subtitle">Invite friends and both get 1 month Pro after they verify email and
+                                log in.</p>
+                        </div>
+                        <div style="max-width: 800px; margin: 0 auto;">
+                            <div class="dashboard-widget">
+                                <div class="widget-header">
+                                    <h3>🎁 Referral Program</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div style="display: grid; gap: 0.75rem;">
+                                        <div>
+                                            <label
+                                                style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.35rem;">Your
+                                                Referral Code</label>
+                                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                                <input type="text" id="profileReferralCode"
+                                                    class="referral-value-input referral-code-input" readonly
+                                                    spellcheck="false">
+                                                <button type="button" class="btn btn-secondary referral-copy-btn"
+                                                    onclick="copyReferralCode()">Copy Code</button>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label
+                                                style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.35rem;">Referral
+                                                Link</label>
+                                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                                <input type="text" id="profileReferralLink"
+                                                    class="referral-value-input referral-link-input" readonly
+                                                    spellcheck="false">
+                                                <button type="button" class="btn btn-secondary referral-copy-btn"
+                                                    onclick="copyReferralLink()">Copy Link</button>
+                                            </div>
+                                        </div>
+                                        <div id="profileReferralStats"
+                                            style="font-size: 0.85rem; color: var(--text-secondary);"></div>
+                                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                            <button type="button" class="btn btn-secondary" style="width: auto;"
+                                                onclick="copyReferralCode()">Copy Code</button>
+                                            <button type="button" class="btn btn-primary" style="width: auto;"
+                                                onclick="copyReferralLink()">Copy Invite Link</button>
+                                            <button type="button" class="btn btn-secondary" style="width: auto;"
+                                                onclick="openReferralPromoModal()">View Details</button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
