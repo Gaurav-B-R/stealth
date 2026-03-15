@@ -3948,23 +3948,27 @@ function renderMockInterviewModeUI() {
         : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Interview' : 'Start Interview'));
 
     const chatModeActive = state.active && state.channel === 'chat';
+    const voiceModeActive = state.active && state.channel === 'voice';
     chatComposer.style.display = state.active ? 'flex' : 'none';
     chatComposer.classList.toggle('voice-mode', state.channel === 'voice');
     chatInput.disabled = !chatModeActive || state.pending;
     chatInput.placeholder = state.channel === 'voice'
-        ? 'Voice mode active. Click Speak Answer below to respond.'
+        ? 'Voice mode active. Mic listens automatically after each question.'
         : 'Type your interview answer...';
     chatSendBtn.style.display = chatModeActive ? 'inline-flex' : 'none';
     chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
     bottomSpeakBtn.style.display = state.active ? 'inline-flex' : 'none';
     bottomSpeakBtn.classList.toggle('is-listening', state.listening);
+    bottomSpeakBtn.textContent = voiceModeActive
+        ? (state.listening ? 'Mic Listening...' : 'Restart Mic')
+        : 'Speak Answer';
 
     if (state.channel === 'voice') {
         modeBadge.textContent = 'Mode: Voice';
         modeBadge.classList.remove('visa-hub-tag-mode-chat');
         modeBadge.classList.add('visa-hub-tag-mode-voice');
         guide.textContent = state.active
-            ? 'Use the highlighted Speak Answer button at the bottom for each response.'
+            ? 'Mic is always on for responses. Just speak when the officer finishes asking.'
             : 'Click Start Interview and choose Voice to run a microphone-based simulation.';
     } else if (state.channel === 'chat') {
         modeBadge.textContent = 'Mode: Chat';
@@ -4013,23 +4017,27 @@ function renderPrepInterviewModeUI() {
         : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Prep Session' : 'Start Prep Session'));
 
     const chatModeActive = state.active && state.channel === 'chat';
+    const voiceModeActive = state.active && state.channel === 'voice';
     chatComposer.style.display = state.active ? 'flex' : 'none';
     chatComposer.classList.toggle('voice-mode', state.channel === 'voice');
     chatInput.disabled = !chatModeActive || state.pending;
     chatInput.placeholder = state.channel === 'voice'
-        ? 'Voice mode active. Click Speak Answer below to respond.'
+        ? 'Voice mode active. Mic listens automatically after each question.'
         : 'Type your prep answer...';
     chatSendBtn.style.display = chatModeActive ? 'inline-flex' : 'none';
     chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
     bottomSpeakBtn.style.display = state.active ? 'inline-flex' : 'none';
     bottomSpeakBtn.classList.toggle('is-listening', state.listening);
+    bottomSpeakBtn.textContent = voiceModeActive
+        ? (state.listening ? 'Mic Listening...' : 'Restart Mic')
+        : 'Speak Answer';
 
     if (state.channel === 'voice') {
         modeBadge.textContent = 'Mode: Voice';
         modeBadge.classList.remove('visa-hub-tag-mode-chat');
         modeBadge.classList.add('visa-hub-tag-mode-voice');
         guide.textContent = state.active
-            ? 'Use the highlighted Speak Answer button at the bottom for each response. Rilono AI will coach and ask the next question.'
+            ? 'Mic is always on for responses. Speak naturally after each question; Rilono AI will coach and continue.'
             : 'Click Start Prep Session and choose Voice to practice with microphone input.';
     } else if (state.channel === 'chat') {
         modeBadge.textContent = 'Mode: Chat';
@@ -4138,6 +4146,8 @@ function listenVisaInterviewAnswer(mode) {
 
     stopVisaInterviewRecognition(mode);
     const recognition = new SpeechRecognitionCtor();
+    let receivedFinalAnswer = false;
+    let shouldAutoRestart = false;
     state.recognition = recognition;
     recognition.lang = 'en-US';
     recognition.interimResults = true;
@@ -4154,9 +4164,20 @@ function listenVisaInterviewAnswer(mode) {
         state.listening = false;
         updateVisaInterviewControls(mode);
         if (!state.active) return;
+        const autoVoiceMode = state.channel === 'voice';
         if (event.error === 'no-speech') {
+            if (autoVoiceMode) {
+                shouldAutoRestart = true;
+                setVisaInterviewStatus(mode, 'Listening...');
+                return;
+            }
             setVisaInterviewStatus(mode, 'No speech detected');
             appendVisaInterviewLog(mode, 'system', 'No speech detected. Click "Speak Answer" and try again.');
+            return;
+        }
+        if (autoVoiceMode && (event.error === 'aborted' || event.error === 'network')) {
+            shouldAutoRestart = true;
+            setVisaInterviewStatus(mode, 'Listening...');
             return;
         }
         setVisaInterviewStatus(mode, 'Mic error');
@@ -4166,6 +4187,15 @@ function listenVisaInterviewAnswer(mode) {
     recognition.onend = () => {
         state.listening = false;
         updateVisaInterviewControls(mode);
+        if (state.active && !state.pending && state.channel === 'voice' && (shouldAutoRestart || !receivedFinalAnswer)) {
+            setVisaInterviewStatus(mode, 'Listening...');
+            window.setTimeout(() => {
+                if (state.active && !state.pending && !state.listening && state.channel === 'voice') {
+                    listenVisaInterviewAnswer(mode);
+                }
+            }, 250);
+            return;
+        }
         if (state.active && !state.pending) {
             setVisaInterviewStatus(mode, 'Ready for answer');
         }
@@ -4183,9 +4213,11 @@ function listenVisaInterviewAnswer(mode) {
             }
         }
 
-        if (finalTranscript.trim()) {
-            appendVisaInterviewLog(mode, 'user', `Student: ${finalTranscript.trim()}`);
-            await sendVisaInterviewTurn(mode, finalTranscript.trim(), false);
+        const answer = finalTranscript.trim();
+        if (answer) {
+            receivedFinalAnswer = true;
+            appendVisaInterviewLog(mode, 'user', `Student: ${answer}`);
+            await sendVisaInterviewTurn(mode, answer, false);
         }
     };
 
@@ -4195,7 +4227,7 @@ function listenVisaInterviewAnswer(mode) {
         state.listening = false;
         updateVisaInterviewControls(mode);
         setVisaInterviewStatus(mode, 'Mic start failed');
-        appendVisaInterviewLog(mode, 'system', 'Could not start microphone. Click "Speak Answer" again and allow mic permission.');
+        appendVisaInterviewLog(mode, 'system', 'Could not start microphone. Allow mic permission and try again.');
     }
 }
 
@@ -4241,6 +4273,7 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
     });
 
     let shouldAutoFinish = false;
+    let shouldAutoListen = false;
 
     try {
         const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
@@ -4300,8 +4333,8 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
                     renderPrepInterviewModeUI();
                 }
             } else {
-                setVisaInterviewStatus(mode, 'Speak your answer');
-                listenVisaInterviewAnswer(mode);
+                shouldAutoListen = true;
+                setVisaInterviewStatus(mode, 'Listening...');
             }
         }
     } catch (error) {
@@ -4313,6 +4346,10 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
         clearVisaInterviewPendingBubble(mode);
         state.pending = false;
         updateVisaInterviewControls(mode);
+        if (shouldAutoListen && state.active && state.channel === 'voice') {
+            setVisaInterviewStatus(mode, 'Listening...');
+            listenVisaInterviewAnswer(mode);
+        }
         if (mode === 'mock' && shouldAutoFinish) {
             await finishVoiceMockInterview();
         }
@@ -4451,6 +4488,28 @@ function downloadMockInterviewReportPdf() {
             line-height: 1.6;
             max-width: 800px;
             margin: 0 auto;
+            position: relative;
+        }
+        .pdf-watermark {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-28deg);
+            font-size: 4.6rem;
+            font-weight: 800;
+            letter-spacing: 0.28rem;
+            text-transform: uppercase;
+            color: rgba(99, 102, 241, 0.1);
+            pointer-events: none;
+            user-select: none;
+            white-space: nowrap;
+            z-index: 0;
+        }
+        .pdf-header,
+        .pdf-body,
+        .pdf-footer {
+            position: relative;
+            z-index: 1;
         }
         .pdf-header {
             border-bottom: 2px solid #6366f1;
@@ -4525,10 +4584,12 @@ function downloadMockInterviewReportPdf() {
         }
         @media print {
             body { padding: 1rem; }
+            .pdf-watermark { color: rgba(99, 102, 241, 0.14); }
         }
     </style>
 </head>
 <body>
+    <div class="pdf-watermark">RILONO AI</div>
     <div class="pdf-header">
         <h1>F1 Mock Interview Report</h1>
         <div class="pdf-meta">${dateStr} at ${timeStr}</div>
