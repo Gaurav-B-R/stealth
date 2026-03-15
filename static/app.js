@@ -4684,6 +4684,16 @@ async function beginMockInterview(channel) {
     visaMockInterviewState.channel = channel;
     visaMockInterviewState.showModePicker = false;
     renderMockInterviewModeUI();
+
+    const mockPanel = document.getElementById('visaMockPanel');
+    if (mockPanel && !document.fullscreenElement) {
+        try {
+            await mockPanel.requestFullscreen();
+        } catch (err) {
+            console.warn('Could not enable fullscreen:', err);
+        }
+    }
+
     await startVoiceInterviewSession('mock', { channel });
 }
 
@@ -4763,7 +4773,7 @@ async function startVoiceInterviewSession(mode, options = {}) {
         state.channel = options.channel || 'voice';
         state.showModePicker = false;
     } else {
-        stopVoiceMockInterview(true);
+        stopVoiceMockInterview(true, false);
         state.channel = options.channel || 'voice';
         state.showModePicker = false;
     }
@@ -4808,7 +4818,7 @@ async function startVoiceMockInterview() {
     await beginMockInterview('voice');
 }
 
-function stopVoiceMockInterview(silent = false) {
+function stopVoiceMockInterview(silent = false, shouldExitFullscreen = true) {
     clearVisaInterviewPendingBubble('mock');
     stopVisaInterviewRecognition('mock');
     stopMockInterviewTimer();
@@ -4818,6 +4828,9 @@ function stopVoiceMockInterview(silent = false) {
     visaMockInterviewState.showModePicker = false;
     if (window.speechSynthesis) {
         window.speechSynthesis.cancel();
+    }
+    if (shouldExitFullscreen && document.fullscreenElement) {
+        document.exitFullscreen().catch(err => console.warn(err));
     }
     setVisaInterviewStatus('mock', 'Stopped');
     updateVisaInterviewControls('mock');

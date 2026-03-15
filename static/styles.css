@@ -2212,6 +2212,17 @@ body {
     z-index: 1;
 }
 
+.visa-mock-panel:fullscreen {
+    background: #0f172a;
+    border-radius: 0;
+    border: none;
+    padding: 2.5rem;
+    max-width: 100%;
+    margin: 0;
+    height: 100vh;
+    overflow-y: auto;
+}
+
 .visa-mock-headerline {
     display: flex;
     justify-content: space-between;
@@ -2461,6 +2472,7 @@ body {
 }
 
 @keyframes visaSpeakPulse {
+
     0%,
     100% {
         box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.3), 0 8px 18px rgba(245, 158, 11, 0.22);
