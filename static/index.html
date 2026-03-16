@@ -2815,7 +2815,7 @@
                                             <li>Funding and ties-to-home-country responses</li>
                                             <li>Red-flag answer correction</li>
                                         </ul>
-                                        <div class="visa-mock-panel">
+                                        <div class="visa-mock-panel" id="visaPrepPanel">
                                             <div class="visa-mock-headerline">
                                                 <div class="visa-mock-console-title">Prep Console</div>
                                                 <div class="visa-mock-state-pills">
@@ -2823,6 +2823,10 @@
                                                     <span id="visaPrepModeBadge"
                                                         class="visa-hub-tag visa-hub-tag-muted">Mode: not
                                                         selected</span>
+                                                    <button type="button" class="btn visa-fullscreen-toggle"
+                                                        id="visaPrepFullscreenBtn"
+                                                        onclick="requestVisaInterviewFullscreen('prep')"
+                                                        style="display: none;">Full Screen</button>
                                                 </div>
                                             </div>
                                             <div class="visa-mock-toolbar">
@@ -2867,6 +2871,11 @@
                                                 <button type="button" class="btn visa-speak-answer-cta"
                                                     id="visaPrepSpeakBottomBtn" onclick="listenPrepInterviewAnswer()"
                                                     disabled>Speak Answer</button>
+                                                <div id="visaPrepMicStatus" class="visa-mic-status" role="status"
+                                                    aria-live="polite" style="display: none;">
+                                                    <span class="visa-mic-status-dot" aria-hidden="true"></span>
+                                                    <span id="visaPrepMicStatusText">Mic status checking...</span>
+                                                </div>
                                                 <input id="visaPrepChatInput" type="text"
                                                     placeholder="Type your prep answer..."
                                                     onkeydown="handlePrepChatInputKeydown(event)">
@@ -2902,6 +2911,10 @@
                                                     <span id="visaMockModeBadge"
                                                         class="visa-hub-tag visa-hub-tag-muted">Mode: not
                                                         selected</span>
+                                                    <button type="button" class="btn visa-fullscreen-toggle"
+                                                        id="visaMockFullscreenBtn"
+                                                        onclick="requestVisaInterviewFullscreen('mock')"
+                                                        style="display: none;">Full Screen</button>
                                                     <span id="visaMockInterviewTimer"
                                                         class="visa-hub-tag visa-hub-tag-timer">Time: 00:00</span>
                                                 </div>
@@ -2949,6 +2962,11 @@
                                                 <button type="button" class="btn visa-speak-answer-cta"
                                                     id="visaMockSpeakBottomBtn" onclick="listenMockInterviewAnswer()"
                                                     disabled>Speak Answer</button>
+                                                <div id="visaMockMicStatus" class="visa-mic-status" role="status"
+                                                    aria-live="polite" style="display: none;">
+                                                    <span class="visa-mic-status-dot" aria-hidden="true"></span>
+                                                    <span id="visaMockMicStatusText">Mic status checking...</span>
+                                                </div>
                                                 <input id="visaMockChatInput" type="text"
                                                     placeholder="Type your interview answer..."
                                                     onkeydown="handleMockChatInputKeydown(event)">

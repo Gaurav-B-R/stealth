@@ -298,7 +298,10 @@ let visaMockInterviewState = {
     showModePicker: false,
     timerIntervalId: null,
     timerStartedAt: null,
-    elapsedMs: 0
+    elapsedMs: 0,
+    micPermission: 'unknown',
+    micPermissionStatus: null,
+    micPermissionCheckPromise: null
 };
 
 let visaPrepInterviewState = {
@@ -308,7 +311,10 @@ let visaPrepInterviewState = {
     history: [],
     recognition: null,
     channel: null,
-    showModePicker: false
+    showModePicker: false,
+    micPermission: 'unknown',
+    micPermissionStatus: null,
+    micPermissionCheckPromise: null
 };
 
 const MOCK_INTERVIEW_TIMER_INTERVAL_MS = 1000;
@@ -740,6 +746,10 @@ function setupEventListeners() {
         if (e.key === 'Escape') {
             closeMobileNav();
         }
+    });
+    document.addEventListener('fullscreenchange', () => {
+        renderPrepInterviewModeUI();
+        renderMockInterviewModeUI();
     });
 
     // Image preview for multiple file upload
@@ -3766,6 +3776,48 @@ function getVisaInterviewState(mode) {
     return mode === 'prep' ? visaPrepInterviewState : visaMockInterviewState;
 }
 
+function getVisaInterviewPanel(mode) {
+    return document.getElementById(mode === 'prep' ? 'visaPrepPanel' : 'visaMockPanel');
+}
+
+function getVisaInterviewFullscreenButton(mode) {
+    return document.getElementById(mode === 'prep' ? 'visaPrepFullscreenBtn' : 'visaMockFullscreenBtn');
+}
+
+function isVisaInterviewPanelFullscreen(mode) {
+    const panel = getVisaInterviewPanel(mode);
+    return Boolean(panel && document.fullscreenElement === panel);
+}
+
+async function requestVisaInterviewFullscreen(mode) {
+    const panel = getVisaInterviewPanel(mode);
+    if (!panel) {
+        return;
+    }
+    if (document.fullscreenElement !== panel) {
+        try {
+            await panel.requestFullscreen();
+        } catch (error) {
+            console.warn('Could not enable fullscreen:', error);
+        }
+    }
+    if (mode === 'prep') {
+        renderPrepInterviewModeUI();
+    } else {
+        renderMockInterviewModeUI();
+    }
+}
+
+function renderVisaInterviewFullscreenCta(mode) {
+    const btn = getVisaInterviewFullscreenButton(mode);
+    if (!btn) {
+        return;
+    }
+    const state = getVisaInterviewState(mode);
+    const shouldShow = (state.active || state.pending) && !isVisaInterviewPanelFullscreen(mode);
+    btn.style.display = shouldShow ? 'inline-flex' : 'none';
+}
+
 function formatInterviewElapsedTime(elapsedMs) {
     const totalSeconds = Math.max(0, Math.floor((elapsedMs || 0) / 1000));
     const hours = Math.floor(totalSeconds / 3600);
@@ -3887,6 +3939,134 @@ function clearVisaInterviewPendingBubble(mode) {
     logEl.querySelectorAll('.visa-mock-log-item.pending').forEach((node) => node.remove());
 }
 
+function normalizeMicPermissionState(rawState) {
+    if (rawState === 'granted' || rawState === 'denied' || rawState === 'prompt') {
+        return rawState;
+    }
+    if (rawState === 'unsupported') {
+        return 'unsupported';
+    }
+    return 'unknown';
+}
+
+function setVisaInterviewMicPermission(mode, nextPermission, shouldRender = true) {
+    const state = getVisaInterviewState(mode);
+    const normalized = normalizeMicPermissionState(nextPermission);
+    if (state.micPermission === normalized) {
+        return;
+    }
+    state.micPermission = normalized;
+    if (shouldRender) {
+        updateVisaInterviewControls(mode);
+    }
+}
+
+function getVisaInterviewMicStatusModel(mode) {
+    const state = getVisaInterviewState(mode);
+    const speechSupported = Boolean(getSpeechRecognitionConstructor());
+    if (!speechSupported) {
+        return {
+            text: 'Mic unsupported in this browser',
+            toneClass: 'is-unsupported'
+        };
+    }
+
+    const micPermission = normalizeMicPermissionState(state.micPermission);
+    if (micPermission === 'denied') {
+        return {
+            text: 'Mic blocked: enable browser permission',
+            toneClass: 'is-blocked'
+        };
+    }
+    if (micPermission === 'prompt') {
+        return {
+            text: 'Mic permission required: enable it in browser',
+            toneClass: 'is-pending'
+        };
+    }
+    if (state.listening) {
+        return {
+            text: 'Mic connected: Listening',
+            toneClass: 'is-listening'
+        };
+    }
+    if (micPermission === 'granted') {
+        return {
+            text: 'Mic connected',
+            toneClass: 'is-connected'
+        };
+    }
+    if (state.channel === 'chat') {
+        return {
+            text: 'Mic idle in chat mode',
+            toneClass: ''
+        };
+    }
+
+    return {
+        text: 'Mic status checking...',
+        toneClass: 'is-pending'
+    };
+}
+
+function renderVisaInterviewMicStatus(mode, statusEl, textEl) {
+    if (!statusEl || !textEl) {
+        return;
+    }
+    const state = getVisaInterviewState(mode);
+    const shouldShow = state.active && state.channel === 'voice';
+    statusEl.style.display = shouldShow ? 'inline-flex' : 'none';
+    if (!shouldShow) {
+        return;
+    }
+
+    const model = getVisaInterviewMicStatusModel(mode);
+    textEl.textContent = model.text;
+    statusEl.classList.remove('is-connected', 'is-listening', 'is-pending', 'is-blocked', 'is-unsupported');
+    if (model.toneClass) {
+        statusEl.classList.add(model.toneClass);
+    }
+}
+
+async function refreshVisaInterviewMicPermission(mode) {
+    const state = getVisaInterviewState(mode);
+    if (state.micPermissionCheckPromise) {
+        return state.micPermissionCheckPromise;
+    }
+
+    state.micPermissionCheckPromise = (async () => {
+        const speechSupported = Boolean(getSpeechRecognitionConstructor());
+        if (!speechSupported) {
+            setVisaInterviewMicPermission(mode, 'unsupported', false);
+            return state.micPermission;
+        }
+
+        if (!navigator.permissions || typeof navigator.permissions.query !== 'function') {
+            setVisaInterviewMicPermission(mode, 'unknown', false);
+            return state.micPermission;
+        }
+
+        try {
+            if (!state.micPermissionStatus) {
+                state.micPermissionStatus = await navigator.permissions.query({ name: 'microphone' });
+                state.micPermissionStatus.onchange = () => {
+                    setVisaInterviewMicPermission(mode, state.micPermissionStatus ? state.micPermissionStatus.state : 'unknown');
+                };
+            }
+            setVisaInterviewMicPermission(mode, state.micPermissionStatus.state, false);
+        } catch (error) {
+            setVisaInterviewMicPermission(mode, 'unknown', false);
+        }
+
+        return state.micPermission;
+    })().finally(() => {
+        state.micPermissionCheckPromise = null;
+        updateVisaInterviewControls(mode);
+    });
+
+    return state.micPermissionCheckPromise;
+}
+
 function updateVisaInterviewControls(mode) {
     const cfg = getVisaInterviewSessionConfig(mode);
     const state = getVisaInterviewState(mode);
@@ -3895,6 +4075,7 @@ function updateVisaInterviewControls(mode) {
     const stopBtn = document.getElementById(cfg.stopId);
     const finishBtn = cfg.finishId ? document.getElementById(cfg.finishId) : null;
     const speechSupported = Boolean(getSpeechRecognitionConstructor());
+    const micBlocked = state.micPermission === 'denied';
 
     if (startBtn) {
         if (mode === 'mock' || mode === 'prep') {
@@ -3904,7 +4085,9 @@ function updateVisaInterviewControls(mode) {
         }
     }
     if (bottomSpeakBtn) {
-        bottomSpeakBtn.disabled = !speechSupported || !state.active || state.pending || state.listening;
+        const autoVoiceMode = state.active && state.channel === 'voice';
+        bottomSpeakBtn.disabled = autoVoiceMode || micBlocked || !speechSupported || !state.active || state.pending || state.listening;
+        bottomSpeakBtn.title = micBlocked ? 'Microphone is blocked in browser settings.' : '';
     }
     if (stopBtn) {
         stopBtn.disabled = !state.active && !state.pending;
@@ -3927,10 +4110,12 @@ function renderMockInterviewModeUI() {
     const startBtn = document.getElementById('visaMockStartBtn');
     const secondaryControls = document.getElementById('visaMockSecondaryControls');
     const bottomSpeakBtn = document.getElementById('visaMockSpeakBottomBtn');
+    const micStatusEl = document.getElementById('visaMockMicStatus');
+    const micStatusTextEl = document.getElementById('visaMockMicStatusText');
     const modeBadge = document.getElementById('visaMockModeBadge');
     const guide = document.getElementById('visaMockInterviewGuide');
     const state = visaMockInterviewState;
-    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !bottomSpeakBtn || !modeBadge || !guide) {
+    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !bottomSpeakBtn || !micStatusEl || !micStatusTextEl || !modeBadge || !guide) {
         return;
     }
 
@@ -3957,11 +4142,13 @@ function renderMockInterviewModeUI() {
         : 'Type your interview answer...';
     chatSendBtn.style.display = chatModeActive ? 'inline-flex' : 'none';
     chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
-    bottomSpeakBtn.style.display = state.active ? 'inline-flex' : 'none';
+    bottomSpeakBtn.style.display = voiceModeActive ? 'inline-flex' : 'none';
     bottomSpeakBtn.classList.toggle('is-listening', state.listening);
     bottomSpeakBtn.textContent = voiceModeActive
-        ? (state.listening ? 'Mic Listening...' : 'Restart Mic')
+        ? (state.listening ? 'Mic Listening...' : 'Mic Auto-On')
         : 'Speak Answer';
+    renderVisaInterviewMicStatus('mock', micStatusEl, micStatusTextEl);
+    renderVisaInterviewFullscreenCta('mock');
 
     if (state.channel === 'voice') {
         modeBadge.textContent = 'Mode: Voice';
@@ -3975,12 +4162,16 @@ function renderMockInterviewModeUI() {
         modeBadge.classList.remove('visa-hub-tag-mode-voice');
         modeBadge.classList.add('visa-hub-tag-mode-chat');
         guide.textContent = state.active
-            ? 'Type and Send each answer below, or tap Speak Answer to reply by voice.'
+            ? 'Type and send each answer below.'
             : 'Click Start Interview and choose Chat to run a typed interview simulation.';
     } else {
         modeBadge.textContent = 'Mode: not selected';
         modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
         guide.textContent = 'Click Start Interview, choose Voice or Chat, then proceed question by question. The AI officer closes the interview when complete.';
+    }
+
+    if (state.active && state.channel === 'voice' && state.micPermission === 'unknown' && !state.micPermissionStatus && !state.micPermissionCheckPromise) {
+        void refreshVisaInterviewMicPermission('mock');
     }
 
     if (chatModeActive && !state.pending) {
@@ -3996,10 +4187,12 @@ function renderPrepInterviewModeUI() {
     const startBtn = document.getElementById('visaPrepStartBtn');
     const secondaryControls = document.getElementById('visaPrepSecondaryControls');
     const bottomSpeakBtn = document.getElementById('visaPrepSpeakBottomBtn');
+    const micStatusEl = document.getElementById('visaPrepMicStatus');
+    const micStatusTextEl = document.getElementById('visaPrepMicStatusText');
     const modeBadge = document.getElementById('visaPrepModeBadge');
     const guide = document.getElementById('visaPrepInterviewGuide');
     const state = visaPrepInterviewState;
-    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !bottomSpeakBtn || !modeBadge || !guide) {
+    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !bottomSpeakBtn || !micStatusEl || !micStatusTextEl || !modeBadge || !guide) {
         return;
     }
 
@@ -4026,11 +4219,13 @@ function renderPrepInterviewModeUI() {
         : 'Type your prep answer...';
     chatSendBtn.style.display = chatModeActive ? 'inline-flex' : 'none';
     chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
-    bottomSpeakBtn.style.display = state.active ? 'inline-flex' : 'none';
+    bottomSpeakBtn.style.display = voiceModeActive ? 'inline-flex' : 'none';
     bottomSpeakBtn.classList.toggle('is-listening', state.listening);
     bottomSpeakBtn.textContent = voiceModeActive
-        ? (state.listening ? 'Mic Listening...' : 'Restart Mic')
+        ? (state.listening ? 'Mic Listening...' : 'Mic Auto-On')
         : 'Speak Answer';
+    renderVisaInterviewMicStatus('prep', micStatusEl, micStatusTextEl);
+    renderVisaInterviewFullscreenCta('prep');
 
     if (state.channel === 'voice') {
         modeBadge.textContent = 'Mode: Voice';
@@ -4044,12 +4239,16 @@ function renderPrepInterviewModeUI() {
         modeBadge.classList.remove('visa-hub-tag-mode-voice');
         modeBadge.classList.add('visa-hub-tag-mode-chat');
         guide.textContent = state.active
-            ? 'Type and Send each answer below, or tap Speak Answer to reply by voice. Rilono AI gives feedback on every turn.'
+            ? 'Type and send each answer below. Rilono AI gives feedback on every turn.'
             : 'Click Start Prep Session and choose Chat to practice in typed mode.';
     } else {
         modeBadge.textContent = 'Mode: not selected';
         modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
         guide.textContent = 'Choose Voice or Chat mode to start your prep session. You will get feedback after each answer.';
+    }
+
+    if (state.active && state.channel === 'voice' && state.micPermission === 'unknown' && !state.micPermissionStatus && !state.micPermissionCheckPromise) {
+        void refreshVisaInterviewMicPermission('prep');
     }
 
     if (chatModeActive && !state.pending) {
@@ -4071,6 +4270,7 @@ function initializeVisaInterviewUI(mode) {
         setVisaInterviewStatus(mode, 'Idle');
     }
     updateVisaInterviewControls(mode);
+    void refreshVisaInterviewMicPermission(mode);
 }
 
 function initializeVisaPrepInterviewUI() {
@@ -4156,6 +4356,7 @@ function listenVisaInterviewAnswer(mode) {
 
     recognition.onstart = () => {
         state.listening = true;
+        setVisaInterviewMicPermission(mode, 'granted', false);
         setVisaInterviewStatus(mode, 'Listening...');
         updateVisaInterviewControls(mode);
     };
@@ -4165,6 +4366,13 @@ function listenVisaInterviewAnswer(mode) {
         updateVisaInterviewControls(mode);
         if (!state.active) return;
         const autoVoiceMode = state.channel === 'voice';
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            setVisaInterviewMicPermission(mode, 'denied', false);
+            setVisaInterviewStatus(mode, 'Mic blocked');
+            appendVisaInterviewLog(mode, 'system', 'Microphone access is blocked. Enable browser mic permission and try again.');
+            updateVisaInterviewControls(mode);
+            return;
+        }
         if (event.error === 'no-speech') {
             if (autoVoiceMode) {
                 shouldAutoRestart = true;
@@ -4225,6 +4433,10 @@ function listenVisaInterviewAnswer(mode) {
         recognition.start();
     } catch (error) {
         state.listening = false;
+        const name = (error && error.name) ? String(error.name).toLowerCase() : '';
+        if (name.includes('notallowed') || name.includes('security')) {
+            setVisaInterviewMicPermission(mode, 'denied', false);
+        }
         updateVisaInterviewControls(mode);
         setVisaInterviewStatus(mode, 'Mic start failed');
         appendVisaInterviewLog(mode, 'system', 'Could not start microphone. Allow mic permission and try again.');
@@ -4375,27 +4587,75 @@ function normalizeMockInterviewReportText(reportText) {
         .trim();
 }
 
-function buildMockInterviewReportHtml(reportText) {
+function clampMockReportPercentage(value) {
+    if (!Number.isFinite(value)) {
+        return null;
+    }
+    return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function normalizeMockReportSectionTitle(rawTitle) {
+    const normalized = String(rawTitle || '').trim().toLowerCase().replace(/[:\-–—\s]+$/, '');
+    if (!normalized) {
+        return null;
+    }
+    if (/^decision drivers?$/.test(normalized)) {
+        return 'Decision Drivers';
+    }
+    if (/^strengths?$/.test(normalized)) {
+        return 'Strengths';
+    }
+    if (/^risk areas?$/.test(normalized)) {
+        return 'Risk Areas';
+    }
+    if (/^top improvements before real interview$/.test(normalized) || /^top improvements?$/.test(normalized) || /^improvements before real interview$/.test(normalized)) {
+        return 'Top Improvements Before Real Interview';
+    }
+    if (/^rilono ai note$/.test(normalized) || /^note$/.test(normalized)) {
+        return 'Rilono AI Note';
+    }
+    return null;
+}
+
+function parseMockInterviewReportModel(reportText) {
     const text = normalizeMockInterviewReportText(reportText);
     if (!text) {
-        return '<p class="visa-mock-report-paragraph">No report content available.</p>';
+        return {
+            approval: null,
+            rejection: null,
+            introParagraphs: [],
+            sections: []
+        };
     }
 
     const lines = text.split('\n');
-    const htmlParts = [];
-    const metricCards = [];
-    let listItems = [];
+    const sectionOrder = [];
+    const sectionItemsByTitle = {};
+    const introParagraphs = [];
+    let activeSectionTitle = null;
+    let approval = null;
+    let rejection = null;
 
-    const flushList = () => {
-        if (!listItems.length) return;
-        htmlParts.push(`<ul class="visa-mock-report-list">${listItems.join('')}</ul>`);
-        listItems = [];
+    const ensureSection = (title) => {
+        if (!sectionItemsByTitle[title]) {
+            sectionItemsByTitle[title] = [];
+            sectionOrder.push(title);
+        }
+    };
+
+    const pushLineToCurrentScope = (value) => {
+        if (!value) return;
+        if (activeSectionTitle) {
+            ensureSection(activeSectionTitle);
+            sectionItemsByTitle[activeSectionTitle].push(value);
+            return;
+        }
+        introParagraphs.push(value);
     };
 
     for (const rawLine of lines) {
         const line = rawLine.trim();
         if (!line) {
-            flushList();
             continue;
         }
 
@@ -4406,50 +4666,184 @@ function buildMockInterviewReportHtml(reportText) {
 
         const metricMatch = normalized.match(/^(Approval Probability|Rejection Probability)\s*:?\s*(\d{1,3})%/i);
         if (metricMatch) {
-            flushList();
-            metricCards.push(
-                `<div class="visa-mock-report-metric-card">` +
-                `<div class="visa-mock-report-metric-label">${escapeHtml(metricMatch[1])}</div>` +
-                `<div class="visa-mock-report-metric-value">${escapeHtml(metricMatch[2])}%</div>` +
-                `</div>`
-            );
+            const metricValue = clampMockReportPercentage(Number.parseInt(metricMatch[2], 10));
+            if (metricValue !== null) {
+                if (/approval/i.test(metricMatch[1])) {
+                    approval = metricValue;
+                } else {
+                    rejection = metricValue;
+                }
+            }
+            continue;
+        }
+
+        const sectionMatch = normalized.match(/^(Decision Drivers|Strengths|Risk Areas|Top Improvements(?: Before Real Interview)?|Improvements Before Real Interview|Rilono AI Note|Note)\s*:?\s*(.*)$/i);
+        if (sectionMatch) {
+            activeSectionTitle = normalizeMockReportSectionTitle(sectionMatch[1]);
+            if (!activeSectionTitle) {
+                activeSectionTitle = null;
+                continue;
+            }
+            ensureSection(activeSectionTitle);
+            const trailingContent = sectionMatch[2].trim();
+            if (trailingContent) {
+                sectionItemsByTitle[activeSectionTitle].push(trailingContent);
+            }
             continue;
         }
 
         if (/^[-•]\s+/.test(normalized)) {
             normalized = normalized.replace(/^[-•]\s+/, '').trim();
-            if (normalized) {
-                listItems.push(`<li>${escapeHtml(normalized)}</li>`);
-            }
-            continue;
         }
-
-        if (/^(Decision Drivers|Strengths|Risk Areas|Top Improvements Before Real Interview|Rilono AI Note)/i.test(normalized)) {
-            flushList();
-            htmlParts.push(`<h4 class="visa-mock-report-section-title">${escapeHtml(normalized)}</h4>`);
-            continue;
-        }
-
-        flushList();
-        htmlParts.push(`<p class="visa-mock-report-paragraph">${escapeHtml(normalized)}</p>`);
+        pushLineToCurrentScope(normalized);
     }
 
-    flushList();
+    if (approval === null && rejection !== null) {
+        approval = clampMockReportPercentage(100 - rejection);
+    } else if (rejection === null && approval !== null) {
+        rejection = clampMockReportPercentage(100 - approval);
+    }
 
-    const metricHtml = metricCards.length
-        ? `<div class="visa-mock-report-metrics">${metricCards.join('')}</div>`
+    const sections = sectionOrder.map((title) => ({
+        title,
+        items: sectionItemsByTitle[title] || []
+    }));
+
+    return {
+        approval,
+        rejection,
+        introParagraphs,
+        sections
+    };
+}
+
+function getMockReportVerdictModel(approvalValue, rejectionValue) {
+    if (!Number.isFinite(approvalValue) && !Number.isFinite(rejectionValue)) {
+        return {
+            label: 'Outcome not available',
+            note: 'Complete the full mock session to generate confidence scores.',
+            toneClass: 'is-neutral'
+        };
+    }
+
+    const effectiveApproval = Number.isFinite(approvalValue)
+        ? approvalValue
+        : clampMockReportPercentage(100 - rejectionValue);
+    const effectiveRejection = Number.isFinite(rejectionValue)
+        ? rejectionValue
+        : clampMockReportPercentage(100 - approvalValue);
+
+    if (effectiveApproval >= 70 && effectiveRejection <= 30) {
+        return {
+            label: 'Strong approval outlook',
+            note: 'Your current answers show a solid visa narrative with lower rejection risk.',
+            toneClass: 'is-positive'
+        };
+    }
+    if (effectiveApproval >= 45 && effectiveApproval <= 69) {
+        return {
+            label: 'Balanced but improvable',
+            note: 'You have potential, but key sections need sharper and more consistent responses.',
+            toneClass: 'is-moderate'
+        };
+    }
+    return {
+        label: 'High rejection risk',
+        note: 'Focus on the risk areas below before your real interview attempt.',
+        toneClass: 'is-critical'
+    };
+}
+
+function buildMockInterviewMetricCard(label, value, toneClass, helperText) {
+    const safeValue = Number.isFinite(value) ? clampMockReportPercentage(value) : null;
+    const displayValue = safeValue === null ? 'N/A' : `${safeValue}%`;
+    const meterValue = safeValue === null ? 0 : safeValue;
+
+    return (
+        `<div class="visa-mock-report-metric-card ${toneClass}" style="--metric-value:${meterValue}%;">` +
+        `<div class="visa-mock-report-metric-label">${escapeHtml(label)}</div>` +
+        `<div class="visa-mock-report-metric-value">${escapeHtml(displayValue)}</div>` +
+        `<div class="visa-mock-report-metric-meter"><span class="visa-mock-report-metric-fill"></span></div>` +
+        `<div class="visa-mock-report-metric-helper">${escapeHtml(helperText)}</div>` +
+        `</div>`
+    );
+}
+
+function buildMockInterviewReportHtml(reportText) {
+    const model = parseMockInterviewReportModel(reportText);
+    if (!model.introParagraphs.length && !model.sections.length && !Number.isFinite(model.approval) && !Number.isFinite(model.rejection)) {
+        return '<p class="visa-mock-report-paragraph">No report content available.</p>';
+    }
+
+    const approvalValue = Number.isFinite(model.approval) ? model.approval : null;
+    const rejectionValue = Number.isFinite(model.rejection) ? model.rejection : null;
+    const verdict = getMockReportVerdictModel(approvalValue, rejectionValue);
+    const introHtml = model.introParagraphs.length
+        ? `<div class="visa-mock-report-summary">${model.introParagraphs.map((line) => `<p class="visa-mock-report-paragraph">${escapeHtml(line)}</p>`).join('')}</div>`
         : '';
+    const metricCards = [
+        buildMockInterviewMetricCard('Approval Probability', approvalValue, 'visa-mock-report-metric-card-approval', 'Likelihood of approval based on this mock transcript.'),
+        buildMockInterviewMetricCard('Rejection Probability', rejectionValue, 'visa-mock-report-metric-card-rejection', 'Risk estimate you should reduce before the actual interview.')
+    ];
 
-    return `${metricHtml}${htmlParts.join('')}`;
+    const sectionClassByTitle = {
+        'Decision Drivers': 'section-drivers',
+        Strengths: 'section-strengths',
+        'Risk Areas': 'section-risks',
+        'Top Improvements Before Real Interview': 'section-improvements',
+        'Rilono AI Note': 'section-note'
+    };
+    const sectionCards = model.sections.map((section) => {
+        const sectionClass = sectionClassByTitle[section.title] || 'section-generic';
+        const sectionItemsHtml = section.items.length
+            ? `<ul class="visa-mock-report-list">${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+            : '<p class="visa-mock-report-paragraph">No additional points were generated for this section.</p>';
+
+        return (
+            `<section class="visa-mock-report-section-card ${sectionClass}">` +
+            `<div class="visa-mock-report-section-head">` +
+            `<h4 class="visa-mock-report-section-title">${escapeHtml(section.title)}</h4>` +
+            `<span class="visa-mock-report-section-count">${section.items.length || 0} point${section.items.length === 1 ? '' : 's'}</span>` +
+            `</div>` +
+            `${sectionItemsHtml}` +
+            `</section>`
+        );
+    });
+
+    return (
+        `<div class="visa-mock-report-shell">` +
+        `${introHtml}` +
+        `<div class="visa-mock-report-overview">` +
+        `<div class="visa-mock-report-verdict ${verdict.toneClass}">` +
+        `<div class="visa-mock-report-verdict-label">Overall Outlook</div>` +
+        `<div class="visa-mock-report-verdict-value">${escapeHtml(verdict.label)}</div>` +
+        `<div class="visa-mock-report-verdict-note">${escapeHtml(verdict.note)}</div>` +
+        `</div>` +
+        `<div class="visa-mock-report-metrics">${metricCards.join('')}</div>` +
+        `</div>` +
+        `<div class="visa-mock-report-sections">${sectionCards.join('')}</div>` +
+        `</div>`
+    );
 }
 
 function renderVisaMockInterviewReport(reportText) {
     const reportEl = document.getElementById('visaMockInterviewReport');
     if (!reportEl) return;
     reportEl.style.display = 'block';
+    const generatedLabel = new Date().toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
     reportEl.innerHTML = `
         <div class="visa-mock-report-header">
-            <div class="visa-mock-report-title">Final Interview Report</div>
+            <div class="visa-mock-report-title-wrap">
+                <div class="visa-mock-report-title">Final Interview Report</div>
+                <div class="visa-mock-report-subtitle">Actionable evaluation generated from your full mock interview transcript.</div>
+                <div class="visa-mock-report-generated-at">Generated ${escapeHtml(generatedLabel)}</div>
+            </div>
             <button type="button" class="btn btn-secondary visa-mock-report-download-btn" onclick="downloadMockInterviewReportPdf()">
                 📥 Download PDF
             </button>
@@ -4481,14 +4875,21 @@ function downloadMockInterviewReportPdf() {
     <title>Rilono - Mock Interview Report</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        @page { size: A4; margin: 10mm; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            color: #1e293b;
-            padding: 2.5rem 2rem;
-            line-height: 1.6;
+            color: #e2e8f0;
+            padding: 1.2rem;
+            line-height: 1.55;
             max-width: 800px;
             margin: 0 auto;
             position: relative;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(15, 118, 110, 0.23), transparent 40%),
+                radial-gradient(circle at 90% 10%, rgba(37, 99, 235, 0.2), transparent 44%),
+                linear-gradient(180deg, #0b1b3a, #081a31);
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
         }
         .pdf-watermark {
             position: fixed;
@@ -4499,125 +4900,311 @@ function downloadMockInterviewReportPdf() {
             font-weight: 800;
             letter-spacing: 0.28rem;
             text-transform: uppercase;
-            color: rgba(99, 102, 241, 0.1);
+            color: rgba(147, 197, 253, 0.11);
             pointer-events: none;
             user-select: none;
             white-space: nowrap;
             z-index: 0;
         }
-        .pdf-header,
-        .pdf-body,
-        .pdf-footer {
+        .pdf-shell {
             position: relative;
             z-index: 1;
+            border: 1px solid rgba(45, 212, 191, 0.32);
+            border-radius: 14px;
+            background:
+                radial-gradient(circle at 10% 0%, rgba(15, 118, 110, 0.18), transparent 42%),
+                radial-gradient(circle at 85% 10%, rgba(30, 64, 175, 0.2), transparent 46%),
+                linear-gradient(180deg, rgba(5, 20, 46, 0.96), rgba(7, 30, 58, 0.93));
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 10px 24px rgba(2, 6, 23, 0.34);
+            padding: 0.95rem;
         }
         .pdf-header {
-            border-bottom: 2px solid #6366f1;
-            padding-bottom: 1rem;
-            margin-bottom: 1.5rem;
-        }
-        .pdf-header h1 {
-            font-size: 1.4rem;
-            color: #312e81;
-            margin-bottom: 0.25rem;
-        }
-        .pdf-header .pdf-meta {
-            font-size: 0.82rem;
-            color: #64748b;
-        }
-        .pdf-header .pdf-brand {
-            font-size: 0.78rem;
-            color: #6366f1;
-            font-weight: 600;
-            margin-top: 0.15rem;
-        }
-        .pdf-body h4 {
-            font-size: 1rem;
-            color: #312e81;
-            margin: 1.2rem 0 0.4rem;
-            font-weight: 700;
-            border-bottom: 1px solid #e2e8f0;
-            padding-bottom: 0.25rem;
-        }
-        .pdf-body p {
-            margin: 0.4rem 0;
-            font-size: 0.92rem;
-        }
-        .pdf-body ul {
-            margin: 0.35rem 0 0.6rem 1.2rem;
-            font-size: 0.92rem;
-        }
-        .pdf-body li {
-            margin-bottom: 0.25rem;
-        }
-        .pdf-metrics {
             display: flex;
-            gap: 1rem;
-            margin-bottom: 1.2rem;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 0.8rem;
+            border-bottom: 1px solid rgba(56, 189, 248, 0.26);
+            padding-bottom: 0.7rem;
+            margin-bottom: 0.85rem;
         }
-        .pdf-metric {
-            flex: 1;
-            border: 1px solid #e2e8f0;
-            border-radius: 0.5rem;
-            padding: 0.75rem;
-            text-align: center;
+        .pdf-header-left {
+            display: grid;
+            gap: 0.18rem;
+            max-width: 70%;
         }
-        .pdf-metric-label {
-            font-size: 0.72rem;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: #64748b;
-            margin-bottom: 0.15rem;
-        }
-        .pdf-metric-value {
-            font-size: 1.3rem;
+        .pdf-title {
+            font-size: 1.28rem;
             font-weight: 800;
-            color: #1e293b;
+            color: #e0f2fe;
+            letter-spacing: 0.01em;
+        }
+        .pdf-subtitle {
+            color: #a5f3fc;
+            font-size: 0.78rem;
+            line-height: 1.35;
+        }
+        .pdf-header-right {
+            display: grid;
+            gap: 0.22rem;
+            justify-items: end;
+        }
+        .pdf-meta {
+            font-size: 0.74rem;
+            color: #cbd5e1;
+        }
+        .pdf-brand {
+            font-size: 0.72rem;
+            color: #ccfbf1;
+            border: 1px solid rgba(45, 212, 191, 0.4);
+            border-radius: 999px;
+            padding: 0.12rem 0.45rem;
+            background: rgba(13, 148, 136, 0.22);
+            font-weight: 700;
+        }
+        .pdf-body {
+            display: grid;
+            gap: 0.9rem;
+        }
+        .visa-mock-report-shell {
+            display: grid;
+            gap: 0.9rem;
+        }
+        .visa-mock-report-summary {
+            border: 1px solid rgba(125, 211, 252, 0.24);
+            border-radius: 0.82rem;
+            background: rgba(15, 23, 42, 0.34);
+            padding: 0.7rem 0.8rem;
+            display: grid;
+            gap: 0.4rem;
+        }
+        .visa-mock-report-overview {
+            display: grid;
+            grid-template-columns: 1fr 1.5fr;
+            gap: 0.66rem;
+            align-items: stretch;
+        }
+        .visa-mock-report-verdict {
+            border: 1px solid rgba(148, 163, 184, 0.32);
+            border-radius: 0.8rem;
+            background: rgba(15, 23, 42, 0.58);
+            padding: 0.72rem;
+            display: grid;
+            gap: 0.28rem;
+        }
+        .visa-mock-report-verdict-label {
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #94a3b8;
+            font-weight: 700;
+        }
+        .visa-mock-report-verdict-value {
+            font-size: 1rem;
+            font-weight: 800;
+            color: #f8fafc;
+            line-height: 1.25;
+        }
+        .visa-mock-report-verdict-note {
+            font-size: 0.76rem;
+            line-height: 1.42;
+            color: #cbd5e1;
+        }
+        .visa-mock-report-verdict.is-positive {
+            border-color: rgba(34, 197, 94, 0.42);
+            background: linear-gradient(145deg, rgba(6, 78, 59, 0.62), rgba(15, 23, 42, 0.62));
+        }
+        .visa-mock-report-verdict.is-moderate {
+            border-color: rgba(245, 158, 11, 0.44);
+            background: linear-gradient(145deg, rgba(120, 53, 15, 0.54), rgba(15, 23, 42, 0.62));
+        }
+        .visa-mock-report-verdict.is-critical {
+            border-color: rgba(248, 113, 113, 0.42);
+            background: linear-gradient(145deg, rgba(127, 29, 29, 0.52), rgba(15, 23, 42, 0.62));
+        }
+        .visa-mock-report-verdict.is-neutral {
+            border-color: rgba(148, 163, 184, 0.34);
+            background: linear-gradient(145deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.62));
+        }
+        .visa-mock-report-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.6rem;
+        }
+        .visa-mock-report-metric-card {
+            --metric-value: 0%;
+            border: 1px solid rgba(148, 163, 184, 0.3);
+            border-radius: 0.8rem;
+            background: rgba(15, 23, 42, 0.54);
+            padding: 0.68rem 0.72rem;
+            display: grid;
+            gap: 0.32rem;
+        }
+        .visa-mock-report-metric-card-approval {
+            border-color: rgba(16, 185, 129, 0.38);
+            background: linear-gradient(150deg, rgba(5, 46, 22, 0.52), rgba(15, 23, 42, 0.58));
+        }
+        .visa-mock-report-metric-card-rejection {
+            border-color: rgba(248, 113, 113, 0.36);
+            background: linear-gradient(150deg, rgba(69, 10, 10, 0.48), rgba(15, 23, 42, 0.58));
+        }
+        .visa-mock-report-metric-label {
+            color: #94a3b8;
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            font-weight: 700;
+        }
+        .visa-mock-report-metric-value {
+            color: #ecfeff;
+            font-size: 1.2rem;
+            font-weight: 800;
+            line-height: 1.2;
+        }
+        .visa-mock-report-metric-meter {
+            height: 0.42rem;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, 0.2);
+            overflow: hidden;
+        }
+        .visa-mock-report-metric-fill {
+            display: block;
+            width: var(--metric-value);
+            height: 100%;
+            border-radius: inherit;
+        }
+        .visa-mock-report-metric-card-approval .visa-mock-report-metric-fill {
+            background: linear-gradient(90deg, #34d399, #2dd4bf);
+        }
+        .visa-mock-report-metric-card-rejection .visa-mock-report-metric-fill {
+            background: linear-gradient(90deg, #f59e0b, #ef4444);
+        }
+        .visa-mock-report-metric-helper {
+            color: rgba(203, 213, 225, 0.82);
+            font-size: 0.69rem;
+            line-height: 1.32;
+        }
+        .visa-mock-report-sections {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0.62rem;
+        }
+        .visa-mock-report-section-card {
+            --section-accent: #38bdf8;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 0.82rem;
+            background: rgba(15, 23, 42, 0.45);
+            padding: 0.66rem 0.74rem;
+            display: grid;
+            gap: 0.48rem;
+            position: relative;
+            overflow: hidden;
+        }
+        .visa-mock-report-section-card::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--section-accent);
+            opacity: 0.9;
+        }
+        .visa-mock-report-section-card.section-drivers { --section-accent: #38bdf8; }
+        .visa-mock-report-section-card.section-strengths { --section-accent: #22c55e; }
+        .visa-mock-report-section-card.section-risks { --section-accent: #ef4444; }
+        .visa-mock-report-section-card.section-improvements {
+            --section-accent: #f59e0b;
+            grid-column: 1 / -1;
+        }
+        .visa-mock-report-section-card.section-note {
+            --section-accent: #a78bfa;
+            grid-column: 1 / -1;
+        }
+        .visa-mock-report-section-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .visa-mock-report-section-title {
+            margin: 0;
+            font-size: 0.9rem;
+            color: #dbeafe;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+        }
+        .visa-mock-report-section-count {
+            font-size: 0.65rem;
+            color: #94a3b8;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 999px;
+            padding: 0.12rem 0.42rem;
+            white-space: nowrap;
+        }
+        .visa-mock-report-paragraph {
+            margin: 0;
+            color: #e2e8f0;
+            line-height: 1.5;
+            font-size: 0.84rem;
+        }
+        .visa-mock-report-list {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            color: #e2e8f0;
+            display: grid;
+            gap: 0.34rem;
+        }
+        .visa-mock-report-list li {
+            line-height: 1.46;
+            padding-left: 0.95rem;
+            position: relative;
+            font-size: 0.82rem;
+        }
+        .visa-mock-report-list li::before {
+            content: "";
+            position: absolute;
+            left: 0.04rem;
+            top: 0.5rem;
+            width: 0.32rem;
+            height: 0.32rem;
+            border-radius: 999px;
+            background: var(--section-accent);
+            box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.22);
         }
         .pdf-footer {
-            margin-top: 2rem;
-            padding-top: 0.75rem;
-            border-top: 1px solid #e2e8f0;
+            margin-top: 0.9rem;
+            padding-top: 0.55rem;
+            border-top: 1px solid rgba(148, 163, 184, 0.3);
             font-size: 0.75rem;
-            color: #94a3b8;
+            color: #a5b4fc;
             text-align: center;
         }
         @media print {
-            body { padding: 1rem; }
-            .pdf-watermark { color: rgba(99, 102, 241, 0.14); }
+            body { padding: 0; }
+            .pdf-watermark { color: rgba(147, 197, 253, 0.14); }
         }
     </style>
 </head>
 <body>
     <div class="pdf-watermark">RILONO AI</div>
-    <div class="pdf-header">
-        <h1>F1 Mock Interview Report</h1>
-        <div class="pdf-meta">${dateStr} at ${timeStr}</div>
-        <div class="pdf-brand">Generated by Rilono AI</div>
+    <div class="pdf-shell">
+        <div class="pdf-header">
+            <div class="pdf-header-left">
+                <div class="pdf-title">F1 Mock Interview Report</div>
+                <div class="pdf-subtitle">Actionable evaluation generated from your full mock interview transcript.</div>
+            </div>
+            <div class="pdf-header-right">
+                <div class="pdf-meta">${dateStr} at ${timeStr}</div>
+                <div class="pdf-brand">Generated by Rilono AI</div>
+            </div>
+        </div>
+        <div class="pdf-body">${bodyContent.innerHTML}</div>
+        <div class="pdf-footer">This report was generated by Rilono AI Mock Interview. For educational purposes only.</div>
     </div>
-    <div class="pdf-body">${bodyContent.innerHTML}</div>
-    <div class="pdf-footer">This report was generated by Rilono AI Mock Interview. For educational purposes only.</div>
 </body>
 </html>`);
     printWindow.document.close();
-
-    /* Replace dark-theme classes with PDF-friendly ones */
-    const metricCards = printWindow.document.querySelectorAll('.visa-mock-report-metric-card');
-    if (metricCards.length) {
-        const metricsWrap = printWindow.document.createElement('div');
-        metricsWrap.className = 'pdf-metrics';
-        metricCards[0].parentNode.parentNode.insertBefore(metricsWrap, metricCards[0].parentNode);
-        metricCards.forEach(card => {
-            const label = card.querySelector('.visa-mock-report-metric-label');
-            const value = card.querySelector('.visa-mock-report-metric-value');
-            const pdfMetric = printWindow.document.createElement('div');
-            pdfMetric.className = 'pdf-metric';
-            pdfMetric.innerHTML = `<div class="pdf-metric-label">${label ? label.textContent : ''}</div><div class="pdf-metric-value">${value ? value.textContent : ''}</div>`;
-            metricsWrap.appendChild(pdfMetric);
-        });
-        const oldMetrics = printWindow.document.querySelector('.visa-mock-report-metrics');
-        if (oldMetrics) oldMetrics.remove();
-    }
 
     setTimeout(() => {
         printWindow.focus();
@@ -4803,6 +5390,16 @@ async function beginPrepInterview(channel) {
     visaPrepInterviewState.channel = channel;
     visaPrepInterviewState.showModePicker = false;
     renderPrepInterviewModeUI();
+
+    const prepPanel = document.getElementById('visaPrepPanel');
+    if (prepPanel && !document.fullscreenElement) {
+        try {
+            await prepPanel.requestFullscreen();
+        } catch (err) {
+            console.warn('Could not enable fullscreen:', err);
+        }
+    }
+
     await startVoiceInterviewSession('prep', { channel });
 }
 
@@ -4821,6 +5418,14 @@ async function startVoiceInterviewSession(mode, options = {}) {
         initializeVisaInterviewUI(mode);
         return;
     }
+    if (useVoiceInput) {
+        const micPermission = await refreshVisaInterviewMicPermission(mode);
+        if (micPermission === 'denied') {
+            showMessage('Microphone is blocked in your browser. Enable mic access and try again.', 'error');
+            initializeVisaInterviewUI(mode);
+            return;
+        }
+    }
 
     const sessionType = mode === 'prep' ? 'prep' : 'mock';
     const quotaAllowed = await consumeInterviewSession(sessionType);
@@ -4830,7 +5435,7 @@ async function startVoiceInterviewSession(mode, options = {}) {
     }
 
     if (mode === 'prep') {
-        stopVoicePrepInterview(true);
+        stopVoicePrepInterview(true, false);
         state.channel = options.channel || 'voice';
         state.showModePicker = false;
     } else {
@@ -4901,7 +5506,7 @@ function stopVoiceMockInterview(silent = false, shouldExitFullscreen = true) {
     }
 }
 
-function stopVoicePrepInterview(silent = false) {
+function stopVoicePrepInterview(silent = false, shouldExitFullscreen = true) {
     clearVisaInterviewPendingBubble('prep');
     stopVisaInterviewRecognition('prep');
     visaPrepInterviewState.active = false;
@@ -4910,6 +5515,9 @@ function stopVoicePrepInterview(silent = false) {
     visaPrepInterviewState.showModePicker = false;
     if (window.speechSynthesis) {
         window.speechSynthesis.cancel();
+    }
+    if (shouldExitFullscreen && document.fullscreenElement) {
+        document.exitFullscreen().catch(err => console.warn(err));
     }
     setVisaInterviewStatus('prep', 'Stopped');
     updateVisaInterviewControls('prep');
