@@ -5636,6 +5636,8 @@ function switchDashboardTab(tabName) {
         loadDashboardStats();
     } else if (tabName === 'profile') {
         loadProfile();
+    } else if (tabName === 'settings') {
+        loadProfile();
     } else if (tabName === 'referral') {
         loadReferralSummary();
         renderReferralPromotions();

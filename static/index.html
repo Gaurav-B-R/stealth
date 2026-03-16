@@ -309,6 +309,15 @@
                                     <circle cx="12" cy="7" r="4" fill="#7DD3FC"></circle>
                                 </svg></span> Profile
                         </a>
+                        <a href="#"
+                            onclick="event.preventDefault(); showDashboard(); switchDashboardTab('settings'); toggleUserMenu(); return false;">
+                            <span class="menu-icon"><svg viewBox="0 0 24 24" fill="#EDE9FE" stroke="#6D28D9"
+                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="12" cy="12" r="3.5" fill="#C4B5FD"></circle>
+                                    <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1 0 1.4l-1.1 1.1a1 1 0 0 1-1.4 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a1 1 0 0 1-1 1h-1.6a1 1 0 0 1-1-1v-.2a1 1 0 0 0-.6-.9 1 1 0 0 0-1.1.2l-.1.1a1 1 0 0 1-1.4 0L4.3 18a1 1 0 0 1 0-1.4l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H3.5a1 1 0 0 1-1-1v-1.6a1 1 0 0 1 1-1h.2a1 1 0 0 0 .9-.6 1 1 0 0 0-.2-1.1l-.1-.1a1 1 0 0 1 0-1.4L5.4 4a1 1 0 0 1 1.4 0l.1.1a1 1 0 0 0 1.1.2 1 1 0 0 0 .6-.9V3.2a1 1 0 0 1 1-1h1.6a1 1 0 0 1 1 1v.2a1 1 0 0 0 .6.9 1 1 0 0 0 1.1-.2l.1-.1a1 1 0 0 1 1.4 0l1.1 1.1a1 1 0 0 1 0 1.4l-.1.1a1 1 0 0 0-.2 1.1 1 1 0 0 0 .9.6h.2a1 1 0 0 1 1 1v1.6a1 1 0 0 1-1 1h-.2a1 1 0 0 0-.9.6z"
+                                        fill="none"></path>
+                                </svg></span> Settings
+                        </a>
                         <a href="/subscription"
                             onclick="event.preventDefault(); showSubscription(); toggleUserMenu(); return false;">
                             <span class="menu-icon"><svg viewBox="0 0 24 24" fill="#FEF08A" stroke="#CA8A04"
@@ -2400,39 +2409,6 @@
                                         <button type="submit" class="btn btn-primary" style="width: 100%;">Update
                                             Profile</button>
                                     </form>
-                                    <div
-                                        style="margin-top: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-secondary);">
-                                        <div
-                                            style="font-weight: 700; color: var(--text-primary); margin-bottom: 0.2rem;">
-                                            Security</div>
-                                        <div
-                                            style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.85rem;">
-                                            Change your password securely.</div>
-                                        <form id="profileChangePasswordForm">
-                                            <div class="form-group">
-                                                <label for="profileCurrentPassword">Current Password</label>
-                                                <input type="password" id="profileCurrentPassword" required
-                                                    autocomplete="current-password">
-                                            </div>
-                                            <div class="form-group">
-                                                <label for="profileNewPassword">New Password</label>
-                                                <input type="password" id="profileNewPassword" required minlength="10"
-                                                    autocomplete="new-password">
-                                            </div>
-                                            <div class="form-group">
-                                                <label for="profileConfirmPassword">Confirm New Password</label>
-                                                <input type="password" id="profileConfirmPassword" required
-                                                    minlength="10" autocomplete="new-password">
-                                                <small id="profilePasswordPolicyHint"
-                                                    style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.85rem;">
-                                                    Use 10+ characters with uppercase, lowercase, number, and special
-                                                    character.
-                                                </small>
-                                            </div>
-                                            <button type="submit" id="profileChangePasswordBtn"
-                                                class="btn btn-secondary" style="width: 100%;">Change Password</button>
-                                        </form>
-                                    </div>
                                     <div id="profileEmailNotificationsCard"
                                         style="display: none; margin-top: 1rem; padding: 1rem; border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 12px; background: rgba(245, 158, 11, 0.08);">
                                         <div style="font-weight: 700; color: #fde68a; margin-bottom: 0.2rem;">Email
@@ -2445,14 +2421,6 @@
                                             class="btn btn-secondary" style="width: 100%;"
                                             onclick="handleEnableEmailNotifications()">Enable Email
                                             Notifications</button>
-                                    </div>
-                                    <div class="danger-zone"
-                                        style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
-                                        <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">
-                                            Danger Zone</h4>
-                                        <button type="button" onclick="handleDeleteAccount()" class="btn"
-                                            style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete
-                                            Account</button>
                                     </div>
                                 </div>
                             </div>
@@ -2493,6 +2461,64 @@
                                         <button type="submit" class="btn btn-primary" style="width: 100%;">Save
                                             Preferences</button>
                                     </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Settings Tab -->
+                    <div id="dashboardTab-settings" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>Settings</h2>
+                            <p class="tab-subtitle">Manage security and account actions</p>
+                        </div>
+                        <div style="max-width: 800px; margin: 0 auto;">
+                            <div class="dashboard-widget">
+                                <div class="widget-header">
+                                    <h3>⚙️ Account Settings</h3>
+                                </div>
+                                <div class="widget-content">
+                                    <div
+                                        style="padding: 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-secondary);">
+                                        <div
+                                            style="font-weight: 700; color: var(--text-primary); margin-bottom: 0.2rem;">
+                                            Security</div>
+                                        <div
+                                            style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.85rem;">
+                                            Change your password securely.</div>
+                                        <form id="profileChangePasswordForm">
+                                            <div class="form-group">
+                                                <label for="profileCurrentPassword">Current Password</label>
+                                                <input type="password" id="profileCurrentPassword" required
+                                                    autocomplete="current-password">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="profileNewPassword">New Password</label>
+                                                <input type="password" id="profileNewPassword" required minlength="10"
+                                                    autocomplete="new-password">
+                                            </div>
+                                            <div class="form-group">
+                                                <label for="profileConfirmPassword">Confirm New Password</label>
+                                                <input type="password" id="profileConfirmPassword" required
+                                                    minlength="10" autocomplete="new-password">
+                                                <small id="profilePasswordPolicyHint"
+                                                    style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.85rem;">
+                                                    Use 10+ characters with uppercase, lowercase, number, and special
+                                                    character.
+                                                </small>
+                                            </div>
+                                            <button type="submit" id="profileChangePasswordBtn"
+                                                class="btn btn-secondary" style="width: 100%;">Change Password</button>
+                                        </form>
+                                    </div>
+                                    <div class="danger-zone"
+                                        style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                                        <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">
+                                            Danger Zone</h4>
+                                        <button type="button" onclick="handleDeleteAccount()" class="btn"
+                                            style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete
+                                            Account</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
