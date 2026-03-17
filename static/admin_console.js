@@ -53,15 +53,40 @@ const refs = {
     prevBtn: document.getElementById('adminUsersPrevBtn'),
     nextBtn: document.getElementById('adminUsersNextBtn'),
     pageInfo: document.getElementById('adminUsersPageInfo'),
+    createdHeader: document.getElementById('adminCreatedHeader'),
+    lastLoginHeader: document.getElementById('adminLastLoginHeader'),
     metricTotal: document.getElementById('adminMetricTotal'),
     metricPro: document.getElementById('adminMetricPro'),
     metricJourney: document.getElementById('adminMetricJourney')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
+    setDateColumnTimeZoneLabels();
     bindEvents();
     void bootstrap();
 });
+
+function resolveTimeZoneLabel() {
+    const iana = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    let shortName = '';
+    try {
+        const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date());
+        shortName = parts.find((part) => part.type === 'timeZoneName')?.value || '';
+    } catch {
+        // no-op
+    }
+
+    if (iana && shortName) return `${iana} (${shortName})`;
+    if (iana) return iana;
+    if (shortName) return shortName;
+    return 'Local Time';
+}
+
+function setDateColumnTimeZoneLabels() {
+    const zoneLabel = resolveTimeZoneLabel();
+    if (refs.createdHeader) refs.createdHeader.textContent = `Created (${zoneLabel})`;
+    if (refs.lastLoginHeader) refs.lastLoginHeader.textContent = `Last Login (${zoneLabel})`;
+}
 
 function bindEvents() {
     refs.loginForm?.addEventListener('submit', handleLoginSubmit);
@@ -583,7 +608,7 @@ function renderUsersTable() {
                 <td>
                     <div class="row-actions">
                         <button class="${statusActionClass}" data-action="toggle-status" data-user-id="${user.id}" data-next-active="${isActive ? 'false' : 'true'}" ${disableAttr}${titleAttr}>${statusActionLabel}</button>
-                        <button class="table-btn danger" data-action="delete-user" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email || 'this user')}" ${disableAttr}${titleAttr}>Delete</button>
+                        <button class="table-btn danger" data-action="delete-user" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email || 'this user')}" data-user-name="${escapeHtml(userName)}" ${disableAttr}${titleAttr}>Delete</button>
                     </div>
                 </td>
             </tr>
@@ -751,7 +776,8 @@ async function handleTableActionClick(event) {
 
     if (action === 'delete-user') {
         const userEmail = String(button.dataset.userEmail || 'this user');
-        await deleteUser(userId, userEmail);
+        const userName = String(button.dataset.userName || '').trim();
+        await deleteUser(userId, userEmail, userName);
     }
 }
 
@@ -783,8 +809,21 @@ async function updateUserStatus(userId, nextIsActive) {
     }
 }
 
-async function deleteUser(userId, userEmail) {
+async function deleteUser(userId, userEmail, userName) {
     if (!await ensureAdminProtection({ silent: false })) return;
+
+    const expectedName = (userName || '').trim();
+    if (expectedName) {
+        const typedName = window.prompt(
+            `Type this user's name to confirm deletion:\n${expectedName}`
+        );
+        if (typedName === null) return;
+        if (typedName.trim().toLowerCase() !== expectedName.toLowerCase()) {
+            showFlash('Name mismatch. User deletion canceled.', 'error');
+            return;
+        }
+    }
+
     const confirmed = window.confirm(`Delete ${userEmail} permanently? This cannot be undone.`);
     if (!confirmed) return;
 
