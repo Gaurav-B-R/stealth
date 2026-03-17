@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.services.daily_ai_notifications import (
@@ -132,6 +132,7 @@ app.include_router(pricing.router)
 app.include_router(subscription.router)
 app.include_router(news.router)
 app.include_router(notifications.router)
+app.include_router(admin.router)
 
 
 @app.on_event("startup")

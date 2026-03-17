@@ -57,6 +57,23 @@ let rilonoReelInitialized = false;
 const DOCUMENT_UPLOAD_ENCRYPTING_MS = 1200;
 const DOCUMENT_UPLOAD_UPLOADING_MS = 700;
 const DOCUMENT_UPLOAD_MIN_SCAN_MS = 8000;
+const ADMIN_USERS_PAGE_SIZE = 20;
+const ADMIN_USERS_DEFAULT_FILTERS = Object.freeze({
+    search: '',
+    status: 'all',
+    role: 'all'
+});
+
+const adminUsersState = {
+    loading: false,
+    page: 1,
+    pageSize: ADMIN_USERS_PAGE_SIZE,
+    total: 0,
+    search: ADMIN_USERS_DEFAULT_FILTERS.search,
+    status: ADMIN_USERS_DEFAULT_FILTERS.status,
+    role: ADMIN_USERS_DEFAULT_FILTERS.role,
+    rows: []
+};
 
 const PRICING_BASE_USD = {
     free: 0
@@ -790,6 +807,11 @@ function setupEventListeners() {
         documentUploadForm.addEventListener('submit', handleDocumentUpload);
     }
 
+    const adminUsersFilterForm = document.getElementById('adminUsersFilterForm');
+    if (adminUsersFilterForm) {
+        adminUsersFilterForm.addEventListener('submit', handleAdminUsersFilterSubmit);
+    }
+
     // University email validation and autofill
     const registerEmailInput = document.getElementById('registerEmail');
     if (registerEmailInput) {
@@ -1082,6 +1104,27 @@ function renderUserInfo(user) {
     userInfoEl.append(avatar, usernameSpan);
 }
 
+function hasAdminConsoleAccess() {
+    return Boolean(currentUser && (currentUser.is_admin || currentUser.is_developer));
+}
+
+function syncAdminConsoleVisibility() {
+    const canManageUsers = hasAdminConsoleAccess();
+    const menuItem = document.getElementById('adminConsoleMenuItem');
+    const navItem = document.getElementById('dashboardAdminNavItem');
+
+    if (menuItem) {
+        menuItem.style.display = canManageUsers ? 'flex' : 'none';
+    }
+    if (navItem) {
+        navItem.style.display = canManageUsers ? 'flex' : 'none';
+    }
+
+    if (!canManageUsers && document.getElementById('dashboardTab-admin')?.classList.contains('active')) {
+        switchDashboardTab('overview');
+    }
+}
+
 function updateUIForAuth() {
     if (currentUser) {
         document.getElementById('loginLink').style.display = 'none';
@@ -1100,6 +1143,7 @@ function updateUIForAuth() {
         if (ctaRegisterBtn) ctaRegisterBtn.style.display = 'none';
 
         renderUserInfo(currentUser);
+        syncAdminConsoleVisibility();
         // Only load profile data if we're on the dashboard section
         const currentSection = sessionStorage.getItem('currentSection');
         if (currentSection === 'dashboard' || currentSection === 'profile') {
@@ -1127,6 +1171,8 @@ function updateUIForAuth() {
         updateSubscriptionUI();
         clearRilonoAiSessionAttachments(false);
         rilonoAiAttachmentRegistry = new Map();
+        resetAdminUsersState(true);
+        syncAdminConsoleVisibility();
     }
 }
 
@@ -5545,6 +5591,20 @@ function setVisaSubNavVisibility(isVisible) {
     }
 }
 
+function toggleVisaDashboardNav() {
+    const visaTab = document.getElementById('dashboardTab-visa');
+    const subNav = document.getElementById('visaSubNav');
+    const isVisaTabActive = Boolean(visaTab?.classList.contains('active'));
+    const isExpanded = Boolean(subNav && subNav.style.display !== 'none');
+
+    if (isVisaTabActive && isExpanded) {
+        setVisaSubNavVisibility(false);
+        return;
+    }
+
+    switchDashboardTab('visa');
+}
+
 function switchVisaSubTab(subTab) {
     const validSubTabs = ['prep', 'mock', 'experiences'];
     const targetSubTab = validSubTabs.includes(subTab) ? subTab : 'prep';
@@ -5596,7 +5656,309 @@ function openVisaSubTab(subTab) {
     switchDashboardTab('visa');
 }
 
+function resetAdminUsersState(resetFilters = false) {
+    adminUsersState.loading = false;
+    adminUsersState.page = 1;
+    adminUsersState.pageSize = ADMIN_USERS_PAGE_SIZE;
+    adminUsersState.total = 0;
+    adminUsersState.rows = [];
+    if (resetFilters) {
+        adminUsersState.search = ADMIN_USERS_DEFAULT_FILTERS.search;
+        adminUsersState.status = ADMIN_USERS_DEFAULT_FILTERS.status;
+        adminUsersState.role = ADMIN_USERS_DEFAULT_FILTERS.role;
+        const searchInput = document.getElementById('adminUsersSearchInput');
+        const statusInput = document.getElementById('adminUsersStatusFilter');
+        const roleInput = document.getElementById('adminUsersRoleFilter');
+        if (searchInput) searchInput.value = ADMIN_USERS_DEFAULT_FILTERS.search;
+        if (statusInput) statusInput.value = ADMIN_USERS_DEFAULT_FILTERS.status;
+        if (roleInput) roleInput.value = ADMIN_USERS_DEFAULT_FILTERS.role;
+    }
+}
+
+function formatAdminDateTime(value) {
+    if (!value) return '-';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString();
+}
+
+function getAdminRoleLabel(user) {
+    if (user?.is_developer) return 'Developer';
+    if (user?.is_admin) return 'Admin';
+    return 'Student';
+}
+
+function renderAdminUsersSummary() {
+    const summaryEl = document.getElementById('adminUsersSummary');
+    if (!summaryEl) return;
+    if (adminUsersState.total <= 0) {
+        summaryEl.textContent = 'No users found for the selected filters.';
+        return;
+    }
+    const start = ((adminUsersState.page - 1) * adminUsersState.pageSize) + 1;
+    const end = Math.min(adminUsersState.total, start + adminUsersState.rows.length - 1);
+    summaryEl.textContent = `Showing ${start}-${end} of ${adminUsersState.total} users`;
+}
+
+function renderAdminUsersPagination() {
+    const prevBtn = document.getElementById('adminUsersPrevBtn');
+    const nextBtn = document.getElementById('adminUsersNextBtn');
+    const pageInfo = document.getElementById('adminUsersPageInfo');
+    const searchBtn = document.getElementById('adminUsersSearchBtn');
+    const totalPages = Math.max(1, Math.ceil(adminUsersState.total / adminUsersState.pageSize));
+
+    if (pageInfo) {
+        pageInfo.textContent = `Page ${adminUsersState.page} of ${totalPages}`;
+    }
+    if (prevBtn) {
+        prevBtn.disabled = adminUsersState.loading || adminUsersState.page <= 1;
+    }
+    if (nextBtn) {
+        nextBtn.disabled = adminUsersState.loading || adminUsersState.page >= totalPages;
+    }
+    if (searchBtn) {
+        searchBtn.disabled = adminUsersState.loading;
+    }
+}
+
+function renderAdminUsersMessageRow(message) {
+    const bodyEl = document.getElementById('adminUsersTableBody');
+    if (!bodyEl) return;
+    bodyEl.innerHTML = `
+        <tr>
+            <td colspan="7" class="admin-users-empty-cell">${escapeHtml(message)}</td>
+        </tr>
+    `;
+}
+
+function renderAdminUsersTable() {
+    const bodyEl = document.getElementById('adminUsersTableBody');
+    if (!bodyEl) return;
+
+    const users = adminUsersState.rows || [];
+    if (!users.length) {
+        renderAdminUsersMessageRow('No users found for these filters.');
+        return;
+    }
+
+    const rows = users.map((user) => {
+        const roleLabel = getAdminRoleLabel(user);
+        const statusLabel = user.is_active ? 'Active' : 'Inactive';
+        const verifiedLabel = user.email_verified ? 'Verified' : 'Pending';
+        const displayName = user.full_name || user.username || user.email || 'Unknown user';
+        const userMeta = [user.email, user.university].filter(Boolean).join(' • ');
+        const canManagePrivileged = Boolean(currentUser?.is_developer);
+        const isOwnAccount = Number(currentUser?.id) === Number(user.id);
+        const isPrivilegedTarget = Boolean(user.is_admin || user.is_developer);
+        const canManageUser = !isOwnAccount && (!isPrivilegedTarget || canManagePrivileged);
+        const disableAttr = canManageUser ? '' : 'disabled';
+        const manageHint = isOwnAccount
+            ? 'You cannot modify your own account.'
+            : (isPrivilegedTarget && !canManagePrivileged ? 'Only developers can manage admin/developer accounts.' : '');
+        const manageTitle = manageHint ? ` title="${escapeHtml(manageHint)}"` : '';
+        const toggleLabel = user.is_active ? 'Deactivate' : 'Activate';
+        const toggleClass = user.is_active ? 'btn-danger' : 'btn-secondary';
+        const nextActiveLiteral = user.is_active ? 'false' : 'true';
+        const deleteEmailParam = JSON.stringify(user.email || 'this user');
+
+        return `
+            <tr>
+                <td>
+                    <div class="admin-user-primary">${escapeHtml(displayName)}</div>
+                    <div class="admin-user-meta">${escapeHtml(userMeta || '-')}</div>
+                </td>
+                <td><span class="admin-role-chip">${escapeHtml(roleLabel)}</span></td>
+                <td><span class="admin-status-chip ${user.is_active ? 'is-active' : 'is-inactive'}">${statusLabel}</span></td>
+                <td>${verifiedLabel}</td>
+                <td>${escapeHtml(formatAdminDateTime(user.created_at))}</td>
+                <td>${escapeHtml(formatAdminDateTime(user.last_login_at))}</td>
+                <td>
+                    <div class="admin-users-actions">
+                        <button type="button" class="btn ${toggleClass} admin-action-btn"
+                            onclick="updateAdminUserStatus(${user.id}, ${nextActiveLiteral})" ${disableAttr}${manageTitle}>
+                            ${toggleLabel}
+                        </button>
+                        <button type="button" class="btn btn-danger admin-action-btn"
+                            onclick='deleteAdminUser(${user.id}, ${deleteEmailParam})' ${disableAttr}${manageTitle}>
+                            Delete
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    });
+
+    bodyEl.innerHTML = rows.join('');
+}
+
+function setAdminActionButtonsDisabled(disabled) {
+    document.querySelectorAll('.admin-action-btn').forEach((btn) => {
+        btn.disabled = disabled;
+    });
+}
+
+async function loadAdminUsers(resetPage = false) {
+    if (!authToken || !hasAdminConsoleAccess()) {
+        renderAdminUsersMessageRow('Admin access required.');
+        return;
+    }
+
+    const searchInput = document.getElementById('adminUsersSearchInput');
+    const statusInput = document.getElementById('adminUsersStatusFilter');
+    const roleInput = document.getElementById('adminUsersRoleFilter');
+
+    if (resetPage) {
+        adminUsersState.page = 1;
+    }
+    adminUsersState.search = (searchInput?.value || '').trim();
+    adminUsersState.status = (statusInput?.value || ADMIN_USERS_DEFAULT_FILTERS.status).trim().toLowerCase();
+    adminUsersState.role = (roleInput?.value || ADMIN_USERS_DEFAULT_FILTERS.role).trim().toLowerCase();
+    adminUsersState.loading = true;
+    renderAdminUsersMessageRow('Loading users...');
+    renderAdminUsersPagination();
+
+    try {
+        const params = new URLSearchParams();
+        params.set('page', String(adminUsersState.page));
+        params.set('page_size', String(adminUsersState.pageSize));
+        params.set('status', adminUsersState.status);
+        params.set('role', adminUsersState.role);
+        if (adminUsersState.search) {
+            params.set('search', adminUsersState.search);
+        }
+
+        const response = await fetch(`${API_BASE}/api/admin/users?${params.toString()}`, {
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            const errorMessage = payload.detail || 'Failed to load users';
+            adminUsersState.total = 0;
+            adminUsersState.rows = [];
+            renderAdminUsersMessageRow(errorMessage);
+            renderAdminUsersSummary();
+            if (response.status === 401 || response.status === 403) {
+                showMessage(errorMessage, 'error');
+            }
+            return;
+        }
+
+        adminUsersState.total = Number(payload.total) || 0;
+        adminUsersState.rows = Array.isArray(payload.users) ? payload.users : [];
+
+        const totalPages = Math.max(1, Math.ceil(adminUsersState.total / adminUsersState.pageSize));
+        if (adminUsersState.page > totalPages) {
+            adminUsersState.page = totalPages;
+            await loadAdminUsers(false);
+            return;
+        }
+
+        renderAdminUsersTable();
+        renderAdminUsersSummary();
+    } catch (error) {
+        console.error('Error loading admin users:', error);
+        adminUsersState.total = 0;
+        adminUsersState.rows = [];
+        renderAdminUsersMessageRow('Failed to load users. Please try again.');
+        renderAdminUsersSummary();
+    } finally {
+        adminUsersState.loading = false;
+        renderAdminUsersPagination();
+    }
+}
+
+function handleAdminUsersFilterSubmit(event) {
+    event.preventDefault();
+    adminUsersState.page = 1;
+    void loadAdminUsers();
+}
+
+function resetAdminUsersFilters() {
+    resetAdminUsersState(true);
+    void loadAdminUsers(true);
+}
+
+function changeAdminUsersPage(delta) {
+    const totalPages = Math.max(1, Math.ceil(adminUsersState.total / adminUsersState.pageSize));
+    const nextPage = adminUsersState.page + Number(delta || 0);
+    if (nextPage < 1 || nextPage > totalPages || adminUsersState.loading) {
+        return;
+    }
+    adminUsersState.page = nextPage;
+    void loadAdminUsers();
+}
+
+async function updateAdminUserStatus(userId, nextIsActive) {
+    if (!authToken || !hasAdminConsoleAccess()) return;
+    setAdminActionButtonsDisabled(true);
+
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/users/${userId}/status`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authToken}`
+            },
+            body: JSON.stringify({ is_active: Boolean(nextIsActive) })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showMessage(payload.detail || 'Failed to update user status.', 'error');
+            return;
+        }
+
+        showMessage(`User ${nextIsActive ? 'activated' : 'deactivated'} successfully.`, 'success');
+        await loadAdminUsers(false);
+    } catch (error) {
+        console.error('Error updating user status:', error);
+        showMessage('Failed to update user status.', 'error');
+    } finally {
+        setAdminActionButtonsDisabled(false);
+    }
+}
+
+async function deleteAdminUser(userId, userEmail = 'this user') {
+    if (!authToken || !hasAdminConsoleAccess()) return;
+    if (!confirm(`Delete ${userEmail} permanently? This cannot be undone.`)) {
+        return;
+    }
+
+    setAdminActionButtonsDisabled(true);
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/users/${userId}`, {
+            method: 'DELETE',
+            headers: {
+                'Authorization': `Bearer ${authToken}`
+            }
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showMessage(payload.detail || 'Failed to delete user account.', 'error');
+            return;
+        }
+
+        showMessage(`Deleted ${userEmail} successfully.`, 'success');
+        if (adminUsersState.rows.length === 1 && adminUsersState.page > 1) {
+            adminUsersState.page -= 1;
+        }
+        await loadAdminUsers(false);
+    } catch (error) {
+        console.error('Error deleting user account:', error);
+        showMessage('Failed to delete user account.', 'error');
+    } finally {
+        setAdminActionButtonsDisabled(false);
+    }
+}
+
 function switchDashboardTab(tabName) {
+    if (tabName === 'admin' && !hasAdminConsoleAccess()) {
+        showMessage('Admin access required.', 'error');
+        tabName = 'overview';
+    }
+
     if (tabName !== 'visa' && (visaMockInterviewState.active || visaMockInterviewState.listening || visaMockInterviewState.pending)) {
         stopVoiceMockInterview(true);
     }
@@ -5650,6 +6012,8 @@ function switchDashboardTab(tabName) {
         initializeRilonoAiChat();
     } else if (tabName === 'news') {
         loadF1VisaNews();
+    } else if (tabName === 'admin') {
+        loadAdminUsers();
     }
 
     // Scroll to top of dashboard content

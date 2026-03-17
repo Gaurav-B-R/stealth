@@ -33,6 +33,8 @@ class UserResponse(UserBase):
     id: int
     is_active: bool
     email_verified: bool
+    is_admin: Optional[bool] = False
+    is_developer: Optional[bool] = False
     referral_code: Optional[str] = None
     accepted_terms_privacy_at: Optional[datetime] = None
     email_notifications_enabled: bool = True
@@ -52,6 +54,37 @@ class PublicUserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AdminUserSummary(BaseModel):
+    id: int
+    email: EmailStr
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    university: Optional[str] = None
+    is_active: bool
+    email_verified: bool
+    is_admin: Optional[bool] = False
+    is_developer: Optional[bool] = False
+    referral_code: Optional[str] = None
+    referred_by_user_id: Optional[int] = None
+    created_at: datetime
+    first_login_at: Optional[datetime] = None
+    last_login_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AdminUserListResponse(BaseModel):
+    users: List[AdminUserSummary]
+    total: int
+    page: int
+    page_size: int
+
+
+class AdminUserStatusUpdateRequest(BaseModel):
+    is_active: bool
 
 
 class SubscriptionResponse(BaseModel):
