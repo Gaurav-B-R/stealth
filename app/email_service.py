@@ -718,6 +718,19 @@ def _format_amount_for_subscription_email(amount_paise: Optional[int], currency:
     return f"{symbol}{amount:,.2f}"
 
 
+def _subscription_plan_label(plan: str, pricing_model: Optional[str] = None) -> str:
+    normalized_plan = str(plan or "").strip().lower()
+    if normalized_plan != "pro":
+        return (plan or "free").strip().title() or "Free"
+
+    normalized_model = str(pricing_model or "").strip().lower()
+    if normalized_model in {"pro_six_month", "pro_6_month", "pro_6month", "six_month", "6_month", "6month"}:
+        return "Journey Pass"
+    if normalized_model in {"pro_monthly", "pro", "monthly", ""}:
+        return "Pro Monthly"
+    return "Pro"
+
+
 def send_subscription_change_email(
     email: str,
     full_name: Optional[str],
@@ -730,6 +743,7 @@ def send_subscription_change_email(
     payment_amount_paise: Optional[int] = None,
     payment_currency: str = "INR",
     payment_status: Optional[str] = None,
+    pricing_model: Optional[str] = None,
     base_url: str = DEFAULT_PUBLIC_BASE_URL,
     unsubscribe_url: Optional[str] = None,
 ) -> bool:
@@ -792,8 +806,36 @@ def send_subscription_change_email(
         "accent_fg": "#5b21b6",
     })
 
+    plan_label = _subscription_plan_label(plan=plan, pricing_model=pricing_model)
+    active_plan_label = plan_label if plan_label.lower() != "free" else "subscription"
+    if event_key == "pro_activated":
+        activation_subject = (
+            "Rilono Journey Pass Activated" if plan_label == "Journey Pass" else "Rilono Pro Activated"
+        )
+        event_content = {
+            **event_content,
+            "subject": activation_subject,
+            "title": f"Your {plan_label} is active",
+            "summary": f"Payment is verified and your {active_plan_label} features are now unlocked.",
+        }
+    elif event_key == "subscription_renewed":
+        event_content = {
+            **event_content,
+            "summary": f"We received your latest recurring payment and your {active_plan_label} access continues.",
+        }
+    elif event_key == "auto_renew_cancelled":
+        event_content = {
+            **event_content,
+            "summary": f"Your {active_plan_label} remains active until the current access period ends.",
+        }
+    elif event_key == "downgraded_to_free":
+        event_content = {
+            **event_content,
+            "summary": "Your paid subscription access has ended and your account is now on Free plan.",
+        }
+
     safe_name = escape((full_name or "").strip() or "there")
-    safe_plan = escape((plan or "free").strip().title())
+    safe_plan = escape(plan_label)
     safe_status = escape((status or "active").strip().title())
     safe_payment_status = escape((payment_status or "N/A").strip().title())
     safe_payment_amount = escape(_format_amount_for_subscription_email(payment_amount_paise, payment_currency))
@@ -896,7 +938,7 @@ def send_subscription_change_email(
         f"{event_content['title']} - Rilono\n\n"
         f"Hi {full_name or 'there'},\n\n"
         f"{event_content['summary']}\n\n"
-        f"Plan: {(plan or 'free').title()}\n"
+        f"Plan: {plan_label}\n"
         f"Status: {(status or 'active').title()}\n"
         f"Auto-Renew: {auto_renew_text}\n"
         f"Access Until: {_format_datetime_for_subscription_email(access_until)}\n"

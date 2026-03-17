@@ -1,6 +1,8 @@
 const API_BASE = '';
 const COOKIE_AUTH_SENTINEL = '__cookie_session__';
 const ADMIN_PAGE_SIZE = 20;
+const ADMIN_TIME_ZONE = 'UTC';
+const ADMIN_TIME_ZONE_LABEL = 'UTC';
 
 const state = {
     authToken: null,
@@ -66,26 +68,9 @@ document.addEventListener('DOMContentLoaded', () => {
     void bootstrap();
 });
 
-function resolveTimeZoneLabel() {
-    const iana = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    let shortName = '';
-    try {
-        const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date());
-        shortName = parts.find((part) => part.type === 'timeZoneName')?.value || '';
-    } catch {
-        // no-op
-    }
-
-    if (iana && shortName) return `${iana} (${shortName})`;
-    if (iana) return iana;
-    if (shortName) return shortName;
-    return 'Local Time';
-}
-
 function setDateColumnTimeZoneLabels() {
-    const zoneLabel = resolveTimeZoneLabel();
-    if (refs.createdHeader) refs.createdHeader.textContent = `Created (${zoneLabel})`;
-    if (refs.lastLoginHeader) refs.lastLoginHeader.textContent = `Last Login (${zoneLabel})`;
+    if (refs.createdHeader) refs.createdHeader.textContent = `Created (${ADMIN_TIME_ZONE_LABEL})`;
+    if (refs.lastLoginHeader) refs.lastLoginHeader.textContent = `Last Login (${ADMIN_TIME_ZONE_LABEL})`;
 }
 
 function bindEvents() {
@@ -556,9 +541,17 @@ function canManageTargetUser(user) {
 
 function formatDateTime(value) {
     if (!value) return '-';
-    const date = new Date(value);
+    const raw = String(value).trim();
+    if (!raw) return '-';
+
+    // Backend returns some timestamps without timezone (e.g. `timestamp` columns).
+    // Treat those as UTC so display stays consistent with DB semantics.
+    const hasTimeZone = /([zZ]|[+-]\d{2}:\d{2})$/.test(raw);
+    const normalized = hasTimeZone ? raw : `${raw}Z`;
+
+    const date = new Date(normalized);
     if (Number.isNaN(date.getTime())) return '-';
-    return date.toLocaleString();
+    return date.toLocaleString(undefined, { timeZone: ADMIN_TIME_ZONE });
 }
 
 function renderUsersTableMessage(message) {

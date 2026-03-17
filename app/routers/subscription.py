@@ -954,6 +954,7 @@ def _subscription_change_snapshot(subscription: models.Subscription) -> dict[str
 
 def _send_subscription_change_email_safe(
     *,
+    db: Session,
     user: models.User,
     event_type: str,
     subscription: models.Subscription,
@@ -962,12 +963,18 @@ def _send_subscription_change_email_safe(
     payment_status: str | None = None,
     payment_amount_paise: int | None = None,
     payment_currency: str | None = None,
+    pricing_model: str | None = None,
 ) -> None:
     if not user.email:
         return
     if user.email_notifications_enabled is False:
         return
     try:
+        resolved_pricing_model = (pricing_model or "").strip() or None
+        if not resolved_pricing_model and subscription.plan == PLAN_PRO:
+            latest_payment = _find_latest_payment_for_user(db, user.id)
+            if latest_payment:
+                resolved_pricing_model = _pricing_model_from_payment_row(latest_payment)
         unsubscribe_url = build_email_notifications_unsubscribe_url(email=user.email)
         send_subscription_change_email(
             email=user.email,
@@ -981,6 +988,7 @@ def _send_subscription_change_email_safe(
             payment_amount_paise=payment_amount_paise,
             payment_currency=(payment_currency or "INR"),
             payment_status=payment_status,
+            pricing_model=resolved_pricing_model,
             unsubscribe_url=unsubscribe_url,
         )
     except Exception:
