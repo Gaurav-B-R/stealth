@@ -1110,12 +1110,8 @@ function hasAdminConsoleAccess() {
 
 function syncAdminConsoleVisibility() {
     const canManageUsers = hasAdminConsoleAccess();
-    const menuItem = document.getElementById('adminConsoleMenuItem');
     const navItem = document.getElementById('dashboardAdminNavItem');
 
-    if (menuItem) {
-        menuItem.style.display = canManageUsers ? 'flex' : 'none';
-    }
     if (navItem) {
         navItem.style.display = canManageUsers ? 'flex' : 'none';
     }

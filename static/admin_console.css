@@ -198,6 +198,10 @@ body {
     margin-bottom: 0.9rem;
 }
 
+.protection-card[hidden] {
+    display: none !important;
+}
+
 .protection-card strong {
     font-size: 0.98rem;
     color: #7c2d12;

@@ -1,9 +1,10 @@
 import os
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from jose import JWTError, jwt
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import bindparam, desc, func, inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -16,10 +17,11 @@ from app.auth import (
     get_current_admin_user,
 )
 from app.database import get_db
-from app.utils.rate_limiter import check_ip_rate_limit
+from app.utils.rate_limiter import check_ip_rate_limit, extract_client_ip, is_request_ip_whitelisted
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+logger = logging.getLogger(__name__)
 
 VALID_USER_STATUS_FILTERS = {"all", "active", "inactive"}
 VALID_USER_ROLE_FILTERS = {"all", "student", "staff", "admin", "developer"}
@@ -62,13 +64,18 @@ def _assert_manageable_target(target_user: models.User, acting_user: models.User
         raise HTTPException(status_code=403, detail="Only a developer can manage admin accounts.")
 
 
-def _request_client_ip(request: Request) -> str:
-    forwarded_for = request.headers.get("x-forwarded-for", "")
-    if forwarded_for:
-        first_hop = forwarded_for.split(",")[0].strip()
-        if first_hop:
-            return first_hop
-    return request.client.host if request.client else "unknown"
+def _is_development_env() -> bool:
+    return os.getenv("ENVIRONMENT", "production").strip().lower() == "development"
+
+
+def _is_admin_turnstile_required(request: Request) -> bool:
+    if not is_turnstile_enabled():
+        return False
+    if _is_development_env():
+        return False
+    if is_request_ip_whitelisted(request):
+        return False
+    return True
 
 
 def _enforce_rate_limit_or_429(
@@ -134,7 +141,7 @@ def require_admin_turnstile_proof(
     """
     Enforce a successful Cloudflare Turnstile challenge before admin API access.
     """
-    if not is_turnstile_enabled():
+    if not _is_admin_turnstile_required(request):
         return
 
     signed_token = request.cookies.get(ADMIN_TURNSTILE_COOKIE_NAME)
@@ -179,11 +186,11 @@ def verify_admin_turnstile(
         extra_key=f"user:{current_user.id}",
     )
 
-    if is_turnstile_enabled():
+    if _is_admin_turnstile_required(request):
         token = (payload.token or "").strip()
         if not token:
             raise HTTPException(status_code=400, detail="Turnstile token is required.")
-        if not verify_turnstile_token(token, _request_client_ip(request)):
+        if not verify_turnstile_token(token, extract_client_ip(request)):
             raise HTTPException(
                 status_code=400,
                 detail="Cloudflare verification failed. Please try again.",
@@ -260,6 +267,95 @@ def _build_plan_metrics_for_filtered_users(db: Session, filtered_user_ids_subque
         "pro_plan_users": int(pro_plan_users),
         "journey_plan_users": int(journey_plan_users),
     }
+
+
+def _get_table_columns(inspector, table_name: str) -> dict[str, dict]:
+    try:
+        return {str(col["name"]): col for col in inspector.get_columns(table_name)}
+    except Exception:
+        return {}
+
+
+def _cleanup_legacy_marketplace_rows(db: Session, user_id: int) -> None:
+    """
+    Best-effort cleanup for legacy marketplace tables that may still exist in some DBs.
+    These tables are not represented in current ORM models but can block user deletion
+    through FK constraints (e.g. test buyer/seller accounts).
+    """
+    bind = db.get_bind()
+    if bind is None:
+        return
+
+    inspector = inspect(bind)
+    table_names = set(inspector.get_table_names())
+    if not {"items", "messages", "item_images"} & table_names:
+        return
+
+    item_columns = _get_table_columns(inspector, "items") if "items" in table_names else {}
+    message_columns = _get_table_columns(inspector, "messages") if "messages" in table_names else {}
+    item_image_columns = _get_table_columns(inspector, "item_images") if "item_images" in table_names else {}
+
+    # If marketplace items are owned by this user, delete dependent rows first.
+    owner_columns = [
+        col
+        for col in ("seller_id", "user_id", "owner_id", "created_by_id", "creator_id")
+        if col in item_columns
+    ]
+    owned_item_ids: list[int] = []
+    if owner_columns:
+        owner_where = " OR ".join(f'"{col}" = :uid' for col in owner_columns)
+        rows = db.execute(
+            text(f'SELECT "id" FROM "items" WHERE {owner_where}'),
+            {"uid": int(user_id)},
+        ).fetchall()
+        owned_item_ids = [int(row[0]) for row in rows if row and row[0] is not None]
+
+    if owned_item_ids:
+        if item_image_columns and "item_id" in item_image_columns:
+            db.execute(
+                text('DELETE FROM "item_images" WHERE "item_id" IN :item_ids').bindparams(
+                    bindparam("item_ids", expanding=True)
+                ),
+                {"item_ids": owned_item_ids},
+            )
+        if message_columns and "item_id" in message_columns:
+            db.execute(
+                text('DELETE FROM "messages" WHERE "item_id" IN :item_ids').bindparams(
+                    bindparam("item_ids", expanding=True)
+                ),
+                {"item_ids": owned_item_ids},
+            )
+
+    # Remove messages directly tied to the user.
+    for column in ("sender_id", "receiver_id", "user_id", "seller_id", "buyer_id"):
+        if column in message_columns:
+            db.execute(
+                text(f'DELETE FROM "messages" WHERE "{column}" = :uid'),
+                {"uid": int(user_id)},
+            )
+
+    # Null out buyer-like references when possible; otherwise delete matching rows.
+    for column in ("buyer_id", "sold_to_user_id", "reserved_by_user_id"):
+        if column not in item_columns:
+            continue
+        if bool(item_columns[column].get("nullable", True)):
+            db.execute(
+                text(f'UPDATE "items" SET "{column}" = NULL WHERE "{column}" = :uid'),
+                {"uid": int(user_id)},
+            )
+        else:
+            db.execute(
+                text(f'DELETE FROM "items" WHERE "{column}" = :uid'),
+                {"uid": int(user_id)},
+            )
+
+    # Finally delete items owned by the user.
+    if owner_columns:
+        owner_where = " OR ".join(f'"{col}" = :uid' for col in owner_columns)
+        db.execute(
+            text(f'DELETE FROM "items" WHERE {owner_where}'),
+            {"uid": int(user_id)},
+        )
 
 
 @router.get("/users", response_model=schemas.AdminUserListResponse)
@@ -416,10 +512,15 @@ def delete_user_admin(
             models.RilonoAiChatUploadEvent.user_id == user.id
         ).delete(synchronize_session=False)
 
+        # Some upgraded DBs still include legacy marketplace tables (items/messages/item_images)
+        # where user-linked rows must be removed first to satisfy FK constraints.
+        _cleanup_legacy_marketplace_rows(db=db, user_id=user.id)
+
         db.delete(user)
         db.commit()
     except Exception:
         db.rollback()
+        logger.exception("Failed to delete user_id=%s from admin console", user_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete user account. Please try again.",
