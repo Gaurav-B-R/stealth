@@ -17,7 +17,7 @@ const state = {
     loading: false,
     filters: {
         search: '',
-        status: 'all',
+        plan: 'all',
         role: 'all'
     },
     turnstileSiteKey: '',
@@ -44,7 +44,7 @@ const refs = {
     actionTurnstileHint: document.getElementById('adminActionTurnstileHint'),
     usersForm: document.getElementById('adminUsersFilterForm'),
     usersSearch: document.getElementById('adminUsersSearchInput'),
-    usersStatus: document.getElementById('adminUsersStatusFilter'),
+    usersPlan: document.getElementById('adminUsersPlanFilter'),
     usersRole: document.getElementById('adminUsersRoleFilter'),
     usersResetBtn: document.getElementById('adminResetBtn'),
     applyBtn: document.getElementById('adminApplyBtn'),
@@ -643,7 +643,7 @@ async function loadUsers({ resetPage = false } = {}) {
     }
 
     state.filters.search = (refs.usersSearch?.value || '').trim();
-    state.filters.status = (refs.usersStatus?.value || 'all').trim().toLowerCase();
+    state.filters.plan = (refs.usersPlan?.value || 'all').trim().toLowerCase();
     state.filters.role = (refs.usersRole?.value || 'all').trim().toLowerCase();
 
     state.loading = true;
@@ -654,7 +654,7 @@ async function loadUsers({ resetPage = false } = {}) {
         const params = new URLSearchParams();
         params.set('page', String(state.page));
         params.set('page_size', String(state.pageSize));
-        params.set('status', state.filters.status);
+        params.set('plan', state.filters.plan);
         params.set('role', state.filters.role);
         if (state.filters.search) {
             params.set('search', state.filters.search);
@@ -720,7 +720,7 @@ function handleUserFiltersSubmit(event) {
 
 function resetFilters() {
     if (refs.usersSearch) refs.usersSearch.value = '';
-    if (refs.usersStatus) refs.usersStatus.value = 'all';
+    if (refs.usersPlan) refs.usersPlan.value = 'all';
     if (refs.usersRole) refs.usersRole.value = 'all';
     state.page = 1;
     void loadUsers({ resetPage: false });

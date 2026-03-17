@@ -23,7 +23,7 @@ from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
 
-VALID_USER_STATUS_FILTERS = {"all", "active", "inactive"}
+VALID_USER_PLAN_FILTERS = {"all", "free", "pro", "journey"}
 VALID_USER_ROLE_FILTERS = {"all", "student", "staff", "admin", "developer"}
 PRICING_MODEL_SIX_MONTH = "pro_six_month"
 ADMIN_TURNSTILE_COOKIE_NAME = (
@@ -364,7 +364,7 @@ def list_users_admin(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: str | None = Query(None, min_length=1, max_length=120),
-    status_filter: str = Query("all", alias="status"),
+    plan_filter: str = Query("all", alias="plan"),
     role_filter: str = Query("all", alias="role"),
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),
@@ -381,11 +381,11 @@ def list_users_admin(
         extra_key=f"user:{current_user.id}",
     )
 
-    normalized_status = (status_filter or "all").strip().lower()
-    if normalized_status not in VALID_USER_STATUS_FILTERS:
+    normalized_plan = (plan_filter or "all").strip().lower()
+    if normalized_plan not in VALID_USER_PLAN_FILTERS:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid status filter. Use one of: {', '.join(sorted(VALID_USER_STATUS_FILTERS))}",
+            detail=f"Invalid plan filter. Use one of: {', '.join(sorted(VALID_USER_PLAN_FILTERS))}",
         )
 
     normalized_role = (role_filter or "all").strip().lower()
@@ -409,11 +409,6 @@ def list_users_admin(
             )
         )
 
-    if normalized_status == "active":
-        query = query.filter(models.User.is_active.is_(True))
-    elif normalized_status == "inactive":
-        query = query.filter(models.User.is_active.is_(False))
-
     if normalized_role == "student":
         query = query.filter(models.User.is_admin.is_(False), models.User.is_developer.is_(False))
     elif normalized_role == "staff":
@@ -422,6 +417,38 @@ def list_users_admin(
         query = query.filter(models.User.is_admin.is_(True))
     elif normalized_role == "developer":
         query = query.filter(models.User.is_developer.is_(True))
+
+    active_pro_user_ids_select = select(models.Subscription.user_id).where(
+        models.Subscription.plan == "pro",
+        models.Subscription.status == "active",
+    )
+    ranked_verified_payments = (
+        db.query(
+            models.SubscriptionPayment.user_id.label("user_id"),
+            models.SubscriptionPayment.pricing_model.label("pricing_model"),
+            func.row_number().over(
+                partition_by=models.SubscriptionPayment.user_id,
+                order_by=models.SubscriptionPayment.id.desc(),
+            ).label("row_num"),
+        )
+        .filter(
+            models.SubscriptionPayment.status == "verified",
+            models.SubscriptionPayment.user_id.in_(active_pro_user_ids_select),
+        )
+        .subquery()
+    )
+    journey_pass_user_ids_select = select(ranked_verified_payments.c.user_id).where(
+        ranked_verified_payments.c.row_num == 1,
+        ranked_verified_payments.c.pricing_model == PRICING_MODEL_SIX_MONTH,
+    )
+
+    if normalized_plan == "free":
+        query = query.filter(~models.User.id.in_(active_pro_user_ids_select))
+    elif normalized_plan == "pro":
+        query = query.filter(models.User.id.in_(active_pro_user_ids_select))
+        query = query.filter(~models.User.id.in_(journey_pass_user_ids_select))
+    elif normalized_plan == "journey":
+        query = query.filter(models.User.id.in_(journey_pass_user_ids_select))
 
     total = query.count()
     filtered_user_ids_subquery = query.with_entities(models.User.id).subquery()
