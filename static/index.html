@@ -318,8 +318,8 @@
                                         fill="none"></path>
                                 </svg></span> Settings
                         </a>
-                        <a id="adminConsoleMenuItem" href="#" style="display: none;"
-                            onclick="event.preventDefault(); showDashboard(); switchDashboardTab('admin'); toggleUserMenu(); return false;">
+                        <a id="adminConsoleMenuItem" href="/admin_console" style="display: none;"
+                            onclick="event.preventDefault(); window.location.href='/admin_console'; toggleUserMenu(); return false;">
                             <span class="menu-icon"><svg viewBox="0 0 24 24" fill="#E0F2FE" stroke="#0284C7"
                                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M12 3l8 4v5c0 5.2-3.4 9.3-8 10-4.6-.7-8-4.8-8-10V7l8-4z"
@@ -1995,14 +1995,6 @@
                                 </svg></span>
                             <span class="nav-label">News</span>
                         </a>
-                        <a id="dashboardAdminNavItem" href="#" class="nav-item" data-tab="admin" style="display: none;"
-                            onclick="switchDashboardTab('admin'); return false;">
-                            <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <path d="M12 3l8 4v5c0 5.2-3.4 9.3-8 10-4.6-.7-8-4.8-8-10V7l8-4z"></path>
-                                    <path d="M9 12l2 2 4-4"></path>
-                                </svg></span>
-                            <span class="nav-label">Admin</span>
-                        </a>
                         <a href="#" class="nav-item" data-tab="copilot"
                             onclick="switchDashboardTab('copilot'); return false;">
                             <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2535,69 +2527,6 @@
                                         <button type="button" onclick="handleDeleteAccount()" class="btn"
                                             style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete
                                             Account</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Admin Tab -->
-                    <div id="dashboardTab-admin" class="dashboard-tab">
-                        <div class="tab-header">
-                            <h2>Admin User Management</h2>
-                            <p class="tab-subtitle">Search, activate/deactivate, and remove user accounts.</p>
-                        </div>
-                        <div class="admin-users-layout">
-                            <div class="dashboard-widget">
-                                <div class="widget-header">
-                                    <h3>👥 User Accounts</h3>
-                                </div>
-                                <div class="widget-content">
-                                    <form id="adminUsersFilterForm" class="admin-users-toolbar">
-                                        <input type="text" id="adminUsersSearchInput" placeholder="Search by email, username, name, or university">
-                                        <select id="adminUsersStatusFilter">
-                                            <option value="all">All Status</option>
-                                            <option value="active">Active</option>
-                                            <option value="inactive">Inactive</option>
-                                        </select>
-                                        <select id="adminUsersRoleFilter">
-                                            <option value="all">All Roles</option>
-                                            <option value="student">Students</option>
-                                            <option value="staff">Staff (Admin/Developer)</option>
-                                            <option value="admin">Admins</option>
-                                            <option value="developer">Developers</option>
-                                        </select>
-                                        <button id="adminUsersSearchBtn" type="submit" class="btn btn-primary">Apply</button>
-                                        <button id="adminUsersResetBtn" type="button" class="btn btn-secondary"
-                                            onclick="resetAdminUsersFilters()">Reset</button>
-                                    </form>
-                                    <div id="adminUsersSummary" class="admin-users-summary">Showing 0 users</div>
-                                    <div class="admin-users-table-wrap">
-                                        <table class="admin-users-table">
-                                            <thead>
-                                                <tr>
-                                                    <th>User</th>
-                                                    <th>Role</th>
-                                                    <th>Status</th>
-                                                    <th>Verified</th>
-                                                    <th>Created</th>
-                                                    <th>Last Login</th>
-                                                    <th>Actions</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody id="adminUsersTableBody">
-                                                <tr>
-                                                    <td colspan="7" class="admin-users-empty-cell">No users loaded yet.</td>
-                                                </tr>
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                    <div class="admin-users-pagination">
-                                        <button id="adminUsersPrevBtn" type="button" class="btn btn-secondary"
-                                            onclick="changeAdminUsersPage(-1)" disabled>Previous</button>
-                                        <span id="adminUsersPageInfo">Page 1</span>
-                                        <button id="adminUsersNextBtn" type="button" class="btn btn-secondary"
-                                            onclick="changeAdminUsersPage(1)" disabled>Next</button>
                                     </div>
                                 </div>
                             </div>

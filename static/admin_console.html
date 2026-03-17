@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rilono Admin Console</title>
+    <meta name="robots" content="noindex,nofollow">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="stylesheet" href="/static/admin_console.css">
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+</head>
+
+<body>
+    <div class="admin-shell">
+        <header class="admin-header">
+            <div class="brand-block">
+                <span class="brand-kicker">Rilono Platform</span>
+                <h1>Admin Console</h1>
+            </div>
+            <div class="header-actions">
+                <span id="adminSessionBadge" class="session-badge" hidden></span>
+                <button id="adminLogoutBtn" type="button" class="ghost-btn" hidden>Logout</button>
+            </div>
+        </header>
+
+        <main class="admin-main">
+            <section id="adminFlash" class="flash" hidden></section>
+
+            <section id="adminAuthPanel" class="panel auth-panel">
+                <h2>Separate Admin Login</h2>
+                <p class="auth-copy">Use your admin or developer account credentials to access account controls.</p>
+                <form id="adminLoginForm" autocomplete="on">
+                    <label for="adminLoginEmail">Email</label>
+                    <input id="adminLoginEmail" type="email" required autocomplete="username">
+
+                    <label for="adminLoginPassword">Password</label>
+                    <input id="adminLoginPassword" type="password" required autocomplete="current-password">
+
+                    <div id="adminTurnstileWrap" class="turnstile-wrap" hidden>
+                        <div id="adminTurnstileWidget"></div>
+                        <p id="adminTurnstileHint">Complete the security check to continue.</p>
+                    </div>
+
+                    <button id="adminLoginBtn" type="submit" class="primary-btn">Sign In to Admin Console</button>
+                </form>
+            </section>
+
+            <section id="adminConsolePanel" class="panel console-panel" hidden>
+                <div class="metrics-grid">
+                    <article class="metric-card">
+                        <span>Total Users</span>
+                        <strong id="adminMetricTotal">0</strong>
+                    </article>
+                    <article class="metric-card">
+                        <span>Pro Plan Users</span>
+                        <strong id="adminMetricPro">0</strong>
+                    </article>
+                    <article class="metric-card">
+                        <span>Journey Plan Users</span>
+                        <strong id="adminMetricJourney">0</strong>
+                    </article>
+                </div>
+
+                <form id="adminUsersFilterForm" class="filters-row">
+                    <input type="text" id="adminUsersSearchInput" placeholder="Search email, username, name, university">
+                    <select id="adminUsersStatusFilter">
+                        <option value="all">All Status</option>
+                        <option value="active">Active</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                    <select id="adminUsersRoleFilter">
+                        <option value="all">All Roles</option>
+                        <option value="student">Students</option>
+                        <option value="staff">Staff (Admin/Developer)</option>
+                        <option value="admin">Admins</option>
+                        <option value="developer">Developers</option>
+                    </select>
+                    <button id="adminApplyBtn" type="submit" class="primary-btn small-btn">Apply</button>
+                    <button id="adminResetBtn" type="button" class="ghost-btn small-btn">Reset</button>
+                </form>
+
+                <div id="adminUsersSummary" class="users-summary">Showing 0 users</div>
+
+                <div class="table-wrap">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                <th>Role</th>
+                                <th>Status</th>
+                                <th>Verified</th>
+                                <th>Created</th>
+                                <th>Last Login</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminUsersTableBody">
+                            <tr>
+                                <td colspan="7" class="table-empty">No users loaded yet.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="pagination-row">
+                    <button id="adminUsersPrevBtn" type="button" class="ghost-btn small-btn" disabled>Previous</button>
+                    <span id="adminUsersPageInfo">Page 1 of 1</span>
+                    <button id="adminUsersNextBtn" type="button" class="ghost-btn small-btn" disabled>Next</button>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/admin_console.js"></script>
+</body>
+
+</html>

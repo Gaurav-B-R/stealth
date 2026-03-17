@@ -183,6 +183,20 @@ async def read_root():
     return {"message": "Rilono API", "docs": "/docs"}
 
 
+@app.get("/admin_console")
+async def read_admin_console():
+    """Serve the standalone admin console page."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "admin_console.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/admin_console/")
+async def read_admin_console_slash():
+    return await read_admin_console()
+
+
 @app.get("/robots.txt", include_in_schema=False)
 async def robots_txt():
     """Serve robots.txt for search engine crawlers."""

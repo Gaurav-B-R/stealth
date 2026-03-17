@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -10,6 +10,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 VALID_USER_STATUS_FILTERS = {"all", "active", "inactive"}
 VALID_USER_ROLE_FILTERS = {"all", "student", "staff", "admin", "developer"}
+PRICING_MODEL_SIX_MONTH = "pro_six_month"
 
 
 def _assert_manageable_target(target_user: models.User, acting_user: models.User) -> None:
@@ -22,6 +23,61 @@ def _assert_manageable_target(target_user: models.User, acting_user: models.User
 
     if target_user.is_admin and not acting_user.is_developer:
         raise HTTPException(status_code=403, detail="Only a developer can manage admin accounts.")
+
+
+def _build_plan_metrics_for_filtered_users(db: Session, filtered_user_ids_subquery) -> dict[str, int]:
+    """
+    Build subscription plan metrics for the filtered user population:
+    - pro_plan_users: active pro users excluding journey-pass users
+    - journey_plan_users: active pro users whose latest verified payment is pro_six_month
+    """
+    filtered_user_ids_select = select(filtered_user_ids_subquery.c.id)
+
+    active_pro_user_rows = (
+        db.query(models.Subscription.user_id)
+        .filter(
+            models.Subscription.user_id.in_(filtered_user_ids_select),
+            models.Subscription.plan == "pro",
+            models.Subscription.status == "active",
+        )
+        .all()
+    )
+    active_pro_user_ids = [row[0] for row in active_pro_user_rows if row and row[0] is not None]
+    if not active_pro_user_ids:
+        return {"pro_plan_users": 0, "journey_plan_users": 0}
+
+    ranked_verified_payments = (
+        db.query(
+            models.SubscriptionPayment.user_id.label("user_id"),
+            models.SubscriptionPayment.pricing_model.label("pricing_model"),
+            func.row_number().over(
+                partition_by=models.SubscriptionPayment.user_id,
+                order_by=models.SubscriptionPayment.id.desc(),
+            ).label("row_num"),
+        )
+        .filter(
+            models.SubscriptionPayment.status == "verified",
+            models.SubscriptionPayment.user_id.in_(active_pro_user_ids),
+        )
+        .subquery()
+    )
+
+    journey_plan_users = (
+        db.query(func.count())
+        .select_from(ranked_verified_payments)
+        .filter(
+            ranked_verified_payments.c.row_num == 1,
+            ranked_verified_payments.c.pricing_model == PRICING_MODEL_SIX_MONTH,
+        )
+        .scalar()
+        or 0
+    )
+
+    pro_plan_users = max(len(active_pro_user_ids) - int(journey_plan_users), 0)
+    return {
+        "pro_plan_users": int(pro_plan_users),
+        "journey_plan_users": int(journey_plan_users),
+    }
 
 
 @router.get("/users", response_model=schemas.AdminUserListResponse)
@@ -82,6 +138,8 @@ def list_users_admin(
         query = query.filter(models.User.is_developer.is_(True))
 
     total = query.count()
+    filtered_user_ids_subquery = query.with_entities(models.User.id).subquery()
+    metrics = _build_plan_metrics_for_filtered_users(db=db, filtered_user_ids_subquery=filtered_user_ids_subquery)
     users = (
         query.order_by(desc(models.User.created_at), desc(models.User.id))
         .offset((page - 1) * page_size)
@@ -94,6 +152,7 @@ def list_users_admin(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "metrics": metrics,
     }
 
 

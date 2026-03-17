@@ -76,11 +76,17 @@ class AdminUserSummary(BaseModel):
         from_attributes = True
 
 
+class AdminUserListMetrics(BaseModel):
+    pro_plan_users: int = 0
+    journey_plan_users: int = 0
+
+
 class AdminUserListResponse(BaseModel):
     users: List[AdminUserSummary]
     total: int
     page: int
     page_size: int
+    metrics: AdminUserListMetrics
 
 
 class AdminUserStatusUpdateRequest(BaseModel):

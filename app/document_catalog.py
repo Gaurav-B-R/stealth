@@ -53,8 +53,8 @@ DEFAULT_JOURNEY_STAGES: list[dict[str, Any]] = [
         "stage": 7,
         "name": "Ready to Fly!",
         "emoji": "✈️",
-        "description": "Interview scheduled! All documents ready.",
-        "next_step": "You're all set! Good luck with your visa interview!",
+        "description": "Visa approved. Complete final pre-departure documents and travel readiness.",
+        "next_step": "Upload remaining arrival documents (for example vaccination records) and finalize travel plans.",
     },
 ]
 
