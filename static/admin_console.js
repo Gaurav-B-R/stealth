@@ -5,6 +5,7 @@ const ADMIN_PAGE_SIZE = 20;
 const state = {
     authToken: null,
     currentUser: null,
+    adminProtectionVerified: false,
     users: [],
     total: 0,
     metrics: {
@@ -20,7 +21,8 @@ const state = {
         role: 'all'
     },
     turnstileSiteKey: '',
-    turnstileWidgetId: null
+    turnstileWidgetId: null,
+    actionTurnstileWidgetId: null
 };
 
 const refs = {
@@ -33,8 +35,13 @@ const refs = {
     loginBtn: document.getElementById('adminLoginBtn'),
     logoutBtn: document.getElementById('adminLogoutBtn'),
     sessionBadge: document.getElementById('adminSessionBadge'),
+    protectionCard: document.getElementById('adminProtectionCard'),
+    protectionText: document.getElementById('adminProtectionText'),
+    verifyProtectionBtn: document.getElementById('adminVerifyProtectionBtn'),
     turnstileWrap: document.getElementById('adminTurnstileWrap'),
     turnstileHint: document.getElementById('adminTurnstileHint'),
+    actionTurnstileWrap: document.getElementById('adminActionTurnstileWrap'),
+    actionTurnstileHint: document.getElementById('adminActionTurnstileHint'),
     usersForm: document.getElementById('adminUsersFilterForm'),
     usersSearch: document.getElementById('adminUsersSearchInput'),
     usersStatus: document.getElementById('adminUsersStatusFilter'),
@@ -59,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function bindEvents() {
     refs.loginForm?.addEventListener('submit', handleLoginSubmit);
     refs.logoutBtn?.addEventListener('click', handleLogout);
+    refs.verifyProtectionBtn?.addEventListener('click', handleProtectionVerifyClick);
     refs.usersForm?.addEventListener('submit', handleUserFiltersSubmit);
     refs.usersResetBtn?.addEventListener('click', resetFilters);
     refs.prevBtn?.addEventListener('click', () => changePage(-1));
@@ -71,8 +79,13 @@ async function bootstrap() {
     const canAccess = await refreshCurrentAdminUser({ silent: true });
     if (canAccess) {
         showConsole();
-        await loadUsers({ resetPage: true });
-        showFlash('Admin session active.', 'success');
+        const verified = await ensureAdminProtection({ silent: true });
+        if (verified) {
+            await loadUsers({ resetPage: true });
+            showFlash('Admin session active.', 'success');
+        } else {
+            showFlash('Complete Cloudflare check to unlock admin data.', 'info');
+        }
         return;
     }
     showAuth();
@@ -103,8 +116,10 @@ function clearFlash() {
 function showAuth() {
     refs.authPanel.hidden = false;
     refs.consolePanel.hidden = true;
-    refs.logoutBtn.hidden = false;
+    refs.logoutBtn.hidden = true;
     refs.sessionBadge.hidden = true;
+    state.adminProtectionVerified = false;
+    updateProtectionUi();
 }
 
 function showConsole() {
@@ -112,6 +127,7 @@ function showConsole() {
     refs.consolePanel.hidden = false;
     refs.logoutBtn.hidden = false;
     refs.sessionBadge.hidden = false;
+    updateProtectionUi();
     updateSessionBadge();
 }
 
@@ -143,6 +159,21 @@ function normalizeErrorMessage(payload, fallbackMessage) {
         return payload.detail.trim();
     }
     return fallbackMessage;
+}
+
+async function handleAdminAuthOrProtectionError(responseStatus, payload) {
+    if (responseStatus !== 401 && responseStatus !== 403) return;
+
+    const detail = String(payload?.detail || '').toLowerCase();
+    if (detail.includes('cloudflare verification')) {
+        state.adminProtectionVerified = false;
+        updateProtectionUi();
+    }
+
+    const stillAdmin = await refreshCurrentAdminUser({ silent: true });
+    if (!stillAdmin) {
+        showAuth();
+    }
 }
 
 async function refreshCurrentAdminUser({ silent = false } = {}) {
@@ -205,6 +236,8 @@ async function initializeTurnstile() {
 
         if (!siteKey) {
             if (refs.turnstileWrap) refs.turnstileWrap.hidden = true;
+            if (refs.actionTurnstileWrap) refs.actionTurnstileWrap.hidden = true;
+            state.adminProtectionVerified = true;
             return;
         }
 
@@ -212,11 +245,18 @@ async function initializeTurnstile() {
         if (!available) {
             if (refs.turnstileWrap) refs.turnstileWrap.hidden = false;
             if (refs.turnstileHint) refs.turnstileHint.textContent = 'Security widget failed to load. Refresh and try again.';
+            if (refs.actionTurnstileWrap) refs.actionTurnstileWrap.hidden = false;
+            if (refs.actionTurnstileHint) refs.actionTurnstileHint.textContent = 'Security widget failed to load. Refresh and try again.';
             return;
         }
 
         if (refs.turnstileWrap) refs.turnstileWrap.hidden = false;
         state.turnstileWidgetId = window.turnstile.render('#adminTurnstileWidget', {
+            sitekey: siteKey,
+            theme: 'light'
+        });
+        if (refs.actionTurnstileWrap) refs.actionTurnstileWrap.hidden = false;
+        state.actionTurnstileWidgetId = window.turnstile.render('#adminActionTurnstileWidget', {
             sitekey: siteKey,
             theme: 'light'
         });
@@ -241,6 +281,120 @@ function resetTurnstileWidget() {
         window.turnstile.reset(state.turnstileWidgetId);
     } catch {
         // no-op
+    }
+}
+
+function getActionTurnstileToken() {
+    if (!state.turnstileSiteKey) return '';
+    if (!window.turnstile || state.actionTurnstileWidgetId === null) return '';
+    try {
+        return window.turnstile.getResponse(state.actionTurnstileWidgetId) || '';
+    } catch {
+        return '';
+    }
+}
+
+function resetActionTurnstileWidget() {
+    if (!state.turnstileSiteKey || !window.turnstile || state.actionTurnstileWidgetId === null) return;
+    try {
+        window.turnstile.reset(state.actionTurnstileWidgetId);
+    } catch {
+        // no-op
+    }
+}
+
+function updateProtectionUi() {
+    const turnstileEnabled = Boolean(state.turnstileSiteKey);
+    if (!refs.protectionCard) return;
+
+    if (!turnstileEnabled) {
+        refs.protectionCard.hidden = true;
+        return;
+    }
+
+    refs.protectionCard.hidden = Boolean(state.adminProtectionVerified);
+    if (refs.protectionText) {
+        refs.protectionText.textContent = state.adminProtectionVerified
+            ? 'Cloudflare protection verified for this admin session.'
+            : 'Complete this check to unlock protected admin actions.';
+    }
+    if (refs.verifyProtectionBtn) {
+        refs.verifyProtectionBtn.disabled = false;
+    }
+}
+
+async function ensureAdminProtection({ silent = false } = {}) {
+    if (!state.turnstileSiteKey) {
+        state.adminProtectionVerified = true;
+        updateProtectionUi();
+        return true;
+    }
+    if (state.adminProtectionVerified) {
+        updateProtectionUi();
+        return true;
+    }
+    updateProtectionUi();
+    if (!silent) {
+        showFlash('Cloudflare verification required. Complete the admin protection check.', 'error');
+    }
+    return false;
+}
+
+async function handleProtectionVerifyClick() {
+    clearFlash();
+
+    if (!state.currentUser) {
+        showAuth();
+        showFlash('Login required before Cloudflare verification.', 'error');
+        return;
+    }
+
+    if (!state.turnstileSiteKey) {
+        state.adminProtectionVerified = true;
+        updateProtectionUi();
+        await loadUsers({ resetPage: true });
+        return;
+    }
+
+    const token = getActionTurnstileToken();
+    if (!token) {
+        showFlash('Please complete the Cloudflare check first.', 'error');
+        return;
+    }
+
+    if (refs.verifyProtectionBtn) {
+        refs.verifyProtectionBtn.disabled = true;
+        refs.verifyProtectionBtn.textContent = 'Verifying...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/turnstile/verify`, {
+            method: 'POST',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify({ token })
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            showFlash(normalizeErrorMessage(payload, 'Cloudflare verification failed.'), 'error');
+            resetActionTurnstileWidget();
+            return;
+        }
+
+        state.adminProtectionVerified = true;
+        updateProtectionUi();
+        resetActionTurnstileWidget();
+        showFlash('Cloudflare protection verified.', 'success');
+        await loadUsers({ resetPage: true });
+    } catch (error) {
+        console.error('Protection verify failed:', error);
+        showFlash('Could not verify Cloudflare protection. Please retry.', 'error');
+    } finally {
+        if (refs.verifyProtectionBtn) {
+            refs.verifyProtectionBtn.disabled = false;
+            refs.verifyProtectionBtn.textContent = 'Complete Cloudflare Check';
+        }
     }
 }
 
@@ -305,8 +459,14 @@ async function handleLoginSubmit(event) {
         showConsole();
         refs.loginForm.reset();
         resetTurnstileWidget();
-        showFlash('Welcome to the admin console.', 'success');
-        await loadUsers({ resetPage: true });
+        state.adminProtectionVerified = !state.turnstileSiteKey;
+        updateProtectionUi();
+        if (await ensureAdminProtection({ silent: true })) {
+            showFlash('Welcome to the admin console.', 'success');
+            await loadUsers({ resetPage: true });
+        } else {
+            showFlash('Login successful. Complete Cloudflare check to continue.', 'info');
+        }
     } catch (error) {
         console.error('Admin login failed:', error);
         showFlash('Could not sign in right now. Please try again.', 'error');
@@ -317,6 +477,18 @@ async function handleLoginSubmit(event) {
 }
 
 async function handleLogout() {
+    if (state.currentUser) {
+        try {
+            await fetch(`${API_BASE}/api/admin/turnstile/clear`, {
+                method: 'POST',
+                headers: buildAuthHeaders(),
+                credentials: 'same-origin'
+            });
+        } catch {
+            // no-op
+        }
+    }
+
     try {
         await fetch(`${API_BASE}/api/auth/logout`, {
             method: 'POST',
@@ -329,11 +501,13 @@ async function handleLogout() {
 
     state.authToken = null;
     state.currentUser = null;
+    state.adminProtectionVerified = false;
     state.users = [];
     state.total = 0;
     state.metrics = { pro_plan_users: 0, journey_plan_users: 0 };
     state.page = 1;
     resetTurnstileWidget();
+    resetActionTurnstileWidget();
     showAuth();
     showFlash('Logged out. Login with an admin account to continue.', 'info');
     renderUsersTableMessage('No users loaded yet.');
@@ -460,6 +634,10 @@ async function loadUsers({ resetPage = false } = {}) {
         }
     }
 
+    if (!await ensureAdminProtection({ silent: false })) {
+        return;
+    }
+
     if (resetPage) {
         state.page = 1;
     }
@@ -496,13 +674,7 @@ async function loadUsers({ resetPage = false } = {}) {
             renderUsersTableMessage(message);
             renderUsersSummary();
             renderMetrics();
-
-            if (response.status === 401 || response.status === 403) {
-                const stillAdmin = await refreshCurrentAdminUser({ silent: true });
-                if (!stillAdmin) {
-                    showAuth();
-                }
-            }
+            await handleAdminAuthOrProtectionError(response.status, payload);
             showFlash(message, 'error');
             return;
         }
@@ -584,6 +756,7 @@ async function handleTableActionClick(event) {
 }
 
 async function updateUserStatus(userId, nextIsActive) {
+    if (!await ensureAdminProtection({ silent: false })) return;
     setRowActionsDisabled(true);
     try {
         const response = await fetch(`${API_BASE}/api/admin/users/${userId}/status`, {
@@ -595,6 +768,7 @@ async function updateUserStatus(userId, nextIsActive) {
 
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
             showFlash(normalizeErrorMessage(payload, 'Failed to update user status.'), 'error');
             return;
         }
@@ -610,6 +784,7 @@ async function updateUserStatus(userId, nextIsActive) {
 }
 
 async function deleteUser(userId, userEmail) {
+    if (!await ensureAdminProtection({ silent: false })) return;
     const confirmed = window.confirm(`Delete ${userEmail} permanently? This cannot be undone.`);
     if (!confirmed) return;
 
@@ -623,6 +798,7 @@ async function deleteUser(userId, userEmail) {
 
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
             showFlash(normalizeErrorMessage(payload, 'Failed to delete user.'), 'error');
             return;
         }

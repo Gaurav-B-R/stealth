@@ -188,6 +188,27 @@ body {
     padding: 1rem;
 }
 
+.protection-card {
+    display: grid;
+    gap: 0.65rem;
+    border: 1px solid #fcd34d;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #fffbeb, #fef3c7);
+    padding: 0.85rem;
+    margin-bottom: 0.9rem;
+}
+
+.protection-card strong {
+    font-size: 0.98rem;
+    color: #7c2d12;
+}
+
+.protection-card p {
+    margin: 0.24rem 0 0;
+    color: #92400e;
+    font-size: 0.83rem;
+}
+
 .metrics-grid {
     display: grid;
     gap: 0.75rem;

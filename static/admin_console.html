@@ -47,6 +47,18 @@
             </section>
 
             <section id="adminConsolePanel" class="panel console-panel" hidden>
+                <div id="adminProtectionCard" class="protection-card" hidden>
+                    <div>
+                        <strong>Cloudflare Admin Shield</strong>
+                        <p id="adminProtectionText">Complete this check to unlock protected admin actions.</p>
+                    </div>
+                    <div id="adminActionTurnstileWrap" class="turnstile-wrap" hidden>
+                        <div id="adminActionTurnstileWidget"></div>
+                        <p id="adminActionTurnstileHint">Confirm you are human to access admin API data.</p>
+                    </div>
+                    <button id="adminVerifyProtectionBtn" type="button" class="primary-btn small-btn">Complete Cloudflare Check</button>
+                </div>
+
                 <div class="metrics-grid">
                     <article class="metric-card">
                         <span>Total Users</span>

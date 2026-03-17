@@ -81,6 +81,10 @@ class AdminUserListMetrics(BaseModel):
     journey_plan_users: int = 0
 
 
+class AdminTurnstileVerifyRequest(BaseModel):
+    token: str
+
+
 class AdminUserListResponse(BaseModel):
     users: List[AdminUserSummary]
     total: int
