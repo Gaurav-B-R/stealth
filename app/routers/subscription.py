@@ -972,8 +972,18 @@ def _send_subscription_change_email_safe(
     try:
         resolved_pricing_model = (pricing_model or "").strip() or None
         if not resolved_pricing_model and subscription.plan == PLAN_PRO:
-            latest_payment = _find_latest_payment_for_user(db, user.id)
-            if latest_payment:
+            latest_verified_payment = (
+                db.query(models.SubscriptionPayment)
+                .filter(
+                    models.SubscriptionPayment.user_id == user.id,
+                    models.SubscriptionPayment.status == "verified",
+                )
+                .order_by(models.SubscriptionPayment.id.desc())
+                .first()
+            )
+            if latest_verified_payment:
+                resolved_pricing_model = _pricing_model_from_payment_row(latest_verified_payment)
+            elif latest_payment := _find_latest_payment_for_user(db, user.id):
                 resolved_pricing_model = _pricing_model_from_payment_row(latest_payment)
         unsubscribe_url = build_email_notifications_unsubscribe_url(email=user.email)
         send_subscription_change_email(
@@ -1321,6 +1331,7 @@ def upgrade_to_pro(
         after_snapshot = _subscription_change_snapshot(subscription)
         if before_snapshot != after_snapshot:
             _send_subscription_change_email_safe(
+                db=db,
                 user=current_user,
                 event_type="pro_activated",
                 subscription=subscription,
@@ -1329,6 +1340,7 @@ def upgrade_to_pro(
                 payment_status="verified",
                 payment_amount_paise=0,
                 payment_currency=currency,
+                pricing_model=pricing_model,
             )
         _refresh_student_profile_snapshot_safe(db=db, user_id=current_user.id)
 
@@ -1588,6 +1600,7 @@ def verify_payment_and_activate_pro(
     if before_snapshot != after_snapshot:
         event_type = "pro_activated" if before_snapshot["plan"] != PLAN_PRO else "subscription_renewed"
         _send_subscription_change_email_safe(
+            db=db,
             user=current_user,
             event_type=event_type,
             subscription=subscription,
@@ -1596,6 +1609,7 @@ def verify_payment_and_activate_pro(
             payment_status="verified",
             payment_amount_paise=int(payment_row.amount_paise or 0),
             payment_currency=_normalize_currency(payment_row.currency or "INR"),
+            pricing_model=_pricing_model_from_payment_row(payment_row),
         )
     _send_founder_first_purchase_alert_safe(
         db=db,
@@ -1777,6 +1791,7 @@ def verify_recurring_payment_and_activate_pro(
     if before_snapshot != after_snapshot:
         event_type = "pro_activated" if before_snapshot["plan"] != PLAN_PRO else "subscription_renewed"
         _send_subscription_change_email_safe(
+            db=db,
             user=current_user,
             event_type=event_type,
             subscription=subscription,
@@ -1785,6 +1800,7 @@ def verify_recurring_payment_and_activate_pro(
             payment_status=str(payment_data.get("status") or "verified"),
             payment_amount_paise=int(payment_data.get("amount", 0) or 0),
             payment_currency=_normalize_currency(payment_data.get("currency", "")),
+            pricing_model=_pricing_model_from_payment_row(target_row),
         )
     _send_founder_first_purchase_alert_safe(
         db=db,
@@ -1936,6 +1952,7 @@ def _handle_recurring_payment_webhook(
     if before_snapshot != after_snapshot:
         event_type = "pro_activated" if before_snapshot["plan"] != PLAN_PRO else "subscription_renewed"
         _send_subscription_change_email_safe(
+            db=db,
             user=user,
             event_type=event_type,
             subscription=refreshed_subscription,
@@ -1944,6 +1961,7 @@ def _handle_recurring_payment_webhook(
             payment_status=str(payment_data.get("status") or "verified"),
             payment_amount_paise=int(payment_data.get("amount", 0) or 0),
             payment_currency=_normalize_currency(payment_data.get("currency", "")),
+            pricing_model=_pricing_model_from_payment_row(target_row),
         )
     _send_founder_first_purchase_alert_safe(
         db=db,
@@ -2015,6 +2033,7 @@ def _handle_subscription_lifecycle_webhook(
         if before_snapshot != after_snapshot:
             event_type = "downgraded_to_free" if subscription.plan == PLAN_FREE else "auto_renew_cancelled"
             _send_subscription_change_email_safe(
+                db=db,
                 user=user,
                 event_type=event_type,
                 subscription=subscription,
@@ -2040,6 +2059,7 @@ def _handle_subscription_lifecycle_webhook(
         else:
             event_type = "subscription_updated"
         _send_subscription_change_email_safe(
+            db=db,
             user=user,
             event_type=event_type,
             subscription=updated_subscription,
@@ -2086,12 +2106,14 @@ def _handle_payment_failed_webhook(
         subscription = get_or_create_user_subscription(db, payment_row.user_id)
         if user and subscription:
             _send_subscription_change_email_safe(
+                db=db,
                 user=user,
                 event_type="payment_failed",
                 subscription=subscription,
                 payment_status="failed",
                 payment_amount_paise=int(payment_entity.get("amount", 0) or 0),
                 payment_currency=_normalize_currency(payment_entity.get("currency", "")),
+                pricing_model=_pricing_model_from_payment_row(payment_row),
             )
     return {"status": "ok"}
 
@@ -2190,6 +2212,7 @@ async def razorpay_webhook(
         if before_snapshot != after_snapshot:
             event_type = "pro_activated" if before_snapshot["plan"] != PLAN_PRO else "subscription_renewed"
             _send_subscription_change_email_safe(
+                db=db,
                 user=user,
                 event_type=event_type,
                 subscription=updated_subscription,
@@ -2198,6 +2221,7 @@ async def razorpay_webhook(
                 payment_status=str(payment_entity.get("status") or "verified"),
                 payment_amount_paise=int(payment_entity.get("amount", 0) or 0),
                 payment_currency=_normalize_currency(payment_entity.get("currency", "")),
+                pricing_model=_pricing_model_from_payment_row(payment_row),
             )
         _send_founder_first_purchase_alert_safe(
             db=db,
@@ -2261,6 +2285,7 @@ def cancel_my_subscription(
         after_snapshot = _subscription_change_snapshot(updated_subscription)
         if before_snapshot != after_snapshot:
             _send_subscription_change_email_safe(
+                db=db,
                 user=current_user,
                 event_type="auto_renew_cancelled",
                 subscription=updated_subscription,
@@ -2282,6 +2307,7 @@ def cancel_my_subscription(
     after_snapshot = _subscription_change_snapshot(subscription)
     if before_snapshot != after_snapshot:
         _send_subscription_change_email_safe(
+            db=db,
             user=current_user,
             event_type="downgraded_to_free",
             subscription=subscription,
