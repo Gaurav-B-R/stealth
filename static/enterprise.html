@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rilono Enterprise — Visa Management Platform</title>
+    <meta name="robots" content="noindex,nofollow">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/enterprise.css?v=3">
+</head>
+
+<body>
+
+    <!-- ============================== -->
+    <!--       AUTH / LOGIN SCREEN       -->
+    <!-- ============================== -->
+    <div id="entAuthScreen" class="ent-auth-screen">
+        <aside class="ent-auth-hero">
+            <div class="ent-auth-brand">
+                <img src="/static/logo.png" alt="Rilono">
+                <span class="ent-auth-brand-text">Rilono Enterprise</span>
+            </div>
+
+            <div class="ent-auth-hero-content">
+                <h2>Visa management at&nbsp;scale</h2>
+                <p>Streamline F-1 visa documentation for thousands of students across your organization.</p>
+                <ul class="ent-auth-hero-features">
+                    <li>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Centralized student tracking
+                    </li>
+                    <li>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Document compliance monitoring
+                    </li>
+                    <li>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Bulk operations & analytics
+                    </li>
+                    <li>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Dedicated account management
+                    </li>
+                </ul>
+            </div>
+
+            <div class="ent-auth-hero-footer">&copy; 2026 Rilono Technologies. All rights reserved.</div>
+        </aside>
+
+        <div class="ent-auth-form-area">
+            <div class="ent-auth-card">
+                <h1>Sign in to Enterprise</h1>
+                <p class="ent-auth-subtitle">Access your organization's visa management dashboard.</p>
+
+                <div id="entAuthFlash" class="ent-flash info" style="display:none"></div>
+
+                <form id="entLoginForm" autocomplete="on">
+                    <div class="ent-form-group">
+                        <label class="ent-form-label" for="entEmail">Work email</label>
+                        <input class="ent-form-input" id="entEmail" type="email" placeholder="you@company.com" required autocomplete="username">
+                    </div>
+                    <div class="ent-form-group">
+                        <label class="ent-form-label" for="entPassword">Password</label>
+                        <input class="ent-form-input" id="entPassword" type="password" placeholder="Enter your password" required autocomplete="current-password">
+                    </div>
+                    <div id="entTurnstileWrap" class="ent-turnstile-wrap" hidden>
+                        <div id="entTurnstileWidget"></div>
+                        <p id="entTurnstileHint">Complete security verification before signing in.</p>
+                    </div>
+                    <div class="ent-form-row">
+                        <label class="ent-form-check">
+                            <input type="checkbox" checked> Remember me
+                        </label>
+                        <a href="#" class="ent-form-link">Forgot password?</a>
+                    </div>
+                    <button type="submit" class="ent-btn ent-btn-primary ent-btn-full" id="entLoginBtn">
+                        Sign In
+                    </button>
+                </form>
+
+                <p style="text-align:center; margin-top:1.5rem; font-size:0.82rem; color:var(--ent-ink-muted);">
+                    Don't have an enterprise account? <a href="#" class="ent-form-link">Contact Sales</a>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================== -->
+    <!--       DASHBOARD SHELL           -->
+    <!-- ============================== -->
+    <div id="entDashboard" class="ent-shell" style="display:none">
+
+        <!-- Sidebar Overlay (mobile) -->
+        <div id="entSidebarOverlay" class="ent-sidebar-overlay"></div>
+
+        <!-- Sidebar -->
+        <nav id="entSidebar" class="ent-sidebar">
+            <a href="/enterprise" class="ent-sidebar-brand">
+                <img src="/static/logo.png" alt="Rilono">
+                <div class="ent-sidebar-brand-text">
+                    <span class="ent-sidebar-brand-name">Rilono</span>
+                    <span class="ent-sidebar-brand-label">Enterprise</span>
+                </div>
+            </a>
+
+            <div class="ent-sidebar-nav">
+                <span class="ent-nav-group-label">Main</span>
+
+                <button class="ent-nav-item active" data-section="overview">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></svg>
+                    Overview
+                </button>
+
+                <button class="ent-nav-item" data-section="students">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                    Students
+                    <span class="ent-nav-badge">2,847</span>
+                </button>
+
+                <button class="ent-nav-item" data-section="visas">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Visa Cases
+                </button>
+
+                <button class="ent-nav-item" data-section="documents">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+                    Documents
+                </button>
+
+                <span class="ent-nav-group-label">Intelligence</span>
+
+                <button class="ent-nav-item" data-section="analytics">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    Analytics
+                </button>
+
+                <button class="ent-nav-item" data-section="compliance">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                    Compliance
+                </button>
+
+                <span class="ent-nav-group-label">Settings</span>
+
+                <button class="ent-nav-item" data-section="team">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>
+                    Team
+                </button>
+
+                <button class="ent-nav-item" data-section="settings">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    Settings
+                </button>
+            </div>
+
+            <div class="ent-sidebar-footer">
+                <div class="ent-org-card">
+                    <div class="ent-org-avatar">AC</div>
+                    <div class="ent-org-info">
+                        <div class="ent-org-name" id="entOrgName">Acme Corp</div>
+                        <div class="ent-org-plan">Enterprise Plan</div>
+                    </div>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Header -->
+        <header class="ent-header">
+            <div class="ent-header-left">
+                <button class="ent-mobile-toggle" id="entMobileToggle">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+                </button>
+                <h1 class="ent-page-title" id="entPageTitle">Overview</h1>
+            </div>
+            <div class="ent-header-right">
+                <div class="ent-search-wrap">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                    <input class="ent-search-input" type="text" placeholder="Search students, cases, documents...">
+                </div>
+                <button class="ent-header-btn" title="Notifications">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+                    <span class="ent-notif-dot"></span>
+                </button>
+                <button class="ent-header-btn" title="Help">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </button>
+                <button class="ent-user-trigger" id="entUserTrigger">
+                    <div class="ent-user-avatar" id="entUserAvatar">AD</div>
+                    <div class="ent-user-details">
+                        <span class="ent-user-name" id="entUserName">Admin User</span>
+                        <span class="ent-user-role">Organization Admin</span>
+                    </div>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="ent-main">
+
+            <!-- ===== OVERVIEW SECTION ===== -->
+            <section id="entSectionOverview" class="ent-section active">
+
+                <div class="ent-welcome-bar">
+                    <div class="ent-welcome-text">
+                        <h2>Welcome back</h2>
+                        <p>Here's what's happening across your organization today.</p>
+                    </div>
+                    <div class="ent-welcome-actions">
+                        <button class="ent-btn ent-btn-ghost ent-btn-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                            Export Report
+                        </button>
+                        <button class="ent-btn ent-btn-primary ent-btn-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                            Add Student
+                        </button>
+                    </div>
+                </div>
+
+                <div class="ent-metrics-row">
+                    <div class="ent-metric-card">
+                        <div class="ent-metric-header">
+                            <span class="ent-metric-label">Total Students</span>
+                            <div class="ent-metric-icon blue">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            </div>
+                        </div>
+                        <div class="ent-metric-value" id="entMetricStudents">2,847</div>
+                        <div class="ent-metric-footer">
+                            <span class="ent-metric-change up">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                                +12%
+                            </span>
+                            <span class="ent-metric-period">vs last month</span>
+                        </div>
+                    </div>
+
+                    <div class="ent-metric-card">
+                        <div class="ent-metric-header">
+                            <span class="ent-metric-label">Active Visa Cases</span>
+                            <div class="ent-metric-icon purple">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                            </div>
+                        </div>
+                        <div class="ent-metric-value" id="entMetricCases">1,204</div>
+                        <div class="ent-metric-footer">
+                            <span class="ent-metric-change up">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                                +8%
+                            </span>
+                            <span class="ent-metric-period">vs last month</span>
+                        </div>
+                    </div>
+
+                    <div class="ent-metric-card">
+                        <div class="ent-metric-header">
+                            <span class="ent-metric-label">Compliance Rate</span>
+                            <div class="ent-metric-icon green">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                            </div>
+                        </div>
+                        <div class="ent-metric-value" id="entMetricCompliance">94.2%</div>
+                        <div class="ent-metric-footer">
+                            <span class="ent-metric-change up">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
+                                +2.1%
+                            </span>
+                            <span class="ent-metric-period">vs last month</span>
+                        </div>
+                    </div>
+
+                    <div class="ent-metric-card">
+                        <div class="ent-metric-header">
+                            <span class="ent-metric-label">Pending Actions</span>
+                            <div class="ent-metric-icon amber">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            </div>
+                        </div>
+                        <div class="ent-metric-value" id="entMetricPending">38</div>
+                        <div class="ent-metric-footer">
+                            <span class="ent-metric-change down">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
+                                -15%
+                            </span>
+                            <span class="ent-metric-period">vs last week</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ent-content-grid">
+
+                    <!-- Recent Student Activity -->
+                    <div class="ent-card">
+                        <div class="ent-card-header">
+                            <span class="ent-card-title">Recent Student Activity</span>
+                            <button class="ent-btn ent-btn-ghost ent-btn-sm">View All</button>
+                        </div>
+                        <div class="ent-card-body no-pad">
+                            <div class="ent-table-wrap">
+                                <table class="ent-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Student</th>
+                                            <th>Visa Type</th>
+                                            <th>Status</th>
+                                            <th>Last Activity</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td>
+                                                <div class="ent-student-cell">
+                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#3b82f6)">AP</div>
+                                                    <div>
+                                                        <div class="ent-student-name">Arjun Patel</div>
+                                                        <div class="ent-student-email">arjun.p@university.edu</div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-green">Approved</span></td>
+                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">2 hours ago</td>
+                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
+                                        </tr>
+                                        <tr>
+                                            <td>
+                                                <div class="ent-student-cell">
+                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#7c3aed,#8b5cf6)">ML</div>
+                                                    <div>
+                                                        <div class="ent-student-name">Maria Lopez</div>
+                                                        <div class="ent-student-email">m.lopez@university.edu</div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-amber">In Review</span></td>
+                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">5 hours ago</td>
+                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
+                                        </tr>
+                                        <tr>
+                                            <td>
+                                                <div class="ent-student-cell">
+                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#059669,#10b981)">WC</div>
+                                                    <div>
+                                                        <div class="ent-student-name">Wei Chen</div>
+                                                        <div class="ent-student-email">wei.chen@university.edu</div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-green">Approved</span></td>
+                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">1 day ago</td>
+                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
+                                        </tr>
+                                        <tr>
+                                            <td>
+                                                <div class="ent-student-cell">
+                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#dc2626,#ef4444)">SK</div>
+                                                    <div>
+                                                        <div class="ent-student-name">Sarah Kim</div>
+                                                        <div class="ent-student-email">s.kim@university.edu</div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-red">Action Required</span></td>
+                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">1 day ago</td>
+                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
+                                        </tr>
+                                        <tr>
+                                            <td>
+                                                <div class="ent-student-cell">
+                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#d97706,#f59e0b)">RT</div>
+                                                    <div>
+                                                        <div class="ent-student-name">Raj Thakur</div>
+                                                        <div class="ent-student-email">raj.t@university.edu</div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-amber">In Review</span></td>
+                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">2 days ago</td>
+                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right sidebar: Visa Breakdown + Quick Actions -->
+                    <div style="display:flex; flex-direction:column; gap:1rem;">
+
+                        <!-- Visa Status Breakdown -->
+                        <div class="ent-card">
+                            <div class="ent-card-header">
+                                <span class="ent-card-title">Visa Status Breakdown</span>
+                            </div>
+                            <div class="ent-card-body">
+                                <div class="ent-breakdown-list">
+                                    <div class="ent-breakdown-item">
+                                        <div class="ent-breakdown-row">
+                                            <span class="ent-breakdown-label">
+                                                <span class="ent-dot" style="background:#059669"></span> Approved
+                                            </span>
+                                            <span class="ent-breakdown-value">1,682</span>
+                                        </div>
+                                        <div class="ent-progress-track">
+                                            <div class="ent-progress-fill green" style="width:58%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="ent-breakdown-item">
+                                        <div class="ent-breakdown-row">
+                                            <span class="ent-breakdown-label">
+                                                <span class="ent-dot" style="background:#2563eb"></span> In Progress
+                                            </span>
+                                            <span class="ent-breakdown-value">724</span>
+                                        </div>
+                                        <div class="ent-progress-track">
+                                            <div class="ent-progress-fill blue" style="width:25%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="ent-breakdown-item">
+                                        <div class="ent-breakdown-row">
+                                            <span class="ent-breakdown-label">
+                                                <span class="ent-dot" style="background:#d97706"></span> Pending Review
+                                            </span>
+                                            <span class="ent-breakdown-value">312</span>
+                                        </div>
+                                        <div class="ent-progress-track">
+                                            <div class="ent-progress-fill amber" style="width:11%"></div>
+                                        </div>
+                                    </div>
+                                    <div class="ent-breakdown-item">
+                                        <div class="ent-breakdown-row">
+                                            <span class="ent-breakdown-label">
+                                                <span class="ent-dot" style="background:#dc2626"></span> Action Required
+                                            </span>
+                                            <span class="ent-breakdown-value">129</span>
+                                        </div>
+                                        <div class="ent-progress-track">
+                                            <div class="ent-progress-fill" style="width:5%; background:#dc2626; border-radius:999px"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Actions -->
+                        <div class="ent-card">
+                            <div class="ent-card-header">
+                                <span class="ent-card-title">Quick Actions</span>
+                            </div>
+                            <div class="ent-card-body">
+                                <div class="ent-quick-grid">
+                                    <button class="ent-quick-action">
+                                        <div class="ent-quick-action-icon" style="background:var(--ent-primary-soft); color:var(--ent-primary)">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+                                        </div>
+                                        <span>Add Student</span>
+                                    </button>
+                                    <button class="ent-quick-action">
+                                        <div class="ent-quick-action-icon" style="background:var(--ent-secondary-soft); color:var(--ent-secondary)">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                                        </div>
+                                        <span>Bulk Import</span>
+                                    </button>
+                                    <button class="ent-quick-action">
+                                        <div class="ent-quick-action-icon" style="background:var(--ent-success-soft); color:var(--ent-success)">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                        </div>
+                                        <span>Generate Report</span>
+                                    </button>
+                                    <button class="ent-quick-action">
+                                        <div class="ent-quick-action-icon" style="background:var(--ent-warning-soft); color:var(--ent-warning)">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                                        </div>
+                                        <span>Review Alerts</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Activity Feed -->
+                <div class="ent-card">
+                    <div class="ent-card-header">
+                        <span class="ent-card-title">Activity Feed</span>
+                        <button class="ent-btn ent-btn-ghost ent-btn-sm">View All</button>
+                    </div>
+                    <div class="ent-card-body no-pad">
+                        <ul class="ent-activity-list">
+                            <li class="ent-activity-item">
+                                <span class="ent-activity-dot green"></span>
+                                <div class="ent-activity-body">
+                                    <div class="ent-activity-text"><strong>Arjun Patel</strong>'s F-1 visa was approved by the consulate.</div>
+                                    <div class="ent-activity-time">2 hours ago</div>
+                                </div>
+                            </li>
+                            <li class="ent-activity-item">
+                                <span class="ent-activity-dot blue"></span>
+                                <div class="ent-activity-body">
+                                    <div class="ent-activity-text"><strong>Maria Lopez</strong> uploaded new I-20 document for review.</div>
+                                    <div class="ent-activity-time">5 hours ago</div>
+                                </div>
+                            </li>
+                            <li class="ent-activity-item">
+                                <span class="ent-activity-dot amber"></span>
+                                <div class="ent-activity-body">
+                                    <div class="ent-activity-text"><strong>12 students</strong> have documents expiring within the next 30 days.</div>
+                                    <div class="ent-activity-time">8 hours ago</div>
+                                </div>
+                            </li>
+                            <li class="ent-activity-item">
+                                <span class="ent-activity-dot red"></span>
+                                <div class="ent-activity-body">
+                                    <div class="ent-activity-text"><strong>Sarah Kim</strong>'s SEVIS record requires immediate attention.</div>
+                                    <div class="ent-activity-time">1 day ago</div>
+                                </div>
+                            </li>
+                            <li class="ent-activity-item">
+                                <span class="ent-activity-dot blue"></span>
+                                <div class="ent-activity-body">
+                                    <div class="ent-activity-text">Bulk import of <strong>45 new students</strong> completed successfully.</div>
+                                    <div class="ent-activity-time">2 days ago</div>
+                                </div>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== STUDENTS SECTION ===== -->
+            <section id="entSectionStudents" class="ent-section">
+                <div class="ent-welcome-bar">
+                    <div class="ent-welcome-text">
+                        <h2>Students</h2>
+                        <p>Manage all students across your organization.</p>
+                    </div>
+                    <div class="ent-welcome-actions">
+                        <button class="ent-btn ent-btn-ghost ent-btn-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                            Bulk Import
+                        </button>
+                        <button class="ent-btn ent-btn-primary ent-btn-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                            Add Student
+                        </button>
+                    </div>
+                </div>
+                <div class="ent-card">
+                    <div class="ent-card-body">
+                        <div class="ent-empty">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            <h3>Students module coming soon</h3>
+                            <p>This section will allow you to manage all students, their visa status, and documentation in one place.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== VISA CASES SECTION ===== -->
+            <section id="entSectionVisas" class="ent-section">
+                <div class="ent-welcome-bar">
+                    <div class="ent-welcome-text">
+                        <h2>Visa Cases</h2>
+                        <p>Track and manage all visa applications and renewals.</p>
+                    </div>
+                </div>
+                <div class="ent-card">
+                    <div class="ent-card-body">
+                        <div class="ent-empty">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                            <h3>Visa cases module coming soon</h3>
+                            <p>View, filter, and manage all visa cases with detailed tracking and status updates.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== DOCUMENTS SECTION ===== -->
+            <section id="entSectionDocuments" class="ent-section">
+                <div class="ent-welcome-bar">
+                    <div class="ent-welcome-text">
+                        <h2>Documents</h2>
+                        <p>Centralized document management for all student files.</p>
+                    </div>
+                </div>
+                <div class="ent-card">
+                    <div class="ent-card-body">
+                        <div class="ent-empty">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+                            <h3>Documents module coming soon</h3>
+                            <p>Upload, organize, and track compliance documents across your entire student base.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== ANALYTICS SECTION ===== -->
+            <section id="entSectionAnalytics" class="ent-section">
+                <div class="ent-welcome-bar">
+                    <div class="ent-welcome-text">
+                        <h2>Analytics</h2>
+                        <p>Insights and reporting across your organization.</p>
+                    </div>
+                </div>
+                <div class="ent-card">
+                    <div class="ent-card-body">
+                        <div class="ent-empty">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                            <h3>Analytics module coming soon</h3>
+                            <p>Comprehensive dashboards with trends, forecasts, and exportable reports.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== COMPLIANCE SECTION ===== -->
+            <section id="entSectionCompliance" class="ent-section">
+                <div class="ent-welcome-bar">
+                    <div class="ent-welcome-text">
+                        <h2>Compliance</h2>
+                        <p>Monitor and ensure regulatory compliance across all cases.</p>
+                    </div>
+                </div>
+                <div class="ent-card">
+                    <div class="ent-card-body">
+                        <div class="ent-empty">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                            <h3>Compliance module coming soon</h3>
+                            <p>Automated compliance checks, audit trails, and regulatory alerts.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== TEAM SECTION ===== -->
+            <section id="entSectionTeam" class="ent-section">
+                <div class="ent-welcome-bar">
+                    <div class="ent-welcome-text">
+                        <h2>Team</h2>
+                        <p>Manage team members and their access levels.</p>
+                    </div>
+                </div>
+                <div class="ent-card">
+                    <div class="ent-card-body">
+                        <div class="ent-empty">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>
+                            <h3>Team management coming soon</h3>
+                            <p>Invite team members, assign roles, and manage permissions for your organization.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== SETTINGS SECTION ===== -->
+            <section id="entSectionSettings" class="ent-section">
+                <div class="ent-welcome-bar">
+                    <div class="ent-welcome-text">
+                        <h2>Settings</h2>
+                        <p>Configure your organization and account preferences.</p>
+                    </div>
+                </div>
+                <div class="ent-card">
+                    <div class="ent-card-body">
+                        <div class="ent-empty">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            <h3>Settings module coming soon</h3>
+                            <p>Organization profile, notification preferences, integrations, and billing management.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+    <script src="/static/enterprise.js?v=3"></script>
+</body>
+
+</html>

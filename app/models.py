@@ -65,6 +65,18 @@ class DeveloperEmail(Base):
     email = Column(String, primary_key=True, nullable=False, index=True)
     university_name = Column(String, nullable=False, default="Developer Account")
 
+
+class EnterpriseCredential(Base):
+    __tablename__ = "enterprise_credentials"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    full_name = Column(String, nullable=True, default="Enterprise Admin")
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
 class Document(Base):
     __tablename__ = "documents"
     

@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.services.daily_ai_notifications import (
@@ -133,6 +133,7 @@ app.include_router(subscription.router)
 app.include_router(news.router)
 app.include_router(notifications.router)
 app.include_router(admin.router)
+app.include_router(enterprise.router)
 
 
 @app.on_event("startup")
@@ -155,6 +156,7 @@ def startup_backfill_subscriptions():
         backfill_hashed_auth_tokens(db)
     finally:
         db.close()
+    enterprise.seed_enterprise_user()
     start_daily_ai_notification_scheduler()
     start_f1_news_ingestion_scheduler()
 
@@ -195,6 +197,20 @@ async def read_admin_console():
 @app.get("/admin_console/")
 async def read_admin_console_slash():
     return await read_admin_console()
+
+
+@app.get("/enterprise")
+async def read_enterprise():
+    """Serve the standalone enterprise dashboard page."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "enterprise.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/enterprise/")
+async def read_enterprise_slash():
+    return await read_enterprise()
 
 
 @app.get("/robots.txt", include_in_schema=False)
