@@ -114,6 +114,12 @@
         },
     };
 
+    function hideAllScreens() {
+        if (authScreen) authScreen.style.display = "none";
+        if (dashboard) dashboard.style.display = "none";
+        if (onboardingScreen) onboardingScreen.style.display = "none";
+    }
+
     function normalizeRole(role) {
         const raw = String(role || "").trim().toLowerCase();
         if (raw === "owner" || raw === "org_admin" || raw === "organization_admin") return "admin";
@@ -294,21 +300,18 @@
     }
 
     function showAuthScreen() {
-        hideOnboardingScreen();
-        if (dashboard) dashboard.style.display = "none";
+        hideAllScreens();
         if (authScreen) authScreen.style.display = "";
     }
 
     function showDashboardShell() {
-        hideOnboardingScreen();
-        if (authScreen) authScreen.style.display = "none";
+        hideAllScreens();
         if (dashboard) dashboard.style.display = "";
     }
 
     function showOnboardingScreen() {
         if (!onboardingScreen) return;
-        if (authScreen) authScreen.style.display = "none";
-        if (dashboard) dashboard.style.display = "none";
+        hideAllScreens();
         onboardingScreen.style.display = "flex";
         if (companyNameInput && !companyNameInput.value && state.organization && state.organization.company_name) {
             companyNameInput.value = state.organization.company_name;
@@ -885,6 +888,7 @@
         sidebarOverlay.addEventListener("click", closeMobileSidebar);
     }
 
+    hideAllScreens();
     if (subdomainInput) {
         subdomainInput.addEventListener("input", () => {
             const normalized = normalizeSubdomainInput(subdomainInput.value);
