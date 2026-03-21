@@ -6,6 +6,7 @@
     <script>
         (function () {
             const CONSENT_STORAGE_KEY = 'rilono_cookie_preferences_v1';
+            const CONSENT_VERSION = 1;
             const MEASUREMENT_ID = 'G-85F78RGWJQ';
             window.RILONO_ANALYTICS_ID = MEASUREMENT_ID;
 
@@ -26,7 +27,9 @@
                     const raw = localStorage.getItem(CONSENT_STORAGE_KEY);
                     if (!raw) return null;
                     const parsed = JSON.parse(raw);
-                    return parsed && typeof parsed === 'object' ? parsed : null;
+                    if (!parsed || typeof parsed !== 'object') return null;
+                    if (Number(parsed.version) !== CONSENT_VERSION) return null;
+                    return parsed;
                 } catch (error) {
                     return null;
                 }
