@@ -1177,6 +1177,52 @@ function toggleUserMenu() {
     dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
 }
 
+let dashNotifOpen = false;
+
+function toggleDashNotifications() {
+    const dropdown = document.getElementById('dashNotifDropdown');
+    dashNotifOpen = !dashNotifOpen;
+    dropdown.style.display = dashNotifOpen ? 'block' : 'none';
+    closeDashUserMenu();
+    if (dashNotifOpen) {
+        renderNotifications();
+        markAllNotificationsRead();
+    }
+}
+
+function closeDashNotifications() {
+    const dropdown = document.getElementById('dashNotifDropdown');
+    if (dropdown) dropdown.style.display = 'none';
+    dashNotifOpen = false;
+}
+
+function toggleDashUserMenu() {
+    const dropdown = document.getElementById('dashUserDropdown');
+    if (!dropdown) return;
+    const isOpen = dropdown.style.display !== 'none';
+    dropdown.style.display = isOpen ? 'none' : 'block';
+    closeDashNotifications();
+}
+
+function closeDashUserMenu() {
+    const dropdown = document.getElementById('dashUserDropdown');
+    if (dropdown) dropdown.style.display = 'none';
+}
+
+function updateDashHeaderUser() {
+    if (!currentUser) return;
+    const avatarEl = document.getElementById('dashUserAvatar');
+    const nameEl = document.getElementById('dashUserName');
+    if (avatarEl) {
+        const name = currentUser.full_name || currentUser.email || '';
+        const initials = name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+        avatarEl.textContent = initials || '?';
+    }
+    if (nameEl) {
+        nameEl.textContent = currentUser.full_name || currentUser.email || 'User';
+    }
+}
+
 // Notification Functions
 function addNotification(title, message, type = 'info', data = null) {
     const notification = {
@@ -1315,6 +1361,7 @@ async function loadNotifications() {
 
 function updateNotificationBadge() {
     const badge = document.getElementById('notificationBadge');
+    const dashDot = document.getElementById('dashNotifDot');
     const unreadCount = notifications.filter(n => !n.read).length;
     if (badge) {
         if (unreadCount > 0) {
@@ -1324,25 +1371,30 @@ function updateNotificationBadge() {
             badge.style.display = 'none';
         }
     }
+    if (dashDot) {
+        dashDot.style.display = unreadCount > 0 ? 'block' : 'none';
+    }
 }
 
 function renderNotifications() {
     const list = document.getElementById('notificationList');
-    if (!list) return;
+    const dashList = document.getElementById('dashNotifList');
+
+    const emptyMsg = '<p style="text-align: center; padding: 1rem; color: var(--text-secondary);">No notifications</p>';
 
     if (notifications.length === 0) {
-        list.innerHTML = '<p style="text-align: center; padding: 1rem; color: var(--text-secondary);">No notifications</p>';
+        if (list) list.innerHTML = emptyMsg;
+        if (dashList) dashList.innerHTML = emptyMsg;
         return;
     }
 
-    list.innerHTML = notifications.map(notif => {
+    const html = notifications.map(notif => {
         const date = new Date(notif.timestamp);
         const timeAgo = getTimeAgo(date);
         const icon = getNotificationIcon(notif.type);
         const readClass = notif.read ? 'read' : '';
         const escapedId = String(notif.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
-        // Format message with line breaks
         const formattedMessage = escapeHtml(notif.message).replace(/\n/g, '<br>');
 
         return `
@@ -1357,6 +1409,9 @@ function renderNotifications() {
             </div>
         `;
     }).join('');
+
+    if (list) list.innerHTML = html;
+    if (dashList) dashList.innerHTML = html;
 }
 
 function getNotificationIcon(type) {
@@ -2290,6 +2345,11 @@ function showDashboard(skipURLUpdate = false) {
     }
     hideAllSections();
     document.getElementById('dashboardSection').style.display = 'block';
+    const navbar = document.querySelector('.navbar');
+    const footer = document.querySelector('.footer');
+    if (navbar) navbar.style.display = 'none';
+    if (footer) footer.style.display = 'none';
+    document.body.classList.add('dashboard-active');
     const pageContainer = document.querySelector('.container');
     if (pageContainer) {
         pageContainer.classList.add('dashboard-fluid');
@@ -2302,6 +2362,7 @@ function showDashboard(skipURLUpdate = false) {
     loadMyDocuments();
     loadSubscriptionStatus(true);
     renderReferralPromotions();
+    updateDashHeaderUser();
 
     // Set default tab to overview if no tab is active
     const activeTab = document.querySelector('.dashboard-tab.active');
@@ -2310,7 +2371,7 @@ function showDashboard(skipURLUpdate = false) {
     }
 
     if (!skipURLUpdate) {
-        updateURL('/dashboard', false); // Use pushState for navigation
+        updateURL('/dashboard', false);
     }
 }
 
@@ -6601,6 +6662,11 @@ function hideAllSections() {
     document.querySelectorAll('.section').forEach(section => {
         section.style.display = 'none';
     });
+    const navbar = document.querySelector('.navbar');
+    const footer = document.querySelector('.footer');
+    if (navbar) navbar.style.display = '';
+    if (footer) footer.style.display = '';
+    document.body.classList.remove('dashboard-active');
     const pageContainer = document.querySelector('.container');
     if (pageContainer) {
         pageContainer.classList.remove('homepage-layout');
