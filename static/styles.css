@@ -7,61 +7,61 @@
 }
 
 :root {
-    /* Modern Dark Theme — softer, warmer palette */
-    --primary-color: #7c8aff;
-    --primary-dark: #7c8aff;
-    --primary-light: #a5b4fc;
-    --secondary-color: #a78bfa;
-    --accent-color: #67d4f1;
-    --accent-glow: rgba(103, 212, 241, 0.2);
+    /* Premium Modern Dark Theme */
+    --primary-color: #6366f1; /* Indigo 500 */
+    --primary-dark: #4f46e5;
+    --primary-light: #818cf8;
+    --secondary-color: #ec4899; /* Pink 500 */
+    --accent-color: #06b6d4; /* Cyan 500 */
+    --accent-glow: rgba(99, 102, 241, 0.2);
 
     /* Status Colors */
-    --success-color: #4ade80;
-    --success-bg: rgba(74, 222, 128, 0.1);
-    --danger-color: #fb7185;
-    --danger-bg: rgba(251, 113, 133, 0.1);
-    --warning-color: #fbbf24;
-    --warning-bg: rgba(251, 191, 36, 0.1);
-    --info-color: #7dd3fc;
-    --info-bg: rgba(125, 211, 252, 0.1);
+    --success-color: #10b981;
+    --success-bg: rgba(16, 185, 129, 0.1);
+    --danger-color: #f43f5e;
+    --danger-bg: rgba(244, 63, 94, 0.1);
+    --warning-color: #f59e0b;
+    --warning-bg: rgba(245, 158, 11, 0.1);
+    --info-color: #0ea5e9;
+    --info-bg: rgba(14, 165, 233, 0.1);
 
-    /* Background Colors — lifted, softer darks */
-    --bg-color: #131520;
-    --bg-secondary: #181a28;
-    --bg-tertiary: #1e2033;
-    --card-bg: rgba(30, 32, 51, 0.85);
-    --card-bg-solid: #1e2033;
-    --card-bg-hover: #252840;
-    --card-bg-elevated: #282b45;
+    /* Background Colors — Deep, sleek, premium darks */
+    --bg-color: #09090b; /* Zinc 950 */
+    --bg-secondary: #0f0f12;
+    --bg-tertiary: #181c20;
+    --card-bg: rgba(20, 20, 23, 0.7);
+    --card-bg-solid: #141417;
+    --card-bg-hover: #1f1f24;
+    --card-bg-elevated: #26262c;
 
-    /* Text Colors — softer, warmer whites */
-    --text-primary: #eaedf6;
-    --text-secondary: #9ba3c2;
-    --text-muted: #646d8a;
-    --text-accent: #b4bffa;
+    /* Text Colors — Crisp and high contrast */
+    --text-primary: #f8fafc;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+    --text-accent: #e0e7ff;
 
     /* Border Colors */
-    --border-color: rgba(255, 255, 255, 0.07);
-    --border-light: rgba(255, 255, 255, 0.11);
-    --border-accent: rgba(124, 138, 255, 0.3);
+    --border-color: rgba(255, 255, 255, 0.08);
+    --border-light: rgba(255, 255, 255, 0.12);
+    --border-accent: rgba(99, 102, 241, 0.3);
 
     /* Gradients */
-    --gradient-primary: linear-gradient(135deg, #7c8aff 0%, #a78bfa 50%, #c084fc 100%);
-    --gradient-secondary: linear-gradient(135deg, #67d4f1 0%, #7c8aff 100%);
-    --gradient-dark: linear-gradient(160deg, #1e2033 0%, #181a28 100%);
-    --gradient-card: linear-gradient(160deg, rgba(37, 40, 64, 0.9) 0%, rgba(30, 32, 51, 0.85) 100%);
-    --gradient-glow: linear-gradient(135deg, rgba(124, 138, 255, 0.07) 0%, rgba(167, 139, 250, 0.04) 100%);
-    --gradient-mesh: radial-gradient(ellipse at 20% 50%, rgba(124, 138, 255, 0.06) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 20%, rgba(167, 139, 250, 0.05) 0%, transparent 50%),
-        radial-gradient(ellipse at 60% 80%, rgba(103, 212, 241, 0.03) 0%, transparent 50%);
-    --gradient-border: linear-gradient(135deg, rgba(124, 138, 255, 0.35), rgba(167, 139, 250, 0.15), rgba(103, 212, 241, 0.18));
+    --gradient-primary: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+    --gradient-secondary: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+    --gradient-dark: linear-gradient(160deg, #181c20 0%, #09090b 100%);
+    --gradient-card: linear-gradient(160deg, rgba(31, 31, 36, 0.8) 0%, rgba(20, 20, 23, 0.7) 100%);
+    --gradient-glow: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(236, 72, 153, 0.05) 100%);
+    --gradient-mesh: radial-gradient(ellipse at 20% 50%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 20%, rgba(236, 72, 153, 0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 60% 80%, rgba(6, 182, 212, 0.04) 0%, transparent 50%);
+    --gradient-border: linear-gradient(135deg, rgba(99, 102, 241, 0.4), rgba(236, 72, 153, 0.2), rgba(6, 182, 212, 0.2));
 
-    /* Shadows — softer */
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 4px 12px rgba(0, 0, 0, 0.1);
-    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.12);
-    --shadow-glow: 0 0 24px rgba(124, 138, 255, 0.1), 0 0 48px rgba(124, 138, 255, 0.05);
-    --shadow-accent: 0 4px 24px rgba(124, 138, 255, 0.15);
-    --shadow-premium: 0 8px 40px rgba(0, 0, 0, 0.22), 0 0 1px rgba(255, 255, 255, 0.06);
+    /* Shadows — Elegant and precise */
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.15);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
+    --shadow-glow: 0 0 24px rgba(99, 102, 241, 0.15), 0 0 48px rgba(99, 102, 241, 0.05);
+    --shadow-accent: 0 4px 24px rgba(99, 102, 241, 0.2);
+    --shadow-premium: 0 12px 48px rgba(0, 0, 0, 0.5), 0 0 1px rgba(255, 255, 255, 0.1);
 
     /* Blur Effects */
     --blur-sm: blur(8px);
@@ -69,12 +69,12 @@
     --blur-lg: blur(32px);
 
     /* Glassmorphism */
-    --glass-bg: rgba(30, 32, 51, 0.65);
-    --glass-bg-hover: rgba(37, 40, 64, 0.75);
-    --glass-border: rgba(255, 255, 255, 0.07);
-    --glass-border-hover: rgba(124, 138, 255, 0.25);
-    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-    --glass-shadow-hover: 0 16px 48px rgba(0, 0, 0, 0.25), 0 0 24px rgba(124, 138, 255, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    --glass-bg: rgba(20, 20, 23, 0.65);
+    --glass-bg-hover: rgba(31, 31, 36, 0.75);
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-border-hover: rgba(99, 102, 241, 0.3);
+    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    --glass-shadow-hover: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 24px rgba(99, 102, 241, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 
     /* Section Spacing */
     --section-pad-y: 7rem;
@@ -127,7 +127,7 @@ body.dashboard-active {
 
 /* Navigation */
 .navbar {
-    background: rgba(19, 21, 32, 0.85);
+    background: rgba(9, 9, 11, 0.85);
     backdrop-filter: blur(24px) saturate(1.2);
     -webkit-backdrop-filter: blur(24px) saturate(1.2);
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -1628,8 +1628,9 @@ body.dashboard-active {
     top: 0;
     height: 100vh;
     height: 100dvh;
-    overflow-y: auto;
-    overflow-x: hidden;
+    /* Keep sidebar internals visible so header popovers (notifications/user menu) can
+       extend into the content area on desktop without getting clipped. */
+    overflow: visible;
     z-index: 10;
     display: flex;
     flex-direction: column;
@@ -1728,6 +1729,8 @@ body.dashboard-active {
     padding: 0.75rem 0.75rem;
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
 }
 
 #dashboardSection .sidebar-subscription-card {
@@ -2009,6 +2012,7 @@ body.dashboard-active {
 
 .sidebar-notif-wrap {
     position: relative;
+    z-index: 220;
 }
 
 .sidebar-notif-dropdown {
@@ -9833,6 +9837,8 @@ body.dashboard-active {
         transform: translateX(-100%);
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         box-shadow: none;
+        overflow-y: auto;
+        overflow-x: hidden;
     }
 
     #dashboardSection .dashboard-sidebar.mobile-open {
