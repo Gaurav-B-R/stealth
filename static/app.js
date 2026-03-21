@@ -27,6 +27,29 @@ const LEGAL_LAST_UPDATED = {
     refund: 'February 12, 2026',
     delivery: 'February 12, 2026'
 };
+const COOKIE_CONSENT_STORAGE_KEY = 'rilono_cookie_preferences_v1';
+const COOKIE_CONSENT_VERSION = 1;
+const COOKIE_CONSENT_DEFAULTS = Object.freeze({
+    necessary: true,
+    analytics: false
+});
+const COOKIE_CONSENT_GTAG_DENIED = Object.freeze({
+    analytics_storage: 'denied',
+    ad_storage: 'denied',
+    ad_user_data: 'denied',
+    ad_personalization: 'denied'
+});
+const COOKIE_CONSENT_GTAG_GRANTED = Object.freeze({
+    analytics_storage: 'granted',
+    ad_storage: 'denied',
+    ad_user_data: 'denied',
+    ad_personalization: 'denied'
+});
+const cookieConsentState = {
+    gaScriptLoaded: false,
+    gaScriptLoadPromise: null,
+    preferences: null
+};
 
 // Notification System
 const NOTIFICATION_STORAGE_PREFIX = 'notifications_user_';
@@ -74,6 +97,257 @@ const adminUsersState = {
     role: ADMIN_USERS_DEFAULT_FILTERS.role,
     rows: []
 };
+
+function normalizeCookieConsentPreferences(raw) {
+    return {
+        necessary: true,
+        analytics: Boolean(raw && raw.analytics === true)
+    };
+}
+
+function readCookieConsentPreferences() {
+    try {
+        const raw = localStorage.getItem(COOKIE_CONSENT_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+        if (Number(parsed.version) !== COOKIE_CONSENT_VERSION) return null;
+        return normalizeCookieConsentPreferences(parsed);
+    } catch (error) {
+        console.warn('Cookie preferences unavailable:', error);
+        return null;
+    }
+}
+
+function persistCookieConsentPreferences(preferences) {
+    const normalized = normalizeCookieConsentPreferences(preferences);
+    try {
+        localStorage.setItem(COOKIE_CONSENT_STORAGE_KEY, JSON.stringify({
+            version: COOKIE_CONSENT_VERSION,
+            necessary: true,
+            analytics: normalized.analytics,
+            updated_at: new Date().toISOString()
+        }));
+    } catch (error) {
+        console.warn('Failed to save cookie preferences:', error);
+    }
+    cookieConsentState.preferences = normalized;
+    return normalized;
+}
+
+function ensureGtagStub() {
+    window.dataLayer = window.dataLayer || [];
+    if (typeof window.gtag !== 'function') {
+        window.gtag = function gtag() {
+            window.dataLayer.push(arguments);
+        };
+    }
+}
+
+function getAnalyticsMeasurementId() {
+    const fromWindow = String(window.RILONO_ANALYTICS_ID || '').trim();
+    return fromWindow || 'G-85F78RGWJQ';
+}
+
+function ensureGoogleAnalyticsScriptLoaded() {
+    if (cookieConsentState.gaScriptLoaded) {
+        return Promise.resolve();
+    }
+    if (cookieConsentState.gaScriptLoadPromise) {
+        return cookieConsentState.gaScriptLoadPromise;
+    }
+
+    const markLoaded = () => {
+        cookieConsentState.gaScriptLoaded = true;
+    };
+    const measurementId = getAnalyticsMeasurementId();
+    if (!measurementId) {
+        return Promise.resolve();
+    }
+
+    const existingScript = document.querySelector('script[data-rilono-ga="true"]');
+    if (existingScript) {
+        if (existingScript.getAttribute('data-loaded') === 'true') {
+            markLoaded();
+            return Promise.resolve();
+        }
+        cookieConsentState.gaScriptLoadPromise = new Promise((resolve) => {
+            let done = false;
+            const finish = () => {
+                if (done) return;
+                done = true;
+                existingScript.setAttribute('data-loaded', 'true');
+                markLoaded();
+                resolve();
+            };
+            existingScript.addEventListener('load', finish, { once: true });
+            existingScript.addEventListener('error', finish, { once: true });
+            window.setTimeout(finish, 800);
+        }).finally(() => {
+            cookieConsentState.gaScriptLoadPromise = null;
+        });
+        return cookieConsentState.gaScriptLoadPromise;
+    }
+
+    cookieConsentState.gaScriptLoadPromise = new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.async = true;
+        script.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(measurementId)}`;
+        script.setAttribute('data-rilono-ga', 'true');
+        const finish = () => {
+            script.setAttribute('data-loaded', 'true');
+            markLoaded();
+            resolve();
+        };
+        script.addEventListener('load', finish, { once: true });
+        script.addEventListener('error', finish, { once: true });
+        document.head.appendChild(script);
+    }).finally(() => {
+        cookieConsentState.gaScriptLoadPromise = null;
+    });
+
+    return cookieConsentState.gaScriptLoadPromise;
+}
+
+async function applyCookieConsentPreferences(preferences) {
+    const normalized = normalizeCookieConsentPreferences(preferences);
+    cookieConsentState.preferences = normalized;
+    ensureGtagStub();
+
+    if (normalized.analytics) {
+        await ensureGoogleAnalyticsScriptLoaded();
+    }
+
+    if (typeof window.gtag !== 'function') return;
+
+    window.gtag('consent', 'update', normalized.analytics ? COOKIE_CONSENT_GTAG_GRANTED : COOKIE_CONSENT_GTAG_DENIED);
+
+    if (normalized.analytics) {
+        const measurementId = getAnalyticsMeasurementId();
+        window.gtag('js', new Date());
+        window.gtag('config', measurementId, {
+            anonymize_ip: true,
+            allow_google_signals: false,
+            allow_ad_personalization_signals: false
+        });
+    }
+}
+
+function showCookieConsentBanner() {
+    const banner = document.getElementById('cookieConsentBanner');
+    if (!banner) return;
+    banner.hidden = false;
+}
+
+function hideCookieConsentBanner() {
+    const banner = document.getElementById('cookieConsentBanner');
+    if (!banner) return;
+    banner.hidden = true;
+}
+
+function openCookieSettingsModal() {
+    const modal = document.getElementById('cookieSettingsModal');
+    if (!modal) return;
+    const analyticsToggle = document.getElementById('cookieAnalyticsToggle');
+    if (analyticsToggle) {
+        const currentPreferences = cookieConsentState.preferences || readCookieConsentPreferences() || COOKIE_CONSENT_DEFAULTS;
+        analyticsToggle.checked = Boolean(currentPreferences.analytics);
+    }
+    modal.style.display = 'flex';
+}
+
+function closeCookieSettingsModal() {
+    const modal = document.getElementById('cookieSettingsModal');
+    if (!modal) return;
+    modal.style.display = 'none';
+}
+
+async function acceptAllCookieConsent() {
+    const preferences = persistCookieConsentPreferences({ ...COOKIE_CONSENT_DEFAULTS, analytics: true });
+    await applyCookieConsentPreferences(preferences);
+    hideCookieConsentBanner();
+    closeCookieSettingsModal();
+}
+
+async function rejectNonEssentialCookieConsent() {
+    const preferences = persistCookieConsentPreferences({ ...COOKIE_CONSENT_DEFAULTS, analytics: false });
+    await applyCookieConsentPreferences(preferences);
+    hideCookieConsentBanner();
+    closeCookieSettingsModal();
+}
+
+async function saveCookieSettingsFromModal() {
+    const analyticsToggle = document.getElementById('cookieAnalyticsToggle');
+    const analyticsEnabled = Boolean(analyticsToggle && analyticsToggle.checked);
+    const preferences = persistCookieConsentPreferences({ ...COOKIE_CONSENT_DEFAULTS, analytics: analyticsEnabled });
+    await applyCookieConsentPreferences(preferences);
+    hideCookieConsentBanner();
+    closeCookieSettingsModal();
+}
+
+function initializeCookieConsentManager() {
+    const footerLink = document.getElementById('cookieSettingsFooterLink');
+    const acceptBtn = document.getElementById('cookieAcceptAllBtn');
+    const rejectBtn = document.getElementById('cookieRejectAllBtn');
+    const manageBtn = document.getElementById('cookieManageBtn');
+    const saveBtn = document.getElementById('cookieSavePreferencesBtn');
+    const rejectModalBtn = document.getElementById('cookieRejectAllModalBtn');
+    const closeModalBtn = document.getElementById('cookieSettingsCloseBtn');
+    const modal = document.getElementById('cookieSettingsModal');
+
+    if (footerLink) {
+        footerLink.addEventListener('click', (event) => {
+            event.preventDefault();
+            openCookieSettingsModal();
+        });
+    }
+    if (acceptBtn) {
+        acceptBtn.addEventListener('click', () => { void acceptAllCookieConsent(); });
+    }
+    if (rejectBtn) {
+        rejectBtn.addEventListener('click', () => { void rejectNonEssentialCookieConsent(); });
+    }
+    if (manageBtn) {
+        manageBtn.addEventListener('click', () => {
+            openCookieSettingsModal();
+        });
+    }
+    if (saveBtn) {
+        saveBtn.addEventListener('click', () => { void saveCookieSettingsFromModal(); });
+    }
+    if (rejectModalBtn) {
+        rejectModalBtn.addEventListener('click', () => { void rejectNonEssentialCookieConsent(); });
+    }
+    if (closeModalBtn) {
+        closeModalBtn.addEventListener('click', () => {
+            closeCookieSettingsModal();
+        });
+    }
+    if (modal) {
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                closeCookieSettingsModal();
+            }
+        });
+    }
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            closeCookieSettingsModal();
+        }
+    });
+
+    const existingPreferences = readCookieConsentPreferences();
+    const activePreferences = existingPreferences || COOKIE_CONSENT_DEFAULTS;
+    void applyCookieConsentPreferences(activePreferences);
+
+    if (existingPreferences) {
+        hideCookieConsentBanner();
+    } else {
+        showCookieConsentBanner();
+    }
+}
+
+window.openCookieSettings = openCookieSettingsModal;
 
 const PRICING_BASE_USD = {
     free: 0
@@ -609,6 +883,7 @@ async function initializeFooterVersion() {
 // Initialize app
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
+    initializeCookieConsentManager();
     syncMobileNavState();
     await initializeDocumentCatalog();
     initializeSearchableDropdowns();
