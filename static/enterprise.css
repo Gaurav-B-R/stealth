@@ -81,6 +81,7 @@ body {
     width: 32px;
     height: 32px;
     border-radius: 8px;
+    flex-shrink: 0;
 }
 
 .ent-sidebar-brand-text {
@@ -187,14 +188,16 @@ body {
     width: 32px;
     height: 32px;
     border-radius: 8px;
-    background: linear-gradient(135deg, #2563eb, #7c3aed);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    font-size: 0.75rem;
-    font-weight: 700;
+    overflow: hidden;
     flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.ent-org-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }
 
 .ent-org-info {
@@ -218,6 +221,41 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* Muted burgundy: reads as “exit session” without matching inline error reds */
+.ent-sidebar-logout-btn {
+    margin-top: 0.65rem;
+    width: 100%;
+    height: 36px;
+    border-radius: 8px;
+    border: 1px solid rgba(220, 168, 178, 0.22);
+    background: rgba(48, 28, 36, 0.92);
+    color: #e8b4bc;
+    font-size: 0.78rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    cursor: pointer;
+    transition: all var(--ent-transition);
+}
+
+.ent-sidebar-logout-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.ent-sidebar-logout-btn:hover:not(:disabled) {
+    background: rgba(58, 32, 40, 0.98);
+    border-color: rgba(232, 180, 188, 0.38);
+    color: #f5d0d6;
+}
+
+.ent-sidebar-logout-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
 }
 
 /* ===== HEADER ===== */
@@ -327,13 +365,16 @@ body {
     width: 32px;
     height: 32px;
     border-radius: 8px;
-    background: linear-gradient(135deg, #2563eb, #7c3aed);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    font-size: 0.78rem;
-    font-weight: 700;
+    overflow: hidden;
+    flex-shrink: 0;
+    background: var(--ent-surface-alt);
+}
+
+.ent-user-avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
 }
 
 .ent-user-details {

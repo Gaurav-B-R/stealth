@@ -992,6 +992,149 @@ def _pricing_model_label_for_founder_email(pricing_model: Optional[str]) -> str:
     return normalized.replace("_", " ").title()
 
 
+def _enterprise_role_label(role: Optional[str]) -> str:
+    normalized = str(role or "").strip().lower()
+    labels = {
+        "admin": "Admin",
+        "editor": "Editor",
+        "viewer": "Viewer (view-only)",
+    }
+    return labels.get(normalized, normalized.title() or "Viewer")
+
+
+def send_enterprise_team_invite_email(
+    *,
+    invitee_email: str,
+    invitee_name: Optional[str],
+    organization_name: str,
+    role: Optional[str],
+    portal_url: Optional[str] = None,
+    set_password_url: Optional[str] = None,
+    password_setup_expires_hours: int = 72,
+    invited_by_name: Optional[str] = None,
+    invited_by_email: Optional[str] = None,
+    base_url: str = DEFAULT_PUBLIC_BASE_URL,
+) -> bool:
+    """
+    Send enterprise team invite email when an admin adds a user to an organization.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send enterprise invite email - Resend not configured")
+        return False
+
+    recipient = (invitee_email or "").strip().lower()
+    if not recipient:
+        print("ERROR: Cannot send enterprise invite email - invitee_email missing")
+        return False
+
+    org_name_raw = (organization_name or "").strip() or "your organization"
+    portal_destination = (portal_url or "").strip() or f"{base_url.rstrip('/')}/enterprise"
+    password_setup_destination = (
+        (set_password_url or "").strip()
+        or f"{base_url.rstrip('/')}/reset-password?token="
+    )
+    inviter_label = (
+        (invited_by_name or "").strip()
+        or (invited_by_email or "").strip()
+        or "your organization admin"
+    )
+
+    safe_invitee_name = escape((invitee_name or "").strip() or "there")
+    safe_org_name = escape(org_name_raw)
+    safe_org_banner_name = escape(org_name_raw.upper())
+    safe_role = escape(_enterprise_role_label(role))
+    safe_portal_url = escape(portal_destination)
+    safe_password_setup_url = escape(password_setup_destination)
+    safe_inviter = escape(inviter_label)
+    safe_expires_hours = max(1, int(password_setup_expires_hours))
+
+    subject = f"You're invited to {org_name_raw} on Rilono Enterprise"
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>{escape(subject)}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+              <tr>
+                <td style="padding:26px 28px;background:linear-gradient(135deg,#1e3a8a 0%,#2563eb 100%);color:#ffffff;">
+                  <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">{safe_org_banner_name}</div>
+                  <h1 style="margin:10px 0 0 0;font-size:28px;line-height:1.2;">Team Invitation</h1>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:26px 28px;color:#0f172a;">
+                  <p style="margin:0 0 14px 0;font-size:15px;">Hi {safe_invitee_name},</p>
+                  <p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;">
+                    You were added to <strong>{safe_org_name}</strong> on Rilono Enterprise by {safe_inviter}.
+                  </p>
+                  <div style="background:#eff6ff;color:#1e3a8a;padding:12px 14px;border-radius:10px;font-size:14px;line-height:1.5;margin-bottom:18px;">
+                    Access Level: <strong>{safe_role}</strong>
+                  </div>
+                  <div style="text-align:center;margin-top:20px;">
+                    <a href="{safe_password_setup_url}" style="display:inline-block;padding:12px 22px;border-radius:10px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;">
+                      Set Password &amp; Continue
+                    </a>
+                  </div>
+                  <p style="margin:18px 0 0 0;font-size:13px;color:#475569;line-height:1.6;">
+                    Use this unique invitation link to create your password and sign in.
+                    The link expires in <strong>{safe_expires_hours} hours</strong>.
+                  </p>
+                  <p style="margin:12px 0 0 0;font-size:13px;color:#64748b;line-height:1.6;">
+                    For security, use a strong password with at least 10 characters, including uppercase, lowercase,
+                    a number, and a special character.
+                  </p>
+                  <p style="margin:14px 0 0 0;font-size:13px;color:#64748b;line-height:1.6;">
+                    Enterprise portal: <a href="{safe_portal_url}" style="color:#2563eb;text-decoration:none;">{safe_portal_url}</a>
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    """
+
+    text_content = (
+        f"Team Invitation - {org_name_raw}\n\n"
+        f"Hi {(invitee_name or '').strip() or 'there'},\n\n"
+        f"You were added to {org_name_raw} on Rilono Enterprise by {inviter_label}.\n"
+        f"Access Level: {_enterprise_role_label(role)}\n\n"
+        f"Set Password & Continue: {password_setup_destination}\n"
+        f"This unique invitation link expires in {safe_expires_hours} hours.\n"
+        "Use a strong password with at least 10 characters including uppercase, lowercase, a number, "
+        "and a special character.\n\n"
+        f"Enterprise Portal: {portal_destination}\n"
+    )
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            print(f"Enterprise invite email sent to {recipient} (ID: {email_id})")
+            return True
+        print(f"Failed to send enterprise invite email to {recipient}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending enterprise invite email to {recipient}: {str(e)}")
+        return False
+
+
 def send_founder_new_verified_user_alert(
     *,
     user_id: int,

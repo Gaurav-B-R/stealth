@@ -6,7 +6,9 @@ let currentSubscription = null;
 let turnstileSiteKey = null;
 let turnstileWidgetIds = {
     login: null,
-    register: null
+    register: null,
+    forgotPassword: null,
+    resetPassword: null
 };
 let newsRequestInFlight = false;
 let visaInterviewRequestInFlight = false;
@@ -838,28 +840,116 @@ async function initializeTurnstile() {
             const data = await response.json();
             turnstileSiteKey = data.site_key;
 
+            const loginWidget = document.getElementById('turnstile-login');
+            const registerWidget = document.getElementById('turnstile-register');
+            const forgotWidget = document.getElementById('turnstile-forgot-password');
+            const resetWidget = document.getElementById('turnstile-reset-password');
+            const widgets = [loginWidget, registerWidget, forgotWidget, resetWidget];
+
             if (!turnstileSiteKey) {
                 // Hide widgets if no site key is configured
-                const loginWidget = document.getElementById('turnstile-login');
-                const registerWidget = document.getElementById('turnstile-register');
-                if (loginWidget) loginWidget.style.display = 'none';
-                if (registerWidget) registerWidget.style.display = 'none';
+                widgets.forEach((widget) => {
+                    if (widget) widget.style.display = 'none';
+                });
                 return;
             }
 
             // Set site key attribute - Turnstile will auto-render when script loads
-            const loginWidget = document.getElementById('turnstile-login');
-            const registerWidget = document.getElementById('turnstile-register');
-            if (loginWidget) {
-                loginWidget.setAttribute('data-sitekey', turnstileSiteKey);
-            }
-            if (registerWidget) {
-                registerWidget.setAttribute('data-sitekey', turnstileSiteKey);
-            }
+            widgets.forEach((widget) => {
+                if (widget) widget.setAttribute('data-sitekey', turnstileSiteKey);
+            });
         }
     } catch (error) {
         console.error('Error loading Turnstile site key:', error);
     }
+}
+
+function renderAuthTurnstileWidget(widgetElement, widgetKey) {
+    if (!widgetElement) return;
+
+    if (!turnstileSiteKey) {
+        widgetElement.style.display = 'none';
+        return;
+    }
+
+    widgetElement.style.display = 'block';
+    if (!widgetElement.getAttribute('data-sitekey')) {
+        widgetElement.setAttribute('data-sitekey', turnstileSiteKey);
+    }
+
+    const renderWidget = () => {
+        if (!window.turnstile) {
+            setTimeout(renderWidget, 100);
+            return;
+        }
+
+        try {
+            // If widget auto-rendered by Turnstile, reuse and reset it.
+            window.turnstile.getResponse(widgetElement);
+            window.turnstile.reset(widgetElement);
+            turnstileWidgetIds[widgetKey] = widgetElement;
+            return;
+        } catch (autoRenderCheckError) {
+            // Continue with explicit render path.
+        }
+
+        try {
+            const existingWidget = turnstileWidgetIds[widgetKey];
+            if (existingWidget) {
+                window.turnstile.reset(existingWidget);
+                return;
+            }
+            const widgetId = window.turnstile.render(widgetElement, {
+                sitekey: turnstileSiteKey,
+                theme: 'light'
+            });
+            turnstileWidgetIds[widgetKey] = widgetId || widgetElement;
+        } catch (error) {
+            try {
+                const widgetId = window.turnstile.render(widgetElement, {
+                    sitekey: turnstileSiteKey,
+                    theme: 'light'
+                });
+                turnstileWidgetIds[widgetKey] = widgetId || widgetElement;
+            } catch (renderError) {
+                console.error('Error rendering Turnstile:', renderError);
+            }
+        }
+    };
+
+    renderWidget();
+}
+
+function getAuthTurnstileToken(widgetElement, widgetKey) {
+    if (!turnstileSiteKey || !window.turnstile) return '';
+
+    try {
+        if (widgetElement) {
+            const directToken = window.turnstile.getResponse(widgetElement);
+            if (directToken) return directToken;
+        }
+    } catch (error) {
+        // noop
+    }
+
+    try {
+        const knownWidgetId = turnstileWidgetIds[widgetKey];
+        if (knownWidgetId) {
+            const token = window.turnstile.getResponse(knownWidgetId);
+            if (token) return token;
+        }
+    } catch (error) {
+        // noop
+    }
+
+    if (widgetElement && widgetElement.id) {
+        try {
+            return window.turnstile.getResponse(widgetElement.id) || '';
+        } catch (error) {
+            return '';
+        }
+    }
+    return '';
 }
 
 async function initializeFooterVersion() {
@@ -2261,6 +2351,8 @@ function showLogin(skipURLUpdate = false) {
 function showForgotPassword(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('forgotPasswordSection').style.display = 'block';
+    const forgotWidget = document.getElementById('turnstile-forgot-password');
+    renderAuthTurnstileWidget(forgotWidget, 'forgotPassword');
     if (!skipURLUpdate) {
         updateURL('/forgot-password', false);
     }
@@ -2271,6 +2363,8 @@ function showResetPassword(token, skipURLUpdate = false) {
     document.getElementById('resetPasswordSection').style.display = 'block';
     document.getElementById('resetToken').value = token;
     updateResetPasswordHint();
+    const resetWidget = document.getElementById('turnstile-reset-password');
+    renderAuthTurnstileWidget(resetWidget, 'resetPassword');
     if (!skipURLUpdate) {
         updateURL(`/reset-password?token=${encodeURIComponent(token)}`, false);
     }
@@ -2287,6 +2381,8 @@ async function handleResetPasswordPage(skipURLUpdate = false) {
     if (token) {
         document.getElementById('resetToken').value = token;
         updateResetPasswordHint();
+        const resetWidget = document.getElementById('turnstile-reset-password');
+        renderAuthTurnstileWidget(resetWidget, 'resetPassword');
     } else {
         // No token in URL, show error
         document.getElementById('resetPasswordSection').innerHTML = `
@@ -7256,19 +7352,30 @@ async function logout() {
 async function handleForgotPassword(e) {
     e.preventDefault();
     const email = document.getElementById('forgotPasswordEmail').value.trim();
+    const forgotWidget = document.getElementById('turnstile-forgot-password');
+    const turnstileToken = getAuthTurnstileToken(forgotWidget, 'forgotPassword');
 
     if (!email) {
         showMessage('Please enter your email address', 'error');
         return;
     }
 
+    if (turnstileSiteKey && !turnstileToken) {
+        showMessage('Please complete the security verification.', 'error');
+        return;
+    }
+
     try {
+        const payload = { email: email };
+        if (turnstileToken) {
+            payload.cf_turnstile_token = turnstileToken;
+        }
         const response = await fetch(`${API_BASE}/api/auth/forgot-password`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ email: email })
+            body: JSON.stringify(payload)
         });
 
         const data = await response.json();
@@ -7321,6 +7428,15 @@ async function handleForgotPassword(e) {
     } catch (error) {
         console.error('Forgot password error:', error);
         showMessage('An error occurred. Please try again.', 'error');
+    } finally {
+        if (turnstileSiteKey && forgotWidget && window.turnstile) {
+            try {
+                const widgetId = turnstileWidgetIds.forgotPassword || forgotWidget;
+                window.turnstile.reset(widgetId);
+            } catch (resetError) {
+                // noop
+            }
+        }
     }
 }
 
@@ -7329,6 +7445,8 @@ async function handleResetPassword(e) {
     const token = document.getElementById('resetToken').value;
     const newPassword = document.getElementById('resetPasswordNew').value;
     const confirmPassword = document.getElementById('resetPasswordConfirm').value;
+    const resetWidget = document.getElementById('turnstile-reset-password');
+    const turnstileToken = getAuthTurnstileToken(resetWidget, 'resetPassword');
 
     if (!token) {
         showMessage('Invalid reset token', 'error');
@@ -7347,16 +7465,25 @@ async function handleResetPassword(e) {
         return;
     }
 
+    if (turnstileSiteKey && !turnstileToken) {
+        showMessage('Please complete the security verification.', 'error');
+        return;
+    }
+
     try {
+        const payload = {
+            token: token,
+            new_password: newPassword
+        };
+        if (turnstileToken) {
+            payload.cf_turnstile_token = turnstileToken;
+        }
         const response = await fetch(`${API_BASE}/api/auth/reset-password`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-                token: token,
-                new_password: newPassword
-            })
+            body: JSON.stringify(payload)
         });
 
         const data = await response.json();
@@ -7390,6 +7517,15 @@ async function handleResetPassword(e) {
     } catch (error) {
         console.error('Reset password error:', error);
         showMessage('An error occurred. Please try again.', 'error');
+    } finally {
+        if (turnstileSiteKey && resetWidget && window.turnstile) {
+            try {
+                const widgetId = turnstileWidgetIds.resetPassword || resetWidget;
+                window.turnstile.reset(widgetId);
+            } catch (resetError) {
+                // noop
+            }
+        }
     }
 }
 

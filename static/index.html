@@ -486,6 +486,9 @@
                         <label for="forgotPasswordEmail">Email Address</label>
                         <input type="email" id="forgotPasswordEmail" required placeholder="your.email@university.edu">
                     </div>
+                    <div class="form-group" style="display: flex; justify-content: center; margin-bottom: 1rem;">
+                        <div id="turnstile-forgot-password" class="cf-turnstile" data-theme="light"></div>
+                    </div>
                     <button type="submit" class="btn btn-primary">Send Reset Link</button>
                 </form>
                 <p class="auth-switch">
@@ -521,6 +524,9 @@
                         <label for="resetPasswordConfirm">Confirm New Password</label>
                         <input type="password" id="resetPasswordConfirm" required minlength="10"
                             autocomplete="new-password">
+                    </div>
+                    <div class="form-group" style="display: flex; justify-content: center; margin-bottom: 1rem;">
+                        <div id="turnstile-reset-password" class="cf-turnstile" data-theme="light"></div>
                     </div>
                     <button type="submit" class="btn btn-primary">Reset Password</button>
                 </form>

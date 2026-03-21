@@ -613,9 +613,25 @@ def forgot_password(
     )
 
     email = payload.email.lower().strip()
+    turnstile_token = (payload.cf_turnstile_token or "").strip()
+    ip_whitelisted = is_request_ip_whitelisted(request)
     
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
+
+    if is_turnstile_enabled() and not ip_whitelisted:
+        if turnstile_token:
+            client_ip = extract_client_ip(request) if request else None
+            if not verify_turnstile_token(turnstile_token, client_ip):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Security verification failed. Please try again."
+                )
+        elif _is_turnstile_required():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security verification is required"
+            )
     
     generic_message = {
         "message": "If an account with this email exists, a password reset link has been sent."
@@ -649,12 +665,32 @@ def forgot_password(
     return generic_message
 
 @router.post("/reset-password")
-def reset_password(request: schemas.PasswordReset, db: Session = Depends(get_db)):
+def reset_password(
+    payload: schemas.PasswordReset,
+    request: Request,
+    db: Session = Depends(get_db)
+):
     """
     Reset password using the reset token.
     """
-    token = request.token
-    new_password = request.new_password
+    token = payload.token
+    new_password = payload.new_password
+    turnstile_token = (payload.cf_turnstile_token or "").strip()
+
+    ip_whitelisted = is_request_ip_whitelisted(request)
+    if is_turnstile_enabled() and not ip_whitelisted:
+        if turnstile_token:
+            client_ip = extract_client_ip(request) if request else None
+            if not verify_turnstile_token(turnstile_token, client_ip):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Security verification failed. Please try again."
+                )
+        elif _is_turnstile_required():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Security verification is required"
+            )
     
     if not token:
         raise HTTPException(status_code=400, detail="Reset token is required")

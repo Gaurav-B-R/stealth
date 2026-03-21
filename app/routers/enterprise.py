@@ -1,7 +1,9 @@
 import os
 import re
 import secrets
+import logging
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func
@@ -19,10 +21,18 @@ from app.auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     set_auth_cookie,
 )
-from app.utils.rate_limiter import extract_client_ip, is_request_ip_whitelisted
+from app.utils.rate_limiter import (
+    check_ip_rate_limit,
+    extract_client_ip,
+    is_request_ip_whitelisted,
+)
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
+from app.email_service import send_enterprise_team_invite_email
+from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
+from app.utils.token_security import hash_token
 
 router = APIRouter(prefix="/api/enterprise", tags=["enterprise"])
+logger = logging.getLogger(__name__)
 
 ENTERPRISE_ROLE_ADMIN = "admin"
 ENTERPRISE_ROLE_EDITOR = "editor"
@@ -55,6 +65,17 @@ ENTERPRISE_RESERVED_SUBDOMAINS = {
 }
 ENTERPRISE_ROOT_DOMAIN = (os.getenv("ENTERPRISE_ROOT_DOMAIN", "rilono.com").strip().lower() or "rilono.com").lstrip(".")
 ENTERPRISE_PORTAL_SCHEME = os.getenv("ENTERPRISE_PORTAL_SCHEME", "https").strip().lower() or "https"
+ENTERPRISE_PASSWORD_SETUP_BASE_URL = (
+    os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL).strip() or DEFAULT_PUBLIC_BASE_URL
+).rstrip("/")
+ENTERPRISE_INVITE_PASSWORD_SETUP_EXPIRES_HOURS = max(
+    1,
+    int(os.getenv("ENTERPRISE_INVITE_PASSWORD_SETUP_EXPIRES_HOURS", "72")),
+)
+ENTERPRISE_LOGIN_RATE_LIMIT = int(os.getenv("ENTERPRISE_LOGIN_RATE_LIMIT", os.getenv("LOGIN_RATE_LIMIT", "12")))
+ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS = int(
+    os.getenv("ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS", os.getenv("LOGIN_RATE_WINDOW_SECONDS", "300"))
+)
 
 
 class EnterpriseLoginRequest(BaseModel):
@@ -88,6 +109,28 @@ def _is_development_env() -> bool:
 
 def _is_turnstile_required() -> bool:
     return is_turnstile_enabled() and not _is_development_env()
+
+
+def _enforce_rate_limit_or_429(
+    request: Request,
+    scope: str,
+    limit: int,
+    window_seconds: int,
+    extra_key: str | None = None,
+) -> None:
+    allowed, retry_after = check_ip_rate_limit(
+        request=request,
+        scope=scope,
+        limit=limit,
+        window_seconds=window_seconds,
+        extra_key=extra_key,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 def _normalize_enterprise_role(raw_role: str | None) -> str:
@@ -458,6 +501,13 @@ async def enterprise_login(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="enterprise.login",
+        limit=ENTERPRISE_LOGIN_RATE_LIMIT,
+        window_seconds=ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS,
+    )
+
     turnstile_token = (payload.cf_turnstile_token or "").strip()
     ip_whitelisted = is_request_ip_whitelisted(request)
     if is_turnstile_enabled() and not ip_whitelisted:
@@ -679,15 +729,59 @@ def enterprise_team_add_user(
             )
         )
 
+    # Every invite issues a fresh one-time password setup link for this recipient.
+    password_setup_token = generate_verification_token()
+    user.password_reset_token = hash_token(password_setup_token)
+    user.password_reset_token_expires = datetime.utcnow() + timedelta(
+        hours=ENTERPRISE_INVITE_PASSWORD_SETUP_EXPIRES_HOURS
+    )
+
     db.commit()
 
+    portal_url = _build_enterprise_portal_url(organization.subdomain_slug)
+    password_setup_url = (
+        f"{ENTERPRISE_PASSWORD_SETUP_BASE_URL}/reset-password"
+        f"?token={quote(password_setup_token, safe='')}"
+    )
+    invite_email_sent = False
+    try:
+        invite_email_sent = send_enterprise_team_invite_email(
+            invitee_email=target_email,
+            invitee_name=user.full_name,
+            organization_name=organization.company_name,
+            role=target_role,
+            portal_url=portal_url,
+            set_password_url=password_setup_url,
+            password_setup_expires_hours=ENTERPRISE_INVITE_PASSWORD_SETUP_EXPIRES_HOURS,
+            invited_by_name=current_user.full_name,
+            invited_by_email=current_user.email,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send enterprise invite email (org_id=%s, invitee=%s)",
+            organization.id,
+            target_email,
+        )
+
+    base_message = (
+        "User added to organization."
+        if not created_user
+        else "User account created and added to organization."
+    )
+    if invite_email_sent:
+        response_message = f"{base_message} Invitation email sent."
+    else:
+        response_message = (
+            f"{base_message} Invite email could not be sent right now. "
+            "Ask the user to request a fresh password setup link from the login screen."
+        )
+
     return {
-        "message": (
-            "User added to organization."
-            if not created_user
-            else "User account created and added to organization."
-        ),
+        "message": response_message,
         "created_user": created_user,
+        "invite_email_sent": invite_email_sent,
+        "invite_email_to": target_email,
+        "organization_portal_url": portal_url,
         "members": _list_organization_members(db, organization.id),
     }
 

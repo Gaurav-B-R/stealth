@@ -33,11 +33,12 @@
     const teamAccessNotice = $("#entTeamAccessNotice");
 
     const userNameEl = $("#entUserName");
-    const userAvatarEl = $("#entUserAvatar");
+    const userAvatarImgEl = $("#entUserAvatarImg");
     const userRoleEl = $(".ent-user-role");
     const orgNameEl = $("#entOrgName");
-    const orgAvatarEl = $(".ent-org-avatar");
+    const orgCardAvatarImgEl = $("#entOrgCardAvatarImg");
     const orgPortalEl = $("#entOrgPortalUrl");
+    const sidebarLogoutBtn = $("#entSidebarLogoutBtn");
 
     const turnstileWrap = $("#entTurnstileWrap");
     const turnstileHint = $("#entTurnstileHint");
@@ -154,6 +155,23 @@
         }
 
         return value.slice(0, 2).toUpperCase();
+    }
+
+    /** Deterministic “random” photo per org/user (stable across sessions). */
+    function hashStringFnv1a(input) {
+        const str = String(input || "");
+        let h = 2166136261;
+        for (let i = 0; i < str.length; i += 1) {
+            h ^= str.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+        }
+        return (h >>> 0).toString(16);
+    }
+
+    function picsumPortraitUrl(seedKey, size) {
+        const seed = hashStringFnv1a(seedKey).replace(/[^a-f0-9]/g, "") || "0";
+        const n = Math.max(48, Math.min(512, Number(size) || 128));
+        return `https://picsum.photos/seed/rilono-${seed}/${n}/${n}`;
     }
 
     function escapeHtml(input) {
@@ -333,14 +351,30 @@
     }
 
     function applyOrganizationUI() {
-        const rawCompanyName = (state.organization && state.organization.company_name)
-            ? String(state.organization.company_name).trim()
-            : "";
+        const org = state.organization;
+        if (!org) {
+            if (orgCardAvatarImgEl) {
+                orgCardAvatarImgEl.src = "/static/logo.png";
+                orgCardAvatarImgEl.alt = "";
+            }
+            if (orgNameEl) orgNameEl.textContent = "Your organization";
+            if (orgPortalEl) orgPortalEl.textContent = "Enterprise Plan";
+            updateSubdomainPreview();
+            return;
+        }
+
+        const rawCompanyName = org.company_name ? String(org.company_name).trim() : "";
         const companyName = rawCompanyName || "Enterprise Organization";
-        const subdomainSlug = (state.organization && state.organization.subdomain_slug) || "";
-        const orgInitials = getInitials(companyName, "EO");
+        const subdomainSlug = org.subdomain_slug || "";
+        const orgKey = org.id != null ? `org-${org.id}` : `org-${subdomainSlug || "pending"}`;
+        const photoUrl = picsumPortraitUrl(`${orgKey}|${companyName}|${subdomainSlug}`, 128);
+
+        if (orgCardAvatarImgEl) {
+            orgCardAvatarImgEl.src = photoUrl;
+            orgCardAvatarImgEl.alt = "";
+        }
+
         if (orgNameEl) orgNameEl.textContent = companyName;
-        if (orgAvatarEl) orgAvatarEl.textContent = orgInitials;
         if (orgPortalEl) {
             orgPortalEl.textContent = subdomainSlug
                 ? `${subdomainSlug}.${ENTERPRISE_ROOT_DOMAIN}`
@@ -358,9 +392,12 @@
     function applyUserUI() {
         const user = state.user;
         if (!user) return;
-        if (userNameEl) userNameEl.textContent = user.full_name || user.email || "Enterprise User";
-        if (userAvatarEl) {
-            userAvatarEl.textContent = getInitials(user.full_name || user.email, "EU");
+        const displayName = user.full_name || user.email || "Enterprise User";
+        if (userNameEl) userNameEl.textContent = displayName;
+        if (userAvatarImgEl) {
+            const uid = user.id != null ? String(user.id) : displayName;
+            userAvatarImgEl.src = picsumPortraitUrl(`user-${uid}|${user.email || ""}|${displayName}`, 128);
+            userAvatarImgEl.alt = displayName;
         }
         const role = state.membership ? normalizeRole(state.membership.role) : "viewer";
         if (userRoleEl) {
@@ -732,6 +769,41 @@
         }
     }
 
+    async function handlePortalLogout() {
+        if (!sidebarLogoutBtn || sidebarLogoutBtn.disabled) return;
+        setButtonLoading(sidebarLogoutBtn, true, "Logging out...", "Logout");
+        try {
+            await apiRequest("/api/auth/logout", { method: "POST" });
+        } catch (error) {
+            const message = error.detail || "Unable to logout right now. Please try again.";
+            if (state.currentSection === "team") {
+                showTeamFlash(message, "error");
+            } else {
+                window.alert(message);
+            }
+            setButtonLoading(sidebarLogoutBtn, false, "Logging out...", "Logout");
+            return;
+        }
+
+        state.user = null;
+        state.organization = null;
+        state.membership = null;
+        state.permissions = {
+            can_view_data: false,
+            can_edit_data: false,
+            can_manage_users: false,
+        };
+        state.teamMembers = [];
+
+        hideAuthFlash();
+        hideTeamFlash();
+        if (loginForm) loginForm.reset();
+        resetTurnstileWidget();
+        showAuthScreen();
+        showAuthFlash("Logged out successfully.", "success");
+        setButtonLoading(sidebarLogoutBtn, false, "Logging out...", "Logout");
+    }
+
     if (loginForm) {
         loginForm.addEventListener("submit", async (event) => {
             event.preventDefault();
@@ -886,6 +958,9 @@
     }
     if (sidebarOverlay) {
         sidebarOverlay.addEventListener("click", closeMobileSidebar);
+    }
+    if (sidebarLogoutBtn) {
+        sidebarLogoutBtn.addEventListener("click", handlePortalLogout);
     }
 
     hideAllScreens();

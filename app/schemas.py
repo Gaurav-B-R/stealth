@@ -191,10 +191,12 @@ class ResendVerificationRequest(BaseModel):
 
 class PasswordResetRequest(BaseModel):
     email: str
+    cf_turnstile_token: Optional[str] = None
 
 class PasswordReset(BaseModel):
     token: str
     new_password: str
+    cf_turnstile_token: Optional[str] = None
 
 
 class PasswordChangeRequest(BaseModel):
