@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
 from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise
@@ -35,6 +35,7 @@ Base.metadata.create_all(bind=engine)
 
 APP_NAME = os.getenv("APP_NAME", "Rilono").strip() or "Rilono"
 APP_VERSION = os.getenv("APP_VERSION", "1.3.2").strip() or "1.3.2"
+ENTERPRISE_ROOT_DOMAIN = (os.getenv("ENTERPRISE_ROOT_DOMAIN", "rilono.com").strip().lower() or "rilono.com").lstrip(".")
 
 app = FastAPI(
     title=APP_NAME,
@@ -87,6 +88,29 @@ def _parse_cors_origins() -> list[str]:
         # Credentials are enabled; wildcard origin is unsafe and invalid in many browsers.
         origins = [origin for origin in origins if origin != "*"]
     return origins or DEFAULT_CORS_ORIGINS
+
+
+def _request_host(request: Request) -> str:
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+        or ""
+    ).split(",")[0].strip().lower()
+    if ":" in host:
+        host = host.split(":", 1)[0].strip().lower()
+    return host
+
+
+def _is_enterprise_subdomain_request(request: Request) -> bool:
+    host = _request_host(request)
+    if not host:
+        return False
+
+    root_domain = ENTERPRISE_ROOT_DOMAIN
+    if host in {root_domain, f"www.{root_domain}"}:
+        return False
+    return host.endswith(f".{root_domain}")
 
 
 # Add CORS middleware with explicit origins only.
@@ -179,8 +203,11 @@ if os.path.exists(uploads_dir):
     app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 @app.get("/")
-async def read_root():
+async def read_root(request: Request):
     """Serve the main HTML page"""
+    if _is_enterprise_subdomain_request(request):
+        return RedirectResponse(url="/enterprise", status_code=307)
+
     html_path = os.path.join(os.path.dirname(__file__), "..", "static", "index.html")
     if os.path.exists(html_path):
         return FileResponse(html_path)

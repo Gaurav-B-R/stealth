@@ -604,6 +604,27 @@
         return data;
     }
 
+    function redirectToOrganizationPortalIfNeeded(payload) {
+        const portalUrl = payload && payload.organization && payload.organization.portal_url
+            ? String(payload.organization.portal_url).trim()
+            : "";
+        if (!portalUrl) return false;
+
+        let target;
+        try {
+            target = new URL(portalUrl, window.location.origin);
+        } catch (_) {
+            return false;
+        }
+
+        const currentHost = String(window.location.host || "").toLowerCase();
+        const targetHost = String(target.host || "").toLowerCase();
+        if (!targetHost || targetHost === currentHost) return false;
+
+        window.location.replace(target.toString());
+        return true;
+    }
+
     function applyEnterpriseContext(payload) {
         state.user = payload.user || null;
         state.organization = payload.organization || null;
@@ -692,6 +713,9 @@
     async function bootstrapSession() {
         try {
             const data = await apiRequest("/api/enterprise/me");
+            if (redirectToOrganizationPortalIfNeeded(data)) {
+                return;
+            }
             applyEnterpriseContext(data);
             if (data.onboarding_required) {
                 showOnboardingScreen();
@@ -737,6 +761,9 @@
                     method: "POST",
                     body: payload,
                 });
+                if (redirectToOrganizationPortalIfNeeded(data)) {
+                    return;
+                }
                 applyEnterpriseContext(data);
                 if (data.onboarding_required) {
                     showOnboardingScreen();
@@ -784,6 +811,9 @@
                         subdomain_slug: subdomainSlug,
                     },
                 });
+                if (redirectToOrganizationPortalIfNeeded(data)) {
+                    return;
+                }
                 applyEnterpriseContext(data);
                 showDashboardShell();
                 switchToSection("overview");
