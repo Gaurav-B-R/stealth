@@ -10,10 +10,77 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/enterprise.css?v=3">
+    <link rel="stylesheet" href="/static/enterprise.css?v=6">
 </head>
 
 <body>
+
+    <!-- ============================== -->
+    <!--   ORGANIZATION SETUP (full page) -->
+    <!-- ============================== -->
+    <div id="entOnboardingScreen" class="ent-onboarding-screen" style="display:none">
+        <header class="ent-onboarding-topbar">
+            <div class="ent-onboarding-brand">
+                <img src="/static/logo.png" alt="Rilono">
+                <div class="ent-onboarding-brand-text">
+                    <span class="ent-onboarding-brand-name">Rilono</span>
+                    <span class="ent-onboarding-brand-label">Enterprise</span>
+                </div>
+            </div>
+        </header>
+
+        <main class="ent-onboarding-main">
+            <div class="ent-onboarding-container">
+                <nav class="ent-onboarding-breadcrumb" aria-label="Setup progress">
+                    <span class="ent-onboarding-step-done">1</span>
+                    <span class="ent-onboarding-step-line"></span>
+                    <span class="ent-onboarding-step-current">2</span>
+                    <span class="ent-onboarding-step-line ent-onboarding-step-line-muted"></span>
+                    <span class="ent-onboarding-step-pending">3</span>
+                </nav>
+                <p class="ent-onboarding-kicker">Organization profile</p>
+                <h1 class="ent-onboarding-title">Set up your organization</h1>
+                <p class="ent-onboarding-lead">
+                    Register your company name to activate your enterprise workspace. You will reach the dashboard after this step.
+                </p>
+
+                <div class="ent-onboarding-panel">
+                    <div id="entOnboardingFlash" class="ent-flash info" style="display:none"></div>
+                    <form id="entOnboardingForm" autocomplete="organization">
+                        <div class="ent-form-group">
+                            <label class="ent-form-label" for="entCompanyName">Legal or operating company name</label>
+                            <input class="ent-form-input" id="entCompanyName" type="text" maxlength="120" placeholder="e.g. Acme Immigration Services" required>
+                            <p class="ent-form-hint">This appears in your workspace and on internal reports.</p>
+                        </div>
+                        <div class="ent-form-group">
+                            <label class="ent-form-label" for="entSubdomainSlug">Organization URL (cannot be changed later)</label>
+                            <input
+                                class="ent-form-input"
+                                id="entSubdomainSlug"
+                                type="text"
+                                maxlength="32"
+                                placeholder="acme-immigration"
+                                inputmode="text"
+                                autocapitalize="none"
+                                spellcheck="false"
+                                required
+                            >
+                            <p class="ent-form-hint">
+                                Portal URL: <span id="entSubdomainPreview">https://acme-immigration.rilono.com/enterprise</span>
+                            </p>
+                        </div>
+                        <button type="submit" class="ent-btn ent-btn-primary ent-btn-full" id="entOnboardingBtn">
+                            Continue to dashboard
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </main>
+
+        <footer class="ent-onboarding-page-footer">
+            <span>&copy; 2026 Rilono Technologies. Enterprise onboarding.</span>
+        </footer>
+    </div>
 
     <!-- ============================== -->
     <!--       AUTH / LOGIN SCREEN       -->
@@ -27,7 +94,7 @@
 
             <div class="ent-auth-hero-content">
                 <h2>Visa management at&nbsp;scale</h2>
-                <p>Streamline F-1 visa documentation for thousands of students across your organization.</p>
+                <p>Manage all visa types in one place with a secure enterprise workflow for your organization.</p>
                 <ul class="ent-auth-hero-features">
                     <li>
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
@@ -35,7 +102,7 @@
                     </li>
                     <li>
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                        Document compliance monitoring
+                        Multi-visa case management (F-1, H-1B, J-1, B1/B2, O-1, more)
                     </li>
                     <li>
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
@@ -161,7 +228,7 @@
                     <div class="ent-org-avatar">AC</div>
                     <div class="ent-org-info">
                         <div class="ent-org-name" id="entOrgName">Acme Corp</div>
-                        <div class="ent-org-plan">Enterprise Plan</div>
+                        <div class="ent-org-plan" id="entOrgPortalUrl">Enterprise Plan</div>
                     </div>
                 </div>
             </div>
@@ -336,7 +403,7 @@
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-purple">H-1B</span></td>
                                             <td><span class="ent-chip ent-chip-amber">In Review</span></td>
                                             <td style="color:var(--ent-ink-secondary); font-size:0.82rem">5 hours ago</td>
                                             <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
@@ -351,7 +418,7 @@
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-blue">J-1</span></td>
                                             <td><span class="ent-chip ent-chip-green">Approved</span></td>
                                             <td style="color:var(--ent-ink-secondary); font-size:0.82rem">1 day ago</td>
                                             <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
@@ -366,7 +433,7 @@
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-gray">B1/B2</span></td>
                                             <td><span class="ent-chip ent-chip-red">Action Required</span></td>
                                             <td style="color:var(--ent-ink-secondary); font-size:0.82rem">1 day ago</td>
                                             <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
@@ -381,7 +448,7 @@
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
+                                            <td><span class="ent-chip ent-chip-purple">O-1</span></td>
                                             <td><span class="ent-chip ent-chip-amber">In Review</span></td>
                                             <td style="color:var(--ent-ink-secondary); font-size:0.82rem">2 days ago</td>
                                             <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
@@ -645,15 +712,68 @@
                 <div class="ent-welcome-bar">
                     <div class="ent-welcome-text">
                         <h2>Team</h2>
-                        <p>Manage team members and their access levels.</p>
+                        <p>Manage users and permissions for your enterprise organization.</p>
                     </div>
                 </div>
-                <div class="ent-card">
-                    <div class="ent-card-body">
-                        <div class="ent-empty">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>
-                            <h3>Team management coming soon</h3>
-                            <p>Invite team members, assign roles, and manage permissions for your organization.</p>
+
+                <div id="entTeamFlash" class="ent-flash info" style="display:none;"></div>
+
+                <div class="ent-content-grid ent-team-grid">
+                    <div class="ent-card">
+                        <div class="ent-card-header">
+                            <span class="ent-card-title">Team Members</span>
+                        </div>
+                        <div class="ent-card-body no-pad">
+                            <div class="ent-table-wrap">
+                                <table class="ent-table">
+                                    <thead>
+                                        <tr>
+                                            <th>User</th>
+                                            <th>Email</th>
+                                            <th>Role</th>
+                                            <th>Last Login</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="entTeamTableBody">
+                                        <tr>
+                                            <td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">No team members found.</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ent-card">
+                        <div class="ent-card-header">
+                            <span class="ent-card-title">Add Team User</span>
+                        </div>
+                        <div class="ent-card-body">
+                            <p id="entTeamAccessNotice" class="ent-team-note">
+                                Only organization admins can add, remove, or change member roles.
+                            </p>
+                            <form id="entTeamAddForm" autocomplete="off">
+                                <div class="ent-form-group">
+                                    <label class="ent-form-label" for="entTeamEmail">User email</label>
+                                    <input class="ent-form-input" id="entTeamEmail" type="email" placeholder="teammate@company.com" required>
+                                </div>
+                                <div class="ent-form-group">
+                                    <label class="ent-form-label" for="entTeamName">Full name (optional)</label>
+                                    <input class="ent-form-input" id="entTeamName" type="text" maxlength="120" placeholder="Jane Doe">
+                                </div>
+                                <div class="ent-form-group">
+                                    <label class="ent-form-label" for="entTeamRole">Access</label>
+                                    <select class="ent-form-input ent-select" id="entTeamRole">
+                                        <option value="viewer">Viewer (view-only)</option>
+                                        <option value="editor">Editor (view + edit)</option>
+                                        <option value="admin">Admin (full access)</option>
+                                    </select>
+                                </div>
+                                <button id="entTeamAddBtn" type="submit" class="ent-btn ent-btn-primary ent-btn-full">
+                                    Add User
+                                </button>
+                            </form>
                         </div>
                     </div>
                 </div>
@@ -682,7 +802,7 @@
     </div>
 
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
-    <script src="/static/enterprise.js?v=3"></script>
+    <script src="/static/enterprise.js?v=6"></script>
 </body>
 
 </html>

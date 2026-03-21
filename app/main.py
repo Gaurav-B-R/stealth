@@ -18,6 +18,7 @@ from app.schema_patch import (
     ensure_coupon_percent_column,
     ensure_coupon_usage_limit_column,
     ensure_document_catalog_columns,
+    ensure_enterprise_organization_columns,
     ensure_f1_visa_news_table,
     ensure_referral_columns,
     ensure_rilono_ai_chat_upload_events_table,
@@ -144,6 +145,7 @@ def startup_backfill_subscriptions():
     ensure_subscription_usage_columns()
     ensure_subscription_payment_recurring_columns()
     ensure_document_catalog_columns()
+    ensure_enterprise_organization_columns()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_f1_visa_news_table()

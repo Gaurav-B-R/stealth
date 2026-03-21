@@ -77,6 +77,35 @@ class EnterpriseCredential(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+
+class EnterpriseOrganization(Base):
+    __tablename__ = "enterprise_organizations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_name = Column(String, nullable=False, index=True)
+    subdomain_slug = Column(String, unique=True, index=True, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterpriseOrganizationMember(Base):
+    __tablename__ = "enterprise_organization_members"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    role = Column(String, nullable=False, default="viewer")  # admin | editor | viewer
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    invited_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_ent_org_member_org_user_unique", "organization_id", "user_id", unique=True),
+    )
+
+
 class Document(Base):
     __tablename__ = "documents"
     

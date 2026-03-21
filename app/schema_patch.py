@@ -164,6 +164,27 @@ def ensure_referral_columns():
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_referred_by_user_id ON users(referred_by_user_id)"))
 
 
+def ensure_enterprise_organization_columns():
+    """
+    Ensure enterprise organization table has immutable subdomain storage.
+    """
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_organizations"):
+            return
+
+        columns = _get_table_columns(conn, "enterprise_organizations")
+        if "subdomain_slug" not in columns:
+            conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN subdomain_slug VARCHAR"))
+
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_enterprise_organizations_subdomain_slug "
+                "ON enterprise_organizations(subdomain_slug)"
+            )
+        )
+
+
 def _table_exists(conn, table_name: str) -> bool:
     if engine.dialect.name == "sqlite":
         result = conn.execute(
