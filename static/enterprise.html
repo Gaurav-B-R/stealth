@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/enterprise.css?v=10">
+    <link rel="stylesheet" href="/static/enterprise.css?v=12">
 </head>
 
 <body>
@@ -150,7 +150,7 @@
                 </form>
 
                 <p style="text-align:center; margin-top:1.5rem; font-size:0.82rem; color:var(--ent-ink-muted);">
-                    Don't have an enterprise account? <a href="#" class="ent-form-link">Contact Sales</a>
+                    Don't have an enterprise account? <a href="/contact" class="ent-form-link">Contact Sales</a>
                 </p>
             </div>
         </div>
@@ -194,7 +194,7 @@
                 <button class="ent-nav-item" data-section="students">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                     Students
-                    <span class="ent-nav-badge">2,847</span>
+                    <span class="ent-nav-badge" id="entStudentsNavBadge">0</span>
                 </button>
 
                 <button class="ent-nav-item" data-section="visas">
@@ -299,7 +299,7 @@
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                             Export Report
                         </button>
-                        <button class="ent-btn ent-btn-primary ent-btn-sm">
+                        <button id="entAddStudentBtnOverview" class="ent-btn ent-btn-primary ent-btn-sm" type="button">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                             Add Student
                         </button>
@@ -629,22 +629,47 @@
                         <p>Manage all students across your organization.</p>
                     </div>
                     <div class="ent-welcome-actions">
-                        <button class="ent-btn ent-btn-ghost ent-btn-sm">
+                        <button class="ent-btn ent-btn-ghost ent-btn-sm" type="button">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
                             Bulk Import
                         </button>
-                        <button class="ent-btn ent-btn-primary ent-btn-sm">
+                        <button id="entAddStudentBtnStudents" class="ent-btn ent-btn-primary ent-btn-sm" type="button">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                             Add Student
                         </button>
                     </div>
                 </div>
+                <div id="entStudentsFlash" class="ent-flash info" style="display:none;"></div>
                 <div class="ent-card">
-                    <div class="ent-card-body">
-                        <div class="ent-empty">
+                    <div class="ent-card-header">
+                        <span class="ent-card-title">Student Directory</span>
+                    </div>
+                    <div class="ent-card-body no-pad">
+                        <div class="ent-students-note" id="entStudentsAccessNotice">
+                            Add students with destination country and visa type to start enterprise tracking.
+                        </div>
+                        <div class="ent-table-wrap">
+                            <table class="ent-table">
+                                <thead>
+                                    <tr>
+                                        <th>Student</th>
+                                        <th>Study Destination</th>
+                                        <th>Visa Type</th>
+                                        <th>Intake</th>
+                                        <th>Added On</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="entStudentsTableBody">
+                                    <tr>
+                                        <td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">Loading students...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div id="entStudentsEmpty" class="ent-empty" style="display:none;">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                            <h3>Students module coming soon</h3>
-                            <p>This section will allow you to manage all students, their visa status, and documentation in one place.</p>
+                            <h3>No students added yet</h3>
+                            <p>Add your first student to start country-specific visa tracking for your organization.</p>
                         </div>
                     </div>
                 </div>
@@ -859,6 +884,22 @@
                             <p class="ent-form-hint">
                                 This branding appears across your enterprise portal experience.
                             </p>
+                            <div class="ent-form-group">
+                                <label class="ent-form-label" for="entSettingsLogoFileInput">Company profile picture</label>
+                                <input id="entSettingsLogoFileInput" type="file" accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" hidden>
+                                <div class="ent-settings-upload-row">
+                                    <button id="entSettingsChooseLogoBtn" type="button" class="ent-btn ent-btn-ghost">
+                                        Choose Image
+                                    </button>
+                                    <button id="entSettingsUploadLogoBtn" type="button" class="ent-btn ent-btn-ghost">
+                                        Upload Picture
+                                    </button>
+                                    <span id="entSettingsLogoFileName" class="ent-settings-file-name">No file selected.</span>
+                                </div>
+                                <p class="ent-form-hint">
+                                    Upload JPG, PNG, GIF, or WEBP. After upload, click Save Branding.
+                                </p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -867,8 +908,51 @@
         </main>
     </div>
 
+    <div id="entStudentModal" class="ent-modal-backdrop" hidden>
+        <div class="ent-modal" role="dialog" aria-modal="true" aria-labelledby="entStudentModalTitle">
+            <div class="ent-modal-header">
+                <h3 id="entStudentModalTitle">Add Student</h3>
+                <button id="entStudentModalClose" type="button" class="ent-modal-close" aria-label="Close">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="ent-modal-body">
+                <div id="entStudentModalFlash" class="ent-flash info" style="display:none;"></div>
+                <form id="entStudentForm" autocomplete="off">
+                    <div class="ent-form-group">
+                        <label class="ent-form-label" for="entStudentName">Student Name</label>
+                        <input id="entStudentName" type="text" class="ent-form-input" maxlength="160" placeholder="Enter full name" required>
+                    </div>
+                    <div class="ent-form-group">
+                        <label class="ent-form-label" for="entStudentCountry">Country planning for studies</label>
+                        <select id="entStudentCountry" class="ent-form-input ent-select" required>
+                            <option value="">Select destination country</option>
+                        </select>
+                    </div>
+                    <div class="ent-form-group">
+                        <label class="ent-form-label" for="entStudentVisaType">Visa Type</label>
+                        <select id="entStudentVisaType" class="ent-form-input ent-select" required disabled>
+                            <option value="">Select visa type</option>
+                        </select>
+                    </div>
+                    <div class="ent-form-group">
+                        <label class="ent-form-label" for="entStudentIntake">Intake</label>
+                        <select id="entStudentIntake" class="ent-form-input ent-select" required disabled>
+                            <option value="">Select intake</option>
+                        </select>
+                    </div>
+                    <p class="ent-form-hint">Visa and intake options are shown based on the selected destination country and visa type. Intake labels include the upcoming year.</p>
+                    <div class="ent-modal-actions">
+                        <button id="entStudentCancelBtn" type="button" class="ent-btn ent-btn-ghost">Cancel</button>
+                        <button id="entStudentSaveBtn" type="submit" class="ent-btn ent-btn-primary">Add Student</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
-    <script src="/static/enterprise.js?v=13"></script>
+    <script src="/static/enterprise.js?v=18"></script>
 </body>
 
 </html>

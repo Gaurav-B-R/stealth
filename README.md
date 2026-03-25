@@ -219,3 +219,6 @@ This project is open source and available for educational purposes.
 ## Contributing
 
 Feel free to submit issues, fork the repository, and create pull requests for any improvements.
+
+For project memory and operational docs, start at `docs/README.md`.
+Before shipping changes, run `docs/workflows/docs-update-checklist.md`.

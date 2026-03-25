@@ -59,68 +59,142 @@
                     <button id="adminVerifyProtectionBtn" type="button" class="primary-btn small-btn">Complete Cloudflare Check</button>
                 </div>
 
-                <div class="metrics-grid">
-                    <article class="metric-card">
-                        <span>Total Users</span>
-                        <strong id="adminMetricTotal">0</strong>
-                    </article>
-                    <article class="metric-card">
-                        <span>Pro Plan Users</span>
-                        <strong id="adminMetricPro">0</strong>
-                    </article>
-                    <article class="metric-card">
-                        <span>Journey Plan Users</span>
-                        <strong id="adminMetricJourney">0</strong>
-                    </article>
+                <div class="tab-row" role="tablist" aria-label="Admin data views">
+                    <button id="adminUsersTabBtn" type="button" class="tab-btn active" data-tab="users" aria-selected="true">
+                        Student Accounts
+                    </button>
+                    <button id="adminEnterpriseTabBtn" type="button" class="tab-btn" data-tab="enterprise" aria-selected="false">
+                        Enterprise Accounts
+                    </button>
                 </div>
 
-                <form id="adminUsersFilterForm" class="filters-row">
-                    <input type="text" id="adminUsersSearchInput" placeholder="Search email, username, name, university">
-                    <select id="adminUsersPlanFilter">
-                        <option value="all">All Plans</option>
-                        <option value="free">Free</option>
-                        <option value="pro">Pro</option>
-                        <option value="journey">Journey Pass</option>
-                    </select>
-                    <select id="adminUsersRoleFilter">
-                        <option value="all">All Roles</option>
-                        <option value="student">Students</option>
-                        <option value="staff">Staff (Admin/Developer)</option>
-                        <option value="admin">Admins</option>
-                        <option value="developer">Developers</option>
-                    </select>
-                    <button id="adminApplyBtn" type="submit" class="primary-btn small-btn">Apply</button>
-                    <button id="adminResetBtn" type="button" class="ghost-btn small-btn">Reset</button>
-                </form>
+                <section id="adminUsersTabPanel" class="tab-panel">
+                    <div class="metrics-grid">
+                        <article class="metric-card">
+                            <span>Total Users</span>
+                            <strong id="adminMetricTotal">0</strong>
+                        </article>
+                        <article class="metric-card">
+                            <span>Pro Plan Users</span>
+                            <strong id="adminMetricPro">0</strong>
+                        </article>
+                        <article class="metric-card">
+                            <span>Journey Plan Users</span>
+                            <strong id="adminMetricJourney">0</strong>
+                        </article>
+                    </div>
 
-                <div id="adminUsersSummary" class="users-summary">Showing 0 users</div>
+                    <form id="adminUsersFilterForm" class="filters-row">
+                        <input type="text" id="adminUsersSearchInput" placeholder="Search email, username, name, university">
+                        <select id="adminUsersPlanFilter">
+                            <option value="all">All Plans</option>
+                            <option value="free">Free</option>
+                            <option value="pro">Pro</option>
+                            <option value="journey">Journey Pass</option>
+                        </select>
+                        <select id="adminUsersRoleFilter">
+                            <option value="all">All Roles</option>
+                            <option value="student">Students</option>
+                            <option value="staff">Staff (Admin/Developer)</option>
+                            <option value="admin">Admins</option>
+                            <option value="developer">Developers</option>
+                        </select>
+                        <button id="adminApplyBtn" type="submit" class="primary-btn small-btn">Apply</button>
+                        <button id="adminResetBtn" type="button" class="ghost-btn small-btn">Reset</button>
+                    </form>
 
-                <div class="table-wrap">
-                    <table class="users-table">
-                        <thead>
-                            <tr>
-                                <th>User</th>
-                                <th>Role</th>
-                                <th>Status</th>
-                                <th>Verified</th>
-                                <th id="adminCreatedHeader">Created</th>
-                                <th id="adminLastLoginHeader">Last Login</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody id="adminUsersTableBody">
-                            <tr>
-                                <td colspan="7" class="table-empty">No users loaded yet.</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
+                    <div id="adminUsersSummary" class="users-summary">Showing 0 users</div>
 
-                <div class="pagination-row">
-                    <button id="adminUsersPrevBtn" type="button" class="ghost-btn small-btn" disabled>Previous</button>
-                    <span id="adminUsersPageInfo">Page 1 of 1</span>
-                    <button id="adminUsersNextBtn" type="button" class="ghost-btn small-btn" disabled>Next</button>
-                </div>
+                    <div class="table-wrap">
+                        <table class="users-table">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Role</th>
+                                    <th>Status</th>
+                                    <th>Verified</th>
+                                    <th id="adminCreatedHeader">Created</th>
+                                    <th id="adminLastLoginHeader">Last Login</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminUsersTableBody">
+                                <tr>
+                                    <td colspan="7" class="table-empty">No users loaded yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination-row">
+                        <button id="adminUsersPrevBtn" type="button" class="ghost-btn small-btn" disabled>Previous</button>
+                        <span id="adminUsersPageInfo">Page 1 of 1</span>
+                        <button id="adminUsersNextBtn" type="button" class="ghost-btn small-btn" disabled>Next</button>
+                    </div>
+                </section>
+
+                <section id="adminEnterpriseTabPanel" class="tab-panel" hidden>
+                    <div class="metrics-grid">
+                        <article class="metric-card">
+                            <span>Total Enterprise Accounts</span>
+                            <strong id="adminEnterpriseMetricTotal">0</strong>
+                        </article>
+                        <article class="metric-card">
+                            <span>Active Members</span>
+                            <strong id="adminEnterpriseMetricActiveMembers">0</strong>
+                        </article>
+                        <article class="metric-card">
+                            <span>Enterprise Admins</span>
+                            <strong id="adminEnterpriseMetricAdmins">0</strong>
+                        </article>
+                    </div>
+
+                    <section class="enterprise-credential-card">
+                        <div class="enterprise-credential-header">
+                            <h3>Create Enterprise Credentials</h3>
+                            <p>Create enterprise access using name and email. Existing main-platform emails keep the same password.</p>
+                        </div>
+                        <form id="adminEnterpriseCredentialForm" class="enterprise-credential-form">
+                            <input type="text" id="adminEnterpriseCredentialName" placeholder="Client full name" required>
+                            <input type="email" id="adminEnterpriseCredentialEmail" placeholder="client@company.com" required>
+                            <button id="adminEnterpriseCredentialCreateBtn" type="submit" class="primary-btn small-btn">Create Credentials</button>
+                        </form>
+                        <div id="adminEnterpriseCredentialResult" class="enterprise-credential-result" hidden></div>
+                    </section>
+
+                    <form id="adminEnterpriseFilterForm" class="filters-row enterprise-filters-row">
+                        <input type="text" id="adminEnterpriseSearchInput" placeholder="Search company, subdomain, creator">
+                        <button id="adminEnterpriseApplyBtn" type="submit" class="primary-btn small-btn">Apply</button>
+                        <button id="adminEnterpriseResetBtn" type="button" class="ghost-btn small-btn">Reset</button>
+                    </form>
+
+                    <div id="adminEnterpriseSummary" class="users-summary">Showing 0 enterprise accounts</div>
+
+                    <div class="table-wrap">
+                        <table class="users-table enterprise-table">
+                            <thead>
+                                <tr>
+                                    <th>Company</th>
+                                    <th>Portal</th>
+                                    <th>Members</th>
+                                    <th>Created By</th>
+                                    <th id="adminEnterpriseCreatedHeader">Created</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminEnterpriseTableBody">
+                                <tr>
+                                    <td colspan="5" class="table-empty">No enterprise accounts loaded yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="pagination-row">
+                        <button id="adminEnterprisePrevBtn" type="button" class="ghost-btn small-btn" disabled>Previous</button>
+                        <span id="adminEnterprisePageInfo">Page 1 of 1</span>
+                        <button id="adminEnterpriseNextBtn" type="button" class="ghost-btn small-btn" disabled>Next</button>
+                    </div>
+                </section>
             </section>
         </main>
     </div>

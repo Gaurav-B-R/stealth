@@ -8,6 +8,7 @@ const state = {
     authToken: null,
     currentUser: null,
     adminProtectionVerified: false,
+    activeTab: 'users',
     users: [],
     total: 0,
     metrics: {
@@ -21,6 +22,17 @@ const state = {
         search: '',
         plan: 'all',
         role: 'all'
+    },
+    enterpriseAccounts: [],
+    enterpriseTotal: 0,
+    enterpriseMetrics: {
+        active_members: 0,
+        active_admins: 0
+    },
+    enterprisePage: 1,
+    enterpriseLoading: false,
+    enterpriseFilters: {
+        search: ''
     },
     turnstileSiteKey: '',
     turnstileWidgetId: null,
@@ -40,6 +52,10 @@ const refs = {
     protectionCard: document.getElementById('adminProtectionCard'),
     protectionText: document.getElementById('adminProtectionText'),
     verifyProtectionBtn: document.getElementById('adminVerifyProtectionBtn'),
+    usersTabBtn: document.getElementById('adminUsersTabBtn'),
+    enterpriseTabBtn: document.getElementById('adminEnterpriseTabBtn'),
+    usersTabPanel: document.getElementById('adminUsersTabPanel'),
+    enterpriseTabPanel: document.getElementById('adminEnterpriseTabPanel'),
     turnstileWrap: document.getElementById('adminTurnstileWrap'),
     turnstileHint: document.getElementById('adminTurnstileHint'),
     actionTurnstileWrap: document.getElementById('adminActionTurnstileWrap'),
@@ -59,7 +75,25 @@ const refs = {
     lastLoginHeader: document.getElementById('adminLastLoginHeader'),
     metricTotal: document.getElementById('adminMetricTotal'),
     metricPro: document.getElementById('adminMetricPro'),
-    metricJourney: document.getElementById('adminMetricJourney')
+    metricJourney: document.getElementById('adminMetricJourney'),
+    enterpriseForm: document.getElementById('adminEnterpriseFilterForm'),
+    enterpriseSearch: document.getElementById('adminEnterpriseSearchInput'),
+    enterpriseApplyBtn: document.getElementById('adminEnterpriseApplyBtn'),
+    enterpriseResetBtn: document.getElementById('adminEnterpriseResetBtn'),
+    enterpriseTableBody: document.getElementById('adminEnterpriseTableBody'),
+    enterpriseSummary: document.getElementById('adminEnterpriseSummary'),
+    enterprisePrevBtn: document.getElementById('adminEnterprisePrevBtn'),
+    enterpriseNextBtn: document.getElementById('adminEnterpriseNextBtn'),
+    enterprisePageInfo: document.getElementById('adminEnterprisePageInfo'),
+    enterpriseCreatedHeader: document.getElementById('adminEnterpriseCreatedHeader'),
+    enterpriseMetricTotal: document.getElementById('adminEnterpriseMetricTotal'),
+    enterpriseMetricActiveMembers: document.getElementById('adminEnterpriseMetricActiveMembers'),
+    enterpriseMetricAdmins: document.getElementById('adminEnterpriseMetricAdmins'),
+    enterpriseCredentialForm: document.getElementById('adminEnterpriseCredentialForm'),
+    enterpriseCredentialName: document.getElementById('adminEnterpriseCredentialName'),
+    enterpriseCredentialEmail: document.getElementById('adminEnterpriseCredentialEmail'),
+    enterpriseCredentialCreateBtn: document.getElementById('adminEnterpriseCredentialCreateBtn'),
+    enterpriseCredentialResult: document.getElementById('adminEnterpriseCredentialResult')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -71,17 +105,26 @@ document.addEventListener('DOMContentLoaded', () => {
 function setDateColumnTimeZoneLabels() {
     if (refs.createdHeader) refs.createdHeader.textContent = `Created (${ADMIN_TIME_ZONE_LABEL})`;
     if (refs.lastLoginHeader) refs.lastLoginHeader.textContent = `Last Login (${ADMIN_TIME_ZONE_LABEL})`;
+    if (refs.enterpriseCreatedHeader) refs.enterpriseCreatedHeader.textContent = `Created (${ADMIN_TIME_ZONE_LABEL})`;
 }
 
 function bindEvents() {
     refs.loginForm?.addEventListener('submit', handleLoginSubmit);
     refs.logoutBtn?.addEventListener('click', handleLogout);
     refs.verifyProtectionBtn?.addEventListener('click', handleProtectionVerifyClick);
+    refs.usersTabBtn?.addEventListener('click', () => handleTabSwitch('users'));
+    refs.enterpriseTabBtn?.addEventListener('click', () => handleTabSwitch('enterprise'));
     refs.usersForm?.addEventListener('submit', handleUserFiltersSubmit);
-    refs.usersResetBtn?.addEventListener('click', resetFilters);
+    refs.usersResetBtn?.addEventListener('click', resetUserFilters);
     refs.prevBtn?.addEventListener('click', () => changePage(-1));
     refs.nextBtn?.addEventListener('click', () => changePage(1));
     refs.tableBody?.addEventListener('click', handleTableActionClick);
+    refs.enterpriseForm?.addEventListener('submit', handleEnterpriseFiltersSubmit);
+    refs.enterpriseResetBtn?.addEventListener('click', resetEnterpriseFilters);
+    refs.enterprisePrevBtn?.addEventListener('click', () => changeEnterprisePage(-1));
+    refs.enterpriseNextBtn?.addEventListener('click', () => changeEnterprisePage(1));
+    refs.enterpriseCredentialForm?.addEventListener('submit', handleEnterpriseCredentialSubmit);
+    refs.enterpriseCredentialResult?.addEventListener('click', handleCredentialResultClick);
 }
 
 async function bootstrap() {
@@ -91,7 +134,7 @@ async function bootstrap() {
         showConsole();
         const verified = await ensureAdminProtection({ silent: true });
         if (verified) {
-            await loadUsers({ resetPage: true });
+            await loadActiveTab({ resetPage: true });
             showFlash('Admin session active.', 'success');
         } else {
             showFlash('Complete Cloudflare check to unlock admin data.', 'info');
@@ -129,6 +172,8 @@ function showAuth() {
     refs.logoutBtn.hidden = true;
     refs.sessionBadge.hidden = true;
     state.adminProtectionVerified = false;
+    state.activeTab = 'users';
+    renderActiveTab();
     updateProtectionUi();
 }
 
@@ -137,8 +182,49 @@ function showConsole() {
     refs.consolePanel.hidden = false;
     refs.logoutBtn.hidden = false;
     refs.sessionBadge.hidden = false;
+    renderActiveTab();
     updateProtectionUi();
     updateSessionBadge();
+}
+
+function renderActiveTab() {
+    const isUsersTab = state.activeTab !== 'enterprise';
+
+    if (refs.usersTabBtn) {
+        refs.usersTabBtn.classList.toggle('active', isUsersTab);
+        refs.usersTabBtn.setAttribute('aria-selected', String(isUsersTab));
+    }
+    if (refs.enterpriseTabBtn) {
+        refs.enterpriseTabBtn.classList.toggle('active', !isUsersTab);
+        refs.enterpriseTabBtn.setAttribute('aria-selected', String(!isUsersTab));
+    }
+    if (refs.usersTabPanel) {
+        refs.usersTabPanel.hidden = !isUsersTab;
+    }
+    if (refs.enterpriseTabPanel) {
+        refs.enterpriseTabPanel.hidden = isUsersTab;
+    }
+}
+
+async function handleTabSwitch(tabName) {
+    const normalized = String(tabName || '').trim().toLowerCase();
+    if (normalized !== 'users' && normalized !== 'enterprise') return;
+    if (state.activeTab === normalized) return;
+
+    state.activeTab = normalized;
+    renderActiveTab();
+
+    if (!state.currentUser) return;
+    clearFlash();
+    await loadActiveTab({ resetPage: false });
+}
+
+async function loadActiveTab({ resetPage = false } = {}) {
+    if (state.activeTab === 'enterprise') {
+        await loadEnterpriseAccounts({ resetPage });
+        return;
+    }
+    await loadUsers({ resetPage });
 }
 
 function updateSessionBadge() {
@@ -362,7 +448,7 @@ async function handleProtectionVerifyClick() {
     if (!state.turnstileSiteKey) {
         state.adminProtectionVerified = true;
         updateProtectionUi();
-        await loadUsers({ resetPage: true });
+        await loadActiveTab({ resetPage: true });
         return;
     }
 
@@ -396,7 +482,7 @@ async function handleProtectionVerifyClick() {
         updateProtectionUi();
         resetActionTurnstileWidget();
         showFlash('Cloudflare protection verified.', 'success');
-        await loadUsers({ resetPage: true });
+        await loadActiveTab({ resetPage: true });
     } catch (error) {
         console.error('Protection verify failed:', error);
         showFlash('Could not verify Cloudflare protection. Please retry.', 'error');
@@ -473,7 +559,7 @@ async function handleLoginSubmit(event) {
         updateProtectionUi();
         if (await ensureAdminProtection({ silent: true })) {
             showFlash('Welcome to the admin console.', 'success');
-            await loadUsers({ resetPage: true });
+            await loadActiveTab({ resetPage: true });
         } else {
             showFlash('Login successful. Complete Cloudflare check to continue.', 'info');
         }
@@ -512,10 +598,18 @@ async function handleLogout() {
     state.authToken = null;
     state.currentUser = null;
     state.adminProtectionVerified = false;
+    state.activeTab = 'users';
     state.users = [];
     state.total = 0;
     state.metrics = { pro_plan_users: 0, journey_plan_users: 0 };
     state.page = 1;
+    state.loading = false;
+    state.enterpriseAccounts = [];
+    state.enterpriseTotal = 0;
+    state.enterpriseMetrics = { active_members: 0, active_admins: 0 };
+    state.enterprisePage = 1;
+    state.enterpriseLoading = false;
+    state.enterpriseFilters = { search: '' };
     resetTurnstileWidget();
     resetActionTurnstileWidget();
     showAuth();
@@ -524,6 +618,11 @@ async function handleLogout() {
     renderUsersSummary();
     renderPagination();
     renderMetrics();
+    renderEnterpriseTableMessage('No enterprise accounts loaded yet.');
+    renderEnterpriseSummary();
+    renderEnterprisePagination();
+    renderEnterpriseMetrics();
+    clearEnterpriseCredentialResult();
 }
 
 function getRoleLabel(user) {
@@ -636,6 +735,150 @@ function renderMetrics() {
     if (refs.metricJourney) refs.metricJourney.textContent = String(state.metrics.journey_plan_users || 0);
 }
 
+function renderEnterpriseTableMessage(message) {
+    if (!refs.enterpriseTableBody) return;
+    refs.enterpriseTableBody.innerHTML = `
+        <tr>
+            <td colspan="5" class="table-empty">${escapeHtml(message)}</td>
+        </tr>
+    `;
+}
+
+function renderEnterpriseTable() {
+    if (!refs.enterpriseTableBody) return;
+    if (!state.enterpriseAccounts.length) {
+        renderEnterpriseTableMessage('No enterprise accounts found for selected filters.');
+        return;
+    }
+
+    const rows = state.enterpriseAccounts.map((account) => {
+        const companyName = account.company_name || 'Untitled Organization';
+        const companyMeta = account.subdomain_slug ? `subdomain: ${account.subdomain_slug}` : 'No subdomain';
+        const portalUrl = String(account.portal_url || '').trim();
+        const portalCell = portalUrl
+            ? `<a class="portal-link" href="${escapeHtml(portalUrl)}" target="_blank" rel="noopener noreferrer">Open portal</a>`
+            : '<span class="user-meta">Not configured</span>';
+        const creatorLabel = account.created_by_name || account.created_by_email || 'Unknown';
+        const creatorMeta = account.created_by_email && account.created_by_name
+            ? account.created_by_email
+            : '';
+
+        return `
+            <tr>
+                <td>
+                    <div class="user-name">${escapeHtml(companyName)}</div>
+                    <div class="enterprise-meta">${escapeHtml(companyMeta)}</div>
+                </td>
+                <td>${portalCell}</td>
+                <td>
+                    <div class="user-name">${escapeHtml(String(account.active_members || 0))} active</div>
+                    <div class="enterprise-meta">${escapeHtml(String(account.total_members || 0))} total • ${escapeHtml(String(account.active_admins || 0))} admins</div>
+                </td>
+                <td>
+                    <div class="user-name">${escapeHtml(creatorLabel)}</div>
+                    <div class="enterprise-meta">${escapeHtml(creatorMeta)}</div>
+                </td>
+                <td>${escapeHtml(formatDateTime(account.created_at))}</td>
+            </tr>
+        `;
+    });
+
+    refs.enterpriseTableBody.innerHTML = rows.join('');
+}
+
+function renderEnterpriseSummary() {
+    if (!refs.enterpriseSummary) return;
+    if (state.enterpriseTotal <= 0) {
+        refs.enterpriseSummary.textContent = 'No enterprise accounts found.';
+        return;
+    }
+    const start = ((state.enterprisePage - 1) * state.pageSize) + 1;
+    const end = Math.min(state.enterpriseTotal, start + state.enterpriseAccounts.length - 1);
+    refs.enterpriseSummary.textContent = `Showing ${start}-${end} of ${state.enterpriseTotal} enterprise accounts`;
+}
+
+function renderEnterprisePagination() {
+    const totalPages = Math.max(1, Math.ceil(state.enterpriseTotal / state.pageSize));
+    if (refs.enterprisePageInfo) refs.enterprisePageInfo.textContent = `Page ${state.enterprisePage} of ${totalPages}`;
+    if (refs.enterprisePrevBtn) refs.enterprisePrevBtn.disabled = state.enterpriseLoading || state.enterprisePage <= 1;
+    if (refs.enterpriseNextBtn) refs.enterpriseNextBtn.disabled = state.enterpriseLoading || state.enterprisePage >= totalPages;
+    if (refs.enterpriseApplyBtn) refs.enterpriseApplyBtn.disabled = state.enterpriseLoading;
+}
+
+function renderEnterpriseMetrics() {
+    if (refs.enterpriseMetricTotal) refs.enterpriseMetricTotal.textContent = String(state.enterpriseTotal || 0);
+    if (refs.enterpriseMetricActiveMembers) refs.enterpriseMetricActiveMembers.textContent = String(state.enterpriseMetrics.active_members || 0);
+    if (refs.enterpriseMetricAdmins) refs.enterpriseMetricAdmins.textContent = String(state.enterpriseMetrics.active_admins || 0);
+}
+
+function clearEnterpriseCredentialResult() {
+    if (!refs.enterpriseCredentialResult) return;
+    refs.enterpriseCredentialResult.hidden = true;
+    refs.enterpriseCredentialResult.innerHTML = '';
+}
+
+function renderEnterpriseCredentialResult(payload) {
+    if (!refs.enterpriseCredentialResult) return;
+    const email = String(payload?.email || '').trim();
+    const fullName = String(payload?.full_name || '').trim();
+    const tempPassword = String(payload?.temporary_password || '').trim();
+    const usesExistingMainPassword = Boolean(payload?.uses_existing_main_password);
+    const hasTemporaryPassword = Boolean(tempPassword) && !usesExistingMainPassword;
+    const message = String(payload?.message || 'Credentials created.');
+    const statusLine = usesExistingMainPassword
+        ? 'Existing main platform account linked for enterprise access.'
+        : (payload?.credential_created
+            ? 'New enterprise credentials created.'
+            : 'Existing enterprise credentials updated.');
+    const passwordLine = hasTemporaryPassword
+        ? `
+        <div>
+            <strong>Temporary Password:</strong>
+            <span class="credential-password">
+                ${escapeHtml(tempPassword)}
+                <button type="button" class="table-btn copy-credential-btn" data-action="copy-credential" data-password="${escapeHtml(tempPassword)}">Copy</button>
+            </span>
+        </div>
+        `
+        : `
+        <div><strong>Password:</strong> Uses existing main platform password (not shown).</div>
+        `;
+    const helperLine = usesExistingMainPassword
+        ? 'Client can login at <code>/enterprise</code> with the same email and password used in the main platform.'
+        : 'Client should log in at <code>/enterprise</code> and change/reset password after first access.';
+    const credentialShareLine = usesExistingMainPassword
+        ? 'Enterprise access is now enabled for this email.'
+        : 'Share these credentials securely with the client.';
+
+    refs.enterpriseCredentialResult.innerHTML = `
+        <strong>${escapeHtml(message)}</strong>
+        <div>${escapeHtml(statusLine)} ${escapeHtml(credentialShareLine)}</div>
+        <div><strong>Name:</strong> ${escapeHtml(fullName || '-')}</div>
+        <div><strong>Email:</strong> ${escapeHtml(email || '-')}</div>
+        ${passwordLine}
+        <div class="enterprise-meta">${helperLine}</div>
+    `;
+    refs.enterpriseCredentialResult.hidden = false;
+}
+
+async function handleCredentialResultClick(event) {
+    const button = event.target.closest('[data-action="copy-credential"]');
+    if (!button) return;
+    const password = String(button.dataset.password || '').trim();
+    if (!password) return;
+
+    try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(password);
+            showFlash('Temporary password copied to clipboard.', 'success');
+            return;
+        }
+    } catch {
+        // no-op fallback
+    }
+    showFlash('Could not copy automatically. Please copy the password manually.', 'info');
+}
+
 function setRowActionsDisabled(disabled) {
     document.querySelectorAll('[data-action]').forEach((button) => {
         button.disabled = disabled;
@@ -736,7 +979,7 @@ function handleUserFiltersSubmit(event) {
     void loadUsers({ resetPage: false });
 }
 
-function resetFilters() {
+function resetUserFilters() {
     if (refs.usersSearch) refs.usersSearch.value = '';
     if (refs.usersPlan) refs.usersPlan.value = 'all';
     if (refs.usersRole) refs.usersRole.value = 'all';
@@ -751,6 +994,159 @@ function changePage(delta) {
     if (nextPage < 1 || nextPage > totalPages) return;
     state.page = nextPage;
     void loadUsers({ resetPage: false });
+}
+
+async function loadEnterpriseAccounts({ resetPage = false } = {}) {
+    if (!state.currentUser) {
+        const canAccess = await refreshCurrentAdminUser({ silent: true });
+        if (!canAccess) {
+            showAuth();
+            showFlash('Please login with an admin account.', 'error');
+            return;
+        }
+    }
+
+    if (!await ensureAdminProtection({ silent: false })) {
+        return;
+    }
+
+    if (resetPage) {
+        state.enterprisePage = 1;
+    }
+
+    state.enterpriseFilters.search = (refs.enterpriseSearch?.value || '').trim();
+
+    state.enterpriseLoading = true;
+    renderEnterpriseTableMessage('Loading enterprise accounts...');
+    renderEnterprisePagination();
+
+    try {
+        const params = new URLSearchParams();
+        params.set('page', String(state.enterprisePage));
+        params.set('page_size', String(state.pageSize));
+        if (state.enterpriseFilters.search) {
+            params.set('search', state.enterpriseFilters.search);
+        }
+
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts?${params.toString()}`, {
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            const message = normalizeErrorMessage(payload, 'Failed to load enterprise accounts.');
+            state.enterpriseAccounts = [];
+            state.enterpriseTotal = 0;
+            state.enterpriseMetrics = { active_members: 0, active_admins: 0 };
+            renderEnterpriseTableMessage(message);
+            renderEnterpriseSummary();
+            renderEnterpriseMetrics();
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(message, 'error');
+            return;
+        }
+
+        state.enterpriseAccounts = Array.isArray(payload.accounts) ? payload.accounts : [];
+        state.enterpriseTotal = Number(payload.total) || 0;
+        state.enterpriseMetrics = {
+            active_members: Number(payload?.metrics?.active_members) || 0,
+            active_admins: Number(payload?.metrics?.active_admins) || 0
+        };
+
+        const totalPages = Math.max(1, Math.ceil(state.enterpriseTotal / state.pageSize));
+        if (state.enterprisePage > totalPages) {
+            state.enterprisePage = totalPages;
+            await loadEnterpriseAccounts({ resetPage: false });
+            return;
+        }
+
+        renderEnterpriseTable();
+        renderEnterpriseSummary();
+        renderEnterpriseMetrics();
+        clearFlash();
+    } catch (error) {
+        console.error('Failed to load enterprise accounts:', error);
+        state.enterpriseAccounts = [];
+        state.enterpriseTotal = 0;
+        state.enterpriseMetrics = { active_members: 0, active_admins: 0 };
+        renderEnterpriseTableMessage('Could not load enterprise accounts. Please retry.');
+        renderEnterpriseSummary();
+        renderEnterpriseMetrics();
+        showFlash('Could not load enterprise accounts. Please retry.', 'error');
+    } finally {
+        state.enterpriseLoading = false;
+        renderEnterprisePagination();
+    }
+}
+
+function handleEnterpriseFiltersSubmit(event) {
+    event.preventDefault();
+    state.enterprisePage = 1;
+    void loadEnterpriseAccounts({ resetPage: false });
+}
+
+function resetEnterpriseFilters() {
+    if (refs.enterpriseSearch) refs.enterpriseSearch.value = '';
+    state.enterprisePage = 1;
+    void loadEnterpriseAccounts({ resetPage: false });
+}
+
+function changeEnterprisePage(delta) {
+    if (state.enterpriseLoading) return;
+    const totalPages = Math.max(1, Math.ceil(state.enterpriseTotal / state.pageSize));
+    const nextPage = state.enterprisePage + Number(delta || 0);
+    if (nextPage < 1 || nextPage > totalPages) return;
+    state.enterprisePage = nextPage;
+    void loadEnterpriseAccounts({ resetPage: false });
+}
+
+async function handleEnterpriseCredentialSubmit(event) {
+    event.preventDefault();
+    if (!await ensureAdminProtection({ silent: false })) return;
+
+    const fullName = (refs.enterpriseCredentialName?.value || '').trim();
+    const email = (refs.enterpriseCredentialEmail?.value || '').trim().toLowerCase();
+    if (!fullName || !email) {
+        showFlash('Enter both name and email to create enterprise credentials.', 'error');
+        return;
+    }
+
+    if (refs.enterpriseCredentialCreateBtn) {
+        refs.enterpriseCredentialCreateBtn.disabled = true;
+        refs.enterpriseCredentialCreateBtn.textContent = 'Creating...';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/credentials`, {
+            method: 'POST',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                full_name: fullName,
+                email
+            })
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(normalizeErrorMessage(payload, 'Failed to create enterprise credentials.'), 'error');
+            return;
+        }
+
+        renderEnterpriseCredentialResult(payload);
+        showFlash(String(payload?.message || 'Enterprise credentials updated successfully.'), 'success');
+        refs.enterpriseCredentialForm?.reset();
+    } catch (error) {
+        console.error('Failed to create enterprise credentials:', error);
+        showFlash('Could not create enterprise credentials. Please retry.', 'error');
+    } finally {
+        if (refs.enterpriseCredentialCreateBtn) {
+            refs.enterpriseCredentialCreateBtn.disabled = false;
+            refs.enterpriseCredentialCreateBtn.textContent = 'Create Credentials';
+        }
+    }
 }
 
 async function handleTableActionClick(event) {

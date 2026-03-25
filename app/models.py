@@ -107,6 +107,25 @@ class EnterpriseOrganizationMember(Base):
     )
 
 
+class EnterpriseStudent(Base):
+    __tablename__ = "enterprise_students"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    student_name = Column(String, nullable=False)
+    study_country_code = Column(String, nullable=False)
+    study_country_name = Column(String, nullable=False)
+    visa_type = Column(String, nullable=False)
+    intake = Column(String, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_ent_students_org_created", "organization_id", "created_at"),
+    )
+
+
 class Document(Base):
     __tablename__ = "documents"
     

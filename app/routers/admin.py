@@ -1,11 +1,13 @@
 import os
 import logging
+import secrets
+import string
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from jose import JWTError, jwt
-from sqlalchemy import bindparam, desc, func, inspect, or_, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy import bindparam, case, desc, func, inspect, or_, select, text
+from sqlalchemy.orm import Session, aliased
 
 from app import models, schemas
 from app.auth import (
@@ -14,6 +16,7 @@ from app.auth import (
     AUTH_COOKIE_SAMESITE,
     SECRET_KEY,
     _resolve_auth_cookie_secure,
+    get_password_hash,
     get_current_admin_user,
 )
 from app.database import get_db
@@ -26,6 +29,11 @@ logger = logging.getLogger(__name__)
 VALID_USER_PLAN_FILTERS = {"all", "free", "pro", "journey"}
 VALID_USER_ROLE_FILTERS = {"all", "student", "staff", "admin", "developer"}
 PRICING_MODEL_SIX_MONTH = "pro_six_month"
+ENTERPRISE_ROLE_ADMIN = "admin"
+ENTERPRISE_ROOT_DOMAIN = (
+    os.getenv("ENTERPRISE_ROOT_DOMAIN", "rilono.com").strip().lower() or "rilono.com"
+).lstrip(".")
+ENTERPRISE_PORTAL_SCHEME = os.getenv("ENTERPRISE_PORTAL_SCHEME", "https").strip().lower() or "https"
 ADMIN_TURNSTILE_COOKIE_NAME = (
     os.getenv("ADMIN_TURNSTILE_COOKIE_NAME", "rilono_admin_turnstile").strip()
     or "rilono_admin_turnstile"
@@ -76,6 +84,32 @@ def _is_admin_turnstile_required(request: Request) -> bool:
     if is_request_ip_whitelisted(request):
         return False
     return True
+
+
+def _build_enterprise_portal_url(subdomain_slug: str | None) -> str | None:
+    subdomain = str(subdomain_slug or "").strip().lower()
+    if not subdomain:
+        return None
+    return f"{ENTERPRISE_PORTAL_SCHEME}://{subdomain}.{ENTERPRISE_ROOT_DOMAIN}/enterprise"
+
+
+def _generate_enterprise_temp_password(length: int = 16) -> str:
+    """
+    Generate a strong temporary password with upper/lowercase letters, numbers, and symbols.
+    """
+    normalized_length = max(int(length), 12)
+    rng = secrets.SystemRandom()
+    required = [
+        rng.choice(string.ascii_lowercase),
+        rng.choice(string.ascii_uppercase),
+        rng.choice(string.digits),
+        rng.choice("!@#$%^&*()-_=+"),
+    ]
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
+    remaining = [rng.choice(alphabet) for _ in range(max(normalized_length - len(required), 0))]
+    password_chars = required + remaining
+    rng.shuffle(password_chars)
+    return "".join(password_chars)
 
 
 def _enforce_rate_limit_or_429(
@@ -466,6 +500,325 @@ def list_users_admin(
         "page": page,
         "page_size": page_size,
         "metrics": metrics,
+    }
+
+
+@router.get("/enterprise/accounts", response_model=schemas.AdminEnterpriseAccountListResponse)
+def list_enterprise_accounts_admin(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None, min_length=1, max_length=120),
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """
+    List enterprise organizations for admin dashboard with search + pagination.
+    """
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.list",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+
+    creator_user = aliased(models.User)
+    query = db.query(models.EnterpriseOrganization).outerjoin(
+        creator_user,
+        creator_user.id == models.EnterpriseOrganization.created_by_user_id,
+    )
+
+    search_term = (search or "").strip()
+    if search_term:
+        token = f"%{search_term}%"
+        query = query.filter(
+            or_(
+                models.EnterpriseOrganization.company_name.ilike(token),
+                models.EnterpriseOrganization.subdomain_slug.ilike(token),
+                creator_user.email.ilike(token),
+                creator_user.full_name.ilike(token),
+            )
+        )
+
+    total = int(query.count() or 0)
+    filtered_org_ids_subquery = query.with_entities(models.EnterpriseOrganization.id).subquery()
+    filtered_org_ids_select = select(filtered_org_ids_subquery.c.id)
+
+    active_members = int(
+        db.query(func.count(models.EnterpriseOrganizationMember.id))
+        .filter(
+            models.EnterpriseOrganizationMember.organization_id.in_(filtered_org_ids_select),
+            models.EnterpriseOrganizationMember.is_active.is_(True),
+        )
+        .scalar()
+        or 0
+    )
+    active_admins = int(
+        db.query(func.count(models.EnterpriseOrganizationMember.id))
+        .filter(
+            models.EnterpriseOrganizationMember.organization_id.in_(filtered_org_ids_select),
+            models.EnterpriseOrganizationMember.is_active.is_(True),
+            func.lower(models.EnterpriseOrganizationMember.role) == ENTERPRISE_ROLE_ADMIN,
+        )
+        .scalar()
+        or 0
+    )
+
+    organizations = (
+        query.order_by(desc(models.EnterpriseOrganization.created_at), desc(models.EnterpriseOrganization.id))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    if not organizations:
+        return {
+            "accounts": [],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "metrics": {
+                "active_members": active_members,
+                "active_admins": active_admins,
+            },
+        }
+
+    organization_ids = [int(org.id) for org in organizations if org and org.id is not None]
+    creator_ids = [
+        int(org.created_by_user_id)
+        for org in organizations
+        if org and org.created_by_user_id is not None
+    ]
+
+    member_rows = (
+        db.query(
+            models.EnterpriseOrganizationMember.organization_id.label("organization_id"),
+            func.count(models.EnterpriseOrganizationMember.id).label("total_members"),
+            func.sum(
+                case(
+                    (models.EnterpriseOrganizationMember.is_active.is_(True), 1),
+                    else_=0,
+                )
+            ).label("active_members"),
+            func.sum(
+                case(
+                    (
+                        (models.EnterpriseOrganizationMember.is_active.is_(True))
+                        & (func.lower(models.EnterpriseOrganizationMember.role) == ENTERPRISE_ROLE_ADMIN),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("active_admins"),
+        )
+        .filter(models.EnterpriseOrganizationMember.organization_id.in_(organization_ids))
+        .group_by(models.EnterpriseOrganizationMember.organization_id)
+        .all()
+    )
+    member_stats_by_org_id = {
+        int(row.organization_id): {
+            "total_members": int(row.total_members or 0),
+            "active_members": int(row.active_members or 0),
+            "active_admins": int(row.active_admins or 0),
+        }
+        for row in member_rows
+        if row and row.organization_id is not None
+    }
+
+    creator_rows = (
+        db.query(models.User.id, models.User.email, models.User.full_name)
+        .filter(models.User.id.in_(creator_ids))
+        .all()
+        if creator_ids
+        else []
+    )
+    creators_by_id = {
+        int(row.id): {
+            "email": row.email,
+            "full_name": row.full_name,
+        }
+        for row in creator_rows
+        if row and row.id is not None
+    }
+
+    accounts: list[dict] = []
+    for org in organizations:
+        org_id = int(org.id)
+        member_stats = member_stats_by_org_id.get(org_id, {})
+        creator = creators_by_id.get(int(org.created_by_user_id), {}) if org.created_by_user_id else {}
+        accounts.append(
+            {
+                "organization_id": org_id,
+                "company_name": (org.company_name or "").strip() or "Untitled Organization",
+                "subdomain_slug": (org.subdomain_slug or "").strip().lower() or None,
+                "portal_url": _build_enterprise_portal_url(org.subdomain_slug),
+                "created_at": org.created_at,
+                "created_by_user_id": int(org.created_by_user_id) if org.created_by_user_id is not None else None,
+                "created_by_email": creator.get("email"),
+                "created_by_name": creator.get("full_name"),
+                "total_members": int(member_stats.get("total_members", 0)),
+                "active_members": int(member_stats.get("active_members", 0)),
+                "active_admins": int(member_stats.get("active_admins", 0)),
+            }
+        )
+
+    return {
+        "accounts": accounts,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "metrics": {
+            "active_members": active_members,
+            "active_admins": active_admins,
+        },
+    }
+
+
+@router.post(
+    "/enterprise/credentials",
+    response_model=schemas.AdminEnterpriseCredentialCreateResponse,
+)
+def create_enterprise_credentials_admin(
+    payload: schemas.AdminEnterpriseCredentialCreateRequest,
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """
+    Create or update enterprise login access.
+    Existing main-platform users keep their current password; new users receive a temporary password.
+    """
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.credentials.create",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+
+    target_email = str(payload.email or "").strip().lower()
+    full_name = str(payload.full_name or "").strip()
+    if len(full_name) < 2:
+        raise HTTPException(status_code=400, detail="Name must be at least 2 characters.")
+    if len(full_name) > 120:
+        raise HTTPException(status_code=400, detail="Name must be at most 120 characters.")
+
+    existing_credential = (
+        db.query(models.EnterpriseCredential)
+        .filter(models.EnterpriseCredential.email == target_email)
+        .first()
+    )
+    existing_user = db.query(models.User).filter(models.User.email == target_email).first()
+
+    if existing_user and existing_user.is_developer:
+        raise HTTPException(
+            status_code=403,
+            detail="Developer accounts cannot be converted into enterprise credentials.",
+        )
+
+    # If user already exists in main platform, preserve existing password and enable enterprise login reuse.
+    if existing_user:
+        credential_created = False
+        if not str(existing_user.full_name or "").strip():
+            existing_user.full_name = full_name
+        if not existing_user.is_active:
+            existing_user.is_active = True
+
+        if existing_credential:
+            existing_credential.password_hash = existing_user.hashed_password
+            existing_credential.full_name = full_name
+            existing_credential.is_active = True
+        else:
+            credential_created = True
+            db.add(
+                models.EnterpriseCredential(
+                    email=target_email,
+                    password_hash=existing_user.hashed_password,
+                    full_name=full_name,
+                    is_active=True,
+                )
+            )
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to grant enterprise access for existing email=%s", target_email)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to grant enterprise access. Please try again.",
+            )
+
+        return {
+            "email": target_email,
+            "full_name": full_name,
+            "temporary_password": None,
+            "uses_existing_main_password": True,
+            "credential_created": credential_created,
+            "user_created": False,
+            "message": (
+                "Enterprise access granted. User can login with their existing main platform password."
+            ),
+        }
+
+    temp_password = _generate_enterprise_temp_password()
+    hashed_password = get_password_hash(temp_password)
+
+    credential_created = False
+    if existing_credential:
+        existing_credential.password_hash = hashed_password
+        existing_credential.full_name = full_name
+        existing_credential.is_active = True
+    else:
+        credential_created = True
+        db.add(
+            models.EnterpriseCredential(
+                email=target_email,
+                password_hash=hashed_password,
+                full_name=full_name,
+                is_active=True,
+            )
+        )
+
+    user_created = True
+    db.add(
+        models.User(
+            email=target_email,
+            username=None,
+            hashed_password=hashed_password,
+            full_name=full_name,
+            university="Enterprise Account",
+            is_active=True,
+            email_verified=True,
+            is_admin=True,
+            accepted_terms_privacy_at=datetime.utcnow(),
+        )
+    )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create enterprise credentials for email=%s", target_email)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create enterprise credentials. Please try again.",
+        )
+
+    return {
+        "email": target_email,
+        "full_name": full_name,
+        "temporary_password": temp_password,
+        "uses_existing_main_password": False,
+        "credential_created": credential_created,
+        "user_created": user_created,
+        "message": (
+            "Enterprise credentials created successfully."
+            if credential_created
+            else "Enterprise credentials updated and password rotated successfully."
+        ),
     }
 
 

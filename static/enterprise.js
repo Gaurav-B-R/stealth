@@ -35,12 +35,33 @@
     const settingsForm = $("#entSettingsBrandingForm");
     const settingsCompanyNameInput = $("#entSettingsCompanyName");
     const settingsLogoUrlInput = $("#entSettingsLogoUrl");
+    const settingsLogoFileInput = $("#entSettingsLogoFileInput");
+    const settingsChooseLogoBtn = $("#entSettingsChooseLogoBtn");
+    const settingsUploadLogoBtn = $("#entSettingsUploadLogoBtn");
+    const settingsLogoFileName = $("#entSettingsLogoFileName");
     const settingsAccessNotice = $("#entSettingsAccessNotice");
     const settingsRandomLogoBtn = $("#entSettingsRandomLogoBtn");
     const settingsSaveBtn = $("#entSettingsSaveBtn");
     const settingsLogoPreviewImg = $("#entSettingsLogoPreviewImg");
     const settingsPreviewCompanyName = $("#entSettingsPreviewCompanyName");
     const settingsPreviewPortalUrl = $("#entSettingsPreviewPortalUrl");
+    const studentsFlash = $("#entStudentsFlash");
+    const studentsTableBody = $("#entStudentsTableBody");
+    const studentsEmpty = $("#entStudentsEmpty");
+    const studentsAccessNotice = $("#entStudentsAccessNotice");
+    const studentsNavBadge = $("#entStudentsNavBadge");
+    const addStudentBtnOverview = $("#entAddStudentBtnOverview");
+    const addStudentBtnStudents = $("#entAddStudentBtnStudents");
+    const studentModal = $("#entStudentModal");
+    const studentModalCloseBtn = $("#entStudentModalClose");
+    const studentModalCancelBtn = $("#entStudentCancelBtn");
+    const studentModalFlash = $("#entStudentModalFlash");
+    const studentForm = $("#entStudentForm");
+    const studentNameInput = $("#entStudentName");
+    const studentCountrySelect = $("#entStudentCountry");
+    const studentVisaTypeSelect = $("#entStudentVisaType");
+    const studentIntakeSelect = $("#entStudentIntake");
+    const studentSaveBtn = $("#entStudentSaveBtn");
 
     const userNameEl = $("#entUserName");
     const userAvatarImgEl = $("#entUserAvatarImg");
@@ -122,6 +143,13 @@
         currentSection: "overview",
         teamMembers: [],
         teamLoading: false,
+        students: [],
+        studentsLoading: false,
+        studentOptions: {
+            countries: [],
+            visaTypesByCountry: {},
+            intakesByCountryVisa: {},
+        },
         turnstile: {
             siteKey: "",
             widgetId: null,
@@ -129,6 +157,7 @@
     };
 
     function hideAllScreens() {
+        closeStudentModal();
         if (authScreen) authScreen.style.display = "none";
         if (dashboard) dashboard.style.display = "none";
         if (onboardingScreen) onboardingScreen.style.display = "none";
@@ -307,6 +336,14 @@
         hideInlineFlash(teamFlash);
     }
 
+    function showStudentsFlash(message, type = "info") {
+        showInlineFlash(studentsFlash, message, type);
+    }
+
+    function hideStudentsFlash() {
+        hideInlineFlash(studentsFlash);
+    }
+
     function showSettingsFlash(message, type = "info") {
         showInlineFlash(settingsFlash, message, type);
     }
@@ -343,6 +380,9 @@
 
         if (sectionKey === "team") {
             loadTeamMembers();
+        }
+        if (sectionKey === "students") {
+            loadStudents();
         }
         if (sectionKey === "settings") {
             hideSettingsFlash();
@@ -461,6 +501,9 @@
         }
         if (settingsCompanyNameInput) settingsCompanyNameInput.disabled = !canManageUsers;
         if (settingsLogoUrlInput) settingsLogoUrlInput.disabled = !canManageUsers;
+        if (settingsLogoFileInput) settingsLogoFileInput.disabled = !canManageUsers;
+        if (settingsChooseLogoBtn) settingsChooseLogoBtn.disabled = !canManageUsers;
+        if (settingsUploadLogoBtn) settingsUploadLogoBtn.disabled = !canManageUsers;
         if (settingsRandomLogoBtn) settingsRandomLogoBtn.disabled = !canManageUsers;
         if (settingsSaveBtn) settingsSaveBtn.disabled = !canManageUsers;
     }
@@ -487,6 +530,12 @@
                 ? `${slug}.${ENTERPRISE_ROOT_DOMAIN}`
                 : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
         }
+        if (settingsLogoFileInput) {
+            settingsLogoFileInput.value = "";
+        }
+        if (settingsLogoFileName) {
+            settingsLogoFileName.textContent = "No file selected.";
+        }
     }
 
     function updateSettingsPreviewFromInputs() {
@@ -507,6 +556,257 @@
             settingsLogoPreviewImg.src = previewLogo;
             settingsLogoPreviewImg.alt = `${previewName} logo preview`;
         }
+    }
+
+    function buildStudentVisaChipClass(visaType) {
+        const value = String(visaType || "").toUpperCase();
+        if (value.startsWith("F-")) return "ent-chip-blue";
+        if (value.startsWith("J-")) return "ent-chip-purple";
+        if (value.startsWith("M-")) return "ent-chip-amber";
+        if (value.includes("PERMIT")) return "ent-chip-green";
+        return "ent-chip-gray";
+    }
+
+    function applyStudentsAccessState() {
+        const canEditData = !!(state.permissions && state.permissions.can_edit_data);
+        if (studentsAccessNotice) {
+            studentsAccessNotice.textContent = canEditData
+                ? "Add students with destination country and visa type to start enterprise tracking."
+                : "View-only mode: only admins or editors can add student records.";
+        }
+        if (addStudentBtnOverview) addStudentBtnOverview.disabled = !canEditData;
+        if (addStudentBtnStudents) addStudentBtnStudents.disabled = !canEditData;
+    }
+
+    function updateStudentCounts(countValue) {
+        const numericCount = Number(countValue);
+        const safeCount = Number.isFinite(numericCount) && numericCount >= 0
+            ? Math.floor(numericCount)
+            : (Array.isArray(state.students) ? state.students.length : 0);
+        const formattedCount = new Intl.NumberFormat().format(safeCount);
+        if (studentsNavBadge) studentsNavBadge.textContent = formattedCount;
+        const metricStudents = $("#entMetricStudents");
+        if (metricStudents) metricStudents.textContent = formattedCount;
+    }
+
+    function setStudentCountryOptions(countries) {
+        state.studentOptions.countries = Array.isArray(countries) ? countries : [];
+        const visaMap = {};
+        const intakeMap = {};
+        state.studentOptions.countries.forEach((country) => {
+            const code = String(country && country.code ? country.code : "").trim().toUpperCase();
+            if (!code) return;
+            const visaTypes = Array.isArray(country.visa_types) ? country.visa_types : [];
+            visaMap[code] = visaTypes;
+            const intakesByVisa = country && typeof country.intakes_by_visa === "object" && country.intakes_by_visa
+                ? country.intakes_by_visa
+                : {};
+            visaTypes.forEach((visaType) => {
+                const visaLabel = String(visaType || "").trim();
+                if (!visaLabel) return;
+                const compositeKey = `${code}||${visaLabel.toLowerCase()}`;
+                intakeMap[compositeKey] = Array.isArray(intakesByVisa[visaLabel]) ? intakesByVisa[visaLabel] : [];
+            });
+        });
+        state.studentOptions.visaTypesByCountry = visaMap;
+        state.studentOptions.intakesByCountryVisa = intakeMap;
+
+        if (!studentCountrySelect) return;
+        const selectedValue = String(studentCountrySelect.value || "").trim().toUpperCase();
+        const options = state.studentOptions.countries
+            .map((country) => {
+                const code = String(country.code || "").trim().toUpperCase();
+                const name = String(country.name || code).trim();
+                if (!code || !name) return "";
+                const selectedAttr = code === selectedValue ? " selected" : "";
+                return `<option value="${escapeHtml(code)}"${selectedAttr}>${escapeHtml(name)}</option>`;
+            })
+            .filter(Boolean)
+            .join("");
+
+        studentCountrySelect.innerHTML = `<option value="">Select destination country</option>${options}`;
+    }
+
+    function setIntakeOptionsForCountryVisa(countryCode, visaType) {
+        if (!studentIntakeSelect) return;
+        const normalizedCode = String(countryCode || "").trim().toUpperCase();
+        const normalizedVisa = String(visaType || "").trim().toLowerCase();
+        if (!normalizedCode || !normalizedVisa) {
+            studentIntakeSelect.innerHTML = '<option value="">Select intake</option>';
+            studentIntakeSelect.disabled = true;
+            return;
+        }
+
+        const key = `${normalizedCode}||${normalizedVisa}`;
+        const intakes = state.studentOptions.intakesByCountryVisa[key] || [];
+        const options = intakes
+            .map((intake) => `<option value="${escapeHtml(intake)}">${escapeHtml(intake)}</option>`)
+            .join("");
+        studentIntakeSelect.innerHTML = `<option value="">Select intake</option>${options}`;
+        studentIntakeSelect.disabled = intakes.length === 0;
+    }
+
+    function setVisaTypeOptionsForCountry(countryCode) {
+        if (!studentVisaTypeSelect) return;
+        const normalizedCode = String(countryCode || "").trim().toUpperCase();
+        const visaTypes = state.studentOptions.visaTypesByCountry[normalizedCode] || [];
+        const options = visaTypes
+            .map((visaType) => `<option value="${escapeHtml(visaType)}">${escapeHtml(visaType)}</option>`)
+            .join("");
+        studentVisaTypeSelect.innerHTML = `<option value="">Select visa type</option>${options}`;
+        studentVisaTypeSelect.disabled = visaTypes.length === 0;
+        setIntakeOptionsForCountryVisa(normalizedCode, "");
+    }
+
+    function setStudentsLoadingRow() {
+        if (!studentsTableBody) return;
+        studentsTableBody.innerHTML =
+            '<tr><td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">Loading students...</td></tr>';
+        if (studentsEmpty) studentsEmpty.style.display = "none";
+    }
+
+    function renderStudentRows() {
+        if (!studentsTableBody) return;
+        const rows = Array.isArray(state.students) ? state.students : [];
+        if (rows.length === 0) {
+            studentsTableBody.innerHTML = "";
+            if (studentsEmpty) studentsEmpty.style.display = "";
+            return;
+        }
+
+        if (studentsEmpty) studentsEmpty.style.display = "none";
+        studentsTableBody.innerHTML = rows
+            .map((student) => {
+                const name = String(student.student_name || "Student").trim() || "Student";
+                const initials = getInitials(name, "S");
+                const countryName = String(student.study_country_name || "").trim() || "Unknown";
+                const countryCode = String(student.study_country_code || "").trim().toUpperCase();
+                const visaType = String(student.visa_type || "").trim() || "Not set";
+                const intake = String(student.intake || "").trim() || "Not set";
+                const visaChipClass = buildStudentVisaChipClass(visaType);
+                const createdAtText = formatDateTime(student.created_at);
+                return `
+                    <tr>
+                        <td>
+                            <div class="ent-student-cell">
+                                <div class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#7c3aed)">${escapeHtml(initials)}</div>
+                                <div>
+                                    <div class="ent-student-name">${escapeHtml(name)}</div>
+                                </div>
+                            </div>
+                        </td>
+                        <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(countryName)}${countryCode ? ` (${escapeHtml(countryCode)})` : ""}</td>
+                        <td><span class="ent-chip ${visaChipClass}">${escapeHtml(visaType)}</span></td>
+                        <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(intake)}</td>
+                        <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(createdAtText)}</td>
+                    </tr>
+                `;
+            })
+            .join("");
+    }
+
+    async function loadStudentOptions(forceReload) {
+        const hasCachedOptions =
+            Array.isArray(state.studentOptions.countries) && state.studentOptions.countries.length > 0;
+        if (hasCachedOptions && !forceReload) {
+            setStudentCountryOptions(state.studentOptions.countries);
+            return state.studentOptions.countries;
+        }
+
+        const data = await apiRequest("/api/enterprise/students/options");
+        if (data && data.permissions) {
+            state.permissions = data.permissions;
+        }
+        const optionsPayload = data && data.options ? data.options : {};
+        const countries = Array.isArray(optionsPayload.countries) ? optionsPayload.countries : [];
+        setStudentCountryOptions(countries);
+        applyStudentsAccessState();
+        return countries;
+    }
+
+    async function loadStudents(forceReload) {
+        if (state.studentsLoading && !forceReload) return;
+        if (!state.permissions || !state.permissions.can_view_data) return;
+
+        state.studentsLoading = true;
+        setStudentsLoadingRow();
+        try {
+            const data = await apiRequest("/api/enterprise/students");
+            if (data && data.permissions) {
+                state.permissions = data.permissions;
+            }
+            state.students = Array.isArray(data.students) ? data.students : [];
+            updateStudentCounts(typeof data.students_count === "number" ? data.students_count : state.students.length);
+            renderStudentRows();
+            applyStudentsAccessState();
+        } catch (error) {
+            showStudentsFlash(error.detail || "Unable to load students.", "error");
+            if (studentsTableBody) {
+                studentsTableBody.innerHTML =
+                    '<tr><td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">Failed to load students.</td></tr>';
+            }
+            if (studentsEmpty) studentsEmpty.style.display = "none";
+        } finally {
+            state.studentsLoading = false;
+        }
+    }
+
+    function showStudentModalFlash(message, type = "info") {
+        showInlineFlash(studentModalFlash, message, type);
+    }
+
+    function hideStudentModalFlash() {
+        hideInlineFlash(studentModalFlash);
+    }
+
+    function closeStudentModal() {
+        if (!studentModal) return;
+        studentModal.hidden = true;
+        studentModal.style.display = "none";
+        document.body.classList.remove("ent-no-scroll");
+        hideStudentModalFlash();
+        if (studentForm) studentForm.reset();
+        if (studentVisaTypeSelect) {
+            studentVisaTypeSelect.innerHTML = '<option value="">Select visa type</option>';
+            studentVisaTypeSelect.disabled = true;
+        }
+        if (studentIntakeSelect) {
+            studentIntakeSelect.innerHTML = '<option value="">Select intake</option>';
+            studentIntakeSelect.disabled = true;
+        }
+    }
+
+    async function openStudentModal() {
+        const canEditData = !!(state.permissions && state.permissions.can_edit_data);
+        if (!canEditData) {
+            showStudentsFlash("Only admins or editors can add students.", "error");
+            switchToSection("students");
+            return;
+        }
+        if (!studentModal) return;
+
+        hideStudentsFlash();
+        hideStudentModalFlash();
+        try {
+            // Refresh options on each open so intake year labels stay aligned with current date.
+            await loadStudentOptions(true);
+        } catch (error) {
+            showStudentsFlash(error.detail || "Unable to load country visa options.", "error");
+            switchToSection("students");
+            return;
+        }
+
+        studentModal.hidden = false;
+        studentModal.style.display = "flex";
+        document.body.classList.add("ent-no-scroll");
+
+        const countries = state.studentOptions.countries || [];
+        const firstCountryCode = countries.length ? String(countries[0].code || "").trim().toUpperCase() : "";
+        if (studentCountrySelect) {
+            studentCountrySelect.value = firstCountryCode || "";
+            setVisaTypeOptionsForCountry(studentCountrySelect.value);
+        }
+        if (studentNameInput) studentNameInput.focus();
     }
 
     function applyUserUI() {
@@ -731,8 +1031,13 @@
 
         let payload;
         if (body !== undefined) {
-            headers["Content-Type"] = "application/json";
-            payload = JSON.stringify(body);
+            const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+            if (isFormData) {
+                payload = body;
+            } else {
+                headers["Content-Type"] = "application/json";
+                payload = JSON.stringify(body);
+            }
         }
 
         let response;
@@ -798,6 +1103,7 @@
         applyUserUI();
         applyOrganizationUI();
         applyTeamAccessState();
+        applyStudentsAccessState();
         applySettingsAccessState();
         syncSettingsFormFromState();
     }
@@ -884,6 +1190,7 @@
             } else {
                 showDashboardShell();
                 switchToSection("overview");
+                loadStudents(true);
             }
             return;
         } catch (_) {
@@ -916,9 +1223,19 @@
             can_manage_users: false,
         };
         state.teamMembers = [];
+        state.students = [];
+        state.studentOptions = {
+            countries: [],
+            visaTypesByCountry: {},
+            intakesByCountryVisa: {},
+        };
+        closeStudentModal();
+        updateStudentCounts(0);
+        renderStudentRows();
 
         hideAuthFlash();
         hideTeamFlash();
+        hideStudentsFlash();
         hideSettingsFlash();
         if (loginForm) loginForm.reset();
         resetTurnstileWidget();
@@ -968,6 +1285,7 @@
                 } else {
                     showDashboardShell();
                     switchToSection("overview");
+                    loadStudents(true);
                 }
             } catch (error) {
                 showAuthFlash(error.detail || "Login failed.", "error");
@@ -1015,6 +1333,7 @@
                 applyEnterpriseContext(data);
                 showDashboardShell();
                 switchToSection("overview");
+                loadStudents(true);
             } catch (error) {
                 showOnboardingFlash(error.detail || "Unable to complete onboarding.", "error");
             } finally {
@@ -1072,9 +1391,194 @@
         });
     }
 
+    if (addStudentBtnOverview) {
+        addStudentBtnOverview.addEventListener("click", () => {
+            openStudentModal();
+        });
+    }
+
+    if (addStudentBtnStudents) {
+        addStudentBtnStudents.addEventListener("click", () => {
+            openStudentModal();
+        });
+    }
+
+    if (studentCountrySelect) {
+        studentCountrySelect.addEventListener("change", () => {
+            setVisaTypeOptionsForCountry(studentCountrySelect.value);
+        });
+    }
+
+    if (studentVisaTypeSelect) {
+        studentVisaTypeSelect.addEventListener("change", () => {
+            const countryCode = studentCountrySelect ? studentCountrySelect.value : "";
+            setIntakeOptionsForCountryVisa(countryCode, studentVisaTypeSelect.value);
+        });
+    }
+
+    if (studentModalCloseBtn) {
+        studentModalCloseBtn.addEventListener("click", () => {
+            closeStudentModal();
+        });
+    }
+
+    if (studentModalCancelBtn) {
+        studentModalCancelBtn.addEventListener("click", () => {
+            closeStudentModal();
+        });
+    }
+
+    if (studentModal) {
+        studentModal.addEventListener("click", (event) => {
+            if (event.target === studentModal) {
+                closeStudentModal();
+            }
+        });
+    }
+    document.addEventListener(
+        "click",
+        (event) => {
+            if (!studentModal || studentModal.hidden) return;
+            const closeTrigger = event.target && event.target.closest
+                ? event.target.closest("#entStudentModalClose, #entStudentCancelBtn")
+                : null;
+            if (!closeTrigger) return;
+            event.preventDefault();
+            closeStudentModal();
+        },
+        true
+    );
+
+    if (studentForm) {
+        studentForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            hideStudentModalFlash();
+
+            const canEditData = !!(state.permissions && state.permissions.can_edit_data);
+            if (!canEditData) {
+                showStudentModalFlash("Only admins or editors can add students.", "error");
+                return;
+            }
+
+            const studentName = studentNameInput ? studentNameInput.value.trim() : "";
+            const studyCountryCode = studentCountrySelect ? String(studentCountrySelect.value || "").trim().toUpperCase() : "";
+            const visaType = studentVisaTypeSelect ? String(studentVisaTypeSelect.value || "").trim() : "";
+            const intake = studentIntakeSelect ? String(studentIntakeSelect.value || "").trim() : "";
+
+            if (studentName.length < 2) {
+                showStudentModalFlash("Student name must be at least 2 characters.", "error");
+                if (studentNameInput) studentNameInput.focus();
+                return;
+            }
+            if (!studyCountryCode) {
+                showStudentModalFlash("Please select destination country.", "error");
+                if (studentCountrySelect) studentCountrySelect.focus();
+                return;
+            }
+            if (!visaType) {
+                showStudentModalFlash("Please select visa type.", "error");
+                if (studentVisaTypeSelect) studentVisaTypeSelect.focus();
+                return;
+            }
+            if (!intake) {
+                showStudentModalFlash("Please select intake.", "error");
+                if (studentIntakeSelect) studentIntakeSelect.focus();
+                return;
+            }
+
+            setButtonLoading(studentSaveBtn, true, "Adding...", "Add Student");
+            try {
+                const data = await apiRequest("/api/enterprise/students", {
+                    method: "POST",
+                    body: {
+                        student_name: studentName,
+                        study_country_code: studyCountryCode,
+                        visa_type: visaType,
+                        intake,
+                    },
+                });
+                closeStudentModal();
+                showStudentsFlash(data.message || "Student added successfully.", "success");
+                await loadStudents(true);
+            } catch (error) {
+                showStudentModalFlash(error.detail || "Unable to add student.", "error");
+            } finally {
+                setButtonLoading(studentSaveBtn, false, "Adding...", "Add Student");
+            }
+        });
+    }
+
     if (settingsLogoUrlInput) {
         settingsLogoUrlInput.addEventListener("input", () => {
             updateSettingsPreviewFromInputs();
+        });
+    }
+
+    if (settingsChooseLogoBtn) {
+        settingsChooseLogoBtn.addEventListener("click", () => {
+            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
+            if (!canManageUsers) {
+                showSettingsFlash("Only organization admins can change company profile picture.", "error");
+                return;
+            }
+            if (!settingsLogoFileInput) return;
+            settingsLogoFileInput.click();
+        });
+    }
+
+    if (settingsLogoFileInput) {
+        settingsLogoFileInput.addEventListener("change", () => {
+            const selected = settingsLogoFileInput.files && settingsLogoFileInput.files[0]
+                ? settingsLogoFileInput.files[0]
+                : null;
+            if (settingsLogoFileName) {
+                settingsLogoFileName.textContent = selected ? selected.name : "No file selected.";
+            }
+            if (selected) {
+                showSettingsFlash("Image selected. Click Upload Picture, then Save Branding.", "info");
+            }
+        });
+    }
+
+    if (settingsUploadLogoBtn) {
+        settingsUploadLogoBtn.addEventListener("click", async () => {
+            hideSettingsFlash();
+            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
+            if (!canManageUsers) {
+                showSettingsFlash("Only organization admins can change company profile picture.", "error");
+                return;
+            }
+            const selected = settingsLogoFileInput && settingsLogoFileInput.files && settingsLogoFileInput.files[0]
+                ? settingsLogoFileInput.files[0]
+                : null;
+            if (!selected) {
+                showSettingsFlash("Choose an image file first.", "error");
+                return;
+            }
+
+            setButtonLoading(settingsUploadLogoBtn, true, "Uploading...", "Upload Picture");
+            try {
+                const formData = new FormData();
+                formData.append("file", selected);
+
+                const data = await apiRequest("/api/upload/image", {
+                    method: "POST",
+                    body: formData,
+                });
+
+                const uploadedUrl = data && data.url ? String(data.url).trim() : "";
+                if (!uploadedUrl) {
+                    throw { detail: "Upload succeeded but no image URL was returned." };
+                }
+
+                if (settingsLogoUrlInput) settingsLogoUrlInput.value = uploadedUrl;
+                updateSettingsPreviewFromInputs();
+                showSettingsFlash("Company profile picture uploaded. Click Save Branding to apply.", "success");
+            } catch (error) {
+                showSettingsFlash(error.detail || "Unable to upload company profile picture.", "error");
+            } finally {
+                setButtonLoading(settingsUploadLogoBtn, false, "Uploading...", "Upload Picture");
+            }
         });
     }
 
@@ -1161,6 +1665,11 @@
     if (sidebarLogoutBtn) {
         sidebarLogoutBtn.addEventListener("click", handlePortalLogout);
     }
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && studentModal && !studentModal.hidden) {
+            closeStudentModal();
+        }
+    });
 
     hideAllScreens();
     if (subdomainInput) {

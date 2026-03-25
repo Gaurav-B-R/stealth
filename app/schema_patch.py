@@ -187,6 +187,76 @@ def ensure_enterprise_organization_columns():
         )
 
 
+def ensure_enterprise_students_table():
+    """
+    Ensure enterprise_students table exists for enterprise student management.
+    """
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_students"):
+            columns = _get_table_columns(conn, "enterprise_students")
+            if "intake" not in columns:
+                conn.execute(text("ALTER TABLE enterprise_students ADD COLUMN intake VARCHAR"))
+            return
+
+        if engine.dialect.name == "sqlite":
+            conn.execute(text("""
+                CREATE TABLE enterprise_students (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    organization_id INTEGER NOT NULL,
+                    student_name VARCHAR NOT NULL,
+                    study_country_code VARCHAR NOT NULL,
+                    study_country_name VARCHAR NOT NULL,
+                    visa_type VARCHAR NOT NULL,
+                    intake VARCHAR,
+                    created_by_user_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP,
+                    FOREIGN KEY(organization_id) REFERENCES enterprise_organizations(id),
+                    FOREIGN KEY(created_by_user_id) REFERENCES users(id)
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_students_organization_id "
+                "ON enterprise_students(organization_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_students_created_by_user_id "
+                "ON enterprise_students(created_by_user_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_students_org_created "
+                "ON enterprise_students(organization_id, created_at)"
+            ))
+            return
+
+        conn.execute(text("""
+            CREATE TABLE enterprise_students (
+                id SERIAL PRIMARY KEY,
+                organization_id INTEGER NOT NULL REFERENCES enterprise_organizations(id),
+                student_name VARCHAR NOT NULL,
+                study_country_code VARCHAR NOT NULL,
+                study_country_name VARCHAR NOT NULL,
+                visa_type VARCHAR NOT NULL,
+                intake VARCHAR,
+                created_by_user_id INTEGER NOT NULL REFERENCES users(id),
+                created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+                updated_at TIMESTAMPTZ
+            )
+        """))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_students_organization_id "
+            "ON enterprise_students(organization_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_students_created_by_user_id "
+            "ON enterprise_students(created_by_user_id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_students_org_created "
+            "ON enterprise_students(organization_id, created_at)"
+        ))
+
+
 def _table_exists(conn, table_name: str) -> bool:
     if engine.dialect.name == "sqlite":
         result = conn.execute(

@@ -188,6 +188,44 @@ body {
     padding: 1rem;
 }
 
+.tab-row {
+    display: inline-flex;
+    gap: 0.5rem;
+    margin-bottom: 0.9rem;
+    padding: 0.25rem;
+    border-radius: 12px;
+    border: 1px solid #d6e2f3;
+    background: #f3f8ff;
+}
+
+.tab-btn {
+    border: 1px solid transparent;
+    border-radius: 9px;
+    min-height: 2.2rem;
+    padding: 0 0.85rem;
+    font-size: 0.83rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: #334155;
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.tab-btn.active {
+    color: #ffffff;
+    background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+    box-shadow: 0 8px 18px rgba(99, 102, 241, 0.3);
+}
+
+.tab-btn:hover:not(.active) {
+    background: #e8f0ff;
+}
+
+.tab-panel[hidden] {
+    display: none !important;
+}
+
 .protection-card {
     display: grid;
     gap: 0.65rem;
@@ -252,6 +290,90 @@ body {
     margin-bottom: 0.6rem;
 }
 
+.enterprise-filters-row {
+    grid-template-columns: minmax(280px, 1fr) auto auto;
+    justify-content: start;
+}
+
+.enterprise-credential-card {
+    margin-bottom: 0.9rem;
+    border: 1px solid #d7e4f5;
+    border-radius: 14px;
+    background: linear-gradient(165deg, rgba(99, 102, 241, 0.08), rgba(14, 165, 233, 0.07));
+    padding: 0.8rem;
+}
+
+.enterprise-credential-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    color: #0f172a;
+}
+
+.enterprise-credential-header p {
+    margin: 0.2rem 0 0.65rem;
+    color: #475569;
+    font-size: 0.84rem;
+}
+
+.enterprise-credential-form {
+    display: grid;
+    gap: 0.55rem;
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr) auto;
+    align-items: center;
+}
+
+.enterprise-credential-form input {
+    width: 100%;
+    min-height: 2.55rem;
+    border-radius: 11px;
+    border: 1px solid #cdd9ea;
+    background: #f8fbff;
+    color: var(--ink);
+    padding: 0 0.72rem;
+    font-size: 0.92rem;
+}
+
+.enterprise-credential-form input:focus {
+    outline: none;
+    border-color: var(--brand-a);
+    box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.15);
+}
+
+.enterprise-credential-result {
+    margin-top: 0.65rem;
+    border: 1px solid #bfdbfe;
+    border-radius: 11px;
+    background: #eff6ff;
+    padding: 0.65rem 0.72rem;
+    color: #1e3a8a;
+    display: grid;
+    gap: 0.26rem;
+}
+
+.enterprise-credential-result strong {
+    color: #0f172a;
+}
+
+.credential-password {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 0.84rem;
+    color: #111827;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0.35rem 0.5rem;
+    width: fit-content;
+}
+
+.copy-credential-btn {
+    min-height: 1.86rem;
+    font-size: 0.74rem;
+    padding: 0 0.58rem;
+}
+
 .users-summary {
     color: var(--ink-soft);
     font-size: 0.86rem;
@@ -269,6 +391,10 @@ body {
     width: 100%;
     min-width: 920px;
     border-collapse: collapse;
+}
+
+.enterprise-table {
+    min-width: 760px;
 }
 
 .users-table th,
@@ -304,6 +430,32 @@ body {
     margin-top: 0.2rem;
     color: #64748b;
     font-size: 0.77rem;
+}
+
+.enterprise-meta {
+    margin-top: 0.2rem;
+    color: #64748b;
+    font-size: 0.77rem;
+}
+
+.portal-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.22rem;
+    color: #1d4ed8;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 0.8rem;
+}
+
+.portal-link:hover {
+    text-decoration: underline;
+}
+
+.metric-subtext {
+    margin-top: 0.2rem;
+    color: #64748b;
+    font-size: 0.75rem;
 }
 
 .role-chip,
@@ -442,6 +594,14 @@ button:disabled {
         grid-template-columns: 1fr 1fr;
     }
 
+    .enterprise-filters-row {
+        grid-template-columns: 1fr;
+    }
+
+    .enterprise-credential-form {
+        grid-template-columns: 1fr;
+    }
+
     .filters-row .primary-btn,
     .filters-row .ghost-btn {
         width: 100%;
@@ -453,6 +613,12 @@ button:disabled {
 }
 
 @media (max-width: 620px) {
+    .tab-row {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 1fr;
+    }
+
     .filters-row {
         grid-template-columns: 1fr;
     }

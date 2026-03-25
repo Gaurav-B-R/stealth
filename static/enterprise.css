@@ -1061,6 +1061,20 @@ body {
     flex-wrap: wrap;
 }
 
+.ent-settings-upload-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    margin-top: 0.4rem;
+}
+
+.ent-settings-file-name {
+    color: var(--ent-ink-secondary);
+    font-size: 0.78rem;
+    word-break: break-all;
+}
+
 .ent-settings-preview-wrap {
     display: flex;
     align-items: center;
@@ -1480,6 +1494,94 @@ body {
     max-width: 320px;
 }
 
+.ent-students-note {
+    font-size: 0.82rem;
+    color: var(--ent-ink-secondary);
+    padding: 0.9rem 1.25rem;
+    border-bottom: 1px solid var(--ent-border-light);
+    background: var(--ent-surface-alt);
+}
+
+body.ent-no-scroll {
+    overflow: hidden;
+}
+
+.ent-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.66);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    z-index: 250;
+}
+
+.ent-modal-backdrop[hidden] {
+    display: none !important;
+}
+
+.ent-modal {
+    width: 100%;
+    max-width: 540px;
+    background: var(--ent-surface);
+    border: 1px solid var(--ent-border);
+    border-radius: 14px;
+    box-shadow: 0 28px 70px rgba(2, 6, 23, 0.55);
+    overflow: hidden;
+}
+
+.ent-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.95rem 1.2rem;
+    border-bottom: 1px solid var(--ent-border);
+}
+
+.ent-modal-header h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--ent-ink);
+}
+
+.ent-modal-close {
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--ent-border);
+    border-radius: 9px;
+    background: var(--ent-surface);
+    color: var(--ent-ink-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all var(--ent-transition);
+}
+
+.ent-modal-close:hover {
+    background: var(--ent-surface-alt);
+    color: var(--ent-ink);
+}
+
+.ent-modal-close svg {
+    width: 16px;
+    height: 16px;
+}
+
+.ent-modal-body {
+    padding: 1rem 1.2rem 1.2rem;
+}
+
+.ent-modal-actions {
+    margin-top: 1rem;
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.55rem;
+}
+
 /* ===== TOAST / FLASH ===== */
 
 .ent-flash {
@@ -1746,5 +1848,23 @@ body {
 
     .ent-onboarding-step-line {
         max-width: 28px;
+    }
+
+    .ent-modal {
+        max-width: 100%;
+    }
+
+    .ent-modal-header,
+    .ent-modal-body {
+        padding-left: 0.9rem;
+        padding-right: 0.9rem;
+    }
+
+    .ent-modal-actions {
+        flex-direction: column-reverse;
+    }
+
+    .ent-modal-actions .ent-btn {
+        width: 100%;
     }
 }

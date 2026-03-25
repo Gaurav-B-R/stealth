@@ -81,6 +81,25 @@ class AdminUserListMetrics(BaseModel):
     journey_plan_users: int = 0
 
 
+class AdminEnterpriseAccountSummary(BaseModel):
+    organization_id: int
+    company_name: str
+    subdomain_slug: Optional[str] = None
+    portal_url: Optional[str] = None
+    created_at: datetime
+    created_by_user_id: Optional[int] = None
+    created_by_email: Optional[str] = None
+    created_by_name: Optional[str] = None
+    total_members: int = 0
+    active_members: int = 0
+    active_admins: int = 0
+
+
+class AdminEnterpriseAccountListMetrics(BaseModel):
+    active_members: int = 0
+    active_admins: int = 0
+
+
 class AdminTurnstileVerifyRequest(BaseModel):
     token: str
 
@@ -95,6 +114,29 @@ class AdminUserListResponse(BaseModel):
 
 class AdminUserStatusUpdateRequest(BaseModel):
     is_active: bool
+
+
+class AdminEnterpriseAccountListResponse(BaseModel):
+    accounts: List[AdminEnterpriseAccountSummary]
+    total: int
+    page: int
+    page_size: int
+    metrics: AdminEnterpriseAccountListMetrics
+
+
+class AdminEnterpriseCredentialCreateRequest(BaseModel):
+    email: EmailStr
+    full_name: str
+
+
+class AdminEnterpriseCredentialCreateResponse(BaseModel):
+    email: EmailStr
+    full_name: str
+    temporary_password: Optional[str] = None
+    uses_existing_main_password: bool = False
+    credential_created: bool = False
+    user_created: bool = False
+    message: str
 
 
 class SubscriptionResponse(BaseModel):

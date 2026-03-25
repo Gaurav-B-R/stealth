@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rilono Enterprise — Visa Management at Scale for Institutions</title>
+    <meta name="description" content="Rilono Enterprise: centralized visa management for universities, law firms, and immigration consultancies. Track students, manage multi-visa cases, and stay compliant at scale.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://rilono.com/for-enterprise">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Rilono">
+    <meta property="og:url" content="https://rilono.com/for-enterprise">
+    <meta property="og:title" content="Rilono Enterprise — Visa Management at Scale">
+    <meta property="og:description" content="Centralized visa management for universities, law firms, and immigration consultancies.">
+    <meta property="og:image" content="https://rilono.com/static/logo.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Rilono Enterprise — Visa Management at Scale">
+    <meta name="twitter:description" content="The all-in-one platform to track students, manage multi-visa cases, ensure compliance, and collaborate.">
+    <meta name="twitter:image" content="https://rilono.com/static/logo.png">
+    <link rel="icon" type="image/png" href="/static/logo.png">
+    <link rel="apple-touch-icon" href="/static/logo.png">
+    <link rel="stylesheet" href="/static/styles.css">
+    <style>
+        /* Enterprise landing page sections — built on top of main site styles */
+        .ent-page-wrap {
+            background: var(--bg-color);
+            color: var(--text-primary);
+        }
+
+        .ent-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        /* Hero */
+        .ent-hero {
+            position: relative;
+            padding: 6rem 0 5rem;
+            overflow: hidden;
+        }
+
+        .ent-hero::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99,102,241,0.12) 0%, transparent 60%),
+                radial-gradient(ellipse 40% 50% at 80% 20%, rgba(168,85,247,0.08) 0%, transparent 60%),
+                radial-gradient(ellipse 30% 40% at 10% 70%, rgba(236,72,153,0.06) 0%, transparent 50%);
+            pointer-events: none;
+        }
+
+        .ent-hero .ent-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4rem;
+            align-items: center;
+            position: relative;
+        }
+
+        .ent-hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--primary-light);
+            background: rgba(99,102,241,0.12);
+            border: 1px solid rgba(99,102,241,0.2);
+            padding: 0.4rem 1rem;
+            border-radius: 100px;
+            margin-bottom: 1.5rem;
+        }
+
+        .ent-hero-badge svg { flex-shrink: 0; }
+
+        .ent-hero-title {
+            font-size: 3.5rem;
+            font-weight: 800;
+            line-height: 1.1;
+            letter-spacing: -0.03em;
+            margin-bottom: 1.25rem;
+        }
+
+        .ent-gradient-text {
+            background: var(--gradient-primary);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .ent-hero-subtitle {
+            font-size: 1.1rem;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            max-width: 520px;
+        }
+
+        .ent-hero-ctas {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        .ent-hero-note {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-top: 1rem;
+        }
+
+        .ent-hero-visual {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* CTA buttons */
+        .ent-btn-primary {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            background: var(--gradient-primary);
+            color: #fff;
+            border: none;
+            padding: 0.85rem 2rem;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            font-family: inherit;
+            box-shadow: var(--shadow-accent);
+        }
+
+        .ent-btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .ent-btn-outline {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid var(--border-light);
+            padding: 0.85rem 2rem;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            font-family: inherit;
+        }
+
+        .ent-btn-outline:hover {
+            border-color: var(--primary-color);
+            color: var(--primary-light);
+            background: rgba(99,102,241,0.06);
+        }
+
+        .ent-btn-white {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            background: #fff;
+            color: var(--bg-color);
+            border: none;
+            padding: 0.85rem 2rem;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            font-family: inherit;
+        }
+
+        .ent-btn-white:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(255,255,255,0.15);
+        }
+
+        .ent-btn-white-ghost {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            background: transparent;
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 0.85rem 2rem;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            font-family: inherit;
+        }
+
+        .ent-btn-white-ghost:hover {
+            border-color: #fff;
+            background: rgba(255,255,255,0.1);
+        }
+
+        .ent-btn-full { width: 100%; }
+
+        /* Dashboard preview */
+        .ent-preview {
+            width: 100%;
+            max-width: 540px;
+            border-radius: 16px;
+            overflow: hidden;
+            background: var(--card-bg-solid);
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-premium);
+            animation: ent-float 6s ease-in-out infinite;
+        }
+
+        @keyframes ent-float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
+
+        .ent-preview-bar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 14px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .ent-preview-dot { width: 10px; height: 10px; border-radius: 50%; }
+        .ent-preview-title { font-size: 0.7rem; color: var(--text-muted); margin-left: 8px; font-weight: 500; }
+        .ent-preview-body { display: flex; min-height: 260px; }
+
+        .ent-preview-sidebar {
+            width: 56px;
+            background: #0f172a;
+            padding: 12px 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .ent-preview-sidebar-item { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); }
+        .ent-preview-sidebar-item.active { background: var(--primary-color); }
+
+        .ent-preview-main { flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+        .ent-preview-metrics { display: flex; gap: 10px; }
+
+        .ent-preview-metric {
+            flex: 1;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .ent-preview-metric-label { font-size: 0.6rem; color: var(--text-muted); font-weight: 500; }
+        .ent-preview-metric-value { font-size: 1rem; font-weight: 700; color: var(--text-primary); }
+
+        .ent-preview-chart { display: flex; align-items: flex-end; gap: 6px; height: 60px; padding: 0 4px; }
+
+        .ent-preview-chart-bar {
+            flex: 1;
+            border-radius: 4px 4px 0 0;
+            background: linear-gradient(to top, var(--primary-color), var(--primary-light));
+            opacity: 0.8;
+        }
+
+        .ent-preview-table { display: flex; flex-direction: column; gap: 6px; }
+        .ent-preview-table-row { height: 10px; border-radius: 4px; background: var(--bg-tertiary); }
+        .ent-preview-table-row:nth-child(1) { width: 90%; }
+        .ent-preview-table-row:nth-child(2) { width: 75%; }
+        .ent-preview-table-row:nth-child(3) { width: 60%; }
+
+        /* Trust bar */
+        .ent-trust {
+            padding: 3rem 0;
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+        }
+
+        .ent-trust-label {
+            text-align: center;
+            font-size: 0.78rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            margin-bottom: 1.5rem;
+        }
+
+        .ent-trust-logos { display: flex; justify-content: center; gap: 3rem; flex-wrap: wrap; }
+
+        .ent-trust-logo {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        /* Section headers */
+        .ent-section-header { text-align: center; margin-bottom: 3.5rem; }
+
+        .ent-kicker {
+            display: inline-block;
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--primary-light);
+            margin-bottom: 0.75rem;
+        }
+
+        .ent-section-title {
+            font-size: 2.25rem;
+            font-weight: 800;
+            letter-spacing: -0.025em;
+            margin-bottom: 0.75rem;
+            line-height: 1.2;
+        }
+
+        .ent-section-desc {
+            font-size: 1.05rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* Features */
+        .ent-features { padding: 6rem 0; }
+
+        .ent-features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; }
+
+        .ent-feature-card {
+            padding: 2rem;
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            background: var(--card-bg);
+            backdrop-filter: var(--blur-sm);
+            transition: all 0.25s;
+        }
+
+        .ent-feature-card:hover {
+            border-color: var(--border-light);
+            box-shadow: var(--shadow);
+            transform: translateY(-3px);
+        }
+
+        .ent-feature-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1.25rem;
+        }
+
+        .ent-feature-card h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem; }
+        .ent-feature-card p { font-size: 0.88rem; line-height: 1.6; color: var(--text-secondary); }
+
+        /* How It Works */
+        .ent-how {
+            padding: 6rem 0;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .ent-how-steps { display: flex; align-items: flex-start; justify-content: center; }
+        .ent-how-step { flex: 1; max-width: 300px; text-align: center; padding: 0 1rem; }
+
+        .ent-how-number {
+            width: 48px; height: 48px; border-radius: 50%;
+            background: var(--gradient-primary);
+            color: #fff; font-size: 1.15rem; font-weight: 800;
+            display: flex; align-items: center; justify-content: center;
+            margin: 0 auto 1.25rem;
+            box-shadow: var(--shadow-accent);
+        }
+
+        .ent-how-connector { display: flex; align-items: center; padding-top: 24px; flex-shrink: 0; }
+        .ent-how-step h3 { font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem; }
+        .ent-how-step p { font-size: 0.88rem; line-height: 1.6; color: var(--text-secondary); }
+
+        /* Stats */
+        .ent-stats { padding: 5rem 0; }
+        .ent-stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2rem; text-align: center; }
+
+        .ent-stat-value {
+            font-size: 2.5rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.25rem;
+            background: var(--gradient-primary);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+
+        .ent-stat-label { font-size: 0.88rem; color: var(--text-secondary); font-weight: 500; }
+
+        /* Pricing */
+        .ent-pricing {
+            padding: 6rem 0;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .ent-pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; align-items: start; }
+
+        .ent-pricing-card {
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 2rem;
+            background: var(--card-bg);
+            position: relative;
+            transition: all 0.25s;
+        }
+
+        .ent-pricing-card:hover { box-shadow: var(--shadow); }
+
+        .ent-pricing-featured {
+            border-color: var(--primary-color);
+            box-shadow: var(--shadow-glow);
+            transform: scale(1.03);
+        }
+
+        .ent-pricing-featured:hover { box-shadow: 0 0 32px rgba(99,102,241,0.2), 0 0 64px rgba(99,102,241,0.08); }
+
+        .ent-pricing-popular {
+            position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
+            background: var(--gradient-primary);
+            color: #fff; font-size: 0.72rem; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.08em;
+            padding: 4px 16px; border-radius: 100px; white-space: nowrap;
+        }
+
+        .ent-pricing-card h3 { font-size: 1.2rem; font-weight: 700; margin-bottom: 0.25rem; }
+        .ent-pricing-card .ent-pricing-desc { font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1.25rem; }
+
+        .ent-pricing-price {
+            display: flex; align-items: baseline; gap: 0.25rem;
+            margin-bottom: 1.5rem; padding-bottom: 1.5rem; border-bottom: 1px solid var(--border-color);
+        }
+
+        .ent-pricing-amount { font-size: 2.25rem; font-weight: 800; letter-spacing: -0.02em; }
+        .ent-pricing-period { font-size: 0.88rem; color: var(--text-muted); font-weight: 500; }
+
+        .ent-pricing-features {
+            list-style: none; margin: 0 0 1.5rem;
+            display: flex; flex-direction: column; gap: 0.75rem;
+        }
+
+        .ent-pricing-features li {
+            display: flex; align-items: center; gap: 0.6rem;
+            font-size: 0.88rem; color: var(--text-secondary);
+        }
+
+        .ent-pricing-features li svg { flex-shrink: 0; }
+
+        /* Final CTA */
+        .ent-final-cta { padding: 5rem 0; }
+
+        .ent-cta-card {
+            background: var(--gradient-primary);
+            border-radius: 24px;
+            padding: 4rem;
+            text-align: center;
+            color: #fff;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .ent-cta-card::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 50% 60% at 20% 80%, rgba(255,255,255,0.08) 0%, transparent 60%),
+                radial-gradient(ellipse 40% 50% at 80% 20%, rgba(255,255,255,0.06) 0%, transparent 60%);
+            pointer-events: none;
+        }
+
+        .ent-cta-card > * { position: relative; }
+
+        .ent-cta-card h2 {
+            font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 0.75rem;
+        }
+
+        .ent-cta-card p {
+            font-size: 1.05rem; opacity: 0.85; margin-bottom: 2rem;
+            max-width: 520px; margin-left: auto; margin-right: auto; line-height: 1.6;
+        }
+
+        .ent-cta-card .ent-hero-ctas { justify-content: center; }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .ent-hero-title { font-size: 2.75rem; }
+            .ent-features-grid { grid-template-columns: repeat(2, 1fr); }
+            .ent-pricing-grid { grid-template-columns: repeat(2, 1fr); }
+            .ent-pricing-featured { transform: none; }
+        }
+
+        @media (max-width: 768px) {
+            .ent-hero { padding: 3.5rem 0 2.5rem; }
+            .ent-hero .ent-container { grid-template-columns: 1fr; gap: 2.5rem; }
+            .ent-hero-title { font-size: 2.25rem; }
+            .ent-hero-subtitle { font-size: 1rem; }
+            .ent-hero-visual { order: -1; }
+            .ent-preview { max-width: 420px; }
+            .ent-features-grid { grid-template-columns: 1fr; }
+            .ent-how-steps { flex-direction: column; align-items: center; gap: 1.5rem; }
+            .ent-how-connector { transform: rotate(90deg); padding-top: 0; }
+            .ent-stats-grid { grid-template-columns: repeat(2, 1fr); gap: 2rem 1rem; }
+            .ent-stat-value { font-size: 2rem; }
+            .ent-pricing-grid { grid-template-columns: 1fr; max-width: 400px; margin: 0 auto; }
+            .ent-section-title { font-size: 1.75rem; }
+            .ent-cta-card { padding: 2.5rem 1.5rem; }
+            .ent-cta-card h2 { font-size: 1.5rem; }
+            .ent-trust-logos { gap: 1.5rem; }
+            .ent-hero-ctas { flex-direction: column; }
+            .ent-btn-primary, .ent-btn-outline, .ent-btn-white, .ent-btn-white-ghost { width: 100%; }
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Same navbar as homepage -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <a href="/" style="display: flex; align-items: center; gap: 0.75rem; text-decoration: none; color: white;">
+                    <img src="/static/logo.png" alt="Rilono Logo" style="height: 40px; width: auto; object-fit: contain;">
+                    <span style="margin: 0; font-size: 1.5rem; font-weight: 700;">Rilono</span>
+                </a>
+            </div>
+            <button class="mobile-nav-toggle" id="mobileNavToggle" type="button" aria-label="Open navigation menu">☰</button>
+            <div class="nav-links" id="navLinks">
+                <a href="/">Home</a>
+                <a href="/pricing">Pricing</a>
+                <a href="/about-us">About Us</a>
+                <a href="/for-enterprise" style="color: var(--primary-light);">Enterprise</a>
+                <a href="/login">Login</a>
+                <a href="/register">Register</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="ent-page-wrap">
+
+        <!-- Hero -->
+        <section class="ent-hero">
+            <div class="ent-container">
+                <div class="ent-hero-content">
+                    <div class="ent-hero-badge">
+                        <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        Built for institutions managing 100+ visa cases
+                    </div>
+                    <h1 class="ent-hero-title">
+                        Visa management<br>
+                        <span class="ent-gradient-text">at enterprise scale.</span>
+                    </h1>
+                    <p class="ent-hero-subtitle">
+                        The all-in-one platform for universities, law firms, and immigration consultancies to track students, manage multi-visa cases, ensure compliance, and collaborate — all from one secure dashboard.
+                    </p>
+                    <div class="ent-hero-ctas">
+                        <a href="/enterprise" class="ent-btn-primary">
+                            Start Free Trial
+                            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+                        </a>
+                        <a href="mailto:enterprise@rilono.com" class="ent-btn-outline">
+                            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+                            Contact Sales
+                        </a>
+                    </div>
+                    <p class="ent-hero-note">No credit card required. 14-day free trial.</p>
+                </div>
+                <div class="ent-hero-visual">
+                    <div class="ent-preview">
+                        <div class="ent-preview-bar">
+                            <span class="ent-preview-dot" style="background:#f87171"></span>
+                            <span class="ent-preview-dot" style="background:#fbbf24"></span>
+                            <span class="ent-preview-dot" style="background:#34d399"></span>
+                            <span class="ent-preview-title">Rilono Enterprise Dashboard</span>
+                        </div>
+                        <div class="ent-preview-body">
+                            <div class="ent-preview-sidebar">
+                                <div class="ent-preview-sidebar-item active"></div>
+                                <div class="ent-preview-sidebar-item"></div>
+                                <div class="ent-preview-sidebar-item"></div>
+                                <div class="ent-preview-sidebar-item"></div>
+                                <div class="ent-preview-sidebar-item"></div>
+                            </div>
+                            <div class="ent-preview-main">
+                                <div class="ent-preview-metrics">
+                                    <div class="ent-preview-metric"><span class="ent-preview-metric-label">Students</span><span class="ent-preview-metric-value">2,847</span></div>
+                                    <div class="ent-preview-metric"><span class="ent-preview-metric-label">Active Cases</span><span class="ent-preview-metric-value">1,204</span></div>
+                                    <div class="ent-preview-metric"><span class="ent-preview-metric-label">Compliance</span><span class="ent-preview-metric-value">94.2%</span></div>
+                                </div>
+                                <div class="ent-preview-chart">
+                                    <div class="ent-preview-chart-bar" style="height:40%"></div>
+                                    <div class="ent-preview-chart-bar" style="height:65%"></div>
+                                    <div class="ent-preview-chart-bar" style="height:50%"></div>
+                                    <div class="ent-preview-chart-bar" style="height:80%"></div>
+                                    <div class="ent-preview-chart-bar" style="height:55%"></div>
+                                    <div class="ent-preview-chart-bar" style="height:90%"></div>
+                                    <div class="ent-preview-chart-bar" style="height:70%"></div>
+                                </div>
+                                <div class="ent-preview-table">
+                                    <div class="ent-preview-table-row"></div>
+                                    <div class="ent-preview-table-row"></div>
+                                    <div class="ent-preview-table-row"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Trust -->
+        <section class="ent-trust">
+            <div class="ent-container">
+                <p class="ent-trust-label">Trusted by institutions managing thousands of visa cases</p>
+                <div class="ent-trust-logos">
+                    <div class="ent-trust-logo"><svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 14l9-5-9-5-9 5 9 5z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z"/></svg> Universities</div>
+                    <div class="ent-trust-logo"><svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg> Law Firms</div>
+                    <div class="ent-trust-logo"><svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg> Immigration Consultancies</div>
+                    <div class="ent-trust-logo"><svg width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg> Government Agencies</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Features -->
+        <section class="ent-features" id="features">
+            <div class="ent-container">
+                <div class="ent-section-header">
+                    <span class="ent-kicker">Powerful Features</span>
+                    <h2 class="ent-section-title">Everything you need to manage visas at scale</h2>
+                    <p class="ent-section-desc">From student tracking to compliance monitoring, Rilono Enterprise gives your team full visibility and control.</p>
+                </div>
+                <div class="ent-features-grid">
+                    <div class="ent-feature-card"><div class="ent-feature-icon" style="background:rgba(99,102,241,0.12);color:#818cf8"><svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg></div><h3>Centralized Student Tracking</h3><p>View every student's visa status, documents, and timeline in one unified dashboard. No more spreadsheets.</p></div>
+                    <div class="ent-feature-card"><div class="ent-feature-icon" style="background:rgba(168,85,247,0.12);color:#c084fc"><svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg></div><h3>Multi-Visa Case Management</h3><p>Handle F-1, H-1B, J-1, O-1, B1/B2, and more. Each visa type with its own workflow, deadlines, and requirements.</p></div>
+                    <div class="ent-feature-card"><div class="ent-feature-icon" style="background:rgba(16,185,129,0.12);color:#34d399"><svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg></div><h3>Compliance Monitoring</h3><p>Automated alerts for expiring documents, SEVIS reporting deadlines, and regulatory changes. Never miss a deadline.</p></div>
+                    <div class="ent-feature-card"><div class="ent-feature-icon" style="background:rgba(245,158,11,0.12);color:#fbbf24"><svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg></div><h3>Analytics & Reporting</h3><p>Real-time dashboards with visa approval rates, processing times, and trends. Export reports for stakeholders.</p></div>
+                    <div class="ent-feature-card"><div class="ent-feature-icon" style="background:rgba(236,72,153,0.12);color:#f472b6"><svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg></div><h3>Team Collaboration</h3><p>Role-based access for admins, editors, and viewers. Assign cases, leave notes, and collaborate in real time.</p></div>
+                    <div class="ent-feature-card"><div class="ent-feature-icon" style="background:rgba(14,165,233,0.12);color:#38bdf8"><svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg></div><h3>Document Vault</h3><p>Secure, organized storage for passports, I-20s, DS-160 confirmations, and every supporting document.</p></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- How It Works -->
+        <section class="ent-how" id="how-it-works">
+            <div class="ent-container">
+                <div class="ent-section-header">
+                    <span class="ent-kicker">Simple Setup</span>
+                    <h2 class="ent-section-title">Get started in minutes, not months</h2>
+                    <p class="ent-section-desc">Rilono Enterprise is designed to be deployed quickly with zero infrastructure headaches.</p>
+                </div>
+                <div class="ent-how-steps">
+                    <div class="ent-how-step"><div class="ent-how-number">1</div><h3>Create your organization</h3><p>Sign up, name your organization, and get your own branded portal at <strong>yourorg.rilono.com</strong>.</p></div>
+                    <div class="ent-how-connector"><svg width="40" height="2" viewBox="0 0 40 2"><line x1="0" y1="1" x2="40" y2="1" stroke="var(--text-muted)" stroke-width="2" stroke-dasharray="4 4"/></svg></div>
+                    <div class="ent-how-step"><div class="ent-how-number">2</div><h3>Invite your team</h3><p>Add team members with role-based permissions — admins, editors, and read-only viewers.</p></div>
+                    <div class="ent-how-connector"><svg width="40" height="2" viewBox="0 0 40 2"><line x1="0" y1="1" x2="40" y2="1" stroke="var(--text-muted)" stroke-width="2" stroke-dasharray="4 4"/></svg></div>
+                    <div class="ent-how-step"><div class="ent-how-number">3</div><h3>Start managing cases</h3><p>Import students, create visa cases, upload documents, and track everything from your dashboard.</p></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Stats -->
+        <section class="ent-stats">
+            <div class="ent-container">
+                <div class="ent-stats-grid">
+                    <div><div class="ent-stat-value">10,000+</div><div class="ent-stat-label">Visa cases managed</div></div>
+                    <div><div class="ent-stat-value">99.9%</div><div class="ent-stat-label">Uptime SLA</div></div>
+                    <div><div class="ent-stat-value">12+</div><div class="ent-stat-label">Visa types supported</div></div>
+                    <div><div class="ent-stat-value">SOC 2</div><div class="ent-stat-label">Security compliant</div></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Pricing -->
+        <section class="ent-pricing" id="pricing">
+            <div class="ent-container">
+                <div class="ent-section-header">
+                    <span class="ent-kicker">Transparent Pricing</span>
+                    <h2 class="ent-section-title">Plans that scale with you</h2>
+                    <p class="ent-section-desc">Start free, upgrade as your team grows. No hidden fees, no long-term contracts.</p>
+                </div>
+                <div class="ent-pricing-grid">
+                    <div class="ent-pricing-card">
+                        <h3>Starter</h3><p class="ent-pricing-desc">For small teams getting started</p>
+                        <div class="ent-pricing-price"><span class="ent-pricing-amount">Free</span><span class="ent-pricing-period">forever</span></div>
+                        <ul class="ent-pricing-features">
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Up to 50 students</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>3 team members</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Core visa tracking</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Email support</li>
+                        </ul>
+                        <a href="/enterprise" class="ent-btn-outline ent-btn-full">Get Started</a>
+                    </div>
+                    <div class="ent-pricing-card ent-pricing-featured">
+                        <div class="ent-pricing-popular">Most Popular</div>
+                        <h3>Professional</h3><p class="ent-pricing-desc">For growing organizations</p>
+                        <div class="ent-pricing-price"><span class="ent-pricing-amount">$49</span><span class="ent-pricing-period">/month</span></div>
+                        <ul class="ent-pricing-features">
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Unlimited students</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>10 team members</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Advanced analytics</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Priority support</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Custom branding</li>
+                        </ul>
+                        <a href="/enterprise" class="ent-btn-primary ent-btn-full">Start Free Trial</a>
+                    </div>
+                    <div class="ent-pricing-card">
+                        <h3>Enterprise</h3><p class="ent-pricing-desc">For large institutions</p>
+                        <div class="ent-pricing-price"><span class="ent-pricing-amount">Custom</span><span class="ent-pricing-period">pricing</span></div>
+                        <ul class="ent-pricing-features">
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Everything in Professional</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Unlimited team members</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>SSO &amp; SAML</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Dedicated account manager</li>
+                            <li><svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="#34d399"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>Custom integrations &amp; SLA</li>
+                        </ul>
+                        <a href="mailto:enterprise@rilono.com" class="ent-btn-outline ent-btn-full">Contact Sales</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Final CTA -->
+        <section class="ent-final-cta">
+            <div class="ent-container">
+                <div class="ent-cta-card">
+                    <h2>Ready to modernize your visa management?</h2>
+                    <p>Join institutions that trust Rilono Enterprise to handle visa cases at scale with confidence and compliance.</p>
+                    <div class="ent-hero-ctas">
+                        <a href="/enterprise" class="ent-btn-white">
+                            Get Started Free
+                            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>
+                        </a>
+                        <a href="mailto:enterprise@rilono.com" class="ent-btn-white-ghost">Contact Sales</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Same footer as homepage -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-links">
+                <a href="/pricing">Pricing</a>
+                <a href="/about-us">About Us</a>
+                <a href="/for-enterprise">Enterprise</a>
+                <a href="mailto:enterprise@rilono.com">Contact Us</a>
+            </div>
+            <div class="footer-social" style="display: flex; align-items: center; justify-content: center; gap: 1rem; margin: 1rem 0;">
+                <a href="https://www.linkedin.com/company/rilono-ai/" target="_blank" rel="noopener noreferrer"
+                    style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; background: rgba(255,255,255,0.05); border-radius: 50%; border: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;"
+                    title="Follow us on LinkedIn">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="#0A66C2">
+                        <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                    </svg>
+                </a>
+                <a href="https://x.com/Rilono_F1_Visa" target="_blank" rel="noopener noreferrer"
+                    style="display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; background: rgba(255,255,255,0.05); border-radius: 50%; border: 1px solid rgba(255,255,255,0.1); transition: all 0.2s ease;"
+                    title="Follow us on X">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="#ffffff">
+                        <path d="M18.244 2H21.5l-7.12 8.139L22.75 22h-6.553l-5.13-6.708L5.2 22H1.94l7.614-8.7L1.5 2h6.72l4.636 6.146L18.244 2zm-1.14 18h1.8L7.247 3.895H5.318L17.104 20z"/>
+                    </svg>
+                </a>
+            </div>
+            <div class="footer-copyright">
+                &copy; 2026 Rilono. All rights reserved.
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        document.getElementById("mobileNavToggle").addEventListener("click", function () {
+            document.getElementById("navLinks").classList.toggle("active");
+        });
+        document.addEventListener("click", function (e) {
+            var anchor = e.target.closest('a[href^="#"]');
+            if (!anchor) return;
+            var target = document.querySelector(anchor.getAttribute("href"));
+            if (target) { e.preventDefault(); target.scrollIntoView({ behavior: "smooth", block: "start" }); }
+        });
+    </script>
+</body>
+
+</html>

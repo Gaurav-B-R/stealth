@@ -19,6 +19,7 @@ from app.schema_patch import (
     ensure_coupon_usage_limit_column,
     ensure_document_catalog_columns,
     ensure_enterprise_organization_columns,
+    ensure_enterprise_students_table,
     ensure_f1_visa_news_table,
     ensure_referral_columns,
     ensure_rilono_ai_chat_upload_events_table,
@@ -170,6 +171,7 @@ def startup_backfill_subscriptions():
     ensure_subscription_payment_recurring_columns()
     ensure_document_catalog_columns()
     ensure_enterprise_organization_columns()
+    ensure_enterprise_students_table()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_f1_visa_news_table()
@@ -226,6 +228,20 @@ async def read_admin_console():
 @app.get("/admin_console/")
 async def read_admin_console_slash():
     return await read_admin_console()
+
+
+@app.get("/for-enterprise")
+async def read_for_enterprise():
+    """Serve the enterprise marketing / landing page."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "for_enterprise.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/for-enterprise/")
+async def read_for_enterprise_slash():
+    return await read_for_enterprise()
 
 
 @app.get("/enterprise")
