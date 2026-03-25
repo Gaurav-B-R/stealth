@@ -84,6 +84,7 @@ class EnterpriseOrganization(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_name = Column(String, nullable=False, index=True)
     subdomain_slug = Column(String, unique=True, index=True, nullable=True)
+    logo_url = Column(String, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

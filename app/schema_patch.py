@@ -175,6 +175,8 @@ def ensure_enterprise_organization_columns():
         columns = _get_table_columns(conn, "enterprise_organizations")
         if "subdomain_slug" not in columns:
             conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN subdomain_slug VARCHAR"))
+        if "logo_url" not in columns:
+            conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN logo_url VARCHAR"))
 
         conn.execute(
             text(

@@ -31,6 +31,16 @@
     const teamNameInput = $("#entTeamName");
     const teamRoleInput = $("#entTeamRole");
     const teamAccessNotice = $("#entTeamAccessNotice");
+    const settingsFlash = $("#entSettingsFlash");
+    const settingsForm = $("#entSettingsBrandingForm");
+    const settingsCompanyNameInput = $("#entSettingsCompanyName");
+    const settingsLogoUrlInput = $("#entSettingsLogoUrl");
+    const settingsAccessNotice = $("#entSettingsAccessNotice");
+    const settingsRandomLogoBtn = $("#entSettingsRandomLogoBtn");
+    const settingsSaveBtn = $("#entSettingsSaveBtn");
+    const settingsLogoPreviewImg = $("#entSettingsLogoPreviewImg");
+    const settingsPreviewCompanyName = $("#entSettingsPreviewCompanyName");
+    const settingsPreviewPortalUrl = $("#entSettingsPreviewPortalUrl");
 
     const userNameEl = $("#entUserName");
     const userAvatarImgEl = $("#entUserAvatarImg");
@@ -38,6 +48,9 @@
     const orgNameEl = $("#entOrgName");
     const orgCardAvatarImgEl = $("#entOrgCardAvatarImg");
     const orgPortalEl = $("#entOrgPortalUrl");
+    const sidebarOrgNameEl = $("#entSidebarOrgName");
+    const sidebarOrgAvatarImgEl = $("#entSidebarOrgAvatarImg");
+    const sidebarOrgPortalEl = $("#entSidebarOrgPortal");
     const sidebarLogoutBtn = $("#entSidebarLogoutBtn");
 
     const turnstileWrap = $("#entTurnstileWrap");
@@ -174,6 +187,16 @@
         return `https://picsum.photos/seed/rilono-${seed}/${n}/${n}`;
     }
 
+    function resolveOrganizationLogoUrl(org, size) {
+        const logoFromApi = org && org.logo_url ? String(org.logo_url).trim() : "";
+        if (logoFromApi) return logoFromApi;
+
+        const orgId = org && org.id != null ? String(org.id) : "pending";
+        const companyName = org && org.company_name ? String(org.company_name) : "";
+        const subdomain = org && org.subdomain_slug ? String(org.subdomain_slug) : "";
+        return picsumPortraitUrl(`org-${orgId}|${companyName}|${subdomain}`, size || 128);
+    }
+
     function escapeHtml(input) {
         return String(input == null ? "" : input)
             .replace(/&/g, "&amp;")
@@ -284,6 +307,14 @@
         hideInlineFlash(teamFlash);
     }
 
+    function showSettingsFlash(message, type = "info") {
+        showInlineFlash(settingsFlash, message, type);
+    }
+
+    function hideSettingsFlash() {
+        hideInlineFlash(settingsFlash);
+    }
+
     function openMobileSidebar() {
         if (sidebar) sidebar.classList.add("open");
         if (sidebarOverlay) sidebarOverlay.classList.add("open");
@@ -312,6 +343,11 @@
 
         if (sectionKey === "team") {
             loadTeamMembers();
+        }
+        if (sectionKey === "settings") {
+            hideSettingsFlash();
+            syncSettingsFormFromState();
+            applySettingsAccessState();
         }
 
         closeMobileSidebar();
@@ -357,8 +393,16 @@
                 orgCardAvatarImgEl.src = "/static/logo.png";
                 orgCardAvatarImgEl.alt = "";
             }
+            if (sidebarOrgAvatarImgEl) {
+                sidebarOrgAvatarImgEl.src = "/static/logo.png";
+                sidebarOrgAvatarImgEl.alt = "";
+            }
             if (orgNameEl) orgNameEl.textContent = "Your organization";
+            if (sidebarOrgNameEl) sidebarOrgNameEl.textContent = "Your organization";
             if (orgPortalEl) orgPortalEl.textContent = "Enterprise Plan";
+            if (sidebarOrgPortalEl) sidebarOrgPortalEl.textContent = `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
+            if (settingsPreviewCompanyName) settingsPreviewCompanyName.textContent = "Your organization";
+            if (settingsPreviewPortalUrl) settingsPreviewPortalUrl.textContent = `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
             updateSubdomainPreview();
             return;
         }
@@ -366,19 +410,38 @@
         const rawCompanyName = org.company_name ? String(org.company_name).trim() : "";
         const companyName = rawCompanyName || "Enterprise Organization";
         const subdomainSlug = org.subdomain_slug || "";
-        const orgKey = org.id != null ? `org-${org.id}` : `org-${subdomainSlug || "pending"}`;
-        const photoUrl = picsumPortraitUrl(`${orgKey}|${companyName}|${subdomainSlug}`, 128);
+        const photoUrl = resolveOrganizationLogoUrl(org, 128);
 
         if (orgCardAvatarImgEl) {
             orgCardAvatarImgEl.src = photoUrl;
-            orgCardAvatarImgEl.alt = "";
+            orgCardAvatarImgEl.alt = `${companyName} logo`;
+        }
+        if (sidebarOrgAvatarImgEl) {
+            sidebarOrgAvatarImgEl.src = photoUrl;
+            sidebarOrgAvatarImgEl.alt = `${companyName} logo`;
         }
 
         if (orgNameEl) orgNameEl.textContent = companyName;
+        if (sidebarOrgNameEl) sidebarOrgNameEl.textContent = companyName;
         if (orgPortalEl) {
             orgPortalEl.textContent = subdomainSlug
                 ? `${subdomainSlug}.${ENTERPRISE_ROOT_DOMAIN}`
                 : "Enterprise Plan";
+        }
+        if (sidebarOrgPortalEl) {
+            sidebarOrgPortalEl.textContent = subdomainSlug
+                ? `${subdomainSlug}.${ENTERPRISE_ROOT_DOMAIN}`
+                : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
+        }
+        if (settingsPreviewCompanyName) settingsPreviewCompanyName.textContent = companyName;
+        if (settingsPreviewPortalUrl) {
+            settingsPreviewPortalUrl.textContent = subdomainSlug
+                ? `${subdomainSlug}.${ENTERPRISE_ROOT_DOMAIN}`
+                : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
+        }
+        if (settingsLogoPreviewImg) {
+            settingsLogoPreviewImg.src = photoUrl;
+            settingsLogoPreviewImg.alt = `${companyName} logo preview`;
         }
         if (companyNameInput && rawCompanyName && !companyNameInput.value) {
             companyNameInput.value = rawCompanyName;
@@ -387,6 +450,63 @@
             subdomainInput.value = subdomainSlug;
         }
         updateSubdomainPreview();
+    }
+
+    function applySettingsAccessState() {
+        const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
+        if (settingsAccessNotice) {
+            settingsAccessNotice.textContent = canManageUsers
+                ? "You can update your organization name and branding from here."
+                : "View-only mode: only organization admins can change branding settings.";
+        }
+        if (settingsCompanyNameInput) settingsCompanyNameInput.disabled = !canManageUsers;
+        if (settingsLogoUrlInput) settingsLogoUrlInput.disabled = !canManageUsers;
+        if (settingsRandomLogoBtn) settingsRandomLogoBtn.disabled = !canManageUsers;
+        if (settingsSaveBtn) settingsSaveBtn.disabled = !canManageUsers;
+    }
+
+    function syncSettingsFormFromState() {
+        const org = state.organization || {};
+        if (settingsCompanyNameInput) {
+            settingsCompanyNameInput.value = org.company_name ? String(org.company_name) : "";
+        }
+        if (settingsLogoUrlInput) {
+            settingsLogoUrlInput.value = org.logo_url ? String(org.logo_url) : "";
+        }
+        const previewUrl = resolveOrganizationLogoUrl(org, 128);
+        if (settingsLogoPreviewImg) {
+            settingsLogoPreviewImg.src = previewUrl;
+            settingsLogoPreviewImg.alt = `${org.company_name || "Organization"} logo preview`;
+        }
+        if (settingsPreviewCompanyName) {
+            settingsPreviewCompanyName.textContent = (org.company_name || "Your organization").trim();
+        }
+        if (settingsPreviewPortalUrl) {
+            const slug = (org.subdomain_slug || "").trim();
+            settingsPreviewPortalUrl.textContent = slug
+                ? `${slug}.${ENTERPRISE_ROOT_DOMAIN}`
+                : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
+        }
+    }
+
+    function updateSettingsPreviewFromInputs() {
+        const inputName = settingsCompanyNameInput ? settingsCompanyNameInput.value.trim() : "";
+        const inputLogo = settingsLogoUrlInput ? settingsLogoUrlInput.value.trim() : "";
+        const fallbackOrg = state.organization || {};
+        const previewName = inputName || fallbackOrg.company_name || "Your organization";
+        const previewSlug = (fallbackOrg.subdomain_slug || "").trim();
+        const previewLogo = inputLogo || resolveOrganizationLogoUrl(fallbackOrg, 128);
+
+        if (settingsPreviewCompanyName) settingsPreviewCompanyName.textContent = previewName;
+        if (settingsPreviewPortalUrl) {
+            settingsPreviewPortalUrl.textContent = previewSlug
+                ? `${previewSlug}.${ENTERPRISE_ROOT_DOMAIN}`
+                : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
+        }
+        if (settingsLogoPreviewImg) {
+            settingsLogoPreviewImg.src = previewLogo;
+            settingsLogoPreviewImg.alt = `${previewName} logo preview`;
+        }
     }
 
     function applyUserUI() {
@@ -678,6 +798,8 @@
         applyUserUI();
         applyOrganizationUI();
         applyTeamAccessState();
+        applySettingsAccessState();
+        syncSettingsFormFromState();
     }
 
     async function fetchTurnstileSiteKey() {
@@ -797,6 +919,7 @@
 
         hideAuthFlash();
         hideTeamFlash();
+        hideSettingsFlash();
         if (loginForm) loginForm.reset();
         resetTurnstileWidget();
         showAuthScreen();
@@ -945,6 +1068,82 @@
             } finally {
                 setButtonLoading(teamAddBtn, false, "Adding...", "Add User");
                 applyTeamAccessState();
+            }
+        });
+    }
+
+    if (settingsLogoUrlInput) {
+        settingsLogoUrlInput.addEventListener("input", () => {
+            updateSettingsPreviewFromInputs();
+        });
+    }
+
+    if (settingsCompanyNameInput) {
+        settingsCompanyNameInput.addEventListener("input", () => {
+            updateSettingsPreviewFromInputs();
+        });
+    }
+
+    if (settingsRandomLogoBtn) {
+        settingsRandomLogoBtn.addEventListener("click", () => {
+            hideSettingsFlash();
+            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
+            if (!canManageUsers) {
+                showSettingsFlash("Only organization admins can randomize organization branding.", "error");
+                return;
+            }
+            if (!settingsLogoUrlInput) return;
+            settingsLogoUrlInput.value = picsumPortraitUrl(
+                `org-random|${Date.now()}|${Math.random()}|${(state.organization && state.organization.id) || "org"}`,
+                256
+            );
+            updateSettingsPreviewFromInputs();
+            showSettingsFlash("Random logo generated. Click Save Branding to apply it.", "info");
+        });
+    }
+
+    if (settingsForm) {
+        settingsForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            hideSettingsFlash();
+
+            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
+            if (!canManageUsers) {
+                showSettingsFlash("Only organization admins can update branding.", "error");
+                return;
+            }
+
+            const companyName = settingsCompanyNameInput ? settingsCompanyNameInput.value.trim() : "";
+            const logoUrl = settingsLogoUrlInput ? settingsLogoUrlInput.value.trim() : "";
+            if (companyName.length < 2) {
+                showSettingsFlash("Organization name must be at least 2 characters.", "error");
+                return;
+            }
+
+            setButtonLoading(settingsSaveBtn, true, "Saving...", "Save Branding");
+            try {
+                const data = await apiRequest("/api/enterprise/organization/branding", {
+                    method: "PATCH",
+                    body: {
+                        company_name: companyName,
+                        logo_url: logoUrl,
+                    },
+                });
+
+                if (data && data.organization) {
+                    state.organization = data.organization;
+                } else if (state.organization) {
+                    state.organization.company_name = companyName;
+                    state.organization.logo_url = logoUrl || state.organization.logo_url;
+                }
+
+                applyOrganizationUI();
+                syncSettingsFormFromState();
+                showSettingsFlash(data.message || "Organization branding updated successfully.", "success");
+            } catch (error) {
+                showSettingsFlash(error.detail || "Unable to save organization branding.", "error");
+            } finally {
+                setButtonLoading(settingsSaveBtn, false, "Saving...", "Save Branding");
             }
         });
     }

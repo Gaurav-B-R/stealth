@@ -33,7 +33,7 @@ const COOKIE_CONSENT_STORAGE_KEY = 'rilono_cookie_preferences_v1';
 const COOKIE_CONSENT_VERSION = 1;
 const COOKIE_CONSENT_DEFAULTS = Object.freeze({
     necessary: true,
-    analytics: false
+    analytics: true
 });
 const COOKIE_CONSENT_GTAG_DENIED = Object.freeze({
     analytics_storage: 'denied',

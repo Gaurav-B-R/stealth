@@ -2,8 +2,9 @@ import os
 import re
 import secrets
 import logging
+import hashlib
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import func
@@ -76,6 +77,7 @@ ENTERPRISE_LOGIN_RATE_LIMIT = int(os.getenv("ENTERPRISE_LOGIN_RATE_LIMIT", os.ge
 ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS = int(
     os.getenv("ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS", os.getenv("LOGIN_RATE_WINDOW_SECONDS", "300"))
 )
+ENTERPRISE_LOGO_URL_MAX_LENGTH = 2048
 
 
 class EnterpriseLoginRequest(BaseModel):
@@ -101,6 +103,12 @@ class EnterpriseTeamAddUserRequest(BaseModel):
 
 class EnterpriseTeamRoleUpdateRequest(BaseModel):
     role: str = Field(..., min_length=3, max_length=16)
+
+
+class EnterpriseBrandingUpdateRequest(BaseModel):
+    company_name: Optional[str] = Field(default=None, min_length=2, max_length=120)
+    logo_url: Optional[str] = Field(default=None, max_length=ENTERPRISE_LOGO_URL_MAX_LENGTH)
+    generate_random_logo: bool = False
 
 
 def _is_development_env() -> bool:
@@ -131,6 +139,59 @@ def _enforce_rate_limit_or_429(
             detail="Too many requests. Please try again later.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+def _build_default_enterprise_logo_url(
+    *,
+    organization_id: int | None,
+    company_name: str | None,
+    subdomain_slug: str | None,
+    randomize: bool = False,
+) -> str:
+    seed_parts = [
+        f"org-{int(organization_id)}" if organization_id is not None else "org-pending",
+        (company_name or "").strip().lower(),
+        (subdomain_slug or "").strip().lower(),
+    ]
+    if randomize:
+        seed_parts.append(secrets.token_hex(6))
+    seed_source = "|".join(seed_parts)
+    seed_hash = hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:20]
+    return f"https://picsum.photos/seed/rilono-org-{seed_hash}/256/256"
+
+
+def _normalize_enterprise_logo_url_or_400(raw_logo_url: str | None) -> str | None:
+    value = str(raw_logo_url or "").strip()
+    if not value:
+        return None
+    if len(value) > ENTERPRISE_LOGO_URL_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Logo URL must be at most {ENTERPRISE_LOGO_URL_MAX_LENGTH} characters.",
+        )
+
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(
+            status_code=400,
+            detail="Logo URL must start with http:// or https://",
+        )
+    return value
+
+
+def _resolve_enterprise_logo_url(organization: models.EnterpriseOrganization) -> str:
+    raw_logo = str(getattr(organization, "logo_url", "") or "").strip()
+    if raw_logo:
+        parsed = urlparse(raw_logo)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return raw_logo
+
+    return _build_default_enterprise_logo_url(
+        organization_id=getattr(organization, "id", None),
+        company_name=getattr(organization, "company_name", None),
+        subdomain_slug=getattr(organization, "subdomain_slug", None),
+        randomize=False,
+    )
 
 
 def _normalize_enterprise_role(raw_role: str | None) -> str:
@@ -338,6 +399,7 @@ def _build_enterprise_context(db: Session, user: models.User) -> dict:
     normalized_role = _normalize_enterprise_role(membership.role)
     company_name = (organization.company_name or "").strip()
     subdomain_slug = (organization.subdomain_slug or "").strip().lower()
+    logo_url = _resolve_enterprise_logo_url(organization)
     onboarding_required = not company_name or not subdomain_slug
     return {
         "onboarding_required": onboarding_required,
@@ -345,6 +407,7 @@ def _build_enterprise_context(db: Session, user: models.User) -> dict:
             "id": organization.id,
             "company_name": company_name or organization.company_name,
             "subdomain_slug": subdomain_slug or None,
+            "logo_url": logo_url,
             "portal_url": _build_enterprise_portal_url(subdomain_slug),
             "created_at": organization.created_at,
         },
@@ -609,6 +672,13 @@ def enterprise_onboarding(
         )
         existing_org.company_name = company_name
         existing_org.subdomain_slug = subdomain_slug
+        if not str(existing_org.logo_url or "").strip():
+            existing_org.logo_url = _build_default_enterprise_logo_url(
+                organization_id=existing_org.id,
+                company_name=company_name,
+                subdomain_slug=subdomain_slug,
+                randomize=True,
+            )
         db.commit()
         return {
             "message": "Enterprise organization setup complete.",
@@ -620,6 +690,12 @@ def enterprise_onboarding(
     organization = models.EnterpriseOrganization(
         company_name=company_name,
         subdomain_slug=subdomain_slug,
+        logo_url=_build_default_enterprise_logo_url(
+            organization_id=None,
+            company_name=company_name,
+            subdomain_slug=subdomain_slug,
+            randomize=True,
+        ),
         created_by_user_id=current_user.id,
     )
     db.add(organization)
@@ -654,11 +730,70 @@ def enterprise_team_members(
             "id": organization.id,
             "company_name": organization.company_name,
             "subdomain_slug": (organization.subdomain_slug or "").strip().lower() or None,
+            "logo_url": _resolve_enterprise_logo_url(organization),
             "portal_url": _build_enterprise_portal_url(organization.subdomain_slug),
         },
         "current_role": role,
         "permissions": _enterprise_permissions_for_role(role),
         "members": members,
+    }
+
+
+@router.patch("/organization/branding")
+def enterprise_update_branding(
+    payload: EnterpriseBrandingUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _ = _require_enterprise_membership(
+        db=db,
+        user=current_user,
+        request=request,
+        require_manage_users=True,
+    )
+
+    has_update = False
+    new_company_name: str | None = None
+    if payload.company_name is not None:
+        new_company_name = (payload.company_name or "").strip()
+        if len(new_company_name) < 2:
+            raise HTTPException(status_code=400, detail="Company name must be at least 2 characters.")
+        has_update = True
+
+    if payload.generate_random_logo:
+        organization.logo_url = _build_default_enterprise_logo_url(
+            organization_id=organization.id,
+            company_name=new_company_name or organization.company_name,
+            subdomain_slug=organization.subdomain_slug,
+            randomize=True,
+        )
+        has_update = True
+    elif payload.logo_url is not None:
+        normalized_logo = _normalize_enterprise_logo_url_or_400(payload.logo_url)
+        if normalized_logo:
+            organization.logo_url = normalized_logo
+        else:
+            organization.logo_url = _build_default_enterprise_logo_url(
+                organization_id=organization.id,
+                company_name=new_company_name or organization.company_name,
+                subdomain_slug=organization.subdomain_slug,
+                randomize=True,
+            )
+        has_update = True
+
+    if new_company_name is not None:
+        organization.company_name = new_company_name
+
+    if not has_update:
+        raise HTTPException(status_code=400, detail="Nothing to update.")
+
+    db.commit()
+
+    context = _build_enterprise_context(db, current_user)
+    return {
+        "message": "Organization branding updated successfully.",
+        "organization": context.get("organization"),
     }
 
 

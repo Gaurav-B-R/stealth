@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/enterprise.css?v=9">
+    <link rel="stylesheet" href="/static/enterprise.css?v=10">
 </head>
 
 <body>
@@ -173,6 +173,15 @@
                     <span class="ent-sidebar-brand-label">Enterprise</span>
                 </div>
             </a>
+            <div class="ent-sidebar-org-inline" id="entSidebarOrgInline">
+                <div class="ent-org-avatar">
+                    <img id="entSidebarOrgAvatarImg" class="ent-org-avatar-img" alt="" width="64" height="64" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+                </div>
+                <div class="ent-org-info">
+                    <div class="ent-org-name" id="entSidebarOrgName">Your organization</div>
+                    <div class="ent-org-plan" id="entSidebarOrgPortal">your-company.rilono.com</div>
+                </div>
+            </div>
 
             <div class="ent-sidebar-nav">
                 <span class="ent-nav-group-label">Main</span>
@@ -794,15 +803,62 @@
                 <div class="ent-welcome-bar">
                     <div class="ent-welcome-text">
                         <h2>Settings</h2>
-                        <p>Configure your organization and account preferences.</p>
+                        <p>Configure your organization branding and profile details.</p>
                     </div>
                 </div>
-                <div class="ent-card">
-                    <div class="ent-card-body">
-                        <div class="ent-empty">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                            <h3>Settings module coming soon</h3>
-                            <p>Organization profile, notification preferences, integrations, and billing management.</p>
+
+                <div id="entSettingsFlash" class="ent-flash info" style="display:none;"></div>
+
+                <div class="ent-content-grid ent-settings-grid">
+                    <div class="ent-card">
+                        <div class="ent-card-header">
+                            <span class="ent-card-title">Organization Branding</span>
+                        </div>
+                        <div class="ent-card-body">
+                            <p id="entSettingsAccessNotice" class="ent-team-note">
+                                Only organization admins can update company branding.
+                            </p>
+                            <form id="entSettingsBrandingForm" autocomplete="off">
+                                <div class="ent-form-group">
+                                    <label class="ent-form-label" for="entSettingsCompanyName">Organization name</label>
+                                    <input class="ent-form-input" id="entSettingsCompanyName" type="text" maxlength="120" placeholder="Acme Immigration Services" required>
+                                </div>
+                                <div class="ent-form-group">
+                                    <label class="ent-form-label" for="entSettingsLogoUrl">Logo URL (optional)</label>
+                                    <input class="ent-form-input" id="entSettingsLogoUrl" type="url" maxlength="2048" placeholder="https://yourcdn.com/logo.png">
+                                    <p class="ent-form-hint">
+                                        Leave blank to use a random default logo. You can also generate a fresh random logo below.
+                                    </p>
+                                </div>
+                                <div class="ent-settings-form-actions">
+                                    <button id="entSettingsRandomLogoBtn" type="button" class="ent-btn ent-btn-ghost">
+                                        Randomize Logo
+                                    </button>
+                                    <button id="entSettingsSaveBtn" type="submit" class="ent-btn ent-btn-primary">
+                                        Save Branding
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+
+                    <div class="ent-card">
+                        <div class="ent-card-header">
+                            <span class="ent-card-title">Brand Preview</span>
+                        </div>
+                        <div class="ent-card-body">
+                            <div class="ent-settings-preview-wrap">
+                                <div class="ent-settings-preview-logo">
+                                    <img id="entSettingsLogoPreviewImg" alt="" width="128" height="128" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+                                </div>
+                                <div class="ent-settings-preview-meta">
+                                    <div id="entSettingsPreviewCompanyName" class="ent-settings-preview-company">Your organization</div>
+                                    <div id="entSettingsPreviewPortalUrl" class="ent-settings-preview-url">your-company.rilono.com</div>
+                                </div>
+                            </div>
+                            <p class="ent-form-hint">
+                                This branding appears across your enterprise portal experience.
+                            </p>
                         </div>
                     </div>
                 </div>
@@ -812,7 +868,7 @@
     </div>
 
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
-    <script src="/static/enterprise.js?v=11"></script>
+    <script src="/static/enterprise.js?v=13"></script>
 </body>
 
 </html>

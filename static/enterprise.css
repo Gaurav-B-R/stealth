@@ -77,6 +77,17 @@ body {
     text-decoration: none;
 }
 
+.ent-sidebar-org-inline {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.75rem 0.75rem 0.3rem;
+    padding: 0.55rem 0.6rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .ent-sidebar-brand img {
     width: 32px;
     height: 32px;
@@ -1032,11 +1043,69 @@ body {
     grid-template-columns: 1fr 360px;
 }
 
+.ent-settings-grid {
+    grid-template-columns: 1fr 360px;
+}
+
 .ent-team-note {
     font-size: 0.82rem;
     color: var(--ent-ink-secondary);
     margin-bottom: 0.8rem;
     line-height: 1.45;
+}
+
+.ent-settings-form-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+}
+
+.ent-settings-preview-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.9rem;
+    border-radius: 12px;
+    border: 1px solid var(--ent-border);
+    background: var(--ent-surface-alt);
+    margin-bottom: 0.9rem;
+}
+
+.ent-settings-preview-logo {
+    width: 52px;
+    height: 52px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--ent-surface);
+    border: 1px solid var(--ent-border);
+    flex-shrink: 0;
+}
+
+.ent-settings-preview-logo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.ent-settings-preview-meta {
+    min-width: 0;
+}
+
+.ent-settings-preview-company {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--ent-ink);
+    line-height: 1.25;
+    word-break: break-word;
+}
+
+.ent-settings-preview-url {
+    margin-top: 0.2rem;
+    font-size: 0.78rem;
+    color: var(--ent-ink-secondary);
+    word-break: break-all;
 }
 
 .ent-role-select {
