@@ -1271,6 +1271,15 @@ body {
     gap: 0.55rem;
 }
 
+.ent-student-row {
+    cursor: pointer;
+}
+
+.ent-student-row:focus-visible {
+    outline: 2px solid var(--ent-primary);
+    outline-offset: -2px;
+}
+
 .ent-student-avatar {
     width: 32px;
     height: 32px;
@@ -1293,6 +1302,224 @@ body {
 .ent-student-email {
     font-size: 0.74rem;
     color: var(--ent-ink-muted);
+}
+
+.ent-student-profile-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.ent-student-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+
+.ent-student-meta-item {
+    border: 1px solid var(--ent-border);
+    border-radius: 10px;
+    background: var(--ent-surface-alt);
+    padding: 0.65rem 0.75rem;
+}
+
+.ent-student-meta-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ent-ink-muted);
+    font-weight: 700;
+}
+
+.ent-student-meta-value {
+    margin-top: 0.15rem;
+    font-size: 0.84rem;
+    color: var(--ent-ink);
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.ent-journey-stage-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.ent-journey-stage-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.6rem;
+    align-items: flex-start;
+    border: 1px solid var(--ent-border-light);
+    border-radius: 10px;
+    background: var(--ent-surface);
+    padding: 0.6rem 0.7rem;
+}
+
+.ent-journey-stage-index {
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    background: var(--ent-primary-soft);
+    border: 1px solid rgba(37, 99, 235, 0.22);
+    color: var(--ent-primary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.ent-journey-stage-title {
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--ent-ink);
+    line-height: 1.35;
+}
+
+.ent-journey-stage-desc {
+    margin-top: 0.12rem;
+    font-size: 0.77rem;
+    color: var(--ent-ink-secondary);
+    line-height: 1.45;
+}
+
+.ent-table-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.ent-student-workspace-grid {
+    grid-template-columns: minmax(0, 1fr) 360px;
+}
+
+.ent-workspace-progress {
+    margin-top: 0.95rem;
+    margin-bottom: 1rem;
+    padding: 0.72rem 0.8rem;
+    border-radius: 10px;
+    border: 1px solid var(--ent-border);
+    background: var(--ent-surface-alt);
+}
+
+.ent-workspace-progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.55rem;
+    margin-bottom: 0.45rem;
+    font-size: 0.8rem;
+    color: var(--ent-ink-secondary);
+}
+
+.ent-workspace-progress-head strong {
+    color: var(--ent-ink);
+    font-size: 0.86rem;
+}
+
+.ent-stage-rail {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.55rem;
+}
+
+.ent-stage-rail-item {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.58rem;
+    align-items: flex-start;
+    padding: 0.58rem 0.65rem;
+    border: 1px solid var(--ent-border-light);
+    border-radius: 10px;
+    background: var(--ent-surface);
+}
+
+.ent-stage-rail-index {
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--ent-ink-secondary);
+    background: #f1f5f9;
+    border: 1px solid #dbe4f1;
+}
+
+.ent-stage-rail-item.is-done .ent-stage-rail-index {
+    background: #dcfce7;
+    border-color: #86efac;
+    color: #15803d;
+}
+
+.ent-stage-rail-item.is-current .ent-stage-rail-index {
+    background: #dbeafe;
+    border-color: #93c5fd;
+    color: #1d4ed8;
+}
+
+.ent-stage-rail-title {
+    font-size: 0.8rem;
+    color: var(--ent-ink);
+    font-weight: 650;
+    line-height: 1.35;
+}
+
+.ent-stage-rail-status {
+    margin-top: 0.1rem;
+    font-size: 0.72rem;
+    color: var(--ent-ink-muted);
+}
+
+.ent-workspace-side-grid {
+    grid-template-columns: 1fr;
+}
+
+.ent-workspace-current-stage {
+    margin-top: 0.85rem;
+    border: 1px solid var(--ent-border);
+    border-radius: 10px;
+    background: var(--ent-surface-alt);
+    padding: 0.75rem 0.8rem;
+}
+
+.ent-workspace-current-stage h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--ent-ink);
+}
+
+.ent-workspace-current-stage p {
+    margin: 0.3rem 0 0;
+    color: var(--ent-ink-secondary);
+    font-size: 0.79rem;
+    line-height: 1.45;
+}
+
+.ent-workspace-checklist-wrap {
+    margin-top: 0.85rem;
+}
+
+.ent-workspace-checklist {
+    margin: 0.45rem 0 0;
+    padding-left: 1.1rem;
+    color: var(--ent-ink-secondary);
+    display: grid;
+    gap: 0.35rem;
+}
+
+.ent-workspace-checklist li {
+    font-size: 0.79rem;
+    line-height: 1.45;
 }
 
 /* ===== ACTIVITY LIST ===== */
@@ -1620,6 +1847,17 @@ body.ent-no-scroll {
     color: #b91c1c;
 }
 
+.ent-flash-link {
+    color: inherit;
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.ent-flash-link:hover {
+    opacity: 0.85;
+}
+
 /* ===== SECTION TABS ===== */
 
 .ent-tabs {
@@ -1807,6 +2045,14 @@ body.ent-no-scroll {
     }
 
     .ent-content-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .ent-student-meta-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .ent-student-workspace-grid {
         grid-template-columns: 1fr;
     }
 }

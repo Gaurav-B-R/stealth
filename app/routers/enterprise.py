@@ -77,7 +77,7 @@ ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS = int(
     os.getenv("ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS", os.getenv("LOGIN_RATE_WINDOW_SECONDS", "300"))
 )
 ENTERPRISE_INVITE_ONLY_DETAIL = (
-    "Enterprise access is invite-only. Please contact us at /contact for enterprise access."
+    "Enterprise access is invite-only. Request access via Contact Sales."
 )
 ENTERPRISE_LOGO_URL_MAX_LENGTH = 2048
 ENTERPRISE_STUDENT_NAME_MAX_LENGTH = 160
@@ -89,6 +89,8 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
     {
         "code": "US",
         "name": "United States",
+        "flag_emoji": "🇺🇸",
+        "iconic_place": "Statue of Liberty",
         "visa_types": [
             "F-1 Student Visa",
             "J-1 Exchange Visitor Visa",
@@ -103,6 +105,8 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
     {
         "code": "CA",
         "name": "Canada",
+        "flag_emoji": "🇨🇦",
+        "iconic_place": "Niagara Falls",
         "visa_types": [
             "Study Permit",
             "Student Direct Stream (SDS)",
@@ -115,6 +119,8 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
     {
         "code": "UK",
         "name": "United Kingdom",
+        "flag_emoji": "🇬🇧",
+        "iconic_place": "Big Ben",
         "visa_types": [
             "UK Student Visa",
             "Child Student Visa",
@@ -127,6 +133,8 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
     {
         "code": "AU",
         "name": "Australia",
+        "flag_emoji": "🇦🇺",
+        "iconic_place": "Sydney Opera House",
         "visa_types": [
             "Subclass 500 Student Visa",
             "Subclass 590 Student Guardian Visa",
@@ -139,6 +147,8 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
     {
         "code": "DE",
         "name": "Germany",
+        "flag_emoji": "🇩🇪",
+        "iconic_place": "Brandenburg Gate",
         "visa_types": [
             "National Visa (Type D) - Study",
             "Student Applicant Visa",
@@ -151,6 +161,8 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
     {
         "code": "FR",
         "name": "France",
+        "flag_emoji": "🇫🇷",
+        "iconic_place": "Eiffel Tower",
         "visa_types": [
             "Long-Stay Student Visa (VLS-TS)",
         ],
@@ -161,6 +173,8 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
     {
         "code": "IE",
         "name": "Ireland",
+        "flag_emoji": "🇮🇪",
+        "iconic_place": "Cliffs of Moher",
         "visa_types": [
             "D Study Visa",
         ],
@@ -171,6 +185,8 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
     {
         "code": "NZ",
         "name": "New Zealand",
+        "flag_emoji": "🇳🇿",
+        "iconic_place": "Milford Sound",
         "visa_types": [
             "Fee Paying Student Visa",
         ],
@@ -529,7 +545,21 @@ def _has_enterprise_access(db: Session, user: models.User) -> bool:
         )
         .first()
     )
-    return bool(credential)
+    if credential:
+        return True
+
+    if user.id is None:
+        return False
+
+    membership = (
+        db.query(models.EnterpriseOrganizationMember.id)
+        .filter(
+            models.EnterpriseOrganizationMember.user_id == int(user.id),
+            models.EnterpriseOrganizationMember.is_active.is_(True),
+        )
+        .first()
+    )
+    return bool(membership)
 
 
 def _enforce_enterprise_access_or_403(db: Session, user: models.User) -> None:
@@ -668,6 +698,8 @@ def _enterprise_student_options_payload() -> dict:
             {
                 "code": item["code"],
                 "name": item["name"],
+                "flag_emoji": str(item.get("flag_emoji") or "").strip(),
+                "iconic_place": str(item.get("iconic_place") or "").strip(),
                 "visa_types": list(item["visa_types"]),
                 "intakes_by_visa": {
                     str(visa_name): _materialize_future_intakes(intakes or [])

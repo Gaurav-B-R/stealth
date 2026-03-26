@@ -62,6 +62,23 @@
     const studentVisaTypeSelect = $("#entStudentVisaType");
     const studentIntakeSelect = $("#entStudentIntake");
     const studentSaveBtn = $("#entStudentSaveBtn");
+    const studentWorkspaceBackBtn = $("#entStudentWorkspaceBackBtn");
+    const studentWorkspaceStudentName = $("#entStudentWorkspaceStudentName");
+    const studentWorkspaceSubline = $("#entStudentWorkspaceSubline");
+    const studentWorkspaceAvatar = $("#entStudentWorkspaceAvatar");
+    const studentWorkspaceDestination = $("#entStudentWorkspaceDestination");
+    const studentWorkspaceVisaType = $("#entStudentWorkspaceVisaType");
+    const studentWorkspaceIntake = $("#entStudentWorkspaceIntake");
+    const studentWorkspaceProgressLabel = $("#entStudentWorkspaceProgressLabel");
+    const studentWorkspaceProgressPercent = $("#entStudentWorkspaceProgressPercent");
+    const studentWorkspaceProgressBar = $("#entStudentWorkspaceProgressBar");
+    const studentWorkspaceStatus = $("#entStudentWorkspaceStatus");
+    const studentWorkspaceEta = $("#entStudentWorkspaceEta");
+    const studentWorkspaceStageCounter = $("#entStudentWorkspaceStageCounter");
+    const studentWorkspaceCurrentStageTitle = $("#entStudentWorkspaceCurrentStageTitle");
+    const studentWorkspaceCurrentStageDesc = $("#entStudentWorkspaceCurrentStageDesc");
+    const studentWorkspaceChecklist = $("#entStudentWorkspaceChecklist");
+    const studentWorkspaceStageRail = $("#entStudentWorkspaceStageRail");
 
     const userNameEl = $("#entUserName");
     const userAvatarImgEl = $("#entUserAvatarImg");
@@ -80,6 +97,7 @@
     const SECTION_MAP = {
         overview: "entSectionOverview",
         students: "entSectionStudents",
+        student_workspace: "entSectionStudentWorkspace",
         visas: "entSectionVisas",
         documents: "entSectionDocuments",
         analytics: "entSectionAnalytics",
@@ -91,6 +109,7 @@
     const TITLE_MAP = {
         overview: "Overview",
         students: "Students",
+        student_workspace: "Student Journey",
         visas: "Visa Cases",
         documents: "Documents",
         analytics: "Analytics",
@@ -106,6 +125,7 @@
     };
 
     const ENTERPRISE_ROOT_DOMAIN = "rilono.com";
+    const CONTACT_SALES_URL = "https://rilono.com/contact";
     const SUBDOMAIN_MIN_LENGTH = 3;
     const SUBDOMAIN_MAX_LENGTH = 32;
     const SUBDOMAIN_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$/;
@@ -145,6 +165,7 @@
         teamLoading: false,
         students: [],
         studentsLoading: false,
+        activeStudentWorkspaceId: null,
         studentOptions: {
             countries: [],
             visaTypesByCountry: {},
@@ -316,6 +337,22 @@
         showInlineFlash(authFlash, message, type);
     }
 
+    function isInviteOnlyAccessError(error) {
+        const detail = String(error && error.detail ? error.detail : "").toLowerCase();
+        const status = Number(error && error.status ? error.status : 0);
+        return status === 403 && detail.includes("invite-only");
+    }
+
+    function showAuthInviteOnlyFlash() {
+        if (!authFlash) return;
+        authFlash.className = "ent-flash info";
+        authFlash.innerHTML =
+            `Enterprise access is invite-only. ` +
+            `<a href="${CONTACT_SALES_URL}" class="ent-flash-link">Contact Sales</a> ` +
+            `to request access.`;
+        authFlash.style.display = "";
+    }
+
     function hideAuthFlash() {
         hideInlineFlash(authFlash);
     }
@@ -371,7 +408,11 @@
         if (target) target.classList.add("active");
 
         $$(".ent-nav-item[data-section]").forEach((button) => {
-            button.classList.toggle("active", button.dataset.section === sectionKey);
+            const navSection = String(button.dataset.section || "");
+            const shouldBeActive = sectionKey === "student_workspace"
+                ? navSection === "students"
+                : navSection === sectionKey;
+            button.classList.toggle("active", shouldBeActive);
         });
 
         if (pageTitle) {
@@ -383,6 +424,12 @@
         }
         if (sectionKey === "students") {
             loadStudents();
+        }
+        if (sectionKey === "student_workspace") {
+            const workspaceId = Number(state.activeStudentWorkspaceId);
+            if (Number.isFinite(workspaceId) && workspaceId > 0) {
+                renderStudentWorkspaceById(workspaceId);
+            }
         }
         if (sectionKey === "settings") {
             hideSettingsFlash();
@@ -567,11 +614,378 @@
         return "ent-chip-gray";
     }
 
+    function buildVisaJourneyStagesForStudent(student) {
+        const countryCode = String(student && student.study_country_code ? student.study_country_code : "")
+            .trim()
+            .toUpperCase();
+        const countryName = String(student && student.study_country_name ? student.study_country_name : "")
+            .trim() || "destination country";
+        const visaType = String(student && student.visa_type ? student.visa_type : "")
+            .trim() || "student visa";
+        const visaKey = visaType.toLowerCase();
+
+        if (countryCode === "US") {
+            if (visaKey.includes("j-1")) {
+                return [
+                    { title: "Program Sponsor Confirmation", description: "Secure sponsorship and receive your DS-2019 form for the exchange category." },
+                    { title: "SEVIS and Funding Readiness", description: "Pay I-901 SEVIS fee and prepare clear funding and program-support documents." },
+                    { title: "Application Filing", description: "Complete DS-160, pay visa fee, and schedule biometric/interview slots." },
+                    { title: "Interview Preparation", description: "Prepare program purpose, return intent, and supporting academic or sponsor records." },
+                    { title: "Interview and Visa Decision", description: "Attend consulate interview and complete passport submission if approved." },
+                    { title: "Arrival and Program Check-in", description: "Travel with DS-2019 packet and finish SEVIS activation on arrival." },
+                ];
+            }
+            if (visaKey.includes("m-1")) {
+                return [
+                    { title: "School Acceptance and I-20", description: "Finalize vocational program admission and obtain your M-1 I-20." },
+                    { title: "SEVIS and Finance Evidence", description: "Pay SEVIS fee and prepare tuition, sponsor, and living-expense documentation." },
+                    { title: "DS-160 Submission", description: "Complete DS-160, pay visa fee, and set biometric/interview appointments." },
+                    { title: "Document Bundle Review", description: "Compile I-20, passport, finances, and vocational intent justification." },
+                    { title: "Consular Interview", description: "Attend interview and complete passport processing for visa stamping." },
+                    { title: "Travel and Entry Compliance", description: "Enter the US with M-1 documents and follow school reporting requirements." },
+                ];
+            }
+            return [
+                { title: "Admission and I-20 Issuance", description: "Confirm admission in the selected program and secure your F-1 I-20." },
+                { title: "SEVIS and Finance Preparation", description: "Pay I-901 SEVIS fee and finalize strong financial sponsorship evidence." },
+                { title: "DS-160 and Fee Payment", description: "Submit DS-160, pay visa fee, and create your interview profile." },
+                { title: "Interview Scheduling and Documents", description: "Book slots and organize passport, I-20, academics, and funding proofs." },
+                { title: "Visa Interview and Decision", description: "Attend interview and complete passport submission if approved." },
+                { title: "Pre-departure and Port-of-Entry", description: "Plan travel and carry compliant documents for smooth US entry." },
+            ];
+        }
+
+        if (countryCode === "UK") {
+            if (visaKey.includes("child")) {
+                return [
+                    { title: "School Offer and CAS", description: "Obtain a valid CAS from the sponsoring UK institution." },
+                    { title: "Guardian and Financial Proofs", description: "Prepare parental consent, guardian details, and funds evidence." },
+                    { title: "Application and IHS", description: "Submit UK Student route application and complete Immigration Health Surcharge." },
+                    { title: "Biometrics and Document Upload", description: "Attend biometrics and submit required supporting records." },
+                    { title: "Decision and Passport Return", description: "Track decision and receive passport with vignette if approved." },
+                    { title: "Arrival and BRP/eVisa Steps", description: "Travel to UK and complete post-arrival identity and residence formalities." },
+                ];
+            }
+            return [
+                { title: "Offer Acceptance and CAS", description: "Secure university offer and receive CAS for UK Student Visa processing." },
+                { title: "Financial Evidence and TB Test", description: "Prepare funds proof and TB certificate where applicable." },
+                { title: "Application and IHS Payment", description: "Submit visa application and pay required IHS charges." },
+                { title: "Biometric Appointment", description: "Complete biometrics and upload passport, CAS, and supporting files." },
+                { title: "Decision and Passport Collection", description: "Track processing and collect passport after decision." },
+                { title: "Travel and Post-arrival Setup", description: "Enter the UK and complete BRP or eVisa onboarding steps." },
+            ];
+        }
+
+        if (countryCode === "CA") {
+            if (visaKey.includes("sds")) {
+                return [
+                    { title: "LOA and SDS Eligibility", description: "Confirm letter of acceptance and SDS eligibility requirements." },
+                    { title: "GIC, Tuition, and English Proof", description: "Arrange GIC, tuition payment proof, and accepted language scores." },
+                    { title: "Application Package Submission", description: "Submit SDS study permit application with complete supporting evidence." },
+                    { title: "Biometrics and Medical Steps", description: "Finish biometrics and medical checks if requested." },
+                    { title: "Decision and Passport Request", description: "Track IRCC updates and complete passport submission if approved." },
+                    { title: "Travel and Border Documents", description: "Carry POE letter, LOA, and financials for Canadian entry." },
+                ];
+            }
+            return [
+                { title: "Offer and Program Confirmation", description: "Secure admission and validate study permit eligibility." },
+                { title: "Funding and Core Documents", description: "Prepare tuition plans, sponsor support, and statement of purpose." },
+                { title: "Study Permit Application", description: "Submit complete application with correct forms and evidence." },
+                { title: "Biometrics and Medical", description: "Complete required biometrics and medical procedures." },
+                { title: "Decision and Passport Stamping", description: "Track approval and submit passport if requested." },
+                { title: "Arrival and POE Compliance", description: "Travel with permit documents and complete entry checks at POE." },
+            ];
+        }
+
+        if (countryCode === "AU") {
+            return [
+                { title: "Admission and COE", description: "Confirm admission and obtain your Confirmation of Enrolment (COE)." },
+                { title: "OSHC and Financial Setup", description: "Arrange OSHC coverage and prepare finance documents." },
+                { title: "GS and Document Preparation", description: "Draft Genuine Student statement and compile academics and identity records." },
+                { title: "Subclass Application Filing", description: `Submit ${visaType} application with complete supporting package.` },
+                { title: "Biometrics/Medical and Review", description: "Complete requested checks and respond to case officer updates." },
+                { title: "Grant and Travel Readiness", description: "Receive visa grant and finalize travel plus enrollment checkpoints." },
+            ];
+        }
+
+        if (countryCode === "DE") {
+            return [
+                { title: "Admission and Program Verification", description: "Confirm admission and validate course eligibility for German study route." },
+                { title: "Blocked Account and Insurance", description: "Arrange blocked account funds and acceptable health insurance proof." },
+                { title: "Appointment and Document File", description: "Book embassy appointment and prepare translated legal documents if needed." },
+                { title: "Visa Interview Submission", description: "Attend interview and submit complete Type D or applicant-visa file." },
+                { title: "Decision and Passport Collection", description: "Track processing timeline and collect visa decision." },
+                { title: "Arrival and Residence Registration", description: "Complete city registration and residence permit formalities after arrival." },
+            ];
+        }
+
+        if (countryCode === "FR") {
+            return [
+                { title: "Admission and Campus France", description: "Secure admission and complete Campus France process where required." },
+                { title: "Funding and Stay Documents", description: "Prepare finance proofs, accommodation details, and travel insurance." },
+                { title: "VLS-TS Application", description: "Submit long-stay student visa application with supporting records." },
+                { title: "Biometrics and Interview", description: "Attend appointment and complete biometrics or interview instructions." },
+                { title: "Decision and Passport Return", description: "Track processing and receive decision outcome." },
+                { title: "Arrival and VLS-TS Validation", description: "Validate your long-stay status and complete local registration tasks." },
+            ];
+        }
+
+        if (countryCode === "IE") {
+            return [
+                { title: "Offer and Fee Confirmation", description: "Confirm institute offer and initial fee payment evidence." },
+                { title: "Financial and Insurance Readiness", description: "Prepare sponsor funds and required private insurance proofs." },
+                { title: "Visa Application Filing", description: "Submit D Study visa application and upload all mandatory records." },
+                { title: "Supporting Documents Review", description: "Resolve checklist gaps and clarify purpose-of-study narrative." },
+                { title: "Decision and Passport Handling", description: "Track outcome and complete passport submission or return." },
+                { title: "Arrival and IRP Registration", description: "Complete post-arrival registration and immigration compliance in Ireland." },
+            ];
+        }
+
+        if (countryCode === "NZ") {
+            return [
+                { title: "Admission and Fee Planning", description: "Receive offer and confirm tuition/payment timeline." },
+                { title: "Funds and Health Documents", description: "Prepare finances, medicals, and police clearances if required." },
+                { title: "Student Visa Application", description: "Submit Fee Paying Student Visa application with full evidence." },
+                { title: "Identity Checks and Updates", description: "Complete biometrics or additional identity checks when requested." },
+                { title: "Decision and Travel Prep", description: "Track visa decision and finalize travel documents." },
+                { title: "Arrival and Enrollment Confirmation", description: "Arrive in New Zealand and complete institution onboarding." },
+            ];
+        }
+
+        return [
+            { title: "Eligibility and Program Confirmation", description: `Confirm admission path and eligibility for ${visaType} in ${countryName}.` },
+            { title: "Documentation and Financial Readiness", description: "Prepare identity, academics, and sponsor/financial support proofs." },
+            { title: "Visa Application Submission", description: "Submit forms, pay fees, and upload complete evidence." },
+            { title: "Biometrics or Interview Stage", description: "Complete biometrics/interview steps if required by the consulate." },
+            { title: "Decision and Passport Processing", description: "Track status updates and complete passport issuance steps." },
+            { title: "Pre-departure Compliance", description: "Finalize arrival checklist and ensure entry-ready documentation." },
+        ];
+    }
+
+    function parseStudentIntakeDate(intakeLabel) {
+        const raw = String(intakeLabel || "").trim().toLowerCase();
+        if (!raw) return null;
+
+        const monthMap = {
+            january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+            july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+            spring: 0, summer: 4, fall: 8, winter: 10,
+        };
+
+        let matchedMonth = null;
+        Object.keys(monthMap).forEach((key) => {
+            if (matchedMonth !== null) return;
+            if (raw.includes(key)) matchedMonth = monthMap[key];
+        });
+        if (matchedMonth === null) return null;
+
+        const yearMatch = raw.match(/\b(20\d{2})\b/);
+        const year = yearMatch ? Number(yearMatch[1]) : null;
+        if (!Number.isFinite(year)) return null;
+        return new Date(Date.UTC(year, matchedMonth, 1, 0, 0, 0));
+    }
+
+    function estimateStudentJourneyProgress(student, stageCount) {
+        const intakeDate = parseStudentIntakeDate(student && student.intake);
+        const now = new Date();
+        let progressPercent = 12;
+        let etaText = "Intake timeline unavailable";
+
+        if (intakeDate && !Number.isNaN(intakeDate.getTime())) {
+            const monthsDiff = ((intakeDate.getUTCFullYear() - now.getUTCFullYear()) * 12)
+                + (intakeDate.getUTCMonth() - now.getUTCMonth());
+            if (monthsDiff >= 8) progressPercent = 12;
+            else if (monthsDiff >= 5) progressPercent = 24;
+            else if (monthsDiff >= 3) progressPercent = 38;
+            else if (monthsDiff >= 1) progressPercent = 52;
+            else if (monthsDiff === 0) progressPercent = 68;
+            else progressPercent = 84;
+
+            if (monthsDiff > 1) etaText = `${monthsDiff} months to intake`;
+            else if (monthsDiff === 1) etaText = "1 month to intake";
+            else if (monthsDiff === 0) etaText = "Intake month in progress";
+            else if (monthsDiff === -1) etaText = "Intake started last month";
+            else etaText = "Intake already started";
+        }
+
+        const safeStageCount = Math.max(1, Number(stageCount) || 1);
+        const currentStageIndex = Math.max(
+            0,
+            Math.min(safeStageCount - 1, Math.floor(progressPercent / (100 / safeStageCount)))
+        );
+
+        let statusLabel = "On track";
+        if (progressPercent >= 80) statusLabel = "Late-stage execution";
+        else if (progressPercent >= 50) statusLabel = "Interview readiness window";
+        else if (progressPercent >= 30) statusLabel = "Document build-up phase";
+        else statusLabel = "Early preparation phase";
+
+        return {
+            progressPercent,
+            currentStageIndex,
+            statusLabel,
+            etaText,
+        };
+    }
+
+    function buildStudentStageChecklist(stage, student) {
+        const countryName = String(student && student.study_country_name ? student.study_country_name : "destination country");
+        const visaType = String(student && student.visa_type ? student.visa_type : "visa");
+        const stageTitle = String(stage && stage.title ? stage.title : "").toLowerCase();
+
+        if (stageTitle.includes("interview")) {
+            return [
+                `Prepare concise answers matching ${visaType} intent and study goals.`,
+                "Run at least 2 mock interview rounds and refine weak areas.",
+                `Organize interview-day documents for ${countryName} consular review.`,
+            ];
+        }
+        if (stageTitle.includes("application") || stageTitle.includes("submission")) {
+            return [
+                "Complete all required form fields without inconsistencies.",
+                "Cross-check fee payment receipts and appointment references.",
+                "Upload supporting evidence in the required format and order.",
+            ];
+        }
+        if (stageTitle.includes("arrival") || stageTitle.includes("travel")) {
+            return [
+                "Prepare travel packet: passport, approval letter, and admission records.",
+                "Keep sponsor and accommodation details ready for border checks.",
+                "Plan first-week compliance tasks after reaching destination.",
+            ];
+        }
+        return [
+            `Collect mandatory documents for ${visaType}.`,
+            "Validate financial and identity records for consistency.",
+            "Review this stage with your organization admin before proceeding.",
+        ];
+    }
+
+    function renderStudentWorkspace(student) {
+        if (!student || typeof student !== "object") {
+            if (studentWorkspaceStudentName) studentWorkspaceStudentName.textContent = "Student";
+            if (studentWorkspaceSubline) studentWorkspaceSubline.textContent = "Personalized visa journey workspace";
+            if (studentWorkspaceDestination) studentWorkspaceDestination.textContent = "-";
+            if (studentWorkspaceVisaType) studentWorkspaceVisaType.textContent = "-";
+            if (studentWorkspaceIntake) studentWorkspaceIntake.textContent = "-";
+            if (studentWorkspaceProgressLabel) studentWorkspaceProgressLabel.textContent = "Journey progress";
+            if (studentWorkspaceProgressPercent) studentWorkspaceProgressPercent.textContent = "0%";
+            if (studentWorkspaceProgressBar) studentWorkspaceProgressBar.style.width = "0%";
+            if (studentWorkspaceStatus) studentWorkspaceStatus.textContent = "-";
+            if (studentWorkspaceEta) studentWorkspaceEta.textContent = "-";
+            if (studentWorkspaceStageCounter) studentWorkspaceStageCounter.textContent = "-";
+            if (studentWorkspaceCurrentStageTitle) studentWorkspaceCurrentStageTitle.textContent = "Stage title";
+            if (studentWorkspaceCurrentStageDesc) studentWorkspaceCurrentStageDesc.textContent = "Stage guidance will appear here.";
+            if (studentWorkspaceChecklist) studentWorkspaceChecklist.innerHTML = "";
+            if (studentWorkspaceStageRail) studentWorkspaceStageRail.innerHTML = "";
+            if (studentWorkspaceAvatar) studentWorkspaceAvatar.textContent = "S";
+            return;
+        }
+
+        const studentName = String(student.student_name || "Student").trim() || "Student";
+        const countryName = String(student.study_country_name || "").trim() || "Unknown";
+        const countryCode = String(student.study_country_code || "").trim().toUpperCase();
+        const visaType = String(student.visa_type || "").trim() || "Not set";
+        const intake = String(student.intake || "").trim() || "Not set";
+        const stages = buildVisaJourneyStagesForStudent(student);
+        const progress = estimateStudentJourneyProgress(student, stages.length);
+        const currentStage = stages[progress.currentStageIndex] || stages[0] || null;
+        const checklist = buildStudentStageChecklist(currentStage, student);
+
+        if (studentWorkspaceStudentName) studentWorkspaceStudentName.textContent = studentName;
+        if (studentWorkspaceSubline) studentWorkspaceSubline.textContent = "Dedicated student journey progress and next actions";
+        if (studentWorkspaceDestination) {
+            studentWorkspaceDestination.textContent = countryCode ? `${countryName} (${countryCode})` : countryName;
+        }
+        if (studentWorkspaceVisaType) studentWorkspaceVisaType.textContent = visaType;
+        if (studentWorkspaceIntake) studentWorkspaceIntake.textContent = intake;
+        if (studentWorkspaceProgressLabel) studentWorkspaceProgressLabel.textContent = "Estimated journey completion";
+        if (studentWorkspaceProgressPercent) studentWorkspaceProgressPercent.textContent = `${progress.progressPercent}%`;
+        if (studentWorkspaceProgressBar) {
+            studentWorkspaceProgressBar.style.width = `${progress.progressPercent}%`;
+        }
+        if (studentWorkspaceStatus) studentWorkspaceStatus.textContent = progress.statusLabel;
+        if (studentWorkspaceEta) studentWorkspaceEta.textContent = progress.etaText;
+        if (studentWorkspaceStageCounter) {
+            studentWorkspaceStageCounter.textContent = `Stage ${progress.currentStageIndex + 1} of ${stages.length}`;
+        }
+        if (studentWorkspaceCurrentStageTitle) {
+            studentWorkspaceCurrentStageTitle.textContent = currentStage ? currentStage.title : "Current stage";
+        }
+        if (studentWorkspaceCurrentStageDesc) {
+            studentWorkspaceCurrentStageDesc.textContent = currentStage ? currentStage.description : "No stage details available.";
+        }
+        if (studentWorkspaceAvatar) {
+            studentWorkspaceAvatar.textContent = getInitials(studentName, "S");
+        }
+
+        if (studentWorkspaceChecklist) {
+            studentWorkspaceChecklist.innerHTML = checklist
+                .map((item) => `<li>${escapeHtml(item)}</li>`)
+                .join("");
+        }
+
+        if (studentWorkspaceStageRail) {
+            studentWorkspaceStageRail.innerHTML = stages
+                .map((stage, index) => {
+                    const statusClass = index < progress.currentStageIndex
+                        ? " is-done"
+                        : (index === progress.currentStageIndex ? " is-current" : "");
+                    const statusText = index < progress.currentStageIndex
+                        ? "Completed"
+                        : (index === progress.currentStageIndex ? "Current Stage" : "Upcoming");
+                    return `
+                        <div class="ent-stage-rail-item${statusClass}">
+                            <span class="ent-stage-rail-index">${index + 1}</span>
+                            <div>
+                                <div class="ent-stage-rail-title">${escapeHtml(stage.title || `Stage ${index + 1}`)}</div>
+                                <div class="ent-stage-rail-status">${escapeHtml(statusText)}</div>
+                            </div>
+                        </div>
+                    `;
+                })
+                .join("");
+        }
+    }
+
+    function renderStudentWorkspaceById(studentId) {
+        const targetId = Number(studentId);
+        if (!Number.isFinite(targetId) || targetId <= 0) {
+            renderStudentWorkspace(null);
+            return;
+        }
+        const student = Array.isArray(state.students)
+            ? state.students.find((item) => Number(item && item.id) === targetId)
+            : null;
+        if (!student) {
+            renderStudentWorkspace(null);
+            return;
+        }
+        renderStudentWorkspace(student);
+    }
+
+    function openStudentWorkspace(studentId) {
+        const targetId = Number(studentId);
+        if (!Number.isFinite(targetId) || targetId <= 0) return;
+        state.activeStudentWorkspaceId = targetId;
+        renderStudentWorkspaceById(targetId);
+        switchToSection("student_workspace");
+    }
+
+    function bindStudentActionEvents() {
+        if (!studentsTableBody) return;
+        $$("button[data-manage-student-id]", studentsTableBody).forEach((button) => {
+            button.addEventListener("click", () => {
+                openStudentWorkspace(button.getAttribute("data-manage-student-id"));
+            });
+        });
+    }
+
     function applyStudentsAccessState() {
         const canEditData = !!(state.permissions && state.permissions.can_edit_data);
         if (studentsAccessNotice) {
             studentsAccessNotice.textContent = canEditData
-                ? "Add students with destination country and visa type to start enterprise tracking."
+                ? "Add students with destination country and visa type to start enterprise tracking. Click Manage for each student's dedicated journey workspace."
                 : "View-only mode: only admins or editors can add student records.";
         }
         if (addStudentBtnOverview) addStudentBtnOverview.disabled = !canEditData;
@@ -587,6 +1001,16 @@
         if (studentsNavBadge) studentsNavBadge.textContent = formattedCount;
         const metricStudents = $("#entMetricStudents");
         if (metricStudents) metricStudents.textContent = formattedCount;
+    }
+
+    function getCountryOptionLabel(country) {
+        const flag = String(country && country.flag_emoji ? country.flag_emoji : "").trim();
+        const name = String(country && country.name ? country.name : country && country.code ? country.code : "").trim();
+        const iconicPlace = String(country && country.iconic_place ? country.iconic_place : "").trim();
+
+        if (!name) return "";
+        const prefix = flag ? `${flag} ` : "";
+        return iconicPlace ? `${prefix}${name} • ${iconicPlace}` : `${prefix}${name}`;
     }
 
     function setStudentCountryOptions(countries) {
@@ -616,10 +1040,10 @@
         const options = state.studentOptions.countries
             .map((country) => {
                 const code = String(country.code || "").trim().toUpperCase();
-                const name = String(country.name || code).trim();
-                if (!code || !name) return "";
+                const optionLabel = getCountryOptionLabel(country);
+                if (!code || !optionLabel) return "";
                 const selectedAttr = code === selectedValue ? " selected" : "";
-                return `<option value="${escapeHtml(code)}"${selectedAttr}>${escapeHtml(name)}</option>`;
+                return `<option value="${escapeHtml(code)}"${selectedAttr}>${escapeHtml(optionLabel)}</option>`;
             })
             .filter(Boolean)
             .join("");
@@ -661,7 +1085,7 @@
     function setStudentsLoadingRow() {
         if (!studentsTableBody) return;
         studentsTableBody.innerHTML =
-            '<tr><td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">Loading students...</td></tr>';
+            '<tr><td colspan="6" style="text-align:center;color:var(--ent-ink-muted);">Loading students...</td></tr>';
         if (studentsEmpty) studentsEmpty.style.display = "none";
     }
 
@@ -677,6 +1101,8 @@
         if (studentsEmpty) studentsEmpty.style.display = "none";
         studentsTableBody.innerHTML = rows
             .map((student) => {
+                const studentId = Number(student.id);
+                const hasStudentId = Number.isFinite(studentId) && studentId > 0;
                 const name = String(student.student_name || "Student").trim() || "Student";
                 const initials = getInitials(name, "S");
                 const countryName = String(student.study_country_name || "").trim() || "Unknown";
@@ -685,6 +1111,9 @@
                 const intake = String(student.intake || "").trim() || "Not set";
                 const visaChipClass = buildStudentVisaChipClass(visaType);
                 const createdAtText = formatDateTime(student.created_at);
+                const manageButton = hasStudentId
+                    ? `<button class="ent-btn ent-btn-ghost ent-btn-sm" type="button" data-manage-student-id="${studentId}">Manage</button>`
+                    : '<span style="color:var(--ent-ink-muted);">-</span>';
                 return `
                     <tr>
                         <td>
@@ -699,10 +1128,12 @@
                         <td><span class="ent-chip ${visaChipClass}">${escapeHtml(visaType)}</span></td>
                         <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(intake)}</td>
                         <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(createdAtText)}</td>
+                        <td><span class="ent-table-actions">${manageButton}</span></td>
                     </tr>
                 `;
             })
             .join("");
+        bindStudentActionEvents();
     }
 
     async function loadStudentOptions(forceReload) {
@@ -739,13 +1170,19 @@
             updateStudentCounts(typeof data.students_count === "number" ? data.students_count : state.students.length);
             renderStudentRows();
             applyStudentsAccessState();
+            if (state.currentSection === "student_workspace") {
+                renderStudentWorkspaceById(state.activeStudentWorkspaceId);
+            }
         } catch (error) {
             showStudentsFlash(error.detail || "Unable to load students.", "error");
             if (studentsTableBody) {
                 studentsTableBody.innerHTML =
-                    '<tr><td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">Failed to load students.</td></tr>';
+                    '<tr><td colspan="6" style="text-align:center;color:var(--ent-ink-muted);">Failed to load students.</td></tr>';
             }
             if (studentsEmpty) studentsEmpty.style.display = "none";
+            if (state.currentSection === "student_workspace") {
+                renderStudentWorkspace(null);
+            }
         } finally {
             state.studentsLoading = false;
         }
@@ -1193,8 +1630,11 @@
                 loadStudents(true);
             }
             return;
-        } catch (_) {
+        } catch (error) {
             showAuthScreen();
+            if (isInviteOnlyAccessError(error)) {
+                showAuthInviteOnlyFlash();
+            }
         }
     }
 
@@ -1224,6 +1664,7 @@
         };
         state.teamMembers = [];
         state.students = [];
+        state.activeStudentWorkspaceId = null;
         state.studentOptions = {
             countries: [],
             visaTypesByCountry: {},
@@ -1232,6 +1673,7 @@
         closeStudentModal();
         updateStudentCounts(0);
         renderStudentRows();
+        renderStudentWorkspace(null);
 
         hideAuthFlash();
         hideTeamFlash();
@@ -1288,7 +1730,11 @@
                     loadStudents(true);
                 }
             } catch (error) {
-                showAuthFlash(error.detail || "Login failed.", "error");
+                if (isInviteOnlyAccessError(error)) {
+                    showAuthInviteOnlyFlash();
+                } else {
+                    showAuthFlash(error.detail || "Login failed.", "error");
+                }
                 resetTurnstileWidget();
             } finally {
                 setButtonLoading(loginBtn, false, "Signing in...", "Sign In");
@@ -1400,6 +1846,12 @@
     if (addStudentBtnStudents) {
         addStudentBtnStudents.addEventListener("click", () => {
             openStudentModal();
+        });
+    }
+
+    if (studentWorkspaceBackBtn) {
+        studentWorkspaceBackBtn.addEventListener("click", () => {
+            switchToSection("students");
         });
     }
 
