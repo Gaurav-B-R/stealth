@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/enterprise.css?v=12">
+    <link rel="stylesheet" href="/static/enterprise.css?v=13">
 </head>
 
 <body>
@@ -690,78 +690,101 @@
                     </div>
                 </div>
 
-                <div class="ent-content-grid ent-student-workspace-grid">
-                    <div class="ent-card">
+                <div class="ent-student-workspace-shell">
+                    <aside class="ent-card ent-student-profile-sidebar">
                         <div class="ent-card-header">
-                            <span class="ent-card-title" id="entStudentWorkspaceStudentName">Student</span>
+                            <span class="ent-card-title">Selected Student Profile</span>
                         </div>
                         <div class="ent-card-body">
-                            <div class="ent-student-profile-head">
-                                <div class="ent-student-cell">
-                                    <div id="entStudentWorkspaceAvatar" class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#7c3aed)">S</div>
-                                    <div>
-                                        <div id="entStudentWorkspaceSubline" class="ent-student-email">Personalized visa journey workspace</div>
+                            <div class="ent-student-profile-card">
+                                <div id="entStudentWorkspaceProfileAvatar" class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#7c3aed)">S</div>
+                                <div>
+                                    <div id="entStudentWorkspaceProfileName" class="ent-student-profile-name">Student</div>
+                                    <div id="entStudentWorkspaceProfileMeta" class="ent-student-profile-meta">Select a student to view details</div>
+                                </div>
+                            </div>
+
+                            <div class="ent-student-profile-option-title">Profile Options</div>
+                            <div id="entStudentWorkspaceOptionList" class="ent-student-profile-option-list"></div>
+                            <div id="entStudentWorkspaceOptionHint" class="ent-student-profile-option-hint">
+                                Choose an option to focus this student's journey view.
+                            </div>
+                        </div>
+                    </aside>
+
+                    <div class="ent-content-grid ent-student-workspace-grid">
+                        <div class="ent-card">
+                            <div class="ent-card-header">
+                                <span class="ent-card-title" id="entStudentWorkspaceStudentName">Student</span>
+                            </div>
+                            <div class="ent-card-body">
+                                <div class="ent-student-profile-head">
+                                    <div class="ent-student-cell">
+                                        <div id="entStudentWorkspaceAvatar" class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#7c3aed)">S</div>
+                                        <div>
+                                            <div id="entStudentWorkspaceSubline" class="ent-student-email">Personalized visa journey workspace</div>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
 
-                            <div class="ent-student-meta-grid">
-                                <div class="ent-student-meta-item">
-                                    <div class="ent-student-meta-label">Study Destination</div>
-                                    <div id="entStudentWorkspaceDestination" class="ent-student-meta-value">-</div>
+                                <div class="ent-student-meta-grid">
+                                    <div class="ent-student-meta-item">
+                                        <div class="ent-student-meta-label">Study Destination</div>
+                                        <div id="entStudentWorkspaceDestination" class="ent-student-meta-value">-</div>
+                                    </div>
+                                    <div class="ent-student-meta-item">
+                                        <div class="ent-student-meta-label">Visa Type</div>
+                                        <div id="entStudentWorkspaceVisaType" class="ent-student-meta-value">-</div>
+                                    </div>
+                                    <div class="ent-student-meta-item">
+                                        <div class="ent-student-meta-label">Intake</div>
+                                        <div id="entStudentWorkspaceIntake" class="ent-student-meta-value">-</div>
+                                    </div>
                                 </div>
-                                <div class="ent-student-meta-item">
-                                    <div class="ent-student-meta-label">Visa Type</div>
-                                    <div id="entStudentWorkspaceVisaType" class="ent-student-meta-value">-</div>
-                                </div>
-                                <div class="ent-student-meta-item">
-                                    <div class="ent-student-meta-label">Intake</div>
-                                    <div id="entStudentWorkspaceIntake" class="ent-student-meta-value">-</div>
-                                </div>
-                            </div>
 
-                            <div class="ent-workspace-progress">
-                                <div class="ent-workspace-progress-head">
-                                    <span id="entStudentWorkspaceProgressLabel">Journey progress</span>
-                                    <strong id="entStudentWorkspaceProgressPercent">0%</strong>
+                                <div class="ent-workspace-progress">
+                                    <div class="ent-workspace-progress-head">
+                                        <span id="entStudentWorkspaceProgressLabel">Journey progress</span>
+                                        <strong id="entStudentWorkspaceProgressPercent">0%</strong>
+                                    </div>
+                                    <div class="ent-progress-track">
+                                        <div id="entStudentWorkspaceProgressBar" class="ent-progress-fill blue" style="width:0%"></div>
+                                    </div>
                                 </div>
-                                <div class="ent-progress-track">
-                                    <div id="entStudentWorkspaceProgressBar" class="ent-progress-fill blue" style="width:0%"></div>
-                                </div>
-                            </div>
 
-                            <div id="entStudentWorkspaceStageRail" class="ent-stage-rail"></div>
+                                <div id="entStudentWorkspaceStageRail" class="ent-stage-rail"></div>
+                            </div>
                         </div>
-                    </div>
 
-                    <div class="ent-card">
-                        <div class="ent-card-header">
-                            <span class="ent-card-title">Current Stage</span>
-                        </div>
-                        <div class="ent-card-body">
-                            <div class="ent-student-meta-grid ent-workspace-side-grid">
-                                <div class="ent-student-meta-item">
-                                    <div class="ent-student-meta-label">Stage</div>
-                                    <div id="entStudentWorkspaceStageCounter" class="ent-student-meta-value">-</div>
-                                </div>
-                                <div class="ent-student-meta-item">
-                                    <div class="ent-student-meta-label">Status</div>
-                                    <div id="entStudentWorkspaceStatus" class="ent-student-meta-value">-</div>
-                                </div>
-                                <div class="ent-student-meta-item">
-                                    <div class="ent-student-meta-label">ETA to Intake</div>
-                                    <div id="entStudentWorkspaceEta" class="ent-student-meta-value">-</div>
-                                </div>
+                        <div class="ent-card">
+                            <div class="ent-card-header">
+                                <span class="ent-card-title">Current Stage</span>
                             </div>
+                            <div class="ent-card-body">
+                                <div class="ent-student-meta-grid ent-workspace-side-grid">
+                                    <div class="ent-student-meta-item">
+                                        <div class="ent-student-meta-label">Stage</div>
+                                        <div id="entStudentWorkspaceStageCounter" class="ent-student-meta-value">-</div>
+                                    </div>
+                                    <div class="ent-student-meta-item">
+                                        <div class="ent-student-meta-label">Status</div>
+                                        <div id="entStudentWorkspaceStatus" class="ent-student-meta-value">-</div>
+                                    </div>
+                                    <div class="ent-student-meta-item">
+                                        <div class="ent-student-meta-label">ETA to Intake</div>
+                                        <div id="entStudentWorkspaceEta" class="ent-student-meta-value">-</div>
+                                    </div>
+                                </div>
 
-                            <div class="ent-workspace-current-stage">
-                                <h3 id="entStudentWorkspaceCurrentStageTitle">Stage title</h3>
-                                <p id="entStudentWorkspaceCurrentStageDesc">Stage guidance will appear here.</p>
-                            </div>
+                                <div class="ent-workspace-current-stage">
+                                    <h3 id="entStudentWorkspaceCurrentStageTitle">Stage title</h3>
+                                    <p id="entStudentWorkspaceCurrentStageDesc">Stage guidance will appear here.</p>
+                                </div>
 
-                            <div class="ent-workspace-checklist-wrap">
-                                <div class="ent-student-meta-label">Recommended Checklist</div>
-                                <ul id="entStudentWorkspaceChecklist" class="ent-workspace-checklist"></ul>
+                                <div class="ent-workspace-checklist-wrap">
+                                    <div class="ent-student-meta-label">Recommended Checklist</div>
+                                    <ul id="entStudentWorkspaceChecklist" class="ent-workspace-checklist"></ul>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1045,7 +1068,7 @@
     </div>
 
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
-    <script src="/static/enterprise.js?v=22"></script>
+    <script src="/static/enterprise.js?v=23"></script>
 </body>
 
 </html>

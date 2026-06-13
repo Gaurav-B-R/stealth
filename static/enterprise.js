@@ -79,6 +79,11 @@
     const studentWorkspaceCurrentStageDesc = $("#entStudentWorkspaceCurrentStageDesc");
     const studentWorkspaceChecklist = $("#entStudentWorkspaceChecklist");
     const studentWorkspaceStageRail = $("#entStudentWorkspaceStageRail");
+    const studentWorkspaceProfileAvatar = $("#entStudentWorkspaceProfileAvatar");
+    const studentWorkspaceProfileName = $("#entStudentWorkspaceProfileName");
+    const studentWorkspaceProfileMeta = $("#entStudentWorkspaceProfileMeta");
+    const studentWorkspaceOptionList = $("#entStudentWorkspaceOptionList");
+    const studentWorkspaceOptionHint = $("#entStudentWorkspaceOptionHint");
 
     const userNameEl = $("#entUserName");
     const userAvatarImgEl = $("#entUserAvatarImg");
@@ -124,6 +129,39 @@
         viewer: "Viewer",
     };
 
+    const WORKSPACE_PROFILE_OPTIONS = [
+        {
+            key: "journey",
+            label: "Journey Overview",
+            description: "Track stage progression, current focus, and estimated completion timeline.",
+            hint: "Use this as your default command center for end-to-end journey progress.",
+        },
+        {
+            key: "documents",
+            label: "Documents",
+            description: "Review document readiness and required evidence for the current phase.",
+            hint: "Prioritize missing records, naming consistency, and support-file validation.",
+        },
+        {
+            key: "interview",
+            label: "Interview Prep",
+            description: "Focus on response clarity, mock practice, and interview confidence.",
+            hint: "Use this view before interviews to tighten messaging and reduce rejection risk.",
+        },
+        {
+            key: "finance",
+            label: "Finance & Fees",
+            description: "Track sponsor proof, tuition support, and visa fee readiness.",
+            hint: "Keep this area updated to avoid last-minute financial documentation blocks.",
+        },
+        {
+            key: "notes",
+            label: "Notes & Risk Flags",
+            description: "Capture advisor notes, blockers, and escalation follow-ups.",
+            hint: "Use this area to coordinate internal follow-ups and risk mitigation actions.",
+        },
+    ];
+
     const ENTERPRISE_ROOT_DOMAIN = "rilono.com";
     const CONTACT_SALES_URL = "https://rilono.com/contact";
     const SUBDOMAIN_MIN_LENGTH = 3;
@@ -166,6 +204,7 @@
         students: [],
         studentsLoading: false,
         activeStudentWorkspaceId: null,
+        activeWorkspaceOption: "journey",
         studentOptions: {
             countries: [],
             visaTypesByCountry: {},
@@ -861,8 +900,150 @@
         ];
     }
 
+    function getWorkspaceOptionByKey(optionKey) {
+        const normalizedKey = String(optionKey || "").trim().toLowerCase();
+        return WORKSPACE_PROFILE_OPTIONS.find((option) => option.key === normalizedKey) || WORKSPACE_PROFILE_OPTIONS[0];
+    }
+
+    function buildWorkspaceOptionContext(optionKey, currentStage, progress) {
+        const stageTitle = currentStage && currentStage.title ? currentStage.title : "Current stage";
+        const stageDescription = currentStage && currentStage.description
+            ? currentStage.description
+            : "No stage details available.";
+
+        if (optionKey === "documents") {
+            return {
+                subline: "Document-focused tracking for this student's journey",
+                progressLabel: "Document readiness coverage",
+                statusLabel: "Document preparation focus",
+                stageTitle: `${stageTitle} · Document Focus`,
+                stageDescription: `Focus on collecting and validating documents for this phase. ${stageDescription}`,
+            };
+        }
+        if (optionKey === "interview") {
+            return {
+                subline: "Interview-readiness view for stronger outcome confidence",
+                progressLabel: "Interview preparation readiness",
+                statusLabel: "Interview preparation focus",
+                stageTitle: `${stageTitle} · Interview Focus`,
+                stageDescription: `Refine speaking clarity, response confidence, and consistency for this stage. ${stageDescription}`,
+            };
+        }
+        if (optionKey === "finance") {
+            return {
+                subline: "Finance and fee readiness focus for this student's case",
+                progressLabel: "Finance and fee readiness",
+                statusLabel: "Finance verification focus",
+                stageTitle: `${stageTitle} · Finance Focus`,
+                stageDescription: `Verify funds, sponsor proofs, and fee evidence before moving ahead. ${stageDescription}`,
+            };
+        }
+        if (optionKey === "notes") {
+            return {
+                subline: "Advisor notes and risk-flag view for student-specific follow-up",
+                progressLabel: "Advisor follow-up coverage",
+                statusLabel: "Advisory follow-up focus",
+                stageTitle: `${stageTitle} · Risk and Notes`,
+                stageDescription: `Capture blockers, case notes, and escalation points linked to this stage. ${stageDescription}`,
+            };
+        }
+        return {
+            subline: "Dedicated student journey progress and next actions",
+            progressLabel: "Estimated journey completion",
+            statusLabel: progress && progress.statusLabel ? progress.statusLabel : "On track",
+            stageTitle,
+            stageDescription,
+        };
+    }
+
+    function buildWorkspaceOptionChecklist(optionKey, baseChecklist, student, currentStage) {
+        const stageTitle = String(currentStage && currentStage.title ? currentStage.title : "this stage");
+        const countryName = String(student && student.study_country_name ? student.study_country_name : "destination country");
+        const visaType = String(student && student.visa_type ? student.visa_type : "visa");
+        const extraChecklistByOption = {
+            documents: [
+                `Create a dedicated folder for ${stageTitle} documents with clear file naming.`,
+                "Collect both original and scan-ready copies for mandatory records.",
+                `Review format and validity rules for ${countryName} ${visaType} submissions.`,
+            ],
+            interview: [
+                `Practice 3 short answers explaining ${visaType} purpose and study intent.`,
+                "Run mock interview rounds with confidence, eye contact, and timing checks.",
+                "Prepare a one-page speaking outline for difficult follow-up questions.",
+            ],
+            finance: [
+                "Confirm sponsor balance history and stable transaction pattern.",
+                "Reconcile tuition, living costs, and fee receipts in one finance summary.",
+                "Keep bank letters and sponsor affidavits updated with current dates.",
+            ],
+            notes: [
+                "Record current blockers with owner and expected resolution date.",
+                "Flag risk items that could delay submission or interview readiness.",
+                "Log advisor decisions so the next reviewer has full context.",
+            ],
+        };
+
+        const merged = []
+            .concat(Array.isArray(baseChecklist) ? baseChecklist : [])
+            .concat(extraChecklistByOption[optionKey] || []);
+
+        const uniqueChecklist = [];
+        const seen = new Set();
+        merged.forEach((item) => {
+            const clean = String(item || "").trim();
+            if (!clean) return;
+            const key = clean.toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            uniqueChecklist.push(clean);
+        });
+        return uniqueChecklist.slice(0, 6);
+    }
+
+    function bindStudentWorkspaceOptionEvents() {
+        if (!studentWorkspaceOptionList) return;
+        $$("button[data-workspace-option]", studentWorkspaceOptionList).forEach((button) => {
+            button.addEventListener("click", () => {
+                const optionKey = String(button.getAttribute("data-workspace-option") || "").trim().toLowerCase();
+                if (!optionKey) return;
+                if (state.activeWorkspaceOption === optionKey) return;
+                state.activeWorkspaceOption = optionKey;
+                renderStudentWorkspaceById(state.activeStudentWorkspaceId);
+            });
+        });
+    }
+
+    function renderStudentWorkspaceOptionList(hasStudent) {
+        const activeOption = getWorkspaceOptionByKey(state.activeWorkspaceOption);
+        if (studentWorkspaceOptionList) {
+            studentWorkspaceOptionList.innerHTML = WORKSPACE_PROFILE_OPTIONS.map((option) => {
+                const activeClass = option.key === activeOption.key ? " is-active" : "";
+                const disabledAttr = hasStudent ? "" : " disabled";
+                const pressedAttr = option.key === activeOption.key ? "true" : "false";
+                return `
+                    <button
+                        class="ent-student-profile-option${activeClass}"
+                        type="button"
+                        data-workspace-option="${escapeHtml(option.key)}"
+                        aria-pressed="${pressedAttr}"${disabledAttr}
+                    >
+                        <span class="ent-student-profile-option-label">${escapeHtml(option.label)}</span>
+                        <span class="ent-student-profile-option-desc">${escapeHtml(option.description)}</span>
+                    </button>
+                `;
+            }).join("");
+        }
+        if (studentWorkspaceOptionHint) {
+            studentWorkspaceOptionHint.textContent = hasStudent
+                ? activeOption.hint
+                : "Select a student from the directory to unlock student-specific profile options.";
+        }
+        bindStudentWorkspaceOptionEvents();
+    }
+
     function renderStudentWorkspace(student) {
         if (!student || typeof student !== "object") {
+            state.activeWorkspaceOption = "journey";
             if (studentWorkspaceStudentName) studentWorkspaceStudentName.textContent = "Student";
             if (studentWorkspaceSubline) studentWorkspaceSubline.textContent = "Personalized visa journey workspace";
             if (studentWorkspaceDestination) studentWorkspaceDestination.textContent = "-";
@@ -879,6 +1060,10 @@
             if (studentWorkspaceChecklist) studentWorkspaceChecklist.innerHTML = "";
             if (studentWorkspaceStageRail) studentWorkspaceStageRail.innerHTML = "";
             if (studentWorkspaceAvatar) studentWorkspaceAvatar.textContent = "S";
+            if (studentWorkspaceProfileAvatar) studentWorkspaceProfileAvatar.textContent = "S";
+            if (studentWorkspaceProfileName) studentWorkspaceProfileName.textContent = "Student";
+            if (studentWorkspaceProfileMeta) studentWorkspaceProfileMeta.textContent = "Select a student to view details";
+            renderStudentWorkspaceOptionList(false);
             return;
         }
 
@@ -890,33 +1075,49 @@
         const stages = buildVisaJourneyStagesForStudent(student);
         const progress = estimateStudentJourneyProgress(student, stages.length);
         const currentStage = stages[progress.currentStageIndex] || stages[0] || null;
-        const checklist = buildStudentStageChecklist(currentStage, student);
+        const option = getWorkspaceOptionByKey(state.activeWorkspaceOption);
+        const context = buildWorkspaceOptionContext(option.key, currentStage, progress);
+        const checklist = buildWorkspaceOptionChecklist(
+            option.key,
+            buildStudentStageChecklist(currentStage, student),
+            student,
+            currentStage
+        );
 
         if (studentWorkspaceStudentName) studentWorkspaceStudentName.textContent = studentName;
-        if (studentWorkspaceSubline) studentWorkspaceSubline.textContent = "Dedicated student journey progress and next actions";
+        if (studentWorkspaceSubline) studentWorkspaceSubline.textContent = context.subline;
         if (studentWorkspaceDestination) {
             studentWorkspaceDestination.textContent = countryCode ? `${countryName} (${countryCode})` : countryName;
         }
         if (studentWorkspaceVisaType) studentWorkspaceVisaType.textContent = visaType;
         if (studentWorkspaceIntake) studentWorkspaceIntake.textContent = intake;
-        if (studentWorkspaceProgressLabel) studentWorkspaceProgressLabel.textContent = "Estimated journey completion";
+        if (studentWorkspaceProgressLabel) studentWorkspaceProgressLabel.textContent = context.progressLabel;
         if (studentWorkspaceProgressPercent) studentWorkspaceProgressPercent.textContent = `${progress.progressPercent}%`;
         if (studentWorkspaceProgressBar) {
             studentWorkspaceProgressBar.style.width = `${progress.progressPercent}%`;
         }
-        if (studentWorkspaceStatus) studentWorkspaceStatus.textContent = progress.statusLabel;
+        if (studentWorkspaceStatus) studentWorkspaceStatus.textContent = context.statusLabel;
         if (studentWorkspaceEta) studentWorkspaceEta.textContent = progress.etaText;
         if (studentWorkspaceStageCounter) {
             studentWorkspaceStageCounter.textContent = `Stage ${progress.currentStageIndex + 1} of ${stages.length}`;
         }
         if (studentWorkspaceCurrentStageTitle) {
-            studentWorkspaceCurrentStageTitle.textContent = currentStage ? currentStage.title : "Current stage";
+            studentWorkspaceCurrentStageTitle.textContent = context.stageTitle;
         }
         if (studentWorkspaceCurrentStageDesc) {
-            studentWorkspaceCurrentStageDesc.textContent = currentStage ? currentStage.description : "No stage details available.";
+            studentWorkspaceCurrentStageDesc.textContent = context.stageDescription;
         }
         if (studentWorkspaceAvatar) {
             studentWorkspaceAvatar.textContent = getInitials(studentName, "S");
+        }
+        if (studentWorkspaceProfileAvatar) {
+            studentWorkspaceProfileAvatar.textContent = getInitials(studentName, "S");
+        }
+        if (studentWorkspaceProfileName) {
+            studentWorkspaceProfileName.textContent = studentName;
+        }
+        if (studentWorkspaceProfileMeta) {
+            studentWorkspaceProfileMeta.textContent = `${countryCode ? `${countryName} (${countryCode})` : countryName} • ${visaType}`;
         }
 
         if (studentWorkspaceChecklist) {
@@ -946,6 +1147,8 @@
                 })
                 .join("");
         }
+
+        renderStudentWorkspaceOptionList(true);
     }
 
     function renderStudentWorkspaceById(studentId) {
@@ -968,6 +1171,7 @@
         const targetId = Number(studentId);
         if (!Number.isFinite(targetId) || targetId <= 0) return;
         state.activeStudentWorkspaceId = targetId;
+        state.activeWorkspaceOption = "journey";
         renderStudentWorkspaceById(targetId);
         switchToSection("student_workspace");
     }
@@ -1665,6 +1869,7 @@
         state.teamMembers = [];
         state.students = [];
         state.activeStudentWorkspaceId = null;
+        state.activeWorkspaceOption = "journey";
         state.studentOptions = {
             countries: [],
             visaTypesByCountry: {},
