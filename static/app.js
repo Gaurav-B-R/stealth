@@ -22,6 +22,7 @@ let currentVisaSubTab = 'prep';
 let documentTypeDropdownController = null;
 const PRO_UPGRADE_ENABLED = true;
 const PUBLIC_APP_ORIGIN = 'https://rilono.com';
+const RILONO_AI_PUBLIC_ERROR_MESSAGE = 'Sorry, I encountered an issue while responding. Please try again in a little while. This issue has been raised for review.';
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
     privacy: 'March 2, 2026',
@@ -2351,6 +2352,11 @@ function showLogin(skipURLUpdate = false) {
 function showForgotPassword(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('forgotPasswordSection').style.display = 'block';
+    const forgotPasswordEmailInput = document.getElementById('forgotPasswordEmail');
+    const emailFromQuery = new URLSearchParams(window.location.search).get('email');
+    if (forgotPasswordEmailInput && emailFromQuery && !forgotPasswordEmailInput.value) {
+        forgotPasswordEmailInput.value = emailFromQuery.trim();
+    }
     const forgotWidget = document.getElementById('turnstile-forgot-password');
     renderAuthTurnstileWidget(forgotWidget, 'forgotPassword');
     if (!skipURLUpdate) {
@@ -3455,6 +3461,13 @@ function isFreePlanExhaustedError(statusCode, detailText = '') {
     if (Number(statusCode) !== 403) return false;
     const text = String(detailText || '').toLowerCase();
     return text.includes('free plan') && text.includes('limit');
+}
+
+function getRilonoAiPublicErrorMessage(statusCode, detailText = '') {
+    if (isFreePlanExhaustedError(statusCode, detailText)) {
+        return detailText || RILONO_AI_PUBLIC_ERROR_MESSAGE;
+    }
+    return RILONO_AI_PUBLIC_ERROR_MESSAGE;
 }
 
 function openPlanLimitModal(detailText = '') {
@@ -5026,7 +5039,7 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
     } catch (error) {
         console.error('Voice interview error:', error);
         clearVisaInterviewPendingBubble(mode);
-        appendVisaInterviewLog(mode, 'system', `Error: ${error.message || 'Unable to continue this session.'}`);
+        appendVisaInterviewLog(mode, 'system', RILONO_AI_PUBLIC_ERROR_MESSAGE);
         setVisaInterviewStatus(mode, 'Error');
     } finally {
         clearVisaInterviewPendingBubble(mode);
@@ -5747,7 +5760,7 @@ async function finishVoiceMockInterview() {
         void loadSubscriptionStatus(true);
     } catch (error) {
         console.error('Mock report generation error:', error);
-        appendVisaInterviewLog('mock', 'system', `Error: ${error.message || 'Unable to generate final report.'}`);
+        appendVisaInterviewLog('mock', 'system', RILONO_AI_PUBLIC_ERROR_MESSAGE);
         setVisaInterviewStatus('mock', 'Report error');
     } finally {
         state.pending = false;
@@ -11809,11 +11822,11 @@ async function handleRilonoAiChatSubmit(e) {
             addMessageToFloatingChat(aiResponse, false);
             void loadSubscriptionStatus(true);
         } else {
-            const errorData = await response.json();
-            const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
+            const errorData = await response.json().catch(() => ({}));
+            const errorMsg = extractErrorDetailText(errorData.detail) || 'Failed to get response from Rilono AI';
             restoreRilonoAiSessionAttachments(attachmentsForSend);
             maybeShowPlanLimitPopup(response.status, errorMsg);
-            addMessageToRilonoAiChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
+            addMessageToRilonoAiChat(getRilonoAiPublicErrorMessage(response.status, errorMsg), false);
             if (response.status === 403) {
                 void loadSubscriptionStatus(true);
             }
@@ -12327,11 +12340,11 @@ async function handleFloatingChatSubmit(e) {
             addMessageToRilonoAiChat(aiResponse, false);
             void loadSubscriptionStatus(true);
         } else {
-            const errorData = await response.json();
-            const errorMsg = errorData.detail || 'Failed to get response from Rilono AI';
+            const errorData = await response.json().catch(() => ({}));
+            const errorMsg = extractErrorDetailText(errorData.detail) || 'Failed to get response from Rilono AI';
             restoreRilonoAiSessionAttachments(attachmentsForSend);
             maybeShowPlanLimitPopup(response.status, errorMsg);
-            addMessageToFloatingChat(`Sorry, I encountered an error: ${errorMsg}. Please try again.`, false);
+            addMessageToFloatingChat(getRilonoAiPublicErrorMessage(response.status, errorMsg), false);
             if (response.status === 403) {
                 void loadSubscriptionStatus(true);
             }

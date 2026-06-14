@@ -10,6 +10,7 @@
     const loginForm = $("#entLoginForm");
     const loginBtn = $("#entLoginBtn");
     const authFlash = $("#entAuthFlash");
+    const forgotPasswordLink = $("#entForgotPasswordLink");
 
     const onboardingForm = $("#entOnboardingForm");
     const onboardingBtn = $("#entOnboardingBtn");
@@ -162,7 +163,31 @@
         },
     ];
 
-    const ENTERPRISE_ROOT_DOMAIN = "rilono.com";
+    function getEnterpriseRootDomainForPage() {
+        const host = String(window.location.hostname || "").trim().toLowerCase();
+        if (host === "localtest.me" || host.endsWith(".localtest.me")) {
+            return "localtest.me";
+        }
+        return "rilono.com";
+    }
+
+    function getEnterprisePortalOriginPrefix() {
+        const host = String(window.location.hostname || "").trim().toLowerCase();
+        if (host === "localtest.me" || host.endsWith(".localtest.me")) {
+            return `${window.location.protocol || "http:"}//`;
+        }
+        return "https://";
+    }
+
+    function getEnterprisePortalPortSuffix() {
+        const host = String(window.location.hostname || "").trim().toLowerCase();
+        if (host === "localtest.me" || host.endsWith(".localtest.me")) {
+            return window.location.port ? `:${window.location.port}` : "";
+        }
+        return "";
+    }
+
+    const ENTERPRISE_ROOT_DOMAIN = getEnterpriseRootDomainForPage();
     const CONTACT_SALES_URL = "https://rilono.com/contact";
     const SUBDOMAIN_MIN_LENGTH = 3;
     const SUBDOMAIN_MAX_LENGTH = 32;
@@ -318,7 +343,7 @@
     function buildPortalUrlPreview(slug) {
         const safeSlug = String(slug || "").trim().toLowerCase();
         const displaySlug = safeSlug || "your-company";
-        return `https://${displaySlug}.${ENTERPRISE_ROOT_DOMAIN}/enterprise`;
+        return `${getEnterprisePortalOriginPrefix()}${displaySlug}.${ENTERPRISE_ROOT_DOMAIN}${getEnterprisePortalPortSuffix()}/enterprise`;
     }
 
     function updateSubdomainPreview() {
@@ -1944,6 +1969,18 @@
             } finally {
                 setButtonLoading(loginBtn, false, "Signing in...", "Sign In");
             }
+        });
+    }
+
+    if (forgotPasswordLink) {
+        forgotPasswordLink.addEventListener("click", (event) => {
+            event.preventDefault();
+            const emailInput = $("#entEmail");
+            const email = emailInput ? emailInput.value.trim() : "";
+            const resetRequestUrl = email
+                ? `/forgot-password?email=${encodeURIComponent(email)}`
+                : "/forgot-password";
+            window.location.assign(resetRequestUrl);
         });
     }
 

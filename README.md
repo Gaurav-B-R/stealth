@@ -175,6 +175,7 @@ Eligibility filter:
 
 ```bash
 RESEND_API_KEY=...
+RESEND_TRANSACTIONAL_FROM_EMAIL=noreply@rilono.com
 RESEND_MARKETING_SEGMENT_ID=...
 ```
 
@@ -183,6 +184,10 @@ Backward compatibility: `RESEND_MARKETING_AUDIENCE_ID` is also accepted.
 Optional:
 
 ```bash
+GEMINI_MODEL=gemini-2.5-flash
+RILONO_AI_CHAT_MODEL=gemini-2.5-flash
+GEMINI_DOCUMENT_MODEL=gemini-2.5-flash
+DAILY_AI_NOTIFIER_MODEL=gemini-2.5-flash
 RESEND_CONTACTS_SYNC_BATCH_SIZE=100
 RESEND_CONTACTS_SYNC_TIMEOUT_SECONDS=30
 RESEND_CONTACTS_SYNC_UNSUBSCRIBE_INELIGIBLE=false
@@ -190,6 +195,8 @@ RESEND_CONTACTS_SYNC_REQUEST_INTERVAL_SECONDS=0.55
 RESEND_CONTACTS_SYNC_MAX_RETRIES=4
 RESEND_CONTACTS_SYNC_RETRY_MAX_SECONDS=6
 ```
+
+Keep AI model names in env instead of hard-coding preview model IDs. If a provider retires a model, update the relevant `*_MODEL` or comma-separated `*_MODEL_CANDIDATES` env value.
 
 ### Run manually
 
@@ -206,11 +213,13 @@ Set a Cron Job command to:
 python -m app.services.resend_contacts_sync
 ```
 
-If you want to mark ineligible contacts as unsubscribed in Resend:
+If you want to remove ineligible contacts from the marketing segment:
 
 ```bash
 python -m app.services.resend_contacts_sync --unsubscribe-ineligible
 ```
+
+This does not mark contacts as unsubscribed in Resend. Notification opt-outs stay app-level so transactional emails like password resets, email verification, and enterprise invites remain deliverable.
 
 ## License
 

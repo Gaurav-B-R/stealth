@@ -14,6 +14,7 @@ load_dotenv()
 # Initialize Resend
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "noreply@rilono.com")
+RESEND_TRANSACTIONAL_FROM_EMAIL = os.getenv("RESEND_TRANSACTIONAL_FROM_EMAIL", RESEND_FROM_EMAIL)
 RESEND_FROM_NAME = os.getenv("RESEND_FROM_NAME", "Rilono")
 # For development: use Resend's test email (delivered@resend.dev) which doesn't require domain verification
 USE_TEST_EMAIL = os.getenv("USE_TEST_EMAIL", "false").lower() == "true"
@@ -54,6 +55,14 @@ def _resolve_resend_from_email() -> str:
         print("DEV MODE: Using test email sender (delivered@resend.dev)")
         return "delivered@resend.dev"
     return RESEND_FROM_EMAIL
+
+
+def _resolve_transactional_from_email() -> str:
+    """Auth/security emails must not depend on notification unsubscribe state."""
+    if USE_TEST_EMAIL or DEV_MODE:
+        print("DEV MODE: Using test email sender (delivered@resend.dev)")
+        return "delivered@resend.dev"
+    return RESEND_TRANSACTIONAL_FROM_EMAIL
 
 
 def _extract_resend_email_id(email_response) -> Optional[str]:
@@ -194,12 +203,7 @@ def send_verification_email(
     """
     
     try:
-        # In development mode, use Resend's test email sender (doesn't require domain verification)
-        if USE_TEST_EMAIL or DEV_MODE:
-            from_email = "delivered@resend.dev"  # Resend's test email - works without domain verification
-            print(f"DEV MODE: Using test email sender (delivered@resend.dev)")
-        else:
-            from_email = RESEND_FROM_EMAIL
+        from_email = _resolve_transactional_from_email()
         
         params = {
             "from": f"{RESEND_FROM_NAME} <{from_email}>",
@@ -330,12 +334,7 @@ def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFA
     """
     
     try:
-        # In development mode, use Resend's test email sender
-        if USE_TEST_EMAIL or DEV_MODE:
-            from_email = "delivered@resend.dev"
-            print(f"DEV MODE: Using test email sender (delivered@resend.dev)")
-        else:
-            from_email = RESEND_FROM_EMAIL
+        from_email = _resolve_transactional_from_email()
         
         params = {
             "from": f"{RESEND_FROM_NAME} <{from_email}>",
@@ -473,12 +472,7 @@ def send_university_change_email(email: str, new_university: str, change_token: 
     """
     
     try:
-        # In development mode, use Resend's test email sender
-        if USE_TEST_EMAIL or DEV_MODE:
-            from_email = "delivered@resend.dev"
-            print(f"DEV MODE: Using test email sender (delivered@resend.dev)")
-        else:
-            from_email = RESEND_FROM_EMAIL
+        from_email = _resolve_transactional_from_email()
         
         params = {
             "from": f"{RESEND_FROM_NAME} <{from_email}>",
@@ -1117,7 +1111,7 @@ def send_enterprise_team_invite_email(
 
     try:
         params = {
-            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "from": f"{RESEND_FROM_NAME} <{_resolve_transactional_from_email()}>",
             "to": [recipient],
             "subject": subject,
             "html": html_content,

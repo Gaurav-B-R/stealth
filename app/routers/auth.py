@@ -120,7 +120,10 @@ if not AUTH_COOKIE_SECURE and _cookie_secure_default():
 
 def _is_local_hostname(hostname: str) -> bool:
     host = (hostname or "").strip().lower()
-    return host in {"localhost", "127.0.0.1", "::1"}
+    return (
+        host in {"localhost", "127.0.0.1", "::1", "localtest.me"}
+        or host.endswith(".localtest.me")
+    )
 
 
 def _request_uses_https(request: Request) -> bool:
@@ -654,7 +657,7 @@ def forgot_password(
     user.password_reset_token_expires = token_expires
     db.commit()
     
-    # Send password reset email
+    # Password reset is transactional; do not gate it on email_notifications_enabled.
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
     email_sent = send_password_reset_email(user.email, reset_token, base_url)
     
@@ -737,6 +740,13 @@ def reset_password(
     user.hashed_password = hashed_password
     user.password_reset_token = None
     user.password_reset_token_expires = None
+    enterprise_credential = (
+        db.query(models.EnterpriseCredential)
+        .filter(models.EnterpriseCredential.email == user.email)
+        .first()
+    )
+    if enterprise_credential:
+        enterprise_credential.password_hash = hashed_password
     db.commit()
     
     return {
@@ -1156,6 +1166,7 @@ def unsubscribe_email_notifications(
     if len(reason) > 2000:
         raise HTTPException(status_code=400, detail="Reason is too long.")
 
+    # App-level notification opt-out only; provider suppression can block account recovery emails.
     user.email_notifications_enabled = False
     user.email_notifications_unsubscribed_at = datetime.utcnow()
     user.email_notifications_unsubscribe_reason = reason or None

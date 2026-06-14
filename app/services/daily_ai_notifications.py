@@ -20,7 +20,11 @@ from app.routers.documents import refresh_student_profile_snapshot_for_user
 from app.utils import gemini_service as gemini_utils
 from app.utils.secure_artifacts import decrypt_artifact_bytes
 
-MODEL_NAME = "gemini-3-pro-preview"
+MODEL_CANDIDATES = gemini_utils.get_model_candidates(
+    primary_env="DAILY_AI_NOTIFIER_MODEL",
+    candidates_env="DAILY_AI_NOTIFIER_MODEL_CANDIDATES",
+)
+MODEL_NAME = MODEL_CANDIDATES[0]
 PROFILE_KEY_SUFFIX = "STUDENT_PROFILE_AND_F1_VISA_STATUS.json"
 PROMPT_LOG_MAX_CHARS = int(os.getenv("GEMINI_LOG_MAX_CHARS", "0") or "0")
 
@@ -114,14 +118,14 @@ def _read_decrypted_r2_text(r2_client, key: str) -> str:
     return decrypt_artifact_bytes(encrypted_blob).decode("utf-8")
 
 
-def _build_gemini_model():
+def _build_gemini_model(model_name: str = MODEL_NAME):
     if gemini_utils.USE_VERTEX_AI and gemini_utils.VERTEX_AI_AVAILABLE:
         from vertexai.generative_models import GenerativeModel
 
-        return GenerativeModel(MODEL_NAME), "vertex"
+        return GenerativeModel(model_name), "vertex"
 
     if gemini_utils.GENAI_AVAILABLE and gemini_utils.genai:
-        return gemini_utils.genai.GenerativeModel(MODEL_NAME), "genai"
+        return gemini_utils.genai.GenerativeModel(model_name), "genai"
 
     raise RuntimeError("Gemini is not configured (service account or API key missing)")
 
@@ -218,9 +222,9 @@ RAW DOCUMENT EXTRACTED FILES:
 """
 
 
-def _analyze_user(model: Any, prompt: str, user_id: int) -> DailyAssistantDecision:
+def _analyze_user(model: Any, prompt: str, user_id: int, model_name: str) -> DailyAssistantDecision:
     print("\n" + "=" * 90)
-    print(f"🔵 GEMINI REQUEST [daily_ai_notification] user_id={user_id} model={MODEL_NAME}")
+    print(f"🔵 GEMINI REQUEST [daily_ai_notification] user_id={user_id} model={model_name}")
     print("-" * 90)
     print(_clip_for_log(prompt))
     print("=" * 90)
@@ -229,7 +233,7 @@ def _analyze_user(model: Any, prompt: str, user_id: int) -> DailyAssistantDecisi
     response_text = str(getattr(response, "text", "") or "")
 
     print("\n" + "-" * 90)
-    print(f"✅ GEMINI RESPONSE [daily_ai_notification] user_id={user_id} model={MODEL_NAME}")
+    print(f"✅ GEMINI RESPONSE [daily_ai_notification] user_id={user_id} model={model_name}")
     print("-" * 90)
     print(_clip_for_log(response_text))
     print("-" * 90 + "\n")
@@ -282,7 +286,7 @@ def _load_profile_raw_json(user_id: int, r2_client) -> str:
     return _read_decrypted_r2_text(r2_client, key)
 
 
-def _process_single_user(user_id: int, model: Any, r2_client) -> bool:
+def _process_single_user(user_id: int, model: Any, model_name: str, r2_client) -> bool:
     session = SessionLocal()
     try:
         user = (
@@ -301,7 +305,7 @@ def _process_single_user(user_id: int, model: Any, r2_client) -> bool:
         profile_raw_json = _load_profile_raw_json(user.id, r2_client)
         document_payload = _load_user_document_payload(user.id, session, r2_client)
         prompt = _build_analysis_prompt(user, profile_raw_json, document_payload)
-        decision = _analyze_user(model, prompt, user_id=user.id)
+        decision = _analyze_user(model, prompt, user_id=user.id, model_name=model_name)
         print(
             f"Daily AI notifier reasoning user_id={user.id}: "
             f"{_clip_for_log(decision.reasoning)}"
@@ -412,7 +416,7 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
                     "run_date": run_date.isoformat(),
                 }
 
-        model, provider = _build_gemini_model()
+        model, provider = _build_gemini_model(MODEL_NAME)
         r2_client = _build_r2_client()
 
         user_id_rows = (
@@ -430,7 +434,7 @@ def run_daily_ai_notification_job(force: bool = False) -> dict:
 
         for user_id in user_ids:
             users_scanned += 1
-            sent = _process_single_user(user_id=user_id, model=model, r2_client=r2_client)
+            sent = _process_single_user(user_id=user_id, model=model, model_name=MODEL_NAME, r2_client=r2_client)
             if sent:
                 notifications_sent += 1
 

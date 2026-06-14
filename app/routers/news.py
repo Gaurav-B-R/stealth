@@ -26,6 +26,10 @@ except Exception:
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
+PUBLIC_NEWS_GENERATION_ERROR_DETAIL = (
+    "This content is temporarily unavailable. Please try again in a little while."
+)
+
 INTERVIEW_CACHE_TTL = timedelta(hours=6)
 _interview_lock = Lock()
 _interview_cache: Dict[str, Dict[str, Any]] = {}
@@ -476,7 +480,7 @@ def _resolve_vertex_project_id() -> str:
 
 def _build_latest_genai_client() -> Tuple[Any, str]:
     if not LATEST_GENAI_AVAILABLE or not latest_genai:
-        raise HTTPException(status_code=503, detail="google-genai SDK is not installed")
+        raise HTTPException(status_code=503, detail=PUBLIC_NEWS_GENERATION_ERROR_DETAIL)
 
     api_key = str(gemini_utils.GEMINI_API_KEY or "").strip()
     if api_key.startswith("AIza"):
@@ -489,7 +493,7 @@ def _build_latest_genai_client() -> Tuple[Any, str]:
         if project_id:
             return latest_genai.Client(vertexai=True, project=project_id, location=location), "vertex"
 
-    raise HTTPException(status_code=503, detail="Gemini is not configured on the server")
+    raise HTTPException(status_code=503, detail=PUBLIC_NEWS_GENERATION_ERROR_DETAIL)
 
 
 def _generate_content_with_grounding(
@@ -618,13 +622,15 @@ Output JSON format:
 
 Provide 4 to 8 items. If no qualifying recent updates exist, return an empty items array."""
 
-    model_candidates = [
-        "gemini-3-pro-preview",
+    model_candidates = gemini_utils.get_model_candidates(
+        primary_env="F1_LATEST_NEWS_MODEL",
+        candidates_env="F1_LATEST_NEWS_MODEL_CANDIDATES",
+        defaults=[
         "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-2.0-flash-exp",
         "gemini-1.5-flash",
-    ]
+        ],
+    )
     last_error = None
     empty_result: Optional[Dict[str, Any]] = None
 
@@ -730,13 +736,15 @@ Output JSON format:
 
 Provide 5 to 10 items."""
 
-    model_candidates = [
-        "gemini-3-pro-preview",
+    model_candidates = gemini_utils.get_model_candidates(
+        primary_env="F1_INTERVIEW_EXPERIENCES_MODEL",
+        candidates_env="F1_INTERVIEW_EXPERIENCES_MODEL_CANDIDATES",
+        defaults=[
         "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "gemini-2.0-flash-exp",
         "gemini-1.5-flash",
-    ]
+        ],
+    )
     last_error = None
 
     for model_name in model_candidates:
@@ -766,7 +774,7 @@ Provide 5 to 10 items."""
 
     raise HTTPException(
         status_code=502,
-        detail=f"Failed to generate interview experiences from Gemini: {str(last_error)}"
+        detail=PUBLIC_NEWS_GENERATION_ERROR_DETAIL
     )
 
 

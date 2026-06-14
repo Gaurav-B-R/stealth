@@ -55,7 +55,10 @@ def _cookie_secure_default() -> bool:
 
 def _is_local_hostname(hostname: str) -> bool:
     host = (hostname or "").strip().lower()
-    return host in {"localhost", "127.0.0.1", "::1"}
+    return (
+        host in {"localhost", "127.0.0.1", "::1", "localtest.me"}
+        or host.endswith(".localtest.me")
+    )
 
 
 def _request_uses_https(request: Request) -> bool:

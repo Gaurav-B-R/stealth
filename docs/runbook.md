@@ -67,6 +67,8 @@ python -m app.services.resend_contacts_sync --dry-run
 python -m app.services.resend_contacts_sync
 ```
 
+Notification unsubscribes are app-level only. Do not provider-unsubscribe users in Resend for notification opt-outs, because password resets, email verification, and enterprise invite emails are transactional and must still be delivered.
+
 Force daily notification job manually:
 
 ```bash

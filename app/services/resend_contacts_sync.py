@@ -64,6 +64,9 @@ RESEND_CONTACTS_SYNC_RETRY_MAX_SECONDS = max(
     1.0,
     float(os.getenv("RESEND_CONTACTS_SYNC_RETRY_MAX_SECONDS", "6") or "6"),
 )
+# Compatibility flag: when enabled, remove ineligible users from the marketing
+# segment only. Do not mark contacts as provider-unsubscribed, because password
+# reset and verification emails are transactional and must remain deliverable.
 RESEND_CONTACTS_SYNC_UNSUBSCRIBE_INELIGIBLE = _is_truthy(
     os.getenv("RESEND_CONTACTS_SYNC_UNSUBSCRIBE_INELIGIBLE", "false")
 )
@@ -351,7 +354,7 @@ def run_resend_contacts_sync(
             "RESEND_MARKETING_SEGMENT_ID (or RESEND_MARKETING_AUDIENCE_ID) is missing."
         )
 
-    unsubscribe_disabled_contacts = (
+    remove_ineligible_from_segment = (
         RESEND_CONTACTS_SYNC_UNSUBSCRIBE_INELIGIBLE
         if unsubscribe_ineligible is None
         else bool(unsubscribe_ineligible)
@@ -475,7 +478,7 @@ def run_resend_contacts_sync(
 
         continue
 
-    if unsubscribe_disabled_contacts:
+    if remove_ineligible_from_segment:
         eligible_emails = set(eligible_by_email.keys())
         for email, contact in contacts_by_email.items():
             if email in eligible_emails:
@@ -500,23 +503,15 @@ def run_resend_contacts_sync(
                 continue
 
             if dry_run:
-                stats.unsubscribed_contacts += 1
                 stats.segment_removed_contacts += 1
                 continue
 
             try:
-                _resend_request(
-                    session,
-                    "PATCH",
-                    f"/contacts/{_encode_contact_path_value(email)}",
-                    payload={"unsubscribed": True},
-                )
                 _remove_contact_from_segment(session, email=email, segment_id=target_segment_id)
-                stats.unsubscribed_contacts += 1
                 stats.segment_removed_contacts += 1
             except Exception as exc:  # noqa: BLE001
                 stats.error_count += 1
-                stats.errors.append(f"Unsubscribe failed for {email}: {str(exc)}")
+                stats.errors.append(f"Segment removal failed for {email}: {str(exc)}")
 
     stats.status = "completed" if stats.error_count == 0 else "completed_with_errors"
     return stats.to_dict()
@@ -550,7 +545,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--unsubscribe-ineligible",
         action="store_true",
-        help="Mark contacts not currently eligible as unsubscribed.",
+        help="Remove contacts not currently eligible from the marketing segment without provider-unsubscribing them.",
     )
     return parser
 

@@ -65,6 +65,12 @@ ENTERPRISE_RESERVED_SUBDOMAINS = {
 }
 ENTERPRISE_ROOT_DOMAIN = (os.getenv("ENTERPRISE_ROOT_DOMAIN", "rilono.com").strip().lower() or "rilono.com").lstrip(".")
 ENTERPRISE_PORTAL_SCHEME = os.getenv("ENTERPRISE_PORTAL_SCHEME", "https").strip().lower() or "https"
+ENTERPRISE_PORTAL_PORT = os.getenv("ENTERPRISE_PORTAL_PORT", "").strip().lstrip(":")
+ENTERPRISE_GENERIC_SUBDOMAINS = {
+    item.strip().lower()
+    for item in os.getenv("ENTERPRISE_GENERIC_SUBDOMAINS", "enterprise,portal").split(",")
+    if item.strip()
+}
 ENTERPRISE_PASSWORD_SETUP_BASE_URL = (
     os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL).strip() or DEFAULT_PUBLIC_BASE_URL
 ).rstrip("/")
@@ -387,11 +393,33 @@ def _blocked_enterprise_permissions() -> dict[str, bool]:
     }
 
 
-def _build_enterprise_portal_url(subdomain_slug: str | None) -> str | None:
+def _is_development_env() -> bool:
+    return os.getenv("ENVIRONMENT", "production").strip().lower() == "development"
+
+
+def _request_port_for_local_enterprise_url(request: Request | None) -> str | None:
+    if ENTERPRISE_PORTAL_PORT:
+        return ENTERPRISE_PORTAL_PORT
+    if not request or not _is_development_env():
+        return None
+    port = request.url.port
+    if not port or int(port) in {80, 443}:
+        return None
+    return str(port)
+
+
+def _build_enterprise_portal_url(
+    subdomain_slug: str | None,
+    request: Request | None = None,
+) -> str | None:
     subdomain = str(subdomain_slug or "").strip().lower()
     if not subdomain:
         return None
-    return f"{ENTERPRISE_PORTAL_SCHEME}://{subdomain}.{ENTERPRISE_ROOT_DOMAIN}/enterprise"
+    host = f"{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+    port = _request_port_for_local_enterprise_url(request)
+    if port:
+        host = f"{host}:{port}"
+    return f"{ENTERPRISE_PORTAL_SCHEME}://{host}/enterprise"
 
 
 def _extract_enterprise_subdomain_from_request(request: Request | None) -> str | None:
@@ -421,6 +449,8 @@ def _extract_enterprise_subdomain_from_request(request: Request | None) -> str |
     subdomain_part = host[: -len(suffix)].strip(".")
     if not subdomain_part:
         return None
+    if subdomain_part in ENTERPRISE_GENERIC_SUBDOMAINS:
+        return None
     return subdomain_part
 
 
@@ -439,7 +469,7 @@ def _enforce_request_subdomain_matches_org(
     if request_subdomain != org_subdomain:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Use your organization URL: {_build_enterprise_portal_url(org_subdomain)}",
+            detail=f"Use your organization URL: {_build_enterprise_portal_url(org_subdomain, request)}",
         )
 
 
@@ -571,7 +601,11 @@ def _enforce_enterprise_access_or_403(db: Session, user: models.User) -> None:
     )
 
 
-def _build_enterprise_context(db: Session, user: models.User) -> dict:
+def _build_enterprise_context(
+    db: Session,
+    user: models.User,
+    request: Request | None = None,
+) -> dict:
     membership, organization = _get_active_enterprise_membership(db, user.id)
     if not membership or not organization:
         return {
@@ -593,7 +627,7 @@ def _build_enterprise_context(db: Session, user: models.User) -> dict:
             "company_name": company_name or organization.company_name,
             "subdomain_slug": subdomain_slug or None,
             "logo_url": logo_url,
-            "portal_url": _build_enterprise_portal_url(subdomain_slug),
+            "portal_url": _build_enterprise_portal_url(subdomain_slug, request),
             "created_at": organization.created_at,
         },
         "membership": {
@@ -954,7 +988,7 @@ async def enterprise_login(
     _, organization = _get_active_enterprise_membership(db, user.id)
     _enforce_request_subdomain_matches_org(request, organization)
 
-    context = _build_enterprise_context(db, user)
+    context = _build_enterprise_context(db, user, request)
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -985,7 +1019,7 @@ def enterprise_me(
             "is_admin": bool(current_user.is_admin),
             "is_developer": bool(current_user.is_developer),
         },
-        **_build_enterprise_context(db, current_user),
+        **_build_enterprise_context(db, current_user, request),
     }
 
 
@@ -1081,7 +1115,7 @@ def enterprise_onboarding(
             _enforce_request_subdomain_matches_org(request, existing_org)
             return {
                 "message": "Enterprise organization already configured.",
-                **_build_enterprise_context(db, current_user),
+                **_build_enterprise_context(db, current_user, request),
             }
 
         _assert_subdomain_available(
@@ -1101,7 +1135,7 @@ def enterprise_onboarding(
         db.commit()
         return {
             "message": "Enterprise organization setup complete.",
-            **_build_enterprise_context(db, current_user),
+            **_build_enterprise_context(db, current_user, request),
         }
 
     _assert_subdomain_available(db=db, subdomain_slug=subdomain_slug)
@@ -1132,7 +1166,7 @@ def enterprise_onboarding(
 
     return {
         "message": "Enterprise organization setup complete.",
-        **_build_enterprise_context(db, current_user),
+        **_build_enterprise_context(db, current_user, request),
     }
 
 
@@ -1150,7 +1184,7 @@ def enterprise_team_members(
             "company_name": organization.company_name,
             "subdomain_slug": (organization.subdomain_slug or "").strip().lower() or None,
             "logo_url": _resolve_enterprise_logo_url(organization),
-            "portal_url": _build_enterprise_portal_url(organization.subdomain_slug),
+            "portal_url": _build_enterprise_portal_url(organization.subdomain_slug, request),
         },
         "current_role": role,
         "permissions": _enterprise_permissions_for_role(role),
@@ -1209,7 +1243,7 @@ def enterprise_update_branding(
 
     db.commit()
 
-    context = _build_enterprise_context(db, current_user)
+    context = _build_enterprise_context(db, current_user, request)
     return {
         "message": "Organization branding updated successfully.",
         "organization": context.get("organization"),
@@ -1308,7 +1342,7 @@ def enterprise_team_add_user(
 
     db.commit()
 
-    portal_url = _build_enterprise_portal_url(organization.subdomain_slug)
+    portal_url = _build_enterprise_portal_url(organization.subdomain_slug, request)
     password_setup_url = (
         f"{ENTERPRISE_PASSWORD_SETUP_BASE_URL}/reset-password"
         f"?token={quote(password_setup_token, safe='')}"

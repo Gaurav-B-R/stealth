@@ -85,6 +85,51 @@ SUPPORTED_DOCUMENT_TYPES = {".pdf", ".txt"}
 UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS = int(
     os.getenv("UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS", "120000") or "120000"
 )
+DEFAULT_GEMINI_MODEL = (os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash")
+DEFAULT_GEMINI_MODEL_CANDIDATES = [
+    DEFAULT_GEMINI_MODEL,
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
+
+
+def _dedupe_model_names(model_names: list[str]) -> list[str]:
+    seen = set()
+    deduped = []
+    for model_name in model_names:
+        value = str(model_name or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def get_model_candidates(
+    primary_env: Optional[str] = None,
+    candidates_env: Optional[str] = None,
+    defaults: Optional[list[str]] = None,
+) -> list[str]:
+    primary = os.getenv(primary_env or "", "").strip() if primary_env else ""
+    configured_candidates = []
+    if candidates_env:
+        configured_candidates = [
+            item.strip()
+            for item in os.getenv(candidates_env, "").split(",")
+            if item.strip()
+        ]
+    return _dedupe_model_names(
+        [primary] + configured_candidates + list(defaults or DEFAULT_GEMINI_MODEL_CANDIDATES)
+    )
+
+
+def build_generative_model(model_name: str):
+    if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+        return GenerativeModel(model_name)
+    if GENAI_AVAILABLE:
+        return genai.GenerativeModel(model_name)
+    return None
 
 def validate_and_extract_document(
     file_contents: bytes,
@@ -117,12 +162,13 @@ def validate_and_extract_document(
     try:
         file_extension = os.path.splitext(filename)[1].lower()
         
-        # Initialize the model
-        if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
-            model = GenerativeModel('gemini-3-pro-preview')
-        elif GENAI_AVAILABLE:
-            model = genai.GenerativeModel('gemini-3-pro-preview')
-        else:
+        # Initialize the model. Keep it configurable so retired model names do not break uploads.
+        document_model_name = get_model_candidates(
+            primary_env="GEMINI_DOCUMENT_MODEL",
+            candidates_env="GEMINI_DOCUMENT_MODEL_CANDIDATES",
+        )[0]
+        model = build_generative_model(document_model_name)
+        if model is None:
             print("Error: Neither Vertex AI nor standard Gemini API available")
             return None
         
@@ -489,12 +535,13 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
     try:
         file_extension = os.path.splitext(filename)[1].lower()
         
-        # Initialize the model - Use Vertex AI if available, otherwise standard API
-        if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
-            model = GenerativeModel('gemini-3-pro-preview')
-        elif GENAI_AVAILABLE:
-            model = genai.GenerativeModel('gemini-3-pro-preview')
-        else:
+        # Initialize the model. Keep it configurable so retired model names do not break extraction.
+        document_model_name = get_model_candidates(
+            primary_env="GEMINI_DOCUMENT_MODEL",
+            candidates_env="GEMINI_DOCUMENT_MODEL_CANDIDATES",
+        )[0]
+        model = build_generative_model(document_model_name)
+        if model is None:
             print("Error: Neither Vertex AI nor standard Gemini API available")
             return None
         

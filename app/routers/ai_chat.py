@@ -27,6 +27,15 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/ai-chat", tags=["ai-chat"])
 
+PUBLIC_AI_RESPONSE_ERROR_DETAIL = (
+    "Sorry, I encountered an issue while responding. Please try again in a little while. "
+    "This issue has been raised for review."
+)
+INTERNAL_PROVIDER_DISCLOSURE_PATTERN = re.compile(
+    r"\b(?:gemini[-\w.]*|google\s+generative\s+ai|google\s+genai|vertex\s+ai)\b",
+    re.IGNORECASE,
+)
+
 # R2 Configuration for documents
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
 R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID", "")
@@ -68,6 +77,58 @@ TEXT_ATTACHMENT_MIME_TYPES = {
     "text/rtf",
 }
 ATTACHMENT_ID_ALLOWED_PATTERN = re.compile(r"[^A-Za-z0-9._:-]+")
+
+
+def sanitize_ai_response_for_public_display(text: str) -> str:
+    """Keep internal provider/model names out of user-visible AI responses."""
+    value = str(text or "").strip()
+    if not value:
+        return value
+    return INTERNAL_PROVIDER_DISCLOSURE_PATTERN.sub("Rilono AI", value)
+
+
+def _build_ai_chat_model(provider: str, model_name: str):
+    if provider == "vertex":
+        from vertexai.generative_models import GenerativeModel
+
+        return GenerativeModel(model_name)
+    if provider == "genai":
+        return gemini_utils.genai.GenerativeModel(model_name)
+    raise RuntimeError("Rilono AI model provider is not configured")
+
+
+def _generate_with_ai_chat_model(
+    *,
+    model,
+    provider: str,
+    full_prompt: str,
+    inline_session_attachment_parts: list[dict],
+):
+    if inline_session_attachment_parts:
+        if provider == "vertex":
+            from vertexai.generative_models import Part
+            prompt_parts = [full_prompt]
+            for file_part in inline_session_attachment_parts:
+                prompt_parts.append(
+                    Part.from_data(
+                        data=file_part["data"],
+                        mime_type=file_part["mime_type"],
+                    )
+                )
+            return model.generate_content(prompt_parts)
+
+        if provider == "genai":
+            prompt_parts = [full_prompt]
+            for file_part in inline_session_attachment_parts:
+                prompt_parts.append(
+                    {
+                        "mime_type": file_part["mime_type"],
+                        "data": file_part["data"],
+                    }
+                )
+            return model.generate_content(prompt_parts)
+
+    return model.generate_content(full_prompt)
 
 class ChatSessionAttachment(BaseModel):
     id: Optional[str] = None
@@ -583,20 +644,17 @@ def generate_ai_response(
     """
     try:
         provider = "none"
-        # Initialize model based on available service
+        model_candidates = gemini_utils.get_model_candidates(
+            primary_env="RILONO_AI_CHAT_MODEL",
+            candidates_env="RILONO_AI_CHAT_MODEL_CANDIDATES",
+        )
+        # Select provider based on available service.
         if hasattr(gemini_utils, 'USE_VERTEX_AI') and gemini_utils.USE_VERTEX_AI and hasattr(gemini_utils, 'VERTEX_AI_AVAILABLE') and gemini_utils.VERTEX_AI_AVAILABLE:
-            from vertexai.generative_models import GenerativeModel
-            model = GenerativeModel('gemini-3-pro-preview')
             provider = "vertex"
-        elif hasattr(gemini_utils, 'GENAI_AVAILABLE') and gemini_utils.GENAI_AVAILABLE:
-            try:
-                import google.generativeai as genai
-                model = genai.GenerativeModel('gemini-3-pro-preview')
-                provider = "genai"
-            except:
-                raise Exception("Gemini API not properly configured")
+        elif hasattr(gemini_utils, 'GENAI_AVAILABLE') and gemini_utils.GENAI_AVAILABLE and gemini_utils.genai:
+            provider = "genai"
         else:
-            raise Exception("Gemini AI not available. Please configure service account or API key.")
+            raise Exception("Rilono AI model provider is not available.")
         
         # Build attached documents section
         attached_docs_text = ""
@@ -664,33 +722,24 @@ Please provide a helpful response to the user's question:"""
         print("-"*80)
         print("⏳ Waiting for Gemini response...")
         
-        # Generate response with optional inline multimodal attachment parts
-        if inline_session_attachment_parts:
-            if provider == "vertex":
-                from vertexai.generative_models import Part
-                prompt_parts = [full_prompt]
-                for file_part in inline_session_attachment_parts:
-                    prompt_parts.append(
-                        Part.from_data(
-                            data=file_part["data"],
-                            mime_type=file_part["mime_type"],
-                        )
-                    )
-                response = model.generate_content(prompt_parts)
-            elif provider == "genai":
-                prompt_parts = [full_prompt]
-                for file_part in inline_session_attachment_parts:
-                    prompt_parts.append(
-                        {
-                            "mime_type": file_part["mime_type"],
-                            "data": file_part["data"],
-                        }
-                    )
-                response = model.generate_content(prompt_parts)
-            else:
-                response = model.generate_content(full_prompt)
-        else:
-            response = model.generate_content(full_prompt)
+        response = None
+        last_model_error = None
+        for model_name in model_candidates:
+            try:
+                model = _build_ai_chat_model(provider, model_name)
+                response = _generate_with_ai_chat_model(
+                    model=model,
+                    provider=provider,
+                    full_prompt=full_prompt,
+                    inline_session_attachment_parts=inline_session_attachment_parts,
+                )
+                break
+            except Exception as model_error:  # noqa: BLE001
+                last_model_error = model_error
+                print(f"Rilono AI model attempt failed [{model_name}] provider={provider}: {str(model_error)}")
+
+        if response is None:
+            raise RuntimeError(f"All configured Rilono AI chat models failed: {str(last_model_error)}")
         
         print("✅ RECEIVED RESPONSE FROM GEMINI:")
         print("-"*80)
@@ -699,13 +748,13 @@ Please provide a helpful response to the user's question:"""
             print(f"\n[... {len(response.text) - 1000} more characters ...]")
         print("="*80 + "\n")
         
-        return response.text
+        return sanitize_ai_response_for_public_display(response.text)
         
     except Exception as e:
         print(f"Error generating AI response: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate AI response: {str(e)}"
+            detail=PUBLIC_AI_RESPONSE_ERROR_DETAIL
         )
 
 def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
@@ -862,7 +911,8 @@ def chat_with_ai(
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Unexpected Rilono AI chat error: {str(e)}")
         raise HTTPException(
             status_code=500,
-            detail=f"An error occurred: {str(e)}"
+            detail=PUBLIC_AI_RESPONSE_ERROR_DETAIL
         )

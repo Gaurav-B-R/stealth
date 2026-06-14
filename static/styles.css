@@ -9655,6 +9655,15 @@ body.dashboard-active {
     color: var(--primary-light);
 }
 
+.footer-enterprise-link {
+    color: var(--accent-color, var(--primary-light)) !important;
+    font-weight: 700;
+}
+
+.footer-enterprise-link:hover {
+    color: var(--primary-light) !important;
+}
+
 .footer-copyright {
     color: var(--text-muted);
     font-size: 0.875rem;

@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app import models
 from app.database import SessionLocal
+from app.utils import gemini_service as gemini_utils
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -243,13 +244,15 @@ def _merge_and_trim(db, new_items: List[Dict[str, str]]) -> int:
 # Gemini interaction
 # ---------------------------------------------------------------------------
 
-MODEL_CANDIDATES = [
-    "gemini-3-pro-preview",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-exp",
-    "gemini-1.5-flash",
-]
+MODEL_CANDIDATES = gemini_utils.get_model_candidates(
+    primary_env="F1_NEWS_MODEL",
+    candidates_env="F1_NEWS_MODEL_CANDIDATES",
+    defaults=[
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+    ],
+)
 
 
 def _build_ingestion_prompt(existing_items: List[Dict[str, str]]) -> str:

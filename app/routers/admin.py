@@ -34,6 +34,7 @@ ENTERPRISE_ROOT_DOMAIN = (
     os.getenv("ENTERPRISE_ROOT_DOMAIN", "rilono.com").strip().lower() or "rilono.com"
 ).lstrip(".")
 ENTERPRISE_PORTAL_SCHEME = os.getenv("ENTERPRISE_PORTAL_SCHEME", "https").strip().lower() or "https"
+ENTERPRISE_PORTAL_PORT = os.getenv("ENTERPRISE_PORTAL_PORT", "").strip().lstrip(":")
 ADMIN_TURNSTILE_COOKIE_NAME = (
     os.getenv("ADMIN_TURNSTILE_COOKIE_NAME", "rilono_admin_turnstile").strip()
     or "rilono_admin_turnstile"
@@ -86,11 +87,29 @@ def _is_admin_turnstile_required(request: Request) -> bool:
     return True
 
 
-def _build_enterprise_portal_url(subdomain_slug: str | None) -> str | None:
+def _request_port_for_local_enterprise_url(request: Request | None) -> str | None:
+    if ENTERPRISE_PORTAL_PORT:
+        return ENTERPRISE_PORTAL_PORT
+    if not request or not _is_development_env():
+        return None
+    port = request.url.port
+    if not port or int(port) in {80, 443}:
+        return None
+    return str(port)
+
+
+def _build_enterprise_portal_url(
+    subdomain_slug: str | None,
+    request: Request | None = None,
+) -> str | None:
     subdomain = str(subdomain_slug or "").strip().lower()
     if not subdomain:
         return None
-    return f"{ENTERPRISE_PORTAL_SCHEME}://{subdomain}.{ENTERPRISE_ROOT_DOMAIN}/enterprise"
+    host = f"{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+    port = _request_port_for_local_enterprise_url(request)
+    if port:
+        host = f"{host}:{port}"
+    return f"{ENTERPRISE_PORTAL_SCHEME}://{host}/enterprise"
 
 
 def _generate_enterprise_temp_password(length: int = 16) -> str:
@@ -652,7 +671,7 @@ def list_enterprise_accounts_admin(
                 "organization_id": org_id,
                 "company_name": (org.company_name or "").strip() or "Untitled Organization",
                 "subdomain_slug": (org.subdomain_slug or "").strip().lower() or None,
-                "portal_url": _build_enterprise_portal_url(org.subdomain_slug),
+                "portal_url": _build_enterprise_portal_url(org.subdomain_slug, request),
                 "created_at": org.created_at,
                 "created_by_user_id": int(org.created_by_user_id) if org.created_by_user_id is not None else None,
                 "created_by_email": creator.get("email"),
