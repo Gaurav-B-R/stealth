@@ -2,7 +2,9 @@ import os
 import logging
 import secrets
 import string
-from datetime import datetime, timedelta, timezone
+from collections import defaultdict
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from jose import JWTError, jwt
@@ -59,6 +61,10 @@ ADMIN_ENDPOINT_RATE_WINDOW_SECONDS = max(
     10,
     int(os.getenv("ADMIN_ENDPOINT_RATE_WINDOW_SECONDS", "60") or "60"),
 )
+try:
+    ADMIN_ANALYTICS_INR_TO_USD = Decimal(os.getenv("ADMIN_ANALYTICS_INR_TO_USD", "0.012") or "0.012")
+except InvalidOperation:
+    ADMIN_ANALYTICS_INR_TO_USD = Decimal("0.012")
 
 
 def _assert_manageable_target(target_user: models.User, acting_user: models.User) -> None:
@@ -322,6 +328,51 @@ def _build_plan_metrics_for_filtered_users(db: Session, filtered_user_ids_subque
     }
 
 
+def _money_decimal(value) -> Decimal:
+    try:
+        return Decimal(str(value or "0"))
+    except InvalidOperation:
+        return Decimal("0")
+
+
+def _money_float(value: Decimal) -> float:
+    rounded = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return float(rounded)
+
+
+def _coerce_date(value) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return datetime.now(timezone.utc).date()
+
+
+def _month_key(value) -> str:
+    normalized = _coerce_date(value)
+    return f"{normalized.year:04d}-{normalized.month:02d}"
+
+
+def _payment_amount_usd(payment: models.SubscriptionPayment) -> Decimal:
+    amount_minor_units = _money_decimal(payment.amount_paise)
+    amount_major_units = amount_minor_units / Decimal("100")
+    currency = str(payment.currency or "INR").strip().upper()
+
+    if currency == "USD":
+        return amount_major_units
+    if currency == "INR":
+        return amount_major_units * ADMIN_ANALYTICS_INR_TO_USD
+
+    # Unknown currencies are kept visible as zero rather than guessing silently.
+    return Decimal("0")
+
+
+def _add_month_bucket(monthly_buckets: dict, when, *, investment: Decimal = Decimal("0"), returns: Decimal = Decimal("0")) -> None:
+    key = _month_key(when)
+    monthly_buckets[key]["investment_usd"] += investment
+    monthly_buckets[key]["returns_usd"] += returns
+
+
 def _get_table_columns(inspector, table_name: str) -> dict[str, dict]:
     try:
         return {str(col["name"]): col for col in inspector.get_columns(table_name)}
@@ -519,6 +570,160 @@ def list_users_admin(
         "page": page,
         "page_size": page_size,
         "metrics": metrics,
+    }
+
+
+@router.get(
+    "/company-finance/analytics",
+    response_model=schemas.AdminCompanyFinanceAnalyticsResponse,
+)
+def company_finance_analytics_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """
+    Company-level finance analytics for the admin console.
+
+    Investment rows come from company_finance_entries. Returns are calculated live
+    from verified subscription payments, with INR converted using ADMIN_ANALYTICS_INR_TO_USD.
+    """
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.company_finance.analytics",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+
+    entries = (
+        db.query(models.CompanyFinanceEntry)
+        .order_by(desc(models.CompanyFinanceEntry.occurred_on), desc(models.CompanyFinanceEntry.id))
+        .all()
+    )
+    verified_payments = (
+        db.query(models.SubscriptionPayment)
+        .filter(models.SubscriptionPayment.status == "verified")
+        .order_by(
+            desc(models.SubscriptionPayment.verified_at),
+            desc(models.SubscriptionPayment.created_at),
+            desc(models.SubscriptionPayment.id),
+        )
+        .all()
+    )
+
+    total_invested = Decimal("0")
+    total_returns = Decimal("0")
+    investment_entry_count = 0
+    return_entry_count = 0
+    monthly_buckets = defaultdict(lambda: {"investment_usd": Decimal("0"), "returns_usd": Decimal("0")})
+    expense_breakdown: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    ledger: list[dict] = []
+
+    for entry in entries:
+        amount = _money_decimal(entry.amount_usd)
+        occurred_on = _coerce_date(entry.occurred_on)
+        label = (entry.vendor or entry.category or "Uncategorized").strip() or "Uncategorized"
+        if amount < 0:
+            absolute_amount = abs(amount)
+            total_invested += absolute_amount
+            investment_entry_count += 1
+            expense_breakdown[label] += absolute_amount
+            _add_month_bucket(monthly_buckets, occurred_on, investment=absolute_amount)
+            kind = "Investment"
+        else:
+            total_returns += amount
+            return_entry_count += 1
+            _add_month_bucket(monthly_buckets, occurred_on, returns=amount)
+            kind = "Return"
+
+        ledger.append(
+            {
+                "id": f"finance-{entry.id}",
+                "kind": kind,
+                "category": entry.category or "Operations",
+                "vendor": entry.vendor or "Unknown",
+                "description": entry.description,
+                "amount_usd": _money_float(amount),
+                "occurred_on": occurred_on.isoformat(),
+                "source": entry.source or "manual",
+            }
+        )
+
+    for payment in verified_payments:
+        amount_usd = _payment_amount_usd(payment)
+        if amount_usd <= 0:
+            continue
+
+        payment_date = _coerce_date(payment.verified_at or payment.signature_verified_at or payment.created_at)
+        total_returns += amount_usd
+        return_entry_count += 1
+        _add_month_bucket(monthly_buckets, payment_date, returns=amount_usd)
+        ledger.append(
+            {
+                "id": f"payment-{payment.id}",
+                "kind": "Return",
+                "category": "Subscriptions",
+                "vendor": (payment.provider or "Payment").title(),
+                "description": "Verified subscription revenue",
+                "amount_usd": _money_float(amount_usd),
+                "occurred_on": payment_date.isoformat(),
+                "source": "subscription_payments",
+            }
+        )
+
+    net_usd = total_returns - total_invested
+    roi_percent = Decimal("0")
+    if total_invested > 0:
+        roi_percent = (net_usd / total_invested) * Decimal("100")
+
+    monthly_series = []
+    for month in sorted(monthly_buckets.keys()):
+        investment_usd = monthly_buckets[month]["investment_usd"]
+        returns_usd = monthly_buckets[month]["returns_usd"]
+        monthly_series.append(
+            {
+                "month": month,
+                "investment_usd": _money_float(investment_usd),
+                "returns_usd": _money_float(returns_usd),
+                "net_usd": _money_float(returns_usd - investment_usd),
+            }
+        )
+
+    breakdown_items = []
+    for label, amount in sorted(expense_breakdown.items(), key=lambda item: item[1], reverse=True):
+        percentage = Decimal("0")
+        if total_invested > 0:
+            percentage = (amount / total_invested) * Decimal("100")
+        breakdown_items.append(
+            {
+                "label": label,
+                "amount_usd": _money_float(amount),
+                "percentage": _money_float(percentage),
+            }
+        )
+
+    ledger.sort(key=lambda item: (item["occurred_on"], item["id"]), reverse=True)
+
+    return {
+        "summary": {
+            "total_invested_usd": _money_float(total_invested),
+            "total_returns_usd": _money_float(total_returns),
+            "net_usd": _money_float(net_usd),
+            "roi_percent": _money_float(roi_percent),
+            "break_even_gap_usd": _money_float(max(total_invested - total_returns, Decimal("0"))),
+            "investment_entry_count": investment_entry_count,
+            "return_entry_count": return_entry_count,
+        },
+        "monthly_series": monthly_series,
+        "expense_breakdown": breakdown_items,
+        "ledger": ledger[:250],
+        "notes": [
+            "Investment rows are stored in company_finance_entries.",
+            "Returns are calculated live from verified subscription payments.",
+            f"INR payments are converted using ADMIN_ANALYTICS_INR_TO_USD={ADMIN_ANALYTICS_INR_TO_USD}.",
+        ],
     }
 
 

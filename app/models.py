@@ -126,6 +126,22 @@ class EnterpriseStudent(Base):
     )
 
 
+class CompanyFinanceEntry(Base):
+    __tablename__ = "company_finance_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    seed_key = Column(String, unique=True, index=True, nullable=True)
+    entry_type = Column(String, nullable=False, default="expense")  # expense | return
+    category = Column(String, nullable=False, index=True)
+    vendor = Column(String, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    amount_usd = Column(Numeric(12, 2), nullable=False)
+    occurred_on = Column(Date, nullable=False, index=True)
+    source = Column(String, nullable=False, default="manual")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 class Document(Base):
     __tablename__ = "documents"
     

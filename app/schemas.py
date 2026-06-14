@@ -139,6 +139,48 @@ class AdminEnterpriseCredentialCreateResponse(BaseModel):
     message: str
 
 
+class AdminCompanyFinanceSummary(BaseModel):
+    total_invested_usd: float = 0
+    total_returns_usd: float = 0
+    net_usd: float = 0
+    roi_percent: float = 0
+    break_even_gap_usd: float = 0
+    investment_entry_count: int = 0
+    return_entry_count: int = 0
+
+
+class AdminCompanyFinanceSeriesPoint(BaseModel):
+    month: str
+    investment_usd: float = 0
+    returns_usd: float = 0
+    net_usd: float = 0
+
+
+class AdminCompanyFinanceBreakdownItem(BaseModel):
+    label: str
+    amount_usd: float = 0
+    percentage: float = 0
+
+
+class AdminCompanyFinanceLedgerItem(BaseModel):
+    id: str
+    kind: str
+    category: str
+    vendor: str
+    description: Optional[str] = None
+    amount_usd: float
+    occurred_on: str
+    source: str
+
+
+class AdminCompanyFinanceAnalyticsResponse(BaseModel):
+    summary: AdminCompanyFinanceSummary
+    monthly_series: List[AdminCompanyFinanceSeriesPoint]
+    expense_breakdown: List[AdminCompanyFinanceBreakdownItem]
+    ledger: List[AdminCompanyFinanceLedgerItem]
+    notes: List[str] = []
+
+
 class SubscriptionResponse(BaseModel):
     plan: str
     status: str

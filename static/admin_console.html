@@ -66,6 +66,9 @@
                     <button id="adminEnterpriseTabBtn" type="button" class="tab-btn" data-tab="enterprise" aria-selected="false">
                         Enterprise Accounts
                     </button>
+                    <button id="adminFinanceTabBtn" type="button" class="tab-btn" data-tab="finance" aria-selected="false">
+                        Investment Analytics
+                    </button>
                 </div>
 
                 <section id="adminUsersTabPanel" class="tab-panel">
@@ -193,6 +196,92 @@
                         <button id="adminEnterprisePrevBtn" type="button" class="ghost-btn small-btn" disabled>Previous</button>
                         <span id="adminEnterprisePageInfo">Page 1 of 1</span>
                         <button id="adminEnterpriseNextBtn" type="button" class="ghost-btn small-btn" disabled>Next</button>
+                    </div>
+                </section>
+
+                <section id="adminFinanceTabPanel" class="tab-panel" hidden>
+                    <div class="finance-hero">
+                        <div>
+                            <span class="finance-eyebrow">Rilono AI Company</span>
+                            <h2>Investment & Returns</h2>
+                            <p>Track founder spend, infrastructure costs, AI tooling, and live subscription returns in one view.</p>
+                        </div>
+                        <div class="finance-hero-stat">
+                            <span>Net Position</span>
+                            <strong id="adminFinanceMetricNetHero">$0.00</strong>
+                        </div>
+                    </div>
+
+                    <div class="metrics-grid finance-metrics-grid">
+                        <article class="metric-card finance-card-invested">
+                            <span>Total Invested</span>
+                            <strong id="adminFinanceMetricInvested">$0.00</strong>
+                            <div id="adminFinanceMetricInvestedSub" class="metric-subtext">0 investment entries</div>
+                        </article>
+                        <article class="metric-card finance-card-returns">
+                            <span>Total Returns</span>
+                            <strong id="adminFinanceMetricReturns">$0.00</strong>
+                            <div id="adminFinanceMetricReturnsSub" class="metric-subtext">0 return entries</div>
+                        </article>
+                        <article class="metric-card finance-card-net">
+                            <span>Net Position</span>
+                            <strong id="adminFinanceMetricNet">$0.00</strong>
+                            <div id="adminFinanceMetricBreakEven" class="metric-subtext">Break-even gap: $0.00</div>
+                        </article>
+                        <article class="metric-card finance-card-roi">
+                            <span>ROI</span>
+                            <strong id="adminFinanceMetricRoi">0.00%</strong>
+                            <div class="metric-subtext">Returns vs invested capital</div>
+                        </article>
+                    </div>
+
+                    <div class="finance-grid">
+                        <section class="finance-chart-card">
+                            <div class="finance-card-header">
+                                <div>
+                                    <h3>Monthly Burn vs Returns</h3>
+                                    <p>Investment outflow compared with realized verified revenue.</p>
+                                </div>
+                            </div>
+                            <div id="adminFinanceTimelineChart" class="finance-timeline-chart">
+                                <div class="table-empty">No finance data loaded yet.</div>
+                            </div>
+                        </section>
+
+                        <section class="finance-chart-card">
+                            <div class="finance-card-header">
+                                <div>
+                                    <h3>Expense Breakdown</h3>
+                                    <p>Where the company investment has gone so far.</p>
+                                </div>
+                            </div>
+                            <div id="adminFinanceBreakdownChart" class="finance-breakdown-chart">
+                                <div class="table-empty">No expense data loaded yet.</div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div id="adminFinanceNotes" class="finance-notes"></div>
+
+                    <div class="table-wrap finance-table-wrap">
+                        <table class="users-table finance-table">
+                            <thead>
+                                <tr>
+                                    <th>Date (UTC)</th>
+                                    <th>Type</th>
+                                    <th>Vendor</th>
+                                    <th>Category</th>
+                                    <th>Description</th>
+                                    <th>Amount (USD)</th>
+                                    <th>Source</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminFinanceTableBody">
+                                <tr>
+                                    <td colspan="7" class="table-empty">No finance data loaded yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </section>
             </section>

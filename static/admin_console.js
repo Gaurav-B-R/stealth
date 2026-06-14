@@ -34,6 +34,8 @@ const state = {
     enterpriseFilters: {
         search: ''
     },
+    financeAnalytics: null,
+    financeLoading: false,
     turnstileSiteKey: '',
     turnstileWidgetId: null,
     actionTurnstileWidgetId: null
@@ -54,8 +56,10 @@ const refs = {
     verifyProtectionBtn: document.getElementById('adminVerifyProtectionBtn'),
     usersTabBtn: document.getElementById('adminUsersTabBtn'),
     enterpriseTabBtn: document.getElementById('adminEnterpriseTabBtn'),
+    financeTabBtn: document.getElementById('adminFinanceTabBtn'),
     usersTabPanel: document.getElementById('adminUsersTabPanel'),
     enterpriseTabPanel: document.getElementById('adminEnterpriseTabPanel'),
+    financeTabPanel: document.getElementById('adminFinanceTabPanel'),
     turnstileWrap: document.getElementById('adminTurnstileWrap'),
     turnstileHint: document.getElementById('adminTurnstileHint'),
     actionTurnstileWrap: document.getElementById('adminActionTurnstileWrap'),
@@ -93,7 +97,19 @@ const refs = {
     enterpriseCredentialName: document.getElementById('adminEnterpriseCredentialName'),
     enterpriseCredentialEmail: document.getElementById('adminEnterpriseCredentialEmail'),
     enterpriseCredentialCreateBtn: document.getElementById('adminEnterpriseCredentialCreateBtn'),
-    enterpriseCredentialResult: document.getElementById('adminEnterpriseCredentialResult')
+    enterpriseCredentialResult: document.getElementById('adminEnterpriseCredentialResult'),
+    financeMetricNetHero: document.getElementById('adminFinanceMetricNetHero'),
+    financeMetricInvested: document.getElementById('adminFinanceMetricInvested'),
+    financeMetricInvestedSub: document.getElementById('adminFinanceMetricInvestedSub'),
+    financeMetricReturns: document.getElementById('adminFinanceMetricReturns'),
+    financeMetricReturnsSub: document.getElementById('adminFinanceMetricReturnsSub'),
+    financeMetricNet: document.getElementById('adminFinanceMetricNet'),
+    financeMetricBreakEven: document.getElementById('adminFinanceMetricBreakEven'),
+    financeMetricRoi: document.getElementById('adminFinanceMetricRoi'),
+    financeTimelineChart: document.getElementById('adminFinanceTimelineChart'),
+    financeBreakdownChart: document.getElementById('adminFinanceBreakdownChart'),
+    financeNotes: document.getElementById('adminFinanceNotes'),
+    financeTableBody: document.getElementById('adminFinanceTableBody')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -114,6 +130,7 @@ function bindEvents() {
     refs.verifyProtectionBtn?.addEventListener('click', handleProtectionVerifyClick);
     refs.usersTabBtn?.addEventListener('click', () => handleTabSwitch('users'));
     refs.enterpriseTabBtn?.addEventListener('click', () => handleTabSwitch('enterprise'));
+    refs.financeTabBtn?.addEventListener('click', () => handleTabSwitch('finance'));
     refs.usersForm?.addEventListener('submit', handleUserFiltersSubmit);
     refs.usersResetBtn?.addEventListener('click', resetUserFilters);
     refs.prevBtn?.addEventListener('click', () => changePage(-1));
@@ -188,27 +205,36 @@ function showConsole() {
 }
 
 function renderActiveTab() {
-    const isUsersTab = state.activeTab !== 'enterprise';
+    const isUsersTab = state.activeTab === 'users';
+    const isEnterpriseTab = state.activeTab === 'enterprise';
+    const isFinanceTab = state.activeTab === 'finance';
 
     if (refs.usersTabBtn) {
         refs.usersTabBtn.classList.toggle('active', isUsersTab);
         refs.usersTabBtn.setAttribute('aria-selected', String(isUsersTab));
     }
     if (refs.enterpriseTabBtn) {
-        refs.enterpriseTabBtn.classList.toggle('active', !isUsersTab);
-        refs.enterpriseTabBtn.setAttribute('aria-selected', String(!isUsersTab));
+        refs.enterpriseTabBtn.classList.toggle('active', isEnterpriseTab);
+        refs.enterpriseTabBtn.setAttribute('aria-selected', String(isEnterpriseTab));
+    }
+    if (refs.financeTabBtn) {
+        refs.financeTabBtn.classList.toggle('active', isFinanceTab);
+        refs.financeTabBtn.setAttribute('aria-selected', String(isFinanceTab));
     }
     if (refs.usersTabPanel) {
         refs.usersTabPanel.hidden = !isUsersTab;
     }
     if (refs.enterpriseTabPanel) {
-        refs.enterpriseTabPanel.hidden = isUsersTab;
+        refs.enterpriseTabPanel.hidden = !isEnterpriseTab;
+    }
+    if (refs.financeTabPanel) {
+        refs.financeTabPanel.hidden = !isFinanceTab;
     }
 }
 
 async function handleTabSwitch(tabName) {
     const normalized = String(tabName || '').trim().toLowerCase();
-    if (normalized !== 'users' && normalized !== 'enterprise') return;
+    if (!['users', 'enterprise', 'finance'].includes(normalized)) return;
     if (state.activeTab === normalized) return;
 
     state.activeTab = normalized;
@@ -222,6 +248,10 @@ async function handleTabSwitch(tabName) {
 async function loadActiveTab({ resetPage = false } = {}) {
     if (state.activeTab === 'enterprise') {
         await loadEnterpriseAccounts({ resetPage });
+        return;
+    }
+    if (state.activeTab === 'finance') {
+        await loadFinanceAnalytics();
         return;
     }
     await loadUsers({ resetPage });
@@ -610,6 +640,8 @@ async function handleLogout() {
     state.enterprisePage = 1;
     state.enterpriseLoading = false;
     state.enterpriseFilters = { search: '' };
+    state.financeAnalytics = null;
+    state.financeLoading = false;
     resetTurnstileWidget();
     resetActionTurnstileWidget();
     showAuth();
@@ -623,6 +655,7 @@ async function handleLogout() {
     renderEnterprisePagination();
     renderEnterpriseMetrics();
     clearEnterpriseCredentialResult();
+    renderFinanceEmptyState('No finance data loaded yet.');
 }
 
 function getRoleLabel(user) {
@@ -651,6 +684,196 @@ function formatDateTime(value) {
     const date = new Date(normalized);
     if (Number.isNaN(date.getTime())) return '-';
     return date.toLocaleString(undefined, { timeZone: ADMIN_TIME_ZONE });
+}
+
+function formatUsd(value) {
+    const amount = Number(value) || 0;
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }).format(amount);
+}
+
+function formatPercent(value) {
+    const amount = Number(value) || 0;
+    return `${amount.toFixed(2)}%`;
+}
+
+function formatMonthLabel(monthKey) {
+    const [year, month] = String(monthKey || '').split('-').map((part) => Number(part));
+    if (!year || !month) return String(monthKey || '-');
+    const date = new Date(Date.UTC(year, month - 1, 1));
+    return new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        year: '2-digit',
+        timeZone: 'UTC'
+    }).format(date);
+}
+
+function renderFinanceEmptyState(message) {
+    const safeMessage = escapeHtml(message || 'No finance data loaded yet.');
+    if (refs.financeMetricNetHero) refs.financeMetricNetHero.textContent = '$0.00';
+    if (refs.financeMetricInvested) refs.financeMetricInvested.textContent = '$0.00';
+    if (refs.financeMetricInvestedSub) refs.financeMetricInvestedSub.textContent = '0 investment entries';
+    if (refs.financeMetricReturns) refs.financeMetricReturns.textContent = '$0.00';
+    if (refs.financeMetricReturnsSub) refs.financeMetricReturnsSub.textContent = '0 return entries';
+    if (refs.financeMetricNet) refs.financeMetricNet.textContent = '$0.00';
+    if (refs.financeMetricBreakEven) refs.financeMetricBreakEven.textContent = 'Break-even gap: $0.00';
+    if (refs.financeMetricRoi) refs.financeMetricRoi.textContent = '0.00%';
+    if (refs.financeTimelineChart) refs.financeTimelineChart.innerHTML = `<div class="table-empty">${safeMessage}</div>`;
+    if (refs.financeBreakdownChart) refs.financeBreakdownChart.innerHTML = `<div class="table-empty">${safeMessage}</div>`;
+    if (refs.financeNotes) refs.financeNotes.innerHTML = '';
+    if (refs.financeTableBody) {
+        refs.financeTableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="table-empty">${safeMessage}</td>
+            </tr>
+        `;
+    }
+}
+
+function renderFinanceMetrics(summary) {
+    const totalInvested = Number(summary?.total_invested_usd) || 0;
+    const totalReturns = Number(summary?.total_returns_usd) || 0;
+    const net = Number(summary?.net_usd) || 0;
+    const roi = Number(summary?.roi_percent) || 0;
+    const breakEvenGap = Number(summary?.break_even_gap_usd) || 0;
+    const investmentCount = Number(summary?.investment_entry_count) || 0;
+    const returnCount = Number(summary?.return_entry_count) || 0;
+    const netLabel = formatUsd(net);
+
+    if (refs.financeMetricNetHero) {
+        refs.financeMetricNetHero.textContent = netLabel;
+        refs.financeMetricNetHero.classList.toggle('negative', net < 0);
+        refs.financeMetricNetHero.classList.toggle('positive', net >= 0);
+    }
+    if (refs.financeMetricInvested) refs.financeMetricInvested.textContent = formatUsd(totalInvested);
+    if (refs.financeMetricInvestedSub) refs.financeMetricInvestedSub.textContent = `${investmentCount} investment ${investmentCount === 1 ? 'entry' : 'entries'}`;
+    if (refs.financeMetricReturns) refs.financeMetricReturns.textContent = formatUsd(totalReturns);
+    if (refs.financeMetricReturnsSub) refs.financeMetricReturnsSub.textContent = `${returnCount} return ${returnCount === 1 ? 'entry' : 'entries'}`;
+    if (refs.financeMetricNet) {
+        refs.financeMetricNet.textContent = netLabel;
+        refs.financeMetricNet.classList.toggle('negative', net < 0);
+        refs.financeMetricNet.classList.toggle('positive', net >= 0);
+    }
+    if (refs.financeMetricBreakEven) refs.financeMetricBreakEven.textContent = `Break-even gap: ${formatUsd(breakEvenGap)}`;
+    if (refs.financeMetricRoi) {
+        refs.financeMetricRoi.textContent = formatPercent(roi);
+        refs.financeMetricRoi.classList.toggle('negative', roi < 0);
+        refs.financeMetricRoi.classList.toggle('positive', roi >= 0);
+    }
+}
+
+function renderFinanceTimeline(monthlySeries) {
+    if (!refs.financeTimelineChart) return;
+    const series = Array.isArray(monthlySeries) ? monthlySeries : [];
+    if (!series.length) {
+        refs.financeTimelineChart.innerHTML = '<div class="table-empty">No monthly finance data available.</div>';
+        return;
+    }
+
+    const maxValue = Math.max(
+        1,
+        ...series.map((point) => Math.max(Number(point.investment_usd) || 0, Number(point.returns_usd) || 0))
+    );
+
+    refs.financeTimelineChart.innerHTML = series.map((point) => {
+        const investment = Number(point.investment_usd) || 0;
+        const returns = Number(point.returns_usd) || 0;
+        const net = Number(point.net_usd) || 0;
+        const investmentHeight = Math.max((investment / maxValue) * 100, investment > 0 ? 4 : 0);
+        const returnsHeight = Math.max((returns / maxValue) * 100, returns > 0 ? 4 : 0);
+        return `
+            <div class="finance-month">
+                <div class="finance-bars" title="Invested ${escapeHtml(formatUsd(investment))}, Returns ${escapeHtml(formatUsd(returns))}">
+                    <span class="finance-bar investment" style="height: ${investmentHeight.toFixed(2)}%"></span>
+                    <span class="finance-bar returns" style="height: ${returnsHeight.toFixed(2)}%"></span>
+                </div>
+                <div class="finance-month-label">${escapeHtml(formatMonthLabel(point.month))}</div>
+                <div class="finance-month-net ${net < 0 ? 'negative' : 'positive'}">${escapeHtml(formatUsd(net))}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderFinanceBreakdown(breakdown) {
+    if (!refs.financeBreakdownChart) return;
+    const rows = Array.isArray(breakdown) ? breakdown : [];
+    if (!rows.length) {
+        refs.financeBreakdownChart.innerHTML = '<div class="table-empty">No expense breakdown available.</div>';
+        return;
+    }
+
+    refs.financeBreakdownChart.innerHTML = rows.map((item) => {
+        const percentage = Math.min(Math.max(Number(item.percentage) || 0, 0), 100);
+        const amount = Number(item.amount_usd) || 0;
+        return `
+            <div class="finance-breakdown-row">
+                <div class="finance-breakdown-top">
+                    <strong>${escapeHtml(item.label || 'Uncategorized')}</strong>
+                    <span>${escapeHtml(formatUsd(amount))}</span>
+                </div>
+                <div class="finance-breakdown-track">
+                    <span style="width: ${percentage.toFixed(2)}%"></span>
+                </div>
+                <div class="finance-breakdown-percent">${escapeHtml(formatPercent(percentage))} of spend</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderFinanceLedger(ledger) {
+    if (!refs.financeTableBody) return;
+    const rows = Array.isArray(ledger) ? ledger : [];
+    if (!rows.length) {
+        refs.financeTableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="table-empty">No finance ledger rows found.</td>
+            </tr>
+        `;
+        return;
+    }
+
+    refs.financeTableBody.innerHTML = rows.map((item) => {
+        const amount = Number(item.amount_usd) || 0;
+        const isReturn = amount >= 0;
+        return `
+            <tr>
+                <td>${escapeHtml(item.occurred_on || '-')}</td>
+                <td><span class="finance-kind ${isReturn ? 'return' : 'investment'}">${escapeHtml(item.kind || '-')}</span></td>
+                <td><div class="user-name">${escapeHtml(item.vendor || '-')}</div></td>
+                <td>${escapeHtml(item.category || '-')}</td>
+                <td>${escapeHtml(item.description || '-')}</td>
+                <td class="finance-amount ${isReturn ? 'positive' : 'negative'}">${escapeHtml(formatUsd(amount))}</td>
+                <td><span class="finance-source">${escapeHtml(item.source || '-')}</span></td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function renderFinanceNotes(notes) {
+    if (!refs.financeNotes) return;
+    const rows = Array.isArray(notes) ? notes.filter(Boolean) : [];
+    if (!rows.length) {
+        refs.financeNotes.innerHTML = '';
+        return;
+    }
+    refs.financeNotes.innerHTML = rows.map((note) => `<span>${escapeHtml(note)}</span>`).join('');
+}
+
+function renderFinanceAnalytics() {
+    const payload = state.financeAnalytics;
+    if (!payload) {
+        renderFinanceEmptyState('No finance data loaded yet.');
+        return;
+    }
+    renderFinanceMetrics(payload.summary || {});
+    renderFinanceTimeline(payload.monthly_series || []);
+    renderFinanceBreakdown(payload.expense_breakdown || []);
+    renderFinanceLedger(payload.ledger || []);
+    renderFinanceNotes(payload.notes || []);
 }
 
 function renderUsersTableMessage(message) {
@@ -1077,6 +1300,52 @@ async function loadEnterpriseAccounts({ resetPage = false } = {}) {
     } finally {
         state.enterpriseLoading = false;
         renderEnterprisePagination();
+    }
+}
+
+async function loadFinanceAnalytics() {
+    if (!state.currentUser) {
+        const canAccess = await refreshCurrentAdminUser({ silent: true });
+        if (!canAccess) {
+            showAuth();
+            showFlash('Please login with an admin account.', 'error');
+            return;
+        }
+    }
+
+    if (!await ensureAdminProtection({ silent: false })) {
+        return;
+    }
+
+    state.financeLoading = true;
+    renderFinanceEmptyState('Loading finance analytics...');
+
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/company-finance/analytics`, {
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            const message = normalizeErrorMessage(payload, 'Failed to load finance analytics.');
+            state.financeAnalytics = null;
+            renderFinanceEmptyState(message);
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(message, 'error');
+            return;
+        }
+
+        state.financeAnalytics = payload;
+        renderFinanceAnalytics();
+        clearFlash();
+    } catch (error) {
+        console.error('Failed to load finance analytics:', error);
+        state.financeAnalytics = null;
+        renderFinanceEmptyState('Could not load finance analytics. Please retry.');
+        showFlash('Could not load finance analytics. Please retry.', 'error');
+    } finally {
+        state.financeLoading = false;
     }
 }
 
