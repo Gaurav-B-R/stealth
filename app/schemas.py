@@ -167,6 +167,7 @@ class AdminCompanyFinanceLedgerItem(BaseModel):
     kind: str
     category: str
     vendor: str
+    paid_by: Optional[str] = None
     description: Optional[str] = None
     amount_usd: float
     occurred_on: str
@@ -177,6 +178,7 @@ class AdminCompanyFinanceAnalyticsResponse(BaseModel):
     summary: AdminCompanyFinanceSummary
     monthly_series: List[AdminCompanyFinanceSeriesPoint]
     expense_breakdown: List[AdminCompanyFinanceBreakdownItem]
+    contributor_breakdown: List[AdminCompanyFinanceBreakdownItem]
     ledger: List[AdminCompanyFinanceLedgerItem]
     notes: List[str] = []
 

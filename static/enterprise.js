@@ -1,2385 +1,1329 @@
+/* ===========================================================================
+   Rilono Enterprise — Visa Consultancy CRM frontend
+   =========================================================================== */
 (function () {
-    "use strict";
-
-    const $ = (sel, ctx = document) => ctx.querySelector(sel);
-    const $$ = (sel, ctx = document) => Array.from(ctx.querySelectorAll(sel));
-
-    const authScreen = $("#entAuthScreen");
-    const dashboard = $("#entDashboard");
-    const onboardingScreen = $("#entOnboardingScreen");
-    const loginForm = $("#entLoginForm");
-    const loginBtn = $("#entLoginBtn");
-    const authFlash = $("#entAuthFlash");
-    const forgotPasswordLink = $("#entForgotPasswordLink");
-
-    const onboardingForm = $("#entOnboardingForm");
-    const onboardingBtn = $("#entOnboardingBtn");
-    const onboardingFlash = $("#entOnboardingFlash");
-    const companyNameInput = $("#entCompanyName");
-    const subdomainInput = $("#entSubdomainSlug");
-    const subdomainPreview = $("#entSubdomainPreview");
-
-    const sidebar = $("#entSidebar");
-    const sidebarOverlay = $("#entSidebarOverlay");
-    const mobileToggle = $("#entMobileToggle");
-    const pageTitle = $("#entPageTitle");
-
-    const teamFlash = $("#entTeamFlash");
-    const teamTableBody = $("#entTeamTableBody");
-    const teamAddForm = $("#entTeamAddForm");
-    const teamAddBtn = $("#entTeamAddBtn");
-    const teamEmailInput = $("#entTeamEmail");
-    const teamNameInput = $("#entTeamName");
-    const teamRoleInput = $("#entTeamRole");
-    const teamAccessNotice = $("#entTeamAccessNotice");
-    const settingsFlash = $("#entSettingsFlash");
-    const settingsForm = $("#entSettingsBrandingForm");
-    const settingsCompanyNameInput = $("#entSettingsCompanyName");
-    const settingsLogoUrlInput = $("#entSettingsLogoUrl");
-    const settingsLogoFileInput = $("#entSettingsLogoFileInput");
-    const settingsChooseLogoBtn = $("#entSettingsChooseLogoBtn");
-    const settingsUploadLogoBtn = $("#entSettingsUploadLogoBtn");
-    const settingsLogoFileName = $("#entSettingsLogoFileName");
-    const settingsAccessNotice = $("#entSettingsAccessNotice");
-    const settingsRandomLogoBtn = $("#entSettingsRandomLogoBtn");
-    const settingsSaveBtn = $("#entSettingsSaveBtn");
-    const settingsLogoPreviewImg = $("#entSettingsLogoPreviewImg");
-    const settingsPreviewCompanyName = $("#entSettingsPreviewCompanyName");
-    const settingsPreviewPortalUrl = $("#entSettingsPreviewPortalUrl");
-    const studentsFlash = $("#entStudentsFlash");
-    const studentsTableBody = $("#entStudentsTableBody");
-    const studentsEmpty = $("#entStudentsEmpty");
-    const studentsAccessNotice = $("#entStudentsAccessNotice");
-    const studentsNavBadge = $("#entStudentsNavBadge");
-    const addStudentBtnOverview = $("#entAddStudentBtnOverview");
-    const addStudentBtnStudents = $("#entAddStudentBtnStudents");
-    const studentModal = $("#entStudentModal");
-    const studentModalCloseBtn = $("#entStudentModalClose");
-    const studentModalCancelBtn = $("#entStudentCancelBtn");
-    const studentModalFlash = $("#entStudentModalFlash");
-    const studentForm = $("#entStudentForm");
-    const studentNameInput = $("#entStudentName");
-    const studentCountrySelect = $("#entStudentCountry");
-    const studentVisaTypeSelect = $("#entStudentVisaType");
-    const studentIntakeSelect = $("#entStudentIntake");
-    const studentSaveBtn = $("#entStudentSaveBtn");
-    const studentWorkspaceBackBtn = $("#entStudentWorkspaceBackBtn");
-    const studentWorkspaceStudentName = $("#entStudentWorkspaceStudentName");
-    const studentWorkspaceSubline = $("#entStudentWorkspaceSubline");
-    const studentWorkspaceAvatar = $("#entStudentWorkspaceAvatar");
-    const studentWorkspaceDestination = $("#entStudentWorkspaceDestination");
-    const studentWorkspaceVisaType = $("#entStudentWorkspaceVisaType");
-    const studentWorkspaceIntake = $("#entStudentWorkspaceIntake");
-    const studentWorkspaceProgressLabel = $("#entStudentWorkspaceProgressLabel");
-    const studentWorkspaceProgressPercent = $("#entStudentWorkspaceProgressPercent");
-    const studentWorkspaceProgressBar = $("#entStudentWorkspaceProgressBar");
-    const studentWorkspaceStatus = $("#entStudentWorkspaceStatus");
-    const studentWorkspaceEta = $("#entStudentWorkspaceEta");
-    const studentWorkspaceStageCounter = $("#entStudentWorkspaceStageCounter");
-    const studentWorkspaceCurrentStageTitle = $("#entStudentWorkspaceCurrentStageTitle");
-    const studentWorkspaceCurrentStageDesc = $("#entStudentWorkspaceCurrentStageDesc");
-    const studentWorkspaceChecklist = $("#entStudentWorkspaceChecklist");
-    const studentWorkspaceStageRail = $("#entStudentWorkspaceStageRail");
-    const studentWorkspaceProfileAvatar = $("#entStudentWorkspaceProfileAvatar");
-    const studentWorkspaceProfileName = $("#entStudentWorkspaceProfileName");
-    const studentWorkspaceProfileMeta = $("#entStudentWorkspaceProfileMeta");
-    const studentWorkspaceOptionList = $("#entStudentWorkspaceOptionList");
-    const studentWorkspaceOptionHint = $("#entStudentWorkspaceOptionHint");
-
-    const userNameEl = $("#entUserName");
-    const userAvatarImgEl = $("#entUserAvatarImg");
-    const userRoleEl = $(".ent-user-role");
-    const orgNameEl = $("#entOrgName");
-    const orgCardAvatarImgEl = $("#entOrgCardAvatarImg");
-    const orgPortalEl = $("#entOrgPortalUrl");
-    const sidebarOrgNameEl = $("#entSidebarOrgName");
-    const sidebarOrgAvatarImgEl = $("#entSidebarOrgAvatarImg");
-    const sidebarOrgPortalEl = $("#entSidebarOrgPortal");
-    const sidebarLogoutBtn = $("#entSidebarLogoutBtn");
-
-    const turnstileWrap = $("#entTurnstileWrap");
-    const turnstileHint = $("#entTurnstileHint");
-
-    const SECTION_MAP = {
-        overview: "entSectionOverview",
-        students: "entSectionStudents",
-        student_workspace: "entSectionStudentWorkspace",
-        visas: "entSectionVisas",
-        documents: "entSectionDocuments",
-        analytics: "entSectionAnalytics",
-        compliance: "entSectionCompliance",
-        team: "entSectionTeam",
-        settings: "entSectionSettings",
-    };
-
-    const TITLE_MAP = {
-        overview: "Overview",
-        students: "Students",
-        student_workspace: "Student Journey",
-        visas: "Visa Cases",
-        documents: "Documents",
-        analytics: "Analytics",
-        compliance: "Compliance",
-        team: "Team",
-        settings: "Settings",
-    };
-
-    const ROLE_LABEL = {
-        admin: "Organization Admin",
-        editor: "Editor",
-        viewer: "Viewer",
-    };
-
-    const WORKSPACE_PROFILE_OPTIONS = [
-        {
-            key: "journey",
-            label: "Journey Overview",
-            description: "Track stage progression, current focus, and estimated completion timeline.",
-            hint: "Use this as your default command center for end-to-end journey progress.",
-        },
-        {
-            key: "documents",
-            label: "Documents",
-            description: "Review document readiness and required evidence for the current phase.",
-            hint: "Prioritize missing records, naming consistency, and support-file validation.",
-        },
-        {
-            key: "interview",
-            label: "Interview Prep",
-            description: "Focus on response clarity, mock practice, and interview confidence.",
-            hint: "Use this view before interviews to tighten messaging and reduce rejection risk.",
-        },
-        {
-            key: "finance",
-            label: "Finance & Fees",
-            description: "Track sponsor proof, tuition support, and visa fee readiness.",
-            hint: "Keep this area updated to avoid last-minute financial documentation blocks.",
-        },
-        {
-            key: "notes",
-            label: "Notes & Risk Flags",
-            description: "Capture advisor notes, blockers, and escalation follow-ups.",
-            hint: "Use this area to coordinate internal follow-ups and risk mitigation actions.",
-        },
-    ];
-
-    function getEnterpriseRootDomainForPage() {
-        const host = String(window.location.hostname || "").trim().toLowerCase();
-        if (host === "localtest.me" || host.endsWith(".localtest.me")) {
-            return "localtest.me";
-        }
-        return "rilono.com";
-    }
-
-    function getEnterprisePortalOriginPrefix() {
-        const host = String(window.location.hostname || "").trim().toLowerCase();
-        if (host === "localtest.me" || host.endsWith(".localtest.me")) {
-            return `${window.location.protocol || "http:"}//`;
-        }
-        return "https://";
-    }
-
-    function getEnterprisePortalPortSuffix() {
-        const host = String(window.location.hostname || "").trim().toLowerCase();
-        if (host === "localtest.me" || host.endsWith(".localtest.me")) {
-            return window.location.port ? `:${window.location.port}` : "";
-        }
-        return "";
-    }
-
-    const ENTERPRISE_ROOT_DOMAIN = getEnterpriseRootDomainForPage();
-    const CONTACT_SALES_URL = "https://rilono.com/contact";
-    const SUBDOMAIN_MIN_LENGTH = 3;
-    const SUBDOMAIN_MAX_LENGTH = 32;
-    const SUBDOMAIN_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$/;
-    const RESERVED_SUBDOMAINS = new Set([
-        "www",
-        "app",
-        "api",
-        "admin",
-        "auth",
-        "portal",
-        "enterprise",
-        "mail",
-        "status",
-        "support",
-        "docs",
-        "blog",
-        "cdn",
-        "m",
-        "ftp",
-        "smtp",
-        "imap",
-        "pop",
-        "rilono",
-    ]);
-
-    const state = {
-        user: null,
-        organization: null,
-        membership: null,
-        permissions: {
-            can_view_data: false,
-            can_edit_data: false,
-            can_manage_users: false,
-        },
-        currentSection: "overview",
-        teamMembers: [],
-        teamLoading: false,
-        students: [],
-        studentsLoading: false,
-        activeStudentWorkspaceId: null,
-        activeWorkspaceOption: "journey",
-        studentOptions: {
-            countries: [],
-            visaTypesByCountry: {},
-            intakesByCountryVisa: {},
-        },
-        turnstile: {
-            siteKey: "",
-            widgetId: null,
-        },
-    };
-
-    function hideAllScreens() {
-        closeStudentModal();
-        if (authScreen) authScreen.style.display = "none";
-        if (dashboard) dashboard.style.display = "none";
-        if (onboardingScreen) onboardingScreen.style.display = "none";
-    }
-
-    function normalizeRole(role) {
-        const raw = String(role || "").trim().toLowerCase();
-        if (raw === "owner" || raw === "org_admin" || raw === "organization_admin") return "admin";
-        if (raw === "edit" || raw === "write") return "editor";
-        if (raw === "read" || raw === "view") return "viewer";
-        if (raw === "admin" || raw === "editor" || raw === "viewer") return raw;
-        return "viewer";
-    }
-
-    function roleToLabel(role) {
-        const normalized = normalizeRole(role);
-        return ROLE_LABEL[normalized] || "Viewer";
-    }
-
-    function getInitials(source, fallback) {
-        const value = String(source || "").trim();
-        if (!value) return fallback || "U";
-
-        const words = value
-            .replace(/[^a-zA-Z0-9\s@._-]/g, " ")
-            .split(/\s+/)
-            .filter(Boolean);
-
-        if (words.length >= 2) {
-            return (words[0][0] + words[1][0]).toUpperCase();
-        }
-
-        if (value.includes("@")) {
-            const local = value.split("@")[0];
-            const clean = local.replace(/[^a-zA-Z0-9]/g, "");
-            return (clean.slice(0, 2) || fallback || "U").toUpperCase();
-        }
-
-        return value.slice(0, 2).toUpperCase();
-    }
-
-    /** Deterministic “random” photo per org/user (stable across sessions). */
-    function hashStringFnv1a(input) {
-        const str = String(input || "");
-        let h = 2166136261;
-        for (let i = 0; i < str.length; i += 1) {
-            h ^= str.charCodeAt(i);
-            h = Math.imul(h, 16777619);
-        }
-        return (h >>> 0).toString(16);
-    }
-
-    function picsumPortraitUrl(seedKey, size) {
-        const seed = hashStringFnv1a(seedKey).replace(/[^a-f0-9]/g, "") || "0";
-        const n = Math.max(48, Math.min(512, Number(size) || 128));
-        return `https://picsum.photos/seed/rilono-${seed}/${n}/${n}`;
-    }
-
-    function resolveOrganizationLogoUrl(org, size) {
-        const logoFromApi = org && org.logo_url ? String(org.logo_url).trim() : "";
-        if (logoFromApi) return logoFromApi;
-
-        const orgId = org && org.id != null ? String(org.id) : "pending";
-        const companyName = org && org.company_name ? String(org.company_name) : "";
-        const subdomain = org && org.subdomain_slug ? String(org.subdomain_slug) : "";
-        return picsumPortraitUrl(`org-${orgId}|${companyName}|${subdomain}`, size || 128);
-    }
-
-    function escapeHtml(input) {
-        return String(input == null ? "" : input)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#039;");
-    }
-
-    function formatDateTime(isoString) {
-        if (!isoString) return "Never";
-        const date = new Date(isoString);
-        if (Number.isNaN(date.getTime())) return "Never";
-        return new Intl.DateTimeFormat(undefined, {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-        }).format(date);
-    }
-
-    function normalizeSubdomainInput(rawValue) {
-        return String(rawValue || "")
-            .trim()
-            .toLowerCase()
-            .replace(/\s+/g, "-");
-    }
-
-    function buildPortalUrlPreview(slug) {
-        const safeSlug = String(slug || "").trim().toLowerCase();
-        const displaySlug = safeSlug || "your-company";
-        return `${getEnterprisePortalOriginPrefix()}${displaySlug}.${ENTERPRISE_ROOT_DOMAIN}${getEnterprisePortalPortSuffix()}/enterprise`;
-    }
-
-    function updateSubdomainPreview() {
-        if (!subdomainPreview) return;
-        const slug = normalizeSubdomainInput(subdomainInput ? subdomainInput.value : "");
-        subdomainPreview.textContent = buildPortalUrlPreview(slug);
-    }
-
-    function validateSubdomainOrError(slug) {
-        const normalized = normalizeSubdomainInput(slug);
-        if (!normalized) {
-            return "Organization URL is required.";
-        }
-        if (normalized.length < SUBDOMAIN_MIN_LENGTH || normalized.length > SUBDOMAIN_MAX_LENGTH) {
-            return `Organization URL must be ${SUBDOMAIN_MIN_LENGTH}-${SUBDOMAIN_MAX_LENGTH} characters.`;
-        }
-        if (RESERVED_SUBDOMAINS.has(normalized)) {
-            return "This organization URL is reserved. Please choose a different one.";
-        }
-        if (!SUBDOMAIN_PATTERN.test(normalized)) {
-            return (
-                "Organization URL can only contain lowercase letters, numbers, and hyphens, " +
-                "and cannot start or end with a hyphen."
-            );
-        }
-        return "";
-    }
-
-    function setButtonLoading(btn, loading, loadingText, idleText) {
-        if (!btn) return;
-        if (!btn.dataset.defaultText) {
-            btn.dataset.defaultText = idleText || btn.textContent || "";
-        }
-        btn.disabled = !!loading;
-        if (loading) {
-            btn.textContent = loadingText;
-            return;
-        }
-        btn.textContent = idleText || btn.dataset.defaultText;
-    }
-
-    function showInlineFlash(el, message, type) {
-        if (!el) return;
-        el.textContent = message || "";
-        el.className = `ent-flash ${type || "info"}`;
-        el.style.display = "";
-    }
-
-    function hideInlineFlash(el) {
-        if (!el) return;
-        el.style.display = "none";
-    }
-
-    function showAuthFlash(message, type = "info") {
-        showInlineFlash(authFlash, message, type);
-    }
-
-    function isInviteOnlyAccessError(error) {
-        const detail = String(error && error.detail ? error.detail : "").toLowerCase();
-        const status = Number(error && error.status ? error.status : 0);
-        return status === 403 && detail.includes("invite-only");
-    }
-
-    function showAuthInviteOnlyFlash() {
-        if (!authFlash) return;
-        authFlash.className = "ent-flash info";
-        authFlash.innerHTML =
-            `Enterprise access is invite-only. ` +
-            `<a href="${CONTACT_SALES_URL}" class="ent-flash-link">Contact Sales</a> ` +
-            `to request access.`;
-        authFlash.style.display = "";
-    }
-
-    function hideAuthFlash() {
-        hideInlineFlash(authFlash);
-    }
-
-    function showOnboardingFlash(message, type = "info") {
-        showInlineFlash(onboardingFlash, message, type);
-    }
-
-    function hideOnboardingFlash() {
-        hideInlineFlash(onboardingFlash);
-    }
-
-    function showTeamFlash(message, type = "info") {
-        showInlineFlash(teamFlash, message, type);
-    }
-
-    function hideTeamFlash() {
-        hideInlineFlash(teamFlash);
-    }
-
-    function showStudentsFlash(message, type = "info") {
-        showInlineFlash(studentsFlash, message, type);
-    }
-
-    function hideStudentsFlash() {
-        hideInlineFlash(studentsFlash);
-    }
-
-    function showSettingsFlash(message, type = "info") {
-        showInlineFlash(settingsFlash, message, type);
-    }
-
-    function hideSettingsFlash() {
-        hideInlineFlash(settingsFlash);
-    }
-
-    function openMobileSidebar() {
-        if (sidebar) sidebar.classList.add("open");
-        if (sidebarOverlay) sidebarOverlay.classList.add("open");
-    }
-
-    function closeMobileSidebar() {
-        if (sidebar) sidebar.classList.remove("open");
-        if (sidebarOverlay) sidebarOverlay.classList.remove("open");
-    }
-
-    function switchToSection(sectionKey) {
-        if (!SECTION_MAP[sectionKey]) return;
-        state.currentSection = sectionKey;
-
-        $$(".ent-section").forEach((section) => section.classList.remove("active"));
-        const target = document.getElementById(SECTION_MAP[sectionKey]);
-        if (target) target.classList.add("active");
-
-        $$(".ent-nav-item[data-section]").forEach((button) => {
-            const navSection = String(button.dataset.section || "");
-            const shouldBeActive = sectionKey === "student_workspace"
-                ? navSection === "students"
-                : navSection === sectionKey;
-            button.classList.toggle("active", shouldBeActive);
-        });
-
-        if (pageTitle) {
-            pageTitle.textContent = TITLE_MAP[sectionKey] || "Overview";
-        }
-
-        if (sectionKey === "team") {
-            loadTeamMembers();
-        }
-        if (sectionKey === "students") {
-            loadStudents();
-        }
-        if (sectionKey === "student_workspace") {
-            const workspaceId = Number(state.activeStudentWorkspaceId);
-            if (Number.isFinite(workspaceId) && workspaceId > 0) {
-                renderStudentWorkspaceById(workspaceId);
-            }
-        }
-        if (sectionKey === "settings") {
-            hideSettingsFlash();
-            syncSettingsFormFromState();
-            applySettingsAccessState();
-        }
-
-        closeMobileSidebar();
-    }
-
-    function showAuthScreen() {
-        hideAllScreens();
-        if (authScreen) authScreen.style.display = "";
-    }
-
-    function showDashboardShell() {
-        hideAllScreens();
-        if (dashboard) dashboard.style.display = "";
-    }
-
-    function showOnboardingScreen() {
-        if (!onboardingScreen) return;
-        hideAllScreens();
-        onboardingScreen.style.display = "flex";
-        if (companyNameInput && !companyNameInput.value && state.organization && state.organization.company_name) {
-            companyNameInput.value = state.organization.company_name;
-        }
-        if (subdomainInput && !subdomainInput.value && state.organization && state.organization.subdomain_slug) {
-            subdomainInput.value = state.organization.subdomain_slug;
-        }
-        updateSubdomainPreview();
-        if (companyNameInput && !companyNameInput.value) {
-            companyNameInput.focus();
-        } else if (subdomainInput && !subdomainInput.value) {
-            subdomainInput.focus();
-        }
-    }
-
-    function hideOnboardingScreen() {
-        if (!onboardingScreen) return;
-        onboardingScreen.style.display = "none";
-    }
-
-    function applyOrganizationUI() {
-        const org = state.organization;
-        if (!org) {
-            if (orgCardAvatarImgEl) {
-                orgCardAvatarImgEl.src = "/static/logo.png";
-                orgCardAvatarImgEl.alt = "";
-            }
-            if (sidebarOrgAvatarImgEl) {
-                sidebarOrgAvatarImgEl.src = "/static/logo.png";
-                sidebarOrgAvatarImgEl.alt = "";
-            }
-            if (orgNameEl) orgNameEl.textContent = "Your organization";
-            if (sidebarOrgNameEl) sidebarOrgNameEl.textContent = "Your organization";
-            if (orgPortalEl) orgPortalEl.textContent = "Enterprise Plan";
-            if (sidebarOrgPortalEl) sidebarOrgPortalEl.textContent = `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
-            if (settingsPreviewCompanyName) settingsPreviewCompanyName.textContent = "Your organization";
-            if (settingsPreviewPortalUrl) settingsPreviewPortalUrl.textContent = `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
-            updateSubdomainPreview();
-            return;
-        }
-
-        const rawCompanyName = org.company_name ? String(org.company_name).trim() : "";
-        const companyName = rawCompanyName || "Enterprise Organization";
-        const subdomainSlug = org.subdomain_slug || "";
-        const photoUrl = resolveOrganizationLogoUrl(org, 128);
-
-        if (orgCardAvatarImgEl) {
-            orgCardAvatarImgEl.src = photoUrl;
-            orgCardAvatarImgEl.alt = `${companyName} logo`;
-        }
-        if (sidebarOrgAvatarImgEl) {
-            sidebarOrgAvatarImgEl.src = photoUrl;
-            sidebarOrgAvatarImgEl.alt = `${companyName} logo`;
-        }
-
-        if (orgNameEl) orgNameEl.textContent = companyName;
-        if (sidebarOrgNameEl) sidebarOrgNameEl.textContent = companyName;
-        if (orgPortalEl) {
-            orgPortalEl.textContent = subdomainSlug
-                ? `${subdomainSlug}.${ENTERPRISE_ROOT_DOMAIN}`
-                : "Enterprise Plan";
-        }
-        if (sidebarOrgPortalEl) {
-            sidebarOrgPortalEl.textContent = subdomainSlug
-                ? `${subdomainSlug}.${ENTERPRISE_ROOT_DOMAIN}`
-                : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
-        }
-        if (settingsPreviewCompanyName) settingsPreviewCompanyName.textContent = companyName;
-        if (settingsPreviewPortalUrl) {
-            settingsPreviewPortalUrl.textContent = subdomainSlug
-                ? `${subdomainSlug}.${ENTERPRISE_ROOT_DOMAIN}`
-                : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
-        }
-        if (settingsLogoPreviewImg) {
-            settingsLogoPreviewImg.src = photoUrl;
-            settingsLogoPreviewImg.alt = `${companyName} logo preview`;
-        }
-        if (companyNameInput && rawCompanyName && !companyNameInput.value) {
-            companyNameInput.value = rawCompanyName;
-        }
-        if (subdomainInput && subdomainSlug && !subdomainInput.value) {
-            subdomainInput.value = subdomainSlug;
-        }
-        updateSubdomainPreview();
-    }
-
-    function applySettingsAccessState() {
-        const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
-        if (settingsAccessNotice) {
-            settingsAccessNotice.textContent = canManageUsers
-                ? "You can update your organization name and branding from here."
-                : "View-only mode: only organization admins can change branding settings.";
-        }
-        if (settingsCompanyNameInput) settingsCompanyNameInput.disabled = !canManageUsers;
-        if (settingsLogoUrlInput) settingsLogoUrlInput.disabled = !canManageUsers;
-        if (settingsLogoFileInput) settingsLogoFileInput.disabled = !canManageUsers;
-        if (settingsChooseLogoBtn) settingsChooseLogoBtn.disabled = !canManageUsers;
-        if (settingsUploadLogoBtn) settingsUploadLogoBtn.disabled = !canManageUsers;
-        if (settingsRandomLogoBtn) settingsRandomLogoBtn.disabled = !canManageUsers;
-        if (settingsSaveBtn) settingsSaveBtn.disabled = !canManageUsers;
-    }
-
-    function syncSettingsFormFromState() {
-        const org = state.organization || {};
-        if (settingsCompanyNameInput) {
-            settingsCompanyNameInput.value = org.company_name ? String(org.company_name) : "";
-        }
-        if (settingsLogoUrlInput) {
-            settingsLogoUrlInput.value = org.logo_url ? String(org.logo_url) : "";
-        }
-        const previewUrl = resolveOrganizationLogoUrl(org, 128);
-        if (settingsLogoPreviewImg) {
-            settingsLogoPreviewImg.src = previewUrl;
-            settingsLogoPreviewImg.alt = `${org.company_name || "Organization"} logo preview`;
-        }
-        if (settingsPreviewCompanyName) {
-            settingsPreviewCompanyName.textContent = (org.company_name || "Your organization").trim();
-        }
-        if (settingsPreviewPortalUrl) {
-            const slug = (org.subdomain_slug || "").trim();
-            settingsPreviewPortalUrl.textContent = slug
-                ? `${slug}.${ENTERPRISE_ROOT_DOMAIN}`
-                : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
-        }
-        if (settingsLogoFileInput) {
-            settingsLogoFileInput.value = "";
-        }
-        if (settingsLogoFileName) {
-            settingsLogoFileName.textContent = "No file selected.";
-        }
-    }
-
-    function updateSettingsPreviewFromInputs() {
-        const inputName = settingsCompanyNameInput ? settingsCompanyNameInput.value.trim() : "";
-        const inputLogo = settingsLogoUrlInput ? settingsLogoUrlInput.value.trim() : "";
-        const fallbackOrg = state.organization || {};
-        const previewName = inputName || fallbackOrg.company_name || "Your organization";
-        const previewSlug = (fallbackOrg.subdomain_slug || "").trim();
-        const previewLogo = inputLogo || resolveOrganizationLogoUrl(fallbackOrg, 128);
-
-        if (settingsPreviewCompanyName) settingsPreviewCompanyName.textContent = previewName;
-        if (settingsPreviewPortalUrl) {
-            settingsPreviewPortalUrl.textContent = previewSlug
-                ? `${previewSlug}.${ENTERPRISE_ROOT_DOMAIN}`
-                : `your-company.${ENTERPRISE_ROOT_DOMAIN}`;
-        }
-        if (settingsLogoPreviewImg) {
-            settingsLogoPreviewImg.src = previewLogo;
-            settingsLogoPreviewImg.alt = `${previewName} logo preview`;
-        }
-    }
-
-    function buildStudentVisaChipClass(visaType) {
-        const value = String(visaType || "").toUpperCase();
-        if (value.startsWith("F-")) return "ent-chip-blue";
-        if (value.startsWith("J-")) return "ent-chip-purple";
-        if (value.startsWith("M-")) return "ent-chip-amber";
-        if (value.includes("PERMIT")) return "ent-chip-green";
-        return "ent-chip-gray";
-    }
-
-    function buildVisaJourneyStagesForStudent(student) {
-        const countryCode = String(student && student.study_country_code ? student.study_country_code : "")
-            .trim()
-            .toUpperCase();
-        const countryName = String(student && student.study_country_name ? student.study_country_name : "")
-            .trim() || "destination country";
-        const visaType = String(student && student.visa_type ? student.visa_type : "")
-            .trim() || "student visa";
-        const visaKey = visaType.toLowerCase();
-
-        if (countryCode === "US") {
-            if (visaKey.includes("j-1")) {
-                return [
-                    { title: "Program Sponsor Confirmation", description: "Secure sponsorship and receive your DS-2019 form for the exchange category." },
-                    { title: "SEVIS and Funding Readiness", description: "Pay I-901 SEVIS fee and prepare clear funding and program-support documents." },
-                    { title: "Application Filing", description: "Complete DS-160, pay visa fee, and schedule biometric/interview slots." },
-                    { title: "Interview Preparation", description: "Prepare program purpose, return intent, and supporting academic or sponsor records." },
-                    { title: "Interview and Visa Decision", description: "Attend consulate interview and complete passport submission if approved." },
-                    { title: "Arrival and Program Check-in", description: "Travel with DS-2019 packet and finish SEVIS activation on arrival." },
-                ];
-            }
-            if (visaKey.includes("m-1")) {
-                return [
-                    { title: "School Acceptance and I-20", description: "Finalize vocational program admission and obtain your M-1 I-20." },
-                    { title: "SEVIS and Finance Evidence", description: "Pay SEVIS fee and prepare tuition, sponsor, and living-expense documentation." },
-                    { title: "DS-160 Submission", description: "Complete DS-160, pay visa fee, and set biometric/interview appointments." },
-                    { title: "Document Bundle Review", description: "Compile I-20, passport, finances, and vocational intent justification." },
-                    { title: "Consular Interview", description: "Attend interview and complete passport processing for visa stamping." },
-                    { title: "Travel and Entry Compliance", description: "Enter the US with M-1 documents and follow school reporting requirements." },
-                ];
-            }
-            return [
-                { title: "Admission and I-20 Issuance", description: "Confirm admission in the selected program and secure your F-1 I-20." },
-                { title: "SEVIS and Finance Preparation", description: "Pay I-901 SEVIS fee and finalize strong financial sponsorship evidence." },
-                { title: "DS-160 and Fee Payment", description: "Submit DS-160, pay visa fee, and create your interview profile." },
-                { title: "Interview Scheduling and Documents", description: "Book slots and organize passport, I-20, academics, and funding proofs." },
-                { title: "Visa Interview and Decision", description: "Attend interview and complete passport submission if approved." },
-                { title: "Pre-departure and Port-of-Entry", description: "Plan travel and carry compliant documents for smooth US entry." },
-            ];
-        }
-
-        if (countryCode === "UK") {
-            if (visaKey.includes("child")) {
-                return [
-                    { title: "School Offer and CAS", description: "Obtain a valid CAS from the sponsoring UK institution." },
-                    { title: "Guardian and Financial Proofs", description: "Prepare parental consent, guardian details, and funds evidence." },
-                    { title: "Application and IHS", description: "Submit UK Student route application and complete Immigration Health Surcharge." },
-                    { title: "Biometrics and Document Upload", description: "Attend biometrics and submit required supporting records." },
-                    { title: "Decision and Passport Return", description: "Track decision and receive passport with vignette if approved." },
-                    { title: "Arrival and BRP/eVisa Steps", description: "Travel to UK and complete post-arrival identity and residence formalities." },
-                ];
-            }
-            return [
-                { title: "Offer Acceptance and CAS", description: "Secure university offer and receive CAS for UK Student Visa processing." },
-                { title: "Financial Evidence and TB Test", description: "Prepare funds proof and TB certificate where applicable." },
-                { title: "Application and IHS Payment", description: "Submit visa application and pay required IHS charges." },
-                { title: "Biometric Appointment", description: "Complete biometrics and upload passport, CAS, and supporting files." },
-                { title: "Decision and Passport Collection", description: "Track processing and collect passport after decision." },
-                { title: "Travel and Post-arrival Setup", description: "Enter the UK and complete BRP or eVisa onboarding steps." },
-            ];
-        }
-
-        if (countryCode === "CA") {
-            if (visaKey.includes("sds")) {
-                return [
-                    { title: "LOA and SDS Eligibility", description: "Confirm letter of acceptance and SDS eligibility requirements." },
-                    { title: "GIC, Tuition, and English Proof", description: "Arrange GIC, tuition payment proof, and accepted language scores." },
-                    { title: "Application Package Submission", description: "Submit SDS study permit application with complete supporting evidence." },
-                    { title: "Biometrics and Medical Steps", description: "Finish biometrics and medical checks if requested." },
-                    { title: "Decision and Passport Request", description: "Track IRCC updates and complete passport submission if approved." },
-                    { title: "Travel and Border Documents", description: "Carry POE letter, LOA, and financials for Canadian entry." },
-                ];
-            }
-            return [
-                { title: "Offer and Program Confirmation", description: "Secure admission and validate study permit eligibility." },
-                { title: "Funding and Core Documents", description: "Prepare tuition plans, sponsor support, and statement of purpose." },
-                { title: "Study Permit Application", description: "Submit complete application with correct forms and evidence." },
-                { title: "Biometrics and Medical", description: "Complete required biometrics and medical procedures." },
-                { title: "Decision and Passport Stamping", description: "Track approval and submit passport if requested." },
-                { title: "Arrival and POE Compliance", description: "Travel with permit documents and complete entry checks at POE." },
-            ];
-        }
-
-        if (countryCode === "AU") {
-            return [
-                { title: "Admission and COE", description: "Confirm admission and obtain your Confirmation of Enrolment (COE)." },
-                { title: "OSHC and Financial Setup", description: "Arrange OSHC coverage and prepare finance documents." },
-                { title: "GS and Document Preparation", description: "Draft Genuine Student statement and compile academics and identity records." },
-                { title: "Subclass Application Filing", description: `Submit ${visaType} application with complete supporting package.` },
-                { title: "Biometrics/Medical and Review", description: "Complete requested checks and respond to case officer updates." },
-                { title: "Grant and Travel Readiness", description: "Receive visa grant and finalize travel plus enrollment checkpoints." },
-            ];
-        }
-
-        if (countryCode === "DE") {
-            return [
-                { title: "Admission and Program Verification", description: "Confirm admission and validate course eligibility for German study route." },
-                { title: "Blocked Account and Insurance", description: "Arrange blocked account funds and acceptable health insurance proof." },
-                { title: "Appointment and Document File", description: "Book embassy appointment and prepare translated legal documents if needed." },
-                { title: "Visa Interview Submission", description: "Attend interview and submit complete Type D or applicant-visa file." },
-                { title: "Decision and Passport Collection", description: "Track processing timeline and collect visa decision." },
-                { title: "Arrival and Residence Registration", description: "Complete city registration and residence permit formalities after arrival." },
-            ];
-        }
-
-        if (countryCode === "FR") {
-            return [
-                { title: "Admission and Campus France", description: "Secure admission and complete Campus France process where required." },
-                { title: "Funding and Stay Documents", description: "Prepare finance proofs, accommodation details, and travel insurance." },
-                { title: "VLS-TS Application", description: "Submit long-stay student visa application with supporting records." },
-                { title: "Biometrics and Interview", description: "Attend appointment and complete biometrics or interview instructions." },
-                { title: "Decision and Passport Return", description: "Track processing and receive decision outcome." },
-                { title: "Arrival and VLS-TS Validation", description: "Validate your long-stay status and complete local registration tasks." },
-            ];
-        }
-
-        if (countryCode === "IE") {
-            return [
-                { title: "Offer and Fee Confirmation", description: "Confirm institute offer and initial fee payment evidence." },
-                { title: "Financial and Insurance Readiness", description: "Prepare sponsor funds and required private insurance proofs." },
-                { title: "Visa Application Filing", description: "Submit D Study visa application and upload all mandatory records." },
-                { title: "Supporting Documents Review", description: "Resolve checklist gaps and clarify purpose-of-study narrative." },
-                { title: "Decision and Passport Handling", description: "Track outcome and complete passport submission or return." },
-                { title: "Arrival and IRP Registration", description: "Complete post-arrival registration and immigration compliance in Ireland." },
-            ];
-        }
-
-        if (countryCode === "NZ") {
-            return [
-                { title: "Admission and Fee Planning", description: "Receive offer and confirm tuition/payment timeline." },
-                { title: "Funds and Health Documents", description: "Prepare finances, medicals, and police clearances if required." },
-                { title: "Student Visa Application", description: "Submit Fee Paying Student Visa application with full evidence." },
-                { title: "Identity Checks and Updates", description: "Complete biometrics or additional identity checks when requested." },
-                { title: "Decision and Travel Prep", description: "Track visa decision and finalize travel documents." },
-                { title: "Arrival and Enrollment Confirmation", description: "Arrive in New Zealand and complete institution onboarding." },
-            ];
-        }
-
-        return [
-            { title: "Eligibility and Program Confirmation", description: `Confirm admission path and eligibility for ${visaType} in ${countryName}.` },
-            { title: "Documentation and Financial Readiness", description: "Prepare identity, academics, and sponsor/financial support proofs." },
-            { title: "Visa Application Submission", description: "Submit forms, pay fees, and upload complete evidence." },
-            { title: "Biometrics or Interview Stage", description: "Complete biometrics/interview steps if required by the consulate." },
-            { title: "Decision and Passport Processing", description: "Track status updates and complete passport issuance steps." },
-            { title: "Pre-departure Compliance", description: "Finalize arrival checklist and ensure entry-ready documentation." },
-        ];
-    }
-
-    function parseStudentIntakeDate(intakeLabel) {
-        const raw = String(intakeLabel || "").trim().toLowerCase();
-        if (!raw) return null;
-
-        const monthMap = {
-            january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-            july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
-            spring: 0, summer: 4, fall: 8, winter: 10,
-        };
-
-        let matchedMonth = null;
-        Object.keys(monthMap).forEach((key) => {
-            if (matchedMonth !== null) return;
-            if (raw.includes(key)) matchedMonth = monthMap[key];
-        });
-        if (matchedMonth === null) return null;
-
-        const yearMatch = raw.match(/\b(20\d{2})\b/);
-        const year = yearMatch ? Number(yearMatch[1]) : null;
-        if (!Number.isFinite(year)) return null;
-        return new Date(Date.UTC(year, matchedMonth, 1, 0, 0, 0));
-    }
-
-    function estimateStudentJourneyProgress(student, stageCount) {
-        const intakeDate = parseStudentIntakeDate(student && student.intake);
-        const now = new Date();
-        let progressPercent = 12;
-        let etaText = "Intake timeline unavailable";
-
-        if (intakeDate && !Number.isNaN(intakeDate.getTime())) {
-            const monthsDiff = ((intakeDate.getUTCFullYear() - now.getUTCFullYear()) * 12)
-                + (intakeDate.getUTCMonth() - now.getUTCMonth());
-            if (monthsDiff >= 8) progressPercent = 12;
-            else if (monthsDiff >= 5) progressPercent = 24;
-            else if (monthsDiff >= 3) progressPercent = 38;
-            else if (monthsDiff >= 1) progressPercent = 52;
-            else if (monthsDiff === 0) progressPercent = 68;
-            else progressPercent = 84;
-
-            if (monthsDiff > 1) etaText = `${monthsDiff} months to intake`;
-            else if (monthsDiff === 1) etaText = "1 month to intake";
-            else if (monthsDiff === 0) etaText = "Intake month in progress";
-            else if (monthsDiff === -1) etaText = "Intake started last month";
-            else etaText = "Intake already started";
-        }
-
-        const safeStageCount = Math.max(1, Number(stageCount) || 1);
-        const currentStageIndex = Math.max(
-            0,
-            Math.min(safeStageCount - 1, Math.floor(progressPercent / (100 / safeStageCount)))
-        );
-
-        let statusLabel = "On track";
-        if (progressPercent >= 80) statusLabel = "Late-stage execution";
-        else if (progressPercent >= 50) statusLabel = "Interview readiness window";
-        else if (progressPercent >= 30) statusLabel = "Document build-up phase";
-        else statusLabel = "Early preparation phase";
-
-        return {
-            progressPercent,
-            currentStageIndex,
-            statusLabel,
-            etaText,
-        };
-    }
-
-    function buildStudentStageChecklist(stage, student) {
-        const countryName = String(student && student.study_country_name ? student.study_country_name : "destination country");
-        const visaType = String(student && student.visa_type ? student.visa_type : "visa");
-        const stageTitle = String(stage && stage.title ? stage.title : "").toLowerCase();
-
-        if (stageTitle.includes("interview")) {
-            return [
-                `Prepare concise answers matching ${visaType} intent and study goals.`,
-                "Run at least 2 mock interview rounds and refine weak areas.",
-                `Organize interview-day documents for ${countryName} consular review.`,
-            ];
-        }
-        if (stageTitle.includes("application") || stageTitle.includes("submission")) {
-            return [
-                "Complete all required form fields without inconsistencies.",
-                "Cross-check fee payment receipts and appointment references.",
-                "Upload supporting evidence in the required format and order.",
-            ];
-        }
-        if (stageTitle.includes("arrival") || stageTitle.includes("travel")) {
-            return [
-                "Prepare travel packet: passport, approval letter, and admission records.",
-                "Keep sponsor and accommodation details ready for border checks.",
-                "Plan first-week compliance tasks after reaching destination.",
-            ];
-        }
-        return [
-            `Collect mandatory documents for ${visaType}.`,
-            "Validate financial and identity records for consistency.",
-            "Review this stage with your organization admin before proceeding.",
-        ];
-    }
-
-    function getWorkspaceOptionByKey(optionKey) {
-        const normalizedKey = String(optionKey || "").trim().toLowerCase();
-        return WORKSPACE_PROFILE_OPTIONS.find((option) => option.key === normalizedKey) || WORKSPACE_PROFILE_OPTIONS[0];
-    }
-
-    function buildWorkspaceOptionContext(optionKey, currentStage, progress) {
-        const stageTitle = currentStage && currentStage.title ? currentStage.title : "Current stage";
-        const stageDescription = currentStage && currentStage.description
-            ? currentStage.description
-            : "No stage details available.";
-
-        if (optionKey === "documents") {
-            return {
-                subline: "Document-focused tracking for this student's journey",
-                progressLabel: "Document readiness coverage",
-                statusLabel: "Document preparation focus",
-                stageTitle: `${stageTitle} · Document Focus`,
-                stageDescription: `Focus on collecting and validating documents for this phase. ${stageDescription}`,
-            };
-        }
-        if (optionKey === "interview") {
-            return {
-                subline: "Interview-readiness view for stronger outcome confidence",
-                progressLabel: "Interview preparation readiness",
-                statusLabel: "Interview preparation focus",
-                stageTitle: `${stageTitle} · Interview Focus`,
-                stageDescription: `Refine speaking clarity, response confidence, and consistency for this stage. ${stageDescription}`,
-            };
-        }
-        if (optionKey === "finance") {
-            return {
-                subline: "Finance and fee readiness focus for this student's case",
-                progressLabel: "Finance and fee readiness",
-                statusLabel: "Finance verification focus",
-                stageTitle: `${stageTitle} · Finance Focus`,
-                stageDescription: `Verify funds, sponsor proofs, and fee evidence before moving ahead. ${stageDescription}`,
-            };
-        }
-        if (optionKey === "notes") {
-            return {
-                subline: "Advisor notes and risk-flag view for student-specific follow-up",
-                progressLabel: "Advisor follow-up coverage",
-                statusLabel: "Advisory follow-up focus",
-                stageTitle: `${stageTitle} · Risk and Notes`,
-                stageDescription: `Capture blockers, case notes, and escalation points linked to this stage. ${stageDescription}`,
-            };
-        }
-        return {
-            subline: "Dedicated student journey progress and next actions",
-            progressLabel: "Estimated journey completion",
-            statusLabel: progress && progress.statusLabel ? progress.statusLabel : "On track",
-            stageTitle,
-            stageDescription,
-        };
-    }
-
-    function buildWorkspaceOptionChecklist(optionKey, baseChecklist, student, currentStage) {
-        const stageTitle = String(currentStage && currentStage.title ? currentStage.title : "this stage");
-        const countryName = String(student && student.study_country_name ? student.study_country_name : "destination country");
-        const visaType = String(student && student.visa_type ? student.visa_type : "visa");
-        const extraChecklistByOption = {
-            documents: [
-                `Create a dedicated folder for ${stageTitle} documents with clear file naming.`,
-                "Collect both original and scan-ready copies for mandatory records.",
-                `Review format and validity rules for ${countryName} ${visaType} submissions.`,
-            ],
-            interview: [
-                `Practice 3 short answers explaining ${visaType} purpose and study intent.`,
-                "Run mock interview rounds with confidence, eye contact, and timing checks.",
-                "Prepare a one-page speaking outline for difficult follow-up questions.",
-            ],
-            finance: [
-                "Confirm sponsor balance history and stable transaction pattern.",
-                "Reconcile tuition, living costs, and fee receipts in one finance summary.",
-                "Keep bank letters and sponsor affidavits updated with current dates.",
-            ],
-            notes: [
-                "Record current blockers with owner and expected resolution date.",
-                "Flag risk items that could delay submission or interview readiness.",
-                "Log advisor decisions so the next reviewer has full context.",
-            ],
-        };
-
-        const merged = []
-            .concat(Array.isArray(baseChecklist) ? baseChecklist : [])
-            .concat(extraChecklistByOption[optionKey] || []);
-
-        const uniqueChecklist = [];
-        const seen = new Set();
-        merged.forEach((item) => {
-            const clean = String(item || "").trim();
-            if (!clean) return;
-            const key = clean.toLowerCase();
-            if (seen.has(key)) return;
-            seen.add(key);
-            uniqueChecklist.push(clean);
-        });
-        return uniqueChecklist.slice(0, 6);
-    }
-
-    function bindStudentWorkspaceOptionEvents() {
-        if (!studentWorkspaceOptionList) return;
-        $$("button[data-workspace-option]", studentWorkspaceOptionList).forEach((button) => {
-            button.addEventListener("click", () => {
-                const optionKey = String(button.getAttribute("data-workspace-option") || "").trim().toLowerCase();
-                if (!optionKey) return;
-                if (state.activeWorkspaceOption === optionKey) return;
-                state.activeWorkspaceOption = optionKey;
-                renderStudentWorkspaceById(state.activeStudentWorkspaceId);
-            });
-        });
-    }
-
-    function renderStudentWorkspaceOptionList(hasStudent) {
-        const activeOption = getWorkspaceOptionByKey(state.activeWorkspaceOption);
-        if (studentWorkspaceOptionList) {
-            studentWorkspaceOptionList.innerHTML = WORKSPACE_PROFILE_OPTIONS.map((option) => {
-                const activeClass = option.key === activeOption.key ? " is-active" : "";
-                const disabledAttr = hasStudent ? "" : " disabled";
-                const pressedAttr = option.key === activeOption.key ? "true" : "false";
-                return `
-                    <button
-                        class="ent-student-profile-option${activeClass}"
-                        type="button"
-                        data-workspace-option="${escapeHtml(option.key)}"
-                        aria-pressed="${pressedAttr}"${disabledAttr}
-                    >
-                        <span class="ent-student-profile-option-label">${escapeHtml(option.label)}</span>
-                        <span class="ent-student-profile-option-desc">${escapeHtml(option.description)}</span>
-                    </button>
-                `;
-            }).join("");
-        }
-        if (studentWorkspaceOptionHint) {
-            studentWorkspaceOptionHint.textContent = hasStudent
-                ? activeOption.hint
-                : "Select a student from the directory to unlock student-specific profile options.";
-        }
-        bindStudentWorkspaceOptionEvents();
-    }
-
-    function renderStudentWorkspace(student) {
-        if (!student || typeof student !== "object") {
-            state.activeWorkspaceOption = "journey";
-            if (studentWorkspaceStudentName) studentWorkspaceStudentName.textContent = "Student";
-            if (studentWorkspaceSubline) studentWorkspaceSubline.textContent = "Personalized visa journey workspace";
-            if (studentWorkspaceDestination) studentWorkspaceDestination.textContent = "-";
-            if (studentWorkspaceVisaType) studentWorkspaceVisaType.textContent = "-";
-            if (studentWorkspaceIntake) studentWorkspaceIntake.textContent = "-";
-            if (studentWorkspaceProgressLabel) studentWorkspaceProgressLabel.textContent = "Journey progress";
-            if (studentWorkspaceProgressPercent) studentWorkspaceProgressPercent.textContent = "0%";
-            if (studentWorkspaceProgressBar) studentWorkspaceProgressBar.style.width = "0%";
-            if (studentWorkspaceStatus) studentWorkspaceStatus.textContent = "-";
-            if (studentWorkspaceEta) studentWorkspaceEta.textContent = "-";
-            if (studentWorkspaceStageCounter) studentWorkspaceStageCounter.textContent = "-";
-            if (studentWorkspaceCurrentStageTitle) studentWorkspaceCurrentStageTitle.textContent = "Stage title";
-            if (studentWorkspaceCurrentStageDesc) studentWorkspaceCurrentStageDesc.textContent = "Stage guidance will appear here.";
-            if (studentWorkspaceChecklist) studentWorkspaceChecklist.innerHTML = "";
-            if (studentWorkspaceStageRail) studentWorkspaceStageRail.innerHTML = "";
-            if (studentWorkspaceAvatar) studentWorkspaceAvatar.textContent = "S";
-            if (studentWorkspaceProfileAvatar) studentWorkspaceProfileAvatar.textContent = "S";
-            if (studentWorkspaceProfileName) studentWorkspaceProfileName.textContent = "Student";
-            if (studentWorkspaceProfileMeta) studentWorkspaceProfileMeta.textContent = "Select a student to view details";
-            renderStudentWorkspaceOptionList(false);
-            return;
-        }
-
-        const studentName = String(student.student_name || "Student").trim() || "Student";
-        const countryName = String(student.study_country_name || "").trim() || "Unknown";
-        const countryCode = String(student.study_country_code || "").trim().toUpperCase();
-        const visaType = String(student.visa_type || "").trim() || "Not set";
-        const intake = String(student.intake || "").trim() || "Not set";
-        const stages = buildVisaJourneyStagesForStudent(student);
-        const progress = estimateStudentJourneyProgress(student, stages.length);
-        const currentStage = stages[progress.currentStageIndex] || stages[0] || null;
-        const option = getWorkspaceOptionByKey(state.activeWorkspaceOption);
-        const context = buildWorkspaceOptionContext(option.key, currentStage, progress);
-        const checklist = buildWorkspaceOptionChecklist(
-            option.key,
-            buildStudentStageChecklist(currentStage, student),
-            student,
-            currentStage
-        );
-
-        if (studentWorkspaceStudentName) studentWorkspaceStudentName.textContent = studentName;
-        if (studentWorkspaceSubline) studentWorkspaceSubline.textContent = context.subline;
-        if (studentWorkspaceDestination) {
-            studentWorkspaceDestination.textContent = countryCode ? `${countryName} (${countryCode})` : countryName;
-        }
-        if (studentWorkspaceVisaType) studentWorkspaceVisaType.textContent = visaType;
-        if (studentWorkspaceIntake) studentWorkspaceIntake.textContent = intake;
-        if (studentWorkspaceProgressLabel) studentWorkspaceProgressLabel.textContent = context.progressLabel;
-        if (studentWorkspaceProgressPercent) studentWorkspaceProgressPercent.textContent = `${progress.progressPercent}%`;
-        if (studentWorkspaceProgressBar) {
-            studentWorkspaceProgressBar.style.width = `${progress.progressPercent}%`;
-        }
-        if (studentWorkspaceStatus) studentWorkspaceStatus.textContent = context.statusLabel;
-        if (studentWorkspaceEta) studentWorkspaceEta.textContent = progress.etaText;
-        if (studentWorkspaceStageCounter) {
-            studentWorkspaceStageCounter.textContent = `Stage ${progress.currentStageIndex + 1} of ${stages.length}`;
-        }
-        if (studentWorkspaceCurrentStageTitle) {
-            studentWorkspaceCurrentStageTitle.textContent = context.stageTitle;
-        }
-        if (studentWorkspaceCurrentStageDesc) {
-            studentWorkspaceCurrentStageDesc.textContent = context.stageDescription;
-        }
-        if (studentWorkspaceAvatar) {
-            studentWorkspaceAvatar.textContent = getInitials(studentName, "S");
-        }
-        if (studentWorkspaceProfileAvatar) {
-            studentWorkspaceProfileAvatar.textContent = getInitials(studentName, "S");
-        }
-        if (studentWorkspaceProfileName) {
-            studentWorkspaceProfileName.textContent = studentName;
-        }
-        if (studentWorkspaceProfileMeta) {
-            studentWorkspaceProfileMeta.textContent = `${countryCode ? `${countryName} (${countryCode})` : countryName} • ${visaType}`;
-        }
-
-        if (studentWorkspaceChecklist) {
-            studentWorkspaceChecklist.innerHTML = checklist
-                .map((item) => `<li>${escapeHtml(item)}</li>`)
-                .join("");
-        }
-
-        if (studentWorkspaceStageRail) {
-            studentWorkspaceStageRail.innerHTML = stages
-                .map((stage, index) => {
-                    const statusClass = index < progress.currentStageIndex
-                        ? " is-done"
-                        : (index === progress.currentStageIndex ? " is-current" : "");
-                    const statusText = index < progress.currentStageIndex
-                        ? "Completed"
-                        : (index === progress.currentStageIndex ? "Current Stage" : "Upcoming");
-                    return `
-                        <div class="ent-stage-rail-item${statusClass}">
-                            <span class="ent-stage-rail-index">${index + 1}</span>
-                            <div>
-                                <div class="ent-stage-rail-title">${escapeHtml(stage.title || `Stage ${index + 1}`)}</div>
-                                <div class="ent-stage-rail-status">${escapeHtml(statusText)}</div>
-                            </div>
-                        </div>
-                    `;
-                })
-                .join("");
-        }
-
-        renderStudentWorkspaceOptionList(true);
-    }
-
-    function renderStudentWorkspaceById(studentId) {
-        const targetId = Number(studentId);
-        if (!Number.isFinite(targetId) || targetId <= 0) {
-            renderStudentWorkspace(null);
-            return;
-        }
-        const student = Array.isArray(state.students)
-            ? state.students.find((item) => Number(item && item.id) === targetId)
-            : null;
-        if (!student) {
-            renderStudentWorkspace(null);
-            return;
-        }
-        renderStudentWorkspace(student);
-    }
-
-    function openStudentWorkspace(studentId) {
-        const targetId = Number(studentId);
-        if (!Number.isFinite(targetId) || targetId <= 0) return;
-        state.activeStudentWorkspaceId = targetId;
-        state.activeWorkspaceOption = "journey";
-        renderStudentWorkspaceById(targetId);
-        switchToSection("student_workspace");
-    }
-
-    function bindStudentActionEvents() {
-        if (!studentsTableBody) return;
-        $$("button[data-manage-student-id]", studentsTableBody).forEach((button) => {
-            button.addEventListener("click", () => {
-                openStudentWorkspace(button.getAttribute("data-manage-student-id"));
-            });
-        });
-    }
-
-    function applyStudentsAccessState() {
-        const canEditData = !!(state.permissions && state.permissions.can_edit_data);
-        if (studentsAccessNotice) {
-            studentsAccessNotice.textContent = canEditData
-                ? "Add students with destination country and visa type to start enterprise tracking. Click Manage for each student's dedicated journey workspace."
-                : "View-only mode: only admins or editors can add student records.";
-        }
-        if (addStudentBtnOverview) addStudentBtnOverview.disabled = !canEditData;
-        if (addStudentBtnStudents) addStudentBtnStudents.disabled = !canEditData;
-    }
-
-    function updateStudentCounts(countValue) {
-        const numericCount = Number(countValue);
-        const safeCount = Number.isFinite(numericCount) && numericCount >= 0
-            ? Math.floor(numericCount)
-            : (Array.isArray(state.students) ? state.students.length : 0);
-        const formattedCount = new Intl.NumberFormat().format(safeCount);
-        if (studentsNavBadge) studentsNavBadge.textContent = formattedCount;
-        const metricStudents = $("#entMetricStudents");
-        if (metricStudents) metricStudents.textContent = formattedCount;
-    }
-
-    function getCountryOptionLabel(country) {
-        const flag = String(country && country.flag_emoji ? country.flag_emoji : "").trim();
-        const name = String(country && country.name ? country.name : country && country.code ? country.code : "").trim();
-        const iconicPlace = String(country && country.iconic_place ? country.iconic_place : "").trim();
-
-        if (!name) return "";
-        const prefix = flag ? `${flag} ` : "";
-        return iconicPlace ? `${prefix}${name} • ${iconicPlace}` : `${prefix}${name}`;
-    }
-
-    function setStudentCountryOptions(countries) {
-        state.studentOptions.countries = Array.isArray(countries) ? countries : [];
-        const visaMap = {};
-        const intakeMap = {};
-        state.studentOptions.countries.forEach((country) => {
-            const code = String(country && country.code ? country.code : "").trim().toUpperCase();
-            if (!code) return;
-            const visaTypes = Array.isArray(country.visa_types) ? country.visa_types : [];
-            visaMap[code] = visaTypes;
-            const intakesByVisa = country && typeof country.intakes_by_visa === "object" && country.intakes_by_visa
-                ? country.intakes_by_visa
-                : {};
-            visaTypes.forEach((visaType) => {
-                const visaLabel = String(visaType || "").trim();
-                if (!visaLabel) return;
-                const compositeKey = `${code}||${visaLabel.toLowerCase()}`;
-                intakeMap[compositeKey] = Array.isArray(intakesByVisa[visaLabel]) ? intakesByVisa[visaLabel] : [];
-            });
-        });
-        state.studentOptions.visaTypesByCountry = visaMap;
-        state.studentOptions.intakesByCountryVisa = intakeMap;
-
-        if (!studentCountrySelect) return;
-        const selectedValue = String(studentCountrySelect.value || "").trim().toUpperCase();
-        const options = state.studentOptions.countries
-            .map((country) => {
-                const code = String(country.code || "").trim().toUpperCase();
-                const optionLabel = getCountryOptionLabel(country);
-                if (!code || !optionLabel) return "";
-                const selectedAttr = code === selectedValue ? " selected" : "";
-                return `<option value="${escapeHtml(code)}"${selectedAttr}>${escapeHtml(optionLabel)}</option>`;
-            })
-            .filter(Boolean)
-            .join("");
-
-        studentCountrySelect.innerHTML = `<option value="">Select destination country</option>${options}`;
-    }
-
-    function setIntakeOptionsForCountryVisa(countryCode, visaType) {
-        if (!studentIntakeSelect) return;
-        const normalizedCode = String(countryCode || "").trim().toUpperCase();
-        const normalizedVisa = String(visaType || "").trim().toLowerCase();
-        if (!normalizedCode || !normalizedVisa) {
-            studentIntakeSelect.innerHTML = '<option value="">Select intake</option>';
-            studentIntakeSelect.disabled = true;
-            return;
-        }
-
-        const key = `${normalizedCode}||${normalizedVisa}`;
-        const intakes = state.studentOptions.intakesByCountryVisa[key] || [];
-        const options = intakes
-            .map((intake) => `<option value="${escapeHtml(intake)}">${escapeHtml(intake)}</option>`)
-            .join("");
-        studentIntakeSelect.innerHTML = `<option value="">Select intake</option>${options}`;
-        studentIntakeSelect.disabled = intakes.length === 0;
-    }
-
-    function setVisaTypeOptionsForCountry(countryCode) {
-        if (!studentVisaTypeSelect) return;
-        const normalizedCode = String(countryCode || "").trim().toUpperCase();
-        const visaTypes = state.studentOptions.visaTypesByCountry[normalizedCode] || [];
-        const options = visaTypes
-            .map((visaType) => `<option value="${escapeHtml(visaType)}">${escapeHtml(visaType)}</option>`)
-            .join("");
-        studentVisaTypeSelect.innerHTML = `<option value="">Select visa type</option>${options}`;
-        studentVisaTypeSelect.disabled = visaTypes.length === 0;
-        setIntakeOptionsForCountryVisa(normalizedCode, "");
-    }
-
-    function setStudentsLoadingRow() {
-        if (!studentsTableBody) return;
-        studentsTableBody.innerHTML =
-            '<tr><td colspan="6" style="text-align:center;color:var(--ent-ink-muted);">Loading students...</td></tr>';
-        if (studentsEmpty) studentsEmpty.style.display = "none";
-    }
-
-    function renderStudentRows() {
-        if (!studentsTableBody) return;
-        const rows = Array.isArray(state.students) ? state.students : [];
-        if (rows.length === 0) {
-            studentsTableBody.innerHTML = "";
-            if (studentsEmpty) studentsEmpty.style.display = "";
-            return;
-        }
-
-        if (studentsEmpty) studentsEmpty.style.display = "none";
-        studentsTableBody.innerHTML = rows
-            .map((student) => {
-                const studentId = Number(student.id);
-                const hasStudentId = Number.isFinite(studentId) && studentId > 0;
-                const name = String(student.student_name || "Student").trim() || "Student";
-                const initials = getInitials(name, "S");
-                const countryName = String(student.study_country_name || "").trim() || "Unknown";
-                const countryCode = String(student.study_country_code || "").trim().toUpperCase();
-                const visaType = String(student.visa_type || "").trim() || "Not set";
-                const intake = String(student.intake || "").trim() || "Not set";
-                const visaChipClass = buildStudentVisaChipClass(visaType);
-                const createdAtText = formatDateTime(student.created_at);
-                const manageButton = hasStudentId
-                    ? `<button class="ent-btn ent-btn-ghost ent-btn-sm" type="button" data-manage-student-id="${studentId}">Manage</button>`
-                    : '<span style="color:var(--ent-ink-muted);">-</span>';
-                return `
-                    <tr>
-                        <td>
-                            <div class="ent-student-cell">
-                                <div class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#7c3aed)">${escapeHtml(initials)}</div>
-                                <div>
-                                    <div class="ent-student-name">${escapeHtml(name)}</div>
-                                </div>
-                            </div>
-                        </td>
-                        <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(countryName)}${countryCode ? ` (${escapeHtml(countryCode)})` : ""}</td>
-                        <td><span class="ent-chip ${visaChipClass}">${escapeHtml(visaType)}</span></td>
-                        <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(intake)}</td>
-                        <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(createdAtText)}</td>
-                        <td><span class="ent-table-actions">${manageButton}</span></td>
-                    </tr>
-                `;
-            })
-            .join("");
-        bindStudentActionEvents();
-    }
-
-    async function loadStudentOptions(forceReload) {
-        const hasCachedOptions =
-            Array.isArray(state.studentOptions.countries) && state.studentOptions.countries.length > 0;
-        if (hasCachedOptions && !forceReload) {
-            setStudentCountryOptions(state.studentOptions.countries);
-            return state.studentOptions.countries;
-        }
-
-        const data = await apiRequest("/api/enterprise/students/options");
-        if (data && data.permissions) {
-            state.permissions = data.permissions;
-        }
-        const optionsPayload = data && data.options ? data.options : {};
-        const countries = Array.isArray(optionsPayload.countries) ? optionsPayload.countries : [];
-        setStudentCountryOptions(countries);
-        applyStudentsAccessState();
-        return countries;
-    }
-
-    async function loadStudents(forceReload) {
-        if (state.studentsLoading && !forceReload) return;
-        if (!state.permissions || !state.permissions.can_view_data) return;
-
-        state.studentsLoading = true;
-        setStudentsLoadingRow();
-        try {
-            const data = await apiRequest("/api/enterprise/students");
-            if (data && data.permissions) {
-                state.permissions = data.permissions;
-            }
-            state.students = Array.isArray(data.students) ? data.students : [];
-            updateStudentCounts(typeof data.students_count === "number" ? data.students_count : state.students.length);
-            renderStudentRows();
-            applyStudentsAccessState();
-            if (state.currentSection === "student_workspace") {
-                renderStudentWorkspaceById(state.activeStudentWorkspaceId);
-            }
-        } catch (error) {
-            showStudentsFlash(error.detail || "Unable to load students.", "error");
-            if (studentsTableBody) {
-                studentsTableBody.innerHTML =
-                    '<tr><td colspan="6" style="text-align:center;color:var(--ent-ink-muted);">Failed to load students.</td></tr>';
-            }
-            if (studentsEmpty) studentsEmpty.style.display = "none";
-            if (state.currentSection === "student_workspace") {
-                renderStudentWorkspace(null);
-            }
-        } finally {
-            state.studentsLoading = false;
-        }
-    }
-
-    function showStudentModalFlash(message, type = "info") {
-        showInlineFlash(studentModalFlash, message, type);
-    }
-
-    function hideStudentModalFlash() {
-        hideInlineFlash(studentModalFlash);
-    }
-
-    function closeStudentModal() {
-        if (!studentModal) return;
-        studentModal.hidden = true;
-        studentModal.style.display = "none";
-        document.body.classList.remove("ent-no-scroll");
-        hideStudentModalFlash();
-        if (studentForm) studentForm.reset();
-        if (studentVisaTypeSelect) {
-            studentVisaTypeSelect.innerHTML = '<option value="">Select visa type</option>';
-            studentVisaTypeSelect.disabled = true;
-        }
-        if (studentIntakeSelect) {
-            studentIntakeSelect.innerHTML = '<option value="">Select intake</option>';
-            studentIntakeSelect.disabled = true;
-        }
-    }
-
-    async function openStudentModal() {
-        const canEditData = !!(state.permissions && state.permissions.can_edit_data);
-        if (!canEditData) {
-            showStudentsFlash("Only admins or editors can add students.", "error");
-            switchToSection("students");
-            return;
-        }
-        if (!studentModal) return;
-
-        hideStudentsFlash();
-        hideStudentModalFlash();
-        try {
-            // Refresh options on each open so intake year labels stay aligned with current date.
-            await loadStudentOptions(true);
-        } catch (error) {
-            showStudentsFlash(error.detail || "Unable to load country visa options.", "error");
-            switchToSection("students");
-            return;
-        }
-
-        studentModal.hidden = false;
-        studentModal.style.display = "flex";
-        document.body.classList.add("ent-no-scroll");
-
-        const countries = state.studentOptions.countries || [];
-        const firstCountryCode = countries.length ? String(countries[0].code || "").trim().toUpperCase() : "";
-        if (studentCountrySelect) {
-            studentCountrySelect.value = firstCountryCode || "";
-            setVisaTypeOptionsForCountry(studentCountrySelect.value);
-        }
-        if (studentNameInput) studentNameInput.focus();
-    }
-
-    function applyUserUI() {
-        const user = state.user;
-        if (!user) return;
-        const displayName = user.full_name || user.email || "Enterprise User";
-        if (userNameEl) userNameEl.textContent = displayName;
-        if (userAvatarImgEl) {
-            const uid = user.id != null ? String(user.id) : displayName;
-            userAvatarImgEl.src = picsumPortraitUrl(`user-${uid}|${user.email || ""}|${displayName}`, 128);
-            userAvatarImgEl.alt = displayName;
-        }
-        const role = state.membership ? normalizeRole(state.membership.role) : "viewer";
-        if (userRoleEl) {
-            userRoleEl.textContent = roleToLabel(role);
-        }
-    }
-
-    function applyTeamAccessState() {
-        const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
-
-        if (teamAccessNotice) {
-            teamAccessNotice.textContent = canManageUsers
-                ? "You can invite team members and manage access levels for this organization."
-                : "View-only mode: only organization admins can add, remove, or change member roles.";
-        }
-
-        if (teamEmailInput) teamEmailInput.disabled = !canManageUsers;
-        if (teamNameInput) teamNameInput.disabled = !canManageUsers;
-        if (teamRoleInput) teamRoleInput.disabled = !canManageUsers;
-        if (teamAddBtn) {
-            teamAddBtn.disabled = !canManageUsers;
-            teamAddBtn.textContent = canManageUsers ? "Add User" : "Admin Access Required";
-        }
-    }
-
-    function buildTeamRoleOptions(currentRole) {
-        const normalized = normalizeRole(currentRole);
-        return [
-            { value: "viewer", label: "Viewer" },
-            { value: "editor", label: "Editor" },
-            { value: "admin", label: "Admin" },
-        ]
-            .map((item) => {
-                const selected = item.value === normalized ? " selected" : "";
-                return `<option value="${item.value}"${selected}>${item.label}</option>`;
-            })
-            .join("");
-    }
-
-    function renderTeamRows() {
-        if (!teamTableBody) return;
-
-        if (!Array.isArray(state.teamMembers) || state.teamMembers.length === 0) {
-            teamTableBody.innerHTML =
-                '<tr><td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">No team members found.</td></tr>';
-            return;
-        }
-
-        const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
-        const currentUserId = state.user ? Number(state.user.id) : null;
-
-        teamTableBody.innerHTML = state.teamMembers
-            .map((member) => {
-                const memberUserId = Number(member.user_id);
-                const role = normalizeRole(member.role);
-                const isCurrentUser = currentUserId !== null && memberUserId === currentUserId;
-                const displayName = member.full_name || member.email || "User";
-                const initials = getInitials(displayName, "U");
-
-                const userCell = `
-                    <div class="ent-student-cell">
-                        <div class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#7c3aed)">${escapeHtml(initials)}</div>
-                        <div>
-                            <div class="ent-student-name">${escapeHtml(displayName)}${isCurrentUser ? " (You)" : ""}</div>
-                            <div class="ent-student-email">${escapeHtml(member.email || "")}</div>
-                        </div>
-                    </div>
-                `;
-
-                let roleCell = `<span class="ent-chip ent-chip-gray">${escapeHtml(roleToLabel(role))}</span>`;
-                if (canManageUsers) {
-                    const disabledAttr = isCurrentUser ? " disabled" : "";
-                    roleCell = `
-                        <select class="ent-role-select" data-role-user-id="${memberUserId}" data-prev-role="${escapeHtml(role)}"${disabledAttr}>
-                            ${buildTeamRoleOptions(role)}
-                        </select>
-                    `;
-                }
-
-                let actionsCell = '<span style="color:var(--ent-ink-muted);">-</span>';
-                if (canManageUsers && !isCurrentUser) {
-                    actionsCell = `
-                        <span class="ent-inline-actions">
-                            <button
-                                class="ent-btn ent-btn-ghost ent-btn-sm"
-                                type="button"
-                                data-remove-user-id="${memberUserId}"
-                            >
-                                Remove
-                            </button>
-                        </span>
-                    `;
-                }
-
-                return `
-                    <tr>
-                        <td>${userCell}</td>
-                        <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(member.email || "")}</td>
-                        <td>${roleCell}</td>
-                        <td style="color:var(--ent-ink-secondary); font-size:0.82rem;">${escapeHtml(formatDateTime(member.last_login_at))}</td>
-                        <td>${actionsCell}</td>
-                    </tr>
-                `;
-            })
-            .join("");
-
-        bindTeamRowEvents();
-    }
-
-    function bindTeamRowEvents() {
-        if (!teamTableBody) return;
-
-        $$("select[data-role-user-id]", teamTableBody).forEach((select) => {
-            select.addEventListener("change", async () => {
-                const memberUserId = Number(select.getAttribute("data-role-user-id"));
-                const newRole = normalizeRole(select.value);
-                const previousRole = normalizeRole(select.getAttribute("data-prev-role") || "");
-                if (!memberUserId || newRole === previousRole) return;
-
-                select.disabled = true;
-                try {
-                    const data = await apiRequest(`/api/enterprise/team/users/${memberUserId}/role`, {
-                        method: "PATCH",
-                        body: { role: newRole },
-                    });
-                    showTeamFlash(data.message || "Role updated.", "success");
-                    if (Array.isArray(data.members)) {
-                        state.teamMembers = data.members;
-                        renderTeamRows();
-                    } else {
-                        await loadTeamMembers(true);
-                    }
-                } catch (error) {
-                    select.value = previousRole;
-                    showTeamFlash(error.detail || "Failed to update role.", "error");
-                } finally {
-                    if (document.body.contains(select)) {
-                        select.disabled = false;
-                    }
-                }
-            });
-        });
-
-        $$("button[data-remove-user-id]", teamTableBody).forEach((button) => {
-            button.addEventListener("click", async () => {
-                const memberUserId = Number(button.getAttribute("data-remove-user-id"));
-                if (!memberUserId) return;
-
-                const confirmRemove = window.confirm("Remove this user from your organization?");
-                if (!confirmRemove) return;
-
-                const originalText = button.textContent || "Remove";
-                button.disabled = true;
-                button.textContent = "Removing...";
-                try {
-                    const data = await apiRequest(`/api/enterprise/team/users/${memberUserId}`, {
-                        method: "DELETE",
-                    });
-                    showTeamFlash(data.message || "User removed.", "success");
-                    if (Array.isArray(data.members)) {
-                        state.teamMembers = data.members;
-                        renderTeamRows();
-                    } else {
-                        await loadTeamMembers(true);
-                    }
-                } catch (error) {
-                    showTeamFlash(error.detail || "Failed to remove user.", "error");
-                } finally {
-                    if (document.body.contains(button)) {
-                        button.disabled = false;
-                        button.textContent = originalText;
-                    }
-                }
-            });
-        });
-    }
-
-    function setTeamLoadingRow() {
-        if (!teamTableBody) return;
-        teamTableBody.innerHTML =
-            '<tr><td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">Loading team members...</td></tr>';
-    }
-
-    async function loadTeamMembers(forceReload) {
-        if (state.teamLoading && !forceReload) return;
-        if (!state.permissions || !state.permissions.can_view_data) return;
-
-        state.teamLoading = true;
-        setTeamLoadingRow();
-        try {
-            const data = await apiRequest("/api/enterprise/team");
-            state.permissions = data.permissions || state.permissions;
-            state.teamMembers = Array.isArray(data.members) ? data.members : [];
-            applyTeamAccessState();
-            renderTeamRows();
-        } catch (error) {
-            showTeamFlash(error.detail || "Unable to load team members.", "error");
-            if (teamTableBody) {
-                teamTableBody.innerHTML =
-                    '<tr><td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">Failed to load team members.</td></tr>';
-            }
-        } finally {
-            state.teamLoading = false;
-        }
-    }
-
-    async function apiRequest(url, options) {
-        const method = (options && options.method) || "GET";
-        const body = options && options.body;
-        const headers = Object.assign({}, (options && options.headers) || {});
-
-        let payload;
-        if (body !== undefined) {
-            const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
-            if (isFormData) {
-                payload = body;
-            } else {
-                headers["Content-Type"] = "application/json";
-                payload = JSON.stringify(body);
-            }
-        }
-
-        let response;
-        try {
-            response = await fetch(url, {
-                method,
-                headers,
-                credentials: "same-origin",
-                body: payload,
-            });
-        } catch (_) {
-            throw { detail: "Network error. Please try again." };
-        }
-
-        const raw = await response.text();
-        let data = {};
-        if (raw) {
-            try {
-                data = JSON.parse(raw);
-            } catch (_) {
-                data = {};
-            }
-        }
-
-        if (!response.ok) {
-            const detail = data && typeof data.detail === "string" ? data.detail : "Request failed.";
-            throw { detail, status: response.status, data };
-        }
-        return data;
-    }
-
-    function redirectToOrganizationPortalIfNeeded(payload) {
-        const portalUrl = payload && payload.organization && payload.organization.portal_url
-            ? String(payload.organization.portal_url).trim()
-            : "";
-        if (!portalUrl) return false;
-
-        let target;
-        try {
-            target = new URL(portalUrl, window.location.origin);
-        } catch (_) {
-            return false;
-        }
-
-        const currentHost = String(window.location.host || "").toLowerCase();
-        const targetHost = String(target.host || "").toLowerCase();
-        if (!targetHost || targetHost === currentHost) return false;
-
-        window.location.replace(target.toString());
+  "use strict";
+
+  const API = "/api/enterprise";
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+
+  const state = {
+    me: null,
+    perms: { can_view_data: true, can_edit_data: false, can_manage_users: false },
+    subscription: null,
+    catalog: null,
+    view: "dashboard",
+    clients: [],
+    statusCounts: {},
+    filters: { status: "", category: "", country: "", q: "" },
+    billingCycle: "monthly",
+    activeClient: null,
+  };
+
+  const enterpriseTurnstile = {
+    siteKey: "",
+    widgets: { signup: null, login: null, forgot: null },
+    loadingPromise: null,
+    loadFailed: false,
+  };
+
+  const turnstileRefs = {
+    signup: { wrap: "#entTurnstileSignupWrap", widget: "#entTurnstileSignup", hint: "#entTurnstileSignupHint" },
+    login: { wrap: "#entTurnstileLoginWrap", widget: "#entTurnstileLogin", hint: "#entTurnstileLoginHint" },
+    forgot: { wrap: "#entTurnstileForgotWrap", widget: "#entTurnstileForgot", hint: "#entTurnstileForgotHint" },
+  };
+
+  /* ---------------- utils ---------------- */
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function initials(name) {
+    const p = String(name || "").trim().split(/\s+/);
+    return ((p[0] || "")[0] || "") + ((p[1] || "")[0] || "") || (String(name || "?")[0] || "?");
+  }
+  function avatarColor(seed) {
+    const colors = [["#6366f1", "#8b5cf6"], ["#0ea5e9", "#22d3ee"], ["#f59e0b", "#f97316"],
+      ["#10b981", "#34d399"], ["#ec4899", "#f43f5e"], ["#8b5cf6", "#6366f1"], ["#0d9488", "#14b8a6"]];
+    let h = 0; for (const ch of String(seed || "x")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return colors[h % colors.length];
+  }
+  function fmtDate(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (isNaN(d)) return esc(iso);
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  }
+  function fmtDateTime(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d)) return esc(iso);
+    return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) +
+      " · " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  function daysUntil(iso) {
+    if (!iso) return null;
+    const d = new Date(iso); if (isNaN(d)) return null;
+    return Math.ceil((d - new Date()) / 86400000);
+  }
+  function rootDomain() {
+    const h = location.hostname;
+    if (h === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(h)) return "rilono.com";
+    if (h.endsWith("lvh.me")) return "lvh.me";
+    const parts = h.split(".");
+    if (parts.length <= 2) return h;
+    return parts.slice(-2).join(".");
+  }
+
+  async function api(path, opts) {
+    opts = opts || {};
+    const res = await fetch(API + path, {
+      method: opts.method || "GET",
+      credentials: "include",
+      headers: opts.body ? { "Content-Type": "application/json" } : {},
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* no body */ }
+    if (!res.ok) {
+      const detail = data && (data.detail || data.message);
+      const err = new Error(typeof detail === "string" ? detail : "Request failed");
+      err.status = res.status; err.data = data;
+      throw err;
+    }
+    return data;
+  }
+
+  async function waitForTurnstile(timeoutMs = 9000) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (window.turnstile && typeof window.turnstile.render === "function") return true;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return false;
+  }
+
+  async function initializeEnterpriseTurnstile() {
+    if (enterpriseTurnstile.loadingPromise) return enterpriseTurnstile.loadingPromise;
+    enterpriseTurnstile.loadingPromise = (async () => {
+      try {
+        const res = await fetch("/api/auth/turnstile-site-key", { credentials: "same-origin" });
+        if (!res.ok) throw new Error("Could not load security configuration.");
+        const data = await res.json().catch(() => ({}));
+        enterpriseTurnstile.siteKey = String(data.site_key || "").trim();
+
+        if (!enterpriseTurnstile.siteKey) {
+          Object.keys(turnstileRefs).forEach((key) => {
+            const wrap = $(turnstileRefs[key].wrap);
+            if (wrap) wrap.classList.add("hidden");
+          });
+          return false;
+        }
+
+        const available = await waitForTurnstile();
+        if (!available) throw new Error("Security widget failed to load.");
         return true;
-    }
-
-    function applyEnterpriseContext(payload) {
-        state.user = payload.user || null;
-        state.organization = payload.organization || null;
-        state.membership = payload.membership || null;
-        state.permissions = payload.permissions || {
-            can_view_data: false,
-            can_edit_data: false,
-            can_manage_users: false,
-        };
-
-        applyUserUI();
-        applyOrganizationUI();
-        applyTeamAccessState();
-        applyStudentsAccessState();
-        applySettingsAccessState();
-        syncSettingsFormFromState();
-    }
-
-    async function fetchTurnstileSiteKey() {
-        try {
-            const response = await fetch("/api/auth/turnstile-site-key", {
-                credentials: "same-origin",
-            });
-            if (!response.ok) return "";
-            const data = await response.json();
-            return typeof data.site_key === "string" ? data.site_key.trim() : "";
-        } catch (_) {
-            return "";
-        }
-    }
-
-    async function waitForTurnstileApi(timeoutMs) {
-        if (window.turnstile && typeof window.turnstile.render === "function") return true;
-        const started = Date.now();
-        while (Date.now() - started < timeoutMs) {
-            await new Promise((resolve) => setTimeout(resolve, 100));
-            if (window.turnstile && typeof window.turnstile.render === "function") {
-                return true;
-            }
-        }
+      } catch (error) {
+        enterpriseTurnstile.loadFailed = true;
+        console.error("Failed to initialize enterprise Turnstile:", error);
         return false;
+      }
+    })();
+    return enterpriseTurnstile.loadingPromise;
+  }
+
+  async function renderEnterpriseTurnstile(key) {
+    await initializeEnterpriseTurnstile();
+    const refs = turnstileRefs[key];
+    if (!refs || !enterpriseTurnstile.siteKey) return;
+
+    const wrap = $(refs.wrap);
+    const widget = $(refs.widget);
+    const hint = $(refs.hint);
+    if (!wrap || !widget) return;
+    wrap.classList.remove("hidden");
+
+    if (enterpriseTurnstile.loadFailed || !window.turnstile) {
+      if (hint) hint.textContent = "Security widget failed to load. Refresh and try again.";
+      return;
+    }
+    if (enterpriseTurnstile.widgets[key] !== null) return;
+
+    try {
+      enterpriseTurnstile.widgets[key] = window.turnstile.render(widget, {
+        sitekey: enterpriseTurnstile.siteKey,
+        theme: "light",
+      });
+    } catch (error) {
+      enterpriseTurnstile.loadFailed = true;
+      if (hint) hint.textContent = "Security widget failed to load. Refresh and try again.";
+      console.error("Failed to render enterprise Turnstile:", error);
+    }
+  }
+
+  async function getEnterpriseTurnstileToken(key) {
+    await initializeEnterpriseTurnstile();
+    if (enterpriseTurnstile.loadFailed) {
+      throw new Error("Security check could not load. Refresh the page and try again.");
+    }
+    if (!enterpriseTurnstile.siteKey) return "";
+    await renderEnterpriseTurnstile(key);
+
+    const widgetId = enterpriseTurnstile.widgets[key];
+    if (enterpriseTurnstile.loadFailed || !window.turnstile || widgetId === null) {
+      throw new Error("Security check could not load. Refresh the page and try again.");
     }
 
-    function getTurnstileToken() {
-        if (!state.turnstile.siteKey || state.turnstile.widgetId === null) return "";
-        if (!window.turnstile || typeof window.turnstile.getResponse !== "function") return "";
-        try {
-            return window.turnstile.getResponse(state.turnstile.widgetId) || "";
-        } catch (_) {
-            return "";
+    let token = "";
+    try {
+      token = window.turnstile.getResponse(widgetId) || "";
+    } catch (error) {
+      token = "";
+    }
+    if (!token) throw new Error("Please complete the security check.");
+    return token;
+  }
+
+  function resetEnterpriseTurnstile(key) {
+    const widgetId = enterpriseTurnstile.widgets[key];
+    if (!enterpriseTurnstile.siteKey || !window.turnstile || widgetId === null) return;
+    try {
+      window.turnstile.reset(widgetId);
+    } catch (error) {
+      // no-op; the next render or page refresh will recover the widget
+    }
+  }
+
+  /* ---------------- toast ---------------- */
+  function toast(msg, type) {
+    const el = document.createElement("div");
+    el.className = "toast " + (type || "");
+    el.innerHTML = (type === "success" ? "✓ " : type === "error" ? "⚠ " : "") + esc(msg);
+    $("#toastWrap").appendChild(el);
+    setTimeout(() => { el.style.opacity = "0"; el.style.transform = "translateY(8px)"; setTimeout(() => el.remove(), 250); }, 3400);
+  }
+
+  /* ---------------- overlay / modal / drawer ---------------- */
+  function openModal(html) {
+    const m = $("#modal"); m.innerHTML = html;
+    $("#overlay").classList.add("show"); m.classList.add("show");
+  }
+  function closeModal() {
+    $("#modal").classList.remove("show");
+    if (!$("#drawer").classList.contains("show")) $("#overlay").classList.remove("show");
+  }
+  function openDrawer(html) {
+    const d = $("#drawer"); d.innerHTML = html;
+    $("#overlay").classList.add("show"); d.classList.add("show");
+  }
+  function closeDrawer() {
+    $("#drawer").classList.remove("show");
+    if (!$("#modal").classList.contains("show")) $("#overlay").classList.remove("show");
+    state.activeClient = null;
+  }
+  $("#overlay").addEventListener("click", () => { closeModal(); closeDrawer(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); closeDrawer(); } });
+
+  /* ---------------- landmark photo ---------------- */
+  // Real bundled landmark photo per country. The parent .country-art carries a
+  // gradient background, so if an image is ever missing it degrades gracefully.
+  function landmarkArt(country) {
+    const code = String(country.code || "").toLowerCase();
+    return `<img class="lk-img" src="/static/destinations/${esc(code)}.jpg" alt="${esc(country.landmark || country.name || "")}" loading="lazy" onerror="this.style.display='none'">`;
+  }
+
+  /* ---------------- catalog lookups ---------------- */
+  function countryByCode(code) {
+    if (!state.catalog) return null;
+    return state.catalog.countries.find((c) => c.code === code) || null;
+  }
+  function stageByKey(key) {
+    if (!state.catalog) return { key, label: key, color: "#94a3b8" };
+    return state.catalog.stages.find((s) => s.key === key) || { key, label: key, color: "#94a3b8" };
+  }
+  function priorityColor(key) {
+    const map = { low: "#94a3b8", normal: "#6366f1", high: "#f97316", urgent: "#ef4444" };
+    return map[key] || "#6366f1";
+  }
+
+  function statusPill(stage) {
+    const c = stage.color || "#94a3b8";
+    return `<span class="status-pill" style="background:${c}1f;color:${c}"><span class="sd" style="background:${c}"></span>${esc(stage.label)}</span>`;
+  }
+
+  /* ============================================================
+     AUTH
+     ============================================================ */
+  function setupAuth() {
+    const suffix = "." + rootDomain();
+    $("#signupDomainSuffix").textContent = suffix;
+    $("#onboardDomainSuffix").textContent = suffix;
+    initializeEnterpriseTurnstile();
+    renderEnterpriseTurnstile("signup");
+
+    $("#toLogin").onclick = () => showLoginCard();
+    $("#toSignup").onclick = () => showSignupCard();
+
+    const forgot = $("#entForgot");
+    if (forgot) forgot.onclick = (e) => { e.preventDefault(); showForgotCard(); };
+    const back = $("#backToLogin");
+    if (back) back.onclick = () => showLoginCard();
+
+    $("#forgotForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#forgotBtn");
+      const err = $("#forgotError"); const ok = $("#forgotSuccess");
+      err.classList.add("hidden"); ok.classList.add("hidden");
+      const email = (f.email.value || "").trim();
+      try {
+        const turnstileToken = await getEnterpriseTurnstileToken("forgot");
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+        const payload = { email };
+        if (turnstileToken) payload.cf_turnstile_token = turnstileToken;
+        const res = await fetch("/api/auth/forgot-password", {
+          method: "POST", credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error((data && (data.detail || data.message)) || "Could not send reset email.");
+        ok.innerHTML = "If an account exists for <b>" + esc(email) + "</b>, a password reset link is on its way. Check your inbox (and spam folder).";
+        ok.classList.remove("hidden");
+        f.reset();
+        resetEnterpriseTurnstile("forgot");
+      } catch (ex) {
+        err.textContent = ex.message; err.classList.remove("hidden");
+        resetEnterpriseTurnstile("forgot");
+      } finally { btn.disabled = false; btn.textContent = "Send reset link"; }
+    };
+
+    $("#signupForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#signupBtn");
+      const err = $("#signupError"); err.classList.add("hidden");
+      const body = {
+        company_name: f.company_name.value.trim(),
+        subdomain_slug: f.subdomain_slug.value.trim().toLowerCase(),
+        full_name: f.full_name.value.trim(),
+        email: f.email.value.trim(),
+        password: f.password.value,
+      };
+      try {
+        const turnstileToken = await getEnterpriseTurnstileToken("signup");
+        if (turnstileToken) body.cf_turnstile_token = turnstileToken;
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creating…';
+        const data = await api("/signup", { method: "POST", body });
+        if (redirectToPortalIfNeeded(data)) return;
+        await boot({ fromAuthAction: true });
+      } catch (ex) {
+        err.textContent = ex.message; err.classList.remove("hidden");
+        resetEnterpriseTurnstile("signup");
+      } finally { btn.disabled = false; btn.textContent = "Create my workspace"; }
+    };
+
+    $("#loginForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#loginBtn");
+      const err = $("#loginError"); err.classList.add("hidden");
+      try {
+        const body = { email: f.email.value.trim(), password: f.password.value };
+        const turnstileToken = await getEnterpriseTurnstileToken("login");
+        if (turnstileToken) body.cf_turnstile_token = turnstileToken;
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Signing in…';
+        const data = await api("/login", { method: "POST", body });
+        if (data.onboarding_required) { showOnboard(); return; }
+        if (redirectToPortalIfNeeded(data)) return;
+        await boot({ fromAuthAction: true });
+      } catch (ex) {
+        showLoginError(ex.message);
+        resetEnterpriseTurnstile("login");
+      } finally { btn.disabled = false; btn.textContent = "Sign in"; }
+    };
+
+    $("#onboardForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#onboardBtn");
+      const err = $("#onboardError"); err.classList.add("hidden");
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Finishing…';
+      try {
+        await api("/onboarding", { method: "POST", body: { company_name: f.company_name.value.trim(), subdomain_slug: f.subdomain_slug.value.trim().toLowerCase() } });
+        await boot({ fromAuthAction: true });
+      } catch (ex) {
+        err.textContent = ex.message; err.classList.remove("hidden");
+      } finally { btn.disabled = false; btn.textContent = "Finish setup"; }
+    };
+  }
+  function showSignupCard() {
+    $("#loginCard").classList.add("hidden");
+    $("#forgotCard").classList.add("hidden");
+    $("#signupCard").classList.remove("hidden");
+    renderEnterpriseTurnstile("signup");
+  }
+  function showLoginCard() {
+    $("#signupCard").classList.add("hidden");
+    $("#forgotCard").classList.add("hidden");
+    $("#loginCard").classList.remove("hidden");
+    renderEnterpriseTurnstile("login");
+  }
+  function showForgotCard() {
+    const em = ($("#loginForm").email.value || "").trim();
+    if (em) $("#forgotForm").email.value = em;
+    $("#loginCard").classList.add("hidden");
+    $("#signupCard").classList.add("hidden");
+    $("#forgotError").classList.add("hidden");
+    $("#forgotSuccess").classList.add("hidden");
+    $("#forgotCard").classList.remove("hidden");
+    renderEnterpriseTurnstile("forgot");
+  }
+  function showLoginError(message) {
+    showLoginCard();
+    const err = $("#loginError");
+    err.textContent = message || "Unable to sign in. Please try again.";
+    err.classList.remove("hidden");
+  }
+  function portalUrlFrom(data) {
+    return String((data && data.portal_url) || (data && data.organization && data.organization.portal_url) || "").trim();
+  }
+  function redirectToPortalIfNeeded(data) {
+    const portalUrl = portalUrlFrom(data);
+    if (!portalUrl) return false;
+    let target;
+    try { target = new URL(portalUrl, location.href); } catch (e) { return false; }
+    if (target.origin === location.origin) return false;
+    window.location.assign(target.toString());
+    return true;
+  }
+  function showAuth() { $("#authView").classList.remove("hidden"); $("#onboardView").classList.add("hidden"); $("#appView").classList.remove("active"); }
+  function showOnboard() { $("#authView").classList.add("hidden"); $("#onboardView").classList.remove("hidden"); $("#appView").classList.remove("active"); }
+  function showApp() { $("#authView").classList.add("hidden"); $("#onboardView").classList.add("hidden"); $("#appView").classList.add("active"); }
+
+  /* ---------------- sign out ---------------- */
+  $("#signoutBtn").onclick = async () => {
+    try { await fetch("/api/auth/logout", { method: "POST", credentials: "include" }); } catch (e) {}
+    location.reload();
+  };
+
+  /* ============================================================
+     BOOT
+     ============================================================ */
+  async function boot(opts) {
+    opts = opts || {};
+    showApp();
+    $("#content").innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    let me;
+    try { me = await api("/me"); }
+    catch (ex) {
+      if (ex.status === 401) {
+        showAuth();
+        if (opts.fromAuthAction) {
+          showLoginError("Sign-in succeeded, but your browser did not keep the session cookie. Check the enterprise domain/HTTPS cookie settings and try again.");
         }
+        return;
+      }
+      if (ex.status === 403) {
+        showAuth();
+        if (opts.fromAuthAction) showLoginError(ex.message || "Access restricted");
+        else toast(ex.message || "Access restricted", "error");
+        return;
+      }
+      $("#content").innerHTML = `<div class="empty"><div class="emoji">⚠️</div><h3>Something went wrong</h3><p>${esc(ex.message)}</p></div>`;
+      return;
+    }
+    if (me.onboarding_required) { showOnboard(); return; }
+    state.me = me;
+    state.perms = me.permissions || state.perms;
+    state.subscription = me.subscription || null;
+
+    // brand + user chip
+    const org = me.organization || {};
+    $("#brandName").textContent = org.company_name || "Your Consultancy";
+    if (org.logo_url) { const l = $("#brandLogo"); l.src = org.logo_url; l.style.display = ""; }
+    const u = me.user || {};
+    $("#userName").textContent = u.full_name || u.email || "User";
+    $("#userRole").textContent = ((me.membership && me.membership.role) || "member").replace(/^\w/, (c) => c.toUpperCase());
+    const [c1] = avatarColor(u.email);
+    $("#userAvatar").textContent = (initials(u.full_name || u.email) || "U").toUpperCase();
+    $("#userAvatar").style.background = `linear-gradient(135deg, ${c1}, ${avatarColor(u.email)[1]})`;
+    updatePlanChip();
+
+    if (!state.perms.can_edit_data) $("#topAddClient").classList.add("hidden");
+
+    try { state.catalog = await api("/catalog"); } catch (e) { state.catalog = { countries: [], categories: [], stages: [], priorities: [] }; }
+
+    navigate(state.view || "dashboard");
+  }
+
+  function updatePlanChip() {
+    const s = state.subscription;
+    $("#brandPlan").textContent = "Free plan";
+    if (s && s.clients_used != null) $("#clientsBadge").textContent = s.clients_used;
+  }
+
+  /* ============================================================
+     NAV
+     ============================================================ */
+  function navigate(view) {
+    state.view = view;
+    $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
+    $("#sidebar").classList.remove("open");
+    const titles = { dashboard: "Dashboard", clients: "Clients", ai: "AI Assistant", team: "Team", billing: "Plans & Billing", settings: "Settings" };
+    $("#viewTitle").textContent = titles[view] || "";
+    $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
+    if (view === "dashboard") renderDashboard();
+    else if (view === "clients") renderClients();
+    else if (view === "ai") renderAIAssistant();
+    else if (view === "team") renderTeam();
+    else if (view === "billing") renderBilling();
+    else if (view === "settings") renderSettings();
+  }
+  $$(".nav-item").forEach((b) => b.onclick = () => navigate(b.dataset.view));
+  $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
+  $("#topAddClient").onclick = () => openClientForm(null);
+  // Activate role="button" dashboard cards with keyboard (Enter / Space)
+  $("#content").addEventListener("keydown", (e) => {
+    const t = e.target;
+    if ((e.key === "Enter" || e.key === " ") && t && t.getAttribute && t.getAttribute("role") === "button") {
+      e.preventDefault(); t.click();
+    }
+  });
+  let searchTimer;
+  const globalSearch = $("#globalSearch");
+  const globalSearchClear = $("#globalSearchClear");
+
+  function syncGlobalSearchUi() {
+    if (!globalSearch || !globalSearchClear) return;
+    globalSearchClear.classList.toggle("hidden", !globalSearch.value.trim());
+  }
+
+  function clearClientSearch() {
+    clearTimeout(searchTimer);
+    state.filters.q = "";
+    state.dashScope = null;
+    state.dashScopeLabel = "";
+    if (globalSearch) globalSearch.value = "";
+    syncGlobalSearchUi();
+    if (state.view === "clients") {
+      loadAndRenderClientList();
+      renderClientToolbar();
+    }
+  }
+
+  function runClientSearch(raw) {
+    clearTimeout(searchTimer);
+    const term = String(raw || "").trim();
+    if (!term) {
+      clearClientSearch();
+      return;
     }
 
-    function resetTurnstileWidget() {
-        if (!state.turnstile.siteKey || state.turnstile.widgetId === null) return;
-        if (!window.turnstile || typeof window.turnstile.reset !== "function") return;
-        try {
-            window.turnstile.reset(state.turnstile.widgetId);
-        } catch (_) {}
+    state.filters.q = term;
+    state.dashScope = null;
+    state.dashScopeLabel = "";
+    if (globalSearch) globalSearch.value = term;
+    syncGlobalSearchUi();
+
+    if (state.view !== "clients") {
+      state.filters.status = "";
+      state.filters.category = "";
+      state.filters.country = "";
+      navigate("clients");
+    } else {
+      loadAndRenderClientList();
+      renderClientToolbar();
+    }
+  }
+
+  globalSearch.oninput = (e) => {
+    clearTimeout(searchTimer);
+    const v = e.target.value;
+    syncGlobalSearchUi();
+    searchTimer = setTimeout(() => {
+      runClientSearch(v);
+    }, 280);
+  };
+  globalSearch.onkeydown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      runClientSearch(e.target.value);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      clearClientSearch();
+    }
+  };
+  globalSearchClear.onclick = clearClientSearch;
+
+  function trialBanner() {
+    // Rilono Enterprise is free — no trial countdown or upgrade prompts.
+    return "";
+  }
+
+  /* ============================================================
+     DASHBOARD
+     ============================================================ */
+  async function renderDashboard() {
+    const c = $("#content");
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    let d;
+    try { d = await api("/dashboard"); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    state.subscription = d.subscription || state.subscription;
+    updatePlanChip();
+
+    const k = d.kpis;
+    const kpiCard = (icGrad, ic, label, val, sub, onclick) =>
+      `<div class="kpi${onclick ? " clickable" : ""}"${onclick ? ` role="button" tabindex="0" onclick="${onclick}"` : ""}>
+        <div class="kpi-top"><div class="kpi-ic" style="background:${icGrad}">${ic}</div>${onclick ? '<span class="kpi-arrow">→</span>' : ""}</div>
+        <div class="kpi-label">${label}</div><div class="kpi-value">${val}</div><div class="kpi-sub">${sub || ""}</div></div>`;
+
+    const maxPipe = Math.max(1, ...d.pipeline.map((p) => p.count));
+    const pipeRows = d.pipeline.map((p) =>
+      `<div class="pipe-row clickable" role="button" tabindex="0" onclick="__ent.viewClients({status:'${p.key}'})"><div class="pl"><span class="dot" style="background:${p.color}"></span>${esc(p.label)}</div>
+       <div class="pipe-track"><div class="pipe-fill" style="width:${(p.count / maxPipe) * 100}%;background:${p.color}"></div></div>
+       <div class="pv">${p.count}</div></div>`).join("");
+
+    const vtCounts = d.visa_type_counts || [];
+    state.dashVisaTypes = vtCounts.map((v) => v.visa_type);
+    const vtCells = vtCounts.length ? vtCounts.map((vt, i) =>
+      `<div class="cat-cell clickable" role="button" tabindex="0" onclick="__ent.viewVisaType(${i})"><div class="ci" style="background:linear-gradient(135deg,#6366f1,#8b5cf6)">🎓</div>
+        <div><div class="cv">${vt.count}</div><div class="cl">${esc(vt.visa_type)}</div></div></div>`).join("")
+      : `<div class="empty" style="padding:22px"><p>Add clients to see visa-type insights.</p></div>`;
+
+    const countryCards = (d.top_countries.length ? d.top_countries : []).map((ct) =>
+      `<div class="country-card clickable" role="button" tabindex="0" onclick="__ent.viewClients({country:'${ct.code}'})">
+        <div class="country-art" style="background:linear-gradient(135deg,${ct.gradient_from || "#6366f1"},${ct.gradient_to || "#8b5cf6"})">${landmarkArt(ct)}
+        <span class="flag">${ct.flag_emoji || "🌐"}</span><span class="cnt">${ct.count}</span></div>
+        <div class="country-meta"><b>${esc(ct.name)}</b><span>${esc(ct.landmark || "")}</span></div></div>`).join("");
+
+    const deadlines = d.upcoming_deadlines.length ? d.upcoming_deadlines.map((cl) => {
+      const du = daysUntil(cl.target_date);
+      const tag = du != null ? (du <= 7 ? `<span class="prio" style="background:#fee2e2;color:#b91c1c">${du}d</span>` : `<span class="prio" style="background:#eef0f8;color:#475569">${du}d</span>`) : "";
+      return `<div class="member-row" style="cursor:pointer;padding:11px 0" onclick="__ent.openClient(${cl.id})">
+        <div class="cl-avatar" style="background:linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})">${esc(cl.country.flag_emoji || "🌐")}</div>
+        <div class="m-meta"><b>${esc(cl.full_name)}</b><span>${esc(cl.visa_type)} · ${fmtDate(cl.target_date)}</span></div>${tag}</div>`;
+    }).join("") : `<div class="empty" style="padding:24px"><p>No upcoming deadlines 🎉</p></div>`;
+
+    const recent = d.recent_clients.length ? d.recent_clients.map((cl) =>
+      `<div class="member-row" style="cursor:pointer;padding:11px 0" onclick="__ent.openClient(${cl.id})">
+        <div class="cl-avatar" style="background:linear-gradient(135deg,${avatarColor(cl.full_name).join(',')})">${esc(initials(cl.full_name).toUpperCase())}</div>
+        <div class="m-meta"><b>${esc(cl.full_name)}</b><span>${esc(cl.country.flag_emoji)} ${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}</span></div>
+        ${statusPill(cl.stage)}</div>`).join("") : `<div class="empty" style="padding:24px"><p>No clients yet.</p></div>`;
+
+    c.innerHTML = `
+      ${trialBanner()}
+      <div class="kpi-grid">
+        ${kpiCard("linear-gradient(135deg,#6366f1,#8b5cf6)", "👥", "Total clients", k.total_clients, "View all clients", "__ent.viewClients({})")}
+        ${kpiCard("linear-gradient(135deg,#0ea5e9,#22d3ee)", "📂", "Active cases", k.active_clients, "in progress", "__ent.viewClients({scope:'active',label:'Active cases'})")}
+        ${kpiCard("linear-gradient(135deg,#10b981,#34d399)", "✅", "Approved", k.approved, k.approval_rate != null ? k.approval_rate + "% approval rate" : "View approved", "__ent.viewClients({status:'approved'})")}
+        ${kpiCard("linear-gradient(135deg,#f59e0b,#f97316)", "🆕", "New this month", k.new_this_month, "this month", "__ent.viewClients({scope:'month',label:'New this month'})")}
+      </div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><h3>Visa pipeline</h3><button class="link" onclick="__ent.go('clients')">View all →</button></div>
+          <div class="card-body">${pipeRows}</div></div>
+        <div class="card"><div class="card-head"><h3>By visa type</h3></div>
+          <div class="card-body"><div class="cat-grid">${vtCells}</div></div></div>
+      </div>
+      <div class="card" style="margin-top:20px"><div class="card-head"><h3>Destinations</h3></div>
+        <div class="card-body">${countryCards ? `<div class="country-grid">${countryCards}</div>` : `<div class="empty" style="padding:24px"><p>Add clients to see destination insights.</p></div>`}</div></div>
+      <div class="grid-2 even" style="margin-top:20px">
+        <div class="card"><div class="card-head"><h3>Upcoming deadlines</h3></div><div class="card-body">${deadlines}</div></div>
+        <div class="card"><div class="card-head"><h3>Recent clients</h3><button class="link" onclick="__ent.go('clients')">All →</button></div><div class="card-body">${recent}</div></div>
+      </div>`;
+  }
+
+  function errBox(ex) {
+    return `<div class="empty"><div class="emoji">⚠️</div><h3>Couldn't load</h3><p>${esc(ex.message || "Error")}</p></div>`;
+  }
+
+  // Open the Clients view pre-filtered from a dashboard click.
+  function openClientsFiltered(opts) {
+    opts = opts || {};
+    state.filters.status = opts.status || "";
+    state.filters.country = opts.country || "";
+    state.filters.q = "";
+    const gs = $("#globalSearch"); if (gs) gs.value = "";
+    syncGlobalSearchUi();
+    state.dashScope = opts.scope || null;          // 'active' | 'month' | { visaType }
+    state.dashScopeLabel = opts.label || "";
+    navigate("clients");
+  }
+  function viewVisaType(i) {
+    const vt = (state.dashVisaTypes || [])[i];
+    if (!vt) { openClientsFiltered({}); return; }
+    openClientsFiltered({ scope: { visaType: vt }, label: "Visa type · " + vt });
+  }
+
+  /* ============================================================
+     CLIENTS
+     ============================================================ */
+  function renderClients() {
+    const c = $("#content");
+    c.innerHTML = `
+      ${trialBanner()}
+      <div class="toolbar" id="clientToolbar"></div>
+      <div id="clientListWrap"><div class="center-load"><div class="spinner dark"></div></div></div>`;
+    renderClientToolbar();
+    loadAndRenderClientList();
+  }
+
+  function renderClientToolbar() {
+    const tb = $("#clientToolbar"); if (!tb) return;
+    const stages = state.catalog ? state.catalog.stages : [];
+    const sc = state.statusCounts || {};
+    const allActive = !state.filters.status;
+    const chips = [`<button class="chip ${allActive ? "active" : ""}" data-st="">All</button>`]
+      .concat(stages.map((s) => `<button class="chip ${state.filters.status === s.key ? "active" : ""}" data-st="${s.key}">
+        <span class="dot" style="width:8px;height:8px;border-radius:50%;background:${s.color}"></span>${esc(s.label)}
+        <span class="c-count">${sc[s.key] || 0}</span></button>`)).join("");
+
+    const searchChip = state.filters.q ? `<button class="chip search-chip active" id="searchChip">Search: ${esc(state.filters.q)} ✕</button>` : "";
+    const scopeChip = state.dashScope ? `<button class="chip scope-chip active" id="scopeChip">${esc(state.dashScopeLabel || "Filtered")} ✕</button>` : "";
+
+    const countries = state.catalog ? state.catalog.countries : [];
+    const countryOpts = `<option value="">All countries</option>` + countries.map((c) => `<option value="${c.code}" ${state.filters.country === c.code ? "selected" : ""}>${esc(c.flag_emoji)} ${esc(c.name)}</option>`).join("");
+
+    tb.innerHTML = `<div class="chips">${searchChip}${scopeChip}${chips}</div><div class="spacer"></div>
+      <select class="select-mini" id="filterCountry">${countryOpts}</select>
+      ${state.perms.can_edit_data ? `<button class="btn btn-primary btn-sm" id="addClientBtn">+ Add Client</button>` : ""}`;
+
+    function clearScope() { state.dashScope = null; state.dashScopeLabel = ""; }
+    $$(".chip[data-st]", tb).forEach((ch) => ch.onclick = () => { state.filters.status = ch.dataset.st; clearScope(); loadAndRenderClientList(); renderClientToolbar(); });
+    const searchEl = $("#searchChip", tb); if (searchEl) searchEl.onclick = () => clearClientSearch();
+    const scEl = $("#scopeChip", tb); if (scEl) scEl.onclick = () => { clearScope(); loadAndRenderClientList(); renderClientToolbar(); };
+    $("#filterCountry").onchange = (e) => { state.filters.country = e.target.value; clearScope(); loadAndRenderClientList(); };
+    const ab = $("#addClientBtn"); if (ab) ab.onclick = () => openClientForm(null);
+  }
+
+  async function loadAndRenderClientList() {
+    const wrap = $("#clientListWrap"); if (!wrap) return;
+    const p = new URLSearchParams();
+    if (state.filters.status) p.set("status_filter", state.filters.status);
+    if (state.filters.category) p.set("category", state.filters.category);
+    if (state.filters.country) p.set("country", state.filters.country);
+    if (state.filters.q) p.set("q", state.filters.q.trim());
+    let data;
+    try { data = await api("/clients?" + p.toString()); } catch (ex) { wrap.innerHTML = errBox(ex); return; }
+    let clients = data.clients;
+    const scope = state.dashScope;
+    if (scope === "active") clients = clients.filter((c) => c.stage && c.stage.is_open);
+    else if (scope === "month") { const ms = new Date(); ms.setDate(1); ms.setHours(0, 0, 0, 0); clients = clients.filter((c) => c.created_at && new Date(c.created_at) >= ms); }
+    else if (scope && scope.visaType) clients = clients.filter((c) => (c.visa_type || "") === scope.visaType);
+    state.clients = clients;
+    state.statusCounts = data.status_counts || {};
+    $("#clientsBadge").textContent = data.total_clients;
+    renderClientToolbar();
+
+    const hasFilter = state.filters.q || state.filters.status || state.filters.country || state.dashScope;
+    if (!clients.length) {
+      const emptyTitle = state.filters.q ? `No clients found for “${esc(state.filters.q)}”` : (hasFilter ? "No matching clients" : "No clients yet");
+      const emptyHelp = state.filters.q ? "Try another name, email, phone, passport, visa type, country, intake, or counselor." : (hasFilter ? "Try clearing your filters." : "Add your first visa client to get started.");
+      wrap.innerHTML = `<div class="empty"><div class="emoji">🗂️</div><h3>${emptyTitle}</h3>
+        <p>${emptyHelp}</p>
+        ${state.filters.q ? `<button class="btn btn-ghost" onclick="__ent.clearSearch()">Clear search</button>` : ""}
+        ${!hasFilter && state.perms.can_edit_data ? `<button class="btn btn-primary" onclick="__ent.openClientForm()">+ Add your first client</button>` : ""}</div>`;
+      return;
     }
 
-    async function initializeTurnstile() {
-        state.turnstile.siteKey = await fetchTurnstileSiteKey();
-        if (!state.turnstile.siteKey) {
-            if (turnstileWrap) turnstileWrap.hidden = true;
-            return;
-        }
+    const rows = clients.map((cl) => {
+      const [a, b] = avatarColor(cl.full_name);
+      const du = daysUntil(cl.target_date);
+      const deadline = cl.target_date ? `<small>${fmtDate(cl.target_date)}${du != null && du <= 14 && du >= 0 ? ` · ${du}d` : ""}</small>` : "";
+      return `<tr onclick="__ent.openClient(${cl.id})">
+        <td><div class="cl-name"><div class="cl-avatar" style="background:linear-gradient(135deg,${a},${b})">${esc(initials(cl.full_name).toUpperCase())}</div>
+          <div><b>${esc(cl.full_name)}</b><span>${esc(cl.email || cl.phone || "—")}</span></div></div></td>
+        <td class="hide-sm"><div class="cl-dest"><span class="fl">${esc(cl.country.flag_emoji)}</span><div>${esc(cl.destination_country_name)}<small>${esc(cl.intake || cl.country.landmark || "")}</small></div></div></td>
+        <td class="hide-sm">${esc(cl.visa_type)}${cl.intake ? `<br><small style="color:var(--muted)">${esc(cl.intake)}</small>` : ""}</td>
+        <td>${statusPill(cl.stage)}</td>
+        <td class="hide-sm">${cl.assigned_to_name ? esc(cl.assigned_to_name) : '<span style="color:var(--muted)">Unassigned</span>'}${deadline}</td>
+      </tr>`;
+    }).join("");
 
-        if (turnstileWrap) turnstileWrap.hidden = false;
-        const ready = await waitForTurnstileApi(5000);
-        if (!ready) {
-            if (turnstileHint) {
-                turnstileHint.textContent = "Security widget failed to load. Refresh and try again.";
-            }
-            return;
-        }
+    wrap.innerHTML = `<table class="client-table"><thead><tr>
+        <th>Client</th><th class="hide-sm">Destination</th><th class="hide-sm">Visa type</th><th>Status</th><th class="hide-sm">Assigned · Deadline</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  }
 
-        try {
-            state.turnstile.widgetId = window.turnstile.render("#entTurnstileWidget", {
-                sitekey: state.turnstile.siteKey,
-            });
-        } catch (_) {
-            if (turnstileHint) {
-                turnstileHint.textContent = "Security widget failed to load. Refresh and try again.";
-            }
-        }
+  /* ---------------- add / edit client form ---------------- */
+  function openClientForm(client) {
+    const isEdit = !!client;
+    const members = teamMembersCache || [];
+    const c = client || {};
+
+    openModal(`
+      <div class="modal-head"><h3>${isEdit ? "Edit client" : "Add new client"}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="clientForm">
+      <div class="modal-body">
+        <div class="field"><label>Full name *</label><input name="full_name" required value="${esc(c.full_name || "")}" placeholder="Client's full name"/></div>
+        <div class="field-row">
+          <div class="field"><label>Email</label><input type="email" name="email" value="${esc(c.email || "")}" placeholder="client@email.com"/></div>
+          <div class="field"><label>Phone</label><input name="phone" value="${esc(c.phone || "")}" placeholder="+91 …"/></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Destination country *</label><select name="destination_country_code" id="cfCountry" required></select></div>
+          <div class="field"><label>Visa type *</label><select name="visa_type" id="cfVisa" required></select></div>
+        </div>
+        <div class="field" id="cfIntakeWrap"><label>Intake</label><select name="intake" id="cfIntake"><option value="">—</option></select></div>
+        <div class="field-row">
+          <div class="field"><label>Status</label><select name="status" id="cfStatus"></select></div>
+          <div class="field"><label>Priority</label><select name="priority" id="cfPriority"></select></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Assigned counselor</label><select name="assigned_to_user_id" id="cfAssign"><option value="">Unassigned</option>${members.map((m) => `<option value="${m.user_id}" ${c.assigned_to_user_id === m.user_id ? "selected" : ""}>${esc(m.full_name || m.email)}</option>`).join("")}</select></div>
+          <div class="field"><label>Key date (interview / travel)</label><input type="date" name="target_date" value="${esc((c.target_date || "").slice(0, 10))}"/></div>
+        </div>
+        <details style="margin-bottom:6px"><summary style="cursor:pointer;font-size:13px;color:var(--primary-600);font-weight:600">More details (passport, nationality…)</summary>
+          <div class="field-row" style="margin-top:12px">
+            <div class="field"><label>Nationality</label><input name="nationality" value="${esc(c.nationality || "")}"/></div>
+            <div class="field"><label>Date of birth</label><input type="date" name="date_of_birth" value="${esc((c.date_of_birth || "").slice(0, 10))}"/></div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>Passport number</label><input name="passport_number" value="${esc(c.passport_number || "")}"/></div>
+            <div class="field"><label>Passport expiry</label><input type="date" name="passport_expiry" value="${esc((c.passport_expiry || "").slice(0, 10))}"/></div>
+          </div>
+          <div class="field"><label>Application reference</label><input name="application_reference" value="${esc(c.application_reference || "")}"/></div>
+        </details>
+        ${isEdit ? "" : `<div class="field"><label>First note (optional)</label><textarea name="initial_note" placeholder="e.g. Walk-in enquiry, interested in Fall intake…"></textarea></div>`}
+        <div id="clientFormError" class="auth-error hidden"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="clientSaveBtn">${isEdit ? "Save changes" : "Add client"}</button>
+      </div></form>`);
+
+    const countrySel = $("#cfCountry"), visaSel = $("#cfVisa"),
+      intakeSel = $("#cfIntake"), intakeWrap = $("#cfIntakeWrap"), statusSel = $("#cfStatus"), prioSel = $("#cfPriority");
+    const CAT = "student";
+
+    statusSel.innerHTML = state.catalog.stages.map((s) => `<option value="${s.key}" ${(c.status || "new_lead") === s.key ? "selected" : ""}>${esc(s.label)}</option>`).join("");
+    prioSel.innerHTML = state.catalog.priorities.map((p) => `<option value="${p.key}" ${(c.priority || "normal") === p.key ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+
+    function fillCountries() {
+      const list = state.catalog.countries.filter((ct) => (ct.visa_types[CAT] || []).length);
+      countrySel.innerHTML = list.map((ct) => `<option value="${ct.code}" ${c.destination_country_code === ct.code ? "selected" : ""}>${ct.flag_emoji} ${esc(ct.name)}</option>`).join("");
+      fillVisas();
     }
-
-    async function bootstrapSession() {
-        try {
-            const data = await apiRequest("/api/enterprise/me");
-            if (redirectToOrganizationPortalIfNeeded(data)) {
-                return;
-            }
-            applyEnterpriseContext(data);
-            if (data.onboarding_required) {
-                showOnboardingScreen();
-            } else {
-                showDashboardShell();
-                switchToSection("overview");
-                loadStudents(true);
-            }
-            return;
-        } catch (error) {
-            showAuthScreen();
-            if (isInviteOnlyAccessError(error)) {
-                showAuthInviteOnlyFlash();
-            }
-        }
+    function fillVisas() {
+      const ct = countryByCode(countrySel.value);
+      const visas = ct ? (ct.visa_types[CAT] || []) : [];
+      visaSel.innerHTML = visas.map((v) => `<option value="${esc(v)}" ${c.visa_type === v ? "selected" : ""}>${esc(v)}</option>`).join("");
+      if (ct) {
+        intakeWrap.style.display = "";
+        intakeSel.innerHTML = `<option value="">—</option>` + (ct.student_intakes || []).map((i) => `<option value="${esc(i)}" ${c.intake === i ? "selected" : ""}>${esc(i)}</option>`).join("");
+      } else { intakeWrap.style.display = "none"; intakeSel.innerHTML = `<option value="">—</option>`; }
     }
+    countrySel.onchange = fillVisas;
+    fillCountries();
 
-    async function handlePortalLogout() {
-        if (!sidebarLogoutBtn || sidebarLogoutBtn.disabled) return;
-        setButtonLoading(sidebarLogoutBtn, true, "Logging out...", "Logout");
-        try {
-            await apiRequest("/api/auth/logout", { method: "POST" });
-        } catch (error) {
-            const message = error.detail || "Unable to logout right now. Please try again.";
-            if (state.currentSection === "team") {
-                showTeamFlash(message, "error");
-            } else {
-                window.alert(message);
-            }
-            setButtonLoading(sidebarLogoutBtn, false, "Logging out...", "Logout");
-            return;
+    $("#clientForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#clientSaveBtn"); const err = $("#clientFormError");
+      err.classList.add("hidden");
+      const body = {};
+      ["full_name", "destination_country_code", "visa_type", "intake", "email", "phone",
+        "nationality", "date_of_birth", "passport_number", "passport_expiry", "priority", "status",
+        "target_date", "application_reference"].forEach((k) => {
+        const el = f[k]; if (!el) return; const v = (el.value || "").trim(); if (v !== "") body[k] = v;
+      });
+      if (!isEdit) body.visa_category = "student";
+      const assign = f.assigned_to_user_id.value;
+      body.assigned_to_user_id = assign ? parseInt(assign, 10) : null;
+      if (!isEdit && f.initial_note && f.initial_note.value.trim()) body.initial_note = f.initial_note.value.trim();
+
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        if (isEdit) {
+          await api("/clients/" + client.id, { method: "PATCH", body });
+          toast("Client updated", "success");
+        } else {
+          const r = await api("/clients", { method: "POST", body });
+          state.subscription = r.subscription || state.subscription; updatePlanChip();
+          toast("Client added", "success");
         }
+        closeModal();
+        if (state.view === "clients") loadAndRenderClientList();
+        else navigate("clients");
+        if (isEdit && state.activeClient === client.id) openClient(client.id);
+      } catch (ex) {
+        if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("billing"); return; }
+        err.textContent = ex.message; err.classList.remove("hidden");
+      } finally { btn.disabled = false; btn.innerHTML = isEdit ? "Save changes" : "Add client"; }
+    };
+  }
 
-        state.user = null;
-        state.organization = null;
-        state.membership = null;
-        state.permissions = {
-            can_view_data: false,
-            can_edit_data: false,
-            can_manage_users: false,
+  /* ---------------- client detail drawer ---------------- */
+  async function openClient(id) {
+    state.activeClient = id;
+    openDrawer('<div class="center-load"><div class="spinner dark"></div></div>');
+    let data;
+    try { data = await api("/clients/" + id); } catch (ex) { openDrawer(`<div class="drawer-body">${errBox(ex)}</div>`); return; }
+    drawClient(data);
+  }
+
+  function drawClient(data) {
+    const cl = data.client;
+    const canEdit = state.perms.can_edit_data;
+    const grad = `linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})`;
+
+    const detail = (label, val) => `<div class="detail-item"><label>${label}</label><div>${val || "—"}</div></div>`;
+
+    const stages = state.catalog.stages.filter((s) => s.key !== "on_hold");
+    const onHold = state.catalog.stages.find((s) => s.key === "on_hold");
+    const stageFlow = stages.map((s) => {
+      const active = cl.status === s.key;
+      return `<button class="stage-step ${active ? "done" : ""}" ${active ? `style="background:${s.color}"` : ""} ${canEdit ? `onclick="__ent.setStatus(${cl.id},'${s.key}')"` : "disabled"}>${esc(s.label)}</button>`;
+    }).join("") + (onHold ? `<button class="stage-step ${cl.status === "on_hold" ? "done" : ""}" ${cl.status === "on_hold" ? `style="background:${onHold.color}"` : ""} ${canEdit ? `onclick="__ent.setStatus(${cl.id},'on_hold')"` : "disabled"}>${esc(onHold.label)}</button>` : "");
+
+    openDrawer(`
+      <div class="drawer-hero" style="background:${grad}">
+        <button class="x" onclick="__ent.closeDrawer()">×</button>
+        <div class="dh-top">
+          <div class="dh-avatar">${esc(cl.country.flag_emoji || initials(cl.full_name))}</div>
+          <div><h2>${esc(cl.full_name)}</h2>
+          <div class="dh-sub">${esc(cl.country.flag_emoji)} ${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}${cl.intake ? " · " + esc(cl.intake) : ""}</div></div>
+        </div>
+      </div>
+      <div class="drawer-tabs">
+        <button class="drawer-tab active" data-tab="overview">Overview</button>
+        <button class="drawer-tab" data-tab="notes">Notes${data.notes.length ? ` (${data.notes.length})` : ""}</button>
+        <button class="drawer-tab" data-tab="email">Email${data.emails.length ? ` (${data.emails.length})` : ""}</button>
+      </div>
+      <div class="drawer-body" id="drawerBody"></div>`);
+
+    const body = $("#drawerBody");
+
+    function showTab(tab) {
+      $$(".drawer-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+      if (tab === "overview") {
+        body.innerHTML = `
+          <div style="margin-bottom:18px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+              <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Visa status</div>
+              ${statusPill(cl.stage)}
+            </div>
+            <div class="stage-flow">${stageFlow}</div>
+          </div>
+          <div class="detail-grid">
+            ${detail("Email", cl.email ? esc(cl.email) : "")}
+            ${detail("Phone", cl.phone ? esc(cl.phone) : "")}
+            ${detail("Priority", `<span class="prio" style="background:${priorityColor(cl.priority)}1f;color:${priorityColor(cl.priority)}">${esc(cl.priority)}</span>`)}
+            ${detail("Key date", cl.target_date ? fmtDate(cl.target_date) : "")}
+            ${detail("Intake", cl.intake ? esc(cl.intake) : "")}
+            ${detail("Assigned to", cl.assigned_to_name ? esc(cl.assigned_to_name) : "")}
+            ${detail("Nationality", cl.nationality ? esc(cl.nationality) : "")}
+            ${detail("Date of birth", cl.date_of_birth ? fmtDate(cl.date_of_birth) : "")}
+            ${detail("Passport no.", cl.passport_number ? esc(cl.passport_number) : "")}
+            ${detail("Passport expiry", cl.passport_expiry ? fmtDate(cl.passport_expiry) : "")}
+            ${detail("Application ref.", cl.application_reference ? esc(cl.application_reference) : "")}
+            ${detail("Added", fmtDate(cl.created_at))}
+          </div>
+          ${canEdit ? `<div style="display:flex;gap:10px;margin-top:22px">
+            <button class="btn btn-soft" style="flex:1" onclick="__ent.editClient(${cl.id})">Edit details</button>
+            <button class="btn btn-danger" onclick="__ent.deleteClient(${cl.id})">Delete</button>
+          </div>` : ""}`;
+      } else if (tab === "notes") {
+        const add = canEdit ? `<div class="note-add">
+          <textarea id="noteInput" placeholder="Add a note about this client…"></textarea>
+          <button class="btn btn-primary btn-sm" style="align-self:flex-start" id="noteSaveBtn">Add note</button></div>` : "";
+        const list = data.notes.length ? `<div class="timeline">${data.notes.map((n) =>
+          `<div class="tl-item"><div class="tl-meta">${esc(n.author_name || "Team")} · ${fmtDateTime(n.created_at)}</div><div class="tl-body">${esc(n.body)}</div></div>`).join("")}</div>`
+          : `<div class="empty" style="padding:24px"><p>No notes yet.</p></div>`;
+        body.innerHTML = add + list;
+        if (canEdit) $("#noteSaveBtn").onclick = async () => {
+          const v = $("#noteInput").value.trim(); if (!v) return;
+          const btn = $("#noteSaveBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+          try { const r = await api(`/clients/${cl.id}/notes`, { method: "POST", body: { body: v } }); data.notes.unshift(r.note); showTab("notes"); toast("Note added", "success"); }
+          catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Add note"; }
         };
-        state.teamMembers = [];
-        state.students = [];
-        state.activeStudentWorkspaceId = null;
-        state.activeWorkspaceOption = "journey";
-        state.studentOptions = {
-            countries: [],
-            visaTypesByCountry: {},
-            intakesByCountryVisa: {},
+      } else if (tab === "email") {
+        const composer = canEdit ? (cl.email ? `<div class="note-add">
+            <input id="emailSubject" class="select-mini" style="width:100%;padding:11px 13px" placeholder="Subject"/>
+            <textarea id="emailBody" placeholder="Write your message to ${esc(cl.full_name)}…"></textarea>
+            <button class="btn btn-primary btn-sm" style="align-self:flex-start" id="emailSendBtn">✉ Send email</button>
+            <div style="font-size:12px;color:var(--muted)">To: ${esc(cl.email)}</div></div>`
+          : `<div class="plan-banner warn" style="margin-bottom:18px"><div class="pb-icon">✉</div><div class="pb-text"><b>No email on file.</b> <span>Add an email to message this client.</span></div></div>`) : "";
+        const hist = data.emails.length ? data.emails.map((em) =>
+          `<div class="email-item"><div class="ei-top"><span class="ei-subject">${esc(em.subject)}</span><span style="font-size:12px;color:var(--muted)">${fmtDateTime(em.created_at)}</span></div>
+           <div class="ei-body">${esc(em.body)}</div>${em.status !== "sent" ? `<div class="ei-fail">⚠ Failed: ${esc(em.error_message || "")}</div>` : ""}</div>`).join("")
+          : `<div class="empty" style="padding:24px"><p>No emails sent yet.</p></div>`;
+        body.innerHTML = composer + hist;
+        const sb = $("#emailSendBtn");
+        if (sb) sb.onclick = async () => {
+          const subject = $("#emailSubject").value.trim(), bodyv = $("#emailBody").value.trim();
+          if (!subject || !bodyv) { toast("Add a subject and message", "error"); return; }
+          sb.disabled = true; sb.innerHTML = '<span class="spinner"></span> Sending…';
+          try { const r = await api(`/clients/${cl.id}/email`, { method: "POST", body: { subject, body: bodyv } });
+            data.emails.unshift(r.email); showTab("email"); toast("Email sent", "success"); }
+          catch (ex) { toast(ex.message, "error"); sb.disabled = false; sb.innerHTML = "✉ Send email"; }
         };
-        closeStudentModal();
-        updateStudentCounts(0);
-        renderStudentRows();
-        renderStudentWorkspace(null);
-
-        hideAuthFlash();
-        hideTeamFlash();
-        hideStudentsFlash();
-        hideSettingsFlash();
-        if (loginForm) loginForm.reset();
-        resetTurnstileWidget();
-        showAuthScreen();
-        showAuthFlash("Logged out successfully.", "success");
-        setButtonLoading(sidebarLogoutBtn, false, "Logging out...", "Logout");
+      }
     }
+    $$(".drawer-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
+    showTab("overview");
+  }
 
-    if (loginForm) {
-        loginForm.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            hideAuthFlash();
+  async function setStatus(id, status) {
+    try {
+      await api(`/clients/${id}/status`, { method: "PATCH", body: { status } });
+      toast("Status updated", "success");
+      const data = await api("/clients/" + id); drawClient(data);
+      if (state.view === "clients") loadAndRenderClientList();
+      else if (state.view === "dashboard") { /* refresh later */ }
+    } catch (ex) { toast(ex.message, "error"); }
+  }
+  async function editClient(id) {
+    const cl = state.clients.find((c) => c.id === id) || (await api("/clients/" + id)).client;
+    await ensureTeam();
+    openClientForm(cl);
+  }
+  async function deleteClient(id) {
+    openModal(`<div class="modal-head"><h3>Delete client?</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body"><p style="margin:0;color:var(--text-2)">This permanently removes the client and all their notes and email history. This cannot be undone.</p></div>
+      <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+      <button class="btn btn-danger" id="confirmDel">Delete client</button></div>`);
+    $("#confirmDel").onclick = async () => {
+      try { await api("/clients/" + id, { method: "DELETE" }); toast("Client deleted", "success"); closeModal(); closeDrawer(); loadAndRenderClientList(); }
+      catch (ex) { toast(ex.message, "error"); }
+    };
+  }
 
-            const emailInput = $("#entEmail");
-            const passwordInput = $("#entPassword");
-            const email = emailInput ? emailInput.value.trim() : "";
-            const password = passwordInput ? passwordInput.value : "";
+  /* ============================================================
+     TEAM
+     ============================================================ */
+  let teamMembersCache = null;
+  async function ensureTeam() {
+    if (teamMembersCache) return teamMembersCache;
+    try { const d = await api("/team"); teamMembersCache = d.members; return d.members; }
+    catch (e) { teamMembersCache = []; return []; }
+  }
 
-            if (!email || !password) {
-                showAuthFlash("Please enter both email and password.", "error");
-                return;
-            }
+  async function renderTeam() {
+    const c = $("#content");
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    let d;
+    try { d = await api("/team"); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    teamMembersCache = d.members;
+    const canManage = d.permissions.can_manage_users;
+    const rows = d.members.map((m) => `<div class="member-row">
+      <div class="m-av">${esc(initials(m.full_name || m.email).toUpperCase())}</div>
+      <div class="m-meta"><b>${esc(m.full_name || m.email)}</b><span>${esc(m.email)}${m.last_login_at ? " · last seen " + fmtDate(m.last_login_at) : ""}</span></div>
+      ${canManage && m.user_id !== (state.me.user.id) ? `<select class="select-mini" onchange="__ent.changeRole(${m.user_id}, this.value)">
+        ${["admin", "editor", "viewer"].map((r) => `<option value="${r}" ${m.role === r ? "selected" : ""}>${r[0].toUpperCase() + r.slice(1)}</option>`).join("")}
+      </select><button class="btn btn-danger btn-sm" onclick="__ent.removeMember(${m.user_id})">Remove</button>`
+        : `<span class="role-badge role-${m.role}">${esc(m.role)}</span>`}
+    </div>`).join("");
 
-            const payload = { email, password };
-            if (state.turnstile.siteKey) {
-                const turnstileToken = getTurnstileToken();
-                if (!turnstileToken) {
-                    showAuthFlash("Please complete security verification.", "error");
-                    return;
-                }
-                payload.cf_turnstile_token = turnstileToken;
-            }
+    c.innerHTML = `
+      ${trialBanner()}
+      <div class="card"><div class="card-head"><h3>Team members (${d.members.length})</h3>
+        ${canManage ? `<button class="btn btn-primary btn-sm" id="inviteBtn">+ Invite member</button>` : ""}</div>
+        <div class="card-body" style="padding:6px 0">${rows}</div></div>
+      ${canManage ? `<p style="color:var(--muted);font-size:13px;margin-top:14px">Invited members receive an email to set their password and join your workspace. Seats used: ${state.subscription ? state.subscription.seats_used + "/" + (state.subscription.max_seats === -1 ? "∞" : state.subscription.max_seats) : ""}.</p>` : ""}`;
 
-            setButtonLoading(loginBtn, true, "Signing in...", "Sign In");
-
-            try {
-                const data = await apiRequest("/api/enterprise/login", {
-                    method: "POST",
-                    body: payload,
-                });
-                if (redirectToOrganizationPortalIfNeeded(data)) {
-                    return;
-                }
-                applyEnterpriseContext(data);
-                if (data.onboarding_required) {
-                    showOnboardingScreen();
-                } else {
-                    showDashboardShell();
-                    switchToSection("overview");
-                    loadStudents(true);
-                }
-            } catch (error) {
-                if (isInviteOnlyAccessError(error)) {
-                    showAuthInviteOnlyFlash();
-                } else {
-                    showAuthFlash(error.detail || "Login failed.", "error");
-                }
-                resetTurnstileWidget();
-            } finally {
-                setButtonLoading(loginBtn, false, "Signing in...", "Sign In");
-            }
-        });
-    }
-
-    if (forgotPasswordLink) {
-        forgotPasswordLink.addEventListener("click", (event) => {
-            event.preventDefault();
-            const emailInput = $("#entEmail");
-            const email = emailInput ? emailInput.value.trim() : "";
-            const resetRequestUrl = email
-                ? `/forgot-password?email=${encodeURIComponent(email)}`
-                : "/forgot-password";
-            window.location.assign(resetRequestUrl);
-        });
-    }
-
-    if (onboardingForm) {
-        onboardingForm.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            hideOnboardingFlash();
-
-            const companyName = companyNameInput ? companyNameInput.value.trim() : "";
-            const subdomainSlug = normalizeSubdomainInput(subdomainInput ? subdomainInput.value : "");
-            if (companyName.length < 2) {
-                showOnboardingFlash("Company name must be at least 2 characters.", "error");
-                return;
-            }
-            const subdomainError = validateSubdomainOrError(subdomainSlug);
-            if (subdomainError) {
-                showOnboardingFlash(subdomainError, "error");
-                if (subdomainInput) subdomainInput.focus();
-                return;
-            }
-            if (subdomainInput) {
-                subdomainInput.value = subdomainSlug;
-            }
-            updateSubdomainPreview();
-
-            setButtonLoading(onboardingBtn, true, "Saving...", "Continue to dashboard");
-            try {
-                const data = await apiRequest("/api/enterprise/onboarding", {
-                    method: "POST",
-                    body: {
-                        company_name: companyName,
-                        subdomain_slug: subdomainSlug,
-                    },
-                });
-                if (redirectToOrganizationPortalIfNeeded(data)) {
-                    return;
-                }
-                applyEnterpriseContext(data);
-                showDashboardShell();
-                switchToSection("overview");
-                loadStudents(true);
-            } catch (error) {
-                showOnboardingFlash(error.detail || "Unable to complete onboarding.", "error");
-            } finally {
-                setButtonLoading(onboardingBtn, false, "Saving...", "Continue to dashboard");
-            }
-        });
-    }
-
-    if (teamAddForm) {
-        teamAddForm.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            hideTeamFlash();
-
-            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
-            if (!canManageUsers) {
-                showTeamFlash("Only organization admins can add team users.", "error");
-                return;
-            }
-
-            const email = teamEmailInput ? teamEmailInput.value.trim() : "";
-            const fullName = teamNameInput ? teamNameInput.value.trim() : "";
-            const role = normalizeRole(teamRoleInput ? teamRoleInput.value : "viewer");
-            if (!email) {
-                showTeamFlash("User email is required.", "error");
-                return;
-            }
-
-            setButtonLoading(teamAddBtn, true, "Adding...", "Add User");
-            try {
-                const data = await apiRequest("/api/enterprise/team/users", {
-                    method: "POST",
-                    body: {
-                        email,
-                        role,
-                        full_name: fullName || null,
-                    },
-                });
-                showTeamFlash(data.message || "User added successfully.", "success");
-                if (teamEmailInput) teamEmailInput.value = "";
-                if (teamNameInput) teamNameInput.value = "";
-                if (teamRoleInput) teamRoleInput.value = "viewer";
-
-                if (Array.isArray(data.members)) {
-                    state.teamMembers = data.members;
-                    renderTeamRows();
-                } else {
-                    await loadTeamMembers(true);
-                }
-            } catch (error) {
-                showTeamFlash(error.detail || "Unable to add user.", "error");
-            } finally {
-                setButtonLoading(teamAddBtn, false, "Adding...", "Add User");
-                applyTeamAccessState();
-            }
-        });
-    }
-
-    if (addStudentBtnOverview) {
-        addStudentBtnOverview.addEventListener("click", () => {
-            openStudentModal();
-        });
-    }
-
-    if (addStudentBtnStudents) {
-        addStudentBtnStudents.addEventListener("click", () => {
-            openStudentModal();
-        });
-    }
-
-    if (studentWorkspaceBackBtn) {
-        studentWorkspaceBackBtn.addEventListener("click", () => {
-            switchToSection("students");
-        });
-    }
-
-    if (studentCountrySelect) {
-        studentCountrySelect.addEventListener("change", () => {
-            setVisaTypeOptionsForCountry(studentCountrySelect.value);
-        });
-    }
-
-    if (studentVisaTypeSelect) {
-        studentVisaTypeSelect.addEventListener("change", () => {
-            const countryCode = studentCountrySelect ? studentCountrySelect.value : "";
-            setIntakeOptionsForCountryVisa(countryCode, studentVisaTypeSelect.value);
-        });
-    }
-
-    if (studentModalCloseBtn) {
-        studentModalCloseBtn.addEventListener("click", () => {
-            closeStudentModal();
-        });
-    }
-
-    if (studentModalCancelBtn) {
-        studentModalCancelBtn.addEventListener("click", () => {
-            closeStudentModal();
-        });
-    }
-
-    if (studentModal) {
-        studentModal.addEventListener("click", (event) => {
-            if (event.target === studentModal) {
-                closeStudentModal();
-            }
-        });
-    }
-    document.addEventListener(
-        "click",
-        (event) => {
-            if (!studentModal || studentModal.hidden) return;
-            const closeTrigger = event.target && event.target.closest
-                ? event.target.closest("#entStudentModalClose, #entStudentCancelBtn")
-                : null;
-            if (!closeTrigger) return;
-            event.preventDefault();
-            closeStudentModal();
-        },
-        true
-    );
-
-    if (studentForm) {
-        studentForm.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            hideStudentModalFlash();
-
-            const canEditData = !!(state.permissions && state.permissions.can_edit_data);
-            if (!canEditData) {
-                showStudentModalFlash("Only admins or editors can add students.", "error");
-                return;
-            }
-
-            const studentName = studentNameInput ? studentNameInput.value.trim() : "";
-            const studyCountryCode = studentCountrySelect ? String(studentCountrySelect.value || "").trim().toUpperCase() : "";
-            const visaType = studentVisaTypeSelect ? String(studentVisaTypeSelect.value || "").trim() : "";
-            const intake = studentIntakeSelect ? String(studentIntakeSelect.value || "").trim() : "";
-
-            if (studentName.length < 2) {
-                showStudentModalFlash("Student name must be at least 2 characters.", "error");
-                if (studentNameInput) studentNameInput.focus();
-                return;
-            }
-            if (!studyCountryCode) {
-                showStudentModalFlash("Please select destination country.", "error");
-                if (studentCountrySelect) studentCountrySelect.focus();
-                return;
-            }
-            if (!visaType) {
-                showStudentModalFlash("Please select visa type.", "error");
-                if (studentVisaTypeSelect) studentVisaTypeSelect.focus();
-                return;
-            }
-            if (!intake) {
-                showStudentModalFlash("Please select intake.", "error");
-                if (studentIntakeSelect) studentIntakeSelect.focus();
-                return;
-            }
-
-            setButtonLoading(studentSaveBtn, true, "Adding...", "Add Student");
-            try {
-                const data = await apiRequest("/api/enterprise/students", {
-                    method: "POST",
-                    body: {
-                        student_name: studentName,
-                        study_country_code: studyCountryCode,
-                        visa_type: visaType,
-                        intake,
-                    },
-                });
-                closeStudentModal();
-                showStudentsFlash(data.message || "Student added successfully.", "success");
-                await loadStudents(true);
-            } catch (error) {
-                showStudentModalFlash(error.detail || "Unable to add student.", "error");
-            } finally {
-                setButtonLoading(studentSaveBtn, false, "Adding...", "Add Student");
-            }
-        });
-    }
-
-    if (settingsLogoUrlInput) {
-        settingsLogoUrlInput.addEventListener("input", () => {
-            updateSettingsPreviewFromInputs();
-        });
-    }
-
-    if (settingsChooseLogoBtn) {
-        settingsChooseLogoBtn.addEventListener("click", () => {
-            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
-            if (!canManageUsers) {
-                showSettingsFlash("Only organization admins can change company profile picture.", "error");
-                return;
-            }
-            if (!settingsLogoFileInput) return;
-            settingsLogoFileInput.click();
-        });
-    }
-
-    if (settingsLogoFileInput) {
-        settingsLogoFileInput.addEventListener("change", () => {
-            const selected = settingsLogoFileInput.files && settingsLogoFileInput.files[0]
-                ? settingsLogoFileInput.files[0]
-                : null;
-            if (settingsLogoFileName) {
-                settingsLogoFileName.textContent = selected ? selected.name : "No file selected.";
-            }
-            if (selected) {
-                showSettingsFlash("Image selected. Click Upload Picture, then Save Branding.", "info");
-            }
-        });
-    }
-
-    if (settingsUploadLogoBtn) {
-        settingsUploadLogoBtn.addEventListener("click", async () => {
-            hideSettingsFlash();
-            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
-            if (!canManageUsers) {
-                showSettingsFlash("Only organization admins can change company profile picture.", "error");
-                return;
-            }
-            const selected = settingsLogoFileInput && settingsLogoFileInput.files && settingsLogoFileInput.files[0]
-                ? settingsLogoFileInput.files[0]
-                : null;
-            if (!selected) {
-                showSettingsFlash("Choose an image file first.", "error");
-                return;
-            }
-
-            setButtonLoading(settingsUploadLogoBtn, true, "Uploading...", "Upload Picture");
-            try {
-                const formData = new FormData();
-                formData.append("file", selected);
-
-                const data = await apiRequest("/api/upload/image", {
-                    method: "POST",
-                    body: formData,
-                });
-
-                const uploadedUrl = data && data.url ? String(data.url).trim() : "";
-                if (!uploadedUrl) {
-                    throw { detail: "Upload succeeded but no image URL was returned." };
-                }
-
-                if (settingsLogoUrlInput) settingsLogoUrlInput.value = uploadedUrl;
-                updateSettingsPreviewFromInputs();
-                showSettingsFlash("Company profile picture uploaded. Click Save Branding to apply.", "success");
-            } catch (error) {
-                showSettingsFlash(error.detail || "Unable to upload company profile picture.", "error");
-            } finally {
-                setButtonLoading(settingsUploadLogoBtn, false, "Uploading...", "Upload Picture");
-            }
-        });
-    }
-
-    if (settingsCompanyNameInput) {
-        settingsCompanyNameInput.addEventListener("input", () => {
-            updateSettingsPreviewFromInputs();
-        });
-    }
-
-    if (settingsRandomLogoBtn) {
-        settingsRandomLogoBtn.addEventListener("click", () => {
-            hideSettingsFlash();
-            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
-            if (!canManageUsers) {
-                showSettingsFlash("Only organization admins can randomize organization branding.", "error");
-                return;
-            }
-            if (!settingsLogoUrlInput) return;
-            settingsLogoUrlInput.value = picsumPortraitUrl(
-                `org-random|${Date.now()}|${Math.random()}|${(state.organization && state.organization.id) || "org"}`,
-                256
-            );
-            updateSettingsPreviewFromInputs();
-            showSettingsFlash("Random logo generated. Click Save Branding to apply it.", "info");
-        });
-    }
-
-    if (settingsForm) {
-        settingsForm.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            hideSettingsFlash();
-
-            const canManageUsers = !!(state.permissions && state.permissions.can_manage_users);
-            if (!canManageUsers) {
-                showSettingsFlash("Only organization admins can update branding.", "error");
-                return;
-            }
-
-            const companyName = settingsCompanyNameInput ? settingsCompanyNameInput.value.trim() : "";
-            const logoUrl = settingsLogoUrlInput ? settingsLogoUrlInput.value.trim() : "";
-            if (companyName.length < 2) {
-                showSettingsFlash("Organization name must be at least 2 characters.", "error");
-                return;
-            }
-
-            setButtonLoading(settingsSaveBtn, true, "Saving...", "Save Branding");
-            try {
-                const data = await apiRequest("/api/enterprise/organization/branding", {
-                    method: "PATCH",
-                    body: {
-                        company_name: companyName,
-                        logo_url: logoUrl,
-                    },
-                });
-
-                if (data && data.organization) {
-                    state.organization = data.organization;
-                } else if (state.organization) {
-                    state.organization.company_name = companyName;
-                    state.organization.logo_url = logoUrl || state.organization.logo_url;
-                }
-
-                applyOrganizationUI();
-                syncSettingsFormFromState();
-                showSettingsFlash(data.message || "Organization branding updated successfully.", "success");
-            } catch (error) {
-                showSettingsFlash(error.detail || "Unable to save organization branding.", "error");
-            } finally {
-                setButtonLoading(settingsSaveBtn, false, "Saving...", "Save Branding");
-            }
-        });
-    }
-
-    $$(".ent-nav-item[data-section]").forEach((button) => {
-        button.addEventListener("click", () => switchToSection(button.dataset.section));
-    });
-
-    if (mobileToggle) {
-        mobileToggle.addEventListener("click", openMobileSidebar);
-    }
-    if (sidebarOverlay) {
-        sidebarOverlay.addEventListener("click", closeMobileSidebar);
-    }
-    if (sidebarLogoutBtn) {
-        sidebarLogoutBtn.addEventListener("click", handlePortalLogout);
-    }
-    document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && studentModal && !studentModal.hidden) {
-            closeStudentModal();
+    const ib = $("#inviteBtn");
+    if (ib) ib.onclick = () => {
+      openModal(`<div class="modal-head"><h3>Invite team member</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+        <form id="inviteForm"><div class="modal-body">
+          <div class="field"><label>Email</label><input type="email" name="email" required placeholder="teammate@company.com"/></div>
+          <div class="field"><label>Full name (optional)</label><input name="full_name" placeholder="Their name"/></div>
+          <div class="field"><label>Role</label><select name="role"><option value="editor">Editor — can manage clients</option><option value="viewer">Viewer — read only</option><option value="admin">Admin — full access</option></select></div>
+          <div class="hint" style="font-size:12px;color:var(--muted)">They'll get an email to set their password and join your workspace.</div>
+          <div id="inviteError" class="auth-error hidden"></div>
+        </div><div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="inviteSubmit">Send invite</button></div></form>`);
+      $("#inviteForm").onsubmit = async (e) => {
+        e.preventDefault(); const f = e.target; const btn = $("#inviteSubmit"); const err = $("#inviteError"); err.classList.add("hidden");
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        try { await api("/team/users", { method: "POST", body: { email: f.email.value.trim(), full_name: f.full_name.value.trim() || null, role: f.role.value } });
+          toast("Invitation sent", "success"); closeModal(); renderTeam(); }
+        catch (ex) {
+          if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("billing"); return; }
+          err.textContent = ex.message; err.classList.remove("hidden"); btn.disabled = false; btn.textContent = "Send invite";
         }
+      };
+    };
+  }
+  async function changeRole(uid, role) {
+    try { await api(`/team/users/${uid}/role`, { method: "PATCH", body: { role } }); toast("Role updated", "success"); renderTeam(); }
+    catch (ex) { toast(ex.message, "error"); renderTeam(); }
+  }
+  async function removeMember(uid) {
+    if (!confirm("Remove this member from your workspace?")) return;
+    try { await api(`/team/users/${uid}`, { method: "DELETE" }); toast("Member removed", "success"); renderTeam(); }
+    catch (ex) { toast(ex.message, "error"); }
+  }
+
+  /* ============================================================
+     BILLING
+     ============================================================ */
+  async function renderBilling() {
+    const c = $("#content");
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    let d;
+    try { d = await api("/billing/subscription"); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    state.subscription = d.subscription; updatePlanChip();
+    const sub = d.subscription;
+    const canManage = state.perms.can_manage_users;
+
+    const usagePct = sub.max_clients === -1 ? 0 : Math.min(100, Math.round((sub.clients_used / Math.max(1, sub.max_clients)) * 100));
+    const cycle = state.billingCycle;
+
+    const planCard = (p) => {
+      const price = cycle === "yearly" ? p.yearly_display : p.monthly_display;
+      const isCurrent = sub.plan === p.key && !sub.is_trial;
+      return `<div class="plan-card ${p.is_popular ? "popular" : ""} ${isCurrent ? "current-plan" : ""}">
+        ${p.is_popular ? `<div class="pop-tag">Most popular</div>` : ""}
+        <h3>${esc(p.label)}</h3><div class="tagline">${esc(p.tagline)}</div>
+        <div class="price">${price}<small>/${cycle === "yearly" ? "yr" : "mo"}</small></div>
+        <ul>${p.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
+        ${isCurrent ? `<div class="plan-current-tag">✓ Current plan</div>`
+          : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}')">${sub.is_trial ? "Start " + esc(p.label) : "Switch to " + esc(p.label)}</button>`
+            : `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to upgrade</div>`)}
+      </div>`;
+    };
+
+    c.innerHTML = `
+      <div class="card" style="margin-bottom:24px"><div class="card-body" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+        <div style="flex:1;min-width:220px">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Current plan</div>
+          <div style="font-size:24px;font-weight:760;margin:4px 0">${esc(sub.plan_label)} ${sub.is_trial ? `<span style="font-size:13px;color:var(--warning);font-weight:600">· ${sub.trial_expired ? "expired" : sub.trial_days_left + " days left"}</span>` : ""}</div>
+          <div style="font-size:13px;color:var(--text-2)">${sub.current_period_end && !sub.is_trial ? "Renews " + fmtDate(sub.current_period_end) : sub.trial_ends_at ? "Trial ends " + fmtDate(sub.trial_ends_at) : ""}</div>
+        </div>
+        <div style="flex:1;min-width:220px">
+          <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-2)">Clients</span><b>${sub.clients_used} / ${sub.max_clients === -1 ? "∞" : sub.max_clients}</b></div>
+          <div class="usage-bar"><div class="usage-fill" style="width:${usagePct}%"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:10px"><span style="color:var(--text-2)">Team seats</span><b>${sub.seats_used} / ${sub.max_seats === -1 ? "∞" : sub.max_seats}</b></div>
+        </div>
+      </div></div>
+      <div style="text-align:center">
+        <div class="billing-toggle">
+          <button class="${cycle === "monthly" ? "active" : ""}" onclick="__ent.setCycle('monthly')">Monthly</button>
+          <button class="${cycle === "yearly" ? "active" : ""}" onclick="__ent.setCycle('yearly')">Yearly<span class="save">save ~17%</span></button>
+        </div>
+      </div>
+      <div class="plan-grid">${d.plans.map(planCard).join("")}</div>
+      ${!d.plans.length ? "" : `<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:18px">Secure payments via Razorpay. Cancel anytime.</p>`}`;
+  }
+  function setCycle(c) { state.billingCycle = c; renderBilling(); }
+
+  async function checkout(plan) {
+    let res;
+    try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: state.billingCycle } }); }
+    catch (ex) { toast(ex.message, "error"); return; }
+    if (res.action === "contact_sales") { toast(res.message || "Please contact sales.", "error"); return; }
+    if (res.action !== "checkout") { toast("Checkout unavailable.", "error"); return; }
+    if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); return; }
+
+    const rzp = new Razorpay({
+      key: res.razorpay_key_id,
+      amount: res.amount,
+      currency: res.currency,
+      name: res.organization_name || "Rilono",
+      description: res.plan_label + " plan (" + res.billing_cycle + ")",
+      order_id: res.order_id,
+      prefill: res.prefill,
+      theme: { color: "#6366f1" },
+      handler: async function (resp) {
+        try {
+          const v = await api("/billing/verify", { method: "POST", body: {
+            razorpay_order_id: resp.razorpay_order_id,
+            razorpay_payment_id: resp.razorpay_payment_id,
+            razorpay_signature: resp.razorpay_signature,
+          }});
+          state.subscription = v.subscription; updatePlanChip();
+          toast(v.message || "Plan activated!", "success");
+          renderBilling();
+        } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
+      },
     });
+    rzp.on("payment.failed", () => toast("Payment was not completed.", "error"));
+    rzp.open();
+  }
 
-    hideAllScreens();
-    if (subdomainInput) {
-        subdomainInput.addEventListener("input", () => {
-            const normalized = normalizeSubdomainInput(subdomainInput.value);
-            if (subdomainInput.value !== normalized) {
-                subdomainInput.value = normalized;
-            }
-            updateSubdomainPreview();
-        });
-        subdomainInput.addEventListener("blur", () => {
-            updateSubdomainPreview();
-        });
+  /* ============================================================
+     SETTINGS
+     ============================================================ */
+  function renderSettings() {
+    const c = $("#content");
+    const org = state.me.organization || {};
+    const canManage = state.perms.can_manage_users;
+    c.innerHTML = `
+      <div class="settings-section">
+        <div class="card"><div class="card-head"><h3>Organization branding</h3></div>
+          <div class="card-body">
+            <div style="display:flex;align-items:center;gap:18px;margin-bottom:20px">
+              <img class="logo-preview" id="settingsLogo" src="${esc(org.logo_url || "")}" alt="logo" onerror="this.style.visibility='hidden'"/>
+              <div><b style="font-size:16px">${esc(org.company_name || "")}</b>
+                <div style="color:var(--muted);font-size:13px">${esc((org.subdomain_slug || "") + "." + rootDomain())}</div></div>
+            </div>
+            ${canManage ? `
+            <div class="field"><label>Company name</label><input id="setCompany" value="${esc(org.company_name || "")}"/></div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn btn-primary btn-sm" id="saveBranding">Save name</button>
+              <button class="btn btn-ghost btn-sm" id="regenLogo">🎲 Generate new logo</button>
+            </div>` : `<p style="color:var(--muted);font-size:13px">Only admins can change branding.</p>`}
+          </div></div>
+
+        <div class="card" style="margin-top:20px"><div class="card-head"><h3>Workspace</h3></div>
+          <div class="card-body">
+            <div class="detail-grid">
+              <div class="detail-item"><label>Portal URL</label><div>${esc((org.subdomain_slug || "") + "." + rootDomain())}</div></div>
+              <div class="detail-item"><label>Plan</label><div>${esc(state.subscription ? state.subscription.plan_label : "—")}</div></div>
+              <div class="detail-item"><label>Your role</label><div style="text-transform:capitalize">${esc((state.me.membership && state.me.membership.role) || "")}</div></div>
+              <div class="detail-item"><label>Signed in as</label><div>${esc(state.me.user.email)}</div></div>
+            </div>
+            <button class="btn btn-danger btn-sm" style="margin-top:18px" onclick="document.getElementById('signoutBtn').click()">Sign out</button>
+          </div></div>
+      </div>`;
+
+    if (canManage) {
+      $("#saveBranding").onclick = async () => {
+        const name = $("#setCompany").value.trim(); if (name.length < 2) { toast("Enter a company name", "error"); return; }
+        const btn = $("#saveBranding"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        try { const r = await api("/organization/branding", { method: "PATCH", body: { company_name: name } });
+          state.me.organization = Object.assign(state.me.organization, r.organization || {});
+          $("#brandName").textContent = name; toast("Saved", "success"); }
+        catch (ex) { toast(ex.message, "error"); }
+        finally { btn.disabled = false; btn.textContent = "Save name"; }
+      };
+      $("#regenLogo").onclick = async () => {
+        const btn = $("#regenLogo"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        try { const r = await api("/organization/branding", { method: "PATCH", body: { generate_random_logo: true } });
+          const url = (r.organization || {}).logo_url; if (url) { $("#settingsLogo").src = url; $("#settingsLogo").style.visibility = "visible"; $("#brandLogo").src = url; $("#brandLogo").style.display = ""; state.me.organization.logo_url = url; }
+          toast("New logo generated", "success"); }
+        catch (ex) { toast(ex.message, "error"); }
+        finally { btn.disabled = false; btn.innerHTML = "🎲 Generate new logo"; }
+      };
     }
+  }
 
-    initializeTurnstile();
-    updateSubdomainPreview();
-    bootstrapSession();
+  /* ============================================================
+     public bridge for inline handlers
+     ============================================================ */
+  /* ============================================================
+     AI ASSISTANT (Rilono Copilot)
+     ============================================================ */
+  function renderAIAssistant() {
+    if (!state.aiHistory) state.aiHistory = [];
+    const c = $("#content");
+    c.innerHTML = `
+      <div class="ai-wrap">
+        <div class="ai-head">
+          <div class="ai-orb">✨</div>
+          <div><h2>Rilono Copilot</h2><p>Ask anything about your clients, visa statuses and activity — I read your live portal data to answer.</p></div>
+        </div>
+        <div class="ai-thread" id="aiThread"></div>
+        <div class="ai-suggest" id="aiSuggest"></div>
+        <form class="ai-input" id="aiForm">
+          <textarea id="aiInput" rows="1" placeholder="e.g. Which clients need my attention today?" maxlength="4000"></textarea>
+          <button type="submit" class="ai-send" id="aiSend" aria-label="Send">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </form>
+        <div class="ai-disclaimer">AI can make mistakes — verify important details against the client record.</div>
+      </div>`;
+    renderAiThread();
+    loadAiMeta();
+    $("#aiForm").onsubmit = (e) => { e.preventDefault(); sendAi(); };
+    const ta = $("#aiInput");
+    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAi(); } });
+    ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; });
+    ta.focus();
+  }
+
+  function aiFormat(text) {
+    let t = esc(text);
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    const lines = t.split(/\n/);
+    let html = "", inList = false;
+    for (const raw of lines) {
+      const line = raw.replace(/\s+$/, "");
+      const m = line.match(/^\s*[-*•]\s+(.*)$/);
+      if (m) { if (!inList) { html += "<ul>"; inList = true; } html += "<li>" + m[1] + "</li>"; }
+      else { if (inList) { html += "</ul>"; inList = false; } if (line.trim() === "") continue; html += "<p>" + line + "</p>"; }
+    }
+    if (inList) html += "</ul>";
+    return html || "<p></p>";
+  }
+
+  function renderAiThread() {
+    const thread = $("#aiThread"); if (!thread) return;
+    if (!state.aiHistory.length) {
+      thread.innerHTML = `<div class="ai-empty"><div class="ai-orb lg">✨</div>
+        <h3>How can I help?</h3>
+        <p>I can answer questions about your clients, their visa progress, who needs attention, recent activity and your team's workload.</p></div>`;
+      return;
+    }
+    thread.innerHTML = state.aiHistory.map((m) => {
+      if (m.role === "user") {
+        return `<div class="ai-msg user"><div class="ai-bubble">${esc(m.content).replace(/\n/g, "<br>")}</div></div>`;
+      }
+      if (m.role === "typing") {
+        return `<div class="ai-msg bot"><div class="ai-av">✨</div><div class="ai-bubble"><span class="ai-typing"><i></i><i></i><i></i></span></div></div>`;
+      }
+      return `<div class="ai-msg bot"><div class="ai-av">✨</div><div class="ai-bubble">${aiFormat(m.content)}</div></div>`;
+    }).join("");
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  function renderAiSuggestions() {
+    const box = $("#aiSuggest"); if (!box) return;
+    const meta = state.aiMeta;
+    if (!meta || !meta.enabled || state.aiHistory.length) { box.innerHTML = ""; return; }
+    box.innerHTML = (meta.suggestions || []).map((s) => `<button class="ai-chip" type="button">${esc(s)}</button>`).join("");
+    $$(".ai-chip", box).forEach((ch) => ch.onclick = () => { $("#aiInput").value = ch.textContent; sendAi(); });
+  }
+
+  async function loadAiMeta() {
+    if (state.aiMeta) { applyAiMeta(); return; }
+    try { state.aiMeta = await api("/ai/meta"); } catch (ex) { state.aiMeta = { enabled: false, suggestions: [] }; }
+    applyAiMeta();
+  }
+  function applyAiMeta() {
+    const meta = state.aiMeta || {};
+    const ta = $("#aiInput"), send = $("#aiSend");
+    if (!meta.enabled) {
+      if (ta) { ta.disabled = true; ta.placeholder = "AI assistant isn't configured on this server yet."; }
+      if (send) send.disabled = true;
+      const thread = $("#aiThread");
+      if (thread && !state.aiHistory.length) {
+        thread.innerHTML = `<div class="ai-empty"><div class="ai-orb lg">🔌</div><h3>AI assistant unavailable</h3><p>An administrator needs to configure the Gemini API key on the server to enable Rilono Copilot.</p></div>`;
+      }
+    }
+    renderAiSuggestions();
+  }
+
+  async function sendAi() {
+    if (state.aiBusy) return;
+    const ta = $("#aiInput"); if (!ta || ta.disabled) return;
+    const msg = (ta.value || "").trim();
+    if (!msg) return;
+    const priorHistory = state.aiHistory.filter((m) => m.role === "user" || m.role === "model").slice(-12);
+    state.aiHistory.push({ role: "user", content: msg });
+    state.aiHistory.push({ role: "typing", content: "" });
+    ta.value = ""; ta.style.height = "auto";
+    state.aiBusy = true;
+    renderAiThread(); renderAiSuggestions();
+    try {
+      const data = await api("/ai/chat", { method: "POST", body: { message: msg, history: priorHistory } });
+      state.aiHistory = state.aiHistory.filter((m) => m.role !== "typing");
+      state.aiHistory.push({ role: "model", content: data.answer || "(no answer)" });
+    } catch (ex) {
+      state.aiHistory = state.aiHistory.filter((m) => m.role !== "typing");
+      state.aiHistory.push({ role: "model", content: "Sorry — " + (ex.message || "I couldn't answer that right now.") });
+    } finally {
+      state.aiBusy = false;
+      renderAiThread();
+    }
+  }
+
+  window.__ent = {
+    go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
+    closeModal, closeDrawer, changeRole, removeMember, checkout, setCycle,
+    viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
+  };
+
+  /* ============================================================
+     INIT
+     ============================================================ */
+  setupAuth();
+  boot();
 })();

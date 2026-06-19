@@ -121,8 +121,9 @@ if not AUTH_COOKIE_SECURE and _cookie_secure_default():
 def _is_local_hostname(hostname: str) -> bool:
     host = (hostname or "").strip().lower()
     return (
-        host in {"localhost", "127.0.0.1", "::1", "localtest.me"}
+        host in {"localhost", "127.0.0.1", "::1", "localtest.me", "lvh.me"}
         or host.endswith(".localtest.me")
+        or host.endswith(".lvh.me")
     )
 
 

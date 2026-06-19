@@ -259,9 +259,19 @@
                                 <div class="table-empty">No expense data loaded yet.</div>
                             </div>
                         </section>
-                    </div>
 
-                    <div id="adminFinanceNotes" class="finance-notes"></div>
+                        <section class="finance-chart-card finance-contributor-card">
+                            <div class="finance-card-header">
+                                <div>
+                                    <h3>Founder Spend</h3>
+                                    <p>Investment split by who paid: Gaurav or Kushal.</p>
+                                </div>
+                            </div>
+                            <div id="adminFinanceContributorChart" class="finance-breakdown-chart">
+                                <div class="table-empty">No founder spend data loaded yet.</div>
+                            </div>
+                        </section>
+                    </div>
 
                     <div class="table-wrap finance-table-wrap">
                         <table class="users-table finance-table">
@@ -271,6 +281,7 @@
                                     <th>Type</th>
                                     <th>Vendor</th>
                                     <th>Category</th>
+                                    <th>Paid By</th>
                                     <th>Description</th>
                                     <th>Amount (USD)</th>
                                     <th>Source</th>
@@ -278,7 +289,7 @@
                             </thead>
                             <tbody id="adminFinanceTableBody">
                                 <tr>
-                                    <td colspan="7" class="table-empty">No finance data loaded yet.</td>
+                                    <td colspan="8" class="table-empty">No finance data loaded yet.</td>
                                 </tr>
                             </tbody>
                         </table>

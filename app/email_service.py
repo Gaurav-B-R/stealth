@@ -1129,6 +1129,111 @@ def send_enterprise_team_invite_email(
         return False
 
 
+def send_enterprise_client_email(
+    *,
+    to_email: str,
+    subject: str,
+    body: str,
+    organization_name: str,
+    sender_name: Optional[str] = None,
+    logo_url: Optional[str] = None,
+    reply_to: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """
+    Send an email composed by an enterprise team member to one of their clients.
+
+    Returns (success, provider_message_id, error_message).
+    """
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    clean_subject = (subject or "").strip() or f"A message from {organization_name}"
+    org_label = (organization_name or "your consultancy").strip()
+    signer = (sender_name or "").strip() or org_label
+
+    safe_org = escape(org_label)
+    safe_org_banner = escape(org_label.upper())
+    safe_subject = escape(clean_subject)
+    safe_signer = escape(signer)
+    body_html = (escape(body or "").replace("\r\n", "\n").replace("\n", "<br>"))
+
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (
+            f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
+            'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">'
+        )
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>{safe_subject}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+              <tr>
+                <td style="padding:24px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#ffffff;">
+                  {logo_block}
+                  <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{safe_org_banner}</div>
+                  <h1 style="margin:8px 0 0 0;font-size:22px;line-height:1.3;">{safe_subject}</h1>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
+                  {body_html}
+                  <p style="margin:24px 0 0 0;color:#475569;font-size:14px;">Warm regards,<br><strong>{safe_signer}</strong><br>{safe_org}</p>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;line-height:1.6;">
+                  This message was sent by {safe_org} regarding your visa application.
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    """
+
+    text_content = (
+        f"{clean_subject}\n\n"
+        f"{(body or '').strip()}\n\n"
+        f"Warm regards,\n{signer}\n{org_label}\n"
+    )
+
+    try:
+        params = {
+            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": clean_subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        clean_reply_to = (reply_to or "").strip()
+        if clean_reply_to:
+            params["reply_to"] = clean_reply_to
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
 def send_founder_new_verified_user_alert(
     *,
     user_id: int,

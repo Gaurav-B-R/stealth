@@ -619,17 +619,20 @@ def company_finance_analytics_admin(
     return_entry_count = 0
     monthly_buckets = defaultdict(lambda: {"investment_usd": Decimal("0"), "returns_usd": Decimal("0")})
     expense_breakdown: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    contributor_spend: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     ledger: list[dict] = []
 
     for entry in entries:
         amount = _money_decimal(entry.amount_usd)
         occurred_on = _coerce_date(entry.occurred_on)
         label = (entry.vendor or entry.category or "Uncategorized").strip() or "Uncategorized"
+        paid_by = (entry.paid_by or "Unassigned").strip() or "Unassigned"
         if amount < 0:
             absolute_amount = abs(amount)
             total_invested += absolute_amount
             investment_entry_count += 1
             expense_breakdown[label] += absolute_amount
+            contributor_spend[paid_by] += absolute_amount
             _add_month_bucket(monthly_buckets, occurred_on, investment=absolute_amount)
             kind = "Investment"
         else:
@@ -644,6 +647,7 @@ def company_finance_analytics_admin(
                 "kind": kind,
                 "category": entry.category or "Operations",
                 "vendor": entry.vendor or "Unknown",
+                "paid_by": paid_by,
                 "description": entry.description,
                 "amount_usd": _money_float(amount),
                 "occurred_on": occurred_on.isoformat(),
@@ -666,6 +670,7 @@ def company_finance_analytics_admin(
                 "kind": "Return",
                 "category": "Subscriptions",
                 "vendor": (payment.provider or "Payment").title(),
+                "paid_by": "Customer Revenue",
                 "description": "Verified subscription revenue",
                 "amount_usd": _money_float(amount_usd),
                 "occurred_on": payment_date.isoformat(),
@@ -704,6 +709,19 @@ def company_finance_analytics_admin(
             }
         )
 
+    contributor_items = []
+    for label, amount in sorted(contributor_spend.items(), key=lambda item: item[1], reverse=True):
+        percentage = Decimal("0")
+        if total_invested > 0:
+            percentage = (amount / total_invested) * Decimal("100")
+        contributor_items.append(
+            {
+                "label": label,
+                "amount_usd": _money_float(amount),
+                "percentage": _money_float(percentage),
+            }
+        )
+
     ledger.sort(key=lambda item: (item["occurred_on"], item["id"]), reverse=True)
 
     return {
@@ -718,9 +736,11 @@ def company_finance_analytics_admin(
         },
         "monthly_series": monthly_series,
         "expense_breakdown": breakdown_items,
+        "contributor_breakdown": contributor_items,
         "ledger": ledger[:250],
         "notes": [
             "Investment rows are stored in company_finance_entries.",
+            "Founder spend uses the paid_by column on each investment row.",
             "Returns are calculated live from verified subscription payments.",
             f"INR payments are converted using ADMIN_ANALYTICS_INR_TO_USD={ADMIN_ANALYTICS_INR_TO_USD}.",
         ],

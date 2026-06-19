@@ -1,1074 +1,225 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rilono Enterprise — Visa Management Platform</title>
-    <meta name="robots" content="noindex,nofollow">
-    <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/enterprise.css?v=13">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rilono Enterprise — Visa Client CRM</title>
+  <meta name="description" content="The all-in-one platform for visa consultancies to manage clients, track visa status, and grow." />
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="/static/logo.png" />
+  <link rel="stylesheet" href="/static/enterprise.css" />
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
-
 <body>
 
-    <!-- ============================== -->
-    <!--   ORGANIZATION SETUP (full page) -->
-    <!-- ============================== -->
-    <div id="entOnboardingScreen" class="ent-onboarding-screen" style="display:none">
-        <header class="ent-onboarding-topbar">
-            <div class="ent-onboarding-brand">
-                <img src="/static/logo.png" alt="Rilono">
-                <div class="ent-onboarding-brand-text">
-                    <span class="ent-onboarding-brand-name">Rilono</span>
-                    <span class="ent-onboarding-brand-label">Enterprise</span>
-                </div>
+  <!-- ===================== AUTH (login / signup) ===================== -->
+  <div id="authView" class="auth-wrap">
+    <aside class="auth-hero">
+      <div class="auth-hero-brand">
+        <div class="logo-mark">R</div>
+        <b>Rilono&nbsp;Enterprise</b>
+      </div>
+      <div class="auth-hero-body">
+        <h1>Run your entire student-visa practice — with an AI copilot.</h1>
+        <p>Manage every applicant, track each student visa end-to-end, send updates, and just ask the built-in AI about your portal — built for education consultancies, and 100% free.</p>
+        <ul class="auth-points">
+          <li><span class="tick">✓</span> ✨ AI copilot — ask anything about your clients &amp; statuses</li>
+          <li><span class="tick">✓</span> Visual pipeline from lead to approval</li>
+          <li><span class="tick">✓</span> Notes, reminders &amp; one-click student emails</li>
+          <li><span class="tick">✓</span> Free for your whole team — no card, no limits</li>
+        </ul>
+      </div>
+      <div class="auth-flags">🇺🇸 🇨🇦 🇬🇧 🇦🇺 🇩🇪 🇮🇪</div>
+    </aside>
+
+    <main class="auth-panel">
+      <!-- Sign up -->
+      <div id="signupCard" class="auth-card">
+        <h2>Create your free workspace</h2>
+        <p class="sub">100% free for your whole team. No card required. Set up your consultancy in a minute.</p>
+        <div id="signupError" class="auth-error hidden"></div>
+        <form id="signupForm" autocomplete="on">
+          <div class="field">
+            <label>Consultancy / company name</label>
+            <input name="company_name" placeholder="e.g. Bangalore Visa Experts" required />
+          </div>
+          <div class="field">
+            <label>Choose your portal URL</label>
+            <div class="subdomain-field">
+              <input name="subdomain_slug" placeholder="yourcompany" required />
+              <span class="suffix" id="signupDomainSuffix">.rilono.com</span>
             </div>
-        </header>
+            <div class="hint">Lowercase letters, numbers and hyphens. This is where your team signs in.</div>
+          </div>
+          <div class="field">
+            <label>Your full name</label>
+            <input name="full_name" placeholder="e.g. Anita Rao" required />
+          </div>
+          <div class="field">
+            <label>Work email</label>
+            <input type="email" name="email" placeholder="you@company.com" required />
+          </div>
+          <div class="field">
+            <label>Password</label>
+            <input type="password" name="password" placeholder="Create a strong password" required />
+            <div class="hint">At least 10 characters with upper, lower, a number &amp; a symbol.</div>
+          </div>
+          <div id="entTurnstileSignupWrap" class="enterprise-turnstile-wrap hidden">
+            <div id="entTurnstileSignup"></div>
+            <p id="entTurnstileSignupHint">Complete the security check to create your workspace.</p>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="signupBtn">Create my workspace</button>
+        </form>
+        <div class="auth-switch">Already have a workspace? <button type="button" id="toLogin">Sign in</button></div>
+      </div>
 
-        <main class="ent-onboarding-main">
-            <div class="ent-onboarding-container">
-                <nav class="ent-onboarding-breadcrumb" aria-label="Setup progress">
-                    <span class="ent-onboarding-step-done">1</span>
-                    <span class="ent-onboarding-step-line"></span>
-                    <span class="ent-onboarding-step-current">2</span>
-                    <span class="ent-onboarding-step-line ent-onboarding-step-line-muted"></span>
-                    <span class="ent-onboarding-step-pending">3</span>
-                </nav>
-                <p class="ent-onboarding-kicker">Organization profile</p>
-                <h1 class="ent-onboarding-title">Set up your organization</h1>
-                <p class="ent-onboarding-lead">
-                    Register your company name to activate your enterprise workspace. You will reach the dashboard after this step.
-                </p>
+      <!-- Login -->
+      <div id="loginCard" class="auth-card hidden">
+        <h2>Welcome back</h2>
+        <p class="sub">Sign in to your consultancy workspace.</p>
+        <div id="loginError" class="auth-error hidden"></div>
+        <form id="loginForm" autocomplete="on">
+          <div class="field">
+            <label>Email</label>
+            <input type="email" name="email" placeholder="you@company.com" required />
+          </div>
+          <div class="field">
+            <label>Password</label>
+            <input type="password" name="password" placeholder="Your password" required />
+          </div>
+          <div id="entTurnstileLoginWrap" class="enterprise-turnstile-wrap hidden">
+            <div id="entTurnstileLogin"></div>
+            <p id="entTurnstileLoginHint">Complete the security check to sign in.</p>
+          </div>
+          <div style="text-align:right;margin:-6px 0 16px;"><a href="/forgot-password" id="entForgot" style="font-size:13px;color:var(--primary-600);font-weight:600;">Forgot password?</a></div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="loginBtn">Sign in</button>
+        </form>
+        <div class="auth-switch">New to Rilono? <button type="button" id="toSignup">Create free workspace</button></div>
+      </div>
 
-                <div class="ent-onboarding-panel">
-                    <div id="entOnboardingFlash" class="ent-flash info" style="display:none"></div>
-                    <form id="entOnboardingForm" autocomplete="organization">
-                        <div class="ent-form-group">
-                            <label class="ent-form-label" for="entCompanyName">Legal or operating company name</label>
-                            <input class="ent-form-input" id="entCompanyName" type="text" maxlength="120" placeholder="e.g. Acme Immigration Services" required>
-                            <p class="ent-form-hint">This appears in your workspace and on internal reports.</p>
-                        </div>
-                        <div class="ent-form-group">
-                            <label class="ent-form-label" for="entSubdomainSlug">Organization URL (cannot be changed later)</label>
-                            <input
-                                class="ent-form-input"
-                                id="entSubdomainSlug"
-                                type="text"
-                                maxlength="32"
-                                placeholder="acme-immigration"
-                                inputmode="text"
-                                autocapitalize="none"
-                                spellcheck="false"
-                                required
-                            >
-                            <p class="ent-form-hint">
-                                Portal URL: <span id="entSubdomainPreview">https://acme-immigration.rilono.com/enterprise</span>
-                            </p>
-                        </div>
-                        <button type="submit" class="ent-btn ent-btn-primary ent-btn-full" id="entOnboardingBtn">
-                            Continue to dashboard
-                        </button>
-                    </form>
-                </div>
+      <!-- Forgot password -->
+      <div id="forgotCard" class="auth-card hidden">
+        <h2>Reset your password</h2>
+        <p class="sub">Enter your account email and we'll send you a secure link to set a new password.</p>
+        <div id="forgotError" class="auth-error hidden"></div>
+        <div id="forgotSuccess" class="auth-success hidden"></div>
+        <form id="forgotForm" autocomplete="on">
+          <div class="field">
+            <label>Email</label>
+            <input type="email" name="email" placeholder="you@company.com" required />
+          </div>
+          <div id="entTurnstileForgotWrap" class="enterprise-turnstile-wrap hidden">
+            <div id="entTurnstileForgot"></div>
+            <p id="entTurnstileForgotHint">Complete the security check to send a reset link.</p>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="forgotBtn">Send reset link</button>
+        </form>
+        <div class="auth-switch"><button type="button" id="backToLogin">← Back to sign in</button></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ===================== ONBOARDING (invited users w/o org) ===================== -->
+  <div id="onboardView" class="auth-wrap hidden">
+    <aside class="auth-hero">
+      <div class="auth-hero-brand"><div class="logo-mark">R</div><b>Rilono&nbsp;Enterprise</b></div>
+      <div class="auth-hero-body">
+        <h1>Set up your consultancy</h1>
+        <p>One last step — name your organization and pick your portal URL.</p>
+      </div>
+      <div></div>
+    </aside>
+    <main class="auth-panel">
+      <div class="auth-card">
+        <h2>Create your organization</h2>
+        <p class="sub">This is how your workspace will be branded.</p>
+        <div id="onboardError" class="auth-error hidden"></div>
+        <form id="onboardForm">
+          <div class="field">
+            <label>Company name</label>
+            <input name="company_name" placeholder="Your consultancy name" required />
+          </div>
+          <div class="field">
+            <label>Portal URL</label>
+            <div class="subdomain-field">
+              <input name="subdomain_slug" placeholder="yourcompany" required />
+              <span class="suffix" id="onboardDomainSuffix">.rilono.com</span>
             </div>
-        </main>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="onboardBtn">Finish setup</button>
+        </form>
+      </div>
+    </main>
+  </div>
 
-        <footer class="ent-onboarding-page-footer">
-            <span>&copy; 2026 Rilono Technologies. Enterprise onboarding.</span>
-        </footer>
-    </div>
-
-    <!-- ============================== -->
-    <!--       AUTH / LOGIN SCREEN       -->
-    <!-- ============================== -->
-    <div id="entAuthScreen" class="ent-auth-screen" style="display:none">
-        <aside class="ent-auth-hero">
-            <div class="ent-auth-brand">
-                <img src="/static/logo.png" alt="Rilono">
-                <span class="ent-auth-brand-text">Rilono Enterprise</span>
-            </div>
-
-            <div class="ent-auth-hero-content">
-                <h2>Visa management at&nbsp;scale</h2>
-                <p>Manage all visa types in one place with a secure enterprise workflow for your organization.</p>
-                <ul class="ent-auth-hero-features">
-                    <li>
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                        Centralized student tracking
-                    </li>
-                    <li>
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                        Multi-visa case management (F-1, H-1B, J-1, B1/B2, O-1, more)
-                    </li>
-                    <li>
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                        Bulk operations & analytics
-                    </li>
-                    <li>
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                        Dedicated account management
-                    </li>
-                </ul>
-            </div>
-
-            <div class="ent-auth-hero-footer">&copy; 2026 Rilono Technologies. All rights reserved.</div>
-        </aside>
-
-        <div class="ent-auth-form-area">
-            <div class="ent-auth-card">
-                <h1>Sign in to Enterprise</h1>
-                <p class="ent-auth-subtitle">Access your organization's visa management dashboard.</p>
-
-                <div id="entAuthFlash" class="ent-flash info" style="display:none"></div>
-
-                <form id="entLoginForm" autocomplete="on">
-                    <div class="ent-form-group">
-                        <label class="ent-form-label" for="entEmail">Work email</label>
-                        <input class="ent-form-input" id="entEmail" type="email" placeholder="you@company.com" required autocomplete="username">
-                    </div>
-                    <div class="ent-form-group">
-                        <label class="ent-form-label" for="entPassword">Password</label>
-                        <input class="ent-form-input" id="entPassword" type="password" placeholder="Enter your password" required autocomplete="current-password">
-                    </div>
-                    <div id="entTurnstileWrap" class="ent-turnstile-wrap" hidden>
-                        <div id="entTurnstileWidget"></div>
-                        <p id="entTurnstileHint">Complete security verification before signing in.</p>
-                    </div>
-                    <div class="ent-form-row">
-                        <label class="ent-form-check">
-                            <input type="checkbox" checked> Remember me
-                        </label>
-                        <a href="/forgot-password" class="ent-form-link" id="entForgotPasswordLink">Forgot password?</a>
-                    </div>
-                    <button type="submit" class="ent-btn ent-btn-primary ent-btn-full" id="entLoginBtn">
-                        Sign In
-                    </button>
-                </form>
-
-                <p style="text-align:center; margin-top:1.5rem; font-size:0.82rem; color:var(--ent-ink-muted);">
-                    Don't have an enterprise account? <a href="https://rilono.com/contact" class="ent-form-link">Contact Sales</a>
-                </p>
-            </div>
+  <!-- ===================== APP ===================== -->
+  <div id="appView" class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="side-brand">
+        <img id="brandLogo" src="/static/logo.png" alt="logo" onerror="this.style.display='none'" />
+        <div class="brand-text">
+          <b id="brandName">Your Consultancy</b>
+          <span id="brandPlan">Free plan</span>
         </div>
-    </div>
-
-    <!-- ============================== -->
-    <!--       DASHBOARD SHELL           -->
-    <!-- ============================== -->
-    <div id="entDashboard" class="ent-shell" style="display:none">
-
-        <!-- Sidebar Overlay (mobile) -->
-        <div id="entSidebarOverlay" class="ent-sidebar-overlay"></div>
-
-        <!-- Sidebar -->
-        <nav id="entSidebar" class="ent-sidebar">
-            <a href="/enterprise" class="ent-sidebar-brand">
-                <img src="/static/logo.png" alt="Rilono">
-                <div class="ent-sidebar-brand-text">
-                    <span class="ent-sidebar-brand-name">Rilono</span>
-                    <span class="ent-sidebar-brand-label">Enterprise</span>
-                </div>
-            </a>
-            <div class="ent-sidebar-org-inline" id="entSidebarOrgInline">
-                <div class="ent-org-avatar">
-                    <img id="entSidebarOrgAvatarImg" class="ent-org-avatar-img" alt="" width="64" height="64" loading="lazy" decoding="async" referrerpolicy="no-referrer">
-                </div>
-                <div class="ent-org-info">
-                    <div class="ent-org-name" id="entSidebarOrgName">Your organization</div>
-                    <div class="ent-org-plan" id="entSidebarOrgPortal">your-company.rilono.com</div>
-                </div>
-            </div>
-
-            <div class="ent-sidebar-nav">
-                <span class="ent-nav-group-label">Main</span>
-
-                <button class="ent-nav-item active" data-section="overview">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-4 0a1 1 0 01-1-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 01-1 1h-2z"/></svg>
-                    Overview
-                </button>
-
-                <button class="ent-nav-item" data-section="students">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                    Students
-                    <span class="ent-nav-badge" id="entStudentsNavBadge">0</span>
-                </button>
-
-                <button class="ent-nav-item" data-section="visas">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                    Visa Cases
-                </button>
-
-                <button class="ent-nav-item" data-section="documents">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
-                    Documents
-                </button>
-
-                <span class="ent-nav-group-label">Intelligence</span>
-
-                <button class="ent-nav-item" data-section="analytics">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                    Analytics
-                </button>
-
-                <button class="ent-nav-item" data-section="compliance">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                    Compliance
-                </button>
-
-                <span class="ent-nav-group-label">Settings</span>
-
-                <button class="ent-nav-item" data-section="team">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>
-                    Team
-                </button>
-
-                <button class="ent-nav-item" data-section="settings">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                    Settings
-                </button>
-            </div>
-
-            <div class="ent-sidebar-footer">
-                <div class="ent-org-card">
-                    <div class="ent-org-avatar">
-                        <img id="entOrgCardAvatarImg" class="ent-org-avatar-img" alt="" width="64" height="64" loading="lazy" decoding="async" referrerpolicy="no-referrer">
-                    </div>
-                    <div class="ent-org-info">
-                        <div class="ent-org-name" id="entOrgName">Acme Corp</div>
-                        <div class="ent-org-plan" id="entOrgPortalUrl">Enterprise Plan</div>
-                    </div>
-                </div>
-                <button id="entSidebarLogoutBtn" class="ent-sidebar-logout-btn" type="button">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9" d="M17 16l4-4m0 0l-4-4m4 4H9m4 8H7a2 2 0 01-2-2V6a2 2 0 012-2h6" />
-                    </svg>
-                    Logout
-                </button>
-            </div>
-        </nav>
-
-        <!-- Header -->
-        <header class="ent-header">
-            <div class="ent-header-left">
-                <button class="ent-mobile-toggle" id="entMobileToggle">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
-                </button>
-                <h1 class="ent-page-title" id="entPageTitle">Overview</h1>
-            </div>
-            <div class="ent-header-right">
-                <div class="ent-search-wrap">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-                    <input class="ent-search-input" type="text" placeholder="Search students, cases, documents...">
-                </div>
-                <button class="ent-header-btn" title="Notifications">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-                    <span class="ent-notif-dot"></span>
-                </button>
-                <button class="ent-header-btn" title="Help">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </button>
-                <button class="ent-user-trigger" id="entUserTrigger">
-                    <div class="ent-user-avatar">
-                        <img id="entUserAvatarImg" class="ent-user-avatar-img" alt="" width="128" height="128" loading="lazy" decoding="async" referrerpolicy="no-referrer">
-                    </div>
-                    <div class="ent-user-details">
-                        <span class="ent-user-name" id="entUserName">Admin User</span>
-                        <span class="ent-user-role">Organization Admin</span>
-                    </div>
-                </button>
-            </div>
-        </header>
-
-        <!-- Main Content -->
-        <main class="ent-main">
-
-            <!-- ===== OVERVIEW SECTION ===== -->
-            <section id="entSectionOverview" class="ent-section active">
-
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Welcome back</h2>
-                        <p>Here's what's happening across your organization today.</p>
-                    </div>
-                    <div class="ent-welcome-actions">
-                        <button class="ent-btn ent-btn-ghost ent-btn-sm">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                            Export Report
-                        </button>
-                        <button id="entAddStudentBtnOverview" class="ent-btn ent-btn-primary ent-btn-sm" type="button">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                            Add Student
-                        </button>
-                    </div>
-                </div>
-
-                <div class="ent-metrics-row">
-                    <div class="ent-metric-card">
-                        <div class="ent-metric-header">
-                            <span class="ent-metric-label">Total Students</span>
-                            <div class="ent-metric-icon blue">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                            </div>
-                        </div>
-                        <div class="ent-metric-value" id="entMetricStudents">2,847</div>
-                        <div class="ent-metric-footer">
-                            <span class="ent-metric-change up">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
-                                +12%
-                            </span>
-                            <span class="ent-metric-period">vs last month</span>
-                        </div>
-                    </div>
-
-                    <div class="ent-metric-card">
-                        <div class="ent-metric-header">
-                            <span class="ent-metric-label">Active Visa Cases</span>
-                            <div class="ent-metric-icon purple">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                            </div>
-                        </div>
-                        <div class="ent-metric-value" id="entMetricCases">1,204</div>
-                        <div class="ent-metric-footer">
-                            <span class="ent-metric-change up">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
-                                +8%
-                            </span>
-                            <span class="ent-metric-period">vs last month</span>
-                        </div>
-                    </div>
-
-                    <div class="ent-metric-card">
-                        <div class="ent-metric-header">
-                            <span class="ent-metric-label">Compliance Rate</span>
-                            <div class="ent-metric-icon green">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                            </div>
-                        </div>
-                        <div class="ent-metric-value" id="entMetricCompliance">94.2%</div>
-                        <div class="ent-metric-footer">
-                            <span class="ent-metric-change up">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>
-                                +2.1%
-                            </span>
-                            <span class="ent-metric-period">vs last month</span>
-                        </div>
-                    </div>
-
-                    <div class="ent-metric-card">
-                        <div class="ent-metric-header">
-                            <span class="ent-metric-label">Pending Actions</span>
-                            <div class="ent-metric-icon amber">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                            </div>
-                        </div>
-                        <div class="ent-metric-value" id="entMetricPending">38</div>
-                        <div class="ent-metric-footer">
-                            <span class="ent-metric-change down">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>
-                                -15%
-                            </span>
-                            <span class="ent-metric-period">vs last week</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="ent-content-grid">
-
-                    <!-- Recent Student Activity -->
-                    <div class="ent-card">
-                        <div class="ent-card-header">
-                            <span class="ent-card-title">Recent Student Activity</span>
-                            <button class="ent-btn ent-btn-ghost ent-btn-sm">View All</button>
-                        </div>
-                        <div class="ent-card-body no-pad">
-                            <div class="ent-table-wrap">
-                                <table class="ent-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Student</th>
-                                            <th>Visa Type</th>
-                                            <th>Status</th>
-                                            <th>Last Activity</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr>
-                                            <td>
-                                                <div class="ent-student-cell">
-                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#3b82f6)">AP</div>
-                                                    <div>
-                                                        <div class="ent-student-name">Arjun Patel</div>
-                                                        <div class="ent-student-email">arjun.p@university.edu</div>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td><span class="ent-chip ent-chip-blue">F-1</span></td>
-                                            <td><span class="ent-chip ent-chip-green">Approved</span></td>
-                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">2 hours ago</td>
-                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
-                                        </tr>
-                                        <tr>
-                                            <td>
-                                                <div class="ent-student-cell">
-                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#7c3aed,#8b5cf6)">ML</div>
-                                                    <div>
-                                                        <div class="ent-student-name">Maria Lopez</div>
-                                                        <div class="ent-student-email">m.lopez@university.edu</div>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td><span class="ent-chip ent-chip-purple">H-1B</span></td>
-                                            <td><span class="ent-chip ent-chip-amber">In Review</span></td>
-                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">5 hours ago</td>
-                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
-                                        </tr>
-                                        <tr>
-                                            <td>
-                                                <div class="ent-student-cell">
-                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#059669,#10b981)">WC</div>
-                                                    <div>
-                                                        <div class="ent-student-name">Wei Chen</div>
-                                                        <div class="ent-student-email">wei.chen@university.edu</div>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td><span class="ent-chip ent-chip-blue">J-1</span></td>
-                                            <td><span class="ent-chip ent-chip-green">Approved</span></td>
-                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">1 day ago</td>
-                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
-                                        </tr>
-                                        <tr>
-                                            <td>
-                                                <div class="ent-student-cell">
-                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#dc2626,#ef4444)">SK</div>
-                                                    <div>
-                                                        <div class="ent-student-name">Sarah Kim</div>
-                                                        <div class="ent-student-email">s.kim@university.edu</div>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td><span class="ent-chip ent-chip-gray">B1/B2</span></td>
-                                            <td><span class="ent-chip ent-chip-red">Action Required</span></td>
-                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">1 day ago</td>
-                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
-                                        </tr>
-                                        <tr>
-                                            <td>
-                                                <div class="ent-student-cell">
-                                                    <div class="ent-student-avatar" style="background:linear-gradient(135deg,#d97706,#f59e0b)">RT</div>
-                                                    <div>
-                                                        <div class="ent-student-name">Raj Thakur</div>
-                                                        <div class="ent-student-email">raj.t@university.edu</div>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td><span class="ent-chip ent-chip-purple">O-1</span></td>
-                                            <td><span class="ent-chip ent-chip-amber">In Review</span></td>
-                                            <td style="color:var(--ent-ink-secondary); font-size:0.82rem">2 days ago</td>
-                                            <td><button class="ent-btn ent-btn-ghost ent-btn-sm ent-btn-icon" title="View"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg></button></td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Right sidebar: Visa Breakdown + Quick Actions -->
-                    <div style="display:flex; flex-direction:column; gap:1rem;">
-
-                        <!-- Visa Status Breakdown -->
-                        <div class="ent-card">
-                            <div class="ent-card-header">
-                                <span class="ent-card-title">Visa Status Breakdown</span>
-                            </div>
-                            <div class="ent-card-body">
-                                <div class="ent-breakdown-list">
-                                    <div class="ent-breakdown-item">
-                                        <div class="ent-breakdown-row">
-                                            <span class="ent-breakdown-label">
-                                                <span class="ent-dot" style="background:#059669"></span> Approved
-                                            </span>
-                                            <span class="ent-breakdown-value">1,682</span>
-                                        </div>
-                                        <div class="ent-progress-track">
-                                            <div class="ent-progress-fill green" style="width:58%"></div>
-                                        </div>
-                                    </div>
-                                    <div class="ent-breakdown-item">
-                                        <div class="ent-breakdown-row">
-                                            <span class="ent-breakdown-label">
-                                                <span class="ent-dot" style="background:#2563eb"></span> In Progress
-                                            </span>
-                                            <span class="ent-breakdown-value">724</span>
-                                        </div>
-                                        <div class="ent-progress-track">
-                                            <div class="ent-progress-fill blue" style="width:25%"></div>
-                                        </div>
-                                    </div>
-                                    <div class="ent-breakdown-item">
-                                        <div class="ent-breakdown-row">
-                                            <span class="ent-breakdown-label">
-                                                <span class="ent-dot" style="background:#d97706"></span> Pending Review
-                                            </span>
-                                            <span class="ent-breakdown-value">312</span>
-                                        </div>
-                                        <div class="ent-progress-track">
-                                            <div class="ent-progress-fill amber" style="width:11%"></div>
-                                        </div>
-                                    </div>
-                                    <div class="ent-breakdown-item">
-                                        <div class="ent-breakdown-row">
-                                            <span class="ent-breakdown-label">
-                                                <span class="ent-dot" style="background:#dc2626"></span> Action Required
-                                            </span>
-                                            <span class="ent-breakdown-value">129</span>
-                                        </div>
-                                        <div class="ent-progress-track">
-                                            <div class="ent-progress-fill" style="width:5%; background:#dc2626; border-radius:999px"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Quick Actions -->
-                        <div class="ent-card">
-                            <div class="ent-card-header">
-                                <span class="ent-card-title">Quick Actions</span>
-                            </div>
-                            <div class="ent-card-body">
-                                <div class="ent-quick-grid">
-                                    <button class="ent-quick-action">
-                                        <div class="ent-quick-action-icon" style="background:var(--ent-primary-soft); color:var(--ent-primary)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
-                                        </div>
-                                        <span>Add Student</span>
-                                    </button>
-                                    <button class="ent-quick-action">
-                                        <div class="ent-quick-action-icon" style="background:var(--ent-secondary-soft); color:var(--ent-secondary)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                                        </div>
-                                        <span>Bulk Import</span>
-                                    </button>
-                                    <button class="ent-quick-action">
-                                        <div class="ent-quick-action-icon" style="background:var(--ent-success-soft); color:var(--ent-success)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                                        </div>
-                                        <span>Generate Report</span>
-                                    </button>
-                                    <button class="ent-quick-action">
-                                        <div class="ent-quick-action-icon" style="background:var(--ent-warning-soft); color:var(--ent-warning)">
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                                        </div>
-                                        <span>Review Alerts</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Recent Activity Feed -->
-                <div class="ent-card">
-                    <div class="ent-card-header">
-                        <span class="ent-card-title">Activity Feed</span>
-                        <button class="ent-btn ent-btn-ghost ent-btn-sm">View All</button>
-                    </div>
-                    <div class="ent-card-body no-pad">
-                        <ul class="ent-activity-list">
-                            <li class="ent-activity-item">
-                                <span class="ent-activity-dot green"></span>
-                                <div class="ent-activity-body">
-                                    <div class="ent-activity-text"><strong>Arjun Patel</strong>'s F-1 visa was approved by the consulate.</div>
-                                    <div class="ent-activity-time">2 hours ago</div>
-                                </div>
-                            </li>
-                            <li class="ent-activity-item">
-                                <span class="ent-activity-dot blue"></span>
-                                <div class="ent-activity-body">
-                                    <div class="ent-activity-text"><strong>Maria Lopez</strong> uploaded new I-20 document for review.</div>
-                                    <div class="ent-activity-time">5 hours ago</div>
-                                </div>
-                            </li>
-                            <li class="ent-activity-item">
-                                <span class="ent-activity-dot amber"></span>
-                                <div class="ent-activity-body">
-                                    <div class="ent-activity-text"><strong>12 students</strong> have documents expiring within the next 30 days.</div>
-                                    <div class="ent-activity-time">8 hours ago</div>
-                                </div>
-                            </li>
-                            <li class="ent-activity-item">
-                                <span class="ent-activity-dot red"></span>
-                                <div class="ent-activity-body">
-                                    <div class="ent-activity-text"><strong>Sarah Kim</strong>'s SEVIS record requires immediate attention.</div>
-                                    <div class="ent-activity-time">1 day ago</div>
-                                </div>
-                            </li>
-                            <li class="ent-activity-item">
-                                <span class="ent-activity-dot blue"></span>
-                                <div class="ent-activity-body">
-                                    <div class="ent-activity-text">Bulk import of <strong>45 new students</strong> completed successfully.</div>
-                                    <div class="ent-activity-time">2 days ago</div>
-                                </div>
-                            </li>
-                        </ul>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ===== STUDENTS SECTION ===== -->
-            <section id="entSectionStudents" class="ent-section">
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Students</h2>
-                        <p>Manage all students across your organization.</p>
-                    </div>
-                    <div class="ent-welcome-actions">
-                        <button class="ent-btn ent-btn-ghost ent-btn-sm" type="button">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                            Bulk Import
-                        </button>
-                        <button id="entAddStudentBtnStudents" class="ent-btn ent-btn-primary ent-btn-sm" type="button">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                            Add Student
-                        </button>
-                    </div>
-                </div>
-                <div id="entStudentsFlash" class="ent-flash info" style="display:none;"></div>
-                <div class="ent-card">
-                    <div class="ent-card-header">
-                        <span class="ent-card-title">Student Directory</span>
-                    </div>
-                    <div class="ent-card-body no-pad">
-                        <div class="ent-students-note" id="entStudentsAccessNotice">
-                            Add students with destination country and visa type to start enterprise tracking. Click Manage for a dedicated student journey workspace.
-                        </div>
-                        <div class="ent-table-wrap">
-                            <table class="ent-table">
-                                <thead>
-                                    <tr>
-                                        <th>Student</th>
-                                        <th>Study Destination</th>
-                                        <th>Visa Type</th>
-                                        <th>Intake</th>
-                                        <th>Added On</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="entStudentsTableBody">
-                                    <tr>
-                                        <td colspan="6" style="text-align:center;color:var(--ent-ink-muted);">Loading students...</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                        <div id="entStudentsEmpty" class="ent-empty" style="display:none;">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                            <h3>No students added yet</h3>
-                            <p>Add your first student to start country-specific visa tracking for your organization.</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section id="entSectionStudentWorkspace" class="ent-section">
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Student Journey Workspace</h2>
-                        <p>Manage one student and track personalized visa journey progress.</p>
-                    </div>
-                    <div class="ent-welcome-actions">
-                        <button id="entStudentWorkspaceBackBtn" class="ent-btn ent-btn-ghost ent-btn-sm" type="button">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="width:14px;height:14px"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-                            Back to Students
-                        </button>
-                    </div>
-                </div>
-
-                <div class="ent-student-workspace-shell">
-                    <aside class="ent-card ent-student-profile-sidebar">
-                        <div class="ent-card-header">
-                            <span class="ent-card-title">Selected Student Profile</span>
-                        </div>
-                        <div class="ent-card-body">
-                            <div class="ent-student-profile-card">
-                                <div id="entStudentWorkspaceProfileAvatar" class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#7c3aed)">S</div>
-                                <div>
-                                    <div id="entStudentWorkspaceProfileName" class="ent-student-profile-name">Student</div>
-                                    <div id="entStudentWorkspaceProfileMeta" class="ent-student-profile-meta">Select a student to view details</div>
-                                </div>
-                            </div>
-
-                            <div class="ent-student-profile-option-title">Profile Options</div>
-                            <div id="entStudentWorkspaceOptionList" class="ent-student-profile-option-list"></div>
-                            <div id="entStudentWorkspaceOptionHint" class="ent-student-profile-option-hint">
-                                Choose an option to focus this student's journey view.
-                            </div>
-                        </div>
-                    </aside>
-
-                    <div class="ent-content-grid ent-student-workspace-grid">
-                        <div class="ent-card">
-                            <div class="ent-card-header">
-                                <span class="ent-card-title" id="entStudentWorkspaceStudentName">Student</span>
-                            </div>
-                            <div class="ent-card-body">
-                                <div class="ent-student-profile-head">
-                                    <div class="ent-student-cell">
-                                        <div id="entStudentWorkspaceAvatar" class="ent-student-avatar" style="background:linear-gradient(135deg,#2563eb,#7c3aed)">S</div>
-                                        <div>
-                                            <div id="entStudentWorkspaceSubline" class="ent-student-email">Personalized visa journey workspace</div>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div class="ent-student-meta-grid">
-                                    <div class="ent-student-meta-item">
-                                        <div class="ent-student-meta-label">Study Destination</div>
-                                        <div id="entStudentWorkspaceDestination" class="ent-student-meta-value">-</div>
-                                    </div>
-                                    <div class="ent-student-meta-item">
-                                        <div class="ent-student-meta-label">Visa Type</div>
-                                        <div id="entStudentWorkspaceVisaType" class="ent-student-meta-value">-</div>
-                                    </div>
-                                    <div class="ent-student-meta-item">
-                                        <div class="ent-student-meta-label">Intake</div>
-                                        <div id="entStudentWorkspaceIntake" class="ent-student-meta-value">-</div>
-                                    </div>
-                                </div>
-
-                                <div class="ent-workspace-progress">
-                                    <div class="ent-workspace-progress-head">
-                                        <span id="entStudentWorkspaceProgressLabel">Journey progress</span>
-                                        <strong id="entStudentWorkspaceProgressPercent">0%</strong>
-                                    </div>
-                                    <div class="ent-progress-track">
-                                        <div id="entStudentWorkspaceProgressBar" class="ent-progress-fill blue" style="width:0%"></div>
-                                    </div>
-                                </div>
-
-                                <div id="entStudentWorkspaceStageRail" class="ent-stage-rail"></div>
-                            </div>
-                        </div>
-
-                        <div class="ent-card">
-                            <div class="ent-card-header">
-                                <span class="ent-card-title">Current Stage</span>
-                            </div>
-                            <div class="ent-card-body">
-                                <div class="ent-student-meta-grid ent-workspace-side-grid">
-                                    <div class="ent-student-meta-item">
-                                        <div class="ent-student-meta-label">Stage</div>
-                                        <div id="entStudentWorkspaceStageCounter" class="ent-student-meta-value">-</div>
-                                    </div>
-                                    <div class="ent-student-meta-item">
-                                        <div class="ent-student-meta-label">Status</div>
-                                        <div id="entStudentWorkspaceStatus" class="ent-student-meta-value">-</div>
-                                    </div>
-                                    <div class="ent-student-meta-item">
-                                        <div class="ent-student-meta-label">ETA to Intake</div>
-                                        <div id="entStudentWorkspaceEta" class="ent-student-meta-value">-</div>
-                                    </div>
-                                </div>
-
-                                <div class="ent-workspace-current-stage">
-                                    <h3 id="entStudentWorkspaceCurrentStageTitle">Stage title</h3>
-                                    <p id="entStudentWorkspaceCurrentStageDesc">Stage guidance will appear here.</p>
-                                </div>
-
-                                <div class="ent-workspace-checklist-wrap">
-                                    <div class="ent-student-meta-label">Recommended Checklist</div>
-                                    <ul id="entStudentWorkspaceChecklist" class="ent-workspace-checklist"></ul>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ===== VISA CASES SECTION ===== -->
-            <section id="entSectionVisas" class="ent-section">
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Visa Cases</h2>
-                        <p>Track and manage all visa applications and renewals.</p>
-                    </div>
-                </div>
-                <div class="ent-card">
-                    <div class="ent-card-body">
-                        <div class="ent-empty">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                            <h3>Visa cases module coming soon</h3>
-                            <p>View, filter, and manage all visa cases with detailed tracking and status updates.</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ===== DOCUMENTS SECTION ===== -->
-            <section id="entSectionDocuments" class="ent-section">
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Documents</h2>
-                        <p>Centralized document management for all student files.</p>
-                    </div>
-                </div>
-                <div class="ent-card">
-                    <div class="ent-card-body">
-                        <div class="ent-empty">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
-                            <h3>Documents module coming soon</h3>
-                            <p>Upload, organize, and track compliance documents across your entire student base.</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ===== ANALYTICS SECTION ===== -->
-            <section id="entSectionAnalytics" class="ent-section">
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Analytics</h2>
-                        <p>Insights and reporting across your organization.</p>
-                    </div>
-                </div>
-                <div class="ent-card">
-                    <div class="ent-card-body">
-                        <div class="ent-empty">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                            <h3>Analytics module coming soon</h3>
-                            <p>Comprehensive dashboards with trends, forecasts, and exportable reports.</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ===== COMPLIANCE SECTION ===== -->
-            <section id="entSectionCompliance" class="ent-section">
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Compliance</h2>
-                        <p>Monitor and ensure regulatory compliance across all cases.</p>
-                    </div>
-                </div>
-                <div class="ent-card">
-                    <div class="ent-card-body">
-                        <div class="ent-empty">
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                            <h3>Compliance module coming soon</h3>
-                            <p>Automated compliance checks, audit trails, and regulatory alerts.</p>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ===== TEAM SECTION ===== -->
-            <section id="entSectionTeam" class="ent-section">
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Team</h2>
-                        <p>Manage users and permissions for your enterprise organization.</p>
-                    </div>
-                </div>
-
-                <div id="entTeamFlash" class="ent-flash info" style="display:none;"></div>
-
-                <div class="ent-content-grid ent-team-grid">
-                    <div class="ent-card">
-                        <div class="ent-card-header">
-                            <span class="ent-card-title">Team Members</span>
-                        </div>
-                        <div class="ent-card-body no-pad">
-                            <div class="ent-table-wrap">
-                                <table class="ent-table">
-                                    <thead>
-                                        <tr>
-                                            <th>User</th>
-                                            <th>Email</th>
-                                            <th>Role</th>
-                                            <th>Last Login</th>
-                                            <th>Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="entTeamTableBody">
-                                        <tr>
-                                            <td colspan="5" style="text-align:center;color:var(--ent-ink-muted);">No team members found.</td>
-                                        </tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="ent-card">
-                        <div class="ent-card-header">
-                            <span class="ent-card-title">Add Team User</span>
-                        </div>
-                        <div class="ent-card-body">
-                            <p id="entTeamAccessNotice" class="ent-team-note">
-                                Only organization admins can add, remove, or change member roles.
-                            </p>
-                            <form id="entTeamAddForm" autocomplete="off">
-                                <div class="ent-form-group">
-                                    <label class="ent-form-label" for="entTeamEmail">User email</label>
-                                    <input class="ent-form-input" id="entTeamEmail" type="email" placeholder="teammate@company.com" required>
-                                </div>
-                                <div class="ent-form-group">
-                                    <label class="ent-form-label" for="entTeamName">Full name (optional)</label>
-                                    <input class="ent-form-input" id="entTeamName" type="text" maxlength="120" placeholder="Jane Doe">
-                                </div>
-                                <div class="ent-form-group">
-                                    <label class="ent-form-label" for="entTeamRole">Access</label>
-                                    <select class="ent-form-input ent-select" id="entTeamRole">
-                                        <option value="viewer">Viewer (view-only)</option>
-                                        <option value="editor">Editor (view + edit)</option>
-                                        <option value="admin">Admin (full access)</option>
-                                    </select>
-                                </div>
-                                <button id="entTeamAddBtn" type="submit" class="ent-btn ent-btn-primary ent-btn-full">
-                                    Add User
-                                </button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- ===== SETTINGS SECTION ===== -->
-            <section id="entSectionSettings" class="ent-section">
-                <div class="ent-welcome-bar">
-                    <div class="ent-welcome-text">
-                        <h2>Settings</h2>
-                        <p>Configure your organization branding and profile details.</p>
-                    </div>
-                </div>
-
-                <div id="entSettingsFlash" class="ent-flash info" style="display:none;"></div>
-
-                <div class="ent-content-grid ent-settings-grid">
-                    <div class="ent-card">
-                        <div class="ent-card-header">
-                            <span class="ent-card-title">Organization Branding</span>
-                        </div>
-                        <div class="ent-card-body">
-                            <p id="entSettingsAccessNotice" class="ent-team-note">
-                                Only organization admins can update company branding.
-                            </p>
-                            <form id="entSettingsBrandingForm" autocomplete="off">
-                                <div class="ent-form-group">
-                                    <label class="ent-form-label" for="entSettingsCompanyName">Organization name</label>
-                                    <input class="ent-form-input" id="entSettingsCompanyName" type="text" maxlength="120" placeholder="Acme Immigration Services" required>
-                                </div>
-                                <div class="ent-form-group">
-                                    <label class="ent-form-label" for="entSettingsLogoUrl">Logo URL (optional)</label>
-                                    <input class="ent-form-input" id="entSettingsLogoUrl" type="url" maxlength="2048" placeholder="https://yourcdn.com/logo.png">
-                                    <p class="ent-form-hint">
-                                        Leave blank to use a random default logo. You can also generate a fresh random logo below.
-                                    </p>
-                                </div>
-                                <div class="ent-settings-form-actions">
-                                    <button id="entSettingsRandomLogoBtn" type="button" class="ent-btn ent-btn-ghost">
-                                        Randomize Logo
-                                    </button>
-                                    <button id="entSettingsSaveBtn" type="submit" class="ent-btn ent-btn-primary">
-                                        Save Branding
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-
-                    <div class="ent-card">
-                        <div class="ent-card-header">
-                            <span class="ent-card-title">Brand Preview</span>
-                        </div>
-                        <div class="ent-card-body">
-                            <div class="ent-settings-preview-wrap">
-                                <div class="ent-settings-preview-logo">
-                                    <img id="entSettingsLogoPreviewImg" alt="" width="128" height="128" loading="lazy" decoding="async" referrerpolicy="no-referrer">
-                                </div>
-                                <div class="ent-settings-preview-meta">
-                                    <div id="entSettingsPreviewCompanyName" class="ent-settings-preview-company">Your organization</div>
-                                    <div id="entSettingsPreviewPortalUrl" class="ent-settings-preview-url">your-company.rilono.com</div>
-                                </div>
-                            </div>
-                            <p class="ent-form-hint">
-                                This branding appears across your enterprise portal experience.
-                            </p>
-                            <div class="ent-form-group">
-                                <label class="ent-form-label" for="entSettingsLogoFileInput">Company profile picture</label>
-                                <input id="entSettingsLogoFileInput" type="file" accept="image/jpeg,image/jpg,image/png,image/gif,image/webp" hidden>
-                                <div class="ent-settings-upload-row">
-                                    <button id="entSettingsChooseLogoBtn" type="button" class="ent-btn ent-btn-ghost">
-                                        Choose Image
-                                    </button>
-                                    <button id="entSettingsUploadLogoBtn" type="button" class="ent-btn ent-btn-ghost">
-                                        Upload Picture
-                                    </button>
-                                    <span id="entSettingsLogoFileName" class="ent-settings-file-name">No file selected.</span>
-                                </div>
-                                <p class="ent-form-hint">
-                                    Upload JPG, PNG, GIF, or WEBP. After upload, click Save Branding.
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-        </main>
-    </div>
-
-    <div id="entStudentModal" class="ent-modal-backdrop" hidden>
-        <div class="ent-modal" role="dialog" aria-modal="true" aria-labelledby="entStudentModalTitle">
-            <div class="ent-modal-header">
-                <h3 id="entStudentModalTitle">Add Student</h3>
-                <button id="entStudentModalClose" type="button" class="ent-modal-close" aria-label="Close">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
-            </div>
-            <div class="ent-modal-body">
-                <div id="entStudentModalFlash" class="ent-flash info" style="display:none;"></div>
-                <form id="entStudentForm" autocomplete="off">
-                    <div class="ent-form-group">
-                        <label class="ent-form-label" for="entStudentName">Student Name</label>
-                        <input id="entStudentName" type="text" class="ent-form-input" maxlength="160" placeholder="Enter full name" required>
-                    </div>
-                    <div class="ent-form-group">
-                        <label class="ent-form-label" for="entStudentCountry">Country planning for studies</label>
-                        <select id="entStudentCountry" class="ent-form-input ent-select" required>
-                            <option value="">Select destination country</option>
-                        </select>
-                    </div>
-                    <div class="ent-form-group">
-                        <label class="ent-form-label" for="entStudentVisaType">Visa Type</label>
-                        <select id="entStudentVisaType" class="ent-form-input ent-select" required disabled>
-                            <option value="">Select visa type</option>
-                        </select>
-                    </div>
-                    <div class="ent-form-group">
-                        <label class="ent-form-label" for="entStudentIntake">Intake</label>
-                        <select id="entStudentIntake" class="ent-form-input ent-select" required disabled>
-                            <option value="">Select intake</option>
-                        </select>
-                    </div>
-                    <p class="ent-form-hint">Visa and intake options are shown based on the selected destination country and visa type. Intake labels include the upcoming year.</p>
-                    <div class="ent-modal-actions">
-                        <button id="entStudentCancelBtn" type="button" class="ent-btn ent-btn-ghost">Cancel</button>
-                        <button id="entStudentSaveBtn" type="submit" class="ent-btn ent-btn-primary">Add Student</button>
-                    </div>
-                </form>
-            </div>
+      </div>
+      <nav class="side-nav">
+        <div class="nav-label">Workspace</div>
+        <button class="nav-item active" data-view="dashboard">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+          Dashboard
+        </button>
+        <button class="nav-item" data-view="clients">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Clients <span class="badge" id="clientsBadge">0</span>
+        </button>
+        <button class="nav-item" data-view="ai">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4L12 3z"/><path d="M19 14l.8 2 2 .8-2 .8L19 20l-.8-2.4-2-.8 2-.8L19 14z"/></svg>
+          AI Assistant <span class="ai-pill">New</span>
+        </button>
+        <button class="nav-item" data-view="team">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          Team
+        </button>
+        <div class="nav-label">Account</div>
+        <button class="nav-item" data-view="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </button>
+      </nav>
+      <div class="side-foot">
+        <div class="user-chip">
+          <div class="avatar" id="userAvatar">U</div>
+          <div class="meta"><b id="userName">User</b><span id="userRole">Admin</span></div>
+          <button class="signout" id="signoutBtn" title="Sign out">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </button>
         </div>
-    </div>
+      </div>
+    </aside>
 
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
-    <script src="/static/enterprise.js?v=24"></script>
+    <div class="main">
+      <header class="topbar">
+        <button class="menu-btn" id="menuBtn"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
+        <h1 id="viewTitle">Dashboard</h1>
+        <div class="spacer"></div>
+        <div class="search-box" id="globalSearchBox">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="search" id="globalSearch" placeholder="Search clients…" />
+          <button type="button" class="search-clear hidden" id="globalSearchClear" aria-label="Clear client search">×</button>
+        </div>
+        <button class="btn btn-primary btn-sm" id="topAddClient">+ Add Client</button>
+      </header>
+      <div class="content" id="content"><div class="center-load"><div class="spinner dark"></div></div></div>
+    </div>
+  </div>
+
+  <!-- ===================== Shared overlay / modal / drawer ===================== -->
+  <div class="overlay" id="overlay"></div>
+  <div class="modal" id="modal"></div>
+  <div class="drawer" id="drawer"></div>
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script src="/static/enterprise.js"></script>
 </body>
-
 </html>

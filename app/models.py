@@ -126,6 +126,157 @@ class EnterpriseStudent(Base):
     )
 
 
+class EnterpriseClient(Base):
+    """A visa client/applicant managed by an enterprise organization (any visa category)."""
+    __tablename__ = "enterprise_clients"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+
+    # Identity & contact
+    full_name = Column(String, nullable=False)
+    email = Column(String, nullable=True, index=True)
+    phone = Column(String, nullable=True)
+    nationality = Column(String, nullable=True)
+    date_of_birth = Column(Date, nullable=True)
+    passport_number = Column(String, nullable=True)
+    passport_expiry = Column(Date, nullable=True)
+
+    # Visa case
+    visa_category = Column(String, nullable=False, default="student")  # student|tourist|work|immigration
+    destination_country_code = Column(String, nullable=False)
+    destination_country_name = Column(String, nullable=False)
+    visa_type = Column(String, nullable=False)
+    intake = Column(String, nullable=True)
+    application_reference = Column(String, nullable=True)
+
+    # Pipeline
+    status = Column(String, nullable=False, default="new_lead", index=True)
+    priority = Column(String, nullable=False, default="normal")
+    target_date = Column(Date, nullable=True)  # interview / travel / intake deadline
+
+    # Assignment & meta
+    assigned_to_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    notes = relationship(
+        "EnterpriseClientNote",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    emails = relationship(
+        "EnterpriseClientEmail",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    documents = relationship(
+        "EnterpriseClientDocument",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("ix_ent_clients_org_status", "organization_id", "status"),
+        Index("ix_ent_clients_org_created", "organization_id", "created_at"),
+    )
+
+
+class EnterpriseClientNote(Base):
+    """A free-text note on a client's timeline."""
+    __tablename__ = "enterprise_client_notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    author_name = Column(String, nullable=True)
+    body = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    client = relationship("EnterpriseClient", back_populates="notes")
+
+
+class EnterpriseClientEmail(Base):
+    """Log of an email sent to a client from the dashboard."""
+    __tablename__ = "enterprise_client_emails"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=True, index=True)
+    sent_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    sent_by_name = Column(String, nullable=True)
+    to_email = Column(String, nullable=False)
+    subject = Column(String, nullable=False)
+    body = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="sent")  # sent|failed
+    provider_message_id = Column(String, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    client = relationship("EnterpriseClient", back_populates="emails")
+
+
+class EnterpriseClientDocument(Base):
+    """A document uploaded for a client (passport, I-20, financials, etc.)."""
+    __tablename__ = "enterprise_client_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    document_type = Column(String, nullable=False, default="Other")
+    original_filename = Column(String, nullable=False)
+    storage_key = Column(String, nullable=False)  # private R2 object key (not a public URL)
+    file_size = Column(Integer, nullable=True)
+    mime_type = Column(String, nullable=True)
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    uploaded_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    client = relationship("EnterpriseClient", back_populates="documents")
+
+
+class EnterpriseSubscription(Base):
+    """Per-organization SaaS subscription (the consultancy's own plan)."""
+    __tablename__ = "enterprise_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, unique=True, index=True)
+    plan = Column(String, nullable=False, default="trial")  # trial|starter|growth|scale
+    status = Column(String, nullable=False, default="trialing")  # trialing|active|past_due|canceled
+    trial_ends_at = Column(DateTime(timezone=True), nullable=True)
+    current_period_end = Column(DateTime(timezone=True), nullable=True)
+    razorpay_subscription_id = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterpriseSubscriptionPayment(Base):
+    """Payment/checkout record for an organization subscription."""
+    __tablename__ = "enterprise_subscription_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    provider = Column(String, nullable=False, default="razorpay")
+    plan = Column(String, nullable=False, default="starter")
+    billing_cycle = Column(String, nullable=False, default="monthly")  # monthly|yearly
+    amount_paise = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False, default="INR")
+    razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
+    razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
+    razorpay_subscription_id = Column(String, nullable=True, index=True)
+    status = Column(String, nullable=False, default="created")  # created|verified|failed
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 class CompanyFinanceEntry(Base):
     __tablename__ = "company_finance_entries"
 
@@ -137,6 +288,7 @@ class CompanyFinanceEntry(Base):
     description = Column(Text, nullable=True)
     amount_usd = Column(Numeric(12, 2), nullable=False)
     occurred_on = Column(Date, nullable=False, index=True)
+    paid_by = Column(String, nullable=False, default="Gaurav", index=True)
     source = Column(String, nullable=False, default="manual")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -108,7 +108,7 @@ const refs = {
     financeMetricRoi: document.getElementById('adminFinanceMetricRoi'),
     financeTimelineChart: document.getElementById('adminFinanceTimelineChart'),
     financeBreakdownChart: document.getElementById('adminFinanceBreakdownChart'),
-    financeNotes: document.getElementById('adminFinanceNotes'),
+    financeContributorChart: document.getElementById('adminFinanceContributorChart'),
     financeTableBody: document.getElementById('adminFinanceTableBody')
 };
 
@@ -724,11 +724,11 @@ function renderFinanceEmptyState(message) {
     if (refs.financeMetricRoi) refs.financeMetricRoi.textContent = '0.00%';
     if (refs.financeTimelineChart) refs.financeTimelineChart.innerHTML = `<div class="table-empty">${safeMessage}</div>`;
     if (refs.financeBreakdownChart) refs.financeBreakdownChart.innerHTML = `<div class="table-empty">${safeMessage}</div>`;
-    if (refs.financeNotes) refs.financeNotes.innerHTML = '';
+    if (refs.financeContributorChart) refs.financeContributorChart.innerHTML = `<div class="table-empty">${safeMessage}</div>`;
     if (refs.financeTableBody) {
         refs.financeTableBody.innerHTML = `
             <tr>
-                <td colspan="7" class="table-empty">${safeMessage}</td>
+                <td colspan="8" class="table-empty">${safeMessage}</td>
             </tr>
         `;
     }
@@ -824,13 +824,39 @@ function renderFinanceBreakdown(breakdown) {
     }).join('');
 }
 
+function renderFinanceContributorBreakdown(breakdown) {
+    if (!refs.financeContributorChart) return;
+    const rows = Array.isArray(breakdown) ? breakdown : [];
+    if (!rows.length) {
+        refs.financeContributorChart.innerHTML = '<div class="table-empty">No founder spend breakdown available.</div>';
+        return;
+    }
+
+    refs.financeContributorChart.innerHTML = rows.map((item) => {
+        const percentage = Math.min(Math.max(Number(item.percentage) || 0, 0), 100);
+        const amount = Number(item.amount_usd) || 0;
+        return `
+            <div class="finance-breakdown-row contributor-row">
+                <div class="finance-breakdown-top">
+                    <strong>${escapeHtml(item.label || 'Unassigned')}</strong>
+                    <span>${escapeHtml(formatUsd(amount))}</span>
+                </div>
+                <div class="finance-breakdown-track contributor-track">
+                    <span style="width: ${percentage.toFixed(2)}%"></span>
+                </div>
+                <div class="finance-breakdown-percent">${escapeHtml(formatPercent(percentage))} of founder spend</div>
+            </div>
+        `;
+    }).join('');
+}
+
 function renderFinanceLedger(ledger) {
     if (!refs.financeTableBody) return;
     const rows = Array.isArray(ledger) ? ledger : [];
     if (!rows.length) {
         refs.financeTableBody.innerHTML = `
             <tr>
-                <td colspan="7" class="table-empty">No finance ledger rows found.</td>
+                <td colspan="8" class="table-empty">No finance ledger rows found.</td>
             </tr>
         `;
         return;
@@ -845,22 +871,13 @@ function renderFinanceLedger(ledger) {
                 <td><span class="finance-kind ${isReturn ? 'return' : 'investment'}">${escapeHtml(item.kind || '-')}</span></td>
                 <td><div class="user-name">${escapeHtml(item.vendor || '-')}</div></td>
                 <td>${escapeHtml(item.category || '-')}</td>
+                <td><span class="finance-source">${escapeHtml(item.paid_by || '-')}</span></td>
                 <td>${escapeHtml(item.description || '-')}</td>
                 <td class="finance-amount ${isReturn ? 'positive' : 'negative'}">${escapeHtml(formatUsd(amount))}</td>
                 <td><span class="finance-source">${escapeHtml(item.source || '-')}</span></td>
             </tr>
         `;
     }).join('');
-}
-
-function renderFinanceNotes(notes) {
-    if (!refs.financeNotes) return;
-    const rows = Array.isArray(notes) ? notes.filter(Boolean) : [];
-    if (!rows.length) {
-        refs.financeNotes.innerHTML = '';
-        return;
-    }
-    refs.financeNotes.innerHTML = rows.map((note) => `<span>${escapeHtml(note)}</span>`).join('');
 }
 
 function renderFinanceAnalytics() {
@@ -872,8 +889,8 @@ function renderFinanceAnalytics() {
     renderFinanceMetrics(payload.summary || {});
     renderFinanceTimeline(payload.monthly_series || []);
     renderFinanceBreakdown(payload.expense_breakdown || []);
+    renderFinanceContributorBreakdown(payload.contributor_breakdown || []);
     renderFinanceLedger(payload.ledger || []);
-    renderFinanceNotes(payload.notes || []);
 }
 
 function renderUsersTableMessage(message) {

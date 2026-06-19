@@ -359,6 +359,192 @@ def ensure_rilono_ai_chat_upload_events_table():
             ))
 
 
+def ensure_enterprise_crm_tables():
+    """
+    Create the enterprise CRM tables (clients, notes, client emails, org
+    subscriptions & payments) for environments without full migrations.
+
+    Idempotent and additive — safe to run on every startup. On first creation
+    of enterprise_clients, any existing enterprise_students rows are copied over
+    so no data is lost when upgrading from the legacy students model.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+
+    with engine.begin() as conn:
+        # --- enterprise_clients ------------------------------------------------
+        clients_existed = _table_exists(conn, "enterprise_clients")
+        if not clients_existed:
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_clients (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    full_name VARCHAR NOT NULL,
+                    email VARCHAR,
+                    phone VARCHAR,
+                    nationality VARCHAR,
+                    date_of_birth DATE,
+                    passport_number VARCHAR,
+                    passport_expiry DATE,
+                    visa_category VARCHAR NOT NULL DEFAULT 'student',
+                    destination_country_code VARCHAR NOT NULL,
+                    destination_country_name VARCHAR NOT NULL,
+                    visa_type VARCHAR NOT NULL,
+                    intake VARCHAR,
+                    application_reference VARCHAR,
+                    status VARCHAR NOT NULL DEFAULT 'new_lead',
+                    priority VARCHAR NOT NULL DEFAULT 'normal',
+                    target_date DATE,
+                    assigned_to_user_id INTEGER,
+                    created_by_user_id INTEGER NOT NULL,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_clients_organization_id ON enterprise_clients(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_clients_status ON enterprise_clients(status)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_clients_email ON enterprise_clients(email)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_clients_assigned_to_user_id ON enterprise_clients(assigned_to_user_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_clients_org_status ON enterprise_clients(organization_id, status)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_clients_org_created ON enterprise_clients(organization_id, created_at)",
+            ):
+                conn.execute(text(stmt))
+
+            # One-time migration of legacy students into the richer clients table.
+            if _table_exists(conn, "enterprise_students"):
+                conn.execute(text("""
+                    INSERT INTO enterprise_clients
+                        (organization_id, full_name, visa_category, destination_country_code,
+                         destination_country_name, visa_type, intake, status, priority,
+                         created_by_user_id, created_at)
+                    SELECT organization_id, student_name, 'student', study_country_code,
+                           study_country_name, visa_type, intake, 'new_lead', 'normal',
+                           created_by_user_id, created_at
+                    FROM enterprise_students
+                """))
+
+        # --- enterprise_client_notes ------------------------------------------
+        if not _table_exists(conn, "enterprise_client_notes"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_client_notes (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    author_user_id INTEGER,
+                    author_name VARCHAR,
+                    body TEXT NOT NULL,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_notes_organization_id ON enterprise_client_notes(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_notes_client_id ON enterprise_client_notes(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_notes_created_at ON enterprise_client_notes(created_at)",
+            ):
+                conn.execute(text(stmt))
+
+        # --- enterprise_client_emails -----------------------------------------
+        if not _table_exists(conn, "enterprise_client_emails"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_client_emails (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER,
+                    sent_by_user_id INTEGER,
+                    sent_by_name VARCHAR,
+                    to_email VARCHAR NOT NULL,
+                    subject VARCHAR NOT NULL,
+                    body TEXT NOT NULL,
+                    status VARCHAR NOT NULL DEFAULT 'sent',
+                    provider_message_id VARCHAR,
+                    error_message TEXT,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_emails_organization_id ON enterprise_client_emails(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_emails_client_id ON enterprise_client_emails(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_emails_created_at ON enterprise_client_emails(created_at)",
+            ):
+                conn.execute(text(stmt))
+
+        # --- enterprise_client_documents --------------------------------------
+        if not _table_exists(conn, "enterprise_client_documents"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_client_documents (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    document_type VARCHAR NOT NULL DEFAULT 'Other',
+                    original_filename VARCHAR NOT NULL,
+                    storage_key VARCHAR NOT NULL,
+                    file_size INTEGER,
+                    mime_type VARCHAR,
+                    uploaded_by_user_id INTEGER,
+                    uploaded_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_documents_organization_id ON enterprise_client_documents(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_documents_client_id ON enterprise_client_documents(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_documents_created_at ON enterprise_client_documents(created_at)",
+            ):
+                conn.execute(text(stmt))
+
+        # --- enterprise_subscriptions -----------------------------------------
+        if not _table_exists(conn, "enterprise_subscriptions"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_subscriptions (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    plan VARCHAR NOT NULL DEFAULT 'trial',
+                    status VARCHAR NOT NULL DEFAULT 'trialing',
+                    trial_ends_at {ts},
+                    current_period_end {ts},
+                    razorpay_subscription_id VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_subscriptions_org "
+                "ON enterprise_subscriptions(organization_id)"
+            ))
+
+        # --- enterprise_subscription_payments ---------------------------------
+        if not _table_exists(conn, "enterprise_subscription_payments"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_subscription_payments (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    created_by_user_id INTEGER,
+                    provider VARCHAR NOT NULL DEFAULT 'razorpay',
+                    plan VARCHAR NOT NULL DEFAULT 'starter',
+                    billing_cycle VARCHAR NOT NULL DEFAULT 'monthly',
+                    amount_paise INTEGER NOT NULL,
+                    currency VARCHAR NOT NULL DEFAULT 'INR',
+                    razorpay_order_id VARCHAR NOT NULL,
+                    razorpay_payment_id VARCHAR,
+                    razorpay_subscription_id VARCHAR,
+                    status VARCHAR NOT NULL DEFAULT 'created',
+                    verified_at {ts},
+                    error_message TEXT,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_subscription_payments_org ON enterprise_subscription_payments(organization_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_subscription_payments_order ON enterprise_subscription_payments(razorpay_order_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_subscription_payments_payment ON enterprise_subscription_payments(razorpay_payment_id)",
+            ):
+                conn.execute(text(stmt))
+
+
 def ensure_company_finance_entries_table():
     """
     Ensure admin company finance analytics table exists and seed baseline spend once.
@@ -376,6 +562,7 @@ def ensure_company_finance_entries_table():
                         description TEXT,
                         amount_usd NUMERIC(12, 2) NOT NULL,
                         occurred_on DATE NOT NULL,
+                        paid_by VARCHAR NOT NULL DEFAULT 'Gaurav',
                         source VARCHAR NOT NULL DEFAULT 'manual',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
                         updated_at TIMESTAMP
@@ -392,6 +579,7 @@ def ensure_company_finance_entries_table():
                         description TEXT,
                         amount_usd NUMERIC(12, 2) NOT NULL,
                         occurred_on DATE NOT NULL,
+                        paid_by VARCHAR NOT NULL DEFAULT 'Gaurav',
                         source VARCHAR NOT NULL DEFAULT 'manual',
                         created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
                         updated_at TIMESTAMPTZ
@@ -413,6 +601,8 @@ def ensure_company_finance_entries_table():
             conn.execute(text("ALTER TABLE company_finance_entries ADD COLUMN amount_usd NUMERIC(12,2) NOT NULL DEFAULT 0"))
         if "occurred_on" not in columns:
             conn.execute(text("ALTER TABLE company_finance_entries ADD COLUMN occurred_on DATE NOT NULL DEFAULT '2026-01-01'"))
+        if "paid_by" not in columns:
+            conn.execute(text("ALTER TABLE company_finance_entries ADD COLUMN paid_by VARCHAR NOT NULL DEFAULT 'Gaurav'"))
         if "source" not in columns:
             conn.execute(text("ALTER TABLE company_finance_entries ADD COLUMN source VARCHAR NOT NULL DEFAULT 'manual'"))
         if "created_at" not in columns:
@@ -436,44 +626,56 @@ def ensure_company_finance_entries_table():
             "CREATE INDEX IF NOT EXISTS ix_company_finance_entries_category "
             "ON company_finance_entries(category)"
         ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_company_finance_entries_paid_by "
+            "ON company_finance_entries(paid_by)"
+        ))
 
         seed_entries = [
-            ("rilono-seed-001", "2026-02-17", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.57"),
-            ("rilono-seed-002", "2026-02-22", "AI Model Tools", "Claude", "Claude workspace subscription", "-21.25"),
-            ("rilono-seed-003", "2026-02-28", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.25"),
-            ("rilono-seed-004", "2026-03-04", "AI Coding Tools", "Cursor", "Cursor usage and tooling", "-31.56"),
-            ("rilono-seed-005", "2026-03-09", "Cloud Infrastructure", "Render", "Render hosting usage", "-4.33"),
-            ("rilono-seed-006", "2026-03-15", "AI Platform", "OpenAI", "OpenAI API and product usage", "-26.63"),
-            ("rilono-seed-007", "2026-03-19", "Email & Domain", "Name Cheap Email", "Namecheap email service", "-2.81"),
-            ("rilono-seed-008", "2026-03-24", "Product Distribution", "Chrome Extension", "Chrome extension registration", "-5.00"),
-            ("rilono-seed-009", "2026-03-30", "Cloud Infrastructure", "Render Pro", "Render Pro plan", "-7.00"),
-            ("rilono-seed-010", "2026-04-04", "Email & Domain", "Domain", "Domain purchase/renewal", "-11.00"),
-            ("rilono-seed-011", "2026-04-10", "Cloud Infrastructure", "Render", "Render hosting usage", "-11.39"),
-            ("rilono-seed-012", "2026-04-17", "Cloud Infrastructure", "Render", "Render hosting usage", "-10.39"),
-            ("rilono-seed-013", "2026-04-25", "AI Model Tools", "Claude", "Claude workspace subscription", "-21.25"),
-            ("rilono-seed-014", "2026-05-02", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.25"),
-            ("rilono-seed-015", "2026-05-10", "Cloud Infrastructure", "Render", "Render hosting usage", "-14.11"),
-            ("rilono-seed-016", "2026-05-18", "AI Coding Tools", "Cursor", "Cursor usage adjustment", "-1.06"),
-            ("rilono-seed-017", "2026-05-24", "Email & Domain", "Namecheap", "Namecheap domain/email services", "-32.64"),
-            ("rilono-seed-018", "2026-06-02", "Cloud Infrastructure", "Render", "Render hosting usage", "-14.30"),
-            ("rilono-seed-019", "2026-06-08", "Security", "CyberSecurity", "Cybersecurity tools and review", "-62.00"),
-            ("rilono-seed-020", "2026-06-13", "Cloud Infrastructure", "Render", "Render hosting usage", "-16.23"),
+            ("rilono-seed-001", "2026-02-17", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.57", "Gaurav"),
+            ("rilono-seed-002", "2026-02-22", "AI Model Tools", "Claude", "Claude workspace subscription", "-21.25", "Gaurav"),
+            ("rilono-seed-003", "2026-02-28", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.25", "Gaurav"),
+            ("rilono-seed-004", "2026-03-04", "AI Coding Tools", "Cursor", "Cursor usage and tooling", "-31.56", "Gaurav"),
+            ("rilono-seed-005", "2026-03-09", "Cloud Infrastructure", "Render", "Render hosting usage", "-4.33", "Gaurav"),
+            ("rilono-seed-006", "2026-03-15", "AI Platform", "OpenAI", "OpenAI API and product usage", "-26.63", "Gaurav"),
+            ("rilono-seed-007", "2026-03-19", "Email & Domain", "Name Cheap Email", "Namecheap email service", "-2.81", "Gaurav"),
+            ("rilono-seed-008", "2026-03-24", "Product Distribution", "Chrome Extension", "Chrome extension registration", "-5.00", "Gaurav"),
+            ("rilono-seed-009", "2026-03-30", "Cloud Infrastructure", "Render Pro", "Render Pro plan", "-7.00", "Gaurav"),
+            ("rilono-seed-010", "2026-04-04", "Email & Domain", "Domain", "Domain purchase/renewal", "-11.00", "Gaurav"),
+            ("rilono-seed-011", "2026-04-10", "Cloud Infrastructure", "Render", "Render hosting usage", "-11.39", "Gaurav"),
+            ("rilono-seed-012", "2026-04-17", "Cloud Infrastructure", "Render", "Render hosting usage", "-10.39", "Gaurav"),
+            ("rilono-seed-013", "2026-04-25", "AI Model Tools", "Claude", "Claude workspace subscription", "-21.25", "Gaurav"),
+            ("rilono-seed-014", "2026-05-02", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.25", "Gaurav"),
+            ("rilono-seed-015", "2026-05-10", "Cloud Infrastructure", "Render", "Render hosting usage", "-14.11", "Gaurav"),
+            ("rilono-seed-016", "2026-05-18", "AI Coding Tools", "Cursor", "Cursor usage adjustment", "-1.06", "Gaurav"),
+            ("rilono-seed-017", "2026-05-24", "Email & Domain", "Namecheap", "Namecheap domain/email services", "-32.64", "Gaurav"),
+            ("rilono-seed-018", "2026-06-02", "Cloud Infrastructure", "Render", "Render hosting usage", "-14.30", "Gaurav"),
+            ("rilono-seed-019", "2026-06-08", "Security", "CyberSecurity", "Cybersecurity tools and review", "-62.00", "Kushal"),
+            ("rilono-seed-020", "2026-06-13", "Cloud Infrastructure", "Render", "Render hosting usage", "-16.23", "Gaurav"),
         ]
 
-        for seed_key, occurred_on, category, vendor, description, amount_usd in seed_entries:
+        for seed_key, occurred_on, category, vendor, description, amount_usd, paid_by in seed_entries:
             existing = conn.execute(
                 text("SELECT id FROM company_finance_entries WHERE seed_key = :seed_key"),
                 {"seed_key": seed_key},
             ).fetchone()
             if existing:
+                conn.execute(
+                    text("""
+                        UPDATE company_finance_entries
+                        SET paid_by = :paid_by
+                        WHERE seed_key = :seed_key
+                    """),
+                    {"seed_key": seed_key, "paid_by": paid_by},
+                )
                 continue
 
             conn.execute(
                 text("""
                     INSERT INTO company_finance_entries
-                        (seed_key, entry_type, category, vendor, description, amount_usd, occurred_on, source)
+                        (seed_key, entry_type, category, vendor, description, amount_usd, occurred_on, paid_by, source)
                     VALUES
-                        (:seed_key, 'expense', :category, :vendor, :description, :amount_usd, :occurred_on, 'seed')
+                        (:seed_key, 'expense', :category, :vendor, :description, :amount_usd, :occurred_on, :paid_by, 'seed')
                 """),
                 {
                     "seed_key": seed_key,
@@ -482,5 +684,6 @@ def ensure_company_finance_entries_table():
                     "description": description,
                     "amount_usd": amount_usd,
                     "occurred_on": occurred_on,
+                    "paid_by": paid_by,
                 },
             )

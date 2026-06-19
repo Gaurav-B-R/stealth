@@ -19,6 +19,7 @@ from app.schema_patch import (
     ensure_coupon_percent_column,
     ensure_coupon_usage_limit_column,
     ensure_document_catalog_columns,
+    ensure_enterprise_crm_tables,
     ensure_enterprise_organization_columns,
     ensure_enterprise_students_table,
     ensure_f1_visa_news_table,
@@ -144,7 +145,16 @@ async def add_security_headers(request: Request, call_next):
 
     forwarded_proto = (request.headers.get("x-forwarded-proto") or "").lower()
     is_https = request.url.scheme == "https" or forwarded_proto == "https"
-    if is_https:
+    hostname = (request.url.hostname or "").strip().lower()
+    is_local_host = (
+        hostname in {"localhost", "127.0.0.1", "::1", "localtest.me", "lvh.me"}
+        or hostname.endswith(".localtest.me")
+        or hostname.endswith(".lvh.me")
+    )
+    if is_https and is_local_host:
+        # Prevent Chrome from caching forced HTTPS for local wildcard domains.
+        response.headers.setdefault("Strict-Transport-Security", "max-age=0")
+    elif is_https:
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
     return response
@@ -173,6 +183,7 @@ def startup_backfill_subscriptions():
     ensure_document_catalog_columns()
     ensure_enterprise_organization_columns()
     ensure_enterprise_students_table()
+    ensure_enterprise_crm_tables()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_f1_visa_news_table()
@@ -244,6 +255,43 @@ async def read_for_enterprise():
 @app.get("/for-enterprise/")
 async def read_for_enterprise_slash():
     return await read_for_enterprise()
+
+
+@app.get("/us-f1-visa")
+async def read_us_f1_visa():
+    """Serve the preserved US F1 visa product page."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "us_f1_visa.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/us-f1-visa/")
+async def read_us_f1_visa_slash():
+    return await read_us_f1_visa()
+
+
+@app.get("/products/us-f1-visa")
+async def read_products_us_f1_visa():
+    return await read_us_f1_visa()
+
+
+@app.get("/products/us-f1-visa/")
+async def read_products_us_f1_visa_slash():
+    return await read_us_f1_visa()
+
+
+@app.get("/pricing")
+@app.get("/about-us")
+@app.get("/contact")
+@app.get("/privacy")
+@app.get("/terms")
+@app.get("/refund-policy")
+@app.get("/delivery-policy")
+@app.get("/login")
+@app.get("/register")
+async def read_preserved_public_spa_routes():
+    return await read_us_f1_visa()
 
 
 @app.get("/enterprise")

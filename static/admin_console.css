@@ -489,6 +489,10 @@ body {
     margin-bottom: 0.85rem;
 }
 
+.finance-contributor-card {
+    grid-column: 1 / -1;
+}
+
 .finance-chart-card {
     border: 1px solid #d7e4f5;
     border-radius: 16px;
@@ -608,6 +612,10 @@ body {
     background: linear-gradient(90deg, var(--brand-a), var(--accent));
 }
 
+.finance-breakdown-track.contributor-track span {
+    background: linear-gradient(90deg, #0ea5e9, #8b5cf6);
+}
+
 .finance-breakdown-percent {
     color: #64748b;
     font-size: 0.72rem;
@@ -631,7 +639,7 @@ body {
 }
 
 .finance-table {
-    min-width: 1080px;
+    min-width: 1180px;
 }
 
 .finance-kind,
