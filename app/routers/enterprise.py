@@ -1,6 +1,7 @@
 import os
 import re
 import hmac
+import uuid
 import secrets
 import logging
 import hashlib
@@ -8,7 +9,7 @@ from typing import Optional
 from urllib.parse import quote, urlparse
 
 import requests
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime, date
@@ -19,6 +20,7 @@ from app import models
 from app import enterprise_catalog as catalog
 from app import enterprise_billing as billing
 from app import enterprise_ai
+from app import enterprise_storage
 from app.auth import (
     authenticate_user,
     create_access_token,
@@ -2015,11 +2017,18 @@ def enterprise_get_client(
         .order_by(models.EnterpriseClientEmail.created_at.desc(), models.EnterpriseClientEmail.id.desc())
         .all()
     )
+    documents = (
+        db.query(models.EnterpriseClientDocument)
+        .filter(models.EnterpriseClientDocument.client_id == client.id)
+        .order_by(models.EnterpriseClientDocument.created_at.desc(), models.EnterpriseClientDocument.id.desc())
+        .all()
+    )
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "client": _serialize_client(client, member_names),
         "notes": [_serialize_note(n) for n in notes],
         "emails": [_serialize_client_email(e) for e in emails],
+        "documents": [_serialize_client_document(d) for d in documents],
     }
 
 
@@ -2829,3 +2838,184 @@ def enterprise_ai_chat(
         )
 
     return {"answer": answer, "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ===========================================================================
+# Per-client documents (private R2 storage, authenticated streaming)
+# ===========================================================================
+
+ENTERPRISE_DOC_MAX_BYTES = int(os.getenv("ENTERPRISE_DOC_MAX_BYTES", str(25 * 1024 * 1024)))
+ENTERPRISE_DOC_ALLOWED_EXT = {
+    ".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic",
+    ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt",
+}
+ENTERPRISE_DOC_INLINE_EXT = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
+    return {
+        "id": doc.id,
+        "client_id": doc.client_id,
+        "document_type": doc.document_type,
+        "original_filename": doc.original_filename,
+        "file_size": doc.file_size,
+        "mime_type": doc.mime_type,
+        "uploaded_by_name": doc.uploaded_by_name,
+        "created_at": _iso(doc.created_at),
+        "download_url": f"/api/enterprise/clients/{doc.client_id}/documents/{doc.id}/download",
+    }
+
+
+def _safe_filename(name: str) -> str:
+    base = os.path.basename(str(name or "").strip()) or "document"
+    base = re.sub(r"[\r\n\"]+", "", base)
+    return base[:160]
+
+
+@router.get("/clients/{client_id}/documents")
+def enterprise_list_client_documents(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    rows = (
+        db.query(models.EnterpriseClientDocument)
+        .filter(models.EnterpriseClientDocument.client_id == client.id)
+        .order_by(models.EnterpriseClientDocument.created_at.desc(), models.EnterpriseClientDocument.id.desc())
+        .all()
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "document_types": list(catalog.STUDENT_DOCUMENT_TYPES),
+        "documents": [_serialize_client_document(d) for d in rows],
+    }
+
+
+@router.post("/clients/{client_id}/documents")
+async def enterprise_upload_client_document(
+    client_id: int,
+    request: Request,
+    document_type: str = Form("Other"),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+
+    if not enterprise_storage.is_configured():
+        raise HTTPException(status_code=503, detail="Document storage is not configured.")
+
+    original = _safe_filename(file.filename)
+    ext = os.path.splitext(original)[1].lower()
+    if ext not in ENTERPRISE_DOC_ALLOWED_EXT:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, images, Word/Excel, CSV, or text.",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The file is empty.")
+    if len(data) > ENTERPRISE_DOC_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File is too large. Maximum size is {ENTERPRISE_DOC_MAX_BYTES // (1024 * 1024)} MB.",
+        )
+
+    storage_key = f"enterprise/{organization.id}/clients/{client.id}/{uuid.uuid4().hex}{ext}"
+    try:
+        enterprise_storage.store_document(storage_key, data, content_type=file.content_type)
+    except Exception:
+        logger.exception("Failed to store client document (org_id=%s, client_id=%s)", organization.id, client.id)
+        raise HTTPException(status_code=502, detail="Could not store the document right now. Please try again.")
+
+    doc = models.EnterpriseClientDocument(
+        organization_id=organization.id,
+        client_id=client.id,
+        document_type=catalog.normalize_document_type(document_type),
+        original_filename=original,
+        storage_key=storage_key,
+        file_size=len(data),
+        mime_type=(file.content_type or None),
+        uploaded_by_user_id=current_user.id,
+        uploaded_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return {
+        "message": "Document uploaded.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "document": _serialize_client_document(doc),
+    }
+
+
+@router.get("/clients/{client_id}/documents/{document_id}/download")
+def enterprise_download_client_document(
+    client_id: int,
+    document_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request)
+    doc = (
+        db.query(models.EnterpriseClientDocument)
+        .filter(
+            models.EnterpriseClientDocument.id == int(document_id),
+            models.EnterpriseClientDocument.client_id == int(client_id),
+            models.EnterpriseClientDocument.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    try:
+        data = enterprise_storage.fetch_document(doc.storage_key)
+    except Exception:
+        logger.exception("Failed to fetch client document id=%s", doc.id)
+        raise HTTPException(status_code=502, detail="Could not retrieve the document right now.")
+
+    ext = os.path.splitext(doc.original_filename)[1].lower()
+    disposition = "inline" if ext in ENTERPRISE_DOC_INLINE_EXT else "attachment"
+    filename = _safe_filename(doc.original_filename)
+    return Response(
+        content=data,
+        media_type=(doc.mime_type or "application/octet-stream"),
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+    )
+
+
+@router.delete("/clients/{client_id}/documents/{document_id}")
+def enterprise_delete_client_document(
+    client_id: int,
+    document_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    doc = (
+        db.query(models.EnterpriseClientDocument)
+        .filter(
+            models.EnterpriseClientDocument.id == int(document_id),
+            models.EnterpriseClientDocument.client_id == int(client_id),
+            models.EnterpriseClientDocument.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    enterprise_storage.delete_document(doc.storage_key)
+    db.delete(doc)
+    db.commit()
+    return {"message": "Document deleted.", "permissions": _enterprise_permissions_for_role(role)}

@@ -839,9 +839,9 @@
           toast("Client added", "success");
         }
         closeModal();
-        if (state.view === "clients") loadAndRenderClientList();
+        if (isEdit && state.view === "clientPage" && state.activeClient === client.id) { openClient(client.id); }
+        else if (state.view === "clients") loadAndRenderClientList();
         else navigate("clients");
-        if (isEdit && state.activeClient === client.id) openClient(client.id);
       } catch (ex) {
         if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("billing"); return; }
         err.textContent = ex.message; err.classList.remove("hidden");
@@ -849,65 +849,113 @@
     };
   }
 
-  /* ---------------- client detail drawer ---------------- */
-  async function openClient(id) {
-    state.activeClient = id;
-    openDrawer('<div class="center-load"><div class="spinner dark"></div></div>');
-    let data;
-    try { data = await api("/clients/" + id); } catch (ex) { openDrawer(`<div class="drawer-body">${errBox(ex)}</div>`); return; }
-    drawClient(data);
+  /* ---------------- full-page client profile ---------------- */
+  function fmtSize(bytes) {
+    const b = Number(bytes || 0);
+    if (!b) return "—";
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b / 1024).toFixed(0) + " KB";
+    return (b / 1048576).toFixed(1) + " MB";
+  }
+  function docIcon(filename) {
+    const ext = String(filename || "").split(".").pop().toLowerCase();
+    if (ext === "pdf") return "📕";
+    if (["jpg", "jpeg", "png", "webp", "gif", "heic"].includes(ext)) return "🖼️";
+    if (["doc", "docx"].includes(ext)) return "📘";
+    if (["xls", "xlsx", "csv"].includes(ext)) return "📊";
+    return "📄";
   }
 
-  function drawClient(data) {
+  async function openClient(id) {
+    state.activeClient = id;
+    if (state.view !== "clientPage") state.clientReturnView = state.view || "clients";
+    state.view = "clientPage";
+    $("#globalSearchBox").style.display = "none";
+    $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === "clients"));
+    const c = $("#content");
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    await ensureTeam();
+    let data;
+    try { data = await api("/clients/" + id); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    renderClientPage(data);
+  }
+
+  function renderClientPage(data) {
     const cl = data.client;
     const canEdit = state.perms.can_edit_data;
+    const members = teamMembersCache || [];
     const grad = `linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})`;
+    const docs = data.documents || [];
+    $("#viewTitle").textContent = cl.full_name;
 
     const detail = (label, val) => `<div class="detail-item"><label>${label}</label><div>${val || "—"}</div></div>`;
 
-    const stages = state.catalog.stages.filter((s) => s.key !== "on_hold");
-    const onHold = state.catalog.stages.find((s) => s.key === "on_hold");
-    const stageFlow = stages.map((s) => {
-      const active = cl.status === s.key;
-      return `<button class="stage-step ${active ? "done" : ""}" ${active ? `style="background:${s.color}"` : ""} ${canEdit ? `onclick="__ent.setStatus(${cl.id},'${s.key}')"` : "disabled"}>${esc(s.label)}</button>`;
-    }).join("") + (onHold ? `<button class="stage-step ${cl.status === "on_hold" ? "done" : ""}" ${cl.status === "on_hold" ? `style="background:${onHold.color}"` : ""} ${canEdit ? `onclick="__ent.setStatus(${cl.id},'on_hold')"` : "disabled"}>${esc(onHold.label)}</button>` : "");
-
-    openDrawer(`
-      <div class="drawer-hero" style="background:${grad}">
-        <button class="x" onclick="__ent.closeDrawer()">×</button>
-        <div class="dh-top">
-          <div class="dh-avatar">${esc(cl.country.flag_emoji || initials(cl.full_name))}</div>
-          <div><h2>${esc(cl.full_name)}</h2>
-          <div class="dh-sub">${esc(cl.country.flag_emoji)} ${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}${cl.intake ? " · " + esc(cl.intake) : ""}</div></div>
+    $("#content").innerHTML = `
+      <div class="client-page">
+        <div class="cp-actionbar">
+          <button class="cp-back" id="cpBack"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M11 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg> Back</button>
+          <div style="flex:1"></div>
+          ${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEdit">Edit details</button>
+            <button class="btn btn-danger btn-sm" id="cpDelete">Delete</button>` : ""}
         </div>
-      </div>
-      <div class="drawer-tabs">
-        <button class="drawer-tab active" data-tab="overview">Overview</button>
-        <button class="drawer-tab" data-tab="notes">Notes${data.notes.length ? ` (${data.notes.length})` : ""}</button>
-        <button class="drawer-tab" data-tab="email">Email${data.emails.length ? ` (${data.emails.length})` : ""}</button>
-      </div>
-      <div class="drawer-body" id="drawerBody"></div>`);
-
-    const body = $("#drawerBody");
-
-    function showTab(tab) {
-      $$(".drawer-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
-      if (tab === "overview") {
-        body.innerHTML = `
-          <div style="margin-bottom:18px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-              <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Visa status</div>
-              ${statusPill(cl.stage)}
-            </div>
-            <div class="stage-flow">${stageFlow}</div>
+        <div class="cp-hero" style="background:${grad}">
+          <div class="cp-avatar">${esc(cl.country.flag_emoji || initials(cl.full_name).toUpperCase())}</div>
+          <div class="cp-hmeta">
+            <h1>${esc(cl.full_name)}</h1>
+            <div class="cp-hsub">${esc(cl.country.flag_emoji)} ${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}${cl.intake ? " · " + esc(cl.intake) : ""}</div>
           </div>
+          <div class="cp-hstatus">${statusPill(cl.stage)}</div>
+        </div>
+        <div class="cp-tabs" id="cpTabs">
+          <button class="cp-tab active" data-tab="overview">Overview</button>
+          <button class="cp-tab" data-tab="documents">Documents${docs.length ? ` (${docs.length})` : ""}</button>
+          <button class="cp-tab" data-tab="notes">Notes${data.notes.length ? ` (${data.notes.length})` : ""}</button>
+          <button class="cp-tab" data-tab="emails">Emails${data.emails.length ? ` (${data.emails.length})` : ""}</button>
+        </div>
+        <div class="cp-body" id="cpBody"></div>
+      </div>`;
+
+    $("#cpBack").onclick = () => navigate(state.clientReturnView || "clients");
+    if (canEdit) {
+      $("#cpEdit").onclick = () => editClient(cl.id);
+      $("#cpDelete").onclick = () => deleteClient(cl.id);
+    }
+    const body = $("#cpBody");
+
+    function tabCount(tab, n) {
+      const labels = { documents: "Documents", notes: "Notes", emails: "Emails" };
+      const el = $(`.cp-tab[data-tab="${tab}"]`);
+      if (el) el.textContent = labels[tab] + (n ? ` (${n})` : "");
+    }
+
+    function renderOverview() {
+      const stages = state.catalog.stages.filter((s) => s.key !== "on_hold");
+      const onHold = state.catalog.stages.find((s) => s.key === "on_hold");
+      const stageFlow = stages.map((s) => {
+        const active = cl.status === s.key;
+        return `<button class="stage-step ${active ? "done" : ""}" ${active ? `style="background:${s.color}"` : ""} ${canEdit ? `onclick="__ent.setStatus(${cl.id},'${s.key}')"` : "disabled"}>${esc(s.label)}</button>`;
+      }).join("") + (onHold ? `<button class="stage-step ${cl.status === "on_hold" ? "done" : ""}" ${cl.status === "on_hold" ? `style="background:${onHold.color}"` : ""} ${canEdit ? `onclick="__ent.setStatus(${cl.id},'on_hold')"` : "disabled"}>${esc(onHold.label)}</button>` : "");
+
+      const assignField = `<div class="detail-item"><label>Assigned counselor</label>${
+        canEdit
+          ? `<select class="select-mini cp-assign" id="cpAssign"><option value="">Unassigned</option>${members.map((m) => `<option value="${m.user_id}" ${cl.assigned_to_user_id === m.user_id ? "selected" : ""}>${esc(m.full_name || m.email)}</option>`).join("")}</select>`
+          : `<div>${cl.assigned_to_name ? esc(cl.assigned_to_name) : "—"}</div>`
+      }</div>`;
+
+      body.innerHTML = `
+        <div class="cp-card">
+          <div class="cp-card-head"><h3>Visa status</h3>${statusPill(cl.stage)}</div>
+          <div class="stage-flow">${stageFlow}</div>
+        </div>
+        <div class="cp-card">
+          <div class="cp-card-head"><h3>Client details</h3></div>
           <div class="detail-grid">
             ${detail("Email", cl.email ? esc(cl.email) : "")}
             ${detail("Phone", cl.phone ? esc(cl.phone) : "")}
             ${detail("Priority", `<span class="prio" style="background:${priorityColor(cl.priority)}1f;color:${priorityColor(cl.priority)}">${esc(cl.priority)}</span>`)}
             ${detail("Key date", cl.target_date ? fmtDate(cl.target_date) : "")}
             ${detail("Intake", cl.intake ? esc(cl.intake) : "")}
-            ${detail("Assigned to", cl.assigned_to_name ? esc(cl.assigned_to_name) : "")}
+            ${assignField}
             ${detail("Nationality", cl.nationality ? esc(cl.nationality) : "")}
             ${detail("Date of birth", cl.date_of_birth ? fmtDate(cl.date_of_birth) : "")}
             ${detail("Passport no.", cl.passport_number ? esc(cl.passport_number) : "")}
@@ -915,48 +963,119 @@
             ${detail("Application ref.", cl.application_reference ? esc(cl.application_reference) : "")}
             ${detail("Added", fmtDate(cl.created_at))}
           </div>
-          ${canEdit ? `<div style="display:flex;gap:10px;margin-top:22px">
-            <button class="btn btn-soft" style="flex:1" onclick="__ent.editClient(${cl.id})">Edit details</button>
-            <button class="btn btn-danger" onclick="__ent.deleteClient(${cl.id})">Delete</button>
-          </div>` : ""}`;
-      } else if (tab === "notes") {
-        const add = canEdit ? `<div class="note-add">
-          <textarea id="noteInput" placeholder="Add a note about this client…"></textarea>
-          <button class="btn btn-primary btn-sm" style="align-self:flex-start" id="noteSaveBtn">Add note</button></div>` : "";
-        const list = data.notes.length ? `<div class="timeline">${data.notes.map((n) =>
-          `<div class="tl-item"><div class="tl-meta">${esc(n.author_name || "Team")} · ${fmtDateTime(n.created_at)}</div><div class="tl-body">${esc(n.body)}</div></div>`).join("")}</div>`
-          : `<div class="empty" style="padding:24px"><p>No notes yet.</p></div>`;
-        body.innerHTML = add + list;
-        if (canEdit) $("#noteSaveBtn").onclick = async () => {
-          const v = $("#noteInput").value.trim(); if (!v) return;
-          const btn = $("#noteSaveBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-          try { const r = await api(`/clients/${cl.id}/notes`, { method: "POST", body: { body: v } }); data.notes.unshift(r.note); showTab("notes"); toast("Note added", "success"); }
-          catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Add note"; }
+        </div>`;
+      const as = $("#cpAssign");
+      if (as) as.onchange = async () => {
+        const val = as.value ? parseInt(as.value, 10) : null;
+        as.disabled = true;
+        try {
+          const r = await api("/clients/" + cl.id, { method: "PATCH", body: { assigned_to_user_id: val } });
+          cl.assigned_to_user_id = r.client.assigned_to_user_id;
+          cl.assigned_to_name = r.client.assigned_to_name;
+          toast(val ? "Counselor assigned" : "Counselor unassigned", "success");
+        } catch (ex) { toast(ex.message, "error"); as.value = cl.assigned_to_user_id || ""; }
+        finally { as.disabled = false; }
+      };
+    }
+
+    function renderDocs() {
+      const types = state.catalog.document_types || [];
+      const uploader = canEdit ? `
+        <div class="cp-card doc-upload">
+          <div class="doc-up-row">
+            <select class="select-mini" id="docType">${types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("")}</select>
+            <input type="file" id="docFile" class="doc-file" />
+            <button class="btn btn-primary btn-sm" id="docUploadBtn">Upload document</button>
+          </div>
+          <div class="doc-hint">PDF, images, Word/Excel, CSV or text · up to 25 MB · stored privately</div>
+        </div>` : "";
+      const list = docs.length ? `<div class="doc-list">${docs.map((d) => `
+        <div class="doc-card">
+          <div class="doc-ic">${docIcon(d.original_filename)}</div>
+          <div class="doc-meta">
+            <a href="${d.download_url}" target="_blank" rel="noopener" class="doc-name">${esc(d.original_filename)}</a>
+            <div class="doc-sub">${esc(d.document_type)} · ${fmtSize(d.file_size)} · ${esc(d.uploaded_by_name || "")} · ${fmtDate(d.created_at)}</div>
+          </div>
+          <a class="doc-act" href="${d.download_url}" target="_blank" rel="noopener" title="View / download">⬇</a>
+          ${canEdit ? `<button class="doc-act doc-del" data-id="${d.id}" title="Delete">✕</button>` : ""}
+        </div>`).join("")}</div>`
+        : `<div class="empty" style="padding:34px"><div class="emoji">📁</div><h3>No documents yet</h3><p>${canEdit ? "Upload this student's passport, offer letter, financials, test scores and more — securely." : "No documents have been uploaded for this client."}</p></div>`;
+      body.innerHTML = uploader + list;
+
+      if (canEdit) {
+        $("#docUploadBtn").onclick = async () => {
+          const fileEl = $("#docFile");
+          if (!fileEl.files || !fileEl.files[0]) { toast("Choose a file first", "error"); return; }
+          const fd = new FormData();
+          fd.append("file", fileEl.files[0]);
+          fd.append("document_type", $("#docType").value || "Other");
+          const btn = $("#docUploadBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Uploading…';
+          try {
+            const res = await fetch(API + "/clients/" + cl.id + "/documents", { method: "POST", credentials: "include", body: fd });
+            const out = await res.json().catch(() => null);
+            if (!res.ok) throw new Error((out && (out.detail || out.message)) || "Upload failed");
+            docs.unshift(out.document); tabCount("documents", docs.length); toast("Document uploaded", "success"); renderDocs();
+          } catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Upload document"; }
         };
-      } else if (tab === "email") {
-        const composer = canEdit ? (cl.email ? `<div class="note-add">
-            <input id="emailSubject" class="select-mini" style="width:100%;padding:11px 13px" placeholder="Subject"/>
-            <textarea id="emailBody" placeholder="Write your message to ${esc(cl.full_name)}…"></textarea>
-            <button class="btn btn-primary btn-sm" style="align-self:flex-start" id="emailSendBtn">✉ Send email</button>
-            <div style="font-size:12px;color:var(--muted)">To: ${esc(cl.email)}</div></div>`
-          : `<div class="plan-banner warn" style="margin-bottom:18px"><div class="pb-icon">✉</div><div class="pb-text"><b>No email on file.</b> <span>Add an email to message this client.</span></div></div>`) : "";
-        const hist = data.emails.length ? data.emails.map((em) =>
-          `<div class="email-item"><div class="ei-top"><span class="ei-subject">${esc(em.subject)}</span><span style="font-size:12px;color:var(--muted)">${fmtDateTime(em.created_at)}</span></div>
-           <div class="ei-body">${esc(em.body)}</div>${em.status !== "sent" ? `<div class="ei-fail">⚠ Failed: ${esc(em.error_message || "")}</div>` : ""}</div>`).join("")
-          : `<div class="empty" style="padding:24px"><p>No emails sent yet.</p></div>`;
-        body.innerHTML = composer + hist;
-        const sb = $("#emailSendBtn");
-        if (sb) sb.onclick = async () => {
-          const subject = $("#emailSubject").value.trim(), bodyv = $("#emailBody").value.trim();
-          if (!subject || !bodyv) { toast("Add a subject and message", "error"); return; }
-          sb.disabled = true; sb.innerHTML = '<span class="spinner"></span> Sending…';
-          try { const r = await api(`/clients/${cl.id}/email`, { method: "POST", body: { subject, body: bodyv } });
-            data.emails.unshift(r.email); showTab("email"); toast("Email sent", "success"); }
-          catch (ex) { toast(ex.message, "error"); sb.disabled = false; sb.innerHTML = "✉ Send email"; }
-        };
+        $$(".doc-del", body).forEach((b) => b.onclick = async () => {
+          const id = parseInt(b.dataset.id, 10);
+          if (!confirm("Delete this document? This cannot be undone.")) return;
+          try {
+            await api("/clients/" + cl.id + "/documents/" + id, { method: "DELETE" });
+            const i = docs.findIndex((x) => x.id === id); if (i >= 0) docs.splice(i, 1);
+            tabCount("documents", docs.length); toast("Document deleted", "success"); renderDocs();
+          } catch (ex) { toast(ex.message, "error"); }
+        });
       }
     }
-    $$(".drawer-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
+
+    function renderNotes() {
+      const add = canEdit ? `<div class="cp-card note-add">
+        <textarea id="noteInput" placeholder="Add a note about this client…"></textarea>
+        <button class="btn btn-primary btn-sm" style="align-self:flex-start" id="noteSaveBtn">Add note</button></div>` : "";
+      const list = data.notes.length ? `<div class="timeline">${data.notes.map((n) =>
+        `<div class="tl-item"><div class="tl-meta">${esc(n.author_name || "Team")} · ${fmtDateTime(n.created_at)}</div><div class="tl-body">${esc(n.body)}</div></div>`).join("")}</div>`
+        : `<div class="empty" style="padding:30px"><div class="emoji">📝</div><h3>No notes yet</h3><p>Keep a running record of calls, follow-ups and decisions.</p></div>`;
+      body.innerHTML = add + list;
+      if (canEdit) $("#noteSaveBtn").onclick = async () => {
+        const v = $("#noteInput").value.trim(); if (!v) return;
+        const btn = $("#noteSaveBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        try { const r = await api(`/clients/${cl.id}/notes`, { method: "POST", body: { body: v } }); data.notes.unshift(r.note); tabCount("notes", data.notes.length); renderNotes(); toast("Note added", "success"); }
+        catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Add note"; }
+      };
+    }
+
+    function renderEmails() {
+      const composer = canEdit ? (cl.email ? `<div class="cp-card note-add">
+          <input id="emailSubject" class="select-mini" style="width:100%;padding:11px 13px" placeholder="Subject"/>
+          <textarea id="emailBody" placeholder="Write your message to ${esc(cl.full_name)}…"></textarea>
+          <button class="btn btn-primary btn-sm" style="align-self:flex-start" id="emailSendBtn">✉ Send email</button>
+          <div style="font-size:12px;color:var(--muted)">To: ${esc(cl.email)}</div></div>`
+        : `<div class="plan-banner warn" style="margin-bottom:18px"><div class="pb-icon">✉</div><div class="pb-text"><b>No email on file.</b> <span>Add an email to message this client (Edit details).</span></div></div>`) : "";
+      const hist = data.emails.length ? data.emails.map((em) =>
+        `<div class="email-item"><div class="ei-top"><span class="ei-subject">${esc(em.subject)}</span><span style="font-size:12px;color:var(--muted)">${fmtDateTime(em.created_at)}</span></div>
+         <div class="ei-body">${esc(em.body)}</div>${em.status !== "sent" ? `<div class="ei-fail">⚠ Failed: ${esc(em.error_message || "")}</div>` : ""}</div>`).join("")
+        : `<div class="empty" style="padding:30px"><div class="emoji">✉️</div><h3>No emails sent yet</h3><p>Send the student an update in one click.</p></div>`;
+      body.innerHTML = composer + hist;
+      const sb = $("#emailSendBtn");
+      if (sb) sb.onclick = async () => {
+        const subject = $("#emailSubject").value.trim(), bodyv = $("#emailBody").value.trim();
+        if (!subject || !bodyv) { toast("Add a subject and message", "error"); return; }
+        sb.disabled = true; sb.innerHTML = '<span class="spinner"></span> Sending…';
+        try { const r = await api(`/clients/${cl.id}/email`, { method: "POST", body: { subject, body: bodyv } });
+          data.emails.unshift(r.email); tabCount("emails", data.emails.length); renderEmails(); toast("Email sent", "success"); }
+        catch (ex) { toast(ex.message, "error"); sb.disabled = false; sb.innerHTML = "✉ Send email"; }
+      };
+    }
+
+    function showTab(tab) {
+      $$(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+      if (tab === "overview") renderOverview();
+      else if (tab === "documents") renderDocs();
+      else if (tab === "notes") renderNotes();
+      else if (tab === "emails") renderEmails();
+    }
+    $$(".cp-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
     showTab("overview");
   }
 
@@ -964,9 +1083,9 @@
     try {
       await api(`/clients/${id}/status`, { method: "PATCH", body: { status } });
       toast("Status updated", "success");
-      const data = await api("/clients/" + id); drawClient(data);
-      if (state.view === "clients") loadAndRenderClientList();
-      else if (state.view === "dashboard") { /* refresh later */ }
+      if (state.view === "clientPage" && state.activeClient === id) {
+        const data = await api("/clients/" + id); renderClientPage(data);
+      } else if (state.view === "clients") loadAndRenderClientList();
     } catch (ex) { toast(ex.message, "error"); }
   }
   async function editClient(id) {
@@ -980,8 +1099,12 @@
       <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
       <button class="btn btn-danger" id="confirmDel">Delete client</button></div>`);
     $("#confirmDel").onclick = async () => {
-      try { await api("/clients/" + id, { method: "DELETE" }); toast("Client deleted", "success"); closeModal(); closeDrawer(); loadAndRenderClientList(); }
-      catch (ex) { toast(ex.message, "error"); }
+      try {
+        await api("/clients/" + id, { method: "DELETE" });
+        toast("Client deleted", "success"); closeModal();
+        if (state.view === "clientPage") navigate(state.clientReturnView || "clients");
+        else loadAndRenderClientList();
+      } catch (ex) { toast(ex.message, "error"); }
     };
   }
 
