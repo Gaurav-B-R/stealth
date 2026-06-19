@@ -467,7 +467,7 @@
     state.view = view;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     $("#sidebar").classList.remove("open");
-    const titles = { dashboard: "Dashboard", clients: "Clients", ai: "AI Assistant", team: "Team", billing: "Plans & Billing", settings: "Settings" };
+    const titles = { dashboard: "Dashboard", clients: "Clients", ai: "Rilono AI Assistant", team: "Team", billing: "Plans & Billing", settings: "Settings" };
     $("#viewTitle").textContent = titles[view] || "";
     $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
     if (view === "dashboard") renderDashboard();
@@ -1322,7 +1322,7 @@
      public bridge for inline handlers
      ============================================================ */
   /* ============================================================
-     AI ASSISTANT (Rilono Copilot)
+     AI ASSISTANT (Rilono AI Assistant)
      ============================================================ */
   function renderAIAssistant() {
     if (!state.aiHistory) state.aiHistory = [];
@@ -1331,7 +1331,7 @@
       <div class="ai-wrap">
         <div class="ai-head">
           <div class="ai-orb">✨</div>
-          <div><h2>Rilono Copilot</h2><p>Ask anything about your clients, visa statuses and activity — I read your live portal data to answer.</p></div>
+          <div><h2>Rilono AI Assistant</h2><p>Ask anything about your clients, visa statuses and activity — I read your live portal data to answer.</p></div>
         </div>
         <div class="ai-thread" id="aiThread"></div>
         <div class="ai-suggest" id="aiSuggest"></div>
@@ -1408,7 +1408,7 @@
       if (send) send.disabled = true;
       const thread = $("#aiThread");
       if (thread && !state.aiHistory.length) {
-        thread.innerHTML = `<div class="ai-empty"><div class="ai-orb lg">🔌</div><h3>AI assistant unavailable</h3><p>An administrator needs to configure the Gemini API key on the server to enable Rilono Copilot.</p></div>`;
+        thread.innerHTML = `<div class="ai-empty"><div class="ai-orb lg">🔌</div><h3>AI assistant unavailable</h3><p>An administrator needs to configure the Gemini API key on the server to enable Rilono AI Assistant.</p></div>`;
       }
     }
     renderAiSuggestions();

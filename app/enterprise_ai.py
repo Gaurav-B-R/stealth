@@ -400,6 +400,79 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         workload.sort(key=lambda x: x["active_clients"], reverse=True)
         return {"team": workload, "unassigned_active_clients": unassigned}
 
+    def _resolve_client_row(name=None, client_id=None):
+        q = _base()
+        if client_id:
+            return q.filter(models.EnterpriseClient.id == int(client_id)).first(), None
+        if name and str(name).strip():
+            matches = q.filter(func.lower(models.EnterpriseClient.full_name).like(f"%{str(name).strip().lower()}%")).limit(10).all()
+            if len(matches) > 1:
+                return None, matches
+            return (matches[0] if matches else None), None
+        return None, None
+
+    def list_client_documents(name: Optional[str] = None, client_id: Optional[int] = None) -> dict:
+        """List the documents uploaded for a client (document type, file name, who
+        uploaded it and when). Provide the client's name or client_id. Use this for
+        'what documents do we have for X' / 'has X uploaded their passport' questions."""
+        client, multi = _resolve_client_row(name, client_id)
+        if multi:
+            return {"multiple_matches": [_client_brief(c) for c in multi]}
+        if not client:
+            return {"error": "No matching client found."}
+        rows = (
+            db.query(models.EnterpriseClientDocument)
+            .filter(models.EnterpriseClientDocument.client_id == client.id)
+            .order_by(models.EnterpriseClientDocument.created_at.desc())
+            .all()
+        )
+        return {
+            "client": client.full_name,
+            "document_count": len(rows),
+            "documents": [
+                {
+                    "document_type": d.document_type,
+                    "file_name": d.original_filename,
+                    "uploaded_by": d.uploaded_by_name,
+                    "uploaded_on": _iso(d.created_at),
+                    "has_readable_text": bool((d.extracted_text or "").strip()),
+                }
+                for d in rows
+            ],
+        }
+
+    def read_client_document(name: Optional[str] = None, client_id: Optional[int] = None,
+                             document_type: Optional[str] = None) -> dict:
+        """Read the extracted TEXT CONTENTS of a client's uploaded document(s) so you can
+        answer questions about what's inside them (e.g. passport number/expiry, amounts in
+        a bank statement, details in an offer letter). Provide the client's name or
+        client_id; optionally pass a document_type (e.g. 'Passport', 'Financial') to narrow
+        it down. Only documents whose text has been extracted are returned."""
+        client, multi = _resolve_client_row(name, client_id)
+        if multi:
+            return {"multiple_matches": [_client_brief(c) for c in multi]}
+        if not client:
+            return {"error": "No matching client found."}
+        q = (
+            db.query(models.EnterpriseClientDocument)
+            .filter(models.EnterpriseClientDocument.client_id == client.id)
+        )
+        if document_type and document_type.strip():
+            q = q.filter(func.lower(models.EnterpriseClientDocument.document_type).like(f"%{document_type.strip().lower()}%"))
+        rows = q.order_by(models.EnterpriseClientDocument.created_at.desc()).limit(6).all()
+        out = []
+        for d in rows:
+            txt = (d.extracted_text or "").strip()
+            out.append({
+                "document_type": d.document_type,
+                "file_name": d.original_filename,
+                "contents": (txt[:8000] if txt else None),
+                "text_available": bool(txt),
+            })
+        if not out:
+            return {"client": client.full_name, "documents": [], "note": "No documents matched."}
+        return {"client": client.full_name, "documents": out}
+
     return [
         get_portal_overview,
         count_clients,
@@ -408,6 +481,8 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         clients_needing_attention,
         list_recent_activity,
         get_team_workload,
+        list_client_documents,
+        read_client_document,
     ]
 
 
@@ -441,6 +516,10 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "question, and finish with a short takeaway (e.g. how the pipeline is split, or who is most urgent).\n"
         "- For 'who needs attention' questions, use the attention tool and give the reason for each, most "
         "urgent first.\n"
+        "- You can also read the TEXT inside documents staff have uploaded for a client (passports, offer "
+        "letters, financial proofs, transcripts, etc.) via the document tools. Use them when asked what a "
+        "document says or contains (e.g. a passport number/expiry, or amounts in a bank statement). If a "
+        "document's text hasn't been extracted yet, say it isn't available to read.\n"
         "- Use light formatting for readability: short **bold** labels and tight bullet lists; keep it "
         "skimmable. Don't pad with filler or repeat the question back, and never invent data.\n"
         "- You can read data but cannot make changes; if asked to edit, add, or email a client, say so and "

@@ -233,6 +233,7 @@ class EnterpriseClientDocument(Base):
     storage_key = Column(String, nullable=False)  # private R2 object key (not a public URL)
     file_size = Column(Integer, nullable=True)
     mime_type = Column(String, nullable=True)
+    extracted_text = Column(Text, nullable=True)  # AI-extracted text contents (for the copilot)
     uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     uploaded_by_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

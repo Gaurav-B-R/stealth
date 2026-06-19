@@ -5,6 +5,7 @@ import uuid
 import secrets
 import logging
 import hashlib
+import threading
 from typing import Optional
 from urllib.parse import quote, urlparse
 
@@ -21,6 +22,7 @@ from app import enterprise_catalog as catalog
 from app import enterprise_billing as billing
 from app import enterprise_ai
 from app import enterprise_storage
+from app.utils import gemini_service
 from app.auth import (
     authenticate_user,
     create_access_token,
@@ -2949,11 +2951,40 @@ async def enterprise_upload_client_document(
     db.add(doc)
     db.commit()
     db.refresh(doc)
+
+    # Extract the document's text in the background so the AI copilot can read it,
+    # without slowing down the upload response.
+    _start_document_text_extraction(doc.id, data, original, file.content_type)
+
     return {
         "message": "Document uploaded.",
         "permissions": _enterprise_permissions_for_role(role),
         "document": _serialize_client_document(doc),
     }
+
+
+def _start_document_text_extraction(document_id: int, data: bytes, filename: str, mime_type: str | None) -> None:
+    def _worker():
+        try:
+            extracted = gemini_service.extract_text_from_document(data, filename, mime_type or "application/octet-stream")
+            if not extracted:
+                return
+            db2 = SessionLocal()
+            try:
+                row = (
+                    db2.query(models.EnterpriseClientDocument)
+                    .filter(models.EnterpriseClientDocument.id == int(document_id))
+                    .first()
+                )
+                if row is not None:
+                    row.extracted_text = extracted[:200000]
+                    db2.commit()
+            finally:
+                db2.close()
+        except Exception:
+            logger.exception("Background document text extraction failed (document_id=%s)", document_id)
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 @router.get("/clients/{client_id}/documents/{document_id}/download")

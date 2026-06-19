@@ -483,6 +483,7 @@ def ensure_enterprise_crm_tables():
                     storage_key VARCHAR NOT NULL,
                     file_size INTEGER,
                     mime_type VARCHAR,
+                    extracted_text TEXT,
                     uploaded_by_user_id INTEGER,
                     uploaded_by_name VARCHAR,
                     created_at {ts} DEFAULT {now_default} NOT NULL
@@ -494,6 +495,10 @@ def ensure_enterprise_crm_tables():
                 "CREATE INDEX IF NOT EXISTS ix_enterprise_client_documents_created_at ON enterprise_client_documents(created_at)",
             ):
                 conn.execute(text(stmt))
+        else:
+            doc_cols = _get_table_columns(conn, "enterprise_client_documents")
+            if "extracted_text" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN extracted_text TEXT"))
 
         # --- enterprise_subscriptions -----------------------------------------
         if not _table_exists(conn, "enterprise_subscriptions"):

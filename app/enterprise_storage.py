@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from app.utils.secure_artifacts import encrypt_artifact_bytes, decrypt_artifact_bytes
+
 LOCAL_DIR = os.getenv("ENTERPRISE_DOCS_DIR", "").strip()
 
 # R2 / S3 config (same credentials the image uploader uses).
@@ -57,24 +59,30 @@ def is_configured() -> bool:
 
 
 def store_document(key: str, data: bytes, content_type: Optional[str] = None) -> None:
+    # Encrypt at rest: the bytes written to R2 are ciphertext, so a bucket or
+    # credential leak does not expose document contents. The server decrypts on read.
+    payload = encrypt_artifact_bytes(data)
     if LOCAL_DIR:
         path = _local_path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        path.write_bytes(payload)
         return
     _client().put_object(
         Bucket=R2_BUCKET_NAME,
         Key=key,
-        Body=data,
-        ContentType=content_type or "application/octet-stream",
+        Body=payload,
+        ContentType="application/octet-stream",  # opaque ciphertext
     )
 
 
 def fetch_document(key: str) -> bytes:
     if LOCAL_DIR:
-        return _local_path(key).read_bytes()
-    resp = _client().get_object(Bucket=R2_BUCKET_NAME, Key=key)
-    return resp["Body"].read()
+        raw = _local_path(key).read_bytes()
+    else:
+        resp = _client().get_object(Bucket=R2_BUCKET_NAME, Key=key)
+        raw = resp["Body"].read()
+    # decrypt_artifact_bytes transparently returns legacy plaintext unchanged.
+    return decrypt_artifact_bytes(raw)
 
 
 def delete_document(key: str) -> None:
