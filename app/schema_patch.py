@@ -500,6 +500,58 @@ def ensure_enterprise_crm_tables():
             if "extracted_text" not in doc_cols:
                 conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN extracted_text TEXT"))
 
+        # --- enterprise_interview_sessions ------------------------------------
+        if not _table_exists(conn, "enterprise_interview_sessions"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_interview_sessions (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    conducted_by_user_id INTEGER,
+                    conducted_by_name VARCHAR,
+                    mode VARCHAR NOT NULL DEFAULT 'chat',
+                    transcript TEXT,
+                    feedback TEXT,
+                    verdict VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_interview_sessions_organization_id ON enterprise_interview_sessions(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_interview_sessions_client_id ON enterprise_interview_sessions(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_interview_sessions_created_at ON enterprise_interview_sessions(created_at)",
+            ):
+                conn.execute(text(stmt))
+
+        # --- enterprise_interview_invites -------------------------------------
+        if not _table_exists(conn, "enterprise_interview_invites"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_interview_invites (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    token_hash VARCHAR NOT NULL,
+                    email VARCHAR NOT NULL,
+                    allowed_count INTEGER NOT NULL DEFAULT 1,
+                    used_count INTEGER NOT NULL DEFAULT 0,
+                    code_hash VARCHAR,
+                    code_expires_at {ts},
+                    code_attempts INTEGER NOT NULL DEFAULT 0,
+                    expires_at {ts},
+                    revoked BOOLEAN NOT NULL DEFAULT {'0' if is_sqlite else 'FALSE'},
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_interview_invites_token ON enterprise_interview_invites(token_hash)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_interview_invites_client_id ON enterprise_interview_invites(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_interview_invites_organization_id ON enterprise_interview_invites(organization_id)",
+            ):
+                conn.execute(text(stmt))
+
         # --- enterprise_subscriptions -----------------------------------------
         if not _table_exists(conn, "enterprise_subscriptions"):
             conn.execute(text(f"""

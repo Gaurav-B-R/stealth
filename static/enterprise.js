@@ -886,6 +886,7 @@
     const members = teamMembersCache || [];
     const grad = `linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})`;
     const docs = data.documents || [];
+    const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
     $("#viewTitle").textContent = cl.full_name;
 
     const detail = (label, val) => `<div class="detail-item"><label>${label}</label><div>${val || "—"}</div></div>`;
@@ -911,6 +912,7 @@
           <button class="cp-tab" data-tab="documents">Documents${docs.length ? ` (${docs.length})` : ""}</button>
           <button class="cp-tab" data-tab="notes">Notes${data.notes.length ? ` (${data.notes.length})` : ""}</button>
           <button class="cp-tab" data-tab="emails">Emails${data.emails.length ? ` (${data.emails.length})` : ""}</button>
+          <button class="cp-tab" data-tab="interview">🎤 Mock Interview</button>
         </div>
         <div class="cp-body" id="cpBody"></div>
       </div>`;
@@ -982,12 +984,13 @@
       const types = state.catalog.document_types || [];
       const uploader = canEdit ? `
         <div class="cp-card doc-upload">
+          <div class="cp-sub-label">Upload a document</div>
           <div class="doc-up-row">
             <select class="select-mini" id="docType">${types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("")}</select>
             <input type="file" id="docFile" class="doc-file" />
             <button class="btn btn-primary btn-sm" id="docUploadBtn">Upload document</button>
           </div>
-          <div class="doc-hint">PDF, images, Word/Excel, CSV or text · up to 25 MB · stored privately</div>
+          <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB</div>
         </div>` : "";
       const list = docs.length ? `<div class="doc-list">${docs.map((d) => `
         <div class="doc-card">
@@ -1031,8 +1034,9 @@
 
     function renderNotes() {
       const add = canEdit ? `<div class="cp-card note-add">
-        <textarea id="noteInput" placeholder="Add a note about this client…"></textarea>
-        <button class="btn btn-primary btn-sm" style="align-self:flex-start" id="noteSaveBtn">Add note</button></div>` : "";
+        <div class="cp-sub-label">Add a note</div>
+        <textarea id="noteInput" placeholder="Log a call, a follow-up or a decision about ${esc(cl.full_name)}…"></textarea>
+        <button class="btn btn-primary btn-sm" id="noteSaveBtn">Add note</button></div>` : "";
       const list = data.notes.length ? `<div class="timeline">${data.notes.map((n) =>
         `<div class="tl-item"><div class="tl-meta">${esc(n.author_name || "Team")} · ${fmtDateTime(n.created_at)}</div><div class="tl-body">${esc(n.body)}</div></div>`).join("")}</div>`
         : `<div class="empty" style="padding:30px"><div class="emoji">📝</div><h3>No notes yet</h3><p>Keep a running record of calls, follow-ups and decisions.</p></div>`;
@@ -1047,10 +1051,11 @@
 
     function renderEmails() {
       const composer = canEdit ? (cl.email ? `<div class="cp-card note-add">
-          <input id="emailSubject" class="select-mini" style="width:100%;padding:11px 13px" placeholder="Subject"/>
-          <textarea id="emailBody" placeholder="Write your message to ${esc(cl.full_name)}…"></textarea>
-          <button class="btn btn-primary btn-sm" style="align-self:flex-start" id="emailSendBtn">✉ Send email</button>
-          <div style="font-size:12px;color:var(--muted)">To: ${esc(cl.email)}</div></div>`
+          <div class="cp-sub-label">Email ${esc(cl.full_name)}</div>
+          <input id="emailSubject" type="text" placeholder="Subject"/>
+          <textarea id="emailBody" placeholder="Write your message…"></textarea>
+          <div class="email-to">To: <b>${esc(cl.email)}</b></div>
+          <button class="btn btn-primary btn-sm" id="emailSendBtn">✉ Send email</button></div>`
         : `<div class="plan-banner warn" style="margin-bottom:18px"><div class="pb-icon">✉</div><div class="pb-text"><b>No email on file.</b> <span>Add an email to message this client (Edit details).</span></div></div>`) : "";
       const hist = data.emails.length ? data.emails.map((em) =>
         `<div class="email-item"><div class="ei-top"><span class="ei-subject">${esc(em.subject)}</span><span style="font-size:12px;color:var(--muted)">${fmtDateTime(em.created_at)}</span></div>
@@ -1068,12 +1073,204 @@
       };
     }
 
+    /* ---- Mock interview tab ---- */
+    const micSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    let ivRecog = null;
+    function ivSpeak(text) {
+      if (!iv.voiceOn || !("speechSynthesis" in window)) return;
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(String(text || "").replace(/[*_#`>]/g, ""));
+        u.rate = 1.0; u.pitch = 1.0;
+        window.speechSynthesis.speak(u);
+      } catch (e) {}
+    }
+    function ivStopSpeak() { try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) {} }
+
+    function renderInterview() {
+      body.innerHTML = `<div id="ivWrap"></div>`;
+      if (iv.sessions === null) { iv.sessions = []; loadIvSessions(); }
+      if (iv.invite === undefined) { iv.invite = null; loadIvInvite(); }
+      drawIv();
+    }
+    async function loadIvSessions() {
+      try { const r = await api(`/clients/${cl.id}/interview/sessions`); iv.sessions = r.sessions || []; if ($("#ivWrap") && !iv.started) drawIv(); }
+      catch (e) { iv.sessions = []; }
+    }
+    async function loadIvInvite() {
+      try { const r = await api(`/clients/${cl.id}/interview/invite`); iv.invite = r.invite || null; if ($("#ivWrap") && !iv.started) drawIv(); }
+      catch (e) { iv.invite = null; }
+    }
+    function openSendModal() {
+      const first = (cl.full_name || "the student").split(" ")[0];
+      openModal(`<div class="modal-head"><h3>Send mock interview to ${esc(first)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+        <form id="ivSendForm"><div class="modal-body">
+          <p style="margin:0 0 16px;color:var(--text-2);font-size:14px;line-height:1.6">We'll email a secure link to <b>${esc(cl.email)}</b>. ${esc(first)} verifies with a one-time code, then can take the interview(s) on their own — and you'll see the results here.</p>
+          <div class="field"><label>How many interviews can they take?</label>
+            <input type="number" id="ivCount" min="1" max="20" value="3" /></div>
+          <div id="ivSendErr" class="auth-error hidden"></div>
+        </div>
+        <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="ivSendSave">✉ Send link</button></div></form>`);
+      $("#ivSendForm").onsubmit = async (e) => {
+        e.preventDefault();
+        const n = Math.max(1, Math.min(20, parseInt($("#ivCount").value, 10) || 3));
+        const btn = $("#ivSendSave"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+        try {
+          const r = await api(`/clients/${cl.id}/interview/invite`, { method: "POST", body: { allowed_count: n } });
+          iv.invite = r.invite; closeModal(); toast(r.message || "Interview link sent", r.email_sent ? "success" : "error"); drawIv();
+        } catch (ex) { const er = $("#ivSendErr"); er.textContent = ex.message; er.classList.remove("hidden"); btn.disabled = false; btn.innerHTML = "✉ Send link"; }
+      };
+    }
+    async function revokeInvite() {
+      if (!confirm("Revoke this interview link? The student won't be able to use it anymore.")) return;
+      try { await api(`/clients/${cl.id}/interview/invite/revoke`, { method: "POST" }); iv.invite = null; toast("Link revoked", "success"); drawIv(); }
+      catch (ex) { toast(ex.message, "error"); }
+    }
+    function ivSessionRow(s) {
+      const v = s.verdict || "Completed";
+      const cls = /approved/i.test(v) ? "ok" : /needs/i.test(v) ? "bad" : "mid";
+      return `<div class="iv-srow" onclick="__ent.viewInterview(${cl.id},${s.id})">
+        <div class="iv-sv ${cls}">${esc(v)}</div>
+        <div class="iv-smeta"><b>${fmtDate(s.created_at)}</b><span>${esc(s.conducted_by_name || "")}${s.mode === "voice" ? " · 🎙 voice" : ""}</span></div>
+        <span class="iv-sarrow">→</span></div>`;
+    }
+    function drawIv() {
+      const w = $("#ivWrap"); if (!w) return;
+      if (iv.started) return drawIvChat(w);
+      const sessions = iv.sessions || [];
+      w.innerHTML = `
+        <div class="cp-card iv-intro">
+          <div class="iv-orb">🎤</div>
+          <h3>AI mock visa interview</h3>
+          <p>Run a realistic ${esc(cl.destination_country_name)} student-visa interview. Rilono AI plays the visa officer — using ${esc(cl.full_name)}'s profile and notes — then gives honest, specific feedback.</p>
+          <div class="iv-start-row">
+            ${canEdit ? `<button class="btn btn-primary" id="ivStartBtn">▶ Start interview</button>` : `<div class="muted">Only editors and admins can run interviews.</div>`}
+            <label class="iv-voice-pref"><input type="checkbox" id="ivVoicePref"> 🎙 Voice mode${micSupported ? "" : " (questions read aloud)"}</label>
+          </div>
+          <div class="iv-tag">Officer adapts to <b>${esc(cl.destination_country_name)}</b> · ${esc(cl.visa_type)}</div>
+        </div>
+        ${canEdit ? sendCard() : ""}
+        <div class="cp-card">
+          <div class="cp-sub-label">Past mock interviews</div>
+          <div class="iv-slist">${sessions.length ? sessions.map(ivSessionRow).join("") : `<div class="muted" style="padding:6px 0">No mock interviews yet — start one above.</div>`}</div>
+        </div>`;
+      if (canEdit) $("#ivStartBtn").onclick = () => startIv($("#ivVoicePref").checked);
+      const sb = $("#ivSendBtn"); if (sb) sb.onclick = openSendModal;
+      const rs = $("#ivResend"); if (rs) rs.onclick = openSendModal;
+      const rv = $("#ivRevoke"); if (rv) rv.onclick = revokeInvite;
+    }
+    function sendCard() {
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const inv = iv.invite;
+      let inner;
+      if (!cl.email) {
+        inner = `<p class="muted" style="margin:0;font-size:13.5px">Add an email to this client (Edit details) to send them an interview link.</p>`;
+      } else if (inv && inv.live) {
+        inner = `<p class="muted" style="margin:0 0 12px;font-size:13.5px">A secure link was sent to <b>${esc(inv.email)}</b> so ${esc(first)} can practise on their own (verified by a one-time code).</p>
+          <div class="iv-invite-status">
+            <div><b>${inv.used_count}/${inv.allowed_count}</b> used · <b>${inv.remaining}</b> remaining<br><span class="muted">Sent${inv.created_at ? " " + fmtDate(inv.created_at) : ""}${inv.created_by_name ? " by " + esc(inv.created_by_name) : ""}</span></div>
+            <div class="row"><button class="btn btn-soft btn-sm" id="ivResend">Resend / change</button><button class="btn btn-danger btn-sm" id="ivRevoke">Revoke</button></div>
+          </div>`;
+      } else {
+        inner = `<p class="muted" style="margin:0 0 12px;font-size:13.5px">Email <b>${esc(cl.email)}</b> a secure link so ${esc(first)} can take the interview themselves — they verify with a one-time code, and you'll see their results here.</p>
+          <button class="btn btn-primary btn-sm" id="ivSendBtn">✉ Send interview link</button>`;
+      }
+      return `<div class="cp-card"><div class="cp-sub-label">Send to the student</div>${inner}</div>`;
+    }
+    function ivBubble(m) {
+      if (m.role === "user") return `<div class="ai-msg user"><div class="ai-bubble">${esc(m.content).replace(/\n/g, "<br>")}</div></div>`;
+      return `<div class="ai-msg bot"><div class="ai-av">🧑‍✈️</div><div class="ai-bubble">${aiFormat(m.content)}</div></div>`;
+    }
+    function drawIvChat(w) {
+      const typing = iv.busy ? `<div class="ai-msg bot"><div class="ai-av">🧑‍✈️</div><div class="ai-bubble"><span class="ai-typing"><i></i><i></i><i></i></span></div></div>` : "";
+      const fb = iv.feedback ? `<div class="cp-card iv-feedback"><div class="cp-sub-label">📋 Interview feedback</div>${aiFormat(iv.feedback)}</div>` : "";
+      w.innerHTML = `
+        <div class="cp-card iv-chat">
+          <div class="iv-chead">
+            <div class="iv-ctitle">🧑‍✈️ ${esc(cl.destination_country_name)} visa officer · <span class="muted">mock interview</span></div>
+            <div class="iv-cactions">
+              <button class="btn btn-soft btn-sm" id="ivVoiceBtn">${iv.voiceOn ? "🔊 Voice on" : "🔈 Voice off"}</button>
+              ${iv.finished ? `<button class="btn btn-soft btn-sm" id="ivRestart">↻ New interview</button>` : `<button class="btn btn-ghost btn-sm" id="ivEnd" ${iv.busy ? "disabled" : ""}>End &amp; get feedback</button>`}
+            </div>
+          </div>
+          <div class="iv-thread" id="ivThread">${iv.history.map(ivBubble).join("")}${typing}</div>
+          ${iv.finished ? `<div class="iv-done">Interview ended. ${iv.feedback ? "See feedback below." : ""}</div>` : `
+          <div class="iv-inrow">
+            <textarea id="ivInput" placeholder="Type ${esc((cl.full_name || "the student").split(" ")[0])}'s answer…" rows="1" ${iv.busy ? "disabled" : ""}></textarea>
+            ${micSupported ? `<button class="iv-mic" id="ivMic" title="Speak the answer" ${iv.busy ? "disabled" : ""}>🎙</button>` : ""}
+            <button class="btn btn-primary" id="ivSend" ${iv.busy ? "disabled" : ""}>Send</button>
+          </div>`}
+        </div>${fb}`;
+      const thread = $("#ivThread"); if (thread) thread.scrollTop = thread.scrollHeight;
+      // speak the latest officer message once
+      const last = iv.history[iv.history.length - 1];
+      if (iv.voiceOn && last && last.role === "officer" && iv.spoken < iv.history.length) { iv.spoken = iv.history.length; ivSpeak(last.content); }
+
+      const inp = $("#ivInput");
+      if (inp) { inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendIv(); } });
+        inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 140) + "px"; }); if (!iv.busy) inp.focus(); }
+      const sendBtn = $("#ivSend"); if (sendBtn) sendBtn.onclick = sendIv;
+      const endBtn = $("#ivEnd"); if (endBtn) endBtn.onclick = endIv;
+      const rb = $("#ivRestart"); if (rb) rb.onclick = () => { ivStopSpeak(); iv.started = false; iv.history = []; iv.finished = false; iv.feedback = null; iv.spoken = 0; drawIv(); };
+      const vb = $("#ivVoiceBtn"); if (vb) vb.onclick = () => { iv.voiceOn = !iv.voiceOn; if (!iv.voiceOn) ivStopSpeak(); else { const l = iv.history[iv.history.length - 1]; if (l && l.role === "officer") ivSpeak(l.content); } drawIvChat(w); };
+      const mic = $("#ivMic"); if (mic) mic.onclick = () => ivMic(mic);
+    }
+    async function startIv(voice) {
+      iv.started = true; iv.voiceOn = !!voice; iv.history = []; iv.finished = false; iv.feedback = null; iv.busy = true; iv.spoken = 0;
+      renderInterview();
+      try {
+        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { start: true } });
+        iv.history.push({ role: "officer", content: r.reply });
+      } catch (ex) { toast(ex.message, "error"); iv.started = false; }
+      iv.busy = false; if (state.activeClient === cl.id) drawIv();
+    }
+    async function sendIv() {
+      const ta = $("#ivInput"); if (!ta) return;
+      const v = (ta.value || "").trim(); if (!v || iv.busy) return;
+      const prior = iv.history.slice();
+      iv.history.push({ role: "user", content: v }); iv.busy = true; drawIv();
+      try {
+        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { message: v, history: prior } });
+        iv.history.push({ role: "officer", content: r.reply });
+      } catch (ex) { toast(ex.message, "error"); }
+      iv.busy = false; drawIv();
+    }
+    async function endIv() {
+      if (iv.busy || iv.history.filter((m) => m.role === "user").length === 0) { toast("Answer at least one question first.", "error"); return; }
+      iv.busy = true; ivStopSpeak(); drawIv();
+      try {
+        const r = await api(`/clients/${cl.id}/interview/feedback`, { method: "POST", body: { history: iv.history, mode: iv.voiceOn ? "voice" : "chat" } });
+        iv.finished = true; iv.feedback = r.feedback;
+        if (iv.sessions) iv.sessions.unshift(r.session);
+        toast("Feedback ready", "success");
+      } catch (ex) { toast(ex.message, "error"); }
+      iv.busy = false; drawIv();
+    }
+    function ivMic(btn) {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return;
+      if (ivRecog) { try { ivRecog.stop(); } catch (e) {} ivRecog = null; btn.classList.remove("rec"); return; }
+      ivRecog = new SR(); ivRecog.lang = "en-US"; ivRecog.interimResults = true; ivRecog.continuous = false;
+      btn.classList.add("rec");
+      let finalText = "";
+      ivRecog.onresult = (e) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) finalText += t; else interim += t; }
+        const inp = $("#ivInput"); if (inp) { inp.value = (finalText + interim).trim(); inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 140) + "px"; }
+      };
+      ivRecog.onerror = () => { btn.classList.remove("rec"); ivRecog = null; };
+      ivRecog.onend = () => { btn.classList.remove("rec"); ivRecog = null; };
+      try { ivRecog.start(); } catch (e) { ivRecog = null; btn.classList.remove("rec"); }
+    }
+
     function showTab(tab) {
       $$(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
+      if (tab !== "interview") ivStopSpeak();
       if (tab === "overview") renderOverview();
       else if (tab === "documents") renderDocs();
       else if (tab === "notes") renderNotes();
       else if (tab === "emails") renderEmails();
+      else if (tab === "interview") renderInterview();
     }
     $$(".cp-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
     showTab("overview");
@@ -1357,13 +1554,16 @@
     t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     const lines = t.split(/\n/);
     let html = "", inList = false;
+    const closeList = () => { if (inList) { html += "</ul>"; inList = false; } };
     for (const raw of lines) {
       const line = raw.replace(/\s+$/, "");
+      const h = line.match(/^\s*(#{1,4})\s+(.*)$/);
+      if (h) { closeList(); html += `<div class="ai-h">${h[2]}</div>`; continue; }
       const m = line.match(/^\s*[-*•]\s+(.*)$/);
       if (m) { if (!inList) { html += "<ul>"; inList = true; } html += "<li>" + m[1] + "</li>"; }
-      else { if (inList) { html += "</ul>"; inList = false; } if (line.trim() === "") continue; html += "<p>" + line + "</p>"; }
+      else { closeList(); if (line.trim() === "") continue; html += "<p>" + line + "</p>"; }
     }
-    if (inList) html += "</ul>";
+    closeList();
     return html || "<p></p>";
   }
 
@@ -1438,10 +1638,30 @@
     }
   }
 
+  async function viewInterviewSession(clientId, sessionId) {
+    let data;
+    try { data = await api(`/clients/${clientId}/interview/sessions/${sessionId}`); }
+    catch (ex) { toast(ex.message, "error"); return; }
+    const s = data.session;
+    const transcript = (s.transcript || []).map((m) => {
+      const bot = m.role !== "user";
+      return `<div class="ai-msg ${bot ? "bot" : "user"}">${bot ? '<div class="ai-av">🧑‍✈️</div>' : ""}<div class="ai-bubble">${bot ? aiFormat(m.content) : esc(m.content).replace(/\n/g, "<br>")}</div></div>`;
+    }).join("");
+    openModal(`<div class="modal-head"><h3>Mock interview · ${fmtDate(s.created_at)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body">
+        <div class="cp-sub-label">📋 Feedback</div>
+        <div class="iv-feedback" style="margin-bottom:18px">${aiFormat(s.feedback || "No feedback recorded.")}</div>
+        <div class="cp-sub-label">Transcript</div>
+        <div class="iv-thread" style="max-height:340px;overflow-y:auto">${transcript || '<div class="muted">No transcript.</div>'}</div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`);
+  }
+
   window.__ent = {
     go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
     closeModal, closeDrawer, changeRole, removeMember, checkout, setCycle,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
+    viewInterview: viewInterviewSession,
   };
 
   /* ============================================================

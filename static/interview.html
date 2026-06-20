@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mock Visa Interview · Rilono</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="/static/logo.png" />
+  <style>
+    :root{
+      --grad:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);
+      --primary:#6366f1;--primary-600:#4f46e5;--text:#0f172a;--text-2:#475569;--muted:#94a3b8;
+      --surface:#fff;--surface-2:#f8fafc;--border:#e7e9f3;--border-strong:#d6d9ea;--danger:#ef4444;
+      --radius:16px;--radius-sm:11px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    }
+    *{box-sizing:border-box}html,body{margin:0;padding:0}
+    body{font-family:var(--font);color:var(--text);background:
+      radial-gradient(900px 500px at 15% -5%,rgba(99,102,241,.16),transparent 60%),
+      radial-gradient(800px 480px at 90% 0%,rgba(124,58,237,.12),transparent 55%),#eef0f8;
+      min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:28px 16px;-webkit-font-smoothing:antialiased;}
+    .wrap{width:100%;max-width:680px;}
+    .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:18px;color:#312e81;font-weight:800;font-size:15px;}
+    .brand img{height:30px;width:30px;border-radius:8px;object-fit:cover}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 18px 48px rgba(15,23,42,.14);overflow:hidden;}
+    .hero{background:var(--grad);color:#fff;padding:24px 28px;}
+    .hero .eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9}
+    .hero h1{margin:8px 0 0;font-size:22px;}
+    .hero .sub{margin:6px 0 0;opacity:.92;font-size:14px}
+    .body{padding:26px 28px;}
+    .muted{color:var(--muted)} .t2{color:var(--text-2)}
+    .lead{color:var(--text-2);line-height:1.65;font-size:15px;margin:0 0 18px}
+    .pill{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:6px 13px;font-size:13px;font-weight:700;margin-bottom:18px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1.5px solid transparent;border-radius:var(--radius-sm);
+      font-family:var(--font);font-size:15px;font-weight:700;padding:13px 22px;cursor:pointer;transition:box-shadow .15s,transform .08s,background .15s;}
+    .btn:active{transform:translateY(1px)} .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn-primary{background:var(--grad);color:#fff;box-shadow:0 8px 22px rgba(99,102,241,.32)}
+    .btn-primary:hover{box-shadow:0 12px 28px rgba(99,102,241,.42)}
+    .btn-soft{background:rgba(99,102,241,.1);color:var(--primary-600);font-size:13.5px;padding:9px 14px}
+    .btn-ghost{background:var(--surface);color:var(--text);border-color:var(--border-strong);font-size:13.5px;padding:9px 14px}
+    .input{width:100%;font-family:var(--font);font-size:16px;color:var(--text);background:var(--surface-2);border:1.5px solid var(--border-strong);
+      border-radius:var(--radius-sm);padding:13px 15px;outline:none;transition:border-color .15s,box-shadow .15s}
+    .input:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+    .code-input{letter-spacing:.32em;text-align:center;font-size:24px;font-weight:700}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .err{background:rgba(239,68,68,.08);color:#b91c1c;border:1px solid rgba(239,68,68,.22);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:14px}
+    .ok{background:rgba(16,185,129,.1);color:#047857;border:1px solid rgba(16,185,129,.28);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:14px}
+    .hidden{display:none!important}
+    .center{text-align:center}
+    .spinner{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
+    .spinner.dark{border-color:rgba(99,102,241,.25);border-top-color:var(--primary)}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .load-wrap{display:flex;justify-content:center;padding:60px 0}
+    /* chat */
+    .iv-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+    .iv-head .ttl{font-weight:700;font-size:14px}
+    .thread{display:flex;flex-direction:column;gap:13px;background:#f5f6fb;border:1px solid var(--border);border-radius:12px;padding:16px;max-height:48vh;overflow-y:auto}
+    .msg{display:flex;gap:9px;max-width:88%}
+    .msg.user{align-self:flex-end;flex-direction:row-reverse}
+    .av{width:30px;height:30px;border-radius:50%;background:var(--grad);display:grid;place-items:center;font-size:15px;flex:none}
+    .bubble{background:#fff;border:1px solid var(--border);border-radius:14px;padding:10px 13px;font-size:14.5px;line-height:1.55}
+    .msg.user .bubble{background:var(--primary);color:#fff;border-color:transparent}
+    .bubble p{margin:5px 0}.bubble ul{margin:5px 0;padding-left:18px}.bubble .h{font-weight:700;margin:10px 0 4px}
+    .typing i{width:7px;height:7px;background:var(--muted);border-radius:50%;display:inline-block;margin:0 1px;animation:blink 1.2s infinite}
+    .typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+    @keyframes blink{0%,80%,100%{opacity:.3}40%{opacity:1}}
+    .inrow{display:flex;gap:9px;align-items:flex-end;margin-top:14px}
+    .inrow textarea{flex:1;resize:none;font-family:var(--font);font-size:15px;background:var(--surface-2);border:1.5px solid var(--border-strong);border-radius:var(--radius-sm);padding:11px 14px;outline:none;max-height:130px;line-height:1.5}
+    .inrow textarea:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+    .mic{width:46px;flex:none;border-radius:var(--radius-sm);border:1.5px solid var(--border-strong);background:var(--surface-2);font-size:17px;cursor:pointer}
+    .mic.rec{background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.4)}
+    .voice-pref{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--text-2);font-weight:600;cursor:pointer}
+    .feedback{margin-top:18px;border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--surface-2);line-height:1.6;font-size:14.5px}
+    .feedback .h{font-weight:700;margin:12px 0 5px}.feedback ul{margin:6px 0;padding-left:20px}.feedback p{margin:6px 0}
+    .foot{text-align:center;margin-top:16px;color:var(--muted);font-size:12px}
+    .remain{font-size:12.5px;color:var(--muted);font-weight:600}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><img src="/static/logo.png" alt="" onerror="this.style.display='none'"> Powered by Rilono</div>
+    <div class="card">
+      <div id="loading" class="load-wrap"><span class="spinner dark"></span></div>
+
+      <!-- invalid -->
+      <div id="invalidView" class="hidden">
+        <div class="hero"><div class="eyebrow">Mock interview</div><h1>Link unavailable</h1></div>
+        <div class="body"><p class="lead" id="invalidMsg">This interview link is invalid or has expired. Please ask your consultancy for a new link.</p></div>
+      </div>
+
+      <!-- verify -->
+      <div id="verifyView" class="hidden">
+        <div class="hero">
+          <div class="eyebrow" id="vOrg">Your consultancy</div>
+          <h1>🎤 Mock visa interview</h1>
+          <div class="sub" id="vSub">Practise your visa interview with AI.</div>
+        </div>
+        <div class="body">
+          <p class="lead" id="vLead"></p>
+          <span class="pill" id="vRemain"></span>
+          <div id="vError" class="err hidden"></div>
+          <div id="vMsg" class="ok hidden"></div>
+
+          <div id="vStep1">
+            <p class="t2" style="font-size:14px;margin:0 0 14px">To confirm it's you, we'll email a 6-digit code to <b id="vEmail"></b>.</p>
+            <button class="btn btn-primary" id="sendCodeBtn">Send verification code</button>
+          </div>
+
+          <div id="vStep2" class="hidden">
+            <label class="t2" style="font-size:13px;font-weight:600;display:block;margin-bottom:8px">Enter the 6-digit code</label>
+            <input class="input code-input" id="codeInput" inputmode="numeric" maxlength="6" placeholder="••••••" />
+            <div class="row" style="margin-top:14px">
+              <button class="btn btn-primary" id="verifyBtn">Verify &amp; continue</button>
+              <button class="btn btn-ghost" id="resendBtn">Resend code</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- interview -->
+      <div id="interviewView" class="hidden">
+        <div class="hero">
+          <div class="eyebrow" id="iOrg">Your consultancy</div>
+          <h1>🎤 Mock visa interview</h1>
+          <div class="sub" id="iSub"></div>
+        </div>
+        <div class="body">
+          <div id="iIntro" class="center">
+            <p class="lead" id="iIntroText" style="max-width:480px;margin:6px auto 18px"></p>
+            <button class="btn btn-primary" id="startBtn">▶ Start interview</button>
+            <div style="margin-top:14px"><label class="voice-pref"><input type="checkbox" id="voicePref"> 🎙 Voice mode</label></div>
+            <div class="remain" id="iRemain" style="margin-top:14px"></div>
+          </div>
+
+          <div id="iChat" class="hidden">
+            <div class="iv-head">
+              <div class="ttl" id="iOfficer">Visa officer</div>
+              <div class="row">
+                <button class="btn btn-soft" id="voiceBtn">🔈 Voice off</button>
+                <button class="btn btn-ghost" id="endBtn">End &amp; get feedback</button>
+              </div>
+            </div>
+            <div class="thread" id="thread"></div>
+            <div class="inrow" id="inRow">
+              <textarea id="answer" rows="1" placeholder="Type your answer…"></textarea>
+              <button class="mic hidden" id="micBtn" title="Speak your answer">🎙</button>
+              <button class="btn btn-primary" id="sendBtn">Send</button>
+            </div>
+            <div id="feedback" class="feedback hidden"></div>
+            <div class="center" id="afterFb" style="margin-top:16px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">🔒 This link is personal to you. Don't share it.</div>
+  </div>
+
+  <script>
+    (function () {
+      var token = location.pathname.split("/").filter(Boolean).pop();
+      var API = "/api/enterprise/public/interview";
+      var $ = function (id) { return document.getElementById(id); };
+      var info = null, sessionToken = null, history = [], voiceOn = false, busy = false, spoken = 0, recog = null;
+      var micSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+      function show(id) { ["loading","invalidView","verifyView","interviewView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
+      function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+      function fmt(text){ var t=esc(text).replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>"); var lines=t.split(/\n/),html="",inList=false;
+        function cl(){ if(inList){html+="</ul>";inList=false;} }
+        for(var i=0;i<lines.length;i++){ var line=lines[i].replace(/\s+$/,""); var h=line.match(/^\s*#{1,4}\s+(.*)$/);
+          if(h){cl();html+='<div class="h">'+h[1]+"</div>";continue;}
+          var m=line.match(/^\s*[-*•]\s+(.*)$/); if(m){ if(!inList){html+="<ul>";inList=true;} html+="<li>"+m[1]+"</li>"; }
+          else { cl(); if(line.trim()==="")continue; html+="<p>"+line+"</p>"; } }
+        cl(); return html||"<p></p>"; }
+      function api(path, body){ return fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})})
+        .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw new Error((d&&(d.detail||d.message))||"Something went wrong"); return d; }); }); }
+
+      function load(){
+        fetch(API+"/"+encodeURIComponent(token)).then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw new Error((d&&d.detail)||"Invalid link"); return d; }); })
+          .then(function(d){ info=d; renderVerify(); })
+          .catch(function(ex){ $("invalidMsg").textContent=ex.message||"This link is invalid or has expired."; show("invalidView"); });
+      }
+
+      function renderVerify(){
+        $("vOrg").textContent=info.organization_name||"Your consultancy";
+        $("vSub").textContent="Practise your "+(info.destination_country||"")+" student-visa interview.";
+        $("vLead").innerHTML="Hi <b>"+esc(info.client_first_name)+"</b>, you've been invited to take a realistic AI mock visa interview for your <b>"+esc(info.destination_country)+"</b> application ("+esc(info.visa_type)+").";
+        $("vRemain").textContent = info.exhausted ? "No interviews remaining on this link" : ("You can take "+info.remaining+" interview"+(info.remaining===1?"":"s"));
+        $("vEmail").textContent=info.masked_email||"your email";
+        if(info.exhausted){ $("vStep1").classList.add("hidden"); }
+        show("verifyView");
+      }
+
+      $("sendCodeBtn").onclick=function(){ var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Sending…';
+        api("/"+encodeURIComponent(token)+"/send-code").then(function(d){ $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
+          $("vMsg").textContent="We sent a 6-digit code to "+(d.masked_email||info.masked_email)+"."; $("vMsg").classList.remove("hidden"); $("codeInput").focus();
+        }).catch(function(ex){ $("vError").textContent=ex.message; $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
+      $("resendBtn").onclick=function(){ $("vError").classList.add("hidden"); $("sendCodeBtn").click(); };
+      $("verifyBtn").onclick=function(){ var code=($("codeInput").value||"").trim(); $("vError").classList.add("hidden");
+        if(code.length<4){ $("vError").textContent="Enter the 6-digit code."; $("vError").classList.remove("hidden"); return; }
+        var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Verifying…';
+        api("/"+encodeURIComponent(token)+"/verify",{code:code}).then(function(d){ sessionToken=d.session_token; info.remaining=d.remaining; info.destination_country=d.destination_country||info.destination_country; info.visa_type=d.visa_type||info.visa_type; renderInterview(); })
+          .catch(function(ex){ $("vError").textContent=ex.message; $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Verify & continue"; }); };
+      $("codeInput").addEventListener("keydown",function(e){ if(e.key==="Enter") $("verifyBtn").click(); });
+
+      function renderInterview(){
+        $("iOrg").textContent=info.organization_name||"";
+        $("iSub").textContent=(info.destination_country||"")+" · "+(info.visa_type||"");
+        $("iOfficer").textContent="🧑‍✈️ "+(info.destination_country||"")+" visa officer";
+        $("iIntroText").textContent="When you're ready, the AI will play the "+(info.destination_country||"")+" visa officer and ask you questions one at a time. Answer naturally — you'll get honest feedback at the end.";
+        $("iRemain").textContent="Interviews remaining: "+info.remaining;
+        $("iIntro").classList.toggle("hidden", info.remaining<=0);
+        if(info.remaining<=0){ $("iIntroText").textContent="You've used all your mock interviews on this link."; $("iIntro").classList.remove("hidden"); $("startBtn").classList.add("hidden"); }
+        show("interviewView");
+      }
+
+      function bubble(m){ var bot=m.role!=="user";
+        return '<div class="msg '+(bot?"bot":"user")+'">'+(bot?'<div class="av">🧑‍✈️</div>':"")+'<div class="bubble">'+(bot?fmt(m.content):esc(m.content).replace(/\n/g,"<br>"))+"</div></div>"; }
+      function drawThread(){ var t=$("thread"); var typing=busy?'<div class="msg bot"><div class="av">🧑‍✈️</div><div class="bubble"><span class="typing"><i></i><i></i><i></i></span></div></div>':"";
+        t.innerHTML=history.map(bubble).join("")+typing; t.scrollTop=t.scrollHeight;
+        var last=history[history.length-1]; if(voiceOn && last && last.role==="officer" && spoken<history.length){ spoken=history.length; speak(last.content); } }
+      function speak(text){ if(!voiceOn||!("speechSynthesis" in window))return; try{ window.speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(String(text||"").replace(/[*_#`>]/g,"")); window.speechSynthesis.speak(u);}catch(e){} }
+      function stopSpeak(){ try{ window.speechSynthesis&&window.speechSynthesis.cancel(); }catch(e){} }
+
+      if(micSupported){} // mic button shown after start
+      $("startBtn").onclick=function(){ info.voice=$("voicePref").checked; voiceOn=!!info.voice; history=[]; spoken=0; busy=true;
+        $("iIntro").classList.add("hidden"); $("iChat").classList.remove("hidden"); $("feedback").classList.add("hidden"); $("afterFb").innerHTML="";
+        if(micSupported){ $("micBtn").classList.remove("hidden"); } $("voiceBtn").textContent=voiceOn?"🔊 Voice on":"🔈 Voice off"; drawThread();
+        api("/chat",{session_token:sessionToken,start:true}).then(function(d){ history.push({role:"officer",content:d.reply}); info.remaining=d.remaining; })
+          .catch(function(ex){ alert(ex.message); $("iChat").classList.add("hidden"); renderInterview(); }).finally(function(){ busy=false; drawThread(); var a=$("answer"); if(a)a.focus(); }); };
+
+      function sendAnswer(){ var a=$("answer"); var v=(a.value||"").trim(); if(!v||busy)return; var prior=history.slice(); history.push({role:"user",content:v}); a.value=""; a.style.height="auto"; busy=true; drawThread();
+        api("/chat",{session_token:sessionToken,message:v,history:prior}).then(function(d){ history.push({role:"officer",content:d.reply}); })
+          .catch(function(ex){ alert(ex.message); }).finally(function(){ busy=false; drawThread(); }); }
+      $("sendBtn").onclick=sendAnswer;
+      $("answer").addEventListener("keydown",function(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAnswer(); } });
+      $("answer").addEventListener("input",function(){ this.style.height="auto"; this.style.height=Math.min(this.scrollHeight,130)+"px"; });
+
+      $("endBtn").onclick=function(){ if(busy)return; if(history.filter(function(m){return m.role==="user";}).length===0){ alert("Answer at least one question first."); return; }
+        busy=true; stopSpeak(); $("endBtn").disabled=true; $("inRow").classList.add("hidden"); drawThread();
+        $("feedback").classList.remove("hidden"); $("feedback").innerHTML='<div class="center"><span class="spinner dark"></span><p class="muted">Preparing your feedback…</p></div>';
+        api("/feedback",{session_token:sessionToken,history:history,mode:voiceOn?"voice":"chat"}).then(function(d){ info.remaining=d.remaining;
+          $("feedback").innerHTML='<div class="h">📋 Your interview feedback</div>'+fmt(d.feedback);
+          $("afterFb").innerHTML='<div class="remain" style="margin-bottom:12px">Interviews remaining: '+info.remaining+'</div>'+(info.remaining>0?'<button class="btn btn-soft" id="againBtn">↻ Take another interview</button>':'<div class="muted">That was your last interview on this link. Good luck! 🎓</div>');
+          var ab=$("againBtn"); if(ab) ab.onclick=function(){ $("iChat").classList.add("hidden"); renderInterview(); };
+        }).catch(function(ex){ $("feedback").innerHTML='<div class="err">'+esc(ex.message)+'</div>'; }).finally(function(){ busy=false; }); };
+
+      $("voiceBtn").onclick=function(){ voiceOn=!voiceOn; this.textContent=voiceOn?"🔊 Voice on":"🔈 Voice off"; if(!voiceOn)stopSpeak(); else{ var l=history[history.length-1]; if(l&&l.role==="officer")speak(l.content);} };
+      $("micBtn").onclick=function(){ var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR)return; var btn=this;
+        if(recog){ try{recog.stop();}catch(e){} recog=null; btn.classList.remove("rec"); return; }
+        recog=new SR(); recog.lang="en-US"; recog.interimResults=true; recog.continuous=false; btn.classList.add("rec"); var fin="";
+        recog.onresult=function(e){ var interim=""; for(var i=e.resultIndex;i<e.results.length;i++){ var tr=e.results[i][0].transcript; if(e.results[i].isFinal)fin+=tr; else interim+=tr; } var a=$("answer"); a.value=(fin+interim).trim(); a.style.height="auto"; a.style.height=Math.min(a.scrollHeight,130)+"px"; };
+        recog.onerror=function(){ btn.classList.remove("rec"); recog=null; }; recog.onend=function(){ btn.classList.remove("rec"); recog=null; };
+        try{ recog.start(); }catch(e){ recog=null; btn.classList.remove("rec"); } };
+
+      load();
+    })();
+  </script>
+</body>
+</html>

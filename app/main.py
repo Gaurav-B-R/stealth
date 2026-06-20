@@ -308,6 +308,15 @@ async def read_enterprise_slash():
     return await read_enterprise()
 
 
+@app.get("/interview/{token}")
+async def read_interview_invite(token: str):
+    """Serve the public client-facing mock interview page (token validated client-side via API)."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "interview.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
 @app.get("/robots.txt", include_in_schema=False)
 async def robots_txt():
     """Serve robots.txt for search engine crawlers."""

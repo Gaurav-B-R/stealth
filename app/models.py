@@ -179,6 +179,18 @@ class EnterpriseClient(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    interview_sessions = relationship(
+        "EnterpriseInterviewSession",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    interview_invites = relationship(
+        "EnterpriseInterviewInvite",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         Index("ix_ent_clients_org_status", "organization_id", "status"),
@@ -239,6 +251,49 @@ class EnterpriseClientDocument(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     client = relationship("EnterpriseClient", back_populates="documents")
+
+
+class EnterpriseInterviewSession(Base):
+    """A completed AI mock visa interview for a client (transcript + feedback)."""
+    __tablename__ = "enterprise_interview_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    conducted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    conducted_by_name = Column(String, nullable=True)
+    mode = Column(String, nullable=False, default="chat")  # chat | voice
+    transcript = Column(Text, nullable=True)  # JSON list of {role, content}
+    feedback = Column(Text, nullable=True)
+    verdict = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    client = relationship("EnterpriseClient", back_populates="interview_sessions")
+
+
+class EnterpriseInterviewInvite(Base):
+    """A secure email invite letting a client take N self-serve mock interviews via a link."""
+    __tablename__ = "enterprise_interview_invites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)  # hashed capability token
+    email = Column(String, nullable=False)  # client email the link was sent to
+    allowed_count = Column(Integer, nullable=False, default=1)
+    used_count = Column(Integer, nullable=False, default=0)
+    # One-time email verification (OTP)
+    code_hash = Column(String, nullable=True)
+    code_expires_at = Column(DateTime(timezone=True), nullable=True)
+    code_attempts = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked = Column(Boolean, nullable=False, default=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    client = relationship("EnterpriseClient", back_populates="interview_invites")
 
 
 class EnterpriseSubscription(Base):

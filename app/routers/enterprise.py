@@ -10,6 +10,7 @@ from typing import Optional
 from urllib.parse import quote, urlparse
 
 import requests
+from jose import jwt as jose_jwt, JWTError
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ from app import models
 from app import enterprise_catalog as catalog
 from app import enterprise_billing as billing
 from app import enterprise_ai
+from app import enterprise_interview
 from app import enterprise_storage
 from app.utils import gemini_service
 from app.auth import (
@@ -30,6 +32,8 @@ from app.auth import (
     get_password_hash,
     validate_password_strength,
     ACCESS_TOKEN_EXPIRE_MINUTES,
+    SECRET_KEY as AUTH_SECRET_KEY,
+    ALGORITHM as AUTH_ALGORITHM,
     set_auth_cookie,
 )
 from app.utils.rate_limiter import (
@@ -39,6 +43,7 @@ from app.utils.rate_limiter import (
 )
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 from app.email_service import send_enterprise_team_invite_email, send_enterprise_client_email
+from app.email_service import send_enterprise_interview_invite_email, send_enterprise_interview_code_email
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
 from app.utils.token_security import hash_token
 
@@ -3050,3 +3055,569 @@ def enterprise_delete_client_document(
     db.delete(doc)
     db.commit()
     return {"message": "Document deleted.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ===========================================================================
+# Mock visa interview (Gemini role-plays the visa officer)
+# ===========================================================================
+
+import json as _json
+
+ENTERPRISE_INTERVIEW_RATE_LIMIT = int(os.getenv("ENTERPRISE_INTERVIEW_RATE_LIMIT", "60"))
+ENTERPRISE_INTERVIEW_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_INTERVIEW_RATE_WINDOW_SECONDS", "300"))
+
+
+class EnterpriseInterviewTurn(BaseModel):
+    role: str = Field(..., max_length=16)
+    content: str = Field(..., max_length=8000)
+
+
+class EnterpriseInterviewChatRequest(BaseModel):
+    message: Optional[str] = Field(default=None, max_length=4000)
+    history: Optional[list[EnterpriseInterviewTurn]] = None
+    start: bool = False
+
+
+class EnterpriseInterviewFeedbackRequest(BaseModel):
+    history: list[EnterpriseInterviewTurn] = Field(..., min_length=1)
+    mode: str = Field(default="chat", max_length=12)
+
+
+def _recent_client_notes(db: Session, client_id: int, limit: int = 6):
+    return (
+        db.query(models.EnterpriseClientNote)
+        .filter(models.EnterpriseClientNote.client_id == int(client_id))
+        .order_by(models.EnterpriseClientNote.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def _serialize_interview_session(s: models.EnterpriseInterviewSession, include_detail: bool = False) -> dict:
+    data = {
+        "id": s.id,
+        "conducted_by_name": s.conducted_by_name,
+        "mode": s.mode,
+        "verdict": s.verdict,
+        "created_at": _iso(s.created_at),
+    }
+    if include_detail:
+        try:
+            data["transcript"] = _json.loads(s.transcript) if s.transcript else []
+        except Exception:
+            data["transcript"] = []
+        data["feedback"] = s.feedback
+    return data
+
+
+@router.post("/clients/{client_id}/interview/chat")
+def enterprise_interview_chat(
+    client_id: int,
+    payload: EnterpriseInterviewChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.interview", limit=ENTERPRISE_INTERVIEW_RATE_LIMIT,
+        window_seconds=ENTERPRISE_INTERVIEW_RATE_WINDOW_SECONDS, extra_key=str(current_user.id),
+    )
+    if not enterprise_interview.is_ai_configured():
+        raise HTTPException(status_code=503, detail="The mock interview isn't available right now.")
+
+    history = [t.model_dump() for t in (payload.history or [])]
+    try:
+        reply = enterprise_interview.run_interview_turn(
+            client=client,
+            organization=organization,
+            recent_notes=_recent_client_notes(db, client.id),
+            history=history,
+            message=payload.message or "",
+            is_start=bool(payload.start),
+        )
+    except Exception:
+        logger.exception("Mock interview turn failed (org_id=%s, client_id=%s)", organization.id, client.id)
+        raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
+
+    return {"reply": reply, "permissions": _enterprise_permissions_for_role(role)}
+
+
+@router.post("/clients/{client_id}/interview/feedback")
+def enterprise_interview_feedback(
+    client_id: int,
+    payload: EnterpriseInterviewFeedbackRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.interview", limit=ENTERPRISE_INTERVIEW_RATE_LIMIT,
+        window_seconds=ENTERPRISE_INTERVIEW_RATE_WINDOW_SECONDS, extra_key=str(current_user.id),
+    )
+    if not enterprise_interview.is_ai_configured():
+        raise HTTPException(status_code=503, detail="Feedback isn't available right now.")
+
+    history = [t.model_dump() for t in payload.history]
+    try:
+        feedback = enterprise_interview.generate_interview_feedback(
+            client=client, organization=organization, history=history,
+        )
+    except Exception:
+        logger.exception("Mock interview feedback failed (org_id=%s, client_id=%s)", organization.id, client.id)
+        raise HTTPException(status_code=502, detail="Could not generate feedback. Please try again.")
+
+    verdict = enterprise_interview.extract_verdict(feedback)
+    session = models.EnterpriseInterviewSession(
+        organization_id=organization.id,
+        client_id=client.id,
+        conducted_by_user_id=current_user.id,
+        conducted_by_name=current_user.full_name or current_user.email,
+        mode=("voice" if payload.mode == "voice" else "chat"),
+        transcript=_json.dumps(history)[:400000],
+        feedback=feedback,
+        verdict=verdict,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    return {
+        "feedback": feedback,
+        "verdict": verdict,
+        "session": _serialize_interview_session(session),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.get("/clients/{client_id}/interview/sessions")
+def enterprise_interview_sessions(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    rows = (
+        db.query(models.EnterpriseInterviewSession)
+        .filter(models.EnterpriseInterviewSession.client_id == client.id)
+        .order_by(models.EnterpriseInterviewSession.created_at.desc(), models.EnterpriseInterviewSession.id.desc())
+        .all()
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "ai_enabled": enterprise_interview.is_ai_configured(),
+        "sessions": [_serialize_interview_session(s) for s in rows],
+    }
+
+
+@router.get("/clients/{client_id}/interview/sessions/{session_id}")
+def enterprise_interview_session_detail(
+    client_id: int,
+    session_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    s = (
+        db.query(models.EnterpriseInterviewSession)
+        .filter(
+            models.EnterpriseInterviewSession.id == int(session_id),
+            models.EnterpriseInterviewSession.client_id == client.id,
+            models.EnterpriseInterviewSession.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not s:
+        raise HTTPException(status_code=404, detail="Interview session not found.")
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "session": _serialize_interview_session(s, include_detail=True),
+    }
+
+
+# ===========================================================================
+# Send mock interview to client via secure email link (self-serve)
+# ===========================================================================
+
+import secrets as _secrets
+
+ENTERPRISE_INTERVIEW_INVITE_EXPIRES_DAYS = int(os.getenv("ENTERPRISE_INTERVIEW_INVITE_EXPIRES_DAYS", "30"))
+ENTERPRISE_INTERVIEW_SESSION_HOURS = int(os.getenv("ENTERPRISE_INTERVIEW_SESSION_HOURS", "3"))
+ENTERPRISE_INTERVIEW_CODE_EXPIRES_MIN = int(os.getenv("ENTERPRISE_INTERVIEW_CODE_EXPIRES_MIN", "15"))
+ENTERPRISE_INTERVIEW_CODE_MAX_ATTEMPTS = int(os.getenv("ENTERPRISE_INTERVIEW_CODE_MAX_ATTEMPTS", "6"))
+ENTERPRISE_INTERVIEW_INVITE_MAX_COUNT = int(os.getenv("ENTERPRISE_INTERVIEW_INVITE_MAX_COUNT", "20"))
+ENTERPRISE_PUBLIC_RATE_LIMIT = int(os.getenv("ENTERPRISE_PUBLIC_INTERVIEW_RATE_LIMIT", "30"))
+ENTERPRISE_PUBLIC_RATE_WINDOW = int(os.getenv("ENTERPRISE_PUBLIC_INTERVIEW_RATE_WINDOW", "300"))
+ENTERPRISE_CODE_RATE_LIMIT = int(os.getenv("ENTERPRISE_INTERVIEW_CODE_RATE_LIMIT", "6"))
+ENTERPRISE_CODE_RATE_WINDOW = int(os.getenv("ENTERPRISE_INTERVIEW_CODE_RATE_WINDOW", "900"))
+
+
+class EnterpriseInterviewInviteRequest(BaseModel):
+    allowed_count: int = Field(default=3, ge=1, le=ENTERPRISE_INTERVIEW_INVITE_MAX_COUNT)
+
+
+class PublicInterviewVerifyRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+class PublicInterviewChatRequest(BaseModel):
+    session_token: str = Field(..., min_length=10, max_length=4000)
+    message: Optional[str] = Field(default=None, max_length=4000)
+    history: Optional[list[EnterpriseInterviewTurn]] = None
+    start: bool = False
+
+
+class PublicInterviewFeedbackRequest(BaseModel):
+    session_token: str = Field(..., min_length=10, max_length=4000)
+    history: list[EnterpriseInterviewTurn] = Field(..., min_length=1)
+    mode: str = Field(default="chat", max_length=12)
+
+
+def _mask_email(email: str) -> str:
+    e = (email or "").strip()
+    if "@" not in e:
+        return e
+    local, dom = e.split("@", 1)
+    ml = (local[0] + "*") if len(local) <= 2 else (local[0] + "*" * (len(local) - 2) + local[-1])
+    return f"{ml}@{dom}"
+
+
+def _build_interview_invite_url(subdomain_slug, token: str, request: Request | None) -> str:
+    subdomain = str(subdomain_slug or "").strip().lower()
+    base = None
+    if subdomain:
+        host = f"{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+        port = _request_port_for_local_enterprise_url(request)
+        if port:
+            host = f"{host}:{port}"
+        base = f"{ENTERPRISE_PORTAL_SCHEME}://{host}"
+    if not base:
+        base = ENTERPRISE_PASSWORD_SETUP_BASE_URL
+    return f"{base.rstrip('/')}/interview/{token}"
+
+
+def _interview_invite_remaining(invite: models.EnterpriseInterviewInvite) -> int:
+    return max(0, int(invite.allowed_count or 0) - int(invite.used_count or 0))
+
+
+def _interview_invite_is_live(invite: models.EnterpriseInterviewInvite) -> bool:
+    if invite.revoked:
+        return False
+    if invite.expires_at:
+        exp = invite.expires_at.replace(tzinfo=None) if getattr(invite.expires_at, "tzinfo", None) else invite.expires_at
+        if exp < datetime.utcnow():
+            return False
+    return True
+
+
+def _serialize_invite_status(invite: models.EnterpriseInterviewInvite | None) -> Optional[dict]:
+    if not invite:
+        return None
+    return {
+        "id": invite.id,
+        "email": invite.email,
+        "allowed_count": invite.allowed_count,
+        "used_count": invite.used_count,
+        "remaining": _interview_invite_remaining(invite),
+        "revoked": bool(invite.revoked),
+        "live": _interview_invite_is_live(invite),
+        "created_by_name": invite.created_by_name,
+        "created_at": _iso(invite.created_at),
+        "expires_at": _iso(invite.expires_at),
+    }
+
+
+def _latest_client_invite(db: Session, organization_id: int, client_id: int):
+    return (
+        db.query(models.EnterpriseInterviewInvite)
+        .filter(
+            models.EnterpriseInterviewInvite.organization_id == int(organization_id),
+            models.EnterpriseInterviewInvite.client_id == int(client_id),
+        )
+        .order_by(models.EnterpriseInterviewInvite.created_at.desc(), models.EnterpriseInterviewInvite.id.desc())
+        .first()
+    )
+
+
+def _issue_interview_session_token(invite_id: int) -> str:
+    return create_access_token(
+        data={"sub": f"entiv:{int(invite_id)}", "scope": "ent_interview", "inv": int(invite_id)},
+        expires_delta=timedelta(hours=ENTERPRISE_INTERVIEW_SESSION_HOURS),
+    )
+
+
+def _decode_interview_session_token(token: str) -> int:
+    try:
+        payload = jose_jwt.decode(token, AUTH_SECRET_KEY, algorithms=[AUTH_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Your interview session has expired. Please verify your email again.")
+    if payload.get("scope") != "ent_interview" or not payload.get("inv"):
+        raise HTTPException(status_code=401, detail="Invalid interview session.")
+    return int(payload["inv"])
+
+
+def _public_invite_or_404(db: Session, token: str) -> models.EnterpriseInterviewInvite:
+    token_hash = hash_token((token or "").strip())
+    invite = (
+        db.query(models.EnterpriseInterviewInvite)
+        .filter(models.EnterpriseInterviewInvite.token_hash == token_hash)
+        .first()
+    )
+    if not invite or not _interview_invite_is_live(invite):
+        raise HTTPException(status_code=404, detail="This interview link is invalid or has expired.")
+    return invite
+
+
+# ---- Staff: create / view / revoke the invite -----------------------------
+
+@router.post("/clients/{client_id}/interview/invite")
+def enterprise_create_interview_invite(
+    client_id: int,
+    payload: EnterpriseInterviewInviteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    email = (client.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Add an email to this client before sending an interview link.")
+
+    # Supersede any prior invites for this client.
+    db.query(models.EnterpriseInterviewInvite).filter(
+        models.EnterpriseInterviewInvite.client_id == client.id,
+        models.EnterpriseInterviewInvite.revoked.is_(False),
+    ).update({"revoked": True})
+
+    raw_token = generate_verification_token()
+    invite = models.EnterpriseInterviewInvite(
+        organization_id=organization.id,
+        client_id=client.id,
+        token_hash=hash_token(raw_token),
+        email=email,
+        allowed_count=int(payload.allowed_count),
+        used_count=0,
+        expires_at=datetime.utcnow() + timedelta(days=ENTERPRISE_INTERVIEW_INVITE_EXPIRES_DAYS),
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+
+    link = _build_interview_invite_url(organization.subdomain_slug, raw_token, request)
+    sent, _mid, err = send_enterprise_interview_invite_email(
+        to_email=email,
+        client_name=client.full_name,
+        organization_name=organization.company_name,
+        interview_url=link,
+        allowed_count=invite.allowed_count,
+        destination_country=client.destination_country_name,
+        visa_type=client.visa_type,
+        logo_url=_resolve_enterprise_logo_url(organization),
+    )
+    message = (f"Sent {invite.allowed_count} mock interview(s) to {email}."
+               if sent else f"Invite created but the email could not be sent right now. {err or ''}".strip())
+    return {
+        "message": message,
+        "email_sent": sent,
+        "invite": _serialize_invite_status(invite),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.get("/clients/{client_id}/interview/invite")
+def enterprise_get_interview_invite(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    invite = _latest_client_invite(db, organization.id, client.id)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "invite": _serialize_invite_status(invite),
+    }
+
+
+@router.post("/clients/{client_id}/interview/invite/revoke")
+def enterprise_revoke_interview_invite(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    db.query(models.EnterpriseInterviewInvite).filter(
+        models.EnterpriseInterviewInvite.client_id == client.id,
+        models.EnterpriseInterviewInvite.revoked.is_(False),
+    ).update({"revoked": True})
+    db.commit()
+    return {"message": "Interview link revoked.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ---- Public (client-facing, token-scoped, no staff auth) ------------------
+
+@router.get("/public/interview/{token}")
+def public_interview_info(token: str, db: Session = Depends(get_db)):
+    invite = _public_invite_or_404(db, token)
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == invite.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This interview link is no longer available.")
+    remaining = _interview_invite_remaining(invite)
+    return {
+        "organization_name": org.company_name,
+        "logo_url": _resolve_enterprise_logo_url(org),
+        "client_first_name": (client.full_name or "there").split(" ")[0],
+        "destination_country": client.destination_country_name,
+        "visa_type": client.visa_type,
+        "masked_email": _mask_email(invite.email),
+        "remaining": remaining,
+        "exhausted": remaining <= 0,
+    }
+
+
+@router.post("/public/interview/{token}/send-code")
+def public_interview_send_code(token: str, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.interview_code",
+        limit=ENTERPRISE_CODE_RATE_LIMIT, window_seconds=ENTERPRISE_CODE_RATE_WINDOW, extra_key=hash_token(token)[:16],
+    )
+    invite = _public_invite_or_404(db, token)
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == invite.organization_id).first()
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
+    if not org or not client:
+        raise HTTPException(status_code=404, detail="This interview link is no longer available.")
+
+    code = f"{_secrets.randbelow(900000) + 100000:06d}"
+    invite.code_hash = hash_token(code)
+    invite.code_expires_at = datetime.utcnow() + timedelta(minutes=ENTERPRISE_INTERVIEW_CODE_EXPIRES_MIN)
+    invite.code_attempts = 0
+    db.commit()
+
+    sent, _mid, err = send_enterprise_interview_code_email(
+        to_email=invite.email, client_name=client.full_name, organization_name=org.company_name, code=code,
+    )
+    if not sent:
+        logger.warning("Interview code email failed for invite %s: %s", invite.id, err)
+    return {"sent": True, "masked_email": _mask_email(invite.email)}
+
+
+@router.post("/public/interview/{token}/verify")
+def public_interview_verify(token: str, payload: PublicInterviewVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.interview_verify",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW, extra_key=hash_token(token)[:16],
+    )
+    invite = _public_invite_or_404(db, token)
+    if not invite.code_hash or not invite.code_expires_at:
+        raise HTTPException(status_code=400, detail="Please request a verification code first.")
+    code_exp = invite.code_expires_at.replace(tzinfo=None) if getattr(invite.code_expires_at, "tzinfo", None) else invite.code_expires_at
+    if code_exp < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That code has expired. Please request a new one.")
+    if int(invite.code_attempts or 0) >= ENTERPRISE_INTERVIEW_CODE_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please request a new code.")
+
+    invite.code_attempts = int(invite.code_attempts or 0) + 1
+    if hash_token((payload.code or "").strip()) != invite.code_hash:
+        db.commit()
+        raise HTTPException(status_code=400, detail="That code is incorrect. Please try again.")
+
+    # Verified — consume the code and issue a short-lived interview session token.
+    invite.code_hash = None
+    invite.code_expires_at = None
+    db.commit()
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
+    return {
+        "session_token": _issue_interview_session_token(invite.id),
+        "client_first_name": (client.full_name or "there").split(" ")[0] if client else "there",
+        "destination_country": client.destination_country_name if client else "",
+        "visa_type": client.visa_type if client else "",
+        "remaining": _interview_invite_remaining(invite),
+        "session_hours": ENTERPRISE_INTERVIEW_SESSION_HOURS,
+    }
+
+
+def _public_load_invite_context(db: Session, session_token: str):
+    invite_id = _decode_interview_session_token(session_token)
+    invite = db.query(models.EnterpriseInterviewInvite).filter(models.EnterpriseInterviewInvite.id == invite_id).first()
+    if not invite or not _interview_invite_is_live(invite):
+        raise HTTPException(status_code=401, detail="This interview link is no longer active.")
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == invite.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This interview is no longer available.")
+    return invite, client, org
+
+
+@router.post("/public/interview/chat")
+def public_interview_chat(payload: PublicInterviewChatRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.interview_public",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
+    )
+    if not enterprise_interview.is_ai_configured():
+        raise HTTPException(status_code=503, detail="The mock interview isn't available right now.")
+    invite, client, org = _public_load_invite_context(db, payload.session_token)
+
+    if payload.start:
+        if _interview_invite_remaining(invite) <= 0:
+            raise HTTPException(status_code=403, detail="You've used all your mock interviews for this link.")
+        invite.used_count = int(invite.used_count or 0) + 1  # a start consumes one interview
+        db.commit()
+
+    history = [t.model_dump() for t in (payload.history or [])]
+    try:
+        reply = enterprise_interview.run_interview_turn(
+            client=client, organization=org, recent_notes=[],  # never leak staff notes to the client
+            history=history, message=payload.message or "", is_start=bool(payload.start),
+        )
+    except Exception:
+        logger.exception("Public interview turn failed (invite=%s)", invite.id)
+        raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
+    return {"reply": reply, "remaining": _interview_invite_remaining(invite)}
+
+
+@router.post("/public/interview/feedback")
+def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.interview_public",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
+    )
+    if not enterprise_interview.is_ai_configured():
+        raise HTTPException(status_code=503, detail="Feedback isn't available right now.")
+    invite, client, org = _public_load_invite_context(db, payload.session_token)
+
+    history = [t.model_dump() for t in payload.history]
+    try:
+        feedback = enterprise_interview.generate_interview_feedback(client=client, organization=org, history=history)
+    except Exception:
+        logger.exception("Public interview feedback failed (invite=%s)", invite.id)
+        raise HTTPException(status_code=502, detail="Could not generate feedback. Please try again.")
+
+    verdict = enterprise_interview.extract_verdict(feedback)
+    session = models.EnterpriseInterviewSession(
+        organization_id=org.id, client_id=client.id, conducted_by_user_id=None,
+        conducted_by_name=f"{client.full_name} (self · via link)",
+        mode=("voice" if payload.mode == "voice" else "chat"),
+        transcript=_json.dumps(history)[:400000], feedback=feedback, verdict=verdict,
+    )
+    db.add(session)
+    db.commit()
+    return {"feedback": feedback, "verdict": verdict, "remaining": _interview_invite_remaining(invite)}
