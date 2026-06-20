@@ -12,6 +12,10 @@ from sqlalchemy import bindparam, case, desc, func, inspect, or_, select, text
 from sqlalchemy.orm import Session, aliased
 
 from app import models, schemas
+from app import ai_usage
+from app import enterprise_credits
+from app import visa_pass
+from app import ai_guardrails
 from app.auth import (
     ALGORITHM,
     AUTH_COOKIE_DOMAIN,
@@ -745,6 +749,96 @@ def company_finance_analytics_admin(
             f"INR payments are converted using ADMIN_ANALYTICS_INR_TO_USD={ADMIN_ANALYTICS_INR_TO_USD}.",
         ],
     }
+
+
+@router.get("/ai-usage/analytics")
+def ai_usage_analytics_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Gemini API usage & estimated cost analytics for the admin console."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.ai_usage.analytics",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    return ai_usage.build_ai_usage_analytics(db)
+
+
+@router.get("/enterprise/revenue")
+def enterprise_revenue_analytics_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Prepaid-credit revenue model: credit/infra revenue vs real Gemini cost = margin."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.revenue",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    return enterprise_credits.build_revenue_analytics(db)
+
+
+@router.get("/b2c/revenue")
+def b2c_revenue_analytics_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """B2C 'Visa Success Pass' economics: one-time pass revenue vs real Gemini cost."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.b2c.revenue",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    return visa_pass.build_revenue_analytics(db)
+
+
+@router.post("/enterprise/calendar-reminders/run")
+def run_enterprise_calendar_reminders_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+):
+    """Manually trigger the daily enterprise calendar-reminder email job (force run)."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.calendar_reminders",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app.services.enterprise_calendar_reminders import run_calendar_reminder_job
+    return run_calendar_reminder_job(force=True)
+
+
+@router.get("/ai-optimization")
+def ai_optimization_analytics_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """GCP cost-optimization metrics: off-topic prompts blocked + context-cache savings."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.ai_optimization",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    return ai_guardrails.build_optimization_analytics(db)
 
 
 @router.get("/enterprise/accounts", response_model=schemas.AdminEnterpriseAccountListResponse)

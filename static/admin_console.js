@@ -109,7 +109,52 @@ const refs = {
     financeTimelineChart: document.getElementById('adminFinanceTimelineChart'),
     financeBreakdownChart: document.getElementById('adminFinanceBreakdownChart'),
     financeContributorChart: document.getElementById('adminFinanceContributorChart'),
-    financeTableBody: document.getElementById('adminFinanceTableBody')
+    financeTableBody: document.getElementById('adminFinanceTableBody'),
+    aiTabBtn: document.getElementById('adminAiTabBtn'),
+    aiTabPanel: document.getElementById('adminAiTabPanel'),
+    aiMonthHero: document.getElementById('adminAiMonthHero'),
+    aiTodayCost: document.getElementById('adminAiTodayCost'),
+    aiTodaySub: document.getElementById('adminAiTodaySub'),
+    ai7Cost: document.getElementById('adminAi7Cost'),
+    ai7Sub: document.getElementById('adminAi7Sub'),
+    aiMonthCost: document.getElementById('adminAiMonthCost'),
+    aiMonthSub: document.getElementById('adminAiMonthSub'),
+    aiAllCost: document.getElementById('adminAiAllCost'),
+    aiAllSub: document.getElementById('adminAiAllSub'),
+    aiTimelineChart: document.getElementById('adminAiTimelineChart'),
+    aiSourceChart: document.getElementById('adminAiSourceChart'),
+    aiModelChart: document.getElementById('adminAiModelChart'),
+    revMarginHero: document.getElementById('adminRevMarginHero'),
+    revTotal: document.getElementById('adminRevTotal'),
+    revTotalSub: document.getElementById('adminRevTotalSub'),
+    revCredits: document.getElementById('adminRevCredits'),
+    revCreditsSub: document.getElementById('adminRevCreditsSub'),
+    revInfra: document.getElementById('adminRevInfra'),
+    revInfraSub: document.getElementById('adminRevInfraSub'),
+    revCost: document.getElementById('adminRevCost'),
+    revMargin: document.getElementById('adminRevMargin'),
+    revMarginSub: document.getElementById('adminRevMarginSub'),
+    revCreditsSold: document.getElementById('adminRevCreditsSold'),
+    revCreditsSoldSub: document.getElementById('adminRevCreditsSoldSub'),
+    revOutstanding: document.getElementById('adminRevOutstanding'),
+    revOutstandingSub: document.getElementById('adminRevOutstandingSub'),
+    revFx: document.getElementById('adminRevFx'),
+    revActionsBody: document.getElementById('adminRevActionsBody'),
+    b2cMarginHero: document.getElementById('adminB2cMarginHero'),
+    b2cRevenue: document.getElementById('adminB2cRevenue'),
+    b2cRevenueSub: document.getElementById('adminB2cRevenueSub'),
+    b2cActive: document.getElementById('adminB2cActive'),
+    b2cCost: document.getElementById('adminB2cCost'),
+    b2cCostSub: document.getElementById('adminB2cCostSub'),
+    b2cConversion: document.getElementById('adminB2cConversion'),
+    b2cConversionSub: document.getElementById('adminB2cConversionSub'),
+    optSavedHero: document.getElementById('adminOptSavedHero'),
+    optBlocks: document.getElementById('adminOptBlocks'),
+    optBlocksSub: document.getElementById('adminOptBlocksSub'),
+    optCacheHits: document.getElementById('adminOptCacheHits'),
+    optCacheHitsSub: document.getElementById('adminOptCacheHitsSub'),
+    optTokens: document.getElementById('adminOptTokens'),
+    optSaved: document.getElementById('adminOptSaved')
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -131,6 +176,7 @@ function bindEvents() {
     refs.usersTabBtn?.addEventListener('click', () => handleTabSwitch('users'));
     refs.enterpriseTabBtn?.addEventListener('click', () => handleTabSwitch('enterprise'));
     refs.financeTabBtn?.addEventListener('click', () => handleTabSwitch('finance'));
+    refs.aiTabBtn?.addEventListener('click', () => handleTabSwitch('ai'));
     refs.usersForm?.addEventListener('submit', handleUserFiltersSubmit);
     refs.usersResetBtn?.addEventListener('click', resetUserFilters);
     refs.prevBtn?.addEventListener('click', () => changePage(-1));
@@ -208,6 +254,7 @@ function renderActiveTab() {
     const isUsersTab = state.activeTab === 'users';
     const isEnterpriseTab = state.activeTab === 'enterprise';
     const isFinanceTab = state.activeTab === 'finance';
+    const isAiTab = state.activeTab === 'ai';
 
     if (refs.usersTabBtn) {
         refs.usersTabBtn.classList.toggle('active', isUsersTab);
@@ -230,11 +277,18 @@ function renderActiveTab() {
     if (refs.financeTabPanel) {
         refs.financeTabPanel.hidden = !isFinanceTab;
     }
+    if (refs.aiTabBtn) {
+        refs.aiTabBtn.classList.toggle('active', isAiTab);
+        refs.aiTabBtn.setAttribute('aria-selected', String(isAiTab));
+    }
+    if (refs.aiTabPanel) {
+        refs.aiTabPanel.hidden = !isAiTab;
+    }
 }
 
 async function handleTabSwitch(tabName) {
     const normalized = String(tabName || '').trim().toLowerCase();
-    if (!['users', 'enterprise', 'finance'].includes(normalized)) return;
+    if (!['users', 'enterprise', 'finance', 'ai'].includes(normalized)) return;
     if (state.activeTab === normalized) return;
 
     state.activeTab = normalized;
@@ -252,6 +306,10 @@ async function loadActiveTab({ resetPage = false } = {}) {
     }
     if (state.activeTab === 'finance') {
         await loadFinanceAnalytics();
+        return;
+    }
+    if (state.activeTab === 'ai') {
+        await loadAiUsage();
         return;
     }
     await loadUsers({ resetPage });
@@ -1364,6 +1422,215 @@ async function loadFinanceAnalytics() {
     } finally {
         state.financeLoading = false;
     }
+}
+
+function formatAiUsd(value) {
+    const n = Number(value) || 0;
+    if (n === 0) return '$0.00';
+    if (n < 1) return '$' + n.toFixed(4);
+    if (n < 100) return '$' + n.toFixed(2);
+    return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatTokens(value) {
+    const v = Number(value) || 0;
+    if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return (v / 1e3).toFixed(1) + 'k';
+    return String(v);
+}
+
+function aiUsageEmptyState(message) {
+    const m = escapeHtml(message || 'No AI usage recorded yet.');
+    [refs.aiTimelineChart, refs.aiSourceChart, refs.aiModelChart].forEach((el) => {
+        if (el) el.innerHTML = `<div class="table-empty">${m}</div>`;
+    });
+}
+
+async function loadAiUsage() {
+    if (!state.currentUser) {
+        const canAccess = await refreshCurrentAdminUser({ silent: true });
+        if (!canAccess) { showAuth(); showFlash('Please login with an admin account.', 'error'); return; }
+    }
+    if (!await ensureAdminProtection({ silent: false })) return;
+    aiUsageEmptyState('Loading AI usage...');
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/ai-usage/analytics`, {
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const message = normalizeErrorMessage(payload, 'Failed to load AI usage.');
+            aiUsageEmptyState(message);
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(message, 'error');
+            return;
+        }
+        renderAiUsage(payload);
+        clearFlash();
+    } catch (error) {
+        console.error('Failed to load AI usage:', error);
+        aiUsageEmptyState('Could not load AI usage. Please retry.');
+        showFlash('Could not load AI usage. Please retry.', 'error');
+    }
+    await loadEnterpriseRevenue();
+    await loadB2cRevenue();
+    await loadOptimization();
+}
+
+async function loadB2cRevenue() {
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/b2c/revenue`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) { await handleAdminAuthOrProtectionError(response.status, payload); return; }
+        renderB2cRevenue(payload);
+    } catch (error) { console.error('Failed to load B2C revenue:', error); }
+}
+
+function renderB2cRevenue(data) {
+    const s = (data && data.summary) || {};
+    const setText = (el, v) => { if (el) el.textContent = v; };
+    setText(refs.b2cMarginHero, s.gross_margin_display || '₹0');
+    setText(refs.b2cRevenue, s.revenue_display || '₹0');
+    setText(refs.b2cRevenueSub, `${(s.passes_sold || 0).toLocaleString()} passes sold`);
+    setText(refs.b2cActive, (s.active_passes || 0).toLocaleString());
+    setText(refs.b2cCost, s.gemini_cost_display || '₹0');
+    setText(refs.b2cCostSub, `${s.avg_cost_per_pass_display || '₹0'} / pass`);
+    setText(refs.b2cConversion, s.conversion_pct != null ? `${s.conversion_pct}%` : '—');
+    setText(refs.b2cConversionSub, `${(s.free_users || 0).toLocaleString()} free users`);
+}
+
+async function loadOptimization() {
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/ai-optimization`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) { await handleAdminAuthOrProtectionError(response.status, payload); return; }
+        renderOptimization(payload);
+    } catch (error) { console.error('Failed to load AI optimization:', error); }
+}
+
+function renderOptimization(data) {
+    const g = (data && data.guardrail) || {};
+    const ch = (data && data.cache_hits) || {};
+    const t = (data && data.totals) || {};
+    const setText = (el, v) => { if (el) el.textContent = v; };
+    setText(refs.optSavedHero, formatAiUsd(t.cost_saved_usd));
+    setText(refs.optBlocks, (g.count || 0).toLocaleString());
+    setText(refs.optBlocksSub, `${formatTokens(g.tokens_saved)} tokens saved`);
+    setText(refs.optCacheHits, (ch.count || 0).toLocaleString());
+    setText(refs.optCacheHitsSub, data && data.cache_hit_rate_pct != null ? `${data.cache_hit_rate_pct}% hit rate` : '0% hit rate');
+    setText(refs.optTokens, formatTokens(t.tokens_saved));
+    setText(refs.optSaved, formatAiUsd(t.cost_saved_usd));
+}
+
+async function loadEnterpriseRevenue() {
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/revenue`, {
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            return;
+        }
+        renderEnterpriseRevenue(payload);
+    } catch (error) {
+        console.error('Failed to load enterprise revenue:', error);
+    }
+}
+
+function renderEnterpriseRevenue(data) {
+    const s = (data && data.summary) || {};
+    const setText = (el, val) => { if (el) el.textContent = val; };
+    setText(refs.revMarginHero, s.gross_margin_display || '₹0');
+    setText(refs.revTotal, s.total_revenue_display || '₹0');
+    setText(refs.revTotalSub, 'Credits + infra fees');
+    setText(refs.revCredits, s.credit_revenue_display || '₹0');
+    setText(refs.revCreditsSub, `${(s.credit_payment_count || 0).toLocaleString()} payments`);
+    setText(refs.revInfra, s.infra_revenue_display || '₹0');
+    setText(refs.revInfraSub, `${(s.infra_payment_count || 0).toLocaleString()} payments`);
+    setText(refs.revCost, s.gemini_cost_display || '₹0');
+    setText(refs.revMargin, s.gross_margin_display || '₹0');
+    setText(refs.revMarginSub, s.margin_pct != null ? `${s.margin_pct}% margin` : 'Revenue − Gemini cost');
+    setText(refs.revCreditsSold, (s.credits_sold || 0).toLocaleString());
+    setText(refs.revCreditsSoldSub, `${(s.credits_spent || 0).toLocaleString()} spent`);
+    setText(refs.revOutstanding, (s.credits_outstanding || 0).toLocaleString());
+    setText(refs.revOutstandingSub, `Liability ${s.credits_outstanding_display || '₹0'}`);
+    if (refs.revFx) refs.revFx.textContent = `$1 = ₹${data && data.usd_to_inr != null ? data.usd_to_inr : 0}`;
+
+    if (refs.revActionsBody) {
+        const rows = Array.isArray(data && data.per_action) ? data.per_action : [];
+        if (!rows.length) {
+            refs.revActionsBody.innerHTML = '<tr><td colspan="6" class="table-empty">No premium AI actions billed yet.</td></tr>';
+        } else {
+            refs.revActionsBody.innerHTML = rows.map((r) => `
+                <tr>
+                    <td>${escapeHtml(r.label || r.key || '—')}</td>
+                    <td>${escapeHtml(r.price_display || '—')} <span class="metric-subtext">(${escapeHtml(String(r.price_credits || 0))} cr)</span></td>
+                    <td>${escapeHtml((r.units_sold || 0).toLocaleString())}</td>
+                    <td>${escapeHtml(r.revenue_display || '₹0')}</td>
+                    <td>${escapeHtml(r.avg_cost_per_unit_display || '₹0')}</td>
+                    <td><strong>${r.margin_pct != null ? escapeHtml(String(r.margin_pct)) + '%' : '—'}</strong></td>
+                </tr>`).join('');
+        }
+    }
+}
+
+function renderAiUsage(data) {
+    const totals = (data && data.totals) || {};
+    const setMetric = (costEl, subEl, t) => {
+        const s = t || { cost_usd: 0, tokens: 0, calls: 0 };
+        if (costEl) costEl.textContent = formatAiUsd(s.cost_usd);
+        if (subEl) subEl.textContent = `${(s.calls || 0).toLocaleString()} calls · ${formatTokens(s.tokens)} tokens`;
+    };
+    setMetric(refs.aiTodayCost, refs.aiTodaySub, totals.today);
+    setMetric(refs.ai7Cost, refs.ai7Sub, totals.last_7_days);
+    setMetric(refs.aiMonthCost, refs.aiMonthSub, totals.this_month);
+    setMetric(refs.aiAllCost, refs.aiAllSub, totals.all_time);
+    if (refs.aiMonthHero) refs.aiMonthHero.textContent = formatAiUsd((totals.this_month || {}).cost_usd);
+
+    const daily = Array.isArray(data && data.daily) ? data.daily : [];
+    if (refs.aiTimelineChart) {
+        const nonzero = daily.some((d) => Number(d.cost_usd) > 0);
+        if (!daily.length || !nonzero) {
+            refs.aiTimelineChart.innerHTML = '<div class="table-empty">No AI usage in the last 30 days.</div>';
+        } else {
+            const max = Math.max(1e-9, ...daily.map((d) => Number(d.cost_usd) || 0));
+            refs.aiTimelineChart.innerHTML = daily.map((d) => {
+                const c = Number(d.cost_usd) || 0;
+                const h = c > 0 ? Math.max((c / max) * 100, 4) : 0;
+                const label = String(d.date || '').slice(5);
+                return `
+                    <div class="finance-month">
+                        <div class="finance-bars" title="${escapeHtml(d.date)} — ${escapeHtml(formatAiUsd(c))} · ${escapeHtml(formatTokens(d.tokens))} tokens">
+                            <span class="finance-bar investment" style="height: ${h.toFixed(2)}%"></span>
+                        </div>
+                        <div class="finance-month-label">${escapeHtml(label)}</div>
+                    </div>`;
+            }).join('');
+        }
+    }
+
+    renderAiBreakdown(refs.aiSourceChart, (data && data.by_source) || [], (r) => r.label);
+    renderAiBreakdown(refs.aiModelChart, (data && data.by_model) || [], (r) => r.model);
+}
+
+function renderAiBreakdown(el, rows, labelFn) {
+    if (!el) return;
+    const list = Array.isArray(rows) ? rows.slice() : [];
+    if (!list.length) { el.innerHTML = '<div class="table-empty">No AI usage recorded yet.</div>'; return; }
+    const total = list.reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0) || 1;
+    el.innerHTML = list.map((r) => {
+        const amount = Number(r.cost_usd) || 0;
+        const pct = Math.min(Math.max((amount / total) * 100, 0), 100);
+        return `
+            <div class="finance-breakdown-row">
+                <div class="finance-breakdown-top"><strong>${escapeHtml(labelFn(r) || '—')}</strong><span>${escapeHtml(formatAiUsd(amount))}</span></div>
+                <div class="finance-breakdown-track"><span style="width: ${pct.toFixed(2)}%"></span></div>
+                <div class="finance-breakdown-percent">${escapeHtml((r.calls || 0).toLocaleString())} calls · ${escapeHtml(formatTokens(r.tokens))} tokens</div>
+            </div>`;
+    }).join('');
 }
 
 function handleEnterpriseFiltersSubmit(event) {

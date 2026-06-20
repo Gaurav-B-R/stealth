@@ -25,9 +25,9 @@ const PUBLIC_APP_ORIGIN = 'https://rilono.com';
 const RILONO_AI_PUBLIC_ERROR_MESSAGE = 'Sorry, I encountered an issue while responding. Please try again in a little while. This issue has been raised for review.';
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
-    privacy: 'March 2, 2026',
-    terms: 'March 2, 2026',
-    refund: 'February 12, 2026',
+    privacy: 'June 20, 2026',
+    terms: 'June 20, 2026',
+    refund: 'June 20, 2026',
     delivery: 'February 12, 2026'
 };
 const COOKIE_CONSENT_STORAGE_KEY = 'rilono_cookie_preferences_v1';
@@ -3093,11 +3093,11 @@ function updateSubscriptionUI() {
         }
         if (copilotUpgradeProBtn) {
             copilotUpgradeProBtn.disabled = !PRO_UPGRADE_ENABLED;
-            copilotUpgradeProBtn.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
+            copilotUpgradeProBtn.textContent = PRO_UPGRADE_ENABLED ? 'Get the Visa Success Pass' : 'Coming Soon';
         }
         if (copilotUpgradeJourneyBtn) {
-            copilotUpgradeJourneyBtn.disabled = !PRO_UPGRADE_ENABLED;
-            copilotUpgradeJourneyBtn.textContent = PRO_UPGRADE_ENABLED ? 'Get Journey Pass' : 'Journey Pass Coming Soon';
+            // Single one-time pass now — hide the second (recurring) CTA.
+            copilotUpgradeJourneyBtn.style.display = 'none';
         }
     };
 
@@ -3154,13 +3154,11 @@ function updateSubscriptionUI() {
             profileSwitchMonthlyButton.style.display = 'inline-flex';
             profileSwitchMonthlyButton.style.gridColumn = '';
             profileSwitchMonthlyButton.disabled = !PRO_UPGRADE_ENABLED;
-            profileSwitchMonthlyButton.textContent = PRO_UPGRADE_ENABLED ? 'Choose Pro Monthly' : 'Coming Soon';
+            profileSwitchMonthlyButton.textContent = PRO_UPGRADE_ENABLED ? 'Get the Visa Success Pass' : 'Coming Soon';
         }
         if (profileSwitchJourneyButton) {
-            profileSwitchJourneyButton.style.display = 'inline-flex';
-            profileSwitchJourneyButton.style.gridColumn = '';
-            profileSwitchJourneyButton.disabled = !PRO_UPGRADE_ENABLED;
-            profileSwitchJourneyButton.textContent = PRO_UPGRADE_ENABLED ? 'Choose Journey Pass' : 'Coming Soon';
+            // Single one-time pass now — hide the second (recurring) CTA.
+            profileSwitchJourneyButton.style.display = 'none';
         }
         if (profileSwitchHintEl) {
             profileSwitchHintEl.style.display = 'block';
@@ -3515,6 +3513,12 @@ async function handleUpgradeToPro(source = '', preferredPricingModel = PRICING_M
         showRegister();
         return;
     }
+
+    // Rilono now sells a single one-time "Visa Success Pass" (₹999 / 30 days) instead
+    // of the old recurring Pro plans. Route every upgrade entry point (pricing cards,
+    // profile switcher, copilot tab, paywalls) to the dedicated pass page.
+    window.location.href = '/visa-pass';
+    return;
 
     const requestedPricingModel = normalizePricingModel(preferredPricingModel);
 

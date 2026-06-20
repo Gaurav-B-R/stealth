@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.services.daily_ai_notifications import (
@@ -14,11 +14,20 @@ from app.services.f1_visa_news_ingestion import (
     start_f1_news_ingestion_scheduler,
     stop_f1_news_ingestion_scheduler,
 )
+from app.services.enterprise_calendar_reminders import (
+    start_enterprise_calendar_reminder_scheduler,
+    stop_enterprise_calendar_reminder_scheduler,
+)
 from app.schema_patch import (
+    ensure_ai_optimization_events_table,
     ensure_company_finance_entries_table,
+    ensure_gemini_usage_table,
     ensure_coupon_percent_column,
     ensure_coupon_usage_limit_column,
     ensure_document_catalog_columns,
+    ensure_enterprise_calendar_table,
+    ensure_enterprise_calendar_reminder_runs_table,
+    ensure_enterprise_credit_tables,
     ensure_enterprise_crm_tables,
     ensure_enterprise_organization_columns,
     ensure_enterprise_students_table,
@@ -171,6 +180,7 @@ app.include_router(news.router)
 app.include_router(notifications.router)
 app.include_router(admin.router)
 app.include_router(enterprise.router)
+app.include_router(visa_pass.router)
 
 
 @app.on_event("startup")
@@ -184,11 +194,16 @@ def startup_backfill_subscriptions():
     ensure_enterprise_organization_columns()
     ensure_enterprise_students_table()
     ensure_enterprise_crm_tables()
+    ensure_enterprise_credit_tables()
+    ensure_enterprise_calendar_table()
+    ensure_enterprise_calendar_reminder_runs_table()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_f1_visa_news_table()
     ensure_rilono_ai_chat_upload_events_table()
     ensure_company_finance_entries_table()
+    ensure_gemini_usage_table()
+    ensure_ai_optimization_events_table()
     db = SessionLocal()
     try:
         ensure_default_document_type_catalog(db)
@@ -200,12 +215,14 @@ def startup_backfill_subscriptions():
     enterprise.seed_enterprise_user()
     start_daily_ai_notification_scheduler()
     start_f1_news_ingestion_scheduler()
+    start_enterprise_calendar_reminder_scheduler()
 
 
 @app.on_event("shutdown")
 def shutdown_background_services():
     stop_daily_ai_notification_scheduler()
     stop_f1_news_ingestion_scheduler()
+    stop_enterprise_calendar_reminder_scheduler()
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
@@ -306,6 +323,20 @@ async def read_enterprise():
 @app.get("/enterprise/")
 async def read_enterprise_slash():
     return await read_enterprise()
+
+
+@app.get("/visa-pass")
+async def read_visa_pass():
+    """Serve the standalone B2C Visa Success Pass page."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "visa_pass.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/visa-pass/")
+async def read_visa_pass_slash():
+    return await read_visa_pass()
 
 
 @app.get("/interview/{token}")

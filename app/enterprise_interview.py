@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 from app import models
+from app import ai_usage
 from app import enterprise_catalog as catalog
 from app.enterprise_ai import is_ai_configured  # reuse the same availability check
 from app.utils import gemini_service as gemini_utils
@@ -119,13 +120,15 @@ def _convert_history(history: Optional[list]) -> list:
     return out
 
 
-def _model(system_instruction: str):
-    genai = gemini_utils.genai
-    model_name = gemini_utils.get_model_candidates(
+def _model_name() -> str:
+    return gemini_utils.get_model_candidates(
         primary_env="ENTERPRISE_AI_MODEL",
         candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
     )[0]
-    return genai.GenerativeModel(model_name, system_instruction=system_instruction)
+
+
+def _model(system_instruction: str):
+    return gemini_utils.genai.GenerativeModel(_model_name(), system_instruction=system_instruction)
 
 
 def run_interview_turn(
@@ -154,6 +157,7 @@ def run_interview_turn(
         user_message = (message or "").strip()[:3000] or "(no answer given)"
 
     response = chat.send_message(user_message)
+    ai_usage.record_gemini_usage("mock_interview", _model_name(), response)
     text = (getattr(response, "text", None) or "").strip()
     return text or "Could you please repeat that?"
 
@@ -197,6 +201,7 @@ def generate_interview_feedback(
     response = model.start_chat(history=[]).send_message(
         "Here is the interview transcript to assess:\n\n" + transcript[:24000]
     )
+    ai_usage.record_gemini_usage("interview_feedback", _model_name(), response)
     return (getattr(response, "text", None) or "").strip() or "No feedback could be generated."
 
 

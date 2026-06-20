@@ -21,8 +21,10 @@ from app.database import get_db, SessionLocal
 from app import models
 from app import enterprise_catalog as catalog
 from app import enterprise_billing as billing
+from app import enterprise_credits as credits
 from app import enterprise_ai
 from app import enterprise_interview
+from app import ai_guardrails
 from app import enterprise_storage
 from app.utils import gemini_service
 from app.auth import (
@@ -646,6 +648,7 @@ def _build_enterprise_context(
     onboarding_required = not company_name or not subdomain_slug
 
     subscription_summary = None
+    credits_summary = None
     if not onboarding_required:
         try:
             subscription_summary = _serialize_subscription_state(
@@ -653,6 +656,10 @@ def _build_enterprise_context(
             )
         except Exception:
             logger.exception("Failed to build subscription state for org_id=%s", organization.id)
+        try:
+            credits_summary = credits.wallet_state(db, organization.id)
+        except Exception:
+            logger.exception("Failed to build credit wallet state for org_id=%s", organization.id)
 
     return {
         "onboarding_required": onboarding_required,
@@ -670,6 +677,7 @@ def _build_enterprise_context(
             "joined_at": membership.created_at,
         },
         "subscription": subscription_summary,
+        "credits": credits_summary,
         "permissions": (
             _enterprise_permissions_for_role(normalized_role)
             if not onboarding_required
@@ -1529,6 +1537,12 @@ ENTERPRISE_SIGNUP_RATE_LIMIT = int(os.getenv("ENTERPRISE_SIGNUP_RATE_LIMIT", "6"
 ENTERPRISE_SIGNUP_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_SIGNUP_RATE_WINDOW_SECONDS", "900"))
 ENTERPRISE_BULK_EMAIL_MAX_RECIPIENTS = int(os.getenv("ENTERPRISE_BULK_EMAIL_MAX_RECIPIENTS", "200"))
 
+# Version (Last Updated date) of the Terms & Conditions / Privacy Policy a user
+# accepts at signup. Bump this whenever the legal documents change so the stored
+# proof-of-consent records exactly which version was agreed to. Keep in sync with
+# LEGAL_LAST_UPDATED.terms / .privacy in static/app.js.
+LEGAL_TERMS_PRIVACY_VERSION = "2026-03-02"
+
 
 class EnterpriseSignupRequest(BaseModel):
     company_name: str = Field(..., min_length=2, max_length=120)
@@ -1540,6 +1554,7 @@ class EnterpriseSignupRequest(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=120)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=200)
+    accepted_terms_privacy: bool = False
     cf_turnstile_token: Optional[str] = None
 
 
@@ -1607,6 +1622,16 @@ class EnterpriseBillingCheckoutRequest(BaseModel):
 
 
 class EnterpriseBillingVerifyRequest(BaseModel):
+    razorpay_order_id: str = Field(..., min_length=6, max_length=64)
+    razorpay_payment_id: str = Field(..., min_length=6, max_length=64)
+    razorpay_signature: str = Field(..., min_length=6, max_length=256)
+
+
+class EnterpriseCreditTopupRequest(BaseModel):
+    package: str = Field(..., min_length=2, max_length=30)
+
+
+class EnterpriseCreditVerifyRequest(BaseModel):
     razorpay_order_id: str = Field(..., min_length=6, max_length=64)
     razorpay_payment_id: str = Field(..., min_length=6, max_length=64)
     razorpay_signature: str = Field(..., min_length=6, max_length=256)
@@ -1945,6 +1970,8 @@ def enterprise_create_client(
         db=db, user=current_user, request=request, require_edit_data=True
     )
     billing.enforce_client_limit_or_402(db, organization.id)
+    # Free CRM up to the student limit; beyond it the monthly infra fee must be active.
+    credits.enforce_infra_fee_or_402(db, organization.id)
 
     full_name = (payload.full_name or "").strip()
     if len(full_name) < 2:
@@ -2457,6 +2484,364 @@ def enterprise_dashboard(
 
 
 # ===========================================================================
+# Calendar — timelines, deadlines & next steps (derived + manual events)
+# ===========================================================================
+
+CALENDAR_EVENT_TYPES = {
+    "reminder":    {"label": "Reminder",    "color": "#6366f1"},
+    "task":        {"label": "Task",        "color": "#0ea5e9"},
+    "follow_up":   {"label": "Follow-up",   "color": "#8b5cf6"},
+    "appointment": {"label": "Appointment", "color": "#10b981"},
+    "deadline":    {"label": "Deadline",    "color": "#f97316"},
+    "other":       {"label": "Other",       "color": "#64748b"},
+}
+DEFAULT_CALENDAR_EVENT_TYPE = "reminder"
+CALENDAR_DERIVED_TYPES = {
+    "client_deadline": {"label": "Key date / deadline", "color": "#f97316"},
+    "passport_expiry": {"label": "Passport expires",    "color": "#f59e0b"},
+}
+CALENDAR_MAX_RANGE_DAYS = int(os.getenv("ENTERPRISE_CALENDAR_MAX_RANGE_DAYS", "100"))
+
+
+def _calendar_event_types_payload() -> list[dict]:
+    return [{"key": k, "label": v["label"], "color": v["color"]} for k, v in CALENDAR_EVENT_TYPES.items()]
+
+
+def _normalize_calendar_event_type(raw: str | None) -> str:
+    value = str(raw or "").strip().lower()
+    return value if value in CALENDAR_EVENT_TYPES else DEFAULT_CALENDAR_EVENT_TYPE
+
+
+def _parse_calendar_time_or_400(raw: str | None) -> Optional[str]:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if not re.match(r"^([01]?\d|2[0-3]):[0-5]\d$", value):
+        raise HTTPException(status_code=400, detail="Time must be in HH:MM 24-hour format.")
+    hh, mm = value.split(":")
+    return f"{int(hh):02d}:{mm}"
+
+
+def _serialize_calendar_manual_event(ev: models.EnterpriseCalendarEvent, client_name: str | None) -> dict:
+    cfg = CALENDAR_EVENT_TYPES.get(ev.event_type, CALENDAR_EVENT_TYPES[DEFAULT_CALENDAR_EVENT_TYPE])
+    ev_date = ev.event_date
+    overdue = bool(ev_date and ev_date < date.today() and not ev.is_done)
+    return {
+        "id": f"manual-{ev.id}",
+        "event_id": ev.id,
+        "source": "manual",
+        "type": ev.event_type,
+        "type_label": cfg["label"],
+        "color": cfg["color"],
+        "date": ev_date.isoformat() if ev_date else None,
+        "time": ev.event_time,
+        "title": ev.title,
+        "notes": ev.notes,
+        "client_id": ev.client_id,
+        "client_name": client_name,
+        "is_done": bool(ev.is_done),
+        "editable": True,
+        "overdue": overdue,
+        "created_by_name": ev.created_by_name,
+    }
+
+
+def _serialize_calendar_derived_event(kind: str, client: models.EnterpriseClient, when) -> dict:
+    cfg = CALENDAR_DERIVED_TYPES[kind]
+    overdue = bool(when and when < date.today())
+    return {
+        "id": f"{kind}-{client.id}",
+        "event_id": None,
+        "source": "client",
+        "type": kind,
+        "type_label": cfg["label"],
+        "color": cfg["color"],
+        "date": when.isoformat() if when else None,
+        "time": None,
+        "title": client.full_name,
+        "notes": None,
+        "client_id": client.id,
+        "client_name": client.full_name,
+        "stage": _stage_brief(client.status),
+        "is_done": False,
+        "editable": False,
+        "overdue": overdue,
+    }
+
+
+def _collect_calendar_events(
+    db: Session, organization_id: int, start: date, end: date,
+    *, include_done: bool = True,
+) -> list[dict]:
+    member_names = _org_member_name_map(db, organization_id)
+
+    # Manual events
+    manual_q = (
+        db.query(models.EnterpriseCalendarEvent)
+        .filter(
+            models.EnterpriseCalendarEvent.organization_id == organization_id,
+            models.EnterpriseCalendarEvent.event_date >= start,
+            models.EnterpriseCalendarEvent.event_date <= end,
+        )
+    )
+    if not include_done:
+        manual_q = manual_q.filter(models.EnterpriseCalendarEvent.is_done.is_(False))
+
+    client_name_cache: dict[int, str] = {}
+
+    def _client_name(cid: Optional[int]) -> Optional[str]:
+        if not cid:
+            return None
+        if cid not in client_name_cache:
+            row = (
+                db.query(models.EnterpriseClient.full_name)
+                .filter(
+                    models.EnterpriseClient.id == cid,
+                    models.EnterpriseClient.organization_id == organization_id,
+                )
+                .first()
+            )
+            client_name_cache[cid] = row[0] if row else None
+        return client_name_cache[cid]
+
+    events = [_serialize_calendar_manual_event(ev, _client_name(ev.client_id)) for ev in manual_q.all()]
+
+    # Derived: client key dates (target_date) — skip terminal cases
+    for client in (
+        db.query(models.EnterpriseClient)
+        .filter(
+            models.EnterpriseClient.organization_id == organization_id,
+            models.EnterpriseClient.target_date.isnot(None),
+            models.EnterpriseClient.target_date >= start,
+            models.EnterpriseClient.target_date <= end,
+            models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+        )
+        .all()
+    ):
+        events.append(_serialize_calendar_derived_event("client_deadline", client, client.target_date))
+
+    # Derived: passport expiries in range (any active client)
+    for client in (
+        db.query(models.EnterpriseClient)
+        .filter(
+            models.EnterpriseClient.organization_id == organization_id,
+            models.EnterpriseClient.passport_expiry.isnot(None),
+            models.EnterpriseClient.passport_expiry >= start,
+            models.EnterpriseClient.passport_expiry <= end,
+        )
+        .all()
+    ):
+        events.append(_serialize_calendar_derived_event("passport_expiry", client, client.passport_expiry))
+
+    events.sort(key=lambda e: (e["date"] or "", e["time"] or "99:99", e["title"] or ""))
+    return events
+
+
+class EnterpriseCalendarEventCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    event_date: str = Field(..., min_length=8, max_length=10)
+    event_type: str = Field(default=DEFAULT_CALENDAR_EVENT_TYPE, max_length=20)
+    event_time: Optional[str] = Field(default=None, max_length=5)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+    client_id: Optional[int] = None
+
+
+class EnterpriseCalendarEventUpdate(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    event_date: Optional[str] = Field(default=None, min_length=8, max_length=10)
+    event_type: Optional[str] = Field(default=None, max_length=20)
+    event_time: Optional[str] = Field(default=None, max_length=5)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+    client_id: Optional[int] = None
+    is_done: Optional[bool] = None
+
+
+@router.get("/calendar")
+def enterprise_calendar(
+    request: Request,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+
+    today = date.today()
+    if start:
+        start_date = _parse_iso_date_or_400(start, "start")
+    else:
+        start_date = today.replace(day=1)
+    if end:
+        end_date = _parse_iso_date_or_400(end, "end")
+    else:
+        # default to the end of the start month
+        nm = (start_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+        end_date = nm - timedelta(days=1)
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="End date must be on or after the start date.")
+    if (end_date - start_date).days > CALENDAR_MAX_RANGE_DAYS:
+        raise HTTPException(status_code=400, detail=f"Date range too large (max {CALENDAR_MAX_RANGE_DAYS} days).")
+
+    events = _collect_calendar_events(db, organization.id, start_date, end_date)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "today": today.isoformat(),
+        "event_types": _calendar_event_types_payload(),
+        "events": events,
+    }
+
+
+@router.get("/calendar/upcoming")
+def enterprise_calendar_upcoming(
+    request: Request,
+    days: int = 14,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """The 'what's next' feed: overdue + the next N days of deadlines and reminders."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    days = max(1, min(int(days or 14), 90))
+    today = date.today()
+    # Look back 30 days so overdue items still surface, forward `days`.
+    window = _collect_calendar_events(
+        db, organization.id, today - timedelta(days=30), today + timedelta(days=days), include_done=False,
+    )
+    overdue = [e for e in window if e.get("overdue")]
+    upcoming = [e for e in window if not e.get("overdue") and (e["date"] or "") >= today.isoformat()]
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "today": today.isoformat(),
+        "horizon_days": days,
+        "overdue": overdue,
+        "upcoming": upcoming[:40],
+    }
+
+
+@router.post("/calendar/events")
+def enterprise_calendar_create_event(
+    payload: EnterpriseCalendarEventCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="A title is required.")
+    event_date = _parse_iso_date_or_400(payload.event_date, "event_date")
+    event_time = _parse_calendar_time_or_400(payload.event_time)
+    if payload.client_id is not None:
+        _get_org_client_or_404(db, organization.id, payload.client_id)
+
+    ev = models.EnterpriseCalendarEvent(
+        organization_id=organization.id,
+        client_id=payload.client_id,
+        title=title[:200],
+        notes=(payload.notes or None),
+        event_type=_normalize_calendar_event_type(payload.event_type),
+        event_date=event_date,
+        event_time=event_time,
+        is_done=False,
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(ev)
+    db.commit()
+    db.refresh(ev)
+    client_name = None
+    if ev.client_id:
+        c = _get_org_client_or_404(db, organization.id, ev.client_id)
+        client_name = c.full_name
+    return {
+        "message": "Event added.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "event": _serialize_calendar_manual_event(ev, client_name),
+    }
+
+
+def _get_org_calendar_event_or_404(db: Session, organization_id: int, event_id: int) -> models.EnterpriseCalendarEvent:
+    ev = (
+        db.query(models.EnterpriseCalendarEvent)
+        .filter(
+            models.EnterpriseCalendarEvent.id == int(event_id),
+            models.EnterpriseCalendarEvent.organization_id == int(organization_id),
+        )
+        .first()
+    )
+    if not ev:
+        raise HTTPException(status_code=404, detail="Calendar event not found.")
+    return ev
+
+
+@router.patch("/calendar/events/{event_id}")
+def enterprise_calendar_update_event(
+    event_id: int,
+    payload: EnterpriseCalendarEventUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    ev = _get_org_calendar_event_or_404(db, organization.id, event_id)
+
+    if payload.title is not None:
+        t = payload.title.strip()
+        if not t:
+            raise HTTPException(status_code=400, detail="A title is required.")
+        ev.title = t[:200]
+    if payload.event_date is not None:
+        ev.event_date = _parse_iso_date_or_400(payload.event_date, "event_date")
+    if payload.event_type is not None:
+        ev.event_type = _normalize_calendar_event_type(payload.event_type)
+    if payload.event_time is not None:
+        ev.event_time = _parse_calendar_time_or_400(payload.event_time)
+    if payload.notes is not None:
+        ev.notes = payload.notes or None
+    if payload.client_id is not None:
+        if payload.client_id == 0:
+            ev.client_id = None
+        else:
+            _get_org_client_or_404(db, organization.id, payload.client_id)
+            ev.client_id = payload.client_id
+    if payload.is_done is not None:
+        ev.is_done = bool(payload.is_done)
+
+    db.commit()
+    db.refresh(ev)
+    client_name = None
+    if ev.client_id:
+        c = _get_org_client_or_404(db, organization.id, ev.client_id)
+        client_name = c.full_name
+    return {
+        "message": "Event updated.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "event": _serialize_calendar_manual_event(ev, client_name),
+    }
+
+
+@router.delete("/calendar/events/{event_id}")
+def enterprise_calendar_delete_event(
+    event_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    ev = _get_org_calendar_event_or_404(db, organization.id, event_id)
+    db.delete(ev)
+    db.commit()
+    return {"message": "Event deleted.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ===========================================================================
 # Billing (per-organization subscriptions) + self-serve signup
 # ===========================================================================
 
@@ -2646,6 +3031,331 @@ def enterprise_billing_verify(
     }
 
 
+# ===========================================================================
+# Rilono Credits — prepaid wallet for premium AI features (the revenue model)
+# ===========================================================================
+
+ENTERPRISE_CREDIT_TXN_PAGE_SIZE = int(os.getenv("ENTERPRISE_CREDIT_TXN_PAGE_SIZE", "25"))
+
+
+def _serialize_credit_txn(txn: models.EnterpriseCreditTransaction) -> dict:
+    return {
+        "id": txn.id,
+        "type": txn.type,
+        "action_key": txn.action_key,
+        "credits": int(txn.credits),
+        "balance_after": int(txn.balance_after),
+        "description": txn.description,
+        "created_by_name": txn.created_by_name,
+        "created_at": _iso(txn.created_at),
+    }
+
+
+@router.get("/credits/wallet")
+def enterprise_credits_wallet(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "wallet": credits.wallet_state(db, organization.id),
+        "packages": credits.packages_payload(),
+        "checkout_enabled": _razorpay_enabled(),
+        "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip() or None,
+    }
+
+
+@router.get("/credits/transactions")
+def enterprise_credits_transactions(
+    request: Request,
+    limit: int = 25,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    limit = max(1, min(int(limit or 25), 100))
+    rows = (
+        db.query(models.EnterpriseCreditTransaction)
+        .filter(models.EnterpriseCreditTransaction.organization_id == organization.id)
+        .order_by(
+            models.EnterpriseCreditTransaction.created_at.desc(),
+            models.EnterpriseCreditTransaction.id.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "transactions": [_serialize_credit_txn(t) for t in rows],
+    }
+
+
+@router.post("/credits/topup/checkout")
+def enterprise_credits_topup_checkout(
+    payload: EnterpriseCreditTopupRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    package = credits.get_package(payload.package)
+    if not package:
+        raise HTTPException(status_code=400, detail="Please choose a valid credit package.")
+    amount = int(package["amount_paise"])
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="This package is not available for checkout.")
+    if not _razorpay_enabled():
+        return {
+            "action": "contact_sales",
+            "message": "Online top-up is being enabled. Please contact us to add credits.",
+        }
+
+    receipt = f"reln_cr_{organization.id}_{secrets.token_hex(5)}"[:40]
+    order = _razorpay_request("POST", "/orders", {
+        "amount": amount,
+        "currency": credits.CURRENCY,
+        "receipt": receipt,
+        "notes": {
+            "organization_id": str(organization.id),
+            "kind": "credits",
+            "package": package["key"],
+            "user_id": str(current_user.id),
+        },
+    })
+    order_id = str(order.get("id") or "").strip()
+    if not order_id:
+        raise HTTPException(status_code=502, detail="Could not create the payment order.")
+
+    db.add(models.EnterpriseCreditPayment(
+        organization_id=organization.id,
+        created_by_user_id=current_user.id,
+        provider="razorpay",
+        kind="credits",
+        package_key=package["key"],
+        credits=int(package["credits"]),
+        bonus_credits=int(package["bonus_credits"]),
+        amount_paise=amount,
+        currency=credits.CURRENCY,
+        razorpay_order_id=order_id,
+        status="created",
+    ))
+    db.commit()
+
+    return {
+        "action": "checkout",
+        "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
+        "order_id": order_id,
+        "amount": amount,
+        "currency": credits.CURRENCY,
+        "package": package["key"],
+        "package_label": package["label"],
+        "total_credits": int(package["credits"]) + int(package["bonus_credits"]),
+        "organization_name": organization.company_name,
+        "prefill": {
+            "name": current_user.full_name or "",
+            "email": current_user.email or "",
+        },
+    }
+
+
+@router.post("/credits/topup/verify")
+def enterprise_credits_topup_verify(
+    payload: EnterpriseCreditVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    payment_row = _verify_credit_payment_or_402(
+        db=db, organization=organization, payload=payload, expected_kind="credits"
+    )
+
+    total_credits = int(payment_row.credits) + int(payment_row.bonus_credits)
+    # Idempotency: credit the wallet only once (skip if a ledger row already exists).
+    already = (
+        db.query(models.EnterpriseCreditTransaction)
+        .filter(
+            models.EnterpriseCreditTransaction.organization_id == organization.id,
+            models.EnterpriseCreditTransaction.reference_type == "payment",
+            models.EnterpriseCreditTransaction.reference_id == payment_row.id,
+        )
+        .first()
+    )
+    if not already and total_credits > 0:
+        pkg = credits.get_package(payment_row.package_key)
+        label = pkg["label"] if pkg else "Credit top-up"
+        credits.add_credits(
+            db, organization.id, total_credits,
+            txn_type="topup",
+            description=f"{label} (+{total_credits} credits)",
+            reference_type="payment", reference_id=payment_row.id,
+            user=current_user, commit=False,
+        )
+    db.commit()
+
+    return {
+        "message": f"{total_credits} credits added to your wallet.",
+        "wallet": credits.wallet_state(db, organization.id),
+    }
+
+
+@router.post("/credits/infra/checkout")
+def enterprise_infra_fee_checkout(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    amount = int(credits.INFRA_FEE_PAISE)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="The infrastructure fee is not configured.")
+    if not _razorpay_enabled():
+        return {
+            "action": "contact_sales",
+            "message": "Online payment is being enabled. Please contact us to activate the infrastructure fee.",
+        }
+
+    receipt = f"reln_infra_{organization.id}_{secrets.token_hex(5)}"[:40]
+    order = _razorpay_request("POST", "/orders", {
+        "amount": amount,
+        "currency": credits.CURRENCY,
+        "receipt": receipt,
+        "notes": {
+            "organization_id": str(organization.id),
+            "kind": "infra_fee",
+            "user_id": str(current_user.id),
+        },
+    })
+    order_id = str(order.get("id") or "").strip()
+    if not order_id:
+        raise HTTPException(status_code=502, detail="Could not create the payment order.")
+
+    db.add(models.EnterpriseCreditPayment(
+        organization_id=organization.id,
+        created_by_user_id=current_user.id,
+        provider="razorpay",
+        kind="infra_fee",
+        package_key="infra",
+        credits=0,
+        bonus_credits=0,
+        amount_paise=amount,
+        currency=credits.CURRENCY,
+        razorpay_order_id=order_id,
+        status="created",
+    ))
+    db.commit()
+
+    return {
+        "action": "checkout",
+        "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
+        "order_id": order_id,
+        "amount": amount,
+        "currency": credits.CURRENCY,
+        "organization_name": organization.company_name,
+        "prefill": {
+            "name": current_user.full_name or "",
+            "email": current_user.email or "",
+        },
+    }
+
+
+@router.post("/credits/infra/verify")
+def enterprise_infra_fee_verify(
+    payload: EnterpriseCreditVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    payment_row = _verify_credit_payment_or_402(
+        db=db, organization=organization, payload=payload, expected_kind="infra_fee"
+    )
+    # Idempotency: only extend the paid-until window once per payment.
+    already = (
+        db.query(models.EnterpriseCreditTransaction)
+        .filter(
+            models.EnterpriseCreditTransaction.organization_id == organization.id,
+            models.EnterpriseCreditTransaction.reference_type == "infra_payment",
+            models.EnterpriseCreditTransaction.reference_id == payment_row.id,
+        )
+        .first()
+    )
+    if not already:
+        credits.mark_infra_fee_paid(db, organization.id, commit=False)
+        # Record a zero-credit ledger marker so the credit ledger shows the charge.
+        wallet = credits.get_or_create_wallet(db, organization.id, commit=False)
+        db.add(models.EnterpriseCreditTransaction(
+            organization_id=organization.id,
+            type="infra_fee",
+            credits=0,
+            balance_after=int(wallet.balance_credits),
+            description=f"Infrastructure server fee ({credits.format_inr(credits.INFRA_FEE_PAISE)}/mo)",
+            reference_type="infra_payment",
+            reference_id=payment_row.id,
+            created_by_user_id=current_user.id,
+            created_by_name=current_user.full_name or current_user.email,
+        ))
+    db.commit()
+
+    return {
+        "message": "Infrastructure server fee activated.",
+        "wallet": credits.wallet_state(db, organization.id),
+    }
+
+
+def _verify_credit_payment_or_402(
+    *,
+    db: Session,
+    organization: models.EnterpriseOrganization,
+    payload: EnterpriseCreditVerifyRequest,
+    expected_kind: str,
+) -> models.EnterpriseCreditPayment:
+    """Validate a Razorpay signature for a credit/infra payment and mark it verified."""
+    key_id, key_secret = _razorpay_credentials()
+    if not key_id or not key_secret:
+        raise HTTPException(status_code=503, detail="Payment verification is not configured.")
+
+    payment_row = (
+        db.query(models.EnterpriseCreditPayment)
+        .filter(
+            models.EnterpriseCreditPayment.razorpay_order_id == payload.razorpay_order_id.strip(),
+            models.EnterpriseCreditPayment.organization_id == organization.id,
+            models.EnterpriseCreditPayment.kind == expected_kind,
+        )
+        .first()
+    )
+    if not payment_row:
+        raise HTTPException(status_code=404, detail="Payment order not found for this organization.")
+
+    expected_signature = hmac.new(
+        key_secret.encode("utf-8"),
+        f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, payload.razorpay_signature):
+        payment_row.status = "failed"
+        payment_row.error_message = "Invalid payment signature."
+        db.commit()
+        raise HTTPException(status_code=400, detail="Invalid payment signature.")
+
+    if payment_row.status != "verified":
+        payment_row.razorpay_payment_id = payload.razorpay_payment_id.strip()
+        payment_row.status = "verified"
+        payment_row.verified_at = datetime.utcnow()
+        payment_row.error_message = None
+    return payment_row
+
+
 @router.post("/signup")
 async def enterprise_signup(
     payload: EnterpriseSignupRequest,
@@ -2668,6 +3378,12 @@ async def enterprise_signup(
                 raise HTTPException(status_code=400, detail="Security verification failed. Please try again.")
         elif _is_turnstile_required():
             raise HTTPException(status_code=400, detail="Security verification is required.")
+
+    if not payload.accepted_terms_privacy:
+        raise HTTPException(
+            status_code=400,
+            detail="You must accept the Terms & Conditions and Privacy Policy to create your workspace.",
+        )
 
     company_name = (payload.company_name or "").strip()
     if len(company_name) < 2:
@@ -2693,6 +3409,13 @@ async def enterprise_signup(
 
     password_hash = get_password_hash(payload.password)
 
+    # Capture proof-of-consent: when, from where, and which version of the legal
+    # documents the owner agreed to. Stored on the user row for audit/compliance.
+    consent_ip = extract_client_ip(request) if request else None
+    consent_user_agent = (request.headers.get("user-agent") if request else None) or None
+    if consent_user_agent:
+        consent_user_agent = consent_user_agent[:1000]
+
     # Create the owner user. Enterprise access is granted via their organization
     # membership below (see _has_enterprise_access) — NOT via an EnterpriseCredential.
     # Credentials are reserved for platform-admin-granted accounts and would otherwise
@@ -2706,6 +3429,9 @@ async def enterprise_signup(
         is_active=True,
         email_verified=True,
         accepted_terms_privacy_at=datetime.utcnow(),
+        accepted_terms_privacy_ip=consent_ip,
+        accepted_terms_privacy_user_agent=consent_user_agent,
+        accepted_terms_privacy_version=LEGAL_TERMS_PRIVACY_VERSION,
     )
     db.add(user)
     db.flush()
@@ -2826,6 +3552,11 @@ def enterprise_ai_chat(
             status_code=503,
             detail="The AI assistant isn't available right now. Please try again later.",
         )
+
+    # Cost guardrail: reject obviously off-topic prompts before spending model tokens.
+    if ai_guardrails.is_off_topic(payload.message):
+        ai_guardrails.record_block(source="enterprise_copilot", detail="enterprise")
+        return {"answer": ai_guardrails.OFF_TOPIC_REFUSAL, "permissions": _enterprise_permissions_for_role(role)}
 
     history = [turn.model_dump() for turn in (payload.history or [])]
     try:
@@ -3057,6 +3788,63 @@ def enterprise_delete_client_document(
     return {"message": "Document deleted.", "permissions": _enterprise_permissions_for_role(role)}
 
 
+@router.post("/clients/{client_id}/deep-scan")
+def enterprise_client_deep_scan(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Premium credit-billed action: Gemini cross-references the client's documents
+    to catch mismatches/missing funds before the visa appointment."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+
+    if not enterprise_ai.is_ai_configured():
+        raise HTTPException(status_code=503, detail="Deep Scan isn't available right now.")
+
+    # Hard-block before spending any Gemini tokens if the wallet can't cover it.
+    credits.enforce_action_or_402(db, organization.id, "deep_scan")
+
+    documents = (
+        db.query(models.EnterpriseClientDocument)
+        .filter(models.EnterpriseClientDocument.client_id == client.id)
+        .order_by(models.EnterpriseClientDocument.created_at.asc(), models.EnterpriseClientDocument.id.asc())
+        .all()
+    )
+    try:
+        result = enterprise_ai.run_deep_scan_audit(
+            client=client,
+            organization=organization,
+            documents=documents,
+            current_date=datetime.utcnow().date().isoformat(),
+        )
+    except ValueError as exc:
+        # Nothing to audit yet — do NOT charge credits.
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        logger.exception("Deep Scan failed (org_id=%s, client_id=%s)", organization.id, client.id)
+        raise HTTPException(status_code=502, detail="The Deep Scan ran into a problem. Please try again.")
+
+    # Charge only after a successful audit.
+    txn = credits.charge_action(
+        db, organization.id, "deep_scan",
+        user=current_user, reference_type="client", reference_id=client.id,
+        description=f"Deep Scan — {client.full_name}", commit=True,
+    )
+
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "report": result["report"],
+        "risk_level": result["risk_level"],
+        "documents_analyzed": result["documents_analyzed"],
+        "credits_charged": credits.action_cost("deep_scan"),
+        "wallet": credits.wallet_state(db, organization.id),
+    }
+
+
 # ===========================================================================
 # Mock visa interview (Gemini role-plays the visa officer)
 # ===========================================================================
@@ -3127,6 +3915,12 @@ def enterprise_interview_chat(
     if not enterprise_interview.is_ai_configured():
         raise HTTPException(status_code=503, detail="The mock interview isn't available right now.")
 
+    is_start = bool(payload.start)
+    # One interview = one charge, taken at the start. Hard-block before any tokens
+    # are spent if the wallet can't cover it.
+    if is_start:
+        credits.enforce_action_or_402(db, organization.id, "mock_interview")
+
     history = [t.model_dump() for t in (payload.history or [])]
     try:
         reply = enterprise_interview.run_interview_turn(
@@ -3135,13 +3929,22 @@ def enterprise_interview_chat(
             recent_notes=_recent_client_notes(db, client.id),
             history=history,
             message=payload.message or "",
-            is_start=bool(payload.start),
+            is_start=is_start,
         )
     except Exception:
         logger.exception("Mock interview turn failed (org_id=%s, client_id=%s)", organization.id, client.id)
         raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
 
-    return {"reply": reply, "permissions": _enterprise_permissions_for_role(role)}
+    response_payload = {"reply": reply, "permissions": _enterprise_permissions_for_role(role)}
+    if is_start:
+        credits.charge_action(
+            db, organization.id, "mock_interview",
+            user=current_user, reference_type="client", reference_id=client.id,
+            description=f"Mock interview — {client.full_name}", commit=True,
+        )
+        response_payload["credits_charged"] = credits.action_cost("mock_interview")
+        response_payload["wallet"] = credits.wallet_state(db, organization.id)
+    return response_payload
 
 
 @router.post("/clients/{client_id}/interview/feedback")

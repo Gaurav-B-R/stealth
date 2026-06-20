@@ -69,6 +69,9 @@
                     <button id="adminFinanceTabBtn" type="button" class="tab-btn" data-tab="finance" aria-selected="false">
                         Investment Analytics
                     </button>
+                    <button id="adminAiTabBtn" type="button" class="tab-btn" data-tab="ai" aria-selected="false">
+                        AI Costs
+                    </button>
                 </div>
 
                 <section id="adminUsersTabPanel" class="tab-panel">
@@ -293,6 +296,239 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </section>
+
+                <section id="adminAiTabPanel" class="tab-panel" hidden>
+                    <div class="finance-hero">
+                        <div>
+                            <span class="finance-eyebrow">Gemini API · GCP</span>
+                            <h2>AI Usage &amp; Cost</h2>
+                            <p>Estimated spend on the Gemini model API across every AI feature. Token usage is logged per call; cost is estimated from Gemini per-token pricing — cross-check the GCP / AI Studio invoice for billing.</p>
+                        </div>
+                        <div class="finance-hero-stat">
+                            <span>This Month (est.)</span>
+                            <strong id="adminAiMonthHero">$0.00</strong>
+                        </div>
+                    </div>
+
+                    <div class="metrics-grid finance-metrics-grid">
+                        <article class="metric-card">
+                            <span>Today (est.)</span>
+                            <strong id="adminAiTodayCost">$0.00</strong>
+                            <div id="adminAiTodaySub" class="metric-subtext">0 calls · 0 tokens</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Last 7 Days (est.)</span>
+                            <strong id="adminAi7Cost">$0.00</strong>
+                            <div id="adminAi7Sub" class="metric-subtext">0 calls · 0 tokens</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>This Month (est.)</span>
+                            <strong id="adminAiMonthCost">$0.00</strong>
+                            <div id="adminAiMonthSub" class="metric-subtext">0 calls · 0 tokens</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>All Time (est.)</span>
+                            <strong id="adminAiAllCost">$0.00</strong>
+                            <div id="adminAiAllSub" class="metric-subtext">0 calls · 0 tokens</div>
+                        </article>
+                    </div>
+
+                    <div class="finance-grid">
+                        <section class="finance-chart-card">
+                            <div class="finance-card-header">
+                                <div>
+                                    <h3>Daily Gemini Cost (30 days)</h3>
+                                    <p>Estimated USD spent per day.</p>
+                                </div>
+                            </div>
+                            <div id="adminAiTimelineChart" class="finance-timeline-chart">
+                                <div class="table-empty">No AI usage recorded yet.</div>
+                            </div>
+                        </section>
+
+                        <section class="finance-chart-card">
+                            <div class="finance-card-header">
+                                <div>
+                                    <h3>Cost by Feature</h3>
+                                    <p>Which features drive Gemini spend.</p>
+                                </div>
+                            </div>
+                            <div id="adminAiSourceChart" class="finance-breakdown-chart">
+                                <div class="table-empty">No AI usage recorded yet.</div>
+                            </div>
+                        </section>
+
+                        <section class="finance-chart-card finance-contributor-card">
+                            <div class="finance-card-header">
+                                <div>
+                                    <h3>Cost by Model</h3>
+                                    <p>Spend per Gemini model.</p>
+                                </div>
+                            </div>
+                            <div id="adminAiModelChart" class="finance-breakdown-chart">
+                                <div class="table-empty">No AI usage recorded yet.</div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="finance-hero" style="margin-top:28px;">
+                        <div>
+                            <span class="finance-eyebrow">Rilono Credits · Prepaid Wallet</span>
+                            <h2>Enterprise Revenue Model</h2>
+                            <p>Prepaid credit top-ups + the monthly infrastructure fee, measured against the
+                               real Gemini cost from the tracker above. Margins are estimated — cross-check the
+                               GCP invoice and FX rate.</p>
+                        </div>
+                        <div class="finance-hero-stat">
+                            <span>Gross Margin</span>
+                            <strong id="adminRevMarginHero">₹0</strong>
+                        </div>
+                    </div>
+
+                    <div class="metrics-grid finance-metrics-grid">
+                        <article class="metric-card">
+                            <span>Total Revenue</span>
+                            <strong id="adminRevTotal">₹0</strong>
+                            <div id="adminRevTotalSub" class="metric-subtext">Credits + infra fees</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Credit Top-ups</span>
+                            <strong id="adminRevCredits">₹0</strong>
+                            <div id="adminRevCreditsSub" class="metric-subtext">0 payments</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Infrastructure Fees</span>
+                            <strong id="adminRevInfra">₹0</strong>
+                            <div id="adminRevInfraSub" class="metric-subtext">0 payments</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Gemini Cost (est.)</span>
+                            <strong id="adminRevCost">₹0</strong>
+                            <div id="adminRevCostSub" class="metric-subtext">Real model cost</div>
+                        </article>
+                    </div>
+
+                    <div class="metrics-grid finance-metrics-grid">
+                        <article class="metric-card">
+                            <span>Gross Margin</span>
+                            <strong id="adminRevMargin">₹0</strong>
+                            <div id="adminRevMarginSub" class="metric-subtext">Revenue − Gemini cost</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Credits Sold</span>
+                            <strong id="adminRevCreditsSold">0</strong>
+                            <div id="adminRevCreditsSoldSub" class="metric-subtext">0 spent</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Outstanding Credits</span>
+                            <strong id="adminRevOutstanding">0</strong>
+                            <div id="adminRevOutstandingSub" class="metric-subtext">Deferred liability</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>FX Rate</span>
+                            <strong id="adminRevFx">$1 = ₹0</strong>
+                            <div class="metric-subtext">USD → INR (env)</div>
+                        </article>
+                    </div>
+
+                    <div class="finance-grid">
+                        <section class="finance-chart-card" style="grid-column:1 / -1;">
+                            <div class="finance-card-header">
+                                <div>
+                                    <h3>Per-Action Economics</h3>
+                                    <p>What each premium AI action earns vs. what Gemini actually costs us.</p>
+                                </div>
+                            </div>
+                            <div class="table-wrap">
+                                <table class="admin-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Action</th>
+                                            <th>Price</th>
+                                            <th>Units</th>
+                                            <th>Revenue</th>
+                                            <th>Real cost / unit</th>
+                                            <th>Margin</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="adminRevActionsBody">
+                                        <tr><td colspan="6" class="table-empty">No premium AI actions billed yet.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="finance-hero" style="margin-top:28px;">
+                        <div>
+                            <span class="finance-eyebrow">Visa Success Pass · B2C</span>
+                            <h2>B2C Revenue Model</h2>
+                            <p>One-time ₹999 / 30-day pass revenue vs the real Gemini cost to serve a student.
+                               Free-funnel adoption is shown below.</p>
+                        </div>
+                        <div class="finance-hero-stat">
+                            <span>Gross Margin</span>
+                            <strong id="adminB2cMarginHero">₹0</strong>
+                        </div>
+                    </div>
+                    <div class="metrics-grid finance-metrics-grid">
+                        <article class="metric-card">
+                            <span>Pass Revenue</span>
+                            <strong id="adminB2cRevenue">₹0</strong>
+                            <div id="adminB2cRevenueSub" class="metric-subtext">0 passes sold</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Active Passes</span>
+                            <strong id="adminB2cActive">0</strong>
+                            <div id="adminB2cActiveSub" class="metric-subtext">currently valid</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Gemini Cost (est.)</span>
+                            <strong id="adminB2cCost">₹0</strong>
+                            <div id="adminB2cCostSub" class="metric-subtext">₹0 / pass</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Free → Pass Conversion</span>
+                            <strong id="adminB2cConversion">—</strong>
+                            <div id="adminB2cConversionSub" class="metric-subtext">0 free users</div>
+                        </article>
+                    </div>
+
+                    <div class="finance-hero" style="margin-top:28px;">
+                        <div>
+                            <span class="finance-eyebrow">GCP Cost Optimization · Part 3</span>
+                            <h2>Tokens Saved</h2>
+                            <p>Off-topic ("free ChatGPT") prompts blocked before hitting the model, plus context-cache
+                               reuse on large documents. Estimated savings — most impactful on Pro-tier models.</p>
+                        </div>
+                        <div class="finance-hero-stat">
+                            <span>Est. Cost Saved</span>
+                            <strong id="adminOptSavedHero">$0.00</strong>
+                        </div>
+                    </div>
+                    <div class="metrics-grid finance-metrics-grid">
+                        <article class="metric-card">
+                            <span>Off-topic Blocked</span>
+                            <strong id="adminOptBlocks">0</strong>
+                            <div id="adminOptBlocksSub" class="metric-subtext">0 tokens saved</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Context-cache Hits</span>
+                            <strong id="adminOptCacheHits">0</strong>
+                            <div id="adminOptCacheHitsSub" class="metric-subtext">0% hit rate</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Tokens Saved</span>
+                            <strong id="adminOptTokens">0</strong>
+                            <div class="metric-subtext">guardrail + cache</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Est. Cost Saved</span>
+                            <strong id="adminOptSaved">$0.00</strong>
+                            <div class="metric-subtext">vs serving every prompt</div>
+                        </article>
                     </div>
                 </section>
             </section>

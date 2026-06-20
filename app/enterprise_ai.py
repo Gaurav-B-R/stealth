@@ -26,6 +26,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app import models
+from app import ai_usage
 from app import enterprise_catalog as catalog
 from app.utils import gemini_service as gemini_utils
 
@@ -525,7 +526,10 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "- You can read data but cannot make changes; if asked to edit, add, or email a client, say so and "
         "point to the exact screen (e.g. 'open the client and use Send email', or '+ Add Client').\n"
         "- Never reveal data about any other organization; you only have access to this one.\n"
-        "- Do not output raw JSON or tool names; answer in clean, friendly natural language."
+        "- Do not output raw JSON or tool names; answer in clean, friendly natural language.\n"
+        "- STRICT SCOPE: only help with this consultancy's portal data and student-visa work. If asked "
+        "anything unrelated (general coding, essays, trivia, using you as a general chatbot), decline in one "
+        "short sentence and redirect — do not answer it, to conserve resources."
     )
 
 
@@ -576,7 +580,147 @@ def run_enterprise_ai_chat(
         enable_automatic_function_calling=True,
     )
     response = chat.send_message((message or "").strip()[:4000])
+    ai_usage.record_gemini_usage("enterprise_copilot", model_name, response)
     text = (getattr(response, "text", None) or "").strip()
     if not text:
         return "I couldn't find an answer to that. Try rephrasing, or ask about your clients, statuses or recent activity."
     return text
+
+
+# ---------------------------------------------------------------------------
+# Deep Scan document audit (premium, credit-billed)
+# ---------------------------------------------------------------------------
+
+DEEP_SCAN_MAX_DOC_CHARS = 14000
+DEEP_SCAN_MAX_TOTAL_CHARS = 90000
+
+
+def _deep_scan_client_block(client: models.EnterpriseClient) -> str:
+    bits = [
+        f"Full name: {client.full_name or '—'}",
+        f"Destination: {client.destination_country_name or client.destination_country_code or '—'}",
+        f"Visa type: {client.visa_type or '—'}",
+        f"Intake: {client.intake or '—'}",
+        f"Passport number: {client.passport_number or '—'}",
+        f"Passport expiry: {_iso(client.passport_expiry) or '—'}",
+        f"Date of birth: {_iso(client.date_of_birth) or '—'}",
+        f"Nationality: {client.nationality or '—'}",
+    ]
+    return "\n".join(bits)
+
+
+def _deep_scan_documents_block(documents: list) -> tuple[str, int]:
+    """Build the cross-reference corpus from documents' extracted text. Returns
+    (text_block, usable_document_count)."""
+    chunks = []
+    used = 0
+    total = 0
+    for doc in documents:
+        extracted = (getattr(doc, "extracted_text", None) or "").strip()
+        if not extracted:
+            continue
+        snippet = extracted[:DEEP_SCAN_MAX_DOC_CHARS]
+        if total + len(snippet) > DEEP_SCAN_MAX_TOTAL_CHARS:
+            snippet = snippet[: max(0, DEEP_SCAN_MAX_TOTAL_CHARS - total)]
+        if not snippet:
+            break
+        used += 1
+        total += len(snippet)
+        chunks.append(
+            f"=== DOCUMENT #{used}: {getattr(doc, 'document_type', 'Document')} "
+            f"({getattr(doc, 'original_filename', 'file')}) ===\n{snippet}"
+        )
+        if total >= DEEP_SCAN_MAX_TOTAL_CHARS:
+            break
+    return ("\n\n".join(chunks), used)
+
+
+def run_deep_scan_audit(
+    *,
+    client: models.EnterpriseClient,
+    organization: models.EnterpriseOrganization,
+    documents: list,
+    current_date: Optional[str] = None,
+) -> dict:
+    """
+    Cross-reference a client's uploaded documents with Gemini to surface mismatched
+    dates/names, missing funds and timeline risks before the visa appointment.
+
+    Returns a dict: {"report": <markdown>, "risk_level": "low|medium|high",
+    "documents_analyzed": int}. Raises if the AI isn't configured or no readable
+    documents exist (so the caller can avoid charging credits).
+    """
+    if not is_ai_configured():
+        raise RuntimeError("Deep Scan AI is not configured.")
+
+    corpus, usable = _deep_scan_documents_block(documents or [])
+    if usable == 0:
+        raise ValueError(
+            "No readable document text yet. Upload documents (PDF/images) and wait a moment "
+            "for text extraction before running a Deep Scan."
+        )
+
+    genai = gemini_utils.genai
+    model_name = gemini_utils.get_model_candidates(
+        primary_env="ENTERPRISE_AI_MODEL",
+        candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
+    )[0]
+
+    eval_date = (current_date or "").strip() or datetime.utcnow().date().isoformat()
+    system = (
+        "You are a meticulous senior visa-documentation auditor for a study-abroad consultancy. "
+        "You cross-reference a student's documents to catch errors BEFORE the visa appointment, "
+        "protecting the agency's university commission. Be precise, cite the document number for "
+        "every finding, and never invent facts that are not present in the provided text."
+    )
+    # The big, reusable part (profile + documents) is the cacheable context; the
+    # question is small and varies. See app.utils.gemini_cache (GCP Context Caching).
+    context_text = f"""{system}
+
+CLIENT PROFILE:
+{_deep_scan_client_block(client)}
+
+DOCUMENTS (extracted text):
+{corpus}"""
+
+    question = f"""Audit this student's visa file using the CLIENT PROFILE and DOCUMENTS above. Today's date for evaluation is {eval_date}.
+
+Cross-check across ALL documents and report:
+1. Identity consistency — name, date of birth, passport number, nationality must match across documents and the profile.
+2. Timeline compliance — bank statements older than 6 months, passport expiring within 6 months of travel, I-20/offer/intake dates already in the past.
+3. Financial sufficiency — whether the bank balance / sponsor funds clearly cover tuition + living costs; flag if missing or ambiguous.
+4. Missing critical documents for a {client.visa_type or 'student'} visa to {client.destination_country_name or 'the destination'}.
+
+Respond in concise Markdown with these sections:
+## Overall Risk
+One of: LOW, MEDIUM, or HIGH — on its own line, followed by a one-sentence reason.
+## Mismatches & Errors
+Bullet list. Cite the document number. If none, say "None found".
+## Missing or Stale Documents
+Bullet list. If none, say "None".
+## Recommended Actions
+A short prioritized checklist for the counselor."""
+
+    # Try the GCP context cache for the large document corpus (>50% input savings on
+    # repeat scans). Falls back to an inline prompt when caching is disabled/too small.
+    from app.utils import gemini_cache
+    response = gemini_cache.generate_content_cached(
+        prompt=question, context_text=context_text, model_name=model_name, source="deep_scan",
+    )
+    if response is None:
+        model = genai.GenerativeModel(model_name, system_instruction=system)
+        response = model.generate_content(f"{context_text}\n\n{question}")
+        ai_usage.record_gemini_usage("deep_scan", model_name, response)
+    report = (getattr(response, "text", None) or "").strip()
+    if not report:
+        raise RuntimeError("The Deep Scan did not return a report. Please try again.")
+
+    upper = report.upper()
+    risk_level = "medium"
+    head = upper.split("## MISMATCHES")[0]
+    if "HIGH" in head:
+        risk_level = "high"
+    elif "LOW" in head:
+        risk_level = "low"
+
+    return {"report": report, "risk_level": risk_level, "documents_analyzed": usable}

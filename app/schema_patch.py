@@ -33,6 +33,12 @@ def ensure_user_legal_consent_column():
             conn.execute(text("ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP"))
         if "accepted_terms_privacy_at" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_at TIMESTAMP"))
+        if "accepted_terms_privacy_ip" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_ip VARCHAR"))
+        if "accepted_terms_privacy_user_agent" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_user_agent TEXT"))
+        if "accepted_terms_privacy_version" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_version VARCHAR"))
         if "visa_case_status" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN visa_case_status VARCHAR"))
         if "current_situation_story" not in columns:
@@ -62,6 +68,14 @@ def ensure_subscription_usage_columns():
 
         if "mock_interviews_used" not in columns:
             conn.execute(text("ALTER TABLE subscriptions ADD COLUMN mock_interviews_used INTEGER NOT NULL DEFAULT 0"))
+
+        # Visa Success Pass (B2C one-time pass) freemium counters.
+        if "ds160_autofills_used" not in columns:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN ds160_autofills_used INTEGER NOT NULL DEFAULT 0"))
+        if "red_flag_scans_used" not in columns:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN red_flag_scans_used INTEGER NOT NULL DEFAULT 0"))
+        if "pass_voice_interviews_used" not in columns:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN pass_voice_interviews_used INTEGER NOT NULL DEFAULT 0"))
 
 
 def ensure_document_catalog_columns():
@@ -600,6 +614,227 @@ def ensure_enterprise_crm_tables():
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_subscription_payments_payment ON enterprise_subscription_payments(razorpay_payment_id)",
             ):
                 conn.execute(text(stmt))
+
+
+def ensure_enterprise_calendar_reminder_runs_table():
+    """Create the run-log table that makes the daily calendar-reminder email job idempotent."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_calendar_reminder_runs"):
+            return
+        conn.execute(text(f"""
+            CREATE TABLE enterprise_calendar_reminder_runs (
+                id {pk},
+                run_date DATE NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'running',
+                started_at {ts} DEFAULT {now_default} NOT NULL,
+                completed_at {ts},
+                recipients_emailed INTEGER NOT NULL DEFAULT 0,
+                events_considered INTEGER NOT NULL DEFAULT 0,
+                error_message TEXT
+            )
+        """))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_calendar_reminder_runs_date "
+            "ON enterprise_calendar_reminder_runs(run_date)"
+        ))
+
+
+def ensure_enterprise_calendar_table():
+    """Create the enterprise_calendar_events table (staff reminders/tasks/deadlines)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_false = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_calendar_events"):
+            return
+        conn.execute(text(f"""
+            CREATE TABLE enterprise_calendar_events (
+                id {pk},
+                organization_id INTEGER NOT NULL,
+                client_id INTEGER,
+                title VARCHAR NOT NULL,
+                notes TEXT,
+                event_type VARCHAR NOT NULL DEFAULT 'reminder',
+                event_date DATE NOT NULL,
+                event_time VARCHAR,
+                is_done BOOLEAN NOT NULL DEFAULT {bool_false},
+                created_by_user_id INTEGER,
+                created_by_name VARCHAR,
+                created_at {ts} DEFAULT {now_default} NOT NULL,
+                updated_at {ts}
+            )
+        """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_organization_id ON enterprise_calendar_events(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_client_id ON enterprise_calendar_events(client_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_event_date ON enterprise_calendar_events(event_date)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_is_done ON enterprise_calendar_events(is_done)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_calendar_org_date ON enterprise_calendar_events(organization_id, event_date)",
+        ):
+            conn.execute(text(stmt))
+
+
+def ensure_enterprise_credit_tables():
+    """
+    Create the prepaid-credit ('Rilono Credits') tables that power the enterprise
+    revenue model: per-org wallets, the credit ledger, and Razorpay credit/infra
+    payments. Idempotent and additive — safe to run on every startup.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+
+    with engine.begin() as conn:
+        # --- enterprise_credit_wallets ----------------------------------------
+        if not _table_exists(conn, "enterprise_credit_wallets"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_credit_wallets (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    balance_credits INTEGER NOT NULL DEFAULT 0,
+                    lifetime_purchased_credits INTEGER NOT NULL DEFAULT 0,
+                    lifetime_spent_credits INTEGER NOT NULL DEFAULT 0,
+                    infra_fee_paid_until {ts},
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_credit_wallets_org "
+                "ON enterprise_credit_wallets(organization_id)"
+            ))
+
+        # --- enterprise_credit_transactions -----------------------------------
+        if not _table_exists(conn, "enterprise_credit_transactions"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_credit_transactions (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    type VARCHAR NOT NULL,
+                    action_key VARCHAR,
+                    credits INTEGER NOT NULL,
+                    balance_after INTEGER NOT NULL DEFAULT 0,
+                    description VARCHAR,
+                    reference_type VARCHAR,
+                    reference_id INTEGER,
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_credit_transactions_organization_id ON enterprise_credit_transactions(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_credit_transactions_type ON enterprise_credit_transactions(type)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_credit_transactions_action_key ON enterprise_credit_transactions(action_key)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_credit_transactions_created_at ON enterprise_credit_transactions(created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_credit_txn_org_created ON enterprise_credit_transactions(organization_id, created_at)",
+            ):
+                conn.execute(text(stmt))
+
+        # --- enterprise_credit_payments ---------------------------------------
+        if not _table_exists(conn, "enterprise_credit_payments"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_credit_payments (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    created_by_user_id INTEGER,
+                    provider VARCHAR NOT NULL DEFAULT 'razorpay',
+                    kind VARCHAR NOT NULL DEFAULT 'credits',
+                    package_key VARCHAR,
+                    credits INTEGER NOT NULL DEFAULT 0,
+                    bonus_credits INTEGER NOT NULL DEFAULT 0,
+                    amount_paise INTEGER NOT NULL,
+                    currency VARCHAR NOT NULL DEFAULT 'INR',
+                    razorpay_order_id VARCHAR NOT NULL,
+                    razorpay_payment_id VARCHAR,
+                    status VARCHAR NOT NULL DEFAULT 'created',
+                    verified_at {ts},
+                    error_message TEXT,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_credit_payments_org ON enterprise_credit_payments(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_credit_payments_kind ON enterprise_credit_payments(kind)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_credit_payments_order ON enterprise_credit_payments(razorpay_order_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_credit_payments_payment ON enterprise_credit_payments(razorpay_payment_id)",
+            ):
+                conn.execute(text(stmt))
+
+
+def ensure_ai_optimization_events_table():
+    """Ensure the ai_optimization_events table exists (Part 3 cost-optimization metrics)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "ai_optimization_events"):
+            return
+        conn.execute(text(f"""
+            CREATE TABLE ai_optimization_events (
+                id {pk},
+                kind VARCHAR NOT NULL,
+                source VARCHAR NOT NULL,
+                tokens_saved INTEGER NOT NULL DEFAULT 0,
+                cost_saved_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
+                detail VARCHAR,
+                created_at {ts} DEFAULT {now_default} NOT NULL
+            )
+        """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_ai_optimization_events_kind ON ai_optimization_events(kind)",
+            "CREATE INDEX IF NOT EXISTS ix_ai_optimization_events_source ON ai_optimization_events(source)",
+            "CREATE INDEX IF NOT EXISTS ix_ai_optimization_events_created_at ON ai_optimization_events(created_at)",
+        ):
+            conn.execute(text(stmt))
+
+
+def ensure_gemini_usage_table():
+    """Ensure the gemini_usage_events table exists for the admin AI-cost tracker."""
+    with engine.begin() as conn:
+        if _table_exists(conn, "gemini_usage_events"):
+            return
+        if engine.dialect.name == "sqlite":
+            conn.execute(text("""
+                CREATE TABLE gemini_usage_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source VARCHAR NOT NULL,
+                    model VARCHAR NOT NULL,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    estimated_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+            """))
+        else:
+            conn.execute(text("""
+                CREATE TABLE gemini_usage_events (
+                    id SERIAL PRIMARY KEY,
+                    source VARCHAR NOT NULL,
+                    model VARCHAR NOT NULL,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0,
+                    estimated_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
+                    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+                )
+            """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_source ON gemini_usage_events(source)",
+            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_model ON gemini_usage_events(model)",
+            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_created_at ON gemini_usage_events(created_at)",
+        ):
+            conn.execute(text(stmt))
 
 
 def ensure_company_finance_entries_table():

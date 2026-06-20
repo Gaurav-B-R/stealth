@@ -124,12 +124,37 @@ def get_model_candidates(
     )
 
 
+def _instrument_usage(model, model_name: str):
+    """Wrap generate_content so every document-AI call logs its token usage/cost."""
+    try:
+        original = model.generate_content
+    except Exception:
+        return
+
+    def _wrapped(*args, **kwargs):
+        resp = original(*args, **kwargs)
+        try:
+            from app import ai_usage
+            ai_usage.record_gemini_usage("document_ai", model_name, resp)
+        except Exception:
+            pass
+        return resp
+
+    try:
+        model.generate_content = _wrapped
+    except Exception:
+        pass
+
+
 def build_generative_model(model_name: str):
+    model = None
     if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
-        return GenerativeModel(model_name)
-    if GENAI_AVAILABLE:
-        return genai.GenerativeModel(model_name)
-    return None
+        model = GenerativeModel(model_name)
+    elif GENAI_AVAILABLE:
+        model = genai.GenerativeModel(model_name)
+    if model is not None:
+        _instrument_usage(model, model_name)
+    return model
 
 def validate_and_extract_document(
     file_contents: bytes,
@@ -749,6 +774,115 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
     except Exception as e:
         print(f"Error extracting text from document with Gemini: {str(e)}")
         return None
+
+RED_FLAG_PROMPT = """You are a US/UK/Canada study-visa document auditor. Inspect this document and
+find "red flags" — concrete errors or risks that could cause a visa refusal (expired/stale dates,
+name/DOB/passport-number mismatches, insufficient or unexplained funds, missing signatures/stamps,
+wrong document for the claimed purpose, sponsor/financial gaps).
+
+Respond with ONLY valid JSON (no markdown, no code fences), starting with {{ and ending with }}:
+{{
+  "summary": "one-sentence overall read of this document",
+  "flags": [
+    {{"title": "short label", "detail": "what is wrong and why it matters", "severity": "high|medium|low"}}
+  ]
+}}
+Order flags most-severe first. If the document looks clean, return an empty "flags" list.
+Current date for evaluation: {eval_date}"""
+
+
+def scan_document_red_flags(file_contents: bytes, filename: str, mime_type: str) -> Optional[dict]:
+    """
+    Run a focused "red flag" audit over a single document for the B2C Visa Success Pass.
+    Returns {"summary": str, "flags": [{"title","detail","severity"}]} or None if AI is
+    unavailable. Usage is logged under the "red_flag_scan" source for B2C economics.
+    """
+    has_service_account = os.path.exists(SERVICE_ACCOUNT_PATH)
+    has_valid_api_key = GEMINI_API_KEY and GEMINI_API_KEY.startswith("AIza")
+    if not has_service_account and not has_valid_api_key:
+        return None
+
+    try:
+        model_name = get_model_candidates(
+            primary_env="GEMINI_DOCUMENT_MODEL",
+            candidates_env="GEMINI_DOCUMENT_MODEL_CANDIDATES",
+        )[0]
+        # Build the model WITHOUT the document_ai usage instrumentation so this call
+        # is attributed to "red_flag_scan" (not "document_ai").
+        if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+            model = GenerativeModel(model_name)
+        elif GENAI_AVAILABLE:
+            model = genai.GenerativeModel(model_name)
+        else:
+            return None
+
+        prompt = RED_FLAG_PROMPT.format(eval_date=datetime.now().date().isoformat())
+        file_extension = os.path.splitext(filename)[1].lower()
+
+        if file_extension in SUPPORTED_IMAGE_TYPES:
+            image = Image.open(io.BytesIO(file_contents))
+            if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+                buf = io.BytesIO(); image.save(buf, format="JPEG"); buf.seek(0)
+                response = model.generate_content([prompt, Part.from_data(buf.read(), mime_type="image/jpeg")])
+            else:
+                response = model.generate_content([prompt, image])
+        elif file_extension == ".pdf":
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(file_contents); tmp_path = tmp.name
+            try:
+                if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+                    with open(tmp_path, "rb") as f:
+                        response = model.generate_content([prompt, Part.from_data(f.read(), mime_type="application/pdf")])
+                else:
+                    import time
+                    pdf_file = genai.upload_file(path=tmp_path, mime_type="application/pdf")
+                    while pdf_file.state.name == "PROCESSING":
+                        time.sleep(2); pdf_file = genai.get_file(pdf_file.name)
+                    if pdf_file.state.name == "FAILED":
+                        raise Exception("PDF processing failed")
+                    response = model.generate_content([prompt, pdf_file])
+                    try: genai.delete_file(pdf_file.name)
+                    except Exception: pass
+            finally:
+                try: os.unlink(tmp_path)
+                except Exception: pass
+        else:
+            text_content = file_contents.decode("utf-8", errors="ignore")
+            response = model.generate_content(prompt + f"\n\nDocument content:\n{text_content[:50000]}")
+
+        try:
+            from app import ai_usage
+            ai_usage.record_gemini_usage("red_flag_scan", model_name, response)
+        except Exception:
+            pass
+
+        import json
+        raw = (response.text or "").strip()
+        if raw.startswith("```json"): raw = raw[7:].strip()
+        elif raw.startswith("```"): raw = raw[3:].strip()
+        if raw.endswith("```"): raw = raw[:-3].strip()
+        fb, lb = raw.find("{"), raw.rfind("}")
+        if fb != -1 and lb != -1 and lb > fb:
+            raw = raw[fb:lb + 1]
+        data = json.loads(raw)
+        flags = data.get("flags") if isinstance(data, dict) else None
+        if not isinstance(flags, list):
+            flags = []
+        normalized = []
+        for f in flags:
+            if not isinstance(f, dict):
+                continue
+            normalized.append({
+                "title": str(f.get("title") or "Issue").strip()[:140],
+                "detail": str(f.get("detail") or "").strip()[:600],
+                "severity": str(f.get("severity") or "medium").strip().lower(),
+            })
+        return {"summary": str((data or {}).get("summary") or "").strip()[:400], "flags": normalized}
+    except Exception as e:
+        print(f"Error running red-flag scan with Gemini: {str(e)}")
+        return None
+
 
 def create_extracted_text_file(extracted_text: str, original_filename: str) -> bytes:
     """

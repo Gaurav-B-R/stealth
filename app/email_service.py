@@ -1643,3 +1643,102 @@ def send_proactive_assistant_email(
     except Exception as e:
         print(f"Error sending proactive assistant email to {email}: {str(e)}")
         return False
+
+
+def send_enterprise_calendar_digest_email(
+    *,
+    to_email: str,
+    recipient_name: str,
+    org_name: str,
+    overdue_items: list,
+    today_items: list,
+    portal_url: str = DEFAULT_PUBLIC_BASE_URL,
+) -> bool:
+    """
+    Send a staff member their daily calendar digest: items due today + overdue.
+    Each item is a dict: {title, type_label, when_label, time, client_name, overdue, color}.
+    Returns False (no-op) when Resend isn't configured.
+    """
+    if not RESEND_API_KEY:
+        print("Calendar digest email skipped: RESEND_API_KEY not configured.")
+        return False
+    if not to_email:
+        return False
+
+    def _rows(items: list) -> str:
+        out = []
+        for it in items:
+            color = it.get("color") or "#6366f1"
+            meta = it.get("type_label") or "Reminder"
+            if it.get("client_name"):
+                meta += f" · {it['client_name']}"
+            when = it.get("when_label") or ""
+            if it.get("time"):
+                when = f"{when} · {it['time']}" if when else it["time"]
+            out.append(
+                f'<tr>'
+                f'<td style="padding:10px 12px;border-bottom:1px solid #eef0f6;vertical-align:top;width:6px">'
+                f'<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:{color}"></span></td>'
+                f'<td style="padding:10px 12px 10px 0;border-bottom:1px solid #eef0f6">'
+                f'<div style="font-weight:650;color:#0f172a;font-size:14px">{escape(it.get("title") or "")}</div>'
+                f'<div style="color:#64748b;font-size:12px;margin-top:2px">{escape(meta)}</div></td>'
+                f'<td style="padding:10px 12px;border-bottom:1px solid #eef0f6;text-align:right;white-space:nowrap;'
+                f'font-size:12px;font-weight:700;color:{"#ef4444" if it.get("overdue") else "#64748b"}">{escape(when)}</td>'
+                f'</tr>'
+            )
+        return "".join(out)
+
+    overdue_block = ""
+    if overdue_items:
+        overdue_block = (
+            f'<p style="margin:18px 0 6px;font-size:12px;font-weight:800;letter-spacing:.04em;'
+            f'text-transform:uppercase;color:#ef4444">⚠ Overdue ({len(overdue_items)})</p>'
+            f'<table style="width:100%;border-collapse:collapse">{_rows(overdue_items)}</table>'
+        )
+    today_block = ""
+    if today_items:
+        today_block = (
+            f'<p style="margin:18px 0 6px;font-size:12px;font-weight:800;letter-spacing:.04em;'
+            f'text-transform:uppercase;color:#6366f1">Due today ({len(today_items)})</p>'
+            f'<table style="width:100%;border-collapse:collapse">{_rows(today_items)}</table>'
+        )
+
+    total = len(overdue_items) + len(today_items)
+    cal_url = portal_url.rstrip("/") + "/enterprise"
+    html_content = f"""<!DOCTYPE html><html><body style="margin:0;background:#f5f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">
+      <div style="max-width:560px;margin:0 auto;padding:28px 18px">
+        <div style="background:#fff;border:1px solid #e7e9f3;border-radius:16px;overflow:hidden">
+          <div style="background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:22px 24px;color:#fff">
+            <div style="font-size:13px;opacity:.9;font-weight:600">{escape(org_name)} · Rilono Enterprise</div>
+            <div style="font-size:20px;font-weight:800;margin-top:4px">Your calendar for today</div>
+          </div>
+          <div style="padding:22px 24px">
+            <p style="margin:0 0 4px;font-size:15px;color:#0f172a">Hi {escape(recipient_name or 'there')},</p>
+            <p style="margin:0;color:#64748b;font-size:14px">You have <b>{total}</b> item{'s' if total != 1 else ''} that need attention.</p>
+            {overdue_block}
+            {today_block}
+            <div style="margin-top:24px">
+              <a href="{cal_url}" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;
+                font-weight:700;font-size:14px;padding:11px 20px;border-radius:10px">Open your calendar</a>
+            </div>
+          </div>
+        </div>
+        <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:16px">
+          You're receiving this because you created these reminders in Rilono Enterprise.</p>
+      </div></body></html>"""
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [to_email],
+            "subject": f"📅 {total} item{'s' if total != 1 else ''} on your Rilono calendar today",
+            "html": html_content,
+        }
+        email_response = resend.Emails.send(params)
+        if _extract_resend_email_id(email_response):
+            return True
+        print(f"Failed to send calendar digest to {to_email}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending calendar digest email to {to_email}: {str(e)}")
+        return False

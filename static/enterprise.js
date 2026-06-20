@@ -12,6 +12,7 @@
     me: null,
     perms: { can_view_data: true, can_edit_data: false, can_manage_users: false },
     subscription: null,
+    credits: null,
     catalog: null,
     view: "dashboard",
     clients: [],
@@ -19,6 +20,7 @@
     filters: { status: "", category: "", country: "", q: "" },
     billingCycle: "monthly",
     activeClient: null,
+    cal: null,
   };
 
   const enterpriseTurnstile = {
@@ -302,12 +304,18 @@
       e.preventDefault();
       const f = e.target; const btn = $("#signupBtn");
       const err = $("#signupError"); err.classList.add("hidden");
+      if (!f.accept_terms.checked) {
+        err.textContent = "Please accept the Terms & Conditions and Privacy Policy to continue.";
+        err.classList.remove("hidden");
+        return;
+      }
       const body = {
         company_name: f.company_name.value.trim(),
         subdomain_slug: f.subdomain_slug.value.trim().toLowerCase(),
         full_name: f.full_name.value.trim(),
         email: f.email.value.trim(),
         password: f.password.value,
+        accepted_terms_privacy: f.accept_terms.checked,
       };
       try {
         const turnstileToken = await getEnterpriseTurnstileToken("signup");
@@ -434,6 +442,7 @@
     state.me = me;
     state.perms = me.permissions || state.perms;
     state.subscription = me.subscription || null;
+    state.credits = me.credits || null;
 
     // brand + user chip
     const org = me.organization || {};
@@ -456,8 +465,15 @@
 
   function updatePlanChip() {
     const s = state.subscription;
-    $("#brandPlan").textContent = "Free plan";
+    const cr = state.credits;
+    if (cr && cr.balance_credits != null) {
+      $("#brandPlan").textContent = cr.balance_credits + " credits";
+    } else {
+      $("#brandPlan").textContent = "Free plan";
+    }
     if (s && s.clients_used != null) $("#clientsBadge").textContent = s.clients_used;
+    const cb = $("#creditsBadge");
+    if (cb && cr && cr.balance_credits != null) cb.textContent = cr.balance_credits;
   }
 
   /* ============================================================
@@ -467,13 +483,15 @@
     state.view = view;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     $("#sidebar").classList.remove("open");
-    const titles = { dashboard: "Dashboard", clients: "Clients", ai: "Rilono AI Assistant", team: "Team", billing: "Plans & Billing", settings: "Settings" };
+    const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", billing: "Plans & Billing", settings: "Settings" };
     $("#viewTitle").textContent = titles[view] || "";
     $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
     if (view === "dashboard") renderDashboard();
     else if (view === "clients") renderClients();
+    else if (view === "calendar") renderCalendar();
     else if (view === "ai") renderAIAssistant();
     else if (view === "team") renderTeam();
+    else if (view === "credits") renderCredits();
     else if (view === "billing") renderBilling();
     else if (view === "settings") renderSettings();
   }
@@ -843,7 +861,7 @@
         else if (state.view === "clients") loadAndRenderClientList();
         else navigate("clients");
       } catch (ex) {
-        if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("billing"); return; }
+        if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("credits"); return; }
         err.textContent = ex.message; err.classList.remove("hidden");
       } finally { btn.disabled = false; btn.innerHTML = isEdit ? "Save changes" : "Add client"; }
     };
@@ -1003,7 +1021,18 @@
           ${canEdit ? `<button class="doc-act doc-del" data-id="${d.id}" title="Delete">✕</button>` : ""}
         </div>`).join("")}</div>`
         : `<div class="empty" style="padding:34px"><div class="emoji">📁</div><h3>No documents yet</h3><p>${canEdit ? "Upload this student's passport, offer letter, financials, test scores and more — securely." : "No documents have been uploaded for this client."}</p></div>`;
-      body.innerHTML = uploader + list;
+      const deepScanCost = ((state.credits && (state.credits.actions || []).find((a) => a.key === "deep_scan")) || {}).credits || 5;
+      const deepScanBar = (canEdit && docs.length) ? `
+        <div class="cp-card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+          <div style="flex:1;min-width:220px">
+            <div style="font-weight:700">🔍 Deep Scan document audit</div>
+            <div style="font-size:12px;color:var(--text-2)">Gemini cross-references every uploaded document for mismatched dates, names & missing funds before the visa appointment. Costs <b>${deepScanCost} credits</b>.</div>
+          </div>
+          <button class="btn btn-primary btn-sm" id="deepScanBtn">Run Deep Scan · ${deepScanCost} cr</button>
+        </div>` : "";
+      body.innerHTML = uploader + deepScanBar + list;
+      const dsb = $("#deepScanBtn");
+      if (dsb) dsb.onclick = () => runDeepScan(cl);
 
       if (canEdit) {
         $("#docUploadBtn").onclick = async () => {
@@ -1222,7 +1251,13 @@
       try {
         const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { start: true } });
         iv.history.push({ role: "officer", content: r.reply });
-      } catch (ex) { toast(ex.message, "error"); iv.started = false; }
+        if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
+        if (r.credits_charged) toast(`Interview started · ${r.credits_charged} credits used`, "success");
+      } catch (ex) {
+        iv.started = false;
+        if (ex.status === 402) { toast(ex.message, "error"); iv.busy = false; if (state.activeClient === cl.id) drawIv(); navigate("credits"); return; }
+        toast(ex.message, "error");
+      }
       iv.busy = false; if (state.activeClient === cl.id) drawIv();
     }
     async function sendIv() {
@@ -1459,6 +1494,175 @@
   }
 
   /* ============================================================
+     CREDITS — prepaid wallet (the revenue model)
+     ============================================================ */
+  async function renderCredits() {
+    const c = $("#content");
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    let d, tx;
+    try {
+      [d, tx] = await Promise.all([api("/credits/wallet"), api("/credits/transactions?limit=25")]);
+    } catch (ex) { c.innerHTML = errBox(ex); return; }
+    const w = d.wallet || {};
+    state.credits = w; updatePlanChip();
+    const canManage = state.perms.can_manage_users;
+    const infra = w.infra_fee || {};
+    const packages = d.packages || [];
+    const actions = w.actions || [];
+    const txns = (tx && tx.transactions) || [];
+
+    const infraBanner = (infra.over_free_limit || infra.fee_due)
+      ? `<div class="card" style="margin-bottom:18px;border-left:4px solid ${infra.is_current ? "var(--success,#10b981)" : "var(--warning,#f59e0b)"}">
+          <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <div style="flex:1;min-width:240px">
+              <div style="font-weight:700;margin-bottom:4px">Infrastructure server fee</div>
+              <div style="font-size:13px;color:var(--text-2)">
+                You have ${infra.clients_used} clients (free up to ${infra.free_student_limit}).
+                ${infra.is_current
+                  ? `Active until ${infra.paid_until ? fmtDate(infra.paid_until) : "—"}.`
+                  : `Activate the ${infra.fee_display}/month fee to keep adding clients.`}
+              </div>
+            </div>
+            ${!infra.is_current && canManage
+              ? `<button class="btn btn-primary" id="infraPayBtn">Activate ${esc(infra.fee_display)}/mo</button>`
+              : (infra.is_current ? `<span class="plan-current-tag" style="color:var(--success,#10b981)">✓ Active</span>` : "")}
+          </div>
+        </div>`
+      : "";
+
+    const pkgCard = (p) => `<div class="plan-card ${p.is_popular ? "popular" : ""}">
+        ${p.is_popular ? `<div class="pop-tag">Best value</div>` : ""}
+        <h3>${esc(p.label)}</h3><div class="tagline">${esc(p.tagline)}</div>
+        <div class="price">${esc(p.amount_display)}</div>
+        <ul>
+          <li><b>${p.total_credits} credits</b>${p.bonus_credits ? ` <span style="color:var(--success,#10b981)">(+${p.bonus_credits} bonus)</span>` : ""}</li>
+          <li>Worth ₹${p.value_inr.toLocaleString()} of AI actions</li>
+          <li>≈ ${Math.floor(p.total_credits / 5)} Deep Scans or ${Math.floor(p.total_credits / 20)} interviews</li>
+        </ul>
+        ${canManage
+          ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.topup('${p.key}')">Buy ${esc(p.label)}</button>`
+          : `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to top up</div>`}
+      </div>`;
+
+    const actionRows = actions.map((a) =>
+      `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border,#eee)">
+        <div><b>${esc(a.label)}</b><div style="font-size:12px;color:var(--text-2)">${esc(a.description || "")}</div></div>
+        <div style="text-align:right;white-space:nowrap"><b>${a.credits} cr</b><div style="font-size:12px;color:var(--text-2)">${esc(a.price_display)}</div></div>
+      </div>`).join("");
+
+    const txnRows = txns.length ? txns.map((t) => {
+      const pos = t.credits > 0;
+      const sign = pos ? "+" : "";
+      return `<tr>
+        <td>${fmtDateTime(t.created_at)}</td>
+        <td>${esc(t.description || t.type)}</td>
+        <td style="text-align:right;color:${pos ? "var(--success,#10b981)" : "var(--text)"};font-weight:600">${t.credits === 0 ? "—" : sign + t.credits}</td>
+        <td style="text-align:right">${t.balance_after}</td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:22px">No credit activity yet.</td></tr>`;
+
+    c.innerHTML = `
+      ${infraBanner}
+      <div class="card" style="margin-bottom:24px"><div class="card-body" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+        <div style="flex:1;min-width:220px">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Rilono Credits balance</div>
+          <div style="font-size:38px;font-weight:800;margin:4px 0;line-height:1.1">${w.balance_credits} <span style="font-size:16px;font-weight:600;color:var(--text-2)">credits</span></div>
+          <div style="font-size:13px;color:var(--text-2)">Worth ${esc(w.balance_display || "")} · 1 credit = ${esc("₹" + (w.credit_value_inr || 10))}</div>
+          ${w.low_balance ? `<div style="margin-top:8px;font-size:12px;color:var(--warning,#f59e0b);font-weight:600">⚠ Low balance — top up to keep using premium AI.</div>` : ""}
+        </div>
+        <div style="display:flex;gap:28px;flex-wrap:wrap">
+          <div><div style="font-size:12px;color:var(--muted)">Purchased</div><b style="font-size:18px">${w.lifetime_purchased_credits || 0}</b></div>
+          <div><div style="font-size:12px;color:var(--muted)">Spent</div><b style="font-size:18px">${w.lifetime_spent_credits || 0}</b></div>
+        </div>
+      </div></div>
+
+      <div class="card" style="margin-bottom:24px"><div class="card-head"><h3>How credits are spent</h3></div>
+        <div class="card-body">${actionRows || '<div class="muted">No billable actions configured.</div>'}</div></div>
+
+      <h3 style="margin:0 0 12px">Top up your wallet</h3>
+      <div class="plan-grid">${packages.map(pkgCard).join("")}</div>
+      <p style="text-align:center;color:var(--muted);font-size:13px;margin-top:14px">Secure top-ups via Razorpay (UPI, NetBanking). Credits never expire.</p>
+
+      <div class="card" style="margin-top:24px"><div class="card-head"><h3>Recent activity</h3></div>
+        <div class="card-body" style="padding:0">
+          <table class="client-table"><thead><tr>
+            <th>When</th><th>Description</th><th style="text-align:right">Credits</th><th style="text-align:right">Balance</th>
+          </tr></thead><tbody>${txnRows}</tbody></table>
+        </div></div>`;
+
+    const ip = $("#infraPayBtn");
+    if (ip) ip.onclick = () => activateInfraFee();
+  }
+
+  async function topupCredits(pkg) {
+    let res;
+    try { res = await api("/credits/topup/checkout", { method: "POST", body: { package: pkg } }); }
+    catch (ex) { toast(ex.message, "error"); return; }
+    if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); return; }
+    if (res.action !== "checkout") { toast("Top-up unavailable.", "error"); return; }
+    if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); return; }
+
+    const rzp = new Razorpay({
+      key: res.razorpay_key_id,
+      amount: res.amount,
+      currency: res.currency,
+      name: res.organization_name || "Rilono",
+      description: res.package_label + " · " + res.total_credits + " credits",
+      order_id: res.order_id,
+      prefill: res.prefill,
+      theme: { color: "#6366f1" },
+      handler: async function (resp) {
+        try {
+          const v = await api("/credits/topup/verify", { method: "POST", body: {
+            razorpay_order_id: resp.razorpay_order_id,
+            razorpay_payment_id: resp.razorpay_payment_id,
+            razorpay_signature: resp.razorpay_signature,
+          }});
+          state.credits = v.wallet; updatePlanChip();
+          toast(v.message || "Credits added!", "success");
+          renderCredits();
+        } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
+      },
+    });
+    rzp.on("payment.failed", () => toast("Payment was not completed.", "error"));
+    rzp.open();
+  }
+
+  async function activateInfraFee() {
+    let res;
+    try { res = await api("/credits/infra/checkout", { method: "POST" }); }
+    catch (ex) { toast(ex.message, "error"); return; }
+    if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); return; }
+    if (res.action !== "checkout") { toast("Payment unavailable.", "error"); return; }
+    if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); return; }
+
+    const rzp = new Razorpay({
+      key: res.razorpay_key_id,
+      amount: res.amount,
+      currency: res.currency,
+      name: res.organization_name || "Rilono",
+      description: "Infrastructure server fee (monthly)",
+      order_id: res.order_id,
+      prefill: res.prefill,
+      theme: { color: "#6366f1" },
+      handler: async function (resp) {
+        try {
+          const v = await api("/credits/infra/verify", { method: "POST", body: {
+            razorpay_order_id: resp.razorpay_order_id,
+            razorpay_payment_id: resp.razorpay_payment_id,
+            razorpay_signature: resp.razorpay_signature,
+          }});
+          state.credits = v.wallet; updatePlanChip();
+          toast(v.message || "Infrastructure fee activated.", "success");
+          renderCredits();
+        } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
+      },
+    });
+    rzp.on("payment.failed", () => toast("Payment was not completed.", "error"));
+    rzp.open();
+  }
+
+  /* ============================================================
      SETTINGS
      ============================================================ */
   function renderSettings() {
@@ -1657,11 +1861,238 @@
       <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`);
   }
 
+  async function runDeepScan(cl) {
+    const btn = $("#deepScanBtn");
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Scanning…'; }
+    let res;
+    try { res = await api(`/clients/${cl.id}/deep-scan`, { method: "POST" }); }
+    catch (ex) {
+      if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); return; }
+      toast(ex.message, "error");
+      if (btn) { btn.disabled = false; btn.textContent = "Run Deep Scan"; }
+      return;
+    }
+    if (res.wallet) { state.credits = res.wallet; updatePlanChip(); }
+    toast(`Deep Scan complete · ${res.credits_charged} credits used`, "success");
+    if (btn) { btn.disabled = false; btn.innerHTML = "Run Deep Scan · " + (res.credits_charged || 5) + " cr"; }
+    showDeepScanReport(cl, res);
+  }
+
+  function showDeepScanReport(cl, res) {
+    const risk = (res.risk_level || "medium").toLowerCase();
+    const riskColor = risk === "high" ? "#ef4444" : risk === "low" ? "#10b981" : "#f59e0b";
+    openModal(`<div class="modal-head"><h3>🔍 Deep Scan · ${esc(cl.full_name)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body">
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+          <span style="background:${riskColor}1f;color:${riskColor};font-weight:700;padding:5px 12px;border-radius:999px;font-size:13px">${risk.toUpperCase()} RISK</span>
+          <span style="font-size:13px;color:var(--text-2)">${res.documents_analyzed} document${res.documents_analyzed === 1 ? "" : "s"} analyzed · ${res.credits_charged} credits</span>
+        </div>
+        <div class="iv-feedback">${aiFormat(res.report || "No findings.")}</div>
+      </div>
+      <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`);
+  }
+
+  /* ============================================================
+     CALENDAR — timelines, deadlines & what's next
+     ============================================================ */
+  let calEventsById = {};
+
+  function calState() {
+    if (!state.cal) { const d = new Date(); state.cal = { year: d.getFullYear(), month: d.getMonth() }; }
+    return state.cal;
+  }
+  function calYmd(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  function calParse(s) { const [y, m, d] = String(s).split("-").map(Number); return new Date(y, (m || 1) - 1, d || 1); }
+  function calGridRange(y, m) {
+    const first = new Date(y, m, 1);
+    const start = new Date(first); start.setDate(1 - first.getDay());
+    const last = new Date(y, m + 1, 0);
+    const end = new Date(last); end.setDate(last.getDate() + (6 - last.getDay()));
+    return { start, end };
+  }
+  function calRel(dateStr, todayStr) {
+    const a = calParse(dateStr), b = calParse(todayStr);
+    const days = Math.round((a - b) / 86400000);
+    if (days === 0) return "Today";
+    if (days === 1) return "Tomorrow";
+    if (days === -1) return "Yesterday";
+    if (days < 0) return `${-days} days ago`;
+    return `in ${days} days`;
+  }
+
+  async function renderCalendar() {
+    const c = $("#content");
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    const cs = calState();
+    const { start, end } = calGridRange(cs.year, cs.month);
+    let data, up;
+    try {
+      [data, up] = await Promise.all([
+        api(`/calendar?start=${calYmd(start)}&end=${calYmd(end)}`),
+        api(`/calendar/upcoming?days=21`),
+      ]);
+    } catch (ex) { c.innerHTML = errBox(ex); return; }
+    state.perms = data.permissions || state.perms;
+    const canEdit = state.perms.can_edit_data;
+    state.calTypes = data.event_types || [];
+    const today = data.today;
+
+    calEventsById = {};
+    const byDate = {};
+    (data.events || []).forEach((e) => { calEventsById[e.id] = e; (byDate[e.date] = byDate[e.date] || []).push(e); });
+    (up.overdue || []).concat(up.upcoming || []).forEach((e) => { calEventsById[e.id] = e; });
+
+    const totalNext = (up.overdue || []).length + (up.upcoming || []).length;
+    const cb = $("#calendarBadge"); if (cb) cb.textContent = totalNext;
+
+    // Build the month grid
+    const dows = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let cells = "";
+    const cur = new Date(start);
+    while (cur <= end) {
+      const ds = calYmd(cur);
+      const inMonth = cur.getMonth() === cs.month;
+      const isToday = ds === today;
+      const dayEvents = byDate[ds] || [];
+      const chips = dayEvents.slice(0, 3).map((e) => `
+        <div class="cal-ev ${e.is_done ? "done" : ""} ${e.overdue ? "overdue" : ""}" style="border-left-color:${e.color}"
+             title="${esc(e.type_label)}: ${esc(e.title)}" onclick="event.stopPropagation(); __ent.calEvent('${e.id}')">
+          ${e.time ? `<b>${esc(e.time)}</b> ` : ""}${esc(e.title)}
+        </div>`).join("");
+      const more = dayEvents.length > 3 ? `<div class="cal-more">+${dayEvents.length - 3} more</div>` : "";
+      cells += `<div class="cal-cell ${inMonth ? "" : "muted"} ${isToday ? "today" : ""}" ${canEdit ? `onclick="__ent.calAdd('${ds}')"` : ""}>
+        <div class="cal-daynum">${cur.getDate()}</div>${chips}${more}</div>`;
+      cur.setDate(cur.getDate() + 1);
+    }
+
+    const legend = (state.calTypes || []).map((t) =>
+      `<span class="cal-legend-item"><span class="cal-dot" style="background:${t.color}"></span>${esc(t.label)}</span>`).join("");
+
+    const monthLabel = new Date(cs.year, cs.month, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+    // "What's next" side panel
+    const upItem = (e) => `
+      <div class="cal-up-item ${e.overdue ? "overdue" : ""}" onclick="__ent.calEvent('${e.id}')">
+        <span class="cal-dot" style="background:${e.color}"></span>
+        <div class="cal-up-meta">
+          <b>${esc(e.title)}</b>
+          <span>${esc(e.type_label)}${e.client_name && e.source !== "client" ? " · " + esc(e.client_name) : ""}</span>
+        </div>
+        <div class="cal-up-when ${e.overdue ? "overdue" : ""}">${esc(calRel(e.date, today))}${e.time ? " · " + esc(e.time) : ""}</div>
+      </div>`;
+    const overdueBlock = (up.overdue || []).length
+      ? `<div class="cal-up-label overdue">⚠ Overdue (${up.overdue.length})</div>${up.overdue.map(upItem).join("")}` : "";
+    const upcomingBlock = (up.upcoming || []).length
+      ? `<div class="cal-up-label">Next ${up.horizon_days} days</div>${up.upcoming.map(upItem).join("")}`
+      : (!overdueBlock ? `<div class="cal-up-empty">Nothing coming up. You're all caught up. 🎉</div>` : "");
+
+    c.innerHTML = `
+      <div class="cal-wrap">
+        <div class="cal-main">
+          <div class="cal-toolbar">
+            <div class="cal-title">${esc(monthLabel)}</div>
+            <div class="cal-navbtns">
+              <button class="btn btn-ghost btn-sm" onclick="__ent.calPrev()" aria-label="Previous month">‹</button>
+              <button class="btn btn-ghost btn-sm" onclick="__ent.calToday()">Today</button>
+              <button class="btn btn-ghost btn-sm" onclick="__ent.calNext()" aria-label="Next month">›</button>
+            </div>
+            ${canEdit ? `<button class="btn btn-primary btn-sm" onclick="__ent.calAdd()">+ Add reminder</button>` : ""}
+          </div>
+          <div class="cal-grid">
+            ${dows.map((d) => `<div class="cal-dow">${d}</div>`).join("")}
+            ${cells}
+          </div>
+          <div class="cal-legend">${legend}</div>
+        </div>
+        <aside class="cal-side">
+          <h3>What's next</h3>
+          <div class="cal-upcoming">${overdueBlock}${upcomingBlock}</div>
+        </aside>
+      </div>`;
+  }
+
+  function calPrev() { const c = calState(); const d = new Date(c.year, c.month - 1, 1); state.cal = { year: d.getFullYear(), month: d.getMonth() }; renderCalendar(); }
+  function calNext() { const c = calState(); const d = new Date(c.year, c.month + 1, 1); state.cal = { year: d.getFullYear(), month: d.getMonth() }; renderCalendar(); }
+  function calToday() { const d = new Date(); state.cal = { year: d.getFullYear(), month: d.getMonth() }; renderCalendar(); }
+
+  function calEvent(id) {
+    const e = calEventsById[id];
+    if (!e) return;
+    if (e.source === "client" && e.client_id) { navigate("clients"); openClient(e.client_id); return; }
+    calEditModal(e);
+  }
+
+  function calAdd(dateStr) {
+    if (!state.perms.can_edit_data) return;
+    calEditModal(null, dateStr);
+  }
+
+  function calEditModal(ev, presetDate) {
+    const types = state.calTypes || [{ key: "reminder", label: "Reminder" }];
+    const isEdit = !!ev;
+    const dateVal = (ev && ev.date) || presetDate || new Date().toISOString().slice(0, 10);
+    openModal(`<div class="modal-head"><h3>${isEdit ? "Edit event" : "Add reminder"}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="calForm"><div class="modal-body">
+        <div class="field"><label>Title</label><input name="title" required maxlength="200" value="${ev ? esc(ev.title) : ""}" placeholder="e.g. Call Rohan about SOP"/></div>
+        <div class="cal-form-row">
+          <div class="field"><label>Type</label><select name="event_type">${types.map((t) => `<option value="${t.key}" ${ev && ev.type === t.key ? "selected" : ""}>${esc(t.label)}</option>`).join("")}</select></div>
+          <div class="field"><label>Date</label><input type="date" name="event_date" required value="${esc(dateVal)}"/></div>
+          <div class="field"><label>Time (optional)</label><input type="time" name="event_time" value="${ev && ev.time ? esc(ev.time) : ""}"/></div>
+        </div>
+        <div class="field"><label>Notes (optional)</label><textarea name="notes" maxlength="2000" placeholder="Any details…">${ev && ev.notes ? esc(ev.notes) : ""}</textarea></div>
+        ${ev && ev.client_name ? `<div class="muted" style="font-size:13px">Linked to client: <b>${esc(ev.client_name)}</b></div>` : ""}
+        <div id="calFormErr" class="auth-error hidden"></div>
+      </div>
+      <div class="modal-foot">
+        ${isEdit ? `<button type="button" class="btn btn-danger btn-sm" onclick="__ent.calDelete(${ev.event_id})">Delete</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="__ent.calToggleDone(${ev.event_id}, ${ev.is_done ? "false" : "true"})">${ev.is_done ? "Mark not done" : "✓ Mark done"}</button>` : ""}
+        <div class="spacer" style="flex:1"></div>
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="calSaveBtn">${isEdit ? "Save" : "Add"}</button>
+      </div></form>`);
+
+    $("#calForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = {
+        title: (fd.get("title") || "").trim(),
+        event_type: fd.get("event_type") || "reminder",
+        event_date: fd.get("event_date"),
+        event_time: fd.get("event_time") || null,
+        notes: (fd.get("notes") || "").trim() || null,
+      };
+      if (!body.title || !body.event_date) return;
+      const btn = $("#calSaveBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        if (isEdit) await api(`/calendar/events/${ev.event_id}`, { method: "PATCH", body });
+        else await api("/calendar/events", { method: "POST", body });
+        closeModal(); toast(isEdit ? "Event updated" : "Reminder added", "success"); renderCalendar();
+      } catch (ex) {
+        const er = $("#calFormErr"); er.textContent = ex.message; er.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = isEdit ? "Save" : "Add";
+      }
+    };
+  }
+
+  async function calToggleDone(eventId, done) {
+    try { await api(`/calendar/events/${eventId}`, { method: "PATCH", body: { is_done: done } }); closeModal(); toast(done ? "Marked done" : "Reopened", "success"); renderCalendar(); }
+    catch (ex) { toast(ex.message, "error"); }
+  }
+  async function calDelete(eventId) {
+    if (!confirm("Delete this event?")) return;
+    try { await api(`/calendar/events/${eventId}`, { method: "DELETE" }); closeModal(); toast("Event deleted", "success"); renderCalendar(); }
+    catch (ex) { toast(ex.message, "error"); }
+  }
+
   window.__ent = {
     go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
     closeModal, closeDrawer, changeRole, removeMember, checkout, setCycle,
+    topup: topupCredits, activateInfra: activateInfraFee, deepScan: runDeepScan,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
     viewInterview: viewInterviewSession,
+    calPrev, calNext, calToday, calEvent, calAdd, calDelete, calToggleDone,
   };
 
   /* ============================================================

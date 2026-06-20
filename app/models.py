@@ -41,6 +41,11 @@ class User(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     referral_reward_granted_at = Column(DateTime(timezone=True), nullable=True)
     accepted_terms_privacy_at = Column(DateTime(timezone=True), nullable=True)
+    # Proof-of-consent captured when the user accepts the Terms & Conditions and
+    # Privacy Policy (IP, browser user-agent, and the version of the legal docs).
+    accepted_terms_privacy_ip = Column(String, nullable=True)
+    accepted_terms_privacy_user_agent = Column(Text, nullable=True)
+    accepted_terms_privacy_version = Column(String, nullable=True)
     email_notifications_enabled = Column(Boolean, nullable=False, default=True)
     email_notifications_unsubscribed_at = Column(DateTime(timezone=True), nullable=True)
     email_notifications_unsubscribe_reason = Column(Text, nullable=True)
@@ -296,6 +301,48 @@ class EnterpriseInterviewInvite(Base):
     client = relationship("EnterpriseClient", back_populates="interview_invites")
 
 
+class EnterpriseCalendarEvent(Base):
+    """A staff-created calendar event / reminder / task for the org's timeline.
+
+    The calendar also surfaces auto-derived deadlines from client data (target dates,
+    passport expiries); those are computed on the fly and not stored here. This table
+    only holds the manual events staff add ("call Rohan", "VFS appointment", etc.)."""
+    __tablename__ = "enterprise_calendar_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=True, index=True)
+    title = Column(String, nullable=False)
+    notes = Column(Text, nullable=True)
+    event_type = Column(String, nullable=False, default="reminder")  # reminder|task|follow_up|appointment|deadline|other
+    event_date = Column(Date, nullable=False, index=True)
+    event_time = Column(String, nullable=True)  # "HH:MM" (24h), optional
+    is_done = Column(Boolean, nullable=False, default=False, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_ent_calendar_org_date", "organization_id", "event_date"),
+    )
+
+
+class EnterpriseCalendarReminderRun(Base):
+    """Idempotency guard for the daily enterprise calendar-reminder email job
+    (one run per UTC day), mirroring AIDailyNotificationRun."""
+    __tablename__ = "enterprise_calendar_reminder_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_date = Column(Date, nullable=False, unique=True, index=True)
+    status = Column(String, nullable=False, default="running")  # running | completed | failed
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    recipients_emailed = Column(Integer, nullable=False, default=0)
+    events_considered = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+
+
 class EnterpriseSubscription(Base):
     """Per-organization SaaS subscription (the consultancy's own plan)."""
     __tablename__ = "enterprise_subscriptions"
@@ -327,6 +374,72 @@ class EnterpriseSubscriptionPayment(Base):
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
     razorpay_subscription_id = Column(String, nullable=True, index=True)
     status = Column(String, nullable=False, default="created")  # created|verified|failed
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterpriseCreditWallet(Base):
+    """Prepaid 'Rilono Credits' wallet for an organization (the B2B revenue model).
+
+    Agencies top up via Razorpay and spend credits on premium Gemini features
+    (Deep Scan document audits, AI mock interviews). 1 credit = ₹10 (see
+    app/enterprise_credits.py). The core CRM is free up to a student limit; beyond
+    it a flat monthly infrastructure fee applies (tracked via infra_fee_paid_until).
+    """
+    __tablename__ = "enterprise_credit_wallets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, unique=True, index=True)
+    balance_credits = Column(Integer, nullable=False, default=0)
+    lifetime_purchased_credits = Column(Integer, nullable=False, default=0)
+    lifetime_spent_credits = Column(Integer, nullable=False, default=0)
+    infra_fee_paid_until = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterpriseCreditTransaction(Base):
+    """One entry in an organization's credit ledger (top-up, debit, bonus, adjustment)."""
+    __tablename__ = "enterprise_credit_transactions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    type = Column(String, nullable=False, index=True)  # topup | debit | bonus | adjustment
+    action_key = Column(String, nullable=True, index=True)  # deep_scan | mock_interview (for debits)
+    credits = Column(Integer, nullable=False)  # signed: + for topup/bonus, - for debit
+    balance_after = Column(Integer, nullable=False, default=0)
+    description = Column(String, nullable=True)
+    reference_type = Column(String, nullable=True)  # interview_session | client | payment
+    reference_id = Column(Integer, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_ent_credit_txn_org_created", "organization_id", "created_at"),
+    )
+
+
+class EnterpriseCreditPayment(Base):
+    """A Razorpay charge in the credit system: a credit-package top-up or the
+    monthly infrastructure server fee."""
+    __tablename__ = "enterprise_credit_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    provider = Column(String, nullable=False, default="razorpay")
+    kind = Column(String, nullable=False, default="credits", index=True)  # credits | infra_fee
+    package_key = Column(String, nullable=True)  # starter | pro | enterprise | infra
+    credits = Column(Integer, nullable=False, default=0)        # base credits in the package
+    bonus_credits = Column(Integer, nullable=False, default=0)  # promotional bonus credits
+    amount_paise = Column(Integer, nullable=False)
+    currency = Column(String, nullable=False, default="INR")
+    razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
+    razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
+    status = Column(String, nullable=False, default="created")  # created | verified | failed
     verified_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -405,6 +518,10 @@ class Subscription(Base):
     document_uploads_used = Column(Integer, nullable=False, default=0)
     prep_sessions_used = Column(Integer, nullable=False, default=0)
     mock_interviews_used = Column(Integer, nullable=False, default=0)
+    # Visa Success Pass (B2C one-time pass) freemium counters.
+    ds160_autofills_used = Column(Integer, nullable=False, default=0)
+    red_flag_scans_used = Column(Integer, nullable=False, default=0)
+    pass_voice_interviews_used = Column(Integer, nullable=False, default=0)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     ends_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -501,3 +618,31 @@ class F1VisaNewsItem(Base):
     source_url = Column(String, nullable=True)
     published_date = Column(String, nullable=True)  # "YYYY-MM-DD" or "unknown"
     ingested_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+class AiOptimizationEvent(Base):
+    """A GCP cost-optimization event: an off-topic prompt blocked before hitting the
+    model, or a context-cache hit/miss. Powers the admin 'tokens/₹ saved' report."""
+    __tablename__ = "ai_optimization_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kind = Column(String, nullable=False, index=True)   # guardrail_block | cache_hit | cache_miss
+    source = Column(String, nullable=False, index=True)  # feature, e.g. student_ai_chat, deep_scan
+    tokens_saved = Column(Integer, nullable=False, default=0)
+    cost_saved_usd = Column(Numeric(12, 6), nullable=False, default=0)
+    detail = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+class GeminiUsageEvent(Base):
+    """One Gemini API call's token usage + estimated cost, for the admin AI-cost tracker."""
+    __tablename__ = "gemini_usage_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String, nullable=False, index=True)   # feature, e.g. enterprise_copilot, mock_interview
+    model = Column(String, nullable=False, index=True)
+    prompt_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+    estimated_cost_usd = Column(Numeric(12, 6), nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

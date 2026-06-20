@@ -11,6 +11,7 @@ from app.subscriptions import (
 )
 from app.utils.rate_limiter import check_ip_rate_limit
 from app.utils.secure_artifacts import decrypt_artifact_bytes
+from app import ai_guardrails
 # Import Gemini configuration
 from app.utils import gemini_service as gemini_utils
 from typing import Optional, List
@@ -626,7 +627,7 @@ Your role:
 Instructions:
 {instruction_text}
 
-Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance."""
+Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance.{ai_guardrails.STUDENT_VISA_GUARDRAIL}"""
 
 def generate_ai_response(
     user_message: str,
@@ -740,7 +741,13 @@ Please provide a helpful response to the user's question:"""
 
         if response is None:
             raise RuntimeError(f"All configured Rilono AI chat models failed: {str(last_model_error)}")
-        
+
+        try:
+            from app import ai_usage
+            ai_usage.record_gemini_usage("student_ai_chat", model_name, response)
+        except Exception:
+            pass
+
         print("✅ RECEIVED RESPONSE FROM GEMINI:")
         print("-"*80)
         print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
@@ -832,6 +839,13 @@ def chat_with_ai(
             window_seconds=AI_CHAT_RATE_WINDOW_SECONDS,
             extra_key=str(current_user.id),
         )
+
+        # Cost guardrail: reject obviously off-topic ("free ChatGPT") prompts before
+        # spending any Gemini tokens. Borderline prompts pass through to the model,
+        # where the system-instruction guardrail handles them.
+        if ai_guardrails.is_off_topic(chat_message.message):
+            ai_guardrails.record_block(source="student_ai_chat", detail=source)
+            return ChatResponse(response=ai_guardrails.OFF_TOPIC_REFUSAL)
 
         count_toward_rilono_chat_limit = source in QUOTA_TRACKED_CHAT_SOURCES
 

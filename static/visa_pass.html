@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Visa Success Pass · Rilono</title>
+  <link rel="icon" href="/static/logo.png" />
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <style>
+    :root{
+      --bg:#0b1020; --card:#141a2e; --card-2:#1b2340; --border:#262f4d;
+      --text:#eef1f8; --muted:#9aa4c2; --brand:#6366f1; --brand-2:#8b5cf6;
+      --green:#10b981; --amber:#f59e0b; --red:#ef4444; --radius:16px;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+      background:radial-gradient(1200px 600px at 80% -10%, #1b2350 0%, var(--bg) 55%);color:var(--text);min-height:100vh}
+    a{color:inherit}
+    .wrap{max-width:920px;margin:0 auto;padding:24px 18px 80px}
+    .top{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+    .top img{width:34px;height:34px;border-radius:8px}
+    .top b{font-size:18px;letter-spacing:.2px}
+    .pill{margin-left:auto;font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px;border:1px solid var(--border)}
+    .pill.free{background:#1b2340;color:var(--muted)}
+    .pill.pass{background:rgba(16,185,129,.14);color:var(--green);border-color:rgba(16,185,129,.3)}
+    .hero{background:linear-gradient(135deg, rgba(99,102,241,.16), rgba(139,92,246,.10));
+      border:1px solid var(--border);border-radius:var(--radius);padding:26px;margin-bottom:22px}
+    .hero h1{margin:0 0 8px;font-size:26px}
+    .hero p{margin:0;color:var(--muted);font-size:14px;line-height:1.6}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px}
+    @media(max-width:640px){.grid{grid-template-columns:1fr}}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
+    .card h3{margin:0 0 6px;font-size:14px}
+    .quota-num{font-size:26px;font-weight:800;margin:2px 0}
+    .quota-sub{font-size:12px;color:var(--muted)}
+    .bar{height:6px;border-radius:99px;background:#222b49;margin-top:10px;overflow:hidden}
+    .bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--brand),var(--brand-2))}
+    .locked{color:var(--amber);font-weight:700}
+    .section-title{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:26px 0 12px;font-weight:700}
+    .btn{appearance:none;border:0;cursor:pointer;font-weight:700;border-radius:10px;padding:11px 16px;font-size:14px;
+      background:#222b49;color:var(--text);transition:filter .15s}
+    .btn:hover{filter:brightness(1.12)}
+    .btn-primary{background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff}
+    .btn-block{width:100%}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .pass-card{background:linear-gradient(135deg,#1c2444,#221a45);border:1px solid #34407a}
+    .price{font-size:38px;font-weight:900;line-height:1}
+    .price small{font-size:14px;color:var(--muted);font-weight:600}
+    .benefits{list-style:none;padding:0;margin:14px 0 18px}
+    .benefits li{padding:6px 0;font-size:14px;display:flex;gap:9px;align-items:flex-start}
+    .benefits li::before{content:"✓";color:var(--green);font-weight:900}
+    .scan-drop{border:1.5px dashed var(--border);border-radius:12px;padding:18px;text-align:center;background:#10162a}
+    .flag{border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:10px;background:var(--card-2)}
+    .flag.locked{filter:blur(.3px);opacity:.92;border-style:dashed}
+    .flag .sev{font-size:11px;font-weight:800;text-transform:uppercase;padding:3px 8px;border-radius:99px}
+    .sev.high{background:rgba(239,68,68,.16);color:#fca5a5}
+    .sev.medium{background:rgba(245,158,11,.16);color:#fcd34d}
+    .sev.low{background:rgba(16,185,129,.16);color:#86efac}
+    .flag h4{margin:8px 0 4px;font-size:15px}
+    .flag p{margin:0;font-size:13px;color:var(--muted);line-height:1.5}
+    .unlock-banner{margin-top:12px;padding:12px 14px;border-radius:10px;background:rgba(245,158,11,.1);
+      border:1px solid rgba(245,158,11,.3);color:#fcd34d;font-size:13px;font-weight:600;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .muted{color:var(--muted)}
+    .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#1b2340;border:1px solid var(--border);
+      padding:12px 18px;border-radius:12px;font-size:14px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
+    .toast.show{opacity:1}
+    .toast.error{border-color:rgba(239,68,68,.4);color:#fca5a5}
+    .toast.success{border-color:rgba(16,185,129,.4);color:#86efac}
+    .center-load{padding:70px;text-align:center;color:var(--muted)}
+    .spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;
+      display:inline-block;animation:spin .7s linear infinite;vertical-align:-2px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .auth-gate{text-align:center;padding:60px 20px}
+    .legal-foot{margin-top:40px;padding-top:22px;border-top:1px solid var(--border);text-align:center}
+    .legal-foot p{margin:0 auto 12px;max-width:640px;font-size:12px;line-height:1.6;color:var(--muted)}
+    .legal-foot-links{display:flex;flex-wrap:wrap;gap:8px 18px;justify-content:center;margin-bottom:12px}
+    .legal-foot-links a{font-size:13px;color:var(--muted);text-decoration:none;font-weight:600}
+    .legal-foot-links a:hover{color:var(--text);text-decoration:underline}
+    .legal-foot-copy{font-size:11px;color:var(--muted);opacity:.8}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'" />
+      <b>Rilono · Visa Success Pass</b>
+      <span class="pill free" id="statusPill">…</span>
+    </div>
+    <div id="app"><div class="center-load"><span class="spinner"></span> Loading your pass…</div></div>
+
+    <footer class="legal-foot">
+      <p>The Visa Success Pass is a one-time payment of ₹999 for 30 days of access — no subscription and no
+        auto-renewal. All payments are final and non-refundable. By purchasing you agree to our Terms.</p>
+      <nav class="legal-foot-links">
+        <a href="/terms">Terms &amp; Conditions</a>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/refund-policy">Refund Policy</a>
+        <a href="/delivery-policy">Delivery Policy</a>
+        <a href="/contact">Contact</a>
+      </nav>
+      <p class="legal-foot-copy">© <span id="footYear"></span> Rilono · Bengaluru, Karnataka, India · Secure payments via Razorpay</p>
+    </footer>
+  </div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+  (function(){
+    const $ = (s,r)=> (r||document).querySelector(s);
+    const API = "";
+    const esc = (s)=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    let STATE = null;
+
+    function toast(msg, type){
+      const t=$("#toast"); t.textContent=msg; t.className="toast show "+(type||"");
+      setTimeout(()=>t.className="toast",2600);
+    }
+    async function api(path, opts){
+      opts=opts||{};
+      const res = await fetch(API+path,{method:opts.method||"GET",credentials:"include",
+        headers:opts.body&&!opts.form?{"Content-Type":"application/json"}:{},
+        body:opts.form?opts.body:(opts.body?JSON.stringify(opts.body):undefined)});
+      let data=null; try{data=await res.json()}catch(e){}
+      if(!res.ok){const err=new Error((data&&(data.detail||data.message))||"Request failed");err.status=res.status;err.data=data;throw err;}
+      return data;
+    }
+
+    async function load(){
+      let d;
+      try{ d = await api("/api/pass/status"); }
+      catch(ex){
+        if(ex.status===401){ renderAuthGate(); return; }
+        $("#app").innerHTML = `<div class="card">Couldn't load your pass: ${esc(ex.message)}</div>`; return;
+      }
+      STATE = d;
+      render();
+    }
+
+    function renderAuthGate(){
+      $("#statusPill").style.display="none";
+      $("#app").innerHTML = `<div class="card auth-gate">
+        <h2>Sign in to view your Visa Success Pass</h2>
+        <p class="muted">Log in to rilono.com to see your free scans, DS-160 auto-fills and unlock the pass.</p>
+        <p style="margin-top:18px"><a class="btn btn-primary" href="/">Go to Rilono</a></p></div>`;
+    }
+
+    function quotaCard(f){
+      const unlimited = f.unlimited;
+      const pct = unlimited?100:(f.limit>0?Math.min(100,Math.round((f.used/f.limit)*100)):(f.locked?100:0));
+      const right = unlimited ? "Unlimited" :
+        (f.limit<=0 ? '<span class="locked">Pass only</span>' : `${Math.max(f.limit-f.used,0)} of ${f.limit} left`);
+      return `<div class="card">
+        <h3>${esc(f.label)}</h3>
+        <div class="quota-num">${unlimited?"∞":(f.limit<=0?"🔒":Math.max(f.limit-f.used,0))}</div>
+        <div class="quota-sub">${right}</div>
+        <div class="bar"><span style="width:${pct}%"></span></div>
+      </div>`;
+    }
+
+    function render(){
+      const e = STATE.entitlements;
+      const isPass = e.has_pass;
+      const pill = $("#statusPill");
+      pill.style.display="";
+      pill.className = "pill "+(isPass?"pass":"free");
+      pill.textContent = isPass ? `Pass active · ${e.pass.days_left} days left` : "Free plan";
+
+      const f = e.features;
+      const hero = isPass
+        ? `<div class="hero"><h1>🎉 Your Visa Success Pass is active</h1>
+            <p>${e.pass.days_left} days left. Unlimited document audits, unlimited DS-160 auto-fills, and ${f.voice_interview.remaining} of ${f.voice_interview.limit} AI voice mock interviews remaining.</p></div>`
+        : `<div class="hero"><h1>Pass your visa interview on the first try</h1>
+            <p>You're on the free plan: ${f.ds160_autofill.remaining} DS-160 auto-fills and ${f.red_flag_scan.remaining} red-flag scan left.
+            Unlock everything with a one-time <b>${esc(e.pass.price_display)}</b> Visa Success Pass — valid ${e.pass.duration_days} days.</p></div>`;
+
+      const passCard = isPass ? "" : `
+        <div class="section-title">Unlock everything</div>
+        <div class="card pass-card">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px">
+            <div>
+              <h3 style="font-size:18px">Visa Success Pass</h3>
+              <div class="muted" style="font-size:13px">One-time payment · no subscription</div>
+            </div>
+            <div style="text-align:right"><div class="price">${esc(e.pass.price_display)}</div><small>for ${e.pass.duration_days} days</small></div>
+          </div>
+          <ul class="benefits">${e.pass.benefits.map(b=>`<li>${esc(b)}</li>`).join("")}</ul>
+          <button class="btn btn-primary btn-block" id="buyBtn">Unlock the Pass · ${esc(e.pass.price_display)}</button>
+          <div class="muted" style="text-align:center;font-size:12px;margin-top:10px">Secure payment via Razorpay (UPI, NetBanking)</div>
+        </div>`;
+
+      $("#app").innerHTML = `
+        ${hero}
+        <div class="section-title">Your features</div>
+        <div class="grid">
+          ${quotaCard(f.ds160_autofill)}
+          ${quotaCard(f.red_flag_scan)}
+          ${quotaCard(f.voice_interview)}
+        </div>
+
+        <div class="section-title">Document Red-Flag scan</div>
+        <div class="card">
+          <p class="muted" style="margin:0 0 12px;font-size:13px">Upload a document (passport, I-20, bank statement…) and Gemini flags visa-refusal risks.
+            ${isPass?"You'll see every finding.":"On the free plan you'll see one finding — unlock the pass to reveal the rest."}</p>
+          <div class="scan-drop">
+            <input type="file" id="scanFile" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.txt" style="display:block;margin:0 auto 12px" />
+            <button class="btn btn-primary" id="scanBtn">Run Red-Flag scan</button>
+          </div>
+          <div id="scanResult"></div>
+        </div>
+
+        ${passCard}
+
+        <div class="section-title">Other tools</div>
+        <div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+          <button class="btn" id="ds160Btn">DS-160 auto-fill</button>
+          <button class="btn" id="voiceBtn">Start AI voice mock interview</button>
+          <span class="muted" style="font-size:12px">Free: ${f.ds160_autofill.limit} auto-fills · voice interviews are pass-only.</span>
+        </div>`;
+
+      const buy=$("#buyBtn"); if(buy) buy.onclick=checkout;
+      $("#scanBtn").onclick=runScan;
+      $("#ds160Btn").onclick=runDs160;
+      $("#voiceBtn").onclick=runVoice;
+    }
+
+    function paywall(ex){
+      if(ex.status===402){ toast(ex.message,"error"); const b=$("#buyBtn"); if(b) b.scrollIntoView({behavior:"smooth"}); return true; }
+      return false;
+    }
+
+    async function runScan(){
+      const fileEl=$("#scanFile");
+      if(!fileEl.files||!fileEl.files[0]){ toast("Choose a file first","error"); return; }
+      const btn=$("#scanBtn"); btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Scanning…';
+      const fd=new FormData(); fd.append("file",fileEl.files[0]);
+      let r;
+      try{ r=await api("/api/pass/red-flag-scan",{method:"POST",form:true,body:fd}); }
+      catch(ex){ btn.disabled=false; btn.textContent="Run Red-Flag scan"; if(paywall(ex))return; toast(ex.message,"error"); return; }
+      STATE.entitlements=r.entitlements;
+      btn.disabled=false; btn.textContent="Run Red-Flag scan";
+      renderScan(r); render(); // refresh quota
+      // re-render replaced #scanResult, so re-inject results after render
+      setTimeout(()=>renderScan(r),0);
+      toast("Scan complete","success");
+    }
+    function renderScan(r){
+      const box=$("#scanResult"); if(!box) return;
+      if(!r.flags.length){ box.innerHTML=`<div class="card" style="margin-top:12px"><b>✅ No red flags found.</b><div class="muted">${esc(r.summary||"")}</div></div>`; return; }
+      const flags = r.flags.map(f=>`
+        <div class="flag ${f.locked?"locked":""}">
+          <span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
+          <h4>${esc(f.title)}</h4><p>${esc(f.detail)}</p>
+        </div>`).join("");
+      const banner = (!r.reveal_all && r.hidden_flags>0)
+        ? `<div class="unlock-banner">🔒 ${r.hidden_flags} more issue${r.hidden_flags>1?"s":""} hidden.
+            <button class="btn btn-primary" style="padding:7px 12px" onclick="document.getElementById('buyBtn') && document.getElementById('buyBtn').scrollIntoView({behavior:'smooth'})">Unlock to reveal</button></div>`
+        : "";
+      box.innerHTML = `<div style="margin-top:6px"><div class="muted" style="font-size:13px;margin:8px 0">${esc(r.summary||"")}</div>${flags}${banner}</div>`;
+    }
+
+    async function runDs160(){
+      const btn=$("#ds160Btn"); btn.disabled=true;
+      try{ const r=await api("/api/pass/ds160/autofill",{method:"POST"}); STATE.entitlements=r.entitlements; render();
+        toast("DS-160 fields ready ("+Object.keys(r.fields).length+" mapped)","success"); }
+      catch(ex){ btn.disabled=false; if(paywall(ex))return; toast(ex.message,"error"); }
+    }
+    async function runVoice(){
+      const btn=$("#voiceBtn"); btn.disabled=true;
+      try{ const r=await api("/api/pass/voice-interview/consume",{method:"POST"}); STATE.entitlements=r.entitlements; render();
+        toast("Mock interview started · "+r.remaining+" left","success"); }
+      catch(ex){ btn.disabled=false; if(paywall(ex))return; toast(ex.message,"error"); }
+    }
+
+    async function checkout(){
+      let res;
+      try{ res=await api("/api/pass/checkout",{method:"POST"}); }
+      catch(ex){ toast(ex.message,"error"); return; }
+      if(res.action==="already_active"){ toast("Your pass is already active.","success"); STATE.entitlements=res.entitlements; render(); return; }
+      if(res.action!=="checkout"){ toast(res.message||"Checkout unavailable.","error"); return; }
+      if(typeof Razorpay==="undefined"){ toast("Payment library failed to load. Please refresh.","error"); return; }
+      const rzp=new Razorpay({
+        key:res.razorpay_key_id, amount:res.amount, currency:res.currency,
+        name:"Rilono", description:res.product_label+" ("+res.duration_days+" days)",
+        order_id:res.order_id, prefill:res.prefill, theme:{color:"#6366f1"},
+        handler: async function(resp){
+          try{
+            const v=await api("/api/pass/verify",{method:"POST",body:{
+              razorpay_order_id:resp.razorpay_order_id, razorpay_payment_id:resp.razorpay_payment_id, razorpay_signature:resp.razorpay_signature}});
+            STATE.entitlements=v.entitlements; render();
+            toast(v.message||"Pass activated!","success");
+          }catch(ex){ toast("Verification failed: "+ex.message,"error"); }
+        },
+      });
+      rzp.on("payment.failed",()=>toast("Payment was not completed.","error"));
+      rzp.open();
+    }
+
+    const footYearEl = document.getElementById("footYear");
+    if (footYearEl) footYearEl.textContent = new Date().getFullYear();
+
+    load();
+  })();
+  </script>
+</body>
+</html>
