@@ -1002,6 +1002,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Restore token for same-tab refresh persistence and check authentication.
     restoreAuthToken();
     await checkAuth();
+    loadSocialAuthButtons();
+    showOAuthErrorIfPresent();
     loadNotifications();
     updateFloatingChatVisibility();
     initializeRilonoAiAttachmentUi();
@@ -1395,6 +1397,52 @@ async function checkUniversityByEmail(email) {
         messageEl.style.color = 'var(--text-secondary)';
         messageEl.style.display = 'block';
     }
+}
+
+const SOCIAL_PROVIDER_ICONS = {
+    google: '<svg viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>',
+    microsoft: '<svg viewBox="0 0 21 21"><rect x="1" y="1" width="9" height="9" fill="#f25022"/><rect x="11" y="1" width="9" height="9" fill="#7fba00"/><rect x="1" y="11" width="9" height="9" fill="#00a4ef"/><rect x="11" y="11" width="9" height="9" fill="#ffb900"/></svg>',
+    apple: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.36 12.78c-.02-2.28 1.86-3.38 1.95-3.43-1.06-1.56-2.72-1.77-3.31-1.79-1.41-.14-2.75.83-3.46.83-.71 0-1.81-.81-2.98-.79-1.53.02-2.95.89-3.74 2.26-1.6 2.77-.41 6.87 1.14 9.12.76 1.1 1.66 2.34 2.84 2.29 1.14-.05 1.57-.74 2.95-.74 1.38 0 1.76.74 2.96.71 1.22-.02 2-1.12 2.75-2.22.86-1.27 1.22-2.5 1.24-2.57-.03-.01-2.38-.91-2.4-3.62zM14.13 5.9c.63-.76 1.05-1.82.94-2.88-.91.04-2 .61-2.65 1.37-.58.67-1.09 1.75-.95 2.78 1.01.08 2.04-.51 2.66-1.27z"/></svg>',
+};
+
+function renderSocialButtons(container, providers, dividerEl) {
+    if (!container) return;
+    if (!providers || !providers.length) {
+        container.innerHTML = '';
+        if (dividerEl) dividerEl.style.display = 'none';
+        return;
+    }
+    container.innerHTML = providers.map((p) => {
+        const key = p.key;
+        const icon = SOCIAL_PROVIDER_ICONS[key] || '';
+        return `<a class="social-btn social-btn-${key}" href="${API_BASE}/api/auth/oauth/${key}/start">${icon}<span>Continue with ${p.label}</span></a>`;
+    }).join('');
+    if (dividerEl) dividerEl.style.display = '';
+}
+
+async function loadSocialAuthButtons() {
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/oauth/providers`, { credentials: 'include' });
+        if (!response.ok) return;
+        const data = await response.json();
+        const providers = (data && data.providers) || [];
+        renderSocialButtons(document.getElementById('socialAuthLogin'), providers, document.getElementById('socialAuthLoginDivider'));
+        renderSocialButtons(document.getElementById('socialAuthRegister'), providers, document.getElementById('socialAuthRegisterDivider'));
+    } catch (error) {
+        // Social login is optional — fail silently and leave the email forms.
+    }
+}
+
+function showOAuthErrorIfPresent() {
+    try {
+        const err = new URLSearchParams(window.location.search).get('auth_error');
+        if (!err) return;
+        if (typeof showMessage === 'function') showMessage(err, 'error');
+        const params = new URLSearchParams(window.location.search);
+        params.delete('auth_error');
+        const qs = params.toString();
+        window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+    } catch (e) { /* ignore */ }
 }
 
 async function checkAuth() {
@@ -3508,16 +3556,95 @@ function normalizeCouponCode(rawValue = '') {
     return String(rawValue || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
 }
 
+// Rilono's single paid product: the one-time Visa Success Pass (₹999 / 30 days).
+// A clean in-app checkout — no separate page, no feature/quota re-listing.
+async function openVisaPassCheckout() {
+    const modal = document.getElementById('checkoutLaunchModal');
+    if (!modal) { await startVisaPassPayment(); return; }
+    checkoutLaunchResolver = null; // never fire the legacy recurring resolver
+    const continueBtn = document.getElementById('checkoutLaunchContinueBtn');
+    if (continueBtn) {
+        continueBtn.disabled = false;
+        continueBtn.textContent = 'Continue to pay';
+        continueBtn.onclick = () => startVisaPassPayment();
+    }
+    modal.style.display = 'flex';
+}
+
+async function startVisaPassPayment() {
+    const continueBtn = document.getElementById('checkoutLaunchContinueBtn');
+    const setBtn = (txt, disabled) => { if (continueBtn) { continueBtn.textContent = txt; continueBtn.disabled = disabled; } };
+    setBtn('Opening checkout…', true);
+
+    let data;
+    try {
+        const response = await fetch(`${API_BASE}/api/pass/checkout`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        });
+        data = await response.json().catch(() => ({}));
+        if (!response.ok) { showMessage(data.detail || 'Could not start checkout.', 'error'); setBtn('Continue to pay', false); return; }
+    } catch (ex) {
+        showMessage('Could not start checkout. Please try again.', 'error'); setBtn('Continue to pay', false); return;
+    }
+
+    if (data.action === 'already_active') {
+        closeCheckoutLaunchModal(false);
+        await loadSubscriptionStatus(true);
+        showMessage(data.message || 'Your Visa Success Pass is already active.', 'success');
+        return;
+    }
+    if (data.action !== 'checkout') {
+        showMessage(data.message || 'Online payment is being enabled. Please try again shortly.', 'error');
+        setBtn('Continue to pay', false); return;
+    }
+    if (typeof window.Razorpay !== 'function') {
+        showMessage('Razorpay failed to load. Please refresh and try again.', 'error'); setBtn('Continue to pay', false); return;
+    }
+
+    const rzp = new window.Razorpay({
+        key: data.razorpay_key_id,
+        amount: data.amount,
+        currency: data.currency,
+        name: 'Rilono',
+        description: (data.product_label || 'Visa Success Pass') + ' (' + (data.duration_days || 30) + ' days)',
+        order_id: data.order_id,
+        prefill: data.prefill || { name: currentUser?.full_name || '', email: currentUser?.email || '' },
+        theme: { color: '#6366f1' },
+        handler: async function (resp) {
+            try {
+                const vr = await fetch(`${API_BASE}/api/pass/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+                    body: JSON.stringify({
+                        razorpay_order_id: resp.razorpay_order_id,
+                        razorpay_payment_id: resp.razorpay_payment_id,
+                        razorpay_signature: resp.razorpay_signature,
+                    }),
+                });
+                const vd = await vr.json().catch(() => ({}));
+                if (!vr.ok) { showMessage(vd.detail || 'Payment verification failed.', 'error'); return; }
+                await loadSubscriptionStatus(true);
+                showMessage(vd.message || 'Visa Success Pass activated! 🎉', 'success');
+            } catch (ex) {
+                showMessage('Payment verification failed: ' + (ex.message || ''), 'error');
+            }
+        },
+    });
+    rzp.on('payment.failed', () => showMessage('Payment was not completed.', 'error'));
+    closeCheckoutLaunchModal(false);
+    setBtn('Continue to pay', false);
+    rzp.open();
+}
+
 async function handleUpgradeToPro(source = '', preferredPricingModel = PRICING_MODEL_MONTHLY) {
     if (!authToken) {
         showRegister();
         return;
     }
 
-    // Rilono now sells a single one-time "Visa Success Pass" (₹999 / 30 days) instead
-    // of the old recurring Pro plans. Route every upgrade entry point (pricing cards,
-    // profile switcher, copilot tab, paywalls) to the dedicated pass page.
-    window.location.href = '/visa-pass';
+    // Single paid product: open the simple in-app Visa Success Pass checkout.
+    await openVisaPassCheckout();
     return;
 
     const requestedPricingModel = normalizePricingModel(preferredPricingModel);

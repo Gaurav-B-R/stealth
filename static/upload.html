@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Upload your documents · Rilono</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="/static/logo.png" />
+  <style>
+    :root{
+      --grad:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);
+      --primary:#6366f1;--primary-600:#4f46e5;--text:#0f172a;--text-2:#475569;--muted:#94a3b8;
+      --surface:#fff;--surface-2:#f8fafc;--border:#e7e9f3;--border-strong:#d6d9ea;--danger:#ef4444;--success:#10b981;
+      --radius:16px;--radius-sm:11px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    }
+    *{box-sizing:border-box}html,body{margin:0;padding:0}
+    body{font-family:var(--font);color:var(--text);background:
+      radial-gradient(900px 500px at 15% -5%,rgba(99,102,241,.16),transparent 60%),
+      radial-gradient(800px 480px at 90% 0%,rgba(124,58,237,.12),transparent 55%),#eef0f8;
+      min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:28px 16px;-webkit-font-smoothing:antialiased;}
+    .wrap{width:100%;max-width:640px;}
+    .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:18px;color:#312e81;font-weight:800;font-size:15px;}
+    .brand img{height:30px;width:30px;border-radius:8px;object-fit:cover}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 18px 48px rgba(15,23,42,.14);overflow:hidden;}
+    .hero{background:var(--grad);color:#fff;padding:24px 28px;}
+    .hero .eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9}
+    .hero h1{margin:8px 0 0;font-size:22px;}
+    .hero .sub{margin:6px 0 0;opacity:.92;font-size:14px}
+    .body{padding:26px 28px;}
+    .muted{color:var(--muted)} .t2{color:var(--text-2)}
+    .lead{color:var(--text-2);line-height:1.65;font-size:15px;margin:0 0 18px}
+    .pill{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:6px 13px;font-size:13px;font-weight:700;margin-bottom:18px}
+    .note{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:14px;color:#334155;margin:0 0 18px;line-height:1.55}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1.5px solid transparent;border-radius:var(--radius-sm);
+      font-family:var(--font);font-size:15px;font-weight:700;padding:13px 22px;cursor:pointer;transition:box-shadow .15s,transform .08s,background .15s;}
+    .btn:active{transform:translateY(1px)} .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn-primary{background:var(--grad);color:#fff;box-shadow:0 8px 22px rgba(99,102,241,.32)}
+    .btn-primary:hover{box-shadow:0 12px 28px rgba(99,102,241,.42)}
+    .btn-soft{background:rgba(99,102,241,.1);color:var(--primary-600);font-size:13.5px;padding:9px 14px}
+    .btn-ghost{background:var(--surface);color:var(--text);border-color:var(--border-strong);font-size:13.5px;padding:9px 14px}
+    .btn-sm{font-size:13.5px;padding:9px 15px}
+    .input{width:100%;font-family:var(--font);font-size:16px;color:var(--text);background:var(--surface-2);border:1.5px solid var(--border-strong);
+      border-radius:var(--radius-sm);padding:13px 15px;outline:none;transition:border-color .15s,box-shadow .15s}
+    .input:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+    .code-input{letter-spacing:.32em;text-align:center;font-size:24px;font-weight:700}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .err{background:rgba(239,68,68,.08);color:#b91c1c;border:1px solid rgba(239,68,68,.22);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:14px}
+    .ok{background:rgba(16,185,129,.1);color:#047857;border:1px solid rgba(16,185,129,.28);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:14px}
+    .hidden{display:none!important}
+    .center{text-align:center}
+    .spinner{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
+    .spinner.dark{border-color:rgba(99,102,241,.25);border-top-color:var(--primary)}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .load-wrap{display:flex;justify-content:center;padding:60px 0}
+    .progress{font-size:13.5px;color:var(--text-2);font-weight:600;margin:0 0 14px}
+    /* document item list */
+    .doc-list{display:flex;flex-direction:column;gap:12px}
+    .doc-item{border:1px solid var(--border);border-radius:12px;padding:14px;background:var(--surface-2);}
+    .doc-item.done{border-color:rgba(16,185,129,.5);background:rgba(16,185,129,.06)}
+    .doc-top{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap}
+    .doc-name{font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px}
+    .doc-badge{font-size:12px;font-weight:700;border-radius:999px;padding:3px 10px}
+    .doc-badge.pending{background:#fef3c7;color:#92400e}
+    .doc-badge.received{background:rgba(16,185,129,.16);color:#047857}
+    .doc-actions{display:flex;align-items:center;gap:9px;margin-top:11px;flex-wrap:wrap}
+    .file-label{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px;font-weight:600;color:var(--primary-600);
+      background:rgba(99,102,241,.1);border-radius:var(--radius-sm);padding:9px 14px;border:1.5px solid transparent}
+    .file-label:hover{background:rgba(99,102,241,.18)}
+    .file-name{font-size:13px;color:var(--text-2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .foot{text-align:center;margin-top:16px;color:var(--muted);font-size:12px}
+    .secure-line{display:flex;align-items:center;gap:7px;justify-content:center;color:var(--text-2);font-size:12.5px;margin-top:18px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><img src="/static/logo.png" alt="" onerror="this.style.display='none'"> Powered by Rilono</div>
+    <div class="card">
+      <div id="loading" class="load-wrap"><span class="spinner dark"></span></div>
+
+      <!-- invalid -->
+      <div id="invalidView" class="hidden">
+        <div class="hero"><div class="eyebrow">Document upload</div><h1>Link unavailable</h1></div>
+        <div class="body"><p class="lead" id="invalidMsg">This upload link is invalid or has expired. Please ask your consultancy for a new link.</p></div>
+      </div>
+
+      <!-- verify -->
+      <div id="verifyView" class="hidden">
+        <div class="hero">
+          <div class="eyebrow" id="vOrg">Your consultancy</div>
+          <h1>📄 Upload your documents</h1>
+          <div class="sub">Securely send the documents requested for your visa application.</div>
+        </div>
+        <div class="body">
+          <p class="lead" id="vLead"></p>
+          <div id="vError" class="err hidden"></div>
+          <div id="vMsg" class="ok hidden"></div>
+
+          <div id="vStep1">
+            <p class="t2" style="font-size:14px;margin:0 0 14px">To confirm it's you, we'll email a 6-digit code to <b id="vEmail"></b>.</p>
+            <button class="btn btn-primary" id="sendCodeBtn">Send verification code</button>
+          </div>
+
+          <div id="vStep2" class="hidden">
+            <label class="t2" style="font-size:13px;font-weight:600;display:block;margin-bottom:8px">Enter the 6-digit code</label>
+            <input class="input code-input" id="codeInput" inputmode="numeric" maxlength="6" placeholder="••••••" />
+            <div class="row" style="margin-top:14px">
+              <button class="btn btn-primary" id="verifyBtn">Verify &amp; continue</button>
+              <button class="btn btn-ghost" id="resendBtn">Resend code</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- upload -->
+      <div id="uploadView" class="hidden">
+        <div class="hero">
+          <div class="eyebrow" id="uOrg">Your consultancy</div>
+          <h1>📄 Upload your documents</h1>
+          <div class="sub" id="uSub"></div>
+        </div>
+        <div class="body">
+          <div id="uNote" class="note hidden"></div>
+          <div class="progress" id="uProgress"></div>
+          <div id="uError" class="err hidden"></div>
+          <div class="doc-list" id="docList"></div>
+          <div id="allDone" class="ok hidden" style="margin-top:16px">✓ All requested documents have been uploaded. Thank you! You can close this page.</div>
+          <div class="secure-line">🔒 Your files are encrypted and only visible to your consultancy.</div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">🔒 This link is personal to you. Don't share it.<br>
+      <a href="/privacy" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Privacy Policy</a> ·
+      <a href="/terms" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Terms</a>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var token = location.pathname.split("/").filter(Boolean).pop();
+      var API = "/api/enterprise/public/document-request";
+      var $ = function (id) { return document.getElementById(id); };
+      var info = null, sessionToken = null, items = [];
+
+      function show(id) { ["loading","invalidView","verifyView","uploadView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
+      function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+      function api(path, body){ return fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})})
+        .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw new Error((d&&(d.detail||d.message))||"Something went wrong"); return d; }); }); }
+
+      function load(){
+        fetch(API+"/"+encodeURIComponent(token)).then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw new Error((d&&d.detail)||"Invalid link"); return d; }); })
+          .then(function(d){ info=d; renderVerify(); })
+          .catch(function(ex){ $("invalidMsg").textContent=ex.message||"This link is invalid or has expired."; show("invalidView"); });
+      }
+
+      function renderVerify(){
+        $("vOrg").textContent=info.organization_name||"Your consultancy";
+        var n=(info.items||[]).length;
+        $("vLead").innerHTML="Hi <b>"+esc(info.client_first_name)+"</b>, "+esc(info.organization_name||"your consultancy")+" has requested <b>"+n+" document"+(n===1?"":"s")+"</b> for your visa application.";
+        $("vEmail").textContent=info.masked_email||"your email";
+        show("verifyView");
+      }
+
+      $("sendCodeBtn").onclick=function(){ var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Sending…';
+        api("/"+encodeURIComponent(token)+"/send-code").then(function(d){ $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
+          $("vMsg").textContent="We sent a 6-digit code to "+(d.masked_email||info.masked_email)+"."; $("vMsg").classList.remove("hidden"); $("codeInput").focus();
+        }).catch(function(ex){ $("vError").textContent=ex.message; $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
+      $("resendBtn").onclick=function(){ $("vError").classList.add("hidden"); $("sendCodeBtn").click(); };
+      $("verifyBtn").onclick=function(){ var code=($("codeInput").value||"").trim(); $("vError").classList.add("hidden");
+        if(code.length<4){ $("vError").textContent="Enter the 6-digit code."; $("vError").classList.remove("hidden"); return; }
+        var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Verifying…';
+        api("/"+encodeURIComponent(token)+"/verify",{code:code}).then(function(d){ sessionToken=d.session_token; items=d.items||[]; info.message=d.message; renderUpload(); })
+          .catch(function(ex){ $("vError").textContent=ex.message; $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Verify & continue"; }); };
+      $("codeInput").addEventListener("keydown",function(e){ if(e.key==="Enter") $("verifyBtn").click(); });
+
+      function renderUpload(){
+        $("uOrg").textContent=info.organization_name||"";
+        $("uSub").textContent="Upload each requested document below.";
+        if(info.message){ $("uNote").innerHTML="<b>Note from "+esc(info.organization_name||"your consultancy")+":</b><br>"+esc(info.message); $("uNote").classList.remove("hidden"); }
+        show("uploadView");
+        drawItems();
+      }
+
+      function itemRow(it){
+        var done=it.status==="received";
+        return '<div class="doc-item'+(done?" done":"")+'" data-id="'+it.id+'">'+
+          '<div class="doc-top"><div class="doc-name">'+(done?"✅":"📎")+' '+esc(it.document_type)+'</div>'+
+          '<span class="doc-badge '+(done?"received":"pending")+'">'+(done?"Received":"Pending")+'</span></div>'+
+          '<div class="doc-actions">'+
+            '<label class="file-label">'+(done?"Replace file":"Choose file")+
+              '<input type="file" class="file-in" data-id="'+it.id+'" style="display:none" '+
+              'accept=".pdf,.jpg,.jpeg,.png,.webp,.gif,.heic,.doc,.docx,.xls,.xlsx,.csv,.txt" /></label>'+
+            '<span class="file-name" data-name="'+it.id+'"></span>'+
+            '<button class="btn btn-primary btn-sm up-btn hidden" data-id="'+it.id+'">Upload</button>'+
+          '</div></div>';
+      }
+
+      function drawItems(){
+        var received=items.filter(function(i){return i.status==="received";}).length;
+        $("uProgress").textContent=received+" of "+items.length+" uploaded";
+        $("docList").innerHTML=items.map(itemRow).join("");
+        $("allDone").classList.toggle("hidden", !(items.length>0 && received>=items.length));
+        Array.prototype.forEach.call(document.querySelectorAll(".file-in"), function(inp){
+          inp.addEventListener("change", function(){ onPick(this); });
+        });
+        Array.prototype.forEach.call(document.querySelectorAll(".up-btn"), function(btn){
+          btn.addEventListener("click", function(){ doUpload(parseInt(this.dataset.id,10)); });
+        });
+      }
+
+      var picked = {}; // item_id -> File
+      function onPick(inp){
+        var id=parseInt(inp.dataset.id,10); var f=inp.files&&inp.files[0];
+        var nameEl=document.querySelector('.file-name[data-name="'+id+'"]');
+        var btn=document.querySelector('.up-btn[data-id="'+id+'"]');
+        if(f){ picked[id]=f; if(nameEl) nameEl.textContent=f.name; if(btn) btn.classList.remove("hidden"); }
+        else { delete picked[id]; if(nameEl) nameEl.textContent=""; if(btn) btn.classList.add("hidden"); }
+      }
+
+      function doUpload(id){
+        var f=picked[id]; if(!f) return;
+        var btn=document.querySelector('.up-btn[data-id="'+id+'"]'); if(!btn) return;
+        $("uError").classList.add("hidden");
+        btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Uploading…';
+        var fd=new FormData(); fd.append("session_token",sessionToken); fd.append("item_id",String(id)); fd.append("file",f);
+        fetch(API+"/upload",{method:"POST",body:fd})
+          .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw new Error((d&&(d.detail||d.message))||"Upload failed"); return d; }); })
+          .then(function(d){ items=d.items||items; delete picked[id]; drawItems(); })
+          .catch(function(ex){ $("uError").textContent=ex.message; $("uError").classList.remove("hidden"); btn.disabled=false; btn.textContent="Upload"; });
+      }
+
+      load();
+    })();
+  </script>
+</body>
+</html>

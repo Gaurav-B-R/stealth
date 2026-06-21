@@ -72,10 +72,13 @@ def _request_uses_https(request: Request) -> bool:
 def _resolve_auth_cookie_secure(request: Request) -> bool:
     if AUTH_COOKIE_SECURE:
         return True
-    if _cookie_secure_default():
-        return True
+    # A Secure cookie is dropped by the browser over plain http, so a local http
+    # host must never get one (otherwise e.g. OAuth-on-localhost silently logs out).
+    # This is checked before the production default so it works without ENVIRONMENT.
     if _is_local_hostname(request.url.hostname) and not _request_uses_https(request):
         return False
+    if _cookie_secure_default():
+        return True
     return True
 
 

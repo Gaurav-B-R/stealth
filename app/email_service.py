@@ -1370,6 +1370,158 @@ def send_enterprise_interview_code_email(
         return False, None, str(e)[:500]
 
 
+def send_enterprise_document_request_email(
+    *,
+    to_email: str,
+    client_name: Optional[str],
+    organization_name: str,
+    upload_url: str,
+    document_types: list,
+    message: Optional[str] = None,
+    logo_url: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email a client a secure link to upload the specific documents staff requested."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = (organization_name or "Your consultancy").strip()
+    name = (client_name or "").strip() or "there"
+    types = [str(t).strip() for t in (document_types or []) if str(t).strip()]
+    safe_org = escape(org_label)
+    safe_name = escape(name)
+    safe_url = escape(upload_url)
+    count = len(types)
+    count_text = "1 document" if count == 1 else f"{count} documents"
+    items_html = "".join(
+        f'<li style="margin:4px 0;">{escape(t)}</li>' for t in types
+    ) or "<li>Requested documents</li>"
+    items_text = "\n".join(f"  • {t}" for t in types) or "  • Requested documents"
+
+    note_block = ""
+    note_text = ""
+    clean_message = (message or "").strip()
+    if clean_message:
+        note_block = (
+            '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;'
+            'padding:12px 14px;font-size:14px;color:#334155;margin:0 0 18px;">'
+            f'<b>Note from {safe_org}:</b><br>{escape(clean_message)}</div>'
+        )
+        note_text = f"\nNote from {org_label}: {clean_message}\n"
+
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
+                      'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
+
+    subject = f"{org_label} needs {count_text} for your visa application"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:26px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
+              {logo_block}
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
+              <h1 style="margin:8px 0 0 0;font-size:23px;">📄 Document upload request</h1>
+            </td></tr>
+            <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
+              <p style="margin:0 0 14px;">Hi {safe_name},</p>
+              <p style="margin:0 0 16px;">{safe_org} has requested the following document{"s" if count != 1 else ""} for your visa application. You can upload them securely using the button below.</p>
+              {note_block}
+              <div style="background:#eef2ff;color:#3730a3;padding:14px 16px;border-radius:10px;font-size:14px;margin-bottom:20px;">
+                <b>Please upload:</b>
+                <ul style="margin:8px 0 0;padding-left:20px;">{items_html}</ul>
+              </div>
+              <div style="text-align:center;margin:8px 0 18px;">
+                <a href="{safe_url}" style="display:inline-block;padding:13px 26px;border-radius:10px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#fff;font-size:15px;font-weight:700;text-decoration:none;">Upload my documents →</a>
+              </div>
+              <p style="margin:14px 0 0;font-size:13px;color:#64748b;">🔒 For your security, you'll confirm a one-time code sent to this email before uploading, and your files are encrypted. This link is personal to you — please don't share it.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        f"Hi {name},\n\n{org_label} has requested the following document(s) for your visa application:\n"
+        f"{items_text}\n{note_text}\nUpload securely here: {upload_url}\n\n"
+        "For your security, you'll confirm a one-time code sent to this email before uploading. "
+        "This link is personal to you.\n"
+    )
+    try:
+        params = {
+            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def send_enterprise_document_request_code_email(
+    *,
+    to_email: str,
+    client_name: Optional[str],
+    organization_name: str,
+    code: str,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email the one-time verification code for the secure document upload link."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+    org_label = (organization_name or "Your consultancy").strip()
+    safe_org = escape(org_label)
+    safe_code = escape(str(code))
+    subject = f"{code} is your document upload verification code"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:28px;color:#0f172a;text-align:center;">
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;">{safe_org}</div>
+              <p style="margin:14px 0 8px;font-size:15px;">Your document upload verification code is:</p>
+              <div style="font-size:34px;font-weight:800;letter-spacing:.18em;color:#4338ca;margin:6px 0 14px;">{safe_code}</div>
+              <p style="margin:0;font-size:13px;color:#64748b;">This code expires in 15 minutes. If you didn't request it, you can ignore this email.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = f"{org_label}\n\nYour document upload verification code is: {code}\nThis code expires in 15 minutes.\n"
+    try:
+        params = {
+            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
 def send_founder_new_verified_user_alert(
     *,
     user_id: int,
@@ -1741,4 +1893,71 @@ def send_enterprise_calendar_digest_email(
         return False
     except Exception as e:
         print(f"Error sending calendar digest email to {to_email}: {str(e)}")
+        return False
+
+
+ENTERPRISE_SUPPORT_INBOX = (os.getenv("ENTERPRISE_SUPPORT_INBOX", "contact@rilono.com").strip() or "contact@rilono.com")
+
+
+def send_enterprise_support_request_email(
+    *,
+    request_type: str,
+    subject: str,
+    message: str,
+    org_name: str,
+    requester_name: str,
+    requester_email: str,
+    portal_url: str = DEFAULT_PUBLIC_BASE_URL,
+) -> bool:
+    """Notify the support inbox of an enterprise help/feature request. Reply-To is the
+    requester so the team can respond directly. No-ops without Resend."""
+    if not RESEND_API_KEY:
+        print("Enterprise support email skipped: RESEND_API_KEY not configured.")
+        return False
+
+    is_feature = (request_type or "").strip().lower() == "feature_request"
+    kind_label = "Feature request" if is_feature else "Help / support request"
+    safe_subject = escape(re.sub(r"[\r\n]+", " ", (subject or "").strip()) or "(No subject)")
+    safe_message = escape((message or "").strip()).replace("\n", "<br>")
+    safe_org = escape((org_name or "").strip() or "Unknown organization")
+    safe_name = escape((requester_name or "").strip() or "Unknown")
+    clean_email = re.sub(r"[\r\n]+", " ", (requester_email or "").strip())
+    safe_email = escape(clean_email)
+    accent = "#8b5cf6" if is_feature else "#6366f1"
+    emoji = "💡" if is_feature else "🛟"
+
+    html_content = f"""<!DOCTYPE html><html><body style="margin:0;background:#f5f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">
+      <div style="max-width:600px;margin:0 auto;padding:24px 18px">
+        <div style="background:#fff;border:1px solid #e7e9f3;border-radius:12px;overflow:hidden">
+          <div style="background:{accent};color:#fff;padding:22px 24px">
+            <div style="font-size:13px;opacity:.9;font-weight:600">Rilono Enterprise</div>
+            <div style="font-size:20px;font-weight:800;margin-top:4px">{emoji} {kind_label}</div>
+          </div>
+          <div style="padding:22px 24px;color:#0f172a">
+            <table style="width:100%;border-collapse:collapse;font-size:14px">
+              <tr><td style="padding:6px 0;color:#64748b;width:120px">Organization</td><td style="padding:6px 0;font-weight:600">{safe_org}</td></tr>
+              <tr><td style="padding:6px 0;color:#64748b">From</td><td style="padding:6px 0;font-weight:600">{safe_name} &lt;{safe_email}&gt;</td></tr>
+              <tr><td style="padding:6px 0;color:#64748b">Subject</td><td style="padding:6px 0;font-weight:600">{safe_subject}</td></tr>
+            </table>
+            <div style="margin-top:16px;padding:14px;background:#f8fafc;border:1px solid #e7e9f3;border-radius:8px;font-size:14px;line-height:1.6;color:#0f172a">{safe_message}</div>
+          </div>
+        </div>
+      </div></body></html>"""
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [ENTERPRISE_SUPPORT_INBOX],
+            "subject": f"[Rilono Enterprise · {kind_label}] {subject.strip()[:120]}",
+            "html": html_content,
+        }
+        if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", clean_email):
+            params["reply_to"] = clean_email
+        email_response = resend.Emails.send(params)
+        if _extract_resend_email_id(email_response):
+            return True
+        print(f"Failed to send enterprise support email. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending enterprise support email: {str(e)}")
         return False

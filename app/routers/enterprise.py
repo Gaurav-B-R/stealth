@@ -22,6 +22,7 @@ from app import models
 from app import enterprise_catalog as catalog
 from app import enterprise_billing as billing
 from app import enterprise_credits as credits
+from app import enterprise_coupons
 from app import enterprise_ai
 from app import enterprise_interview
 from app import ai_guardrails
@@ -46,7 +47,9 @@ from app.utils.rate_limiter import (
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 from app.email_service import send_enterprise_team_invite_email, send_enterprise_client_email
 from app.email_service import send_enterprise_interview_invite_email, send_enterprise_interview_code_email
+from app.email_service import send_enterprise_document_request_email, send_enterprise_document_request_code_email
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
+from app.email_service import send_enterprise_support_request_email
 from app.utils.token_security import hash_token
 
 RAZORPAY_API_BASE = os.getenv("RAZORPAY_API_BASE", "https://api.razorpay.com/v1").rstrip("/")
@@ -1619,6 +1622,7 @@ class EnterpriseBulkEmailRequest(BaseModel):
 class EnterpriseBillingCheckoutRequest(BaseModel):
     plan: str = Field(..., min_length=2, max_length=30)
     billing_cycle: str = Field(default="monthly", max_length=12)
+    coupon_code: Optional[str] = Field(default=None, max_length=40)
 
 
 class EnterpriseBillingVerifyRequest(BaseModel):
@@ -1629,6 +1633,15 @@ class EnterpriseBillingVerifyRequest(BaseModel):
 
 class EnterpriseCreditTopupRequest(BaseModel):
     package: str = Field(..., min_length=2, max_length=30)
+    coupon_code: Optional[str] = Field(default=None, max_length=40)
+
+
+class EnterpriseCouponValidateRequest(BaseModel):
+    code: str = Field(..., min_length=1, max_length=40)
+    context: str = Field(default="credits", max_length=12)  # credits | billing
+    package: Optional[str] = Field(default=None, max_length=30)
+    plan: Optional[str] = Field(default=None, max_length=30)
+    billing_cycle: Optional[str] = Field(default="monthly", max_length=12)
 
 
 class EnterpriseCreditVerifyRequest(BaseModel):
@@ -2842,6 +2855,122 @@ def enterprise_calendar_delete_event(
 
 
 # ===========================================================================
+# Help & Support + feature requests
+# ===========================================================================
+
+ENTERPRISE_SUPPORT_RATE_LIMIT = int(os.getenv("ENTERPRISE_SUPPORT_RATE_LIMIT", "8"))
+ENTERPRISE_SUPPORT_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_SUPPORT_RATE_WINDOW_SECONDS", "3600"))
+SUPPORT_REQUEST_TYPES = {"support", "feature_request"}
+
+
+class EnterpriseSupportRequestCreate(BaseModel):
+    request_type: str = Field(default="support", max_length=24)
+    subject: str = Field(..., min_length=3, max_length=160)
+    message: str = Field(..., min_length=5, max_length=4000)
+
+
+def _normalize_support_type(raw: str | None) -> str:
+    value = str(raw or "").strip().lower()
+    if value in {"feature", "feature_request", "feature-request", "idea"}:
+        return "feature_request"
+    return "support"
+
+
+def _serialize_support_request(r: models.EnterpriseSupportRequest) -> dict:
+    return {
+        "id": r.id,
+        "request_type": r.request_type,
+        "type_label": "Feature request" if r.request_type == "feature_request" else "Help & support",
+        "subject": r.subject,
+        "message": r.message,
+        "status": r.status,
+        "requester_name": r.requester_name,
+        "created_at": _iso(r.created_at),
+    }
+
+
+@router.get("/support")
+def enterprise_support_list(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    rows = (
+        db.query(models.EnterpriseSupportRequest)
+        .filter(models.EnterpriseSupportRequest.organization_id == organization.id)
+        .order_by(models.EnterpriseSupportRequest.created_at.desc(), models.EnterpriseSupportRequest.id.desc())
+        .limit(25)
+        .all()
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "support_email": os.getenv("ENTERPRISE_SUPPORT_INBOX", "contact@rilono.com").strip() or "contact@rilono.com",
+        "requests": [_serialize_support_request(r) for r in rows],
+    }
+
+
+@router.post("/support")
+def enterprise_support_create(
+    payload: EnterpriseSupportRequestCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="enterprise.support",
+        limit=ENTERPRISE_SUPPORT_RATE_LIMIT,
+        window_seconds=ENTERPRISE_SUPPORT_RATE_WINDOW_SECONDS,
+        extra_key=str(current_user.id),
+    )
+    request_type = _normalize_support_type(payload.request_type)
+    subject = (payload.subject or "").strip()
+    message = (payload.message or "").strip()
+    if len(subject) < 3:
+        raise HTTPException(status_code=400, detail="Please add a short subject.")
+    if len(message) < 5:
+        raise HTTPException(status_code=400, detail="Please describe your request.")
+
+    requester_name = current_user.full_name or current_user.email
+    row = models.EnterpriseSupportRequest(
+        organization_id=organization.id,
+        user_id=current_user.id,
+        requester_name=requester_name,
+        requester_email=current_user.email,
+        request_type=request_type,
+        subject=subject[:160],
+        message=message[:4000],
+        status="open",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    # Notify the support inbox (best-effort — never fail the request on email error).
+    try:
+        send_enterprise_support_request_email(
+            request_type=request_type,
+            subject=subject,
+            message=message,
+            org_name=organization.company_name or "Unknown organization",
+            requester_name=requester_name,
+            requester_email=current_user.email or "",
+        )
+    except Exception:
+        logger.exception("Failed to email enterprise support request (org_id=%s)", organization.id)
+
+    friendly = "Thanks! Your feature request is in — we read every one." if request_type == "feature_request" \
+        else "Thanks! Our team has your message and will get back to you by email."
+    return {
+        "message": friendly,
+        "permissions": _enterprise_permissions_for_role(role),
+        "request": _serialize_support_request(row),
+    }
+
+
+# ===========================================================================
 # Billing (per-organization subscriptions) + self-serve signup
 # ===========================================================================
 
@@ -2919,9 +3048,22 @@ def enterprise_billing_checkout(
     if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
         raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
     cycle = billing.normalize_billing_cycle(payload.billing_cycle)
-    amount = billing.plan_amount_paise(plan["key"], cycle)
-    if amount <= 0:
+    base_amount = billing.plan_amount_paise(plan["key"], cycle)
+    if base_amount <= 0:
         raise HTTPException(status_code=400, detail="This plan is not available for online checkout.")
+
+    # Per-account discount code (admin-managed). Reduces the payable amount.
+    amount = base_amount
+    coupon_code = None
+    coupon_percent = None
+    raw_coupon = (payload.coupon_code or "").strip()
+    if raw_coupon:
+        coupon = enterprise_coupons.resolve_active_coupon_or_400(
+            db, organization.id, raw_coupon, context="billing"
+        )
+        coupon_percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
+        coupon_code = enterprise_coupons.normalize_code(coupon.code)
+        amount = enterprise_coupons.apply_to_amount_or_400(base_amount, coupon_percent)
 
     if not _razorpay_enabled():
         return {
@@ -2939,6 +3081,7 @@ def enterprise_billing_checkout(
             "plan": plan["key"],
             "billing_cycle": cycle,
             "user_id": str(current_user.id),
+            "coupon_code": coupon_code or "",
         },
     })
     order_id = str(order.get("id") or "").strip()
@@ -2952,6 +3095,9 @@ def enterprise_billing_checkout(
         plan=plan["key"],
         billing_cycle=cycle,
         amount_paise=amount,
+        original_amount_paise=base_amount,
+        coupon_code=coupon_code,
+        coupon_percent_off=coupon_percent,
         currency=billing.CURRENCY,
         razorpay_order_id=order_id,
         status="created",
@@ -2963,6 +3109,10 @@ def enterprise_billing_checkout(
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
         "order_id": order_id,
         "amount": amount,
+        "original_amount": base_amount,
+        "discount_paise": base_amount - amount,
+        "coupon_code": coupon_code,
+        "coupon_percent_off": float(coupon_percent) if coupon_percent is not None else None,
         "currency": billing.CURRENCY,
         "plan": plan["key"],
         "plan_label": plan["label"],
@@ -3038,7 +3188,15 @@ def enterprise_billing_verify(
 ENTERPRISE_CREDIT_TXN_PAGE_SIZE = int(os.getenv("ENTERPRISE_CREDIT_TXN_PAGE_SIZE", "25"))
 
 
-def _serialize_credit_txn(txn: models.EnterpriseCreditTransaction) -> dict:
+def _serialize_credit_txn(
+    txn: models.EnterpriseCreditTransaction,
+    client_names: Optional[dict] = None,
+) -> dict:
+    # Resolve the client name when this entry was a per-client action (Deep Scan,
+    # mock interview) so the ledger shows *where* the credits were used.
+    client_name = None
+    if txn.reference_type == "client" and txn.reference_id is not None and client_names:
+        client_name = client_names.get(txn.reference_id)
     return {
         "id": txn.id,
         "type": txn.type,
@@ -3047,6 +3205,9 @@ def _serialize_credit_txn(txn: models.EnterpriseCreditTransaction) -> dict:
         "balance_after": int(txn.balance_after),
         "description": txn.description,
         "created_by_name": txn.created_by_name,
+        "reference_type": txn.reference_type,
+        "reference_id": txn.reference_id,
+        "client_name": client_name,
         "created_at": _iso(txn.created_at),
     }
 
@@ -3061,6 +3222,7 @@ def enterprise_credits_wallet(
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "wallet": credits.wallet_state(db, organization.id),
+        "usage": credits.usage_breakdown(db, organization.id),
         "packages": credits.packages_payload(),
         "checkout_enabled": _razorpay_enabled(),
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip() or None,
@@ -3086,9 +3248,71 @@ def enterprise_credits_transactions(
         .limit(limit)
         .all()
     )
+    # Batch-resolve client names for per-client actions so each ledger row can
+    # show which client the credits were spent on.
+    client_ids = {
+        t.reference_id for t in rows
+        if t.reference_type == "client" and t.reference_id is not None
+    }
+    client_names: dict = {}
+    if client_ids:
+        for cid, name in (
+            db.query(models.EnterpriseClient.id, models.EnterpriseClient.full_name)
+            .filter(
+                models.EnterpriseClient.organization_id == organization.id,
+                models.EnterpriseClient.id.in_(client_ids),
+            )
+            .all()
+        ):
+            client_names[cid] = name
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "transactions": [_serialize_credit_txn(t) for t in rows],
+        "transactions": [_serialize_credit_txn(t, client_names) for t in rows],
+    }
+
+
+@router.post("/coupons/validate")
+def enterprise_coupon_validate(
+    payload: EnterpriseCouponValidateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Preview a per-account discount code for a given purchase before checkout."""
+    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request)
+    context = (payload.context or "credits").strip().lower()
+    if context not in ("credits", "billing"):
+        raise HTTPException(status_code=400, detail="Unknown checkout context.")
+
+    if context == "credits":
+        package = credits.get_package(payload.package)
+        if not package:
+            raise HTTPException(status_code=400, detail="Please choose a valid credit package.")
+        base_amount = int(package["amount_paise"])
+    else:
+        plan = billing.get_plan(payload.plan)
+        if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
+            raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
+        cycle = billing.normalize_billing_cycle(payload.billing_cycle)
+        base_amount = billing.plan_amount_paise(plan["key"], cycle)
+    if base_amount <= 0:
+        raise HTTPException(status_code=400, detail="This item is not available for checkout.")
+
+    coupon = enterprise_coupons.resolve_active_coupon_or_400(
+        db, organization.id, payload.code, context=context
+    )
+    percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
+    amount = enterprise_coupons.apply_to_amount_or_400(base_amount, percent)
+    return {
+        "valid": True,
+        "code": enterprise_coupons.normalize_code(coupon.code),
+        "percent_off": float(percent),
+        "percent_display": enterprise_coupons.format_percent_off(percent) + "%",
+        "base_amount_paise": base_amount,
+        "amount_paise": amount,
+        "discount_paise": base_amount - amount,
+        "base_amount_display": credits.format_inr(base_amount),
+        "amount_display": credits.format_inr(amount),
     }
 
 
@@ -3105,9 +3329,23 @@ def enterprise_credits_topup_checkout(
     package = credits.get_package(payload.package)
     if not package:
         raise HTTPException(status_code=400, detail="Please choose a valid credit package.")
-    amount = int(package["amount_paise"])
-    if amount <= 0:
+    base_amount = int(package["amount_paise"])
+    if base_amount <= 0:
         raise HTTPException(status_code=400, detail="This package is not available for checkout.")
+
+    # Per-account discount code (admin-managed). Reduces the payable amount.
+    amount = base_amount
+    coupon_code = None
+    coupon_percent = None
+    raw_coupon = (payload.coupon_code or "").strip()
+    if raw_coupon:
+        coupon = enterprise_coupons.resolve_active_coupon_or_400(
+            db, organization.id, raw_coupon, context="credits"
+        )
+        coupon_percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
+        coupon_code = enterprise_coupons.normalize_code(coupon.code)
+        amount = enterprise_coupons.apply_to_amount_or_400(base_amount, coupon_percent)
+
     if not _razorpay_enabled():
         return {
             "action": "contact_sales",
@@ -3124,6 +3362,7 @@ def enterprise_credits_topup_checkout(
             "kind": "credits",
             "package": package["key"],
             "user_id": str(current_user.id),
+            "coupon_code": coupon_code or "",
         },
     })
     order_id = str(order.get("id") or "").strip()
@@ -3139,6 +3378,9 @@ def enterprise_credits_topup_checkout(
         credits=int(package["credits"]),
         bonus_credits=int(package["bonus_credits"]),
         amount_paise=amount,
+        original_amount_paise=base_amount,
+        coupon_code=coupon_code,
+        coupon_percent_off=coupon_percent,
         currency=credits.CURRENCY,
         razorpay_order_id=order_id,
         status="created",
@@ -3150,6 +3392,10 @@ def enterprise_credits_topup_checkout(
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
         "order_id": order_id,
         "amount": amount,
+        "original_amount": base_amount,
+        "discount_paise": base_amount - amount,
+        "coupon_code": coupon_code,
+        "coupon_percent_off": float(coupon_percent) if coupon_percent is not None else None,
         "currency": credits.CURRENCY,
         "package": package["key"],
         "package_label": package["label"],
@@ -4382,8 +4628,20 @@ def public_interview_chat(payload: PublicInterviewChatRequest, request: Request,
     if payload.start:
         if _interview_invite_remaining(invite) <= 0:
             raise HTTPException(status_code=403, detail="You've used all your mock interviews for this link.")
+        # Meter the org's wallet — a self-serve interview costs the same 20 credits as a
+        # staff-run one, so the "send to student" links can't be used to run Gemini for free.
+        if not credits.can_afford(db, org.id, "mock_interview"):
+            raise HTTPException(
+                status_code=402,
+                detail="This mock interview isn't available right now. Please contact your consultancy.",
+            )
         invite.used_count = int(invite.used_count or 0) + 1  # a start consumes one interview
         db.commit()
+        credits.charge_action(
+            db, org.id, "mock_interview",
+            reference_type="client", reference_id=client.id,
+            description=f"Mock interview (self-serve) — {client.full_name}", commit=True,
+        )
 
     history = [t.model_dump() for t in (payload.history or [])]
     try:
@@ -4424,3 +4682,432 @@ def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: 
     db.add(session)
     db.commit()
     return {"feedback": feedback, "verdict": verdict, "remaining": _interview_invite_remaining(invite)}
+
+
+# ===========================================================================
+# Secure document requests — email a client a tokenized, OTP-verified link so
+# they can upload the specific documents staff asked for. Files land in the same
+# private encrypted storage as staff uploads. Mirrors the interview-invite model.
+# ===========================================================================
+
+ENTERPRISE_DOCREQ_EXPIRES_DAYS = int(os.getenv("ENTERPRISE_DOCREQ_EXPIRES_DAYS", "30"))
+ENTERPRISE_DOCREQ_SESSION_HOURS = int(os.getenv("ENTERPRISE_DOCREQ_SESSION_HOURS", "6"))
+ENTERPRISE_DOCREQ_MAX_TYPES = int(os.getenv("ENTERPRISE_DOCREQ_MAX_TYPES", "20"))
+
+
+class EnterpriseDocumentRequestCreate(BaseModel):
+    document_types: list[str] = Field(..., min_length=1, max_length=ENTERPRISE_DOCREQ_MAX_TYPES)
+    message: Optional[str] = Field(default=None, max_length=2000)
+
+
+class PublicDocRequestVerifyRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+def _build_document_request_url(subdomain_slug, token: str, request: Request | None) -> str:
+    subdomain = str(subdomain_slug or "").strip().lower()
+    base = None
+    if subdomain:
+        host = f"{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+        port = _request_port_for_local_enterprise_url(request)
+        if port:
+            host = f"{host}:{port}"
+        base = f"{ENTERPRISE_PORTAL_SCHEME}://{host}"
+    if not base:
+        base = ENTERPRISE_PASSWORD_SETUP_BASE_URL
+    return f"{base.rstrip('/')}/upload/{token}"
+
+
+def _docreq_is_live(req: models.EnterpriseDocumentRequest) -> bool:
+    if req.revoked:
+        return False
+    if req.expires_at:
+        exp = req.expires_at.replace(tzinfo=None) if getattr(req.expires_at, "tzinfo", None) else req.expires_at
+        if exp < datetime.utcnow():
+            return False
+    return True
+
+
+def _recompute_docreq_status(req: models.EnterpriseDocumentRequest) -> None:
+    items = req.items or []
+    received = sum(1 for i in items if i.status == "received")
+    if received == 0:
+        req.status = "pending"
+        req.completed_at = None
+    elif received >= len(items):
+        req.status = "completed"
+        if not req.completed_at:
+            req.completed_at = datetime.utcnow()
+    else:
+        req.status = "partial"
+        req.completed_at = None
+
+
+def _serialize_docreq_item(item: models.EnterpriseDocumentRequestItem) -> dict:
+    return {
+        "id": item.id,
+        "document_type": item.document_type,
+        "status": item.status,
+        "received": item.status == "received",
+        "received_at": _iso(item.received_at),
+        "document_id": item.document_id,
+    }
+
+
+def _serialize_docreq(req: models.EnterpriseDocumentRequest | None) -> Optional[dict]:
+    if not req:
+        return None
+    items = list(req.items or [])
+    received = sum(1 for i in items if i.status == "received")
+    return {
+        "id": req.id,
+        "email": req.email,
+        "message": req.message,
+        "status": req.status,
+        "revoked": bool(req.revoked),
+        "live": _docreq_is_live(req),
+        "total": len(items),
+        "received": received,
+        "pending": len(items) - received,
+        "items": [_serialize_docreq_item(i) for i in items],
+        "created_by_name": req.created_by_name,
+        "created_at": _iso(req.created_at),
+        "expires_at": _iso(req.expires_at),
+        "completed_at": _iso(req.completed_at),
+    }
+
+
+def _latest_client_docreq(db: Session, organization_id: int, client_id: int):
+    return (
+        db.query(models.EnterpriseDocumentRequest)
+        .filter(
+            models.EnterpriseDocumentRequest.organization_id == int(organization_id),
+            models.EnterpriseDocumentRequest.client_id == int(client_id),
+        )
+        .order_by(models.EnterpriseDocumentRequest.created_at.desc(), models.EnterpriseDocumentRequest.id.desc())
+        .first()
+    )
+
+
+def _public_docreq_or_404(db: Session, token: str) -> models.EnterpriseDocumentRequest:
+    token_hash = hash_token((token or "").strip())
+    req = (
+        db.query(models.EnterpriseDocumentRequest)
+        .filter(models.EnterpriseDocumentRequest.token_hash == token_hash)
+        .first()
+    )
+    if not req or not _docreq_is_live(req):
+        raise HTTPException(status_code=404, detail="This upload link is invalid or has expired.")
+    return req
+
+
+def _issue_docreq_session_token(request_id: int) -> str:
+    return create_access_token(
+        data={"sub": f"entdr:{int(request_id)}", "scope": "ent_docreq", "dr": int(request_id)},
+        expires_delta=timedelta(hours=ENTERPRISE_DOCREQ_SESSION_HOURS),
+    )
+
+
+def _decode_docreq_session_token(token: str) -> int:
+    try:
+        payload = jose_jwt.decode(token, AUTH_SECRET_KEY, algorithms=[AUTH_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Your upload session has expired. Please verify your email again.")
+    if payload.get("scope") != "ent_docreq" or not payload.get("dr"):
+        raise HTTPException(status_code=401, detail="Invalid upload session.")
+    return int(payload["dr"])
+
+
+def _public_load_docreq_context(db: Session, session_token: str):
+    request_id = _decode_docreq_session_token(session_token)
+    req = (
+        db.query(models.EnterpriseDocumentRequest)
+        .filter(models.EnterpriseDocumentRequest.id == request_id)
+        .first()
+    )
+    if not req or not _docreq_is_live(req):
+        raise HTTPException(status_code=401, detail="This upload link is no longer active.")
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == req.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == req.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This upload link is no longer available.")
+    return req, client, org
+
+
+# ---- Staff: create / view / revoke the document request -------------------
+
+@router.post("/clients/{client_id}/document-requests")
+def enterprise_create_document_request(
+    client_id: int,
+    payload: EnterpriseDocumentRequestCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    email = (client.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Add an email to this client before requesting documents.")
+
+    # Normalize + de-duplicate the requested document types (preserve order).
+    seen: set[str] = set()
+    doc_types: list[str] = []
+    for raw in payload.document_types:
+        normalized = catalog.normalize_document_type(raw)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            doc_types.append(normalized)
+    if not doc_types:
+        raise HTTPException(status_code=400, detail="Choose at least one document to request.")
+
+    # Supersede any prior active requests for this client.
+    db.query(models.EnterpriseDocumentRequest).filter(
+        models.EnterpriseDocumentRequest.client_id == client.id,
+        models.EnterpriseDocumentRequest.revoked.is_(False),
+    ).update({"revoked": True})
+
+    raw_token = generate_verification_token()
+    req = models.EnterpriseDocumentRequest(
+        organization_id=organization.id,
+        client_id=client.id,
+        token_hash=hash_token(raw_token),
+        email=email,
+        message=(payload.message or "").strip() or None,
+        status="pending",
+        expires_at=datetime.utcnow() + timedelta(days=ENTERPRISE_DOCREQ_EXPIRES_DAYS),
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(req)
+    db.flush()
+    for dt in doc_types:
+        db.add(models.EnterpriseDocumentRequestItem(
+            request_id=req.id,
+            organization_id=organization.id,
+            document_type=dt,
+            status="pending",
+        ))
+    db.commit()
+    db.refresh(req)
+
+    link = _build_document_request_url(organization.subdomain_slug, raw_token, request)
+    sent, _mid, err = send_enterprise_document_request_email(
+        to_email=email,
+        client_name=client.full_name,
+        organization_name=organization.company_name,
+        upload_url=link,
+        document_types=doc_types,
+        message=req.message,
+        logo_url=_resolve_enterprise_logo_url(organization),
+    )
+    message = (f"Document request sent to {email}."
+               if sent else f"Request created but the email could not be sent right now. {err or ''}".strip())
+    return {
+        "message": message,
+        "email_sent": sent,
+        "request": _serialize_docreq(req),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.get("/clients/{client_id}/document-requests")
+def enterprise_get_document_request(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    req = _latest_client_docreq(db, organization.id, client.id)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "document_types": list(catalog.STUDENT_DOCUMENT_TYPES),
+        "request": _serialize_docreq(req),
+    }
+
+
+@router.post("/clients/{client_id}/document-requests/revoke")
+def enterprise_revoke_document_request(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    db.query(models.EnterpriseDocumentRequest).filter(
+        models.EnterpriseDocumentRequest.client_id == client.id,
+        models.EnterpriseDocumentRequest.revoked.is_(False),
+    ).update({"revoked": True})
+    db.commit()
+    return {"message": "Document request revoked.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ---- Public (client-facing, token-scoped, no staff auth) ------------------
+
+@router.get("/public/document-request/{token}")
+def public_document_request_info(token: str, db: Session = Depends(get_db)):
+    req = _public_docreq_or_404(db, token)
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == req.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == req.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This upload link is no longer available.")
+    return {
+        "organization_name": org.company_name,
+        "logo_url": _resolve_enterprise_logo_url(org),
+        "client_first_name": (client.full_name or "there").split(" ")[0],
+        "masked_email": _mask_email(req.email),
+        "message": req.message,
+        "status": req.status,
+        "items": [_serialize_docreq_item(i) for i in (req.items or [])],
+        "expires_at": _iso(req.expires_at),
+    }
+
+
+@router.post("/public/document-request/{token}/send-code")
+def public_document_request_send_code(token: str, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.docreq_code",
+        limit=ENTERPRISE_CODE_RATE_LIMIT, window_seconds=ENTERPRISE_CODE_RATE_WINDOW, extra_key=hash_token(token)[:16],
+    )
+    req = _public_docreq_or_404(db, token)
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == req.organization_id).first()
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == req.client_id).first()
+    if not org or not client:
+        raise HTTPException(status_code=404, detail="This upload link is no longer available.")
+
+    code = f"{_secrets.randbelow(900000) + 100000:06d}"
+    req.code_hash = hash_token(code)
+    req.code_expires_at = datetime.utcnow() + timedelta(minutes=ENTERPRISE_INTERVIEW_CODE_EXPIRES_MIN)
+    req.code_attempts = 0
+    db.commit()
+
+    sent, _mid, err = send_enterprise_document_request_code_email(
+        to_email=req.email, client_name=client.full_name, organization_name=org.company_name, code=code,
+    )
+    if not sent:
+        logger.warning("Document request code email failed for request %s: %s", req.id, err)
+    return {"sent": True, "masked_email": _mask_email(req.email)}
+
+
+@router.post("/public/document-request/{token}/verify")
+def public_document_request_verify(token: str, payload: PublicDocRequestVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.docreq_verify",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW, extra_key=hash_token(token)[:16],
+    )
+    req = _public_docreq_or_404(db, token)
+    if not req.code_hash or not req.code_expires_at:
+        raise HTTPException(status_code=400, detail="Please request a verification code first.")
+    code_exp = req.code_expires_at.replace(tzinfo=None) if getattr(req.code_expires_at, "tzinfo", None) else req.code_expires_at
+    if code_exp < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That code has expired. Please request a new one.")
+    if int(req.code_attempts or 0) >= ENTERPRISE_INTERVIEW_CODE_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please request a new code.")
+
+    req.code_attempts = int(req.code_attempts or 0) + 1
+    if hash_token((payload.code or "").strip()) != req.code_hash:
+        db.commit()
+        raise HTTPException(status_code=400, detail="That code is incorrect. Please try again.")
+
+    # Verified — consume the code and issue a short-lived upload session token.
+    req.code_hash = None
+    req.code_expires_at = None
+    db.commit()
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == req.client_id).first()
+    return {
+        "session_token": _issue_docreq_session_token(req.id),
+        "client_first_name": (client.full_name or "there").split(" ")[0] if client else "there",
+        "message": req.message,
+        "items": [_serialize_docreq_item(i) for i in (req.items or [])],
+        "session_hours": ENTERPRISE_DOCREQ_SESSION_HOURS,
+    }
+
+
+@router.post("/public/document-request/upload")
+async def public_document_request_upload(
+    request: Request,
+    session_token: str = Form(...),
+    item_id: int = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.docreq_upload",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
+    )
+    req, client, org = _public_load_docreq_context(db, session_token)
+
+    item = (
+        db.query(models.EnterpriseDocumentRequestItem)
+        .filter(
+            models.EnterpriseDocumentRequestItem.id == int(item_id),
+            models.EnterpriseDocumentRequestItem.request_id == req.id,
+        )
+        .first()
+    )
+    if not item:
+        raise HTTPException(status_code=404, detail="That document is not part of this request.")
+
+    if not enterprise_storage.is_configured():
+        raise HTTPException(status_code=503, detail="Document upload is not available right now. Please contact your consultancy.")
+
+    original = _safe_filename(file.filename)
+    ext = os.path.splitext(original)[1].lower()
+    if ext not in ENTERPRISE_DOC_ALLOWED_EXT:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, images, Word/Excel, CSV, or text.",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The file is empty.")
+    if len(data) > ENTERPRISE_DOC_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File is too large. Maximum size is {ENTERPRISE_DOC_MAX_BYTES // (1024 * 1024)} MB.",
+        )
+
+    storage_key = f"enterprise/{org.id}/clients/{client.id}/{uuid.uuid4().hex}{ext}"
+    try:
+        enterprise_storage.store_document(storage_key, data, content_type=file.content_type)
+    except Exception:
+        logger.exception("Failed to store client-uploaded document (org_id=%s, client_id=%s)", org.id, client.id)
+        raise HTTPException(status_code=502, detail="Could not store the document right now. Please try again.")
+
+    doc = models.EnterpriseClientDocument(
+        organization_id=org.id,
+        client_id=client.id,
+        document_type=item.document_type,
+        original_filename=original,
+        storage_key=storage_key,
+        file_size=len(data),
+        mime_type=(file.content_type or None),
+        uploaded_by_user_id=None,
+        uploaded_by_name=f"{client.full_name} (uploaded via secure link)",
+    )
+    db.add(doc)
+    db.flush()
+
+    item.document_id = doc.id
+    item.status = "received"
+    item.received_at = datetime.utcnow()
+    _recompute_docreq_status(req)
+    db.commit()
+    db.refresh(req)
+
+    # Extract text in the background so the AI copilot can read the new document.
+    _start_document_text_extraction(doc.id, data, original, file.content_type)
+
+    return {
+        "message": "Uploaded.",
+        "items": [_serialize_docreq_item(i) for i in (req.items or [])],
+        "status": req.status,
+    }

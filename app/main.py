@@ -27,8 +27,12 @@ from app.schema_patch import (
     ensure_document_catalog_columns,
     ensure_enterprise_calendar_table,
     ensure_enterprise_calendar_reminder_runs_table,
+    ensure_enterprise_support_requests_table,
+    ensure_enterprise_coupons_table,
     ensure_enterprise_credit_tables,
+    ensure_enterprise_payment_coupon_columns,
     ensure_enterprise_crm_tables,
+    ensure_enterprise_document_request_tables,
     ensure_enterprise_organization_columns,
     ensure_enterprise_students_table,
     ensure_f1_visa_news_table,
@@ -194,9 +198,13 @@ def startup_backfill_subscriptions():
     ensure_enterprise_organization_columns()
     ensure_enterprise_students_table()
     ensure_enterprise_crm_tables()
+    ensure_enterprise_document_request_tables()
     ensure_enterprise_credit_tables()
+    ensure_enterprise_coupons_table()
+    ensure_enterprise_payment_coupon_columns()
     ensure_enterprise_calendar_table()
     ensure_enterprise_calendar_reminder_runs_table()
+    ensure_enterprise_support_requests_table()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_f1_visa_news_table()
@@ -343,6 +351,15 @@ async def read_visa_pass_slash():
 async def read_interview_invite(token: str):
     """Serve the public client-facing mock interview page (token validated client-side via API)."""
     html_path = os.path.join(os.path.dirname(__file__), "..", "static", "interview.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/upload/{token}")
+async def read_document_upload(token: str):
+    """Serve the public client-facing secure document upload page (token validated client-side via API)."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "upload.html")
     if os.path.exists(html_path):
         return FileResponse(html_path)
     raise HTTPException(status_code=404, detail="Not found")

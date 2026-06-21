@@ -77,6 +77,27 @@
     if (parts.length <= 2) return h;
     return parts.slice(-2).join(".");
   }
+  function fmtPaise(p) {
+    return "₹" + (Number(p || 0) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+  }
+  // Shared discount-code bar used on the credits top-up and billing pages.
+  // `coupon` is null (show input) or { code, percent, percent_display } (show applied state).
+  function couponRow(coupon, applyFn, removeFn, inputId, label) {
+    if (coupon) {
+      return `<div class="coupon-bar applied">
+        <div class="coupon-bar-info">
+          <span class="coupon-tag">🎟 ${esc(coupon.code)}</span>
+          <span class="coupon-msg">${esc(coupon.percent_display)} off all ${esc(label)}</span>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="__ent.${removeFn}()">Remove</button>
+      </div>`;
+    }
+    return `<div class="coupon-bar">
+      <input id="${inputId}" class="coupon-input" placeholder="Have a discount code?" maxlength="40"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();__ent.${applyFn}();}" />
+      <button class="btn btn-primary btn-sm" onclick="__ent.${applyFn}()">Apply</button>
+    </div>`;
+  }
 
   async function api(path, opts) {
     opts = opts || {};
@@ -483,7 +504,7 @@
     state.view = view;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     $("#sidebar").classList.remove("open");
-    const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", billing: "Plans & Billing", settings: "Settings" };
+    const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
     $("#viewTitle").textContent = titles[view] || "";
     $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
     if (view === "dashboard") renderDashboard();
@@ -492,6 +513,7 @@
     else if (view === "ai") renderAIAssistant();
     else if (view === "team") renderTeam();
     else if (view === "credits") renderCredits();
+    else if (view === "support") renderSupport();
     else if (view === "billing") renderBilling();
     else if (view === "settings") renderSettings();
   }
@@ -905,6 +927,7 @@
     const grad = `linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})`;
     const docs = data.documents || [];
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
+    const dr = { request: undefined };  // secure document-request state (lazy-loaded)
     $("#viewTitle").textContent = cl.full_name;
 
     const detail = (label, val) => `<div class="detail-item"><label>${label}</label><div>${val || "—"}</div></div>`;
@@ -1026,13 +1049,15 @@
         <div class="cp-card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
           <div style="flex:1;min-width:220px">
             <div style="font-weight:700">🔍 Deep Scan document audit</div>
-            <div style="font-size:12px;color:var(--text-2)">Gemini cross-references every uploaded document for mismatched dates, names & missing funds before the visa appointment. Costs <b>${deepScanCost} credits</b>.</div>
+            <div style="font-size:12px;color:var(--text-2)">Rilono AI cross-references every uploaded document for mismatched dates, names & missing funds before the visa appointment. Costs <b>${deepScanCost} credits</b>.</div>
           </div>
           <button class="btn btn-primary btn-sm" id="deepScanBtn">Run Deep Scan · ${deepScanCost} cr</button>
         </div>` : "";
-      body.innerHTML = uploader + deepScanBar + list;
+      const docReqHolder = canEdit ? `<div id="docReqCard" class="cp-card doc-req-card" style="margin-bottom:14px"></div>` : "";
+      body.innerHTML = uploader + docReqHolder + deepScanBar + list;
       const dsb = $("#deepScanBtn");
       if (dsb) dsb.onclick = () => runDeepScan(cl);
+      if (canEdit) { drawDocReq(); if (dr.request === undefined) loadDocReq(); }
 
       if (canEdit) {
         $("#docUploadBtn").onclick = async () => {
@@ -1059,6 +1084,72 @@
           } catch (ex) { toast(ex.message, "error"); }
         });
       }
+    }
+
+    /* ---- Secure document requests (email a client an upload link) ---- */
+    function drawDocReq() {
+      const host = $("#docReqCard"); if (!host) return;
+      const r = dr.request;
+      if (r === undefined) {
+        host.innerHTML = `<div class="cp-sub-label">📩 Request documents from client</div><div class="muted" style="padding:6px 0"><span class="spinner dark" style="width:14px;height:14px"></span></div>`;
+        return;
+      }
+      const first = (cl.full_name || "the student").split(" ")[0];
+      let inner;
+      if (!cl.email) {
+        inner = `<p class="muted" style="margin:0;font-size:13.5px">Add an email to this client (Edit details) to request documents by email.</p>`;
+      } else if (r && r.live) {
+        const ticks = (r.items || []).map((it) =>
+          `<div class="docreq-item ${it.received ? "done" : ""}"><span>${it.received ? "✅" : "⏳"} ${esc(it.document_type)}</span><span class="muted">${it.received ? "Received" : "Pending"}</span></div>`).join("");
+        inner = `<p class="muted" style="margin:0 0 10px;font-size:13.5px">Secure link sent to <b>${esc(r.email)}</b> · <b>${r.received}/${r.total}</b> received${r.created_at ? " · " + fmtDate(r.created_at) : ""}${r.created_by_name ? " by " + esc(r.created_by_name) : ""}</p>
+          <div class="docreq-list">${ticks}</div>
+          <div class="row" style="margin-top:12px"><button class="btn btn-soft btn-sm" id="docReqResend">Resend / change</button><button class="btn btn-danger btn-sm" id="docReqRevoke">Revoke link</button></div>`;
+      } else {
+        inner = `<p class="muted" style="margin:0 0 12px;font-size:13.5px">Email <b>${esc(cl.email)}</b> a secure link so ${esc(first)} can upload the exact documents you need — they verify with a one-time code, and the encrypted files appear here.</p>
+          <button class="btn btn-primary btn-sm" id="docReqSend">✉ Request documents</button>`;
+      }
+      host.innerHTML = `<div class="cp-sub-label">📩 Request documents from client</div>${inner}`;
+      const sb = $("#docReqSend"); if (sb) sb.onclick = openDocReqModal;
+      const rs = $("#docReqResend"); if (rs) rs.onclick = openDocReqModal;
+      const rv = $("#docReqRevoke"); if (rv) rv.onclick = revokeDocReq;
+    }
+    async function loadDocReq() {
+      try { const r = await api(`/clients/${cl.id}/document-requests`); dr.request = r.request || null; }
+      catch (e) { dr.request = null; }
+      drawDocReq();
+    }
+    function openDocReqModal() {
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const types = state.catalog.document_types || [];
+      const checks = types.map((t) =>
+        `<label class="docreq-check"><input type="checkbox" value="${esc(t)}"> <span>${esc(t)}</span></label>`).join("");
+      openModal(`<div class="modal-head"><h3>Request documents from ${esc(first)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+        <form id="docReqForm"><div class="modal-body">
+          <p style="margin:0 0 14px;color:var(--text-2);font-size:14px;line-height:1.6">We'll email a secure link to <b>${esc(cl.email)}</b>. ${esc(first)} verifies with a one-time code, then uploads exactly what you select — files appear here, encrypted.</p>
+          <div class="cp-sub-label">Which documents do you need?</div>
+          <div class="docreq-checks">${checks}</div>
+          <div class="field" style="margin-top:14px"><label>Add a note (optional)</label>
+            <textarea id="docReqMsg" rows="3" maxlength="2000" placeholder="e.g. Please make sure your bank statement covers the last 6 months."></textarea></div>
+          <div id="docReqErr" class="auth-error hidden"></div>
+        </div>
+        <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="docReqSave">✉ Send request</button></div></form>`);
+      $("#docReqForm").onsubmit = async (e) => {
+        e.preventDefault();
+        const picked = $$("#docReqForm input[type=checkbox]:checked").map((c) => c.value);
+        const er = $("#docReqErr");
+        if (!picked.length) { er.textContent = "Select at least one document to request."; er.classList.remove("hidden"); return; }
+        const btn = $("#docReqSave"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+        try {
+          const r = await api(`/clients/${cl.id}/document-requests`, { method: "POST", body: { document_types: picked, message: ($("#docReqMsg").value || "").trim() || null } });
+          dr.request = r.request; closeModal(); toast(r.message || "Document request sent", r.email_sent ? "success" : "error"); drawDocReq();
+        } catch (ex) { er.textContent = ex.message; er.classList.remove("hidden"); btn.disabled = false; btn.innerHTML = "✉ Send request"; }
+      };
+    }
+    async function revokeDocReq() {
+      if (!confirm("Revoke this document request? The student's upload link will stop working.")) return;
+      try { await api(`/clients/${cl.id}/document-requests/revoke`, { method: "POST" }); dr.request = null; toast("Request revoked", "success"); drawDocReq(); }
+      catch (ex) { toast(ex.message, "error"); }
     }
 
     function renderNotes() {
@@ -1420,14 +1511,26 @@
 
     const usagePct = sub.max_clients === -1 ? 0 : Math.min(100, Math.round((sub.clients_used / Math.max(1, sub.max_clients)) * 100));
     const cycle = state.billingCycle;
+    state.billingCoupon = state.billingCoupon || null;
+    state.billingPlans = d.plans || [];
+    const bCoupon = state.billingCoupon;
+    const cyclSuffix = cycle === "yearly" ? "yr" : "mo";
+
+    const planPriceBlock = (p) => {
+      const display = cycle === "yearly" ? p.yearly_display : p.monthly_display;
+      const basePaise = cycle === "yearly" ? p.yearly_paise : p.monthly_paise;
+      if (!bCoupon || !basePaise) return `<div class="price">${display}<small>/${cyclSuffix}</small></div>`;
+      const discounted = Math.max(0, Math.round(basePaise * (100 - bCoupon.percent) / 100));
+      return `<div class="price">${fmtPaise(discounted)}<small>/${cyclSuffix}</small><span class="price-was">${display}</span></div>
+        <div class="price-off">${esc(bCoupon.percent_display)} off applied</div>`;
+    };
 
     const planCard = (p) => {
-      const price = cycle === "yearly" ? p.yearly_display : p.monthly_display;
       const isCurrent = sub.plan === p.key && !sub.is_trial;
       return `<div class="plan-card ${p.is_popular ? "popular" : ""} ${isCurrent ? "current-plan" : ""}">
         ${p.is_popular ? `<div class="pop-tag">Most popular</div>` : ""}
         <h3>${esc(p.label)}</h3><div class="tagline">${esc(p.tagline)}</div>
-        <div class="price">${price}<small>/${cycle === "yearly" ? "yr" : "mo"}</small></div>
+        ${planPriceBlock(p)}
         <ul>${p.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
         ${isCurrent ? `<div class="plan-current-tag">✓ Current plan</div>`
           : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}')">${sub.is_trial ? "Start " + esc(p.label) : "Switch to " + esc(p.label)}</button>`
@@ -1454,14 +1557,32 @@
           <button class="${cycle === "yearly" ? "active" : ""}" onclick="__ent.setCycle('yearly')">Yearly<span class="save">save ~17%</span></button>
         </div>
       </div>
+      ${canManage && d.plans.length ? couponRow(bCoupon, "applyBillingCoupon", "removeBillingCoupon", "billingCouponInput", "plans") : ""}
       <div class="plan-grid">${d.plans.map(planCard).join("")}</div>
       ${!d.plans.length ? "" : `<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:18px">Secure payments via Razorpay. Cancel anytime.</p>`}`;
   }
   function setCycle(c) { state.billingCycle = c; renderBilling(); }
 
+  async function applyBillingCoupon() {
+    const input = $("#billingCouponInput");
+    const code = ((input && input.value) || "").trim();
+    if (!code) { toast("Enter a discount code.", "error"); return; }
+    const paid = (state.billingPlans || []).filter((p) => p.key !== "trial" && (p.monthly_paise > 0 || p.yearly_paise > 0));
+    if (!paid.length) { toast("No paid plans available for discounts.", "error"); return; }
+    let res;
+    try {
+      res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: paid[0].key, billing_cycle: state.billingCycle } });
+    } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
+    state.billingCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
+    toast(res.percent_display + " discount applied.", "success");
+    renderBilling();
+  }
+  function removeBillingCoupon() { state.billingCoupon = null; renderBilling(); }
+
   async function checkout(plan) {
     let res;
-    try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: state.billingCycle } }); }
+    const couponCode = state.billingCoupon ? state.billingCoupon.code : undefined;
+    try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: state.billingCycle, coupon_code: couponCode } }); }
     catch (ex) { toast(ex.message, "error"); return; }
     if (res.action === "contact_sales") { toast(res.message || "Please contact sales.", "error"); return; }
     if (res.action !== "checkout") { toast("Checkout unavailable.", "error"); return; }
@@ -1496,19 +1617,51 @@
   /* ============================================================
      CREDITS — prepaid wallet (the revenue model)
      ============================================================ */
+  // Short badge label + accent colour per billable feature — keeps the usage
+  // bars and the ledger badges visually consistent.
+  const CREDIT_ACTION_META = {
+    deep_scan: { label: "Deep Scan", color: "#f59e0b" },
+    mock_interview: { label: "Mock interview", color: "#ec4899" },
+    other: { label: "Usage", color: "#64748b" },
+  };
+  const creditActionColor = (key) => (CREDIT_ACTION_META[key] || {}).color || "#6366f1";
+
+  // Visual identity (badge label + accent colour) for one ledger entry.
+  function creditTxnMeta(t) {
+    if (t.type === "topup") return { label: "Top-up", color: "#10b981" };
+    if (t.type === "bonus") return { label: "Bonus", color: "#8b5cf6" };
+    if (t.action_key === "infra_fee" || t.reference_type === "infra_payment") return { label: "Infra fee", color: "#0ea5e9" };
+    if (t.type === "adjustment") return { label: "Adjustment", color: "#0ea5e9" };
+    if (t.action_key && CREDIT_ACTION_META[t.action_key]) return CREDIT_ACTION_META[t.action_key];
+    if (t.type === "debit") return { label: "Usage", color: "#64748b" };
+    return { label: t.type || "—", color: "#64748b" };
+  }
+  function creditBadge(meta) {
+    return `<span class="status-pill" style="background:${meta.color}1a;color:${meta.color};white-space:nowrap">` +
+      `<span class="sd" style="background:${meta.color}"></span>${esc(meta.label)}</span>`;
+  }
+  function usageBar(pct, color) {
+    const v = Math.max(0, Math.min(100, Number(pct) || 0));
+    return `<div style="height:6px;border-radius:6px;background:var(--bg-2);overflow:hidden;margin-top:6px">` +
+      `<div style="height:100%;width:${v}%;background:${color};border-radius:6px"></div></div>`;
+  }
+
   async function renderCredits() {
     const c = $("#content");
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     let d, tx;
     try {
-      [d, tx] = await Promise.all([api("/credits/wallet"), api("/credits/transactions?limit=25")]);
+      [d, tx] = await Promise.all([api("/credits/wallet"), api("/credits/transactions?limit=50")]);
     } catch (ex) { c.innerHTML = errBox(ex); return; }
     const w = d.wallet || {};
     state.credits = w; updatePlanChip();
     const canManage = state.perms.can_manage_users;
     const infra = w.infra_fee || {};
     const packages = d.packages || [];
+    state.creditCoupon = state.creditCoupon || null;
+    state.creditPackages = packages;
     const actions = w.actions || [];
+    const usage = d.usage || {};
     const txns = (tx && tx.transactions) || [];
 
     const infraBanner = (infra.over_free_limit || infra.fee_due)
@@ -1530,10 +1683,17 @@
         </div>`
       : "";
 
+    const coupon = state.creditCoupon;
+    const priceBlock = (p) => {
+      if (!coupon) return `<div class="price">${esc(p.amount_display)}</div>`;
+      const discounted = Math.max(0, Math.round(p.amount_paise * (100 - coupon.percent) / 100));
+      return `<div class="price">${fmtPaise(discounted)}<span class="price-was">${esc(p.amount_display)}</span></div>
+        <div class="price-off">${esc(coupon.percent_display)} off applied</div>`;
+    };
     const pkgCard = (p) => `<div class="plan-card ${p.is_popular ? "popular" : ""}">
         ${p.is_popular ? `<div class="pop-tag">Best value</div>` : ""}
         <h3>${esc(p.label)}</h3><div class="tagline">${esc(p.tagline)}</div>
-        <div class="price">${esc(p.amount_display)}</div>
+        ${priceBlock(p)}
         <ul>
           <li><b>${p.total_credits} credits</b>${p.bonus_credits ? ` <span style="color:var(--success,#10b981)">(+${p.bonus_credits} bonus)</span>` : ""}</li>
           <li>Worth ₹${p.value_inr.toLocaleString()} of AI actions</li>
@@ -1550,16 +1710,71 @@
         <div style="text-align:right;white-space:nowrap"><b>${a.credits} cr</b><div style="font-size:12px;color:var(--text-2)">${esc(a.price_display)}</div></div>
       </div>`).join("");
 
+    // --- Usage breakdown: where credits go, and who on the team spent them ---
+    const byAction = (usage.by_action || []).filter((a) => a.units > 0 || a.credits_spent > 0);
+    const byMember = usage.by_member || [];
+    const hasUsage = (usage.total_spent_credits || 0) > 0;
+
+    const featureRows = byAction.map((a) => {
+      const color = creditActionColor(a.key);
+      return `<div style="padding:11px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
+          <div><b>${esc(a.label)}</b> <span style="color:var(--text-2);font-size:12.5px">· ${a.units} ${a.units === 1 ? "use" : "uses"}</span></div>
+          <div style="text-align:right;white-space:nowrap"><b>${a.credits_spent} cr</b><span style="color:var(--muted);font-size:12px"> · ${a.share_pct}%</span></div>
+        </div>
+        ${usageBar(a.share_pct, color)}
+      </div>`;
+    }).join("");
+
+    const memberRows = byMember.length ? byMember.map((m) => {
+      const col = avatarColor(m.name)[0];
+      return `<div style="display:flex;align-items:center;gap:11px;padding:10px 0;border-bottom:1px solid var(--border)">
+        <span style="width:30px;height:30px;border-radius:50%;background:${col};color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700;flex:none">${esc(initials(m.name))}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.name)}</div>
+          <div style="font-size:12px;color:var(--text-2)">${m.units} ${m.units === 1 ? "action" : "actions"}</div>
+        </div>
+        <div style="text-align:right;white-space:nowrap"><b>${m.credits_spent} cr</b><div style="font-size:12px;color:var(--muted)">${m.share_pct}%</div></div>
+      </div>`;
+    }).join("") : `<div class="muted" style="padding:14px 0">No team usage yet.</div>`;
+
+    const usageCard = `
+      <div class="card" style="margin-bottom:24px">
+        <div class="card-head"><h3>Credit usage</h3>
+          <span style="font-size:12.5px;color:var(--text-2)">${usage.total_spent_credits || 0} credits spent all-time · ${usage.spent_last_30d_credits || 0} in last 30 days</span>
+        </div>
+        <div class="card-body">
+          ${hasUsage
+            ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:28px">
+                <div>
+                  <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:2px">Where credits go</div>
+                  ${featureRows}
+                </div>
+                <div>
+                  <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:2px">By team member</div>
+                  ${memberRows}
+                </div>
+              </div>`
+            : `<div class="muted" style="padding:6px 0">No credits spent yet. Usage will appear here as your team runs Deep Scans and AI mock interviews.</div>`}
+        </div>
+      </div>`;
+
     const txnRows = txns.length ? txns.map((t) => {
       const pos = t.credits > 0;
       const sign = pos ? "+" : "";
+      const meta = creditTxnMeta(t);
+      const detail = t.client_name
+        ? `<span style="color:var(--text)">${esc(t.client_name)}</span>`
+        : `<span style="color:var(--text-2)">${esc(t.description || "—")}</span>`;
       return `<tr>
-        <td>${fmtDateTime(t.created_at)}</td>
-        <td>${esc(t.description || t.type)}</td>
+        <td style="white-space:nowrap">${fmtDateTime(t.created_at)}</td>
+        <td>${creditBadge(meta)}</td>
+        <td>${detail}</td>
+        <td style="color:var(--text-2)">${esc(t.created_by_name || "—")}</td>
         <td style="text-align:right;color:${pos ? "var(--success,#10b981)" : "var(--text)"};font-weight:600">${t.credits === 0 ? "—" : sign + t.credits}</td>
         <td style="text-align:right">${t.balance_after}</td>
       </tr>`;
-    }).join("") : `<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:22px">No credit activity yet.</td></tr>`;
+    }).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">No credit activity yet.</td></tr>`;
 
     c.innerHTML = `
       ${infraBanner}
@@ -1576,17 +1791,21 @@
         </div>
       </div></div>
 
+      ${usageCard}
+
       <div class="card" style="margin-bottom:24px"><div class="card-head"><h3>How credits are spent</h3></div>
         <div class="card-body">${actionRows || '<div class="muted">No billable actions configured.</div>'}</div></div>
 
       <h3 style="margin:0 0 12px">Top up your wallet</h3>
+      ${canManage ? couponRow(coupon, "applyCreditCoupon", "removeCreditCoupon", "creditCouponInput", "top-ups") : ""}
       <div class="plan-grid">${packages.map(pkgCard).join("")}</div>
       <p style="text-align:center;color:var(--muted);font-size:13px;margin-top:14px">Secure top-ups via Razorpay (UPI, NetBanking). Credits never expire.</p>
 
-      <div class="card" style="margin-top:24px"><div class="card-head"><h3>Recent activity</h3></div>
-        <div class="card-body" style="padding:0">
+      <div class="card" style="margin-top:24px"><div class="card-head"><h3>Recent activity</h3>
+        <span style="font-size:12.5px;color:var(--text-2)">Every top-up and credit spend, with who used it and on which client</span></div>
+        <div class="card-body" style="padding:0;overflow-x:auto">
           <table class="client-table"><thead><tr>
-            <th>When</th><th>Description</th><th style="text-align:right">Credits</th><th style="text-align:right">Balance</th>
+            <th>When</th><th>Activity</th><th>Details</th><th>Member</th><th style="text-align:right">Credits</th><th style="text-align:right">Balance</th>
           </tr></thead><tbody>${txnRows}</tbody></table>
         </div></div>`;
 
@@ -1594,9 +1813,26 @@
     if (ip) ip.onclick = () => activateInfraFee();
   }
 
+  async function applyCreditCoupon() {
+    const input = $("#creditCouponInput");
+    const code = ((input && input.value) || "").trim();
+    if (!code) { toast("Enter a discount code.", "error"); return; }
+    const pkgs = state.creditPackages || [];
+    if (!pkgs.length) { toast("No packages available.", "error"); return; }
+    let res;
+    try {
+      res = await api("/coupons/validate", { method: "POST", body: { code, context: "credits", package: pkgs[0].key } });
+    } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
+    state.creditCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
+    toast(res.percent_display + " discount applied.", "success");
+    renderCredits();
+  }
+  function removeCreditCoupon() { state.creditCoupon = null; renderCredits(); }
+
   async function topupCredits(pkg) {
     let res;
-    try { res = await api("/credits/topup/checkout", { method: "POST", body: { package: pkg } }); }
+    const couponCode = state.creditCoupon ? state.creditCoupon.code : undefined;
+    try { res = await api("/credits/topup/checkout", { method: "POST", body: { package: pkg, coupon_code: couponCode } }); }
     catch (ex) { toast(ex.message, "error"); return; }
     if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); return; }
     if (res.action !== "checkout") { toast("Top-up unavailable.", "error"); return; }
@@ -1812,7 +2048,7 @@
       if (send) send.disabled = true;
       const thread = $("#aiThread");
       if (thread && !state.aiHistory.length) {
-        thread.innerHTML = `<div class="ai-empty"><div class="ai-orb lg">🔌</div><h3>AI assistant unavailable</h3><p>An administrator needs to configure the Gemini API key on the server to enable Rilono AI Assistant.</p></div>`;
+        thread.innerHTML = `<div class="ai-empty"><div class="ai-orb lg">🔌</div><h3>AI assistant unavailable</h3><p>An administrator needs to enable Rilono AI on the server to use the Rilono AI Assistant.</p></div>`;
       }
     }
     renderAiSuggestions();
@@ -2086,9 +2322,83 @@
     catch (ex) { toast(ex.message, "error"); }
   }
 
+  /* ============================================================
+     HELP & SUPPORT + feature requests
+     ============================================================ */
+  async function renderSupport() {
+    const c = $("#content");
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    let d;
+    try { d = await api("/support"); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    const supportEmail = d.support_email || "contact@rilono.com";
+    const reqs = d.requests || [];
+
+    const histRow = (r) => `
+      <div class="sup-hist-item">
+        <span class="sup-badge ${r.request_type === "feature_request" ? "feature" : "help"}">${r.request_type === "feature_request" ? "💡 Feature" : "🛟 Help"}</span>
+        <div class="sup-hist-meta"><b>${esc(r.subject)}</b><span>${fmtDateTime(r.created_at)} · ${esc(r.status)}</span></div>
+      </div>`;
+    const history = reqs.length
+      ? `<div class="card" style="margin-top:24px"><div class="card-head"><h3>Your recent requests</h3></div>
+          <div class="card-body" style="padding:8px 0">${reqs.map(histRow).join("")}</div></div>`
+      : "";
+
+    const formCard = (kind) => {
+      const isFeature = kind === "feature_request";
+      return `<div class="card sup-card">
+        <div class="sup-card-head">
+          <div class="sup-icon ${isFeature ? "feature" : "help"}">${isFeature ? "💡" : "🛟"}</div>
+          <div>
+            <h3>${isFeature ? "Request a feature" : "Get help"}</h3>
+            <p>${isFeature ? "Have an idea to make Rilono better? Tell us — we read every one." : "Stuck or something not working? Our team will get back to you by email."}</p>
+          </div>
+        </div>
+        <form class="sup-form" data-type="${kind}">
+          <div class="field"><label>${isFeature ? "What would you like to see?" : "Subject"}</label>
+            <input name="subject" required maxlength="160" placeholder="${isFeature ? "e.g. Bulk import clients from CSV" : "e.g. I can't upload a document"}"/></div>
+          <div class="field"><label>${isFeature ? "Tell us more" : "Describe the issue"}</label>
+            <textarea name="message" required maxlength="4000" rows="4" placeholder="${isFeature ? "How would it help your team? Any details welcome." : "What happened, and what did you expect? Include any error messages."}"></textarea></div>
+          <div class="sup-form-err auth-error hidden"></div>
+          <button type="submit" class="btn ${isFeature ? "btn-ghost" : "btn-primary"}">${isFeature ? "Send feature request" : "Send to support"}</button>
+        </form>
+      </div>`;
+    };
+
+    c.innerHTML = `
+      <div class="card sup-hero">
+        <div>
+          <h2>How can we help?</h2>
+          <p>Email us any time at <a href="mailto:${esc(supportEmail)}">${esc(supportEmail)}</a> — we typically reply within one business day.</p>
+        </div>
+      </div>
+      <div class="sup-grid">${formCard("support")}${formCard("feature_request")}</div>
+      ${history}`;
+
+    $$(".sup-form", c).forEach((form) => {
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const kind = form.dataset.type;
+        const fd = new FormData(form);
+        const body = { request_type: kind, subject: (fd.get("subject") || "").trim(), message: (fd.get("message") || "").trim() };
+        if (body.subject.length < 3 || body.message.length < 5) return;
+        const btn = form.querySelector("button[type=submit]");
+        const orig = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+        try {
+          const r = await api("/support", { method: "POST", body });
+          toast(r.message || "Sent — thank you!", "success");
+          renderSupport();
+        } catch (ex) {
+          const er = form.querySelector(".sup-form-err"); er.textContent = ex.message; er.classList.remove("hidden");
+          btn.disabled = false; btn.textContent = orig;
+        }
+      };
+    });
+  }
+
   window.__ent = {
     go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
     closeModal, closeDrawer, changeRole, removeMember, checkout, setCycle,
+    applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
     topup: topupCredits, activateInfra: activateInfraFee, deepScan: runDeepScan,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
     viewInterview: viewInterviewSession,

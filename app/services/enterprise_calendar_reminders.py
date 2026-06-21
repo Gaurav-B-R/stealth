@@ -28,6 +28,11 @@ from app.email_service import send_enterprise_calendar_digest_email, DEFAULT_PUB
 
 logger = logging.getLogger(__name__)
 
+# Tenant portal URLs are subdomain-based (e.g. https://acme.rilono.com). Built purely
+# from env here (no request object in a background job) so deployed links are correct.
+ENTERPRISE_ROOT_DOMAIN = (os.getenv("ENTERPRISE_ROOT_DOMAIN", "rilono.com").strip().lower() or "rilono.com").lstrip(".")
+ENTERPRISE_PORTAL_SCHEME = os.getenv("ENTERPRISE_PORTAL_SCHEME", "https").strip().lower() or "https"
+
 ENABLED = str(os.getenv("ENTERPRISE_CALENDAR_REMINDER_ENABLED", "true")).strip().lower() in {"1", "true", "yes", "on"}
 # India-focused product → default 08:00 IST (02:30 UTC). Override via env.
 HOUR_UTC = max(0, min(23, int(os.getenv("ENTERPRISE_CALENDAR_REMINDER_HOUR_UTC", "2") or "2")))
@@ -138,6 +143,15 @@ def _collect_org_items_by_recipient(db, organization_id: int, today: date, floor
     return by_recipient
 
 
+def _org_portal_url(org) -> str:
+    """The org's tenant portal base URL, e.g. https://acme.rilono.com (falls back to
+    the root public URL if the org has no subdomain yet)."""
+    subdomain = (getattr(org, "subdomain_slug", None) or "").strip().lower()
+    if subdomain:
+        return f"{ENTERPRISE_PORTAL_SCHEME}://{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+    return DEFAULT_PUBLIC_BASE_URL.rstrip("/")
+
+
 def _is_active_member(db, organization_id: int, user_id: int) -> bool:
     return (
         db.query(models.EnterpriseOrganizationMember.id)
@@ -214,7 +228,7 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
                         org_name=org.company_name or "Your consultancy",
                         overdue_items=overdue,
                         today_items=today_items,
-                        portal_url=DEFAULT_PUBLIC_BASE_URL,
+                        portal_url=_org_portal_url(org),
                     )
                     if ok:
                         emailed += 1

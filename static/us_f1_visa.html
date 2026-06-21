@@ -455,10 +455,12 @@
         <div id="loginSection" class="section" style="display: none;">
             <div class="auth-card">
                 <h2>Login</h2>
+                <div class="social-auth" id="socialAuthLogin"></div>
+                <div class="social-auth-divider" id="socialAuthLoginDivider" style="display:none;"><span>or</span></div>
                 <form id="loginForm">
                     <div class="form-group">
-                        <label for="loginEmail">University Email</label>
-                        <input type="email" id="loginEmail" required placeholder="your.email@university.edu">
+                        <label for="loginEmail">Email</label>
+                        <input type="email" id="loginEmail" required placeholder="you@example.com">
                     </div>
                     <div class="form-group">
                         <label for="loginPassword">Password</label>
@@ -622,10 +624,12 @@
         <div id="registerSection" class="section" style="display: none;">
             <div class="auth-card">
                 <h2>Create Account</h2>
+                <div class="social-auth" id="socialAuthRegister"></div>
+                <div class="social-auth-divider" id="socialAuthRegisterDivider" style="display:none;"><span>or sign up with email</span></div>
                 <form id="registerForm">
                     <div class="form-group">
-                        <label for="registerEmail">University Email *</label>
-                        <input type="email" id="registerEmail" required placeholder="your.name@university.edu">
+                        <label for="registerEmail">Email *</label>
+                        <input type="email" id="registerEmail" required placeholder="you@example.com">
                         <small id="emailValidationMessage"
                             style="display: none; margin-top: 0.5rem; font-size: 0.875rem;"></small>
                     </div>
@@ -648,13 +652,12 @@
                         <input type="text" id="registerFullName">
                     </div>
                     <div class="form-group">
-                        <label for="registerUniversity">University</label>
-                        <input type="text" id="registerUniversity" readonly
-                            style="background-color: var(--bg-color); cursor: not-allowed;"
-                            placeholder="Auto-filled from your email domain">
+                        <label for="registerUniversity">University (optional)</label>
+                        <input type="text" id="registerUniversity"
+                            placeholder="Auto-filled from your email — or type your university">
                         <small
                             style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
-                            University is automatically detected from your email domain
+                            Auto-detected from a university email; optional otherwise.
                         </small>
                     </div>
                     <div class="form-group">
@@ -3439,7 +3442,7 @@
                             <li>Unlimited Rilono Copilot workflows</li>
                             <li>Valid for 30 days · priority support</li>
                         </ul>
-                        <a href="/visa-pass" id="pricingPassButton" class="btn btn-primary">Get the Visa Success Pass</a>
+                        <button type="button" id="pricingPassButton" class="btn btn-primary" onclick="handleUpgradeToPro('pricing')">Get the Visa Success Pass</button>
                     </div>
                 </div>
                 <p class="pricing-disclaimer">Prices are shown in local currency and updated daily using exchange rates.
@@ -4477,36 +4480,28 @@
                 <button type="button" class="checkout-launch-close-btn" onclick="closeCheckoutLaunchModal(false)"
                     aria-label="Close">×</button>
                 <div class="checkout-launch-header">
-                    <div class="checkout-launch-badge">Pro Upgrade</div>
-                    <h3 class="checkout-launch-title">Secure Checkout</h3>
-                    <p class="checkout-launch-subtitle">You're one step away from unlocking unlimited AI guidance,
-                        unlimited Rilono AI chat uploads, and unlimited document uploads.</p>
+                    <div class="checkout-launch-badge">Visa Success Pass</div>
+                    <h3 class="checkout-launch-title">Unlock everything</h3>
+                    <p class="checkout-launch-subtitle">One payment, 30 days of full access — no subscription, no
+                        auto-renew. Everything stays right here in your dashboard.</p>
                 </div>
                 <div class="checkout-launch-layout">
                     <div class="checkout-launch-benefits-card">
                         <div class="checkout-launch-benefits-title">What You Get</div>
                         <ul class="checkout-launch-benefits">
-                            <li>Unlimited Rilono AI messages</li>
-                            <li>Unlimited Rilono AI chat file uploads</li>
-                            <li>Unlimited document uploads</li>
-                            <li>Unlimited interview prep and mock sessions</li>
-                            <li>Unlimited Rilono Copilot workflows</li>
+                            <li>Unlimited document audits &amp; red-flag scans</li>
+                            <li>3 full AI voice mock interviews</li>
+                            <li>Unlimited DS-160 auto-fills</li>
+                            <li>Unlimited Rilono AI messages &amp; uploads</li>
+                            <li>Unlimited interview prep &amp; Copilot workflows</li>
                             <li>Priority support</li>
                         </ul>
                     </div>
                     <div class="checkout-launch-summary">
                         <div id="checkoutLaunchPlanName" class="checkout-launch-plan-name">Visa Success Pass</div>
                         <div id="checkoutLaunchAmount" class="checkout-launch-plan-price">₹999 / one-time</div>
-                        <div class="checkout-launch-coupon-block">
-                            <label for="checkoutLaunchCouponCode" class="checkout-launch-coupon-label">Coupon code
-                                (optional)</label>
-                            <input id="checkoutLaunchCouponCode" type="text" class="checkout-launch-coupon-input"
-                                placeholder="Enter coupon at checkout" autocomplete="off" maxlength="40">
-                            <p class="checkout-launch-coupon-help">If valid, discount is applied before Razorpay opens.
-                            </p>
-                        </div>
-                        <p id="checkoutLaunchMode" class="checkout-launch-plan-note">Auto-renew enabled. Cancel anytime
-                            from Profile > Subscription.</p>
+                        <p id="checkoutLaunchMode" class="checkout-launch-plan-note">One-time payment · valid 30 days ·
+                            no subscription, no auto-renew.</p>
                     </div>
                 </div>
                 <div class="checkout-launch-actions">

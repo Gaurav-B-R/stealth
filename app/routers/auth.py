@@ -43,6 +43,10 @@ router = APIRouter(prefix="/api/auth", tags=["authentication"])
 logger = logging.getLogger(__name__)
 DEFAULT_PUBLIC_BASE_URL = "https://rilono.com"
 
+# B2C: when open (default), students can sign up / log in with ANY email (Gmail etc.)
+# and university becomes optional. Set false to restore the university-domain gate.
+B2C_OPEN_SIGNUP = os.getenv("B2C_OPEN_SIGNUP", "true").strip().lower() in {"1", "true", "yes", "on"}
+
 REGISTER_RATE_LIMIT = int(os.getenv("REGISTER_RATE_LIMIT", "5"))
 REGISTER_RATE_WINDOW_SECONDS = int(os.getenv("REGISTER_RATE_WINDOW_SECONDS", "900"))
 LOGIN_RATE_LIMIT = int(os.getenv("LOGIN_RATE_LIMIT", "12"))
@@ -148,6 +152,20 @@ def _resolve_auth_cookie_secure(request: Request) -> bool:
     return True
 
 
+def _effective_cookie_domain(request: Request) -> str | None:
+    """The configured cookie domain, but only when it actually matches the request host.
+    A cookie whose Domain= doesn't match the host is silently dropped by the browser
+    (e.g. Domain=.lvh.me on a localhost OAuth callback), so fall back to a host-only
+    cookie in that case instead of losing the session."""
+    if not AUTH_COOKIE_DOMAIN:
+        return None
+    host = (request.url.hostname or "").strip().lower()
+    base = AUTH_COOKIE_DOMAIN.lstrip(".").lower()
+    if host == base or host.endswith("." + base):
+        return AUTH_COOKIE_DOMAIN
+    return None
+
+
 def _set_auth_cookie(request: Request, response: Response, access_token: str, max_age_seconds: int) -> None:
     secure_cookie = _resolve_auth_cookie_secure(request)
     response.set_cookie(
@@ -157,15 +175,15 @@ def _set_auth_cookie(request: Request, response: Response, access_token: str, ma
         httponly=True,
         secure=secure_cookie,
         samesite=AUTH_COOKIE_SAMESITE,
-        domain=AUTH_COOKIE_DOMAIN,
+        domain=_effective_cookie_domain(request),
         path="/",
     )
 
 
-def _clear_auth_cookie(response: Response) -> None:
+def _clear_auth_cookie(response: Response, request: Request | None = None) -> None:
     response.delete_cookie(
         key=AUTH_COOKIE_NAME,
-        domain=AUTH_COOKIE_DOMAIN,
+        domain=(_effective_cookie_domain(request) if request is not None else AUTH_COOKIE_DOMAIN),
         path="/",
     )
 
@@ -363,17 +381,20 @@ def register(
         # Developer email - allow registration with special university name
         university_name = dev_email.university_name
     else:
-        # Validate email domain against us_universities table
+        # Auto-fill university from the domain when we recognize it.
         university = db.query(models.USUniversity).filter(
             models.USUniversity.email_domain == email_domain
         ).first()
-        
-        if not university:
+        if university:
+            university_name = university.university_name
+        elif B2C_OPEN_SIGNUP:
+            # Open B2C signup: any email is allowed; university is optional.
+            university_name = None
+        else:
             raise HTTPException(
                 status_code=403,
                 detail="Registration is restricted to students with valid university email addresses. Please use your university email domain."
             )
-        university_name = university.university_name
     
     # Check if user already exists
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
@@ -530,7 +551,7 @@ async def login(
         models.DeveloperEmail.email == user.email.lower()
     ).first()
     
-    if not dev_email:
+    if not dev_email and not B2C_OPEN_SIGNUP:
         email_domain = extract_email_domain(user.email)
         if email_domain:
             university = db.query(models.USUniversity).filter(
@@ -580,6 +601,174 @@ async def login(
         "referral_bonus_awarded": bool(reward_payload.get("awarded")),
         "referral_bonus_message": reward_payload.get("message"),
     }
+
+
+# ===========================================================================
+# Social login (OAuth) — Google / Microsoft / Apple
+# ===========================================================================
+
+import secrets as _secrets
+from jose import jwt as _jose_jwt, JWTError as _JWTError
+from fastapi.responses import RedirectResponse
+from app import oauth as social_oauth
+from app.auth import SECRET_KEY as _AUTH_SECRET_KEY, ALGORITHM as _AUTH_ALGORITHM
+
+OAUTH_STATE_TTL_SECONDS = int(os.getenv("OAUTH_STATE_TTL_SECONDS", "600"))
+OAUTH_RATE_LIMIT = int(os.getenv("OAUTH_RATE_LIMIT", "20"))
+OAUTH_RATE_WINDOW_SECONDS = int(os.getenv("OAUTH_RATE_WINDOW_SECONDS", "300"))
+
+
+def _oauth_state_encode(provider: str, nonce: str) -> str:
+    payload = {
+        "p": provider, "n": nonce,
+        "exp": datetime.utcnow() + timedelta(seconds=OAUTH_STATE_TTL_SECONDS),
+        "iat": datetime.utcnow(),
+    }
+    return _jose_jwt.encode(payload, _AUTH_SECRET_KEY, algorithm=_AUTH_ALGORITHM)
+
+
+def _oauth_state_decode(token: str) -> dict:
+    return _jose_jwt.decode(token, _AUTH_SECRET_KEY, algorithms=[_AUTH_ALGORITHM])
+
+
+def _app_redirect(path: str, *, error: str | None = None) -> RedirectResponse:
+    base = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL).rstrip("/")
+    target = path if path.startswith("http") else f"{base}{path}"
+    if error:
+        sep = "&" if "?" in target else "?"
+        from urllib.parse import quote as _q
+        target = f"{target}{sep}auth_error={_q(error)}"
+    return RedirectResponse(url=target, status_code=302)
+
+
+def _find_or_create_oauth_user(db: Session, *, email: str, name: str | None, provider: str) -> models.User:
+    """Find an existing user by email or create a verified one for this provider."""
+    email = (email or "").strip().lower()
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if user:
+        if not user.auth_provider:
+            user.auth_provider = provider
+        if not user.email_verified:
+            user.email_verified = True  # provider has verified the email
+        db.commit()
+        return user
+
+    # Username from email local-part, de-duplicated.
+    base_username = (email.split("@")[0] or "user")[:40]
+    username = base_username
+    counter = 1
+    while db.query(models.User).filter(models.User.username == username).first():
+        username = f"{base_username}{counter}"
+        counter += 1
+
+    # Auto-fill university only when the domain is recognized; otherwise optional.
+    domain = extract_email_domain(email)
+    university = (
+        db.query(models.USUniversity).filter(models.USUniversity.email_domain == domain).first()
+        if domain else None
+    )
+
+    user = models.User(
+        email=email,
+        username=username,
+        hashed_password=get_password_hash(_secrets.token_urlsafe(32)),  # unusable; reset to set one
+        full_name=(name or None),
+        university=(university.university_name if university else None),
+        current_residence_country="United States",
+        referral_code=generate_unique_referral_code(db),
+        accepted_terms_privacy_at=datetime.utcnow(),
+        email_verified=True,
+        auth_provider=provider,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    get_or_create_user_subscription(db, user.id)
+    _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
+    return user
+
+
+@router.get("/oauth/providers")
+def oauth_providers():
+    """List the social-login providers that are currently configured (have env creds)."""
+    return {"providers": social_oauth.enabled_providers()}
+
+
+@router.get("/oauth/{provider}/start")
+def oauth_start(provider: str, request: Request):
+    provider = (provider or "").strip().lower()
+    if not social_oauth.is_enabled(provider):
+        return _app_redirect("/login", error="This sign-in option isn't available right now.")
+    _enforce_rate_limit_or_429(
+        request=request, scope="auth.oauth.start",
+        limit=OAUTH_RATE_LIMIT, window_seconds=OAUTH_RATE_WINDOW_SECONDS,
+    )
+    nonce = _secrets.token_urlsafe(16)
+    state = _oauth_state_encode(provider, nonce)
+    return RedirectResponse(url=social_oauth.build_authorize_url(provider, state=state, nonce=nonce), status_code=302)
+
+
+@router.api_route("/oauth/{provider}/callback", methods=["GET", "POST"])
+async def oauth_callback(provider: str, request: Request, db: Session = Depends(get_db)):
+    provider = (provider or "").strip().lower()
+    if provider not in social_oauth.PROVIDERS:
+        return _app_redirect("/login", error="Unknown sign-in provider.")
+
+    # Apple posts the callback as form data; others use query params.
+    if request.method == "POST":
+        form = await request.form()
+        params = dict(form)
+    else:
+        params = dict(request.query_params)
+
+    if params.get("error"):
+        return _app_redirect("/login", error="Sign-in was cancelled.")
+
+    code = params.get("code")
+    state = params.get("state")
+    if not code or not state:
+        return _app_redirect("/login", error="Sign-in response was incomplete.")
+    try:
+        decoded = _oauth_state_decode(state)
+        if decoded.get("p") != provider:
+            raise ValueError("provider mismatch")
+    except (_JWTError, ValueError):
+        return _app_redirect("/login", error="Your sign-in link expired. Please try again.")
+
+    try:
+        tokens = social_oauth.exchange_code(provider, code)
+        identity = social_oauth.fetch_identity(provider, tokens, apple_user=params.get("user"))
+    except Exception as exc:
+        logger.warning("OAuth callback failed (%s): %s", provider, exc)
+        return _app_redirect("/login", error=str(exc) or "Could not complete sign-in.")
+
+    user = _find_or_create_oauth_user(db, email=identity["email"], name=identity.get("name"), provider=provider)
+    if not user.is_active:
+        return _app_redirect("/login", error="Your account is deactivated. Please contact support.")
+
+    now = datetime.utcnow()
+    if user.first_login_at is None:
+        user.first_login_at = now
+    user.last_login_at = now
+    ensure_user_referral_code(db, user, commit=False)
+    try:
+        maybe_award_referral_bonus_on_login(db, user, commit=False)
+    except Exception:
+        pass
+    db.commit()
+
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data={"sub": user.email}, expires_delta=access_token_expires)
+    response = _app_redirect("/dashboard")
+    _set_auth_cookie(request, response, access_token, int(access_token_expires.total_seconds()))
+    logger.info(
+        "OAuth login OK: %s via %s | host=%s scheme=%s | cookie name=%s secure=%s domain=%r samesite=%s -> %s",
+        user.email, provider, request.url.hostname, request.url.scheme, AUTH_COOKIE_NAME,
+        _resolve_auth_cookie_secure(request), _effective_cookie_domain(request), AUTH_COOKIE_SAMESITE,
+        response.headers.get("location"),
+    )
+    return response
+
 
 @router.get("/me", response_model=schemas.UserResponse)
 def read_users_me(

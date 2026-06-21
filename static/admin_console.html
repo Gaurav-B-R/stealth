@@ -185,11 +185,12 @@
                                     <th>Members</th>
                                     <th>Created By</th>
                                     <th id="adminEnterpriseCreatedHeader">Created</th>
+                                    <th>Discounts</th>
                                 </tr>
                             </thead>
                             <tbody id="adminEnterpriseTableBody">
                                 <tr>
-                                    <td colspan="5" class="table-empty">No enterprise accounts loaded yet.</td>
+                                    <td colspan="6" class="table-empty">No enterprise accounts loaded yet.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -533,6 +534,71 @@
                 </section>
             </section>
         </main>
+    </div>
+
+    <div id="adminCouponModal" class="admin-modal-overlay" hidden>
+        <div class="admin-modal" role="dialog" aria-modal="true" aria-labelledby="adminCouponModalTitle">
+            <div class="admin-modal-head">
+                <div>
+                    <h3 id="adminCouponModalTitle">Discount codes</h3>
+                    <p id="adminCouponModalSubtitle" class="admin-modal-sub">—</p>
+                </div>
+                <button type="button" id="adminCouponModalCloseBtn" class="admin-modal-close" aria-label="Close">&times;</button>
+            </div>
+
+            <div class="admin-modal-body">
+                <form id="adminCouponForm" class="coupon-form">
+                    <div class="coupon-form-grid">
+                        <label class="coupon-field">
+                            <span>Code</span>
+                            <input type="text" id="adminCouponCodeInput" placeholder="WELCOME10" maxlength="40" autocomplete="off" required>
+                        </label>
+                        <label class="coupon-field coupon-field-narrow">
+                            <span>% off</span>
+                            <input type="number" id="adminCouponPercentInput" placeholder="10" min="0.01" max="100" step="0.01" required>
+                        </label>
+                        <label class="coupon-field">
+                            <span>Applies to</span>
+                            <select id="adminCouponAppliesInput">
+                                <option value="all">Top-ups &amp; plan billing</option>
+                                <option value="credits">Credit top-ups only</option>
+                                <option value="billing">Plan billing only</option>
+                            </select>
+                        </label>
+                        <label class="coupon-field coupon-field-narrow">
+                            <span>Max redemptions</span>
+                            <input type="number" id="adminCouponMaxInput" placeholder="Unlimited" min="1" step="1">
+                        </label>
+                        <label class="coupon-field coupon-field-wide">
+                            <span>Note (optional)</span>
+                            <input type="text" id="adminCouponNoteInput" placeholder="e.g. Diwali launch offer" maxlength="120">
+                        </label>
+                    </div>
+                    <div class="coupon-form-actions">
+                        <button type="submit" id="adminCouponCreateBtn" class="primary-btn small-btn">Add discount code</button>
+                        <span id="adminCouponFormError" class="coupon-form-error" hidden></span>
+                    </div>
+                </form>
+
+                <div class="coupon-list-wrap">
+                    <table class="users-table coupon-table">
+                        <thead>
+                            <tr>
+                                <th>Code</th>
+                                <th>Discount</th>
+                                <th>Applies to</th>
+                                <th>Redemptions</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminCouponTableBody">
+                            <tr><td colspan="6" class="table-empty">No discount codes yet.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="/static/admin_console.js"></script>

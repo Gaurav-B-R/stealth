@@ -139,6 +139,23 @@ class AdminEnterpriseCredentialCreateResponse(BaseModel):
     message: str
 
 
+class AdminEnterpriseCouponCreateRequest(BaseModel):
+    code: str
+    percent_off: float
+    applies_to: str = "all"  # all | credits | billing
+    max_redemptions: Optional[int] = None
+    note: Optional[str] = None
+    is_active: bool = True
+
+
+class AdminEnterpriseCouponUpdateRequest(BaseModel):
+    percent_off: Optional[float] = None
+    applies_to: Optional[str] = None
+    max_redemptions: Optional[int] = None
+    note: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class AdminCompanyFinanceSummary(BaseModel):
     total_invested_usd: float = 0
     total_returns_usd: float = 0

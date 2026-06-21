@@ -922,3 +922,170 @@ button:disabled {
         align-items: flex-start;
     }
 }
+
+/* ------------------------------------------------------------------ */
+/* Per-account discount codes modal                                   */
+/* ------------------------------------------------------------------ */
+body.admin-modal-open {
+    overflow: hidden;
+}
+
+.admin-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 5vh 1rem 2rem;
+    background: rgba(15, 23, 42, 0.55);
+    backdrop-filter: blur(2px);
+    overflow-y: auto;
+}
+
+.admin-modal-overlay[hidden] {
+    display: none;
+}
+
+.admin-modal {
+    width: min(760px, 100%);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: 0 30px 80px rgba(15, 23, 42, 0.35);
+    overflow: hidden;
+}
+
+.admin-modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.25rem 1.5rem;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(168, 85, 247, 0.08));
+    border-bottom: 1px solid var(--line);
+}
+
+.admin-modal-head h3 {
+    margin: 0;
+    font-size: 1.15rem;
+    color: var(--ink);
+}
+
+.admin-modal-sub {
+    margin: 0.2rem 0 0;
+    font-size: 0.85rem;
+    color: var(--ink-soft);
+}
+
+.admin-modal-close {
+    border: none;
+    background: transparent;
+    font-size: 1.6rem;
+    line-height: 1;
+    color: var(--ink-soft);
+    cursor: pointer;
+    padding: 0 0.35rem;
+}
+
+.admin-modal-close:hover {
+    color: var(--ink);
+}
+
+.admin-modal-body {
+    padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.coupon-form {
+    margin-bottom: 1.25rem;
+}
+
+.coupon-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+}
+
+.coupon-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    font-weight: 600;
+}
+
+.coupon-field-wide {
+    grid-column: 1 / -1;
+}
+
+.coupon-field input,
+.coupon-field select {
+    min-height: 2.4rem;
+    padding: 0 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    color: var(--ink);
+    font-size: 0.9rem;
+}
+
+.coupon-field input:focus,
+.coupon-field select:focus {
+    outline: none;
+    border-color: var(--brand-a);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.coupon-form-actions {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 0.95rem;
+}
+
+.coupon-form-error {
+    font-size: 0.82rem;
+    color: var(--bad);
+    font-weight: 600;
+}
+
+.coupon-list-wrap {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.coupon-table {
+    width: 100%;
+    margin: 0;
+}
+
+.coupon-code-cell {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.02em;
+}
+
+.coupon-chip {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.coupon-chip.active {
+    background: #ecfdf5;
+    color: #047857;
+}
+
+.coupon-chip.inactive {
+    background: #f1f5f9;
+    color: #64748b;
+}
+
+@media (max-width: 620px) {
+    .coupon-form-grid {
+        grid-template-columns: 1fr;
+    }
+}

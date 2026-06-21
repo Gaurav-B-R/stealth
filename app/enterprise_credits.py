@@ -121,7 +121,7 @@ ACTIONS = {
     "deep_scan": {
         "key": "deep_scan",
         "label": "Deep Scan document audit",
-        "description": "Gemini cross-references the client's documents for mismatched dates, names and missing funds.",
+        "description": "Rilono AI cross-references the client's documents for mismatched dates, names and missing funds.",
         "credits": _int_env("ENTERPRISE_CREDIT_COST_DEEP_SCAN", 5),
     },
     "mock_interview": {
@@ -461,6 +461,101 @@ def wallet_state(db: Session, organization_id: int) -> dict:
         "low_balance": balance < (action_cost("mock_interview") or 1),
         "actions": actions_payload(),
         "infra_fee": infra_fee_state(db, organization_id),
+    }
+
+
+def usage_breakdown(db: Session, organization_id: int, *, member_limit: int = 12) -> dict:
+    """How an org's credits have actually been spent — the in-app usage tracker.
+
+    Aggregates the debit ledger so consultancies can see *where* credits went
+    (which premium feature) and *who* on the team spent them. Used by the
+    "Credit usage" section of the enterprise Credits & Billing page.
+    """
+    T = models.EnterpriseCreditTransaction
+    org_id = int(organization_id)
+
+    # --- By feature (billable action) --------------------------------------
+    action_rows = (
+        db.query(
+            T.action_key,
+            func.count(T.id),
+            func.coalesce(func.sum(-T.credits), 0),
+        )
+        .filter(T.organization_id == org_id, T.type == "debit")
+        .group_by(T.action_key)
+        .all()
+    )
+    raw = {(k or ""): {"units": int(u or 0), "credits_spent": int(c or 0)} for k, u, c in action_rows}
+
+    by_action = []
+    total_spent = 0
+    for key, action in ACTIONS.items():
+        stat = raw.pop(key, {"units": 0, "credits_spent": 0})
+        total_spent += stat["credits_spent"]
+        by_action.append({
+            "key": key,
+            "label": action["label"],
+            "price_credits": int(action["credits"]),
+            "units": stat["units"],
+            "credits_spent": stat["credits_spent"],
+            "value_display": format_inr(credits_to_paise(stat["credits_spent"])),
+        })
+    # Any leftover (legacy / unknown) debit action keys roll up into "Other".
+    other_units = sum(v["units"] for v in raw.values())
+    other_credits = sum(v["credits_spent"] for v in raw.values())
+    if other_units or other_credits:
+        total_spent += other_credits
+        by_action.append({
+            "key": "other", "label": "Other usage", "price_credits": 0,
+            "units": other_units, "credits_spent": other_credits,
+            "value_display": format_inr(credits_to_paise(other_credits)),
+        })
+
+    for row in by_action:
+        row["share_pct"] = round((row["credits_spent"] / total_spent) * 100, 1) if total_spent > 0 else 0.0
+
+    # --- By team member ----------------------------------------------------
+    member_rows = (
+        db.query(
+            T.created_by_user_id,
+            func.max(T.created_by_name),
+            func.count(T.id),
+            func.coalesce(func.sum(-T.credits), 0),
+        )
+        .filter(T.organization_id == org_id, T.type == "debit")
+        .group_by(T.created_by_user_id)
+        .all()
+    )
+    by_member = []
+    for uid, name, units, spent in member_rows:
+        spent = int(spent or 0)
+        by_member.append({
+            "user_id": uid,
+            "name": (name or "Unknown / system"),
+            "units": int(units or 0),
+            "credits_spent": spent,
+            "value_display": format_inr(credits_to_paise(spent)),
+            "share_pct": round((spent / total_spent) * 100, 1) if total_spent > 0 else 0.0,
+        })
+    by_member.sort(key=lambda r: r["credits_spent"], reverse=True)
+    if member_limit and len(by_member) > member_limit:
+        by_member = by_member[:member_limit]
+
+    # --- Last 30 days spend ------------------------------------------------
+    since = datetime.utcnow() - timedelta(days=30)
+    spent_30d = int(
+        db.query(func.coalesce(func.sum(-T.credits), 0))
+        .filter(T.organization_id == org_id, T.type == "debit", T.created_at >= since)
+        .scalar() or 0
+    )
+
+    return {
+        "total_spent_credits": total_spent,
+        "total_spent_display": format_inr(credits_to_paise(total_spent)),
+        "spent_last_30d_credits": spent_30d,
+        "spent_last_30d_display": format_inr(credits_to_paise(spent_30d)),
+        "by_action": by_action,
+        "by_member": by_member,
     }
 
 

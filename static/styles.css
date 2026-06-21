@@ -14516,3 +14516,22 @@ svg {
         display: none;
     }
 }
+
+/* ===================== Social login (Google / Microsoft / Apple) ===================== */
+.social-auth { display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; }
+.social-auth:empty { display: none; }
+.social-btn {
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; padding: 11px 16px; border-radius: 10px; cursor: pointer;
+    font-size: 0.95rem; font-weight: 600; text-decoration: none;
+    background: #ffffff; color: #1f2937; border: 1px solid rgba(255,255,255,0.16);
+    transition: filter .15s, transform .05s;
+}
+.social-btn:hover { filter: brightness(0.96); }
+.social-btn:active { transform: translateY(1px); }
+.social-btn svg, .social-btn img { width: 18px; height: 18px; flex: none; }
+.social-btn-apple { background: #000000; color: #ffffff; border-color: rgba(255,255,255,0.22); }
+.social-btn-microsoft { background: #ffffff; color: #1f2937; }
+.social-auth-divider { display: flex; align-items: center; text-align: center; margin: 16px 0; color: var(--text-muted); font-size: 0.8rem; }
+.social-auth-divider::before, .social-auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--border-color); }
+.social-auth-divider span { padding: 0 12px; white-space: nowrap; }

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, aliased
 from app import models, schemas
 from app import ai_usage
 from app import enterprise_credits
+from app import enterprise_coupons
 from app import visa_pass
 from app import ai_guardrails
 from app.auth import (
@@ -1158,6 +1159,178 @@ def create_enterprise_credentials_admin(
             else "Enterprise credentials updated and password rotated successfully."
         ),
     }
+
+
+# ===========================================================================
+# Per-account enterprise discount codes (admin-managed)
+# ===========================================================================
+
+def _get_enterprise_org_or_404(db: Session, organization_id: int) -> models.EnterpriseOrganization:
+    org = (
+        db.query(models.EnterpriseOrganization)
+        .filter(models.EnterpriseOrganization.id == organization_id)
+        .first()
+    )
+    if not org:
+        raise HTTPException(status_code=404, detail="Enterprise account not found.")
+    return org
+
+
+@router.get("/enterprise/accounts/{organization_id}/coupons")
+def list_enterprise_account_coupons_admin(
+    request: Request,
+    organization_id: int,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """List the discount codes configured for one enterprise account."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.coupons.list",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+    rows = (
+        db.query(models.EnterpriseCoupon)
+        .filter(models.EnterpriseCoupon.organization_id == org.id)
+        .order_by(desc(models.EnterpriseCoupon.created_at), desc(models.EnterpriseCoupon.id))
+        .all()
+    )
+    return {
+        "organization_id": int(org.id),
+        "company_name": (org.company_name or "").strip() or "Untitled Organization",
+        "coupons": [enterprise_coupons.serialize(db, row) for row in rows],
+    }
+
+
+@router.post("/enterprise/accounts/{organization_id}/coupons")
+def create_enterprise_account_coupon_admin(
+    request: Request,
+    organization_id: int,
+    payload: schemas.AdminEnterpriseCouponCreateRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Create a discount code for one enterprise account."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.coupons.create",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+
+    code = enterprise_coupons.normalize_code(payload.code)
+    if not code:
+        raise HTTPException(status_code=400, detail="Enter a discount code (letters, numbers, - or _).")
+    percent = enterprise_coupons.parse_percent_off(payload.percent_off)
+    applies_to = enterprise_coupons.normalize_applies_to(payload.applies_to)
+    max_redemptions = enterprise_coupons.parse_max_redemptions(payload.max_redemptions)
+
+    existing = enterprise_coupons.find_coupon(db, org.id, code)
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Code '{code}' already exists for this account.")
+
+    note = (payload.note or "").strip() or None
+    coupon = models.EnterpriseCoupon(
+        organization_id=org.id,
+        code=code,
+        percent_off=percent,
+        is_active=bool(payload.is_active),
+        applies_to=applies_to,
+        max_redemptions=max_redemptions,
+        note=note,
+        created_by_user_id=current_user.id,
+    )
+    db.add(coupon)
+    db.commit()
+    db.refresh(coupon)
+    return {"coupon": enterprise_coupons.serialize(db, coupon)}
+
+
+@router.patch("/enterprise/accounts/{organization_id}/coupons/{coupon_id}")
+def update_enterprise_account_coupon_admin(
+    request: Request,
+    organization_id: int,
+    coupon_id: int,
+    payload: schemas.AdminEnterpriseCouponUpdateRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Update a discount code (percent, scope, cap, note, or active toggle)."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.coupons.update",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+    coupon = (
+        db.query(models.EnterpriseCoupon)
+        .filter(
+            models.EnterpriseCoupon.id == coupon_id,
+            models.EnterpriseCoupon.organization_id == org.id,
+        )
+        .first()
+    )
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Discount code not found.")
+
+    provided = payload.model_dump(exclude_unset=True)
+    if "percent_off" in provided and provided["percent_off"] is not None:
+        coupon.percent_off = enterprise_coupons.parse_percent_off(provided["percent_off"])
+    if "applies_to" in provided and provided["applies_to"] is not None:
+        coupon.applies_to = enterprise_coupons.normalize_applies_to(provided["applies_to"])
+    if "max_redemptions" in provided:
+        coupon.max_redemptions = enterprise_coupons.parse_max_redemptions(provided["max_redemptions"])
+    if "note" in provided:
+        coupon.note = (provided["note"] or "").strip() or None
+    if "is_active" in provided and provided["is_active"] is not None:
+        coupon.is_active = bool(provided["is_active"])
+
+    db.commit()
+    db.refresh(coupon)
+    return {"coupon": enterprise_coupons.serialize(db, coupon)}
+
+
+@router.delete("/enterprise/accounts/{organization_id}/coupons/{coupon_id}")
+def delete_enterprise_account_coupon_admin(
+    request: Request,
+    organization_id: int,
+    coupon_id: int,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Delete a discount code from one enterprise account."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.coupons.delete",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+    coupon = (
+        db.query(models.EnterpriseCoupon)
+        .filter(
+            models.EnterpriseCoupon.id == coupon_id,
+            models.EnterpriseCoupon.organization_id == org.id,
+        )
+        .first()
+    )
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Discount code not found.")
+    db.delete(coupon)
+    db.commit()
+    return {"deleted": True, "id": coupon_id}
 
 
 @router.patch("/users/{user_id}/status", response_model=schemas.AdminUserSummary)

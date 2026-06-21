@@ -30,6 +30,7 @@ class User(Base):
     university_change_token_expires = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, default=False)  # Admin/Developer access
     is_developer = Column(Boolean, default=False)  # Developer team access
+    auth_provider = Column(String, nullable=True)  # password | google | microsoft | apple
     encryption_salt = Column(String, nullable=True)  # Salt for Zero-Knowledge encryption (base64 encoded)
     # Documentation preferences
     preferred_country = Column(String, nullable=True, default="United States")
@@ -301,6 +302,59 @@ class EnterpriseInterviewInvite(Base):
     client = relationship("EnterpriseClient", back_populates="interview_invites")
 
 
+class EnterpriseDocumentRequest(Base):
+    """A secure email request asking a client to upload specific documents via a link.
+
+    Mirrors the interview-invite security model: a high-entropy capability token
+    (stored hashed) plus a one-time email code (OTP) the client must confirm
+    before they can upload. Each requested document type is tracked as a child
+    item so staff can see exactly what's been received and what's still pending."""
+    __tablename__ = "enterprise_document_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)  # hashed capability token
+    email = Column(String, nullable=False)  # client email the link was sent to
+    message = Column(Text, nullable=True)  # optional note from staff shown to the client
+    status = Column(String, nullable=False, default="pending")  # pending | partial | completed
+    # One-time email verification (OTP) — same scheme as EnterpriseInterviewInvite.
+    code_hash = Column(String, nullable=True)
+    code_expires_at = Column(DateTime(timezone=True), nullable=True)
+    code_attempts = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked = Column(Boolean, nullable=False, default=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    client = relationship("EnterpriseClient")
+    items = relationship(
+        "EnterpriseDocumentRequestItem",
+        back_populates="request",
+        cascade="all, delete-orphan",
+        order_by="EnterpriseDocumentRequestItem.id",
+    )
+
+
+class EnterpriseDocumentRequestItem(Base):
+    """One requested document type within a document request, with its fulfillment state."""
+    __tablename__ = "enterprise_document_request_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    request_id = Column(Integer, ForeignKey("enterprise_document_requests.id", ondelete="CASCADE"), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    document_type = Column(String, nullable=False, default="Other")
+    status = Column(String, nullable=False, default="pending")  # pending | received
+    document_id = Column(Integer, ForeignKey("enterprise_client_documents.id", ondelete="SET NULL"), nullable=True)
+    received_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    request = relationship("EnterpriseDocumentRequest", back_populates="items")
+
+
 class EnterpriseCalendarEvent(Base):
     """A staff-created calendar event / reminder / task for the org's timeline.
 
@@ -343,6 +397,27 @@ class EnterpriseCalendarReminderRun(Base):
     error_message = Column(Text, nullable=True)
 
 
+class EnterpriseSupportRequest(Base):
+    """A help request or feature request submitted by an enterprise staff member."""
+    __tablename__ = "enterprise_support_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    requester_name = Column(String, nullable=True)
+    requester_email = Column(String, nullable=True)
+    request_type = Column(String, nullable=False, default="support", index=True)  # support | feature_request
+    subject = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    status = Column(String, nullable=False, default="open")  # open | in_progress | closed
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_ent_support_org_created", "organization_id", "created_at"),
+    )
+
+
 class EnterpriseSubscription(Base):
     """Per-organization SaaS subscription (the consultancy's own plan)."""
     __tablename__ = "enterprise_subscriptions"
@@ -374,6 +449,10 @@ class EnterpriseSubscriptionPayment(Base):
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
     razorpay_subscription_id = Column(String, nullable=True, index=True)
     status = Column(String, nullable=False, default="created")  # created|verified|failed
+    # Per-account discount applied at checkout (admin-managed; see EnterpriseCoupon).
+    coupon_code = Column(String, nullable=True, index=True)
+    coupon_percent_off = Column(Numeric(5, 2), nullable=True)
+    original_amount_paise = Column(Integer, nullable=True)  # pre-discount amount
     verified_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -440,10 +519,41 @@ class EnterpriseCreditPayment(Base):
     razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
     status = Column(String, nullable=False, default="created")  # created | verified | failed
+    # Per-account discount applied at checkout (admin-managed; see EnterpriseCoupon).
+    coupon_code = Column(String, nullable=True, index=True)
+    coupon_percent_off = Column(Numeric(5, 2), nullable=True)
+    original_amount_paise = Column(Integer, nullable=True)  # pre-discount amount
     verified_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterpriseCoupon(Base):
+    """Admin-managed discount code scoped to a single enterprise organization.
+
+    Created from the Admin Console (per account) and redeemed by that org's
+    admins at checkout (Rilono Credits top-ups and/or the enterprise plan
+    billing). Redemptions are counted live from verified payment rows that
+    carry this code, so there is no mutable counter to keep in sync.
+    """
+    __tablename__ = "enterprise_coupons"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    code = Column(String, nullable=False, index=True)  # stored normalized (uppercase)
+    percent_off = Column(Numeric(5, 2), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    applies_to = Column(String, nullable=False, default="all")  # all | credits | billing
+    max_redemptions = Column(Integer, nullable=True)  # total cap across the org (null = unlimited)
+    note = Column(String, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("uq_enterprise_coupon_org_code", "organization_id", "code", unique=True),
+    )
 
 
 class CompanyFinanceEntry(Base):

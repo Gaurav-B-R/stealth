@@ -31,6 +31,9 @@ const state = {
     },
     enterprisePage: 1,
     enterpriseLoading: false,
+    couponOrg: null,            // { id, company } currently open in the discount modal
+    couponList: [],
+    couponLoading: false,
     enterpriseFilters: {
         search: ''
     },
@@ -98,6 +101,19 @@ const refs = {
     enterpriseCredentialEmail: document.getElementById('adminEnterpriseCredentialEmail'),
     enterpriseCredentialCreateBtn: document.getElementById('adminEnterpriseCredentialCreateBtn'),
     enterpriseCredentialResult: document.getElementById('adminEnterpriseCredentialResult'),
+    couponModal: document.getElementById('adminCouponModal'),
+    couponModalTitle: document.getElementById('adminCouponModalTitle'),
+    couponModalSubtitle: document.getElementById('adminCouponModalSubtitle'),
+    couponModalCloseBtn: document.getElementById('adminCouponModalCloseBtn'),
+    couponForm: document.getElementById('adminCouponForm'),
+    couponCodeInput: document.getElementById('adminCouponCodeInput'),
+    couponPercentInput: document.getElementById('adminCouponPercentInput'),
+    couponAppliesInput: document.getElementById('adminCouponAppliesInput'),
+    couponMaxInput: document.getElementById('adminCouponMaxInput'),
+    couponNoteInput: document.getElementById('adminCouponNoteInput'),
+    couponCreateBtn: document.getElementById('adminCouponCreateBtn'),
+    couponFormError: document.getElementById('adminCouponFormError'),
+    couponTableBody: document.getElementById('adminCouponTableBody'),
     financeMetricNetHero: document.getElementById('adminFinanceMetricNetHero'),
     financeMetricInvested: document.getElementById('adminFinanceMetricInvested'),
     financeMetricInvestedSub: document.getElementById('adminFinanceMetricInvestedSub'),
@@ -188,6 +204,16 @@ function bindEvents() {
     refs.enterpriseNextBtn?.addEventListener('click', () => changeEnterprisePage(1));
     refs.enterpriseCredentialForm?.addEventListener('submit', handleEnterpriseCredentialSubmit);
     refs.enterpriseCredentialResult?.addEventListener('click', handleCredentialResultClick);
+    refs.enterpriseTableBody?.addEventListener('click', handleEnterpriseTableActionClick);
+    refs.couponModalCloseBtn?.addEventListener('click', closeCouponModal);
+    refs.couponModal?.addEventListener('click', (event) => {
+        if (event.target === refs.couponModal) closeCouponModal();
+    });
+    refs.couponForm?.addEventListener('submit', handleCouponCreateSubmit);
+    refs.couponTableBody?.addEventListener('click', handleCouponTableActionClick);
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && refs.couponModal && !refs.couponModal.hidden) closeCouponModal();
+    });
 }
 
 async function bootstrap() {
@@ -1037,7 +1063,7 @@ function renderEnterpriseTableMessage(message) {
     if (!refs.enterpriseTableBody) return;
     refs.enterpriseTableBody.innerHTML = `
         <tr>
-            <td colspan="5" class="table-empty">${escapeHtml(message)}</td>
+            <td colspan="6" class="table-empty">${escapeHtml(message)}</td>
         </tr>
     `;
 }
@@ -1077,6 +1103,11 @@ function renderEnterpriseTable() {
                     <div class="enterprise-meta">${escapeHtml(creatorMeta)}</div>
                 </td>
                 <td>${escapeHtml(formatDateTime(account.created_at))}</td>
+                <td>
+                    <button type="button" class="table-btn" data-action="manage-coupons"
+                        data-org-id="${escapeHtml(String(account.organization_id))}"
+                        data-company="${escapeHtml(companyName)}">Manage</button>
+                </td>
             </tr>
         `;
     });
@@ -1699,6 +1730,239 @@ async function handleEnterpriseCredentialSubmit(event) {
             refs.enterpriseCredentialCreateBtn.disabled = false;
             refs.enterpriseCredentialCreateBtn.textContent = 'Create Credentials';
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Per-account discount codes (admin)
+// ---------------------------------------------------------------------------
+
+const COUPON_APPLIES_LABELS = {
+    all: 'Top-ups & billing',
+    credits: 'Credit top-ups',
+    billing: 'Plan billing'
+};
+
+async function handleEnterpriseTableActionClick(event) {
+    const button = event.target.closest('[data-action="manage-coupons"]');
+    if (!button || button.disabled || state.enterpriseLoading) return;
+    const orgId = Number(button.dataset.orgId || 0);
+    if (!Number.isFinite(orgId) || orgId <= 0) return;
+    openCouponModal(orgId, String(button.dataset.company || 'this account'));
+}
+
+function setCouponFormError(message) {
+    if (!refs.couponFormError) return;
+    if (!message) {
+        refs.couponFormError.hidden = true;
+        refs.couponFormError.textContent = '';
+        return;
+    }
+    refs.couponFormError.textContent = message;
+    refs.couponFormError.hidden = false;
+}
+
+async function openCouponModal(orgId, company) {
+    state.couponOrg = { id: orgId, company };
+    state.couponList = [];
+    if (refs.couponModalTitle) refs.couponModalTitle.textContent = 'Discount codes';
+    if (refs.couponModalSubtitle) refs.couponModalSubtitle.textContent = company;
+    refs.couponForm?.reset();
+    setCouponFormError('');
+    renderCouponTableMessage('Loading discount codes...');
+    if (refs.couponModal) refs.couponModal.hidden = false;
+    document.body.classList.add('admin-modal-open');
+    await loadCoupons();
+}
+
+function closeCouponModal() {
+    if (refs.couponModal) refs.couponModal.hidden = true;
+    document.body.classList.remove('admin-modal-open');
+    state.couponOrg = null;
+    state.couponList = [];
+    setCouponFormError('');
+}
+
+function renderCouponTableMessage(message) {
+    if (!refs.couponTableBody) return;
+    refs.couponTableBody.innerHTML = `<tr><td colspan="6" class="table-empty">${escapeHtml(message)}</td></tr>`;
+}
+
+function renderCouponTable() {
+    if (!refs.couponTableBody) return;
+    if (!state.couponList.length) {
+        renderCouponTableMessage('No discount codes yet. Add one above.');
+        return;
+    }
+    refs.couponTableBody.innerHTML = state.couponList.map((c) => {
+        const used = Number(c.redemptions_used || 0);
+        const cap = c.max_redemptions == null ? '∞' : escapeHtml(String(c.max_redemptions));
+        const appliesLabel = COUPON_APPLIES_LABELS[c.applies_to] || 'Top-ups & billing';
+        const statusChip = c.is_active
+            ? '<span class="coupon-chip active">Active</span>'
+            : '<span class="coupon-chip inactive">Paused</span>';
+        const toggleLabel = c.is_active ? 'Pause' : 'Activate';
+        const noteRow = c.note
+            ? `<div class="enterprise-meta">${escapeHtml(c.note)}</div>`
+            : '';
+        return `
+            <tr>
+                <td><div class="user-name coupon-code-cell">${escapeHtml(c.code)}</div>${noteRow}</td>
+                <td>${escapeHtml(c.percent_display || (c.percent_off + '%'))}</td>
+                <td>${escapeHtml(appliesLabel)}</td>
+                <td>${escapeHtml(String(used))} / ${cap}</td>
+                <td>${statusChip}</td>
+                <td>
+                    <button type="button" class="table-btn" data-coupon-action="toggle"
+                        data-coupon-id="${escapeHtml(String(c.id))}" data-next-active="${c.is_active ? 'false' : 'true'}">${toggleLabel}</button>
+                    <button type="button" class="table-btn danger" data-coupon-action="delete"
+                        data-coupon-id="${escapeHtml(String(c.id))}" data-coupon-code="${escapeHtml(c.code)}">Delete</button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+async function loadCoupons() {
+    if (!state.couponOrg) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    state.couponLoading = true;
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons`, {
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            renderCouponTableMessage(normalizeErrorMessage(payload, 'Failed to load discount codes.'));
+            return;
+        }
+        state.couponList = Array.isArray(payload.coupons) ? payload.coupons : [];
+        if (refs.couponModalSubtitle && payload.company_name) {
+            refs.couponModalSubtitle.textContent = payload.company_name;
+        }
+        renderCouponTable();
+    } catch (error) {
+        console.error('Failed to load discount codes:', error);
+        renderCouponTableMessage('Could not load discount codes. Please retry.');
+    } finally {
+        state.couponLoading = false;
+    }
+}
+
+async function handleCouponCreateSubmit(event) {
+    event.preventDefault();
+    if (!state.couponOrg) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    setCouponFormError('');
+
+    const code = (refs.couponCodeInput?.value || '').trim();
+    const percent = parseFloat(refs.couponPercentInput?.value || '');
+    const appliesTo = refs.couponAppliesInput?.value || 'all';
+    const maxRaw = (refs.couponMaxInput?.value || '').trim();
+    const note = (refs.couponNoteInput?.value || '').trim();
+
+    if (!code) { setCouponFormError('Enter a discount code.'); return; }
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+        setCouponFormError('Discount must be between 0 and 100%.');
+        return;
+    }
+
+    const body = {
+        code,
+        percent_off: percent,
+        applies_to: appliesTo,
+        is_active: true,
+        max_redemptions: maxRaw === '' ? null : Number(maxRaw),
+        note: note || null
+    };
+
+    if (refs.couponCreateBtn) { refs.couponCreateBtn.disabled = true; refs.couponCreateBtn.textContent = 'Adding...'; }
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons`, {
+            method: 'POST',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify(body)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            setCouponFormError(normalizeErrorMessage(payload, 'Failed to add discount code.'));
+            return;
+        }
+        refs.couponForm?.reset();
+        showFlash(`Discount code ${code.toUpperCase()} added.`, 'success');
+        await loadCoupons();
+    } catch (error) {
+        console.error('Failed to add discount code:', error);
+        setCouponFormError('Could not add discount code. Please retry.');
+    } finally {
+        if (refs.couponCreateBtn) { refs.couponCreateBtn.disabled = false; refs.couponCreateBtn.textContent = 'Add discount code'; }
+    }
+}
+
+async function handleCouponTableActionClick(event) {
+    const button = event.target.closest('[data-coupon-action]');
+    if (!button || button.disabled || !state.couponOrg) return;
+    const couponId = Number(button.dataset.couponId || 0);
+    if (!Number.isFinite(couponId) || couponId <= 0) return;
+
+    if (button.dataset.couponAction === 'toggle') {
+        const nextActive = String(button.dataset.nextActive || '').toLowerCase() === 'true';
+        await updateCoupon(couponId, { is_active: nextActive });
+    } else if (button.dataset.couponAction === 'delete') {
+        const code = String(button.dataset.couponCode || 'this code');
+        if (!window.confirm(`Delete discount code "${code}"? This cannot be undone.`)) return;
+        await deleteCoupon(couponId, code);
+    }
+}
+
+async function updateCoupon(couponId, patch) {
+    if (!state.couponOrg) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}`, {
+            method: 'PATCH',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify(patch)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(normalizeErrorMessage(payload, 'Failed to update discount code.'), 'error');
+            return;
+        }
+        showFlash('Discount code updated.', 'success');
+        await loadCoupons();
+    } catch (error) {
+        console.error('Failed to update discount code:', error);
+        showFlash('Could not update discount code. Please retry.', 'error');
+    }
+}
+
+async function deleteCoupon(couponId, code) {
+    if (!state.couponOrg) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}`, {
+            method: 'DELETE',
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(normalizeErrorMessage(payload, 'Failed to delete discount code.'), 'error');
+            return;
+        }
+        showFlash(`Discount code ${code} deleted.`, 'success');
+        await loadCoupons();
+    } catch (error) {
+        console.error('Failed to delete discount code:', error);
+        showFlash('Could not delete discount code. Please retry.', 'error');
     }
 }
 

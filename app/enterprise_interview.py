@@ -142,7 +142,7 @@ def run_interview_turn(
 ) -> str:
     """One officer turn. If is_start, the model opens the interview."""
     if not is_ai_configured():
-        return "The mock interview isn't available right now — the Gemini API key isn't configured."
+        return "The mock interview isn't available right now — Rilono AI isn't configured on the server."
 
     system = build_interview_system_prompt(client, organization, recent_notes)
     model = _model(system)
@@ -170,7 +170,7 @@ def generate_interview_feedback(
 ) -> str:
     """One-shot coaching assessment of the interview transcript (markdown)."""
     if not is_ai_configured():
-        return "Feedback isn't available right now — the Gemini API key isn't configured."
+        return "Feedback isn't available right now — Rilono AI isn't configured on the server."
 
     transcript_lines = []
     for turn in (history or []):

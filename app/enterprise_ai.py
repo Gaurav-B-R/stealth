@@ -559,8 +559,8 @@ def run_enterprise_ai_chat(
 ) -> str:
     """Run one turn of the enterprise AI copilot. Returns the assistant's text answer."""
     if not is_ai_configured():
-        return ("The AI assistant isn't configured yet — an administrator needs to set the "
-                "Gemini API key on the server.")
+        return ("The AI assistant isn't configured yet — an administrator needs to enable "
+                "Rilono AI on the server.")
 
     genai = gemini_utils.genai
     model_name = gemini_utils.get_model_candidates(

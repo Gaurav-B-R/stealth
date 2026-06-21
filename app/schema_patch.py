@@ -55,6 +55,10 @@ def ensure_user_legal_consent_column():
         if "email_notifications_unsubscribe_reason" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN email_notifications_unsubscribe_reason TEXT"))
 
+        # Social login (Google/Microsoft/Apple) — which provider created/owns the account.
+        if "auth_provider" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN auth_provider VARCHAR"))
+
 
 def ensure_subscription_usage_columns():
     """
@@ -616,6 +620,101 @@ def ensure_enterprise_crm_tables():
                 conn.execute(text(stmt))
 
 
+def ensure_enterprise_support_requests_table():
+    """Create the enterprise_support_requests table (help & feature requests)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_support_requests"):
+            return
+        conn.execute(text(f"""
+            CREATE TABLE enterprise_support_requests (
+                id {pk},
+                organization_id INTEGER NOT NULL,
+                user_id INTEGER,
+                requester_name VARCHAR,
+                requester_email VARCHAR,
+                request_type VARCHAR NOT NULL DEFAULT 'support',
+                subject VARCHAR NOT NULL,
+                message TEXT NOT NULL,
+                status VARCHAR NOT NULL DEFAULT 'open',
+                created_at {ts} DEFAULT {now_default} NOT NULL,
+                updated_at {ts}
+            )
+        """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_support_requests_organization_id ON enterprise_support_requests(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_support_requests_request_type ON enterprise_support_requests(request_type)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_support_requests_created_at ON enterprise_support_requests(created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_support_org_created ON enterprise_support_requests(organization_id, created_at)",
+        ):
+            conn.execute(text(stmt))
+
+
+def ensure_enterprise_document_request_tables():
+    """Create the secure client document-request tables (the email-upload feature).
+
+    A request is a tokenized, OTP-verified capability sent to a client's email so
+    they can upload the specific document types staff asked for. Idempotent and
+    additive — safe to run on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_false = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_document_requests"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_document_requests (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    token_hash VARCHAR NOT NULL,
+                    email VARCHAR NOT NULL,
+                    message TEXT,
+                    status VARCHAR NOT NULL DEFAULT 'pending',
+                    code_hash VARCHAR,
+                    code_expires_at {ts},
+                    code_attempts INTEGER NOT NULL DEFAULT 0,
+                    expires_at {ts},
+                    revoked BOOLEAN NOT NULL DEFAULT {bool_false},
+                    completed_at {ts},
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_document_requests_token ON enterprise_document_requests(token_hash)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_document_requests_organization_id ON enterprise_document_requests(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_document_requests_client_id ON enterprise_document_requests(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_docreq_client_created ON enterprise_document_requests(client_id, created_at)",
+            ):
+                conn.execute(text(stmt))
+
+        if not _table_exists(conn, "enterprise_document_request_items"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_document_request_items (
+                    id {pk},
+                    request_id INTEGER NOT NULL,
+                    organization_id INTEGER NOT NULL,
+                    document_type VARCHAR NOT NULL DEFAULT 'Other',
+                    status VARCHAR NOT NULL DEFAULT 'pending',
+                    document_id INTEGER,
+                    received_at {ts},
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_document_request_items_request_id ON enterprise_document_request_items(request_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_document_request_items_organization_id ON enterprise_document_request_items(organization_id)",
+            ):
+                conn.execute(text(stmt))
+
+
 def ensure_enterprise_calendar_reminder_runs_table():
     """Create the run-log table that makes the daily calendar-reminder email job idempotent."""
     is_sqlite = engine.dialect.name == "sqlite"
@@ -766,6 +865,62 @@ def ensure_enterprise_credit_tables():
                 "CREATE INDEX IF NOT EXISTS ix_enterprise_credit_payments_kind ON enterprise_credit_payments(kind)",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_credit_payments_order ON enterprise_credit_payments(razorpay_order_id)",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_credit_payments_payment ON enterprise_credit_payments(razorpay_payment_id)",
+            ):
+                conn.execute(text(stmt))
+
+
+def ensure_enterprise_payment_coupon_columns():
+    """
+    Add per-account discount columns to the enterprise payment tables so a
+    coupon applied at checkout is recorded alongside the charge. Idempotent.
+    """
+    with engine.begin() as conn:
+        for table in ("enterprise_credit_payments", "enterprise_subscription_payments"):
+            if not _table_exists(conn, table):
+                continue
+            columns = _get_table_columns(conn, table)
+            if "coupon_code" not in columns:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN coupon_code VARCHAR"))
+            if "coupon_percent_off" not in columns:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN coupon_percent_off NUMERIC(5,2)"))
+            if "original_amount_paise" not in columns:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN original_amount_paise INTEGER"))
+
+
+def ensure_enterprise_coupons_table():
+    """
+    Create the enterprise_coupons table that powers admin-managed, per-account
+    discount codes redeemed at enterprise checkout. Idempotent and additive —
+    safe to run on every startup.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_true = "1" if is_sqlite else "TRUE"
+
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_coupons"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_coupons (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    code VARCHAR NOT NULL,
+                    percent_off NUMERIC(5,2) NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT {bool_true},
+                    applies_to VARCHAR NOT NULL DEFAULT 'all',
+                    max_redemptions INTEGER,
+                    note VARCHAR,
+                    created_by_user_id INTEGER,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_coupons_organization_id ON enterprise_coupons(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_coupons_code ON enterprise_coupons(code)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_coupons_created_by_user_id ON enterprise_coupons(created_by_user_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_coupon_org_code ON enterprise_coupons(organization_id, code)",
             ):
                 conn.execute(text(stmt))
 
