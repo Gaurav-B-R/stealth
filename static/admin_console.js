@@ -1813,6 +1813,8 @@ function renderCouponTable() {
                 <td>${escapeHtml(String(used))} / ${cap}</td>
                 <td>${statusChip}</td>
                 <td>
+                    <button type="button" class="table-btn" data-coupon-action="email"
+                        data-coupon-id="${escapeHtml(String(c.id))}" data-coupon-code="${escapeHtml(c.code)}">Email</button>
                     <button type="button" class="table-btn" data-coupon-action="toggle"
                         data-coupon-id="${escapeHtml(String(c.id))}" data-next-active="${c.is_active ? 'false' : 'true'}">${toggleLabel}</button>
                     <button type="button" class="table-btn danger" data-coupon-action="delete"
@@ -1916,6 +1918,38 @@ async function handleCouponTableActionClick(event) {
         const code = String(button.dataset.couponCode || 'this code');
         if (!window.confirm(`Delete discount code "${code}"? This cannot be undone.`)) return;
         await deleteCoupon(couponId, code);
+    } else if (button.dataset.couponAction === 'email') {
+        const code = String(button.dataset.couponCode || 'this code');
+        await sendCouponEmail(couponId, code, button);
+    }
+}
+
+async function sendCouponEmail(couponId, code, button) {
+    if (!state.couponOrg) return;
+    const company = state.couponOrg.company || 'this account';
+    if (!window.confirm(`Email the "${code}" discount to ${company}'s team?`)) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    const original = button ? button.textContent : '';
+    if (button) { button.disabled = true; button.textContent = 'Sending...'; }
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/coupons/${couponId}/send-email`, {
+            method: 'POST',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify({})
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(normalizeErrorMessage(payload, 'Failed to send the promotion email.'), 'error');
+            return;
+        }
+        showFlash(String(payload?.message || `Promotion email sent for ${code}.`), 'success');
+    } catch (error) {
+        console.error('Failed to send discount promo email:', error);
+        showFlash('Could not send the promotion email. Please retry.', 'error');
+    } finally {
+        if (button) { button.disabled = false; button.textContent = original || 'Email'; }
     }
 }
 

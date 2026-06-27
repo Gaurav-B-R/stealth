@@ -41,8 +41,12 @@ COMMON_WEAK_PASSWORDS = {
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "rilono_access_token").strip() or "rilono_access_token"
 AUTH_COOKIE_DOMAIN = (os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None)
-_cookie_samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "strict").strip().lower()
-AUTH_COOKIE_SAMESITE = _cookie_samesite_raw if _cookie_samesite_raw in {"lax", "strict", "none"} else "strict"
+# Default "lax" (not "strict"): the auth cookie must be sent when a user lands back
+# on the site via an OAuth redirect (Google/Microsoft/Apple). "strict" withholds the
+# cookie on that cross-site-initiated landing, so the user looks logged out until they
+# click something in-site. "lax" still protects against CSRF on cross-site POSTs.
+_cookie_samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
+AUTH_COOKIE_SAMESITE = _cookie_samesite_raw if _cookie_samesite_raw in {"lax", "strict", "none"} else "lax"
 AUTH_COOKIE_SECURE = str(os.getenv("AUTH_COOKIE_SECURE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login", auto_error=False)
@@ -159,11 +163,10 @@ def validate_password_strength(password: str, user_email: Optional[str] = None) 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    now = datetime.utcnow()
+    expire = now + (expires_delta if expires_delta else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    # `iat` (issued-at) lets logout invalidate every token minted before it.
+    to_encode.update({"exp": expire, "iat": now})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -208,13 +211,12 @@ def get_current_user(
     if not candidate_token:
         raise credentials_exception
 
-    decoded_email: Optional[str] = None
     try:
-        decoded_email = _decode_token_subject(candidate_token)
+        token_payload = _decode_token_payload(candidate_token)
     except JWTError:
         raise credentials_exception
 
-    email = (decoded_email or "").strip()
+    email = (token_payload.get("sub") or "").strip()
     if not email:
         raise credentials_exception
 
@@ -225,6 +227,30 @@ def get_current_user(
         user = db.query(models.User).filter(models.User.username == email).first()
     if user is None:
         raise credentials_exception
+
+    # Server-side session invalidation: a logout sets session_invalidated_at, after
+    # which every token minted at/before that instant is rejected — so a token copy
+    # that lingers in the browser (localStorage/cookie/cache) can't revive the session.
+    invalidated_at = getattr(user, "session_invalidated_at", None)
+    if invalidated_at is not None:
+        if getattr(invalidated_at, "tzinfo", None) is not None:
+            invalidated_at = invalidated_at.replace(tzinfo=None)
+        iat_claim = token_payload.get("iat")
+        if iat_claim is None:
+            # Pre-invalidation token with no issued-at → can't prove it's newer → reject.
+            raise credentials_exception
+        try:
+            token_issued_at = datetime.utcfromtimestamp(int(iat_claim))
+        except (TypeError, ValueError, OSError):
+            raise credentials_exception
+        # A JWT `iat` is whole-second granular (floored), but session_invalidated_at
+        # carries microseconds. Compare at second granularity, otherwise a token minted
+        # in the SAME second as logout — i.e. a fresh re-login, including the Google/OAuth
+        # round-trip that lands back on /dashboard — is wrongly rejected as a pre-logout
+        # token (its floored iat is <= the microsecond-precise invalidation time), bouncing
+        # the user straight back to the login page.
+        if token_issued_at < invalidated_at.replace(microsecond=0):
+            raise credentials_exception
 
     # Sliding idle-timeout: refresh token on authenticated activity.
     refreshed_token = create_access_token(

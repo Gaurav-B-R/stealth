@@ -156,6 +156,12 @@ class AdminEnterpriseCouponUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
 
 
+class AdminEnterpriseCouponSendEmailRequest(BaseModel):
+    # Optional single-recipient override. When omitted, the promo is sent to
+    # every active member of the account.
+    email: Optional[EmailStr] = None
+
+
 class AdminCompanyFinanceSummary(BaseModel):
     total_invested_usd: float = 0
     total_returns_usd: float = 0

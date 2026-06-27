@@ -15,6 +15,7 @@ from app import models, schemas
 from app import ai_usage
 from app import enterprise_credits
 from app import enterprise_coupons
+from app import email_service
 from app import visa_pass
 from app import ai_guardrails
 from app.auth import (
@@ -1331,6 +1332,114 @@ def delete_enterprise_account_coupon_admin(
     db.delete(coupon)
     db.commit()
     return {"deleted": True, "id": coupon_id}
+
+
+_COUPON_APPLIES_EMAIL_LABELS = {
+    "all": "credit top-ups & plan billing",
+    "credits": "credit top-ups",
+    "billing": "plan billing",
+}
+
+
+@router.post("/enterprise/accounts/{organization_id}/coupons/{coupon_id}/send-email")
+def send_enterprise_account_coupon_email_admin(
+    request: Request,
+    organization_id: int,
+    coupon_id: int,
+    payload: schemas.AdminEnterpriseCouponSendEmailRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Email a discount-code promotion to the account's team (or one address)."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.coupons.send_email",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+    coupon = (
+        db.query(models.EnterpriseCoupon)
+        .filter(
+            models.EnterpriseCoupon.id == coupon_id,
+            models.EnterpriseCoupon.organization_id == org.id,
+        )
+        .first()
+    )
+    if not coupon:
+        raise HTTPException(status_code=404, detail="Discount code not found.")
+
+    # Resolve recipients: an explicit override, else every active member, else
+    # the account creator as a last resort.
+    recipients: list[tuple[str, str | None]] = []
+    override = (payload.email or "").strip().lower() if payload and payload.email else ""
+    if override:
+        existing = db.query(models.User).filter(func.lower(models.User.email) == override).first()
+        recipients.append((override, existing.full_name if existing else None))
+    else:
+        seen: set[str] = set()
+        member_rows = (
+            db.query(models.User.email, models.User.full_name)
+            .join(
+                models.EnterpriseOrganizationMember,
+                models.EnterpriseOrganizationMember.user_id == models.User.id,
+            )
+            .filter(
+                models.EnterpriseOrganizationMember.organization_id == org.id,
+                models.EnterpriseOrganizationMember.is_active.is_(True),
+            )
+            .all()
+        )
+        for email, name in member_rows:
+            normalized = (email or "").strip().lower()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                recipients.append((normalized, name))
+        if not recipients and org.created_by_user_id:
+            creator = db.query(models.User).filter(models.User.id == org.created_by_user_id).first()
+            if creator and creator.email:
+                recipients.append((creator.email.strip().lower(), creator.full_name))
+
+    if not recipients:
+        raise HTTPException(status_code=400, detail="No recipient email found for this account.")
+
+    percent_display = enterprise_coupons.format_percent_off(coupon.percent_off) + "%"
+    applies_label = _COUPON_APPLIES_EMAIL_LABELS.get(str(coupon.applies_to or "all"), "your purchases")
+    portal_url = _build_enterprise_portal_url(org.subdomain_slug, request)
+    code = enterprise_coupons.normalize_code(coupon.code)
+
+    sent = 0
+    failed: list[str] = []
+    for email, name in recipients:
+        ok = email_service.send_enterprise_discount_promo_email(
+            recipient_email=email,
+            recipient_name=name,
+            organization_name=org.company_name or "your organization",
+            code=code,
+            percent_display=percent_display,
+            applies_to_label=applies_label,
+            note=coupon.note,
+            portal_url=portal_url,
+        )
+        if ok:
+            sent += 1
+        else:
+            failed.append(email)
+
+    if sent == 0:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not send the promotion email. Please check the email service configuration.",
+        )
+
+    return {
+        "sent": sent,
+        "failed": failed,
+        "recipients": [email for email, _ in recipients],
+        "message": f"Promotion email sent to {sent} recipient{'s' if sent != 1 else ''}.",
+    }
 
 
 @router.patch("/users/{user_id}/status", response_model=schemas.AdminUserSummary)

@@ -7462,9 +7462,17 @@ async function handleRegister(e) {
 }
 
 async function logout() {
-    fetch(`${API_BASE}/api/auth/logout`, {
-        method: 'POST'
-    }).catch(() => null);
+    // Await the server so the session cookie is cleared + invalidated BEFORE the user
+    // can navigate again (otherwise a quick "Login" click could re-use a live cookie).
+    try {
+        await fetch(`${API_BASE}/api/auth/logout`, {
+            method: 'POST',
+            credentials: 'include',
+        });
+    } catch (e) {
+        // Network error — local state is still cleared below; the cookie/session is
+        // also invalidated server-side on the next successful logout/login.
+    }
     authToken = null;
     persistAuthToken(null);
     currentUser = null;

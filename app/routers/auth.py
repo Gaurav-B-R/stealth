@@ -13,6 +13,7 @@ from app.auth import (
     get_current_active_user,
     ACCESS_TOKEN_EXPIRE_MINUTES,
     validate_password_strength,
+    _decode_token_subject,
 )
 from app.email_service import (
     generate_verification_token,
@@ -111,8 +112,9 @@ def _is_turnstile_required() -> bool:
 
 AUTH_COOKIE_SECURE = _bool_env("AUTH_COOKIE_SECURE", _cookie_secure_default())
 AUTH_COOKIE_DOMAIN = (os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None)
-_cookie_samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "strict").strip().lower()
-AUTH_COOKIE_SAMESITE = _cookie_samesite_raw if _cookie_samesite_raw in {"lax", "strict", "none"} else "strict"
+# Default "lax" so the auth cookie survives the OAuth redirect landing (see app/auth.py).
+_cookie_samesite_raw = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
+AUTH_COOKIE_SAMESITE = _cookie_samesite_raw if _cookie_samesite_raw in {"lax", "strict", "none"} else "lax"
 ENFORCE_LOGOUT_CSRF_ORIGIN_CHECK = _bool_env("ENFORCE_LOGOUT_CSRF_ORIGIN_CHECK", True)
 
 if not AUTH_COOKIE_SECURE and _cookie_secure_default():
@@ -181,11 +183,17 @@ def _set_auth_cookie(request: Request, response: Response, access_token: str, ma
 
 
 def _clear_auth_cookie(response: Response, request: Request | None = None) -> None:
-    response.delete_cookie(
-        key=AUTH_COOKIE_NAME,
-        domain=(_effective_cookie_domain(request) if request is not None else AUTH_COOKIE_DOMAIN),
-        path="/",
-    )
+    # Clear EVERY domain variant the cookie could have been set with (host-only AND the
+    # configured domain), so a domain mismatch can never leave the session cookie behind.
+    domains: list[str | None] = [None]
+    if AUTH_COOKIE_DOMAIN and AUTH_COOKIE_DOMAIN not in domains:
+        domains.append(AUTH_COOKIE_DOMAIN)
+    if request is not None:
+        eff = _effective_cookie_domain(request)
+        if eff and eff not in domains:
+            domains.append(eff)
+    for d in domains:
+        response.delete_cookie(key=AUTH_COOKIE_NAME, domain=d, path="/")
 
 
 def _normalize_origin(value: str | None) -> str | None:
@@ -784,9 +792,31 @@ def read_users_me(
 
 
 @router.post("/logout")
-def logout(request: Request, response: Response):
-    _enforce_logout_csrf_guard(request)
-    _clear_auth_cookie(response)
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    # Logout must NEVER fail silently. We always clear the cookie and invalidate the
+    # session server-side. We do NOT hard-block on the CSRF origin check here: a forced
+    # cross-site logout is low severity, whereas a logout that doesn't take effect is a
+    # real security problem. (Login/sensitive actions remain CSRF-guarded elsewhere.)
+    _clear_auth_cookie(response, request)
+
+    # Invalidate every access token issued for this user up to now, so any lingering
+    # token copy in the browser (localStorage/cookie/cache) is rejected on next use.
+    token = (request.cookies.get(AUTH_COOKIE_NAME) or "").strip()
+    if not token:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+    if token:
+        try:
+            email = (_decode_token_subject(token) or "").strip()
+        except Exception:
+            email = ""
+        if email:
+            user = db.query(models.User).filter(models.User.email == email).first()
+            if user is not None:
+                user.session_invalidated_at = datetime.utcnow()
+                db.commit()
+
     return {"message": "Logged out successfully."}
 
 @router.post("/forgot-password")

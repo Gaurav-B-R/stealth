@@ -59,6 +59,10 @@ def ensure_user_legal_consent_column():
         if "auth_provider" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN auth_provider VARCHAR"))
 
+        # Server-side logout: tokens issued at/before this instant are rejected.
+        if "session_invalidated_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN session_invalidated_at TIMESTAMP"))
+
 
 def ensure_subscription_usage_columns():
     """

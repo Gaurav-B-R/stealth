@@ -1129,6 +1129,131 @@ def send_enterprise_team_invite_email(
         return False
 
 
+def send_enterprise_discount_promo_email(
+    *,
+    recipient_email: str,
+    recipient_name: Optional[str],
+    organization_name: str,
+    code: str,
+    percent_display: str,
+    applies_to_label: str,
+    note: Optional[str] = None,
+    portal_url: Optional[str] = None,
+    base_url: str = DEFAULT_PUBLIC_BASE_URL,
+) -> bool:
+    """
+    Send a promotional email announcing an admin-created discount code to an
+    enterprise account. Sent from the no-reply transactional address.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send discount promo email - Resend not configured")
+        return False
+
+    recipient = (recipient_email or "").strip().lower()
+    if not recipient:
+        print("ERROR: Cannot send discount promo email - recipient missing")
+        return False
+
+    org_name_raw = (organization_name or "").strip() or "your organization"
+    portal_destination = (portal_url or "").strip() or f"{base_url.rstrip('/')}/enterprise"
+    code_raw = (code or "").strip().upper()
+
+    safe_name = escape((recipient_name or "").strip() or "there")
+    safe_org_name = escape(org_name_raw)
+    safe_org_banner = escape(org_name_raw.upper())
+    safe_code = escape(code_raw)
+    safe_percent = escape(percent_display)
+    safe_applies = escape(applies_to_label)
+    safe_portal_url = escape(portal_destination)
+    note_clean = (note or "").strip()
+    note_block = (
+        f"""<p style="margin:0 0 14px 0;font-size:14px;color:#475569;line-height:1.6;font-style:italic;">{escape(note_clean)}</p>"""
+        if note_clean else ""
+    )
+
+    subject = f"Save {percent_display} on {org_name_raw} with code {code_raw}"
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>{escape(subject)}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+              <tr>
+                <td style="padding:26px 28px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;">
+                  <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">{safe_org_banner}</div>
+                  <h1 style="margin:10px 0 0 0;font-size:28px;line-height:1.2;">A discount just for you</h1>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:26px 28px;color:#0f172a;">
+                  <p style="margin:0 0 14px 0;font-size:15px;">Hi {safe_name},</p>
+                  <p style="margin:0 0 18px 0;font-size:15px;line-height:1.6;">
+                    Good news for <strong>{safe_org_name}</strong> — here's an exclusive discount you can use on Rilono Enterprise.
+                  </p>
+                  <div style="border:2px dashed #a855f7;border-radius:14px;padding:20px;text-align:center;margin-bottom:18px;background:#faf5ff;">
+                    <div style="font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#7c3aed;font-weight:700;">Your code</div>
+                    <div style="font-size:30px;font-weight:800;letter-spacing:.04em;color:#0f172a;margin:8px 0;">{safe_code}</div>
+                    <div style="font-size:15px;color:#475569;"><strong>{safe_percent} off</strong> {safe_applies}</div>
+                  </div>
+                  {note_block}
+                  <div style="text-align:center;margin-top:6px;">
+                    <a href="{safe_portal_url}" style="display:inline-block;padding:12px 22px;border-radius:10px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;">
+                      Apply at checkout
+                    </a>
+                  </div>
+                  <p style="margin:18px 0 0 0;font-size:13px;color:#64748b;line-height:1.6;">
+                    Enter the code <strong>{safe_code}</strong> at checkout in your Rilono Enterprise portal to apply the discount.
+                  </p>
+                  <p style="margin:10px 0 0 0;font-size:13px;color:#64748b;line-height:1.6;">
+                    Portal: <a href="{safe_portal_url}" style="color:#6366f1;text-decoration:none;">{safe_portal_url}</a>
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    """
+
+    text_content = (
+        f"A discount just for you - {org_name_raw}\n\n"
+        f"Hi {(recipient_name or '').strip() or 'there'},\n\n"
+        f"Here's an exclusive discount you can use on Rilono Enterprise.\n\n"
+        f"Code: {code_raw}\n"
+        f"{percent_display} off {applies_to_label}\n"
+        + (f"\n{note_clean}\n" if note_clean else "")
+        + f"\nApply the code at checkout in your Rilono Enterprise portal:\n{portal_destination}\n"
+    )
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            print(f"Discount promo email sent to {recipient} (ID: {email_id})")
+            return True
+        print(f"Failed to send discount promo email to {recipient}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending discount promo email to {recipient}: {str(e)}")
+        return False
+
+
 def send_enterprise_client_email(
     *,
     to_email: str,

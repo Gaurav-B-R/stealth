@@ -31,6 +31,11 @@ class User(Base):
     is_admin = Column(Boolean, default=False)  # Admin/Developer access
     is_developer = Column(Boolean, default=False)  # Developer team access
     auth_provider = Column(String, nullable=True)  # password | google | microsoft | apple
+    # On logout (or forced sign-out) this is set to "now"; any access token issued at
+    # or before this instant is rejected, so logout truly ends the session server-side
+    # even if a token copy survives in the browser (stateless JWTs are otherwise valid
+    # until expiry).
+    session_invalidated_at = Column(DateTime(timezone=True), nullable=True)
     encryption_salt = Column(String, nullable=True)  # Salt for Zero-Knowledge encryption (base64 encoded)
     # Documentation preferences
     preferred_country = Column(String, nullable=True, default="United States")
