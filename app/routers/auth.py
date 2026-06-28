@@ -18,6 +18,7 @@ from app.auth import (
 from app.email_service import (
     generate_verification_token,
     send_verification_email,
+    send_email_otp,
     send_password_reset_email,
     send_contact_form_email,
     send_founder_new_verified_user_alert,
@@ -57,7 +58,19 @@ FORGOT_PASSWORD_RATE_WINDOW_SECONDS = int(os.getenv("FORGOT_PASSWORD_RATE_WINDOW
 CONTACT_RATE_LIMIT = int(os.getenv("CONTACT_RATE_LIMIT", "5"))
 CONTACT_RATE_WINDOW_SECONDS = int(os.getenv("CONTACT_RATE_WINDOW_SECONDS", "1800"))
 EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS = int(os.getenv("EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS", "24"))
+# Stepped signup uses a short-lived 6-digit OTP (hashed into verification_token).
+EMAIL_OTP_EXPIRES_MINUTES = int(os.getenv("EMAIL_OTP_EXPIRES_MINUTES", "10"))
+OTP_VERIFY_RATE_LIMIT = int(os.getenv("OTP_VERIFY_RATE_LIMIT", "10"))
+OTP_VERIFY_RATE_WINDOW_SECONDS = int(os.getenv("OTP_VERIFY_RATE_WINDOW_SECONDS", "300"))
+OTP_RESEND_RATE_LIMIT = int(os.getenv("OTP_RESEND_RATE_LIMIT", "5"))
+OTP_RESEND_RATE_WINDOW_SECONDS = int(os.getenv("OTP_RESEND_RATE_WINDOW_SECONDS", "600"))
 AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "rilono_access_token").strip() or "rilono_access_token"
+
+
+def _generate_email_otp() -> str:
+    """A 6-digit numeric one-time code for email verification."""
+    import secrets as _s
+    return f"{_s.randbelow(1_000_000):06d}"
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -447,10 +460,10 @@ def register(
     except Exception as e:
         raise HTTPException(status_code=500, detail="An error occurred during registration. Please try again.")
     
-    # Generate verification token
-    verification_token = generate_verification_token()
-    verification_token_hash = hash_token(verification_token)
-    token_expires = datetime.utcnow() + timedelta(hours=EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS)
+    # Generate a 6-digit email OTP (hashed at rest, short-lived).
+    otp_code = _generate_email_otp()
+    verification_token_hash = hash_token(otp_code)
+    token_expires = datetime.utcnow() + timedelta(minutes=EMAIL_OTP_EXPIRES_MINUTES)
     
     # Auto-fill university name from the database (ignore user-provided university)
     db_user = models.User(
@@ -464,6 +477,8 @@ def register(
         referral_code=generate_unique_referral_code(db),
         referred_by_user_id=referrer.id if referrer else None,
         accepted_terms_privacy_at=datetime.utcnow(),
+        marketing_emails_consent=bool(user.marketing_emails_consent),
+        marketing_emails_consent_at=(datetime.utcnow() if user.marketing_emails_consent else None),
         email_verified=False,
         verification_token=verification_token_hash,
         verification_token_expires=token_expires
@@ -474,22 +489,112 @@ def register(
     get_or_create_user_subscription(db, db_user.id)
     _refresh_student_profile_snapshot_safe(db=db, user_id=db_user.id)
     
-    # Send verification email
-    base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
-    email_sent = send_verification_email(
+    # Email the 6-digit code for the stepped signup flow.
+    email_sent = send_email_otp(
         user.email,
-        verification_token,
-        base_url,
-        expires_in_hours=EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS,
+        otp_code,
+        expires_in_minutes=EMAIL_OTP_EXPIRES_MINUTES,
     )
-    
+
     if not email_sent:
-        # Log error but don't fail registration - user can request resend later
-        print(f"Warning: Failed to send verification email to {user.email}")
-        print("   User can still request a resend verification email later.")
-    
-    response.headers["X-Verification-Link-Expires-Hours"] = str(EMAIL_VERIFICATION_TOKEN_EXPIRES_HOURS)
+        # Log error but don't fail registration - user can request a resend.
+        print(f"Warning: Failed to send verification OTP to {user.email}")
+        print("   User can request a new code via /api/auth/resend-otp.")
+
+    response.headers["X-OTP-Expires-Minutes"] = str(EMAIL_OTP_EXPIRES_MINUTES)
     return db_user
+
+
+@router.post("/verify-otp", response_model=schemas.Token)
+def verify_otp(
+    payload: schemas.OtpVerifyRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+):
+    """Verify the 6-digit signup OTP and, on success, auto-login (set the cookie)."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="auth.verify_otp",
+        limit=OTP_VERIFY_RATE_LIMIT,
+        window_seconds=OTP_VERIFY_RATE_WINDOW_SECONDS,
+    )
+    email = (payload.email or "").strip().lower()
+    code = "".join(ch for ch in str(payload.code or "") if ch.isdigit())
+    invalid = HTTPException(status_code=400, detail="Invalid or expired code. Please try again or resend.")
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user or len(code) != 6:
+        raise invalid
+    if user.email_verified:
+        raise HTTPException(status_code=400, detail="This email is already verified. Please log in.")
+
+    expires = user.verification_token_expires
+    if expires is not None and getattr(expires, "tzinfo", None) is not None:
+        expires = expires.replace(tzinfo=None)
+    if not user.verification_token or expires is None or expires < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Your code has expired. Tap resend to get a new one.")
+    if not token_matches(code, user.verification_token):
+        raise invalid
+
+    # Verified — clear the OTP and treat this as the first login.
+    user.email_verified = True
+    user.verification_token = None
+    user.verification_token_expires = None
+    now = datetime.utcnow()
+    if user.first_login_at is None:
+        user.first_login_at = now
+    user.last_login_at = now
+    ensure_user_referral_code(db, user, commit=False)
+    reward_payload: dict = {}
+    try:
+        reward_payload = maybe_award_referral_bonus_on_login(db, user, commit=False) or {}
+    except Exception:
+        reward_payload = {}
+    db.commit()
+    try:
+        _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
+    except Exception:
+        pass
+
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data={"sub": user.email}, expires_delta=access_token_expires)
+    _set_auth_cookie(request, response, access_token, int(access_token_expires.total_seconds()))
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "referral_bonus_awarded": bool(reward_payload.get("awarded")),
+        "referral_bonus_message": reward_payload.get("message"),
+    }
+
+
+@router.post("/resend-otp")
+def resend_otp(
+    payload: schemas.OtpResendRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Email a fresh signup OTP. Always returns a generic message (no account enumeration)."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="auth.resend_otp",
+        limit=OTP_RESEND_RATE_LIMIT,
+        window_seconds=OTP_RESEND_RATE_WINDOW_SECONDS,
+    )
+    email = (payload.email or "").strip().lower()
+    generic = {"message": "If that account exists and isn't verified yet, a new code is on its way."}
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if not user or user.email_verified:
+        return generic
+
+    otp_code = _generate_email_otp()
+    user.verification_token = hash_token(otp_code)
+    user.verification_token_expires = datetime.utcnow() + timedelta(minutes=EMAIL_OTP_EXPIRES_MINUTES)
+    db.commit()
+    send_email_otp(user.email, otp_code, expires_in_minutes=EMAIL_OTP_EXPIRES_MINUTES)
+    return generic
+
 
 @router.post("/login", response_model=schemas.Token)
 async def login(
@@ -1413,3 +1518,37 @@ def unsubscribe_email_notifications(
         pass
 
     return {"message": "You have unsubscribed from email notifications successfully."}
+
+
+@router.get("/marketing-emails/preference", response_model=schemas.MarketingEmailPreferenceResponse)
+def get_marketing_email_preference(
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Return the signed-in user's current marketing-email consent state."""
+    return schemas.MarketingEmailPreferenceResponse(
+        marketing_emails_consent=bool(current_user.marketing_emails_consent),
+        marketing_emails_consent_at=current_user.marketing_emails_consent_at,
+    )
+
+
+@router.post("/marketing-emails/preference", response_model=schemas.MarketingEmailPreferenceResponse)
+def set_marketing_email_preference(
+    payload: schemas.MarketingEmailPreferenceRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Let a signed-in user opt in or out of marketing emails at any time.
+
+    This is the in-app 'unsubscribe whenever you want' control. Setting it to
+    False removes the user from the marketing audience on the next sync; the
+    timestamp records when consent was last changed (proof of consent)."""
+    enabled = bool(payload.enabled)
+    if bool(current_user.marketing_emails_consent) != enabled:
+        current_user.marketing_emails_consent = enabled
+        current_user.marketing_emails_consent_at = datetime.utcnow()
+        db.commit()
+        db.refresh(current_user)
+    return schemas.MarketingEmailPreferenceResponse(
+        marketing_emails_consent=bool(current_user.marketing_emails_consent),
+        marketing_emails_consent_at=current_user.marketing_emails_consent_at,
+    )

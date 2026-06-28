@@ -1558,6 +1558,7 @@ class EnterpriseSignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=200)
     accepted_terms_privacy: bool = False
+    marketing_emails_consent: bool = False
     cf_turnstile_token: Optional[str] = None
 
 
@@ -2552,6 +2553,7 @@ def _serialize_calendar_manual_event(ev: models.EnterpriseCalendarEvent, client_
         "notes": ev.notes,
         "client_id": ev.client_id,
         "client_name": client_name,
+        "notify_client": bool(ev.notify_client),
         "is_done": bool(ev.is_done),
         "editable": True,
         "overdue": overdue,
@@ -2657,6 +2659,7 @@ class EnterpriseCalendarEventCreate(BaseModel):
     event_time: Optional[str] = Field(default=None, max_length=5)
     notes: Optional[str] = Field(default=None, max_length=2000)
     client_id: Optional[int] = None
+    notify_client: Optional[bool] = None
 
 
 class EnterpriseCalendarEventUpdate(BaseModel):
@@ -2666,6 +2669,7 @@ class EnterpriseCalendarEventUpdate(BaseModel):
     event_time: Optional[str] = Field(default=None, max_length=5)
     notes: Optional[str] = Field(default=None, max_length=2000)
     client_id: Optional[int] = None
+    notify_client: Optional[bool] = None
     is_done: Optional[bool] = None
 
 
@@ -2732,6 +2736,33 @@ def enterprise_calendar_upcoming(
     }
 
 
+@router.get("/calendar/clients")
+def enterprise_calendar_clients(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Lightweight client list for the @-mention autocomplete in the reminder form.
+    Returns every client in the org (id, name, email) sourced from the SQL DB."""
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    rows = (
+        db.query(
+            models.EnterpriseClient.id,
+            models.EnterpriseClient.full_name,
+            models.EnterpriseClient.email,
+        )
+        .filter(models.EnterpriseClient.organization_id == organization.id)
+        .order_by(models.EnterpriseClient.full_name.asc())
+        .all()
+    )
+    return {
+        "clients": [
+            {"id": r[0], "name": r[1], "email": (r[2] or None), "has_email": bool((r[2] or "").strip())}
+            for r in rows
+        ]
+    }
+
+
 @router.post("/calendar/events")
 def enterprise_calendar_create_event(
     payload: EnterpriseCalendarEventCreate,
@@ -2759,6 +2790,8 @@ def enterprise_calendar_create_event(
         event_date=event_date,
         event_time=event_time,
         is_done=False,
+        # Only meaningful when a client is linked; the client is emailed when due.
+        notify_client=bool(payload.notify_client) and payload.client_id is not None,
         created_by_user_id=current_user.id,
         created_by_name=current_user.full_name or current_user.email,
     )
@@ -2817,11 +2850,17 @@ def enterprise_calendar_update_event(
     if payload.notes is not None:
         ev.notes = payload.notes or None
     if payload.client_id is not None:
-        if payload.client_id == 0:
-            ev.client_id = None
-        else:
-            _get_org_client_or_404(db, organization.id, payload.client_id)
-            ev.client_id = payload.client_id
+        new_cid = None if payload.client_id == 0 else payload.client_id
+        if new_cid is not None:
+            _get_org_client_or_404(db, organization.id, new_cid)
+        if new_cid != ev.client_id:
+            # Re-link → allow the new client to be notified afresh.
+            ev.client_notified_at = None
+        ev.client_id = new_cid
+        if new_cid is None:
+            ev.notify_client = False
+    if payload.notify_client is not None:
+        ev.notify_client = bool(payload.notify_client) and ev.client_id is not None
     if payload.is_done is not None:
         ev.is_done = bool(payload.is_done)
 
@@ -3678,6 +3717,8 @@ async def enterprise_signup(
         accepted_terms_privacy_ip=consent_ip,
         accepted_terms_privacy_user_agent=consent_user_agent,
         accepted_terms_privacy_version=LEGAL_TERMS_PRIVACY_VERSION,
+        marketing_emails_consent=bool(payload.marketing_emails_consent),
+        marketing_emails_consent_at=(datetime.utcnow() if payload.marketing_emails_consent else None),
     )
     db.add(user)
     db.flush()

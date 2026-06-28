@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Index
+from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -31,6 +31,13 @@ class User(Base):
     is_admin = Column(Boolean, default=False)  # Admin/Developer access
     is_developer = Column(Boolean, default=False)  # Developer team access
     auth_provider = Column(String, nullable=True)  # password | google | microsoft | apple
+    # Personalized student journey (multi-country). Existing users are backfilled to
+    # US/us_f1 with onboarding marked complete; new users leave these NULL until they
+    # finish the post-signup onboarding (destination country + visa type are required).
+    destination_country_code = Column(String, nullable=True)  # US | UK | CA | AU
+    visa_type_key = Column(String, nullable=True)             # us_f1 | uk_student | ...
+    university_email = Column(String, nullable=True)
+    onboarding_completed_at = Column(DateTime(timezone=True), nullable=True)
     # On logout (or forced sign-out) this is set to "now"; any access token issued at
     # or before this instant is rejected, so logout truly ends the session server-side
     # even if a token copy survives in the browser (stateless JWTs are otherwise valid
@@ -55,6 +62,12 @@ class User(Base):
     email_notifications_enabled = Column(Boolean, nullable=False, default=True)
     email_notifications_unsubscribed_at = Column(DateTime(timezone=True), nullable=True)
     email_notifications_unsubscribe_reason = Column(Text, nullable=True)
+    # Explicit opt-in consent for marketing emails (product tips, offers, newsletters),
+    # captured at signup. Distinct from email_notifications_enabled, which governs
+    # transactional/visa notifications. Users can opt out anytime; the timestamp
+    # records when consent was last given or withdrawn (proof of consent).
+    marketing_emails_consent = Column(Boolean, nullable=False, default=False)
+    marketing_emails_consent_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
@@ -377,6 +390,11 @@ class EnterpriseCalendarEvent(Base):
     event_date = Column(Date, nullable=False, index=True)
     event_time = Column(String, nullable=True)  # "HH:MM" (24h), optional
     is_done = Column(Boolean, nullable=False, default=False, index=True)
+    # When a client is @-mentioned in the title, optionally email that client when the
+    # reminder is due. notify_client gates it; client_notified_at dedups so an overdue
+    # reminder doesn't email the client every day.
+    notify_client = Column(Boolean, nullable=False, default=False)
+    client_notified_at = Column(DateTime(timezone=True), nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     created_by_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -608,7 +626,12 @@ class DocumentTypeCatalog(Base):
     __tablename__ = "document_type_catalog"
 
     id = Column(Integer, primary_key=True, index=True)
-    document_type = Column(String, unique=True, index=True, nullable=False)
+    # Scoped per (country, visa type): the SAME document_type (e.g. "passport") can
+    # exist for multiple destinations with different stages/gating. Uniqueness is the
+    # composite (country_code, visa_type_key, document_type) — see __table_args__.
+    document_type = Column(String, index=True, nullable=False)
+    country_code = Column(String, nullable=False, default="US", server_default="US", index=True)
+    visa_type_key = Column(String, nullable=False, default="us_f1", server_default="us_f1", index=True)
     label = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
@@ -620,6 +643,10 @@ class DocumentTypeCatalog(Base):
     stage_gate_group = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("country_code", "visa_type_key", "document_type", name="uq_doc_catalog_scope"),
+    )
 
 
 class Subscription(Base):
@@ -637,6 +664,7 @@ class Subscription(Base):
     ds160_autofills_used = Column(Integer, nullable=False, default=0)
     red_flag_scans_used = Column(Integer, nullable=False, default=0)
     pass_voice_interviews_used = Column(Integer, nullable=False, default=0)
+    university_recommendations_used = Column(Integer, nullable=False, default=0)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     ends_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -670,6 +698,33 @@ class SubscriptionPayment(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     user = relationship("User", back_populates="subscription_payments")
+
+
+class UniversityShortlistEntry(Base):
+    """A university a student is considering / applying to (B2C shortlisting).
+
+    Entries are created manually or saved from the AI recommendation engine, and the
+    student tracks each university's application status from the dashboard.
+    """
+    __tablename__ = "university_shortlist_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    country_code = Column(String, nullable=True)  # destination country when added
+    university_name = Column(String, nullable=False)
+    program = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="considering")  # considering|applied|admitted|rejected
+    source = Column(String, nullable=False, default="manual")  # manual|ai
+    est_tuition = Column(String, nullable=True)       # free-text estimate (from AI)
+    rationale = Column(Text, nullable=True)           # why recommended (from AI)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_university_shortlist_user_created", "user_id", "created_at"),
+    )
 
 
 class CouponCode(Base):
@@ -756,6 +811,10 @@ class GeminiUsageEvent(Base):
     id = Column(Integer, primary_key=True, index=True)
     source = Column(String, nullable=False, index=True)   # feature, e.g. enterprise_copilot, mock_interview
     model = Column(String, nullable=False, index=True)
+    # Which account incurred this AI cost — lets us attribute Gemini spend per user (B2C)
+    # and per organization (B2B) so we can compute per-account cost and profit.
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=True, index=True)
     prompt_tokens = Column(Integer, nullable=False, default=0)
     output_tokens = Column(Integer, nullable=False, default=0)
     total_tokens = Column(Integer, nullable=False, default=0)

@@ -48,6 +48,7 @@ PASS_PRICING_MODEL = "visa_pass"  # stored on SubscriptionPayment.pricing_model
 FREE_DS160_AUTOFILLS = int(os.getenv("VISA_PASS_FREE_DS160", "3") or "3")
 FREE_RED_FLAG_SCANS = int(os.getenv("VISA_PASS_FREE_RED_FLAG", "1") or "1")
 PASS_VOICE_INTERVIEWS = int(os.getenv("VISA_PASS_VOICE_INTERVIEWS", "3") or "3")
+FREE_UNIVERSITY_RECOMMENDATIONS = int(os.getenv("VISA_PASS_FREE_UNIVERSITY_RECS", "1") or "1")
 
 # Hard-paywall when the free quota is exhausted (the whole point of the model).
 ENFORCE = os.getenv("VISA_PASS_ENFORCE", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -81,10 +82,21 @@ FEATURES = {
         "free_limit": 0,                      # voice interviews are pass-only
         "pass_limit": PASS_VOICE_INTERVIEWS,
     },
+    "university_shortlist": {
+        "key": "university_shortlist",
+        "label": "AI University Shortlist",
+        "counter": "university_recommendations_used",
+        "free_limit": FREE_UNIVERSITY_RECOMMENDATIONS,
+        "pass_limit": UNLIMITED,
+    },
 }
 
-# Gemini cost-tracker sources attributable to the B2C student funnel.
-B2C_COST_SOURCES = ["student_ai_chat", "red_flag_scan", "ds160_autofill", "student_voice_interview"]
+# Gemini cost-tracker sources that are EXCLUSIVELY B2C-student features (used for the
+# aggregate cost estimate). `document_ai` is shared with enterprise, so it's excluded
+# here and instead attributed precisely per-account via user_id (see account report).
+# (Dropped phantom sources `ds160_autofill` [no Gemini] and `student_voice_interview`
+#  [never recorded — voice runs through the chat endpoint as student_ai_chat].)
+B2C_COST_SOURCES = ["student_ai_chat", "red_flag_scan", "university_shortlist"]
 
 
 # ---------------------------------------------------------------------------
@@ -372,3 +384,87 @@ def build_revenue_analytics(db: Session) -> dict:
             "pricing (app.ai_usage), B2C sources only, converted at USD_TO_INR — cross-check the GCP invoice."
         ),
     }
+
+
+def build_account_cost_profit(db: Session, *, limit: int = 100) -> dict:
+    """Per-ACCOUNT economics: for each student, their actual attributed Gemini cost
+    (all sources, via GeminiUsageEvent.user_id) vs their Visa Pass revenue = profit.
+    This is the precise per-account view (includes shared sources like document_ai)."""
+    E = models.GeminiUsageEvent
+    P = models.SubscriptionPayment
+    U = models.User
+
+    cost_rows = (
+        db.query(E.user_id, func.coalesce(func.sum(E.estimated_cost_usd), 0), func.count(E.id))
+        .filter(E.user_id.isnot(None))
+        .group_by(E.user_id)
+        .all()
+    )
+    cost_by_user = {int(uid): {"cost_usd": float(c or 0), "calls": int(n or 0)} for uid, c, n in cost_rows}
+
+    rev_rows = (
+        db.query(P.user_id, func.coalesce(func.sum(P.amount_paise), 0), func.count(P.id))
+        .filter(P.status == "verified", P.pricing_model == PASS_PRICING_MODEL, P.user_id.isnot(None))
+        .group_by(P.user_id)
+        .all()
+    )
+    rev_by_user = {int(uid): {"paise": int(r or 0), "count": int(n or 0)} for uid, r, n in rev_rows}
+
+    user_ids = set(cost_by_user) | set(rev_by_user)
+    users = {u.id: u for u in db.query(U).filter(U.id.in_(user_ids)).all()} if user_ids else {}
+
+    accounts = []
+    tot_cost = tot_rev = 0
+    unattributed = _b2c_unattributed_cost_paise(db)
+    for uid in user_ids:
+        cost_paise = usd_to_inr_paise(cost_by_user.get(uid, {}).get("cost_usd", 0.0))
+        rev_paise = rev_by_user.get(uid, {}).get("paise", 0)
+        tot_cost += cost_paise
+        tot_rev += rev_paise
+        u = users.get(uid)
+        accounts.append({
+            "user_id": uid,
+            "email": (u.email if u else None),
+            "name": (u.full_name if u else None),
+            "has_pass": rev_by_user.get(uid, {}).get("count", 0) > 0,
+            "ai_calls": cost_by_user.get(uid, {}).get("calls", 0),
+            "gemini_cost_paise": cost_paise,
+            "gemini_cost_display": format_inr(cost_paise),
+            "revenue_paise": rev_paise,
+            "revenue_display": format_inr(rev_paise),
+            "profit_paise": rev_paise - cost_paise,
+            "profit_display": format_inr(rev_paise - cost_paise),
+        })
+    accounts.sort(key=lambda a: (a["revenue_paise"], a["gemini_cost_paise"]), reverse=True)
+
+    return {
+        "currency": CURRENCY,
+        "usd_to_inr": USD_TO_INR,
+        "is_estimate": True,
+        "total_accounts": len(accounts),
+        "totals": {
+            "attributed_cost_paise": tot_cost,
+            "attributed_cost_display": format_inr(tot_cost),
+            "revenue_paise": tot_rev,
+            "revenue_display": format_inr(tot_rev),
+            "profit_paise": tot_rev - tot_cost,
+            "profit_display": format_inr(tot_rev - tot_cost),
+            "unattributed_cost_paise": unattributed,
+            "unattributed_cost_display": format_inr(unattributed),
+        },
+        "accounts": accounts[:max(1, min(int(limit or 100), 500))],
+        "note": (
+            "Per-account Gemini cost is attributed via GeminiUsageEvent.user_id (all sources). "
+            "'Unattributed' = AI events with no user_id (e.g. pre-attribution history or background jobs)."
+        ),
+    }
+
+
+def _b2c_unattributed_cost_paise(db: Session) -> int:
+    E = models.GeminiUsageEvent
+    usd = float(
+        db.query(func.coalesce(func.sum(E.estimated_cost_usd), 0))
+        .filter(E.user_id.is_(None), E.organization_id.is_(None))
+        .scalar() or 0
+    )
+    return usd_to_inr_paise(usd)

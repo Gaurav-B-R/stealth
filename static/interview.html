@@ -92,7 +92,7 @@
         <div class="hero">
           <div class="eyebrow" id="vOrg">Your consultancy</div>
           <h1>🎤 Mock visa interview</h1>
-          <div class="sub" id="vSub">Practise your visa interview with AI.</div>
+          <div class="sub" id="vSub">Practise your visa interview with Rilono AI.</div>
         </div>
         <div class="body">
           <p class="lead" id="vLead"></p>
@@ -186,7 +186,7 @@
       function renderVerify(){
         $("vOrg").textContent=info.organization_name||"Your consultancy";
         $("vSub").textContent="Practise your "+(info.destination_country||"")+" student-visa interview.";
-        $("vLead").innerHTML="Hi <b>"+esc(info.client_first_name)+"</b>, you've been invited to take a realistic AI mock visa interview for your <b>"+esc(info.destination_country)+"</b> application ("+esc(info.visa_type)+").";
+        $("vLead").innerHTML="Hi <b>"+esc(info.client_first_name)+"</b>, you've been invited to take a realistic Rilono AI mock visa interview for your <b>"+esc(info.destination_country)+"</b> application ("+esc(info.visa_type)+").";
         $("vRemain").textContent = info.exhausted ? "No interviews remaining on this link" : ("You can take "+info.remaining+" interview"+(info.remaining===1?"":"s"));
         $("vEmail").textContent=info.masked_email||"your email";
         if(info.exhausted){ $("vStep1").classList.add("hidden"); }
@@ -209,7 +209,7 @@
         $("iOrg").textContent=info.organization_name||"";
         $("iSub").textContent=(info.destination_country||"")+" · "+(info.visa_type||"");
         $("iOfficer").textContent="🧑‍✈️ "+(info.destination_country||"")+" visa officer";
-        $("iIntroText").textContent="When you're ready, the AI will play the "+(info.destination_country||"")+" visa officer and ask you questions one at a time. Answer naturally — you'll get honest feedback at the end.";
+        $("iIntroText").textContent="When you're ready, the Rilono AI will play the "+(info.destination_country||"")+" visa officer and ask you questions one at a time. Answer naturally — you'll get honest feedback at the end.";
         $("iRemain").textContent="Interviews remaining: "+info.remaining;
         $("iIntro").classList.toggle("hidden", info.remaining<=0);
         if(info.remaining<=0){ $("iIntroText").textContent="You've used all your mock interviews on this link."; $("iIntro").classList.remove("hidden"); $("startBtn").classList.add("hidden"); }

@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app import visa_pass
+from app import ai_usage
 from app.database import get_db
 from app.auth import get_current_active_user
 from app.subscriptions import get_or_create_user_subscription, PLAN_PRO
@@ -259,6 +260,8 @@ async def red_flag_scan(
     if len(data) > SCAN_MAX_BYTES:
         raise HTTPException(status_code=400, detail=f"File too large (max {SCAN_MAX_BYTES // (1024*1024)} MB).")
 
+    # Attribute this scan's Gemini cost to the account that ran it.
+    ai_usage.set_usage_account(user_id=current_user.id)
     result = gemini_service.scan_document_red_flags(data, file.filename or "document", file.content_type or "")
     if result is None:
         raise HTTPException(status_code=503, detail="The red-flag scan isn't available right now.")

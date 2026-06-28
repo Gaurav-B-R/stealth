@@ -19,6 +19,7 @@ class UserCreate(UserBase):
     cf_turnstile_token: Optional[str] = None  # Cloudflare Turnstile token
     referral_code: Optional[str] = None
     accepted_terms_privacy: bool = False
+    marketing_emails_consent: bool = False  # optional opt-in for marketing emails
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -38,10 +39,25 @@ class UserResponse(UserBase):
     referral_code: Optional[str] = None
     accepted_terms_privacy_at: Optional[datetime] = None
     email_notifications_enabled: bool = True
+    marketing_emails_consent: bool = False
+    # Personalized student journey (multi-country onboarding).
+    destination_country_code: Optional[str] = None
+    visa_type_key: Optional[str] = None
+    university_email: Optional[str] = None
+    onboarding_completed_at: Optional[datetime] = None
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
+
+
+class OnboardingRequest(BaseModel):
+    destination_country_code: str
+    visa_type_key: str
+    home_country: Optional[str] = None
+    university: Optional[str] = None
+    university_email: Optional[str] = None
+    intake: Optional[str] = None
 
 
 class PublicUserResponse(BaseModel):
@@ -287,6 +303,15 @@ class Token(BaseModel):
     referral_bonus_awarded: Optional[bool] = None
     referral_bonus_message: Optional[str] = None
 
+
+class OtpVerifyRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+
+class OtpResendRequest(BaseModel):
+    email: EmailStr
+
 class TokenData(BaseModel):
     username: Optional[str] = None
 
@@ -321,6 +346,15 @@ class EmailNotificationUnsubscribeRequest(BaseModel):
 class EmailNotificationUnsubscribePreview(BaseModel):
     email: str
     subscribed: bool
+
+
+class MarketingEmailPreferenceRequest(BaseModel):
+    enabled: bool
+
+
+class MarketingEmailPreferenceResponse(BaseModel):
+    marketing_emails_consent: bool
+    marketing_emails_consent_at: Optional[datetime] = None
 
 class UniversityChangeRequest(BaseModel):
     new_email: str

@@ -5,375 +5,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app import models
+from app import visa_catalog
 
-DEFAULT_JOURNEY_STAGES: list[dict[str, Any]] = [
-    {
-        "stage": 1,
-        "name": "Getting Started",
-        "emoji": "📝",
-        "description": "Build your profile with core academic and test documents.",
-        "next_step": "Upload and validate your starter document set",
-    },
-    {
-        "stage": 2,
-        "name": "Admission Received",
-        "emoji": "🎓",
-        "description": "University admission confirmed!",
-        "next_step": "Upload admission proof and one financial proof document",
-    },
-    {
-        "stage": 3,
-        "name": "I-20 Received",
-        "emoji": "📘",
-        "description": "Upload and validate your signed Form I-20.",
-        "next_step": "Complete your DS-160 application online",
-    },
-    {
-        "stage": 4,
-        "name": "DS-160 Filed",
-        "emoji": "📋",
-        "description": "Upload and validate your full DS-160 application and 2x2 photograph.",
-        "next_step": "Pay your SEVIS I-901 fee and visa fee",
-    },
-    {
-        "stage": 5,
-        "name": "Fees Paid",
-        "emoji": "💳",
-        "description": "SEVIS payment is mandatory. Other fee/appointment confirmations are optional.",
-        "next_step": "Book interview slot and upload interview documents",
-    },
-    {
-        "stage": 6,
-        "name": "Visa",
-        "emoji": "🛂",
-        "description": "Prepare your visa interview packet and supporting documents.",
-        "next_step": "Review final interview checklist and confidence prep",
-    },
-    {
-        "stage": 7,
-        "name": "Ready to Fly!",
-        "emoji": "✈️",
-        "description": "Visa approved. Complete final pre-departure documents and travel readiness.",
-        "next_step": "Upload remaining arrival documents (for example vaccination records) and finalize travel plans.",
-    },
-]
-
-
-DEFAULT_DOCUMENT_TYPES: list[dict[str, Any]] = [
-    {
-        "document_type": "passport",
-        "label": "Passport",
-        "sort_order": 10,
-        "is_required": True,
-        "journey_stage": 1,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "high-school-transcripts",
-        "label": "High School Transcripts",
-        "sort_order": 20,
-        "is_required": False,
-        "journey_stage": 1,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "bachelors-transcript",
-        "label": "Bachelors Transcript (Optional)",
-        "sort_order": 30,
-        "is_required": False,
-        "journey_stage": 1,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "masters-transcript",
-        "label": "Master's Transcript (Optional)",
-        "sort_order": 40,
-        "is_required": False,
-        "journey_stage": 1,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "other-school-college-degree-certificates",
-        "label": "Other School/College/Degree Certificates",
-        "sort_order": 50,
-        "is_required": False,
-        "journey_stage": 1,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "standardized-test-scores",
-        "label": "Standardized Test Scores (TOEFL/IELTS/Duolingo)",
-        "sort_order": 60,
-        "is_required": True,
-        "journey_stage": 1,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "standardized-test-scores-gre-gmat",
-        "label": "Standardized Test Scores (GRE/GMAT)",
-        "sort_order": 70,
-        "is_required": False,
-        "journey_stage": 1,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "statement-of-purpose-lors",
-        "label": "Statement of Purpose (SOP) & LORs",
-        "description": "Copies of the SOP and LORs submitted to university applications.",
-        "sort_order": 80,
-        "is_required": False,
-        "journey_stage": 1,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "resume",
-        "label": "Resume/CV",
-        "sort_order": 90,
-        "is_required": True,
-        "journey_stage": 1,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "ds-160-confirmation",
-        "label": "DS-160 Confirmation Page",
-        "sort_order": 160,
-        "is_required": False,
-        "journey_stage": 4,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "ds-160-application",
-        "label": "DS-160 Application (Full Application)",
-        "sort_order": 170,
-        "is_required": True,
-        "journey_stage": 4,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "travel-history-documents",
-        "label": "Travel History Documents",
-        "sort_order": 175,
-        "is_required": False,
-        "journey_stage": 4,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "us-visa-appointment-letter",
-        "label": "US Visa Appointment Letter",
-        "sort_order": 240,
-        "is_required": True,
-        "journey_stage": 6,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "stamped-f1-visa",
-        "label": "Stamped F-1 Visa",
-        "sort_order": 245,
-        "is_required": True,
-        "journey_stage": 6,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "immunization-vaccination-records",
-        "label": "Immunization/Vaccination Records",
-        "sort_order": 290,
-        "is_required": True,
-        "journey_stage": 7,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "visa-fee-receipt",
-        "label": "Visa Application (MRV) Fee Receipts",
-        "sort_order": 190,
-        "is_required": False,
-        "journey_stage": 5,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "biometric-appointment-confirmation",
-        "label": "Biometric Appointment Confirmation",
-        "sort_order": 191,
-        "is_required": False,
-        "journey_stage": 5,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "consular-interview-confirmation",
-        "label": "Consular Interview Confirmation",
-        "sort_order": 192,
-        "is_required": False,
-        "journey_stage": 5,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "photograph-2x2",
-        "label": "Photograph (2x2 Inches)",
-        "sort_order": 250,
-        "is_required": True,
-        "journey_stage": 4,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "form-i20-signed",
-        "label": "Form I-20 (Signed)",
-        "sort_order": 140,
-        "is_required": True,
-        "journey_stage": 3,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-    {
-        "document_type": "previous-i20s",
-        "label": "Previous I-20's",
-        "sort_order": 150,
-        "is_required": False,
-        "journey_stage": 3,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "university-admission-letter",
-        "label": "University Admission Letter",
-        "sort_order": 100,
-        "is_required": True,
-        "journey_stage": 2,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-        "stage_gate_group": "admission_proof",
-    },
-    {
-        "document_type": "university-offer-letter",
-        "label": "University Offer Letter",
-        "sort_order": 101,
-        "is_required": False,
-        "journey_stage": 2,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-        "stage_gate_group": "admission_proof",
-    },
-    {
-        "document_type": "bank-statement",
-        "label": "Bank Statement",
-        "sort_order": 102,
-        "is_required": True,
-        "journey_stage": 2,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-        "stage_gate_group": "financial_proof",
-    },
-    {
-        "document_type": "bank-balance-certificate",
-        "label": "Bank balance certificate",
-        "sort_order": 103,
-        "is_required": False,
-        "journey_stage": 2,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-        "stage_gate_group": "financial_proof",
-    },
-    {
-        "document_type": "loan-approval-letter",
-        "label": "Loan approval letter (if applicable)",
-        "sort_order": 104,
-        "is_required": False,
-        "journey_stage": 2,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-        "stage_gate_group": "financial_proof",
-    },
-    {
-        "document_type": "loan-sanction-letter",
-        "label": "Loan Sanction Letter",
-        "sort_order": 105,
-        "is_required": False,
-        "journey_stage": 2,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-        "stage_gate_group": "financial_proof",
-    },
-    {
-        "document_type": "affidavit-of-support",
-        "label": "Affidavit of Support (from parents/sponsors)",
-        "sort_order": 210,
-        "is_required": False,
-        "journey_stage": 6,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "ca-statement",
-        "label": "CA Statement (summary of assets)",
-        "sort_order": 225,
-        "is_required": False,
-        "journey_stage": 6,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "sponsor-income-proof",
-        "label": "Sponsor's income proof (salary slips, IT returns)",
-        "sort_order": 220,
-        "is_required": False,
-        "journey_stage": 6,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "provisional-certificates",
-        "label": "Provisional certificates",
-        "sort_order": 130,
-        "is_required": False,
-        "journey_stage": 3,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "experience-letters",
-        "label": "Work Experience Letters",
-        "sort_order": 280,
-        "is_required": False,
-        "journey_stage": 6,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "salary-slips",
-        "label": "Salary slips (last 3-6 months)",
-        "sort_order": 230,
-        "is_required": False,
-        "journey_stage": 6,
-        "stage_gate_required": False,
-        "stage_gate_requires_validation": False,
-    },
-    {
-        "document_type": "i901-sevis-fee-confirmation",
-        "label": "SEVIS I-901 Fee Receipt",
-        "sort_order": 180,
-        "is_required": True,
-        "journey_stage": 5,
-        "stage_gate_required": True,
-        "stage_gate_requires_validation": True,
-    },
-]
+# Back-compat aliases: the US F-1 catalog now lives in app/visa_catalog.py (single
+# source of truth). These names are kept because other modules import them.
+DEFAULT_JOURNEY_STAGES: list[dict[str, Any]] = visa_catalog.US_F1_STAGES
+DEFAULT_DOCUMENT_TYPES: list[dict[str, Any]] = visa_catalog.US_F1_DOCUMENTS
 
 REMOVED_DOCUMENT_TYPES = {
     "degree-certificates",
@@ -381,16 +18,38 @@ REMOVED_DOCUMENT_TYPES = {
     "offer-letters",
 }
 
+# The US F-1 scope owns the legacy rows (existing prod data is backfilled to this).
+_US_COUNTRY = visa_catalog.DEFAULT_COUNTRY_CODE   # "US"
+_US_VISA = visa_catalog.DEFAULT_VISA_TYPE_KEY     # "us_f1"
+
+
+def _scoped_query(db: Session, country_code: str, visa_type_key: str, active_only: bool):
+    query = db.query(models.DocumentTypeCatalog).filter(
+        models.DocumentTypeCatalog.country_code == country_code,
+        models.DocumentTypeCatalog.visa_type_key == visa_type_key,
+    )
+    if active_only:
+        query = query.filter(models.DocumentTypeCatalog.is_active.is_(True))
+    return query
+
 
 def ensure_default_document_type_catalog(db: Session) -> None:
-    existing_rows = db.query(models.DocumentTypeCatalog).all()
+    """Seed/repair every (country, visa) document catalog scope."""
+    _ensure_us_f1_catalog(db)
+    _ensure_additional_scope_catalogs(db)
+
+
+def _ensure_us_f1_catalog(db: Session) -> None:
+    """US F-1 seeding + one-time legacy migrations. Behaviour is unchanged from the
+    original single-scope implementation; queries/inserts are scoped to US/us_f1."""
+    existing_rows = _scoped_query(db, _US_COUNTRY, _US_VISA, active_only=False).all()
     existing_by_type = {row.document_type: row for row in existing_rows}
     has_changes = False
 
     for row in DEFAULT_DOCUMENT_TYPES:
         existing = existing_by_type.get(row["document_type"])
         if not existing:
-            db.add(models.DocumentTypeCatalog(**row))
+            db.add(models.DocumentTypeCatalog(**row, country_code=_US_COUNTRY, visa_type_key=_US_VISA))
             has_changes = True
             continue
 
@@ -589,7 +248,7 @@ def ensure_default_document_type_catalog(db: Session) -> None:
             "stage_gate_requires_validation": True,
         },
     }
-    for existing in db.query(models.DocumentTypeCatalog).all():
+    for existing in _scoped_query(db, _US_COUNTRY, _US_VISA, active_only=False).all():
         if existing.document_type in REMOVED_DOCUMENT_TYPES:
             if existing.is_active:
                 existing.is_active = False
@@ -651,21 +310,52 @@ def ensure_default_document_type_catalog(db: Session) -> None:
         db.commit()
 
 
+def _ensure_additional_scope_catalogs(db: Session) -> None:
+    """Additively seed the non-US (country, visa) catalogs from visa_catalog. Existing
+    rows are left untouched so admin customizations survive. Each scope commits on its
+    own and rolls back on failure, so a legacy DB (e.g. a pre-migration single-unique
+    document_type) degrades gracefully to US-only instead of crashing startup."""
+    for country_code, journey_key in visa_catalog.catalog_scopes():
+        if (country_code, journey_key) == (_US_COUNTRY, _US_VISA):
+            continue
+        try:
+            existing_types = {
+                row.document_type
+                for row in _scoped_query(db, country_code, journey_key, active_only=False).all()
+            }
+            added = False
+            for row in visa_catalog.documents_for(country_code, journey_key):
+                if row["document_type"] in existing_types:
+                    continue
+                db.add(models.DocumentTypeCatalog(**row, country_code=country_code, visa_type_key=journey_key))
+                added = True
+            if added:
+                db.commit()
+        except Exception:
+            db.rollback()
+
+
 def get_document_type_catalog(
     db: Session,
     active_only: bool = True,
+    country_code: str | None = None,
+    visa_type_key: str | None = None,
 ) -> list[models.DocumentTypeCatalog]:
-    query = db.query(models.DocumentTypeCatalog)
-    if active_only:
-        query = query.filter(models.DocumentTypeCatalog.is_active.is_(True))
-    return query.order_by(models.DocumentTypeCatalog.sort_order.asc(), models.DocumentTypeCatalog.id.asc()).all()
+    code, journey = visa_catalog.catalog_scope(country_code, visa_type_key)
+    return (
+        _scoped_query(db, code, journey, active_only)
+        .order_by(models.DocumentTypeCatalog.sort_order.asc(), models.DocumentTypeCatalog.id.asc())
+        .all()
+    )
 
 
 def get_document_type_payload(
     db: Session,
     active_only: bool = True,
+    country_code: str | None = None,
+    visa_type_key: str | None = None,
 ) -> list[dict[str, Any]]:
-    rows = get_document_type_catalog(db, active_only=active_only)
+    rows = get_document_type_catalog(db, active_only=active_only, country_code=country_code, visa_type_key=visa_type_key)
     return [
         {
             "value": row.document_type,
@@ -683,9 +373,13 @@ def get_document_type_payload(
     ]
 
 
-def build_journey_stages(document_types: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_journey_stages(
+    document_types: list[dict[str, Any]],
+    stages: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    base_stages = stages if stages is not None else DEFAULT_JOURNEY_STAGES
     stage_map: dict[int, dict[str, Any]] = {}
-    for stage in DEFAULT_JOURNEY_STAGES:
+    for stage in base_stages:
         stage_map[stage["stage"]] = {
             **stage,
             "required_docs": [],
@@ -704,10 +398,16 @@ def build_journey_stages(document_types: list[dict[str, Any]]) -> list[dict[str,
     return [stage_map[key] for key in sorted(stage_map.keys())]
 
 
-def build_document_catalog_response(db: Session) -> dict[str, Any]:
-    document_types = get_document_type_payload(db, active_only=True)
+def build_document_catalog_response(
+    db: Session,
+    country_code: str | None = None,
+    visa_type_key: str | None = None,
+) -> dict[str, Any]:
+    code, journey = visa_catalog.catalog_scope(country_code, visa_type_key)
+    document_types = get_document_type_payload(db, active_only=True, country_code=code, visa_type_key=journey)
     required_document_types = [row["value"] for row in document_types if row.get("is_required")]
-    journey_stages = build_journey_stages(document_types)
+    stages = visa_catalog.journey_stages_for(code, journey)
+    journey_stages = build_journey_stages(document_types, stages)
     return {
         "document_types": document_types,
         "required_document_types": required_document_types,

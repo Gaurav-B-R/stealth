@@ -246,6 +246,91 @@ def send_verification_email(
         return False
 
 
+def send_email_otp(email: str, code: str, expires_in_minutes: int = 10) -> bool:
+    """
+    Send a 6-digit email verification code for the stepped signup flow.
+    Sent from the no-reply transactional address.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send OTP email - Resend not configured")
+        return False
+
+    recipient = (email or "").strip().lower()
+    code_clean = "".join(ch for ch in str(code or "") if ch.isdigit())
+    if not recipient or not code_clean:
+        print("ERROR: Cannot send OTP email - missing recipient or code")
+        return False
+
+    minutes = max(1, int(expires_in_minutes or 10))
+    safe_code = escape(code_clean)
+    subject = f"{code_clean} is your Rilono verification code"
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>{escape(subject)}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+              <tr>
+                <td style="padding:24px 28px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;">
+                  <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">Rilono</div>
+                  <h1 style="margin:8px 0 0 0;font-size:22px;line-height:1.2;">Verify your email</h1>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:26px 28px;color:#0f172a;">
+                  <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;">
+                    Enter this code to finish creating your Rilono account:
+                  </p>
+                  <div style="text-align:center;margin:8px 0 18px;">
+                    <div style="display:inline-block;font-size:34px;font-weight:800;letter-spacing:10px;color:#0f172a;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:12px;padding:14px 22px 14px 32px;">{safe_code}</div>
+                  </div>
+                  <p style="margin:0 0 6px 0;font-size:13px;color:#64748b;line-height:1.6;">
+                    This code expires in <strong>{minutes} minutes</strong>. If you didn't request it, you can safely ignore this email.
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    """
+
+    text_content = (
+        f"Verify your email - Rilono\n\n"
+        f"Your verification code is: {code_clean}\n"
+        f"It expires in {minutes} minutes.\n\n"
+        "If you didn't request this, you can ignore this email.\n"
+    )
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            print(f"OTP email sent to {recipient} (ID: {email_id})")
+            return True
+        print(f"Failed to send OTP email to {recipient}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending OTP email to {recipient}: {str(e)}")
+        return False
+
+
 def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFAULT_PUBLIC_BASE_URL) -> bool:
     """
     Send password reset email using Resend.
@@ -2018,6 +2103,78 @@ def send_enterprise_calendar_digest_email(
         return False
     except Exception as e:
         print(f"Error sending calendar digest email to {to_email}: {str(e)}")
+        return False
+
+
+def send_enterprise_client_calendar_reminder_email(
+    *,
+    to_email: str,
+    client_name: str,
+    org_name: str,
+    title: str,
+    when_label: str = "Today",
+    event_time: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> bool:
+    """
+    Notify a client (student) about a reminder their consultancy set for them — sent
+    when the reminder is due, only if the staff member ticked "notify the client".
+    Returns False (no-op) when Resend isn't configured.
+    """
+    if not RESEND_API_KEY:
+        print("Client calendar reminder email skipped: RESEND_API_KEY not configured.")
+        return False
+    if not to_email:
+        return False
+
+    when = escape(when_label or "Today")
+    if event_time:
+        when = f"{when} · {escape(event_time)}"
+    notes_block = ""
+    if (notes or "").strip():
+        notes_block = (
+            f'<div style="margin-top:14px;padding:12px 14px;background:#f8f9fc;border:1px solid #eef0f6;'
+            f'border-radius:10px;color:#475569;font-size:13px;line-height:1.5">{escape(notes.strip())}</div>'
+        )
+
+    html_content = f"""<!DOCTYPE html><html><body style="margin:0;background:#f5f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">
+      <div style="max-width:520px;margin:0 auto;padding:28px 18px">
+        <div style="background:#fff;border:1px solid #e7e9f3;border-radius:16px;overflow:hidden">
+          <div style="background:linear-gradient(135deg,#6366f1,#8b5cf6);padding:22px 24px;color:#fff">
+            <div style="font-size:13px;opacity:.9;font-weight:600">{escape(org_name)}</div>
+            <div style="font-size:20px;font-weight:800;margin-top:4px">A reminder for you</div>
+          </div>
+          <div style="padding:22px 24px">
+            <p style="margin:0 0 10px;font-size:15px;color:#0f172a">Hi {escape(client_name or 'there')},</p>
+            <p style="margin:0 0 16px;color:#64748b;font-size:14px">
+              Your team at <b>{escape(org_name)}</b> wanted to make sure you don't miss this:</p>
+            <div style="padding:14px 16px;border:1px solid #e7e9f3;border-left:4px solid #6366f1;border-radius:10px">
+              <div style="font-weight:700;color:#0f172a;font-size:15px">{escape(title)}</div>
+              <div style="color:#6366f1;font-size:13px;font-weight:650;margin-top:4px">{when}</div>
+            </div>
+            {notes_block}
+            <p style="margin:18px 0 0;color:#94a3b8;font-size:12px">
+              Have a question? Just reply to your consultant — they're here to help.</p>
+          </div>
+        </div>
+        <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:16px">
+          Sent on behalf of {escape(org_name)} via Rilono.</p>
+      </div></body></html>"""
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [to_email],
+            "subject": f"Reminder from {org_name}: {title}"[:120],
+            "html": html_content,
+        }
+        email_response = resend.Emails.send(params)
+        if _extract_resend_email_id(email_response):
+            return True
+        print(f"Failed to send client calendar reminder to {to_email}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending client calendar reminder email to {to_email}: {str(e)}")
         return False
 
 

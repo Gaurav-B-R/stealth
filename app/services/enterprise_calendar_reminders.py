@@ -24,7 +24,11 @@ from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal
 from app import models
 from app import enterprise_catalog as catalog
-from app.email_service import send_enterprise_calendar_digest_email, DEFAULT_PUBLIC_BASE_URL
+from app.email_service import (
+    send_enterprise_calendar_digest_email,
+    send_enterprise_client_calendar_reminder_email,
+    DEFAULT_PUBLIC_BASE_URL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +169,57 @@ def _is_active_member(db, organization_id: int, user_id: int) -> bool:
     )
 
 
+def _notify_linked_clients(db, org, today: date, floor: date) -> int:
+    """Email clients who were @-mentioned (with notify-on) when their reminder comes due.
+
+    Sent at most once per event (dedup via client_notified_at) so an overdue reminder
+    doesn't email the client every day. Future-dated reminders aren't sent until due."""
+    sent = 0
+    events = (
+        db.query(models.EnterpriseCalendarEvent)
+        .filter(
+            models.EnterpriseCalendarEvent.organization_id == org.id,
+            models.EnterpriseCalendarEvent.is_done.is_(False),
+            models.EnterpriseCalendarEvent.notify_client.is_(True),
+            models.EnterpriseCalendarEvent.client_id.isnot(None),
+            models.EnterpriseCalendarEvent.client_notified_at.is_(None),
+            models.EnterpriseCalendarEvent.event_date >= floor,
+            models.EnterpriseCalendarEvent.event_date <= today,
+        )
+        .all()
+    )
+    for ev in events:
+        client = (
+            db.query(models.EnterpriseClient)
+            .filter(
+                models.EnterpriseClient.id == ev.client_id,
+                models.EnterpriseClient.organization_id == org.id,
+            )
+            .first()
+        )
+        # Mark handled regardless, so we don't re-scan a client with no email forever.
+        ev.client_notified_at = datetime.utcnow()
+        if not client or not (client.email or "").strip():
+            continue
+        when_label, _overdue = _when_label(ev.event_date, today)
+        try:
+            ok = send_enterprise_client_calendar_reminder_email(
+                to_email=client.email.strip(),
+                client_name=client.full_name or "there",
+                org_name=org.company_name or "Your consultancy",
+                title=ev.title,
+                when_label=when_label,
+                event_time=ev.event_time,
+                notes=ev.notes,
+            )
+            if ok:
+                sent += 1
+        except Exception:
+            logger.exception("Client calendar reminder send failed (org=%s, event=%s)", org.id, ev.id)
+    db.commit()
+    return sent
+
+
 def run_calendar_reminder_job(force: bool = False) -> dict:
     """Send today's calendar digest to each staff member with due/overdue items.
     Idempotent per UTC day via enterprise_calendar_reminder_runs."""
@@ -204,12 +259,19 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
         floor = today - timedelta(days=OVERDUE_DAYS)
         emailed = 0
         considered = 0
+        clients_emailed = 0
 
         org_ids = [oid for (oid,) in db.query(models.EnterpriseOrganization.id).all()]
         for org_id in org_ids:
             org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == org_id).first()
             if not org:
                 continue
+            # Notify @-mentioned clients whose reminders are due (once each).
+            try:
+                clients_emailed += _notify_linked_clients(db, org, today, floor)
+            except Exception:
+                logger.exception("Client notification pass failed (org=%s)", org_id)
+                db.rollback()
             by_recipient = _collect_org_items_by_recipient(db, org_id, today, floor)
             for user_id, items in by_recipient.items():
                 considered += len(items)
@@ -242,7 +304,8 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
         db.commit()
         return {
             "status": "completed", "run_date": run_date.isoformat(),
-            "recipients_emailed": emailed, "events_considered": considered, "orgs": len(org_ids),
+            "recipients_emailed": emailed, "clients_emailed": clients_emailed,
+            "events_considered": considered, "orgs": len(org_ids),
         }
     except Exception as exc:
         logger.exception("Calendar reminder job failed")

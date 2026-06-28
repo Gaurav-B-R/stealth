@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
+from app import visa_catalog
 from app.auth import get_current_active_user
 from app.subscriptions import (
     PLAN_PRO,
@@ -243,26 +244,34 @@ def format_student_profile_context(profile_data: dict) -> str:
     doc_prefs = profile_data.get('documentation_preferences', {})
     visa_journey = profile_data.get('visa_journey', {})
     docs_summary = profile_data.get('documents_summary', {})
-    
+
+    # Destination + visa type personalize the whole context (defaults to US F-1).
+    target_country = doc_prefs.get('target_country') or visa_journey.get('destination_country') or 'United States'
+    visa_type = doc_prefs.get('visa_type') or visa_journey.get('visa_type') or 'F-1 Student Visa'
+    total_stages = visa_journey.get('total_stages', 7)
+
     context = f"""
-=== STUDENT PROFILE AND F1 VISA STATUS ===
+=== STUDENT PROFILE AND {visa_type.upper()} STATUS ({target_country}) ===
 
 STUDENT INFORMATION:
 - Name: {student_profile.get('full_name', 'Unknown')}
 - Email: {student_profile.get('email', 'Unknown')}
 - University: {student_profile.get('university', 'Not set')}
+- University Email: {student_profile.get('university_email', 'Not provided')}
 - Phone: {student_profile.get('phone', 'Not provided')}
+- Home Country: {student_profile.get('current_residence_country', 'Not provided')}
 - Visa Case Status: {student_profile.get('visa_case_status', 'Not provided')}
 - Current Situation / Story: {student_profile.get('current_situation_story', 'Not provided')}
 - Account Created: {student_profile.get('account_created', 'Unknown')}
 
 DOCUMENTATION PREFERENCES:
-- Target Country: {doc_prefs.get('target_country', 'United States')}
+- Destination Country: {target_country}
+- Visa Type: {visa_type}
 - Intake Semester: {doc_prefs.get('intake_semester', 'Not set')}
 - Intake Year: {doc_prefs.get('intake_year', 'Not set')}
 
-F1 VISA JOURNEY STATUS:
-- Current Stage: {visa_journey.get('current_stage', 1)} of {visa_journey.get('total_stages', 7)} - "{visa_journey.get('stage_name', 'Getting Started')}"
+{visa_type.upper()} JOURNEY STATUS ({target_country}):
+- Current Stage: {visa_journey.get('current_stage', 1)} of {total_stages} - "{visa_journey.get('stage_name', 'Getting Started')}"
 - Progress: {visa_journey.get('progress_percent', 0)}%
 - Stage Description: {visa_journey.get('stage_description', '')}
 - Next Step Required: {visa_journey.get('next_step_required', '')}
@@ -544,16 +553,21 @@ def build_system_prompt(
     documents_context: str,
     attached_docs_text: str,
     navigation_guide_text: str,
+    visa_summary: str = "",
 ) -> str:
     normalized_source = (source or "rilono_ai_chat").strip().lower()
     is_copilot = normalized_source == "rilono_ai_copilot"
 
+    # The student's destination + visa type (e.g. "United Kingdom — Student Visa (Tier 4)")
+    # personalizes the assistant. Falls back to the US F-1 wording when unknown.
+    journey_label = (visa_summary or "").strip() or "F-1 student visa"
+
     if is_copilot:
         assistant_intro = (
-            "You are Rilono AI Copilot, an application assistant for students on the F-1 visa journey."
+            f"You are Rilono AI Copilot, an application assistant for students on the {journey_label} journey."
         )
         role_lines = [
-            "- Assist ongoing applications like I-20 forms, health forms, DS-160 applications, and related F-1 workflow tasks",
+            "- Assist ongoing applications like university and visa forms, financial and health documents, and related visa workflow tasks",
             "- Help the student fill application fields and prepare responses with utmost accuracy",
             "- Ask clarifying questions whenever required details are missing, ambiguous, or inconsistent",
             "- Cross-check answers against student profile details, uploaded documents, and page context before final guidance",
@@ -566,13 +580,13 @@ def build_system_prompt(
         ]
     else:
         assistant_intro = (
-            "You are Rilono AI, a F1 student visa expert assistant. "
-            "You are guiding the student through the F1 student visa process and documentation."
+            f"You are Rilono AI, a student visa expert assistant for the {journey_label}. "
+            "You are guiding the student through their student visa process and documentation."
         )
         role_lines = [
-            "- Provide expert guidance on F1 student visa requirements and processes",
+            f"- Provide expert guidance on {journey_label} requirements and processes",
             "- Help with document preparation and verification",
-            "- Answer questions about visa application steps (DS-160, I-20, SEVIS, interview, etc.)",
+            "- Answer questions about the visa application steps for the student's destination (application forms, financial proof, biometrics, interview, etc.), using the specific stages in the attached profile",
             "- Assist with understanding visa documentation requirements",
             "- Be friendly, supportive, and professional",
         ]
@@ -639,6 +653,7 @@ def generate_ai_response(
     session_attachments: Optional[List[ChatSessionAttachment]] = None,
     conversation_history: Optional[List[dict]] = None,
     source: str = "rilono_ai_chat",
+    visa_summary: str = "",
 ) -> str:
     """
     Generate AI response using Gemini with system prompt, document context, attached document files, and comprehensive student profile.
@@ -677,6 +692,7 @@ def generate_ai_response(
             documents_context=documents_context,
             attached_docs_text=attached_docs_text,
             navigation_guide_text=navigation_guide_text,
+            visa_summary=visa_summary,
         )
 
         # Build conversation context
@@ -701,28 +717,14 @@ Current user message: {user_message}
 
 Please provide a helpful response to the user's question:"""
         
-        print("\n" + "="*80)
-        print(f"🔵 GEMINI API CALL: generate_ai_response() - AI CHAT")
-        print(f"🧭 Chat Source: {source}")
-        print(f"👤 User: {user_name}")
-        print(f"📎 Attached Documents: {len(document_files) if document_files else 0}")
-        print(f"📎 Session Attachments: {len(session_attachments) if session_attachments else 0}")
-        print("-"*80)
-        print("📤 SENDING PROMPT TO GEMINI:")
-        print("-"*80)
-        log_prompt_preview = full_prompt
-        if session_attachments_text:
-            log_prompt_preview = log_prompt_preview.replace(
-                session_attachments_text,
-                "[ATTACHED CHAT SESSION FILES REDACTED IN LOGS]"
-            )
+        # Privacy: never log user chat prompts, messages, or profile/document content.
+        # Emit only a minimal, non-sensitive operational marker.
+        print(
+            f"Rilono AI chat call: source={source} "
+            f"docs={len(document_files) if document_files else 0} "
+            f"session_attachments={len(session_attachments) if session_attachments else 0}"
+        )
 
-        print(log_prompt_preview[:2000] + ("..." if len(log_prompt_preview) > 2000 else ""))
-        if len(log_prompt_preview) > 2000:
-            print(f"\n[... {len(log_prompt_preview) - 2000} more characters ...]")
-        print("-"*80)
-        print("⏳ Waiting for Gemini response...")
-        
         response = None
         last_model_error = None
         for model_name in model_candidates:
@@ -748,13 +750,7 @@ Please provide a helpful response to the user's question:"""
         except Exception:
             pass
 
-        print("✅ RECEIVED RESPONSE FROM GEMINI:")
-        print("-"*80)
-        print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
-        if len(response.text) > 1000:
-            print(f"\n[... {len(response.text) - 1000} more characters ...]")
-        print("="*80 + "\n")
-        
+        # Privacy: do not log the AI response content.
         return sanitize_ai_response_for_public_display(response.text)
         
     except Exception as e:
@@ -798,7 +794,11 @@ def refresh_student_profile_if_stale(user: models.User, db: Session) -> dict:
     
     # Refresh the profile
     try:
-        status_data = calculate_visa_journey_stage(actual_documents, db)
+        status_data = calculate_visa_journey_stage(
+            actual_documents, db,
+            getattr(user, "destination_country_code", None),
+            getattr(user, "visa_type_key", None),
+        )
         save_student_profile_to_r2(user, status_data, actual_documents, db=db)
         # Return the fresh profile
         return get_student_profile_and_status(user.id)
@@ -839,6 +839,9 @@ def chat_with_ai(
             window_seconds=AI_CHAT_RATE_WINDOW_SECONDS,
             extra_key=str(current_user.id),
         )
+
+        # Attribute every Gemini call in this request to the signed-in account.
+        ai_usage.set_usage_account(user_id=current_user.id)
 
         # Cost guardrail: reject obviously off-topic ("free ChatGPT") prompts before
         # spending any Gemini tokens. Borderline prompts pass through to the model,
@@ -897,6 +900,15 @@ def chat_with_ai(
         # Get document files (full JSON content) to attach to the prompt
         document_files = get_user_document_files(current_user.id, db)
         
+        # Destination + visa type personalize the assistant's persona.
+        _vc_country, _vc_visa = visa_catalog.resolve_selection(
+            getattr(current_user, "destination_country_code", None),
+            getattr(current_user, "visa_type_key", None),
+        )
+        _vc_country_name = (visa_catalog.country_meta(_vc_country) or {}).get("name", _vc_country)
+        _vc_visa_label = visa_catalog.visa_type_label(_vc_country, _vc_visa) or "Student Visa"
+        visa_summary = f"{_vc_country_name} — {_vc_visa_label}"
+
         # Generate response with attached document files
         response_text = generate_ai_response(
             user_message=chat_message.message,
@@ -907,7 +919,8 @@ def chat_with_ai(
             document_files=document_files,
             session_attachments=chat_message.session_attachments,
             conversation_history=chat_message.conversation_history,
-            source=source
+            source=source,
+            visa_summary=visa_summary,
         )
 
         # Track free-tier usage for all chat sources that are quota-tracked.

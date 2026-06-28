@@ -69,6 +69,96 @@
     const d = new Date(iso); if (isNaN(d)) return null;
     return Math.ceil((d - new Date()) / 86400000);
   }
+
+  /* ---------------- phone country dial codes ---------------- */
+  const PHONE_COUNTRIES = [
+    { f: "🇮🇳", d: "+91", n: "India" },
+    { f: "🇺🇸", d: "+1", n: "United States" },
+    { f: "🇨🇦", d: "+1", n: "Canada" },
+    { f: "🇬🇧", d: "+44", n: "United Kingdom" },
+    { f: "🇦🇺", d: "+61", n: "Australia" },
+    { f: "🇳🇿", d: "+64", n: "New Zealand" },
+    { f: "🇮🇪", d: "+353", n: "Ireland" },
+    { f: "🇩🇪", d: "+49", n: "Germany" },
+    { f: "🇫🇷", d: "+33", n: "France" },
+    { f: "🇮🇹", d: "+39", n: "Italy" },
+    { f: "🇪🇸", d: "+34", n: "Spain" },
+    { f: "🇵🇹", d: "+351", n: "Portugal" },
+    { f: "🇳🇱", d: "+31", n: "Netherlands" },
+    { f: "🇧🇪", d: "+32", n: "Belgium" },
+    { f: "🇨🇭", d: "+41", n: "Switzerland" },
+    { f: "🇦🇹", d: "+43", n: "Austria" },
+    { f: "🇸🇪", d: "+46", n: "Sweden" },
+    { f: "🇳🇴", d: "+47", n: "Norway" },
+    { f: "🇩🇰", d: "+45", n: "Denmark" },
+    { f: "🇫🇮", d: "+358", n: "Finland" },
+    { f: "🇵🇱", d: "+48", n: "Poland" },
+    { f: "🇨🇿", d: "+420", n: "Czechia" },
+    { f: "🇬🇷", d: "+30", n: "Greece" },
+    { f: "🇷🇺", d: "+7", n: "Russia" },
+    { f: "🇺🇦", d: "+380", n: "Ukraine" },
+    { f: "🇹🇷", d: "+90", n: "Turkey" },
+    { f: "🇦🇪", d: "+971", n: "United Arab Emirates" },
+    { f: "🇸🇦", d: "+966", n: "Saudi Arabia" },
+    { f: "🇶🇦", d: "+974", n: "Qatar" },
+    { f: "🇰🇼", d: "+965", n: "Kuwait" },
+    { f: "🇧🇭", d: "+973", n: "Bahrain" },
+    { f: "🇴🇲", d: "+968", n: "Oman" },
+    { f: "🇮🇱", d: "+972", n: "Israel" },
+    { f: "🇪🇬", d: "+20", n: "Egypt" },
+    { f: "🇿🇦", d: "+27", n: "South Africa" },
+    { f: "🇳🇬", d: "+234", n: "Nigeria" },
+    { f: "🇰🇪", d: "+254", n: "Kenya" },
+    { f: "🇬🇭", d: "+233", n: "Ghana" },
+    { f: "🇪🇹", d: "+251", n: "Ethiopia" },
+    { f: "🇹🇿", d: "+255", n: "Tanzania" },
+    { f: "🇺🇬", d: "+256", n: "Uganda" },
+    { f: "🇵🇰", d: "+92", n: "Pakistan" },
+    { f: "🇧🇩", d: "+880", n: "Bangladesh" },
+    { f: "🇱🇰", d: "+94", n: "Sri Lanka" },
+    { f: "🇳🇵", d: "+977", n: "Nepal" },
+    { f: "🇧🇹", d: "+975", n: "Bhutan" },
+    { f: "🇲🇻", d: "+960", n: "Maldives" },
+    { f: "🇨🇳", d: "+86", n: "China" },
+    { f: "🇭🇰", d: "+852", n: "Hong Kong" },
+    { f: "🇹🇼", d: "+886", n: "Taiwan" },
+    { f: "🇯🇵", d: "+81", n: "Japan" },
+    { f: "🇰🇷", d: "+82", n: "South Korea" },
+    { f: "🇸🇬", d: "+65", n: "Singapore" },
+    { f: "🇲🇾", d: "+60", n: "Malaysia" },
+    { f: "🇮🇩", d: "+62", n: "Indonesia" },
+    { f: "🇹🇭", d: "+66", n: "Thailand" },
+    { f: "🇵🇭", d: "+63", n: "Philippines" },
+    { f: "🇻🇳", d: "+84", n: "Vietnam" },
+    { f: "🇲🇲", d: "+95", n: "Myanmar" },
+    { f: "🇰🇭", d: "+855", n: "Cambodia" },
+    { f: "🇧🇷", d: "+55", n: "Brazil" },
+    { f: "🇲🇽", d: "+52", n: "Mexico" },
+    { f: "🇦🇷", d: "+54", n: "Argentina" },
+    { f: "🇨🇴", d: "+57", n: "Colombia" },
+    { f: "🇨🇱", d: "+56", n: "Chile" },
+    { f: "🇵🇪", d: "+51", n: "Peru" },
+  ];
+  const DEFAULT_DIAL = "+91";
+  function phoneCcOptions(selectedDial) {
+    let picked = false;
+    return PHONE_COUNTRIES.map((p) => {
+      const sel = !picked && p.d === selectedDial;
+      if (sel) picked = true;
+      return `<option value="${p.d}" title="${esc(p.n)}" ${sel ? "selected" : ""}>${p.f} ${p.d}</option>`;
+    }).join("");
+  }
+  function splitPhone(full) {
+    const s = String(full == null ? "" : full).trim();
+    if (!s || s[0] !== "+") return { dial: DEFAULT_DIAL, local: s };
+    const compact = s.replace(/[\s()-]/g, "");
+    const dials = PHONE_COUNTRIES.map((p) => p.d).sort((a, b) => b.length - a.length);
+    for (const d of dials) {
+      if (compact.startsWith(d)) return { dial: d, local: compact.slice(d.length) };
+    }
+    return { dial: DEFAULT_DIAL, local: s };
+  }
+
   function rootDomain() {
     const h = location.hostname;
     if (h === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(h)) return "rilono.com";
@@ -337,6 +427,7 @@
         email: f.email.value.trim(),
         password: f.password.value,
         accepted_terms_privacy: f.accept_terms.checked,
+        marketing_emails_consent: f.marketing_consent.checked,
       };
       try {
         const turnstileToken = await getEnterpriseTurnstileToken("signup");
@@ -795,7 +886,7 @@
         <div class="field"><label>Full name *</label><input name="full_name" required value="${esc(c.full_name || "")}" placeholder="Client's full name"/></div>
         <div class="field-row">
           <div class="field"><label>Email</label><input type="email" name="email" value="${esc(c.email || "")}" placeholder="client@email.com"/></div>
-          <div class="field"><label>Phone</label><input name="phone" value="${esc(c.phone || "")}" placeholder="+91 …"/></div>
+          <div class="field"><label>Phone</label><div class="phone-input-group"><select name="phone_cc" id="cfPhoneCc" aria-label="Phone country code"></select><input name="phone" id="cfPhone" inputmode="tel" placeholder="98765 43210"/></div></div>
         </div>
         <div class="field-row">
           <div class="field"><label>Destination country *</label><select name="destination_country_code" id="cfCountry" required></select></div>
@@ -853,16 +944,25 @@
     countrySel.onchange = fillVisas;
     fillCountries();
 
+    const phoneParts = splitPhone(c.phone || "");
+    $("#cfPhoneCc").innerHTML = phoneCcOptions(phoneParts.dial);
+    $("#cfPhone").value = phoneParts.local;
+
     $("#clientForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#clientSaveBtn"); const err = $("#clientFormError");
       err.classList.add("hidden");
       const body = {};
-      ["full_name", "destination_country_code", "visa_type", "intake", "email", "phone",
+      ["full_name", "destination_country_code", "visa_type", "intake", "email",
         "nationality", "date_of_birth", "passport_number", "passport_expiry", "priority", "status",
         "target_date", "application_reference"].forEach((k) => {
         const el = f[k]; if (!el) return; const v = (el.value || "").trim(); if (v !== "") body[k] = v;
       });
+      const phoneLocal = (f.phone.value || "").trim();
+      if (phoneLocal) {
+        const dial = (f.phone_cc && f.phone_cc.value) || DEFAULT_DIAL;
+        body.phone = phoneLocal[0] === "+" ? phoneLocal : (dial + " " + phoneLocal);
+      }
       if (!isEdit) body.visa_category = "student";
       const assign = f.assigned_to_user_id.value;
       body.assigned_to_user_id = assign ? parseInt(assign, 10) : null;
@@ -2163,13 +2263,15 @@
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     const cs = calState();
     const { start, end } = calGridRange(cs.year, cs.month);
-    let data, up;
+    let data, up, clientsResp;
     try {
-      [data, up] = await Promise.all([
+      [data, up, clientsResp] = await Promise.all([
         api(`/calendar?start=${calYmd(start)}&end=${calYmd(end)}`),
         api(`/calendar/upcoming?days=21`),
+        api(`/calendar/clients`),
       ]);
     } catch (ex) { c.innerHTML = errBox(ex); return; }
+    state.calClients = (clientsResp && clientsResp.clients) || [];
     state.perms = data.permissions || state.perms;
     const canEdit = state.perms.can_edit_data;
     state.calTypes = data.event_types || [];
@@ -2207,6 +2309,14 @@
       `<span class="cal-legend-item"><span class="cal-dot" style="background:${t.color}"></span>${esc(t.label)}</span>`).join("");
 
     const monthLabel = new Date(cs.year, cs.month, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    // Quick month + year pickers for jumping anywhere fast.
+    const CAL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const calNowYear = new Date().getFullYear();
+    const calMinYear = Math.min(calNowYear - 6, cs.year);
+    const calMaxYear = Math.max(calNowYear + 6, cs.year);
+    const calMonthOpts = CAL_MONTHS.map((m, i) => `<option value="${i}" ${i === cs.month ? "selected" : ""}>${m}</option>`).join("");
+    let calYearOpts = "";
+    for (let y = calMinYear; y <= calMaxYear; y++) calYearOpts += `<option value="${y}" ${y === cs.year ? "selected" : ""}>${y}</option>`;
 
     // "What's next" side panel
     const upItem = (e) => `
@@ -2228,7 +2338,10 @@
       <div class="cal-wrap">
         <div class="cal-main">
           <div class="cal-toolbar">
-            <div class="cal-title">${esc(monthLabel)}</div>
+            <div class="cal-period">
+              <select class="cal-select cal-select-month" onchange="__ent.calSetMonth(this.value)" aria-label="Month">${calMonthOpts}</select>
+              <select class="cal-select cal-select-year" onchange="__ent.calSetYear(this.value)" aria-label="Year">${calYearOpts}</select>
+            </div>
             <div class="cal-navbtns">
               <button class="btn btn-ghost btn-sm" onclick="__ent.calPrev()" aria-label="Previous month">‹</button>
               <button class="btn btn-ghost btn-sm" onclick="__ent.calToday()">Today</button>
@@ -2252,6 +2365,8 @@
   function calPrev() { const c = calState(); const d = new Date(c.year, c.month - 1, 1); state.cal = { year: d.getFullYear(), month: d.getMonth() }; renderCalendar(); }
   function calNext() { const c = calState(); const d = new Date(c.year, c.month + 1, 1); state.cal = { year: d.getFullYear(), month: d.getMonth() }; renderCalendar(); }
   function calToday() { const d = new Date(); state.cal = { year: d.getFullYear(), month: d.getMonth() }; renderCalendar(); }
+  function calSetMonth(m) { const c = calState(); state.cal = { year: c.year, month: parseInt(m, 10) }; renderCalendar(); }
+  function calSetYear(y) { const c = calState(); state.cal = { year: parseInt(y, 10), month: c.month }; renderCalendar(); }
 
   function calEvent(id) {
     const e = calEventsById[id];
@@ -2271,14 +2386,24 @@
     const dateVal = (ev && ev.date) || presetDate || new Date().toISOString().slice(0, 10);
     openModal(`<div class="modal-head"><h3>${isEdit ? "Edit event" : "Add reminder"}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
       <form id="calForm"><div class="modal-body">
-        <div class="field"><label>Title</label><input name="title" required maxlength="200" value="${ev ? esc(ev.title) : ""}" placeholder="e.g. Call Rohan about SOP"/></div>
+        <div class="field cal-title-field">
+          <label>Title</label>
+          <div class="cal-title-input-wrap">
+            <input name="title" id="calTitleInput" autocomplete="off" required maxlength="200" value="${ev ? esc(ev.title) : ""}" placeholder="e.g. Call Rohan about SOP"/>
+            <div id="calMentionMenu" class="cal-mention-menu hidden"></div>
+          </div>
+          <div class="cal-title-hint">Type <b>@</b> to mention a client</div>
+        </div>
         <div class="cal-form-row">
           <div class="field"><label>Type</label><select name="event_type">${types.map((t) => `<option value="${t.key}" ${ev && ev.type === t.key ? "selected" : ""}>${esc(t.label)}</option>`).join("")}</select></div>
           <div class="field"><label>Date</label><input type="date" name="event_date" required value="${esc(dateVal)}"/></div>
           <div class="field"><label>Time (optional)</label><input type="time" name="event_time" value="${ev && ev.time ? esc(ev.time) : ""}"/></div>
         </div>
         <div class="field"><label>Notes (optional)</label><textarea name="notes" maxlength="2000" placeholder="Any details…">${ev && ev.notes ? esc(ev.notes) : ""}</textarea></div>
-        ${ev && ev.client_name ? `<div class="muted" style="font-size:13px">Linked to client: <b>${esc(ev.client_name)}</b></div>` : ""}
+        <div id="calNotifyRow" class="cal-notify-row hidden">
+          <label class="cal-check"><input type="checkbox" id="calNotifyChk"/><span id="calNotifyLabel"></span></label>
+          <button type="button" class="cal-mention-clear" id="calMentionClear" title="Remove client link" aria-label="Remove client link">✕</button>
+        </div>
         <div id="calFormErr" class="auth-error hidden"></div>
       </div>
       <div class="modal-foot">
@@ -2288,6 +2413,90 @@
         <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary" id="calSaveBtn">${isEdit ? "Save" : "Add"}</button>
       </div></form>`);
+
+    // ---- @-mention: link a client + optionally notify them ----
+    const titleInput = $("#calTitleInput");
+    const menu = $("#calMentionMenu");
+    const notifyRow = $("#calNotifyRow");
+    const notifyChk = $("#calNotifyChk");
+    const notifyLabel = $("#calNotifyLabel");
+    let modalClient = null;            // {id, name, has_email}
+    let mMatches = [], mIdx = 0, mStart = -1, mQuery = "";
+
+    function showNotifyRow(checked) {
+      if (!modalClient) { notifyRow.classList.add("hidden"); return; }
+      notifyRow.classList.remove("hidden");
+      if (modalClient.has_email) {
+        notifyLabel.innerHTML = `Notify <b>@${esc(modalClient.name)}</b> by email when this reminder is due`;
+        notifyChk.disabled = false;
+        notifyChk.checked = checked;
+      } else {
+        notifyLabel.innerHTML = `<b>@${esc(modalClient.name)}</b> has no email on file — add one on their profile to notify them`;
+        notifyChk.disabled = true;
+        notifyChk.checked = false;
+      }
+    }
+    function closeMenu() { menu.classList.add("hidden"); mMatches = []; }
+    function renderMenu() {
+      const all = state.calClients || [];
+      const ql = mQuery.toLowerCase();
+      mMatches = all.filter((c) => (c.name || "").toLowerCase().includes(ql)).slice(0, 8);
+      if (mIdx >= mMatches.length) mIdx = 0;
+      if (!mMatches.length) {
+        menu.innerHTML = `<div class="cal-mention-empty">${all.length ? "No matching clients" : "No clients yet — add clients first"}</div>`;
+        menu.classList.remove("hidden"); return;
+      }
+      menu.innerHTML = mMatches.map((c, i) => `
+        <div class="cal-mention-item ${i === mIdx ? "active" : ""}" data-i="${i}">
+          <span class="cal-mention-avatar">${esc((c.name || "?").trim().charAt(0).toUpperCase())}</span>
+          <span class="cal-mention-name">${esc(c.name)}</span>
+          ${c.has_email ? "" : `<span class="cal-mention-noemail">no email</span>`}
+        </div>`).join("");
+      menu.classList.remove("hidden");
+      $$(".cal-mention-item", menu).forEach((el) => {
+        el.onmousedown = (e) => { e.preventDefault(); pickClient(mMatches[parseInt(el.dataset.i, 10)]); };
+      });
+    }
+    function pickClient(c) {
+      if (!c) return;
+      const val = titleInput.value;
+      const after = val.slice(titleInput.selectionStart);
+      titleInput.value = (val.slice(0, mStart) + "@" + c.name + " " + after).slice(0, 200);
+      modalClient = { id: c.id, name: c.name, has_email: !!c.has_email };
+      closeMenu();
+      showNotifyRow(true);
+      titleInput.focus();
+    }
+    titleInput.addEventListener("input", () => {
+      const pos = titleInput.selectionStart;
+      const upto = titleInput.value.slice(0, pos);
+      const at = upto.lastIndexOf("@");
+      if (at >= 0 && (at === 0 || /\s/.test(upto[at - 1]))) {
+        const q = upto.slice(at + 1);
+        if (!/\s/.test(q)) { mStart = at; mQuery = q; mIdx = 0; renderMenu(); return; }
+      }
+      closeMenu();
+    });
+    titleInput.addEventListener("keydown", (e) => {
+      if (menu.classList.contains("hidden") || !mMatches.length) return;
+      if (e.key === "ArrowDown") { e.preventDefault(); mIdx = (mIdx + 1) % mMatches.length; renderMenu(); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); mIdx = (mIdx - 1 + mMatches.length) % mMatches.length; renderMenu(); }
+      else if (e.key === "Enter") { e.preventDefault(); pickClient(mMatches[mIdx]); }
+      else if (e.key === "Escape") { closeMenu(); }
+    });
+    titleInput.addEventListener("blur", () => setTimeout(closeMenu, 150));
+    $("#calMentionClear").onclick = () => { modalClient = null; notifyRow.classList.add("hidden"); };
+
+    // Pre-fill when editing an event that's already linked to a client.
+    if (ev && ev.client_id) {
+      const known = (state.calClients || []).find((x) => x.id === ev.client_id);
+      modalClient = {
+        id: ev.client_id,
+        name: ev.client_name || (known && known.name) || "Client",
+        has_email: known ? known.has_email : true,
+      };
+      showNotifyRow(!!ev.notify_client);
+    }
 
     $("#calForm").onsubmit = async (e) => {
       e.preventDefault();
@@ -2299,6 +2508,13 @@
         event_time: fd.get("event_time") || null,
         notes: (fd.get("notes") || "").trim() || null,
       };
+      if (modalClient) {
+        body.client_id = modalClient.id;
+        body.notify_client = !!(notifyChk.checked && !notifyChk.disabled);
+      } else if (isEdit && ev && ev.client_id) {
+        body.client_id = 0;          // unlink a previously linked client
+        body.notify_client = false;
+      }
       if (!body.title || !body.event_date) return;
       const btn = $("#calSaveBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
       try {
@@ -2402,7 +2618,7 @@
     topup: topupCredits, activateInfra: activateInfraFee, deepScan: runDeepScan,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
     viewInterview: viewInterviewSession,
-    calPrev, calNext, calToday, calEvent, calAdd, calDelete, calToggleDone,
+    calPrev, calNext, calToday, calSetMonth, calSetYear, calEvent, calAdd, calDelete, calToggleDone,
   };
 
   /* ============================================================

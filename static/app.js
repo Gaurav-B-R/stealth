@@ -735,9 +735,23 @@ function getDocumentTypeLabel(documentType) {
     return documentTypeLabelByValue[documentType] || formatDocumentType(documentType);
 }
 
-async function initializeDocumentCatalog() {
+// Destination + visa type the dashboard should personalize for (null when unknown
+// or for anonymous visitors, in which case the backend serves the US F-1 catalog).
+function currentUserVisaScope() {
+    const country = (currentUser && currentUser.destination_country_code) || '';
+    const visa = (currentUser && currentUser.visa_type_key) || '';
+    return country ? { country, visa } : null;
+}
+
+async function initializeDocumentCatalog(scope = null) {
     try {
-        const response = await fetch(`${API_BASE}/api/documents/catalog`);
+        let url = `${API_BASE}/api/documents/catalog`;
+        if (scope && scope.country) {
+            const qs = new URLSearchParams({ country: scope.country });
+            if (scope.visa) qs.set('visa_type', scope.visa);
+            url += `?${qs.toString()}`;
+        }
+        const response = await fetch(url, { credentials: 'same-origin' });
         if (!response.ok) {
             throw new Error(`Catalog request failed: ${response.status}`);
         }
@@ -1002,6 +1016,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Restore token for same-tab refresh persistence and check authentication.
     restoreAuthToken();
     await checkAuth();
+    // Personalize the document/journey catalog to the signed-in student's destination.
+    if (currentUser) {
+        const scope = currentUserVisaScope();
+        if (scope) { try { await initializeDocumentCatalog(scope); } catch (e) { /* keep default */ } }
+    }
     loadSocialAuthButtons();
     showOAuthErrorIfPresent();
     loadNotifications();
@@ -1378,24 +1397,21 @@ async function checkUniversityByEmail(email) {
         const data = await response.json();
 
         if (data.is_valid && data.university_name) {
-            // Valid university email - autofill university
+            // Recognized university email — auto-fill the university as a convenience.
             universityInput.value = data.university_name;
-            messageEl.textContent = `✓ Valid university email domain: ${data.email_domain}`;
+            messageEl.textContent = `✓ Recognized university email: ${data.email_domain}`;
             messageEl.style.color = 'var(--success-color)';
             messageEl.style.display = 'block';
         } else {
-            // Invalid university email domain
+            // Open signup: any email is welcome. Don't block — university is optional
+            // and can be set later during onboarding or in profile settings.
             universityInput.value = '';
-            messageEl.textContent = `✗ This email domain (${data.email_domain}) is not recognized. Please use your university email address.`;
-            messageEl.style.color = 'var(--danger-color)';
-            messageEl.style.display = 'block';
+            messageEl.style.display = 'none';
         }
     } catch (error) {
         console.error('Error checking university:', error);
         universityInput.value = '';
-        messageEl.textContent = 'Unable to verify email domain. Please try again.';
-        messageEl.style.color = 'var(--text-secondary)';
-        messageEl.style.display = 'block';
+        messageEl.style.display = 'none';
     }
 }
 
@@ -2463,6 +2479,9 @@ function showRegister(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('registerSection').style.display = 'block';
 
+    // Always start on Step 1 (a prior OTP step may still be showing).
+    backToRegisterStep1();
+
     // Clear university field and validation message when showing register form
     const universityInput = document.getElementById('registerUniversity');
     const messageEl = document.getElementById('emailValidationMessage');
@@ -2476,6 +2495,8 @@ function showRegister(skipURLUpdate = false) {
         referralInput.value = getReferralCodeFromURL() || '';
     }
     if (consentInput) consentInput.checked = false;
+    const marketingConsentInput = document.getElementById('registerMarketingConsent');
+    if (marketingConsentInput) marketingConsentInput.checked = false;
     const registerPasswordInput = document.getElementById('registerPassword');
     if (registerPasswordInput) registerPasswordInput.value = '';
     updateRegisterPasswordHint();
@@ -2762,12 +2783,369 @@ function showMessages(skipURLUpdate = false) {
     showDashboard(skipURLUpdate);
 }
 
+// ===========================================================================
+// Onboarding wizard — runs once after sign-up/login. Destination country + visa
+// type are required (they drive the personalized journey); the rest is optional.
+// ===========================================================================
+let _onboardingCatalog = null;
+
+function needsOnboarding() {
+    return Boolean(currentUser && authToken && !currentUser.onboarding_completed_at);
+}
+
+function closeOnboardingWizard() {
+    const overlay = document.getElementById('onboardingOverlay');
+    if (overlay) overlay.remove();
+    document.body.style.overflow = '';
+}
+
+async function showOnboardingWizard() {
+    if (document.getElementById('onboardingOverlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'onboardingOverlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:11000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(5,6,15,.80);backdrop-filter:blur(6px);overflow-y:auto;';
+    overlay.innerHTML = `
+      <div style="width:min(560px,100%);background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.6);overflow:hidden;color:#0f172a">
+        <div style="padding:26px 28px 8px">
+          <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:700">Welcome to Rilono</div>
+          <h2 style="margin:8px 0 4px;font-size:24px;font-weight:800;color:#0f172a">Let's personalize your visa journey</h2>
+          <p style="margin:0;font-size:14px;color:#64748b">Tell us where you're headed. You can change this anytime in settings.</p>
+        </div>
+        <div id="onbBody" style="padding:18px 28px 4px">
+          <div style="text-align:center;color:#64748b;padding:30px 0">Loading options…</div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 28px 24px">
+          <span id="onbError" style="font-size:13px;color:#fb7185;min-height:18px"></span>
+          <button id="onbSubmit" disabled style="border:none;border-radius:12px;padding:12px 22px;font-size:15px;font-weight:700;color:#fff;background:linear-gradient(135deg,#6366f1,#a855f7);cursor:not-allowed;opacity:.5">Continue to dashboard</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+    try {
+        if (!_onboardingCatalog) {
+            const r = await fetch(`${API_BASE}/api/onboarding/catalog`, { credentials: 'same-origin' });
+            _onboardingCatalog = await r.json();
+        }
+        renderOnboardingForm();
+    } catch (e) {
+        const b = document.getElementById('onbBody');
+        if (b) b.innerHTML = '<div style="color:#fb7185;padding:20px 0">Could not load options. Please refresh and try again.</div>';
+    }
+}
+
+function renderOnboardingForm() {
+    const countries = (_onboardingCatalog && _onboardingCatalog.countries) || [];
+    const body = document.getElementById('onbBody');
+    if (!body) return;
+    const lbl = (t) => `<div style="font-size:12px;font-weight:700;color:#64748b;margin:0 0 6px">${t}</div>`;
+    const inp = 'width:100%;box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:11px;color:#0f172a;font-size:14px;padding:11px 12px';
+    const countryOpts = countries.map((c) => `<option value="${escapeHtml(c.code)}">${(c.flag_emoji || '')} ${escapeHtml(c.name)}</option>`).join('');
+    body.innerHTML = `
+      <div style="margin-bottom:14px">${lbl('Destination country <span style=\"color:#fb7185\">*</span>')}
+        <select id="onbCountry" style="${inp}"><option value="">Select a country…</option>${countryOpts}</select></div>
+      <div style="margin-bottom:14px">${lbl('Visa type <span style=\"color:#fb7185\">*</span>')}
+        <select id="onbVisa" style="${inp}" disabled><option value="">Select a country first…</option></select></div>
+      <details style="margin:6px 0 4px"><summary style="cursor:pointer;color:#9aa0ff;font-size:13px;font-weight:600">+ Add more details (optional)</summary>
+        <div style="margin-top:12px;display:grid;gap:12px">
+          <div>${lbl('Home country')}<input id="onbHome" placeholder="e.g. India" style="${inp}"></div>
+          <div>${lbl('Target university')}<input id="onbUni" placeholder="e.g. University of Toronto" style="${inp}"></div>
+          <div>${lbl('University email')}<input id="onbUniEmail" type="email" placeholder="you@university.edu" style="${inp}"></div>
+          <div>${lbl('Intake')}<select id="onbIntake" style="${inp}"><option value="">Select intake…</option></select></div>
+        </div></details>`;
+    const countrySel = document.getElementById('onbCountry');
+    const visaSel = document.getElementById('onbVisa');
+    const intakeSel = document.getElementById('onbIntake');
+    const submit = document.getElementById('onbSubmit');
+    const updateSubmit = () => {
+        const ok = Boolean(countrySel.value && visaSel.value);
+        submit.disabled = !ok;
+        submit.style.opacity = ok ? '1' : '.5';
+        submit.style.cursor = ok ? 'pointer' : 'not-allowed';
+    };
+    countrySel.addEventListener('change', () => {
+        const c = countries.find((x) => x.code === countrySel.value);
+        if (!c) {
+            visaSel.innerHTML = '<option value="">Select a country first…</option>';
+            visaSel.disabled = true;
+            intakeSel.innerHTML = '<option value="">Select intake…</option>';
+        } else {
+            visaSel.innerHTML = c.visa_types.map((v) => `<option value="${escapeHtml(v.key)}"${v.default ? ' selected' : ''}>${escapeHtml(v.label)}</option>`).join('');
+            visaSel.disabled = false;
+            intakeSel.innerHTML = '<option value="">Select intake…</option>' + (c.intakes || []).map((i) => `<option value="${escapeHtml(i)}">${escapeHtml(i)}</option>`).join('');
+        }
+        updateSubmit();
+    });
+    visaSel.addEventListener('change', updateSubmit);
+    submit.addEventListener('click', submitOnboarding);
+    updateSubmit();
+}
+
+async function submitOnboarding() {
+    const errEl = document.getElementById('onbError');
+    const submit = document.getElementById('onbSubmit');
+    const country = (document.getElementById('onbCountry') || {}).value || '';
+    const visa = (document.getElementById('onbVisa') || {}).value || '';
+    if (!country || !visa) { if (errEl) errEl.textContent = 'Please choose a country and visa type.'; return; }
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim() || null;
+    const payload = {
+        destination_country_code: country,
+        visa_type_key: visa,
+        home_country: val('onbHome'),
+        university: val('onbUni'),
+        university_email: val('onbUniEmail'),
+        intake: val('onbIntake'),
+    };
+    if (errEl) errEl.textContent = '';
+    if (submit) { submit.disabled = true; submit.textContent = 'Saving…'; }
+    try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (authToken && authToken !== COOKIE_AUTH_SENTINEL) headers['Authorization'] = `Bearer ${authToken}`;
+        const res = await fetch(`${API_BASE}/api/onboarding`, { method: 'POST', headers, credentials: 'same-origin', body: JSON.stringify(payload) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            if (errEl) errEl.textContent = (data && (data.detail || data.message)) || 'Could not save. Please try again.';
+            if (submit) { submit.disabled = false; submit.textContent = 'Continue to dashboard'; }
+            return;
+        }
+        currentUser = data;
+        closeOnboardingWizard();
+        const scope = currentUserVisaScope();
+        if (scope) { try { await initializeDocumentCatalog(scope); } catch (e) { /* keep default */ } }
+        showDashboard();
+    } catch (e) {
+        if (errEl) errEl.textContent = 'Network error. Please try again.';
+        if (submit) { submit.disabled = false; submit.textContent = 'Continue to dashboard'; }
+    }
+}
+
+// ===========================================================================
+// University shortlisting + AI recommendations (Phase 3)
+// ===========================================================================
+let _shortlistRecs = [];
+let _shortlistData = { entries: [], entitlement: null, destination_country: '' };
+
+async function shortlistFetch(path, opts) {
+    opts = opts || {};
+    const headers = opts.body ? { 'Content-Type': 'application/json' } : {};
+    if (authToken && authToken !== COOKIE_AUTH_SENTINEL) headers['Authorization'] = `Bearer ${authToken}`;
+    const res = await fetch(`${API_BASE}/api/shortlist${path}`, {
+        method: opts.method || 'GET',
+        headers,
+        credentials: 'same-origin',
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    let data = null; try { data = await res.json(); } catch (e) { /* no body */ }
+    if (!res.ok) {
+        const detail = data && (data.detail || data.message);
+        const err = new Error(typeof detail === 'string' ? detail : 'Request failed');
+        err.status = res.status; throw err;
+    }
+    return data;
+}
+
+async function loadUniversityShortlist() {
+    const c = document.getElementById('universitiesContent');
+    if (!c) return;
+    c.innerHTML = '<div style="padding:2rem;color:#64748b">Loading…</div>';
+    try {
+        _shortlistData = await shortlistFetch('');
+    } catch (e) {
+        c.innerHTML = `<div style="padding:2rem;color:#fb7185">Could not load universities: ${escapeHtml(e.message)}</div>`;
+        return;
+    }
+    renderUniversitiesUI();
+}
+
+function renderUniversitiesUI() {
+    const c = document.getElementById('universitiesContent');
+    if (!c) return;
+    const d = _shortlistData || {};
+    const ent = d.entitlement || {};
+    const dest = d.destination_country || 'your destination';
+    const recAvailable = d.recommend_available !== false;
+    const locked = Boolean(ent.locked);
+    const remainingTxt = ent.tier === 'pass' ? 'Unlimited with Visa Pass'
+        : (ent.limit === -1 ? 'Unlimited' : `${ent.remaining != null ? ent.remaining : (ent.limit || 0)} free left`);
+    const inp = 'width:100%;box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;color:#0f172a;font-size:14px;padding:10px 12px';
+    const lbl = (t) => `<div style="font-size:12px;font-weight:700;color:#64748b;margin:0 0 6px">${t}</div>`;
+    const card = (inner, extra) => `<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:18px 20px;${extra || ''}">${inner}</div>`;
+
+    const formCard = card(`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+          <div><div style="font-weight:800;font-size:16px;color:#0f172a">Rilono AI University Recommendations</div>
+          <div style="font-size:12.5px;color:#64748b">Tailored to ${escapeHtml(dest)} based on your profile.</div></div>
+          <span style="font-size:12px;font-weight:700;color:${locked ? '#fbbf24' : '#34d399'}">${escapeHtml(remainingTxt)}</span>
+        </div>
+        ${!recAvailable ? '<div style="color:#fbbf24;font-size:13px">Rilono AI recommendations are not available right now.</div>' : `
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+          <div style="grid-column:1/-1">${lbl('Field of study <span style="color:#fb7185">*</span>')}<input id="slField" placeholder="e.g. Computer Science" style="${inp}"></div>
+          <div>${lbl('Study level')}<select id="slLevel" style="${inp}"><option value="">Any</option><option>Bachelors</option><option>Masters</option><option>PhD</option><option>Diploma</option></select></div>
+          <div>${lbl('Annual budget')}<input id="slBudget" placeholder="e.g. $30,000" style="${inp}"></div>
+          <div>${lbl('GPA / grades')}<input id="slGpa" placeholder="e.g. 3.6/4.0" style="${inp}"></div>
+          <div>${lbl('Test scores')}<input id="slScores" placeholder="e.g. IELTS 7.5, GRE 320" style="${inp}"></div>
+          <div style="grid-column:1/-1">${lbl('Other preferences')}<input id="slPrefs" placeholder="e.g. scholarships, near a major city" style="${inp}"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap">
+          <button id="slRecBtn" onclick="getUniversityRecommendations()" style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;border:none;border-radius:10px;padding:10px 18px;font-weight:700;cursor:pointer">Get recommendations</button>
+          <span id="slRecMsg" style="font-size:13px;color:#fb7185"></span>
+        </div>
+        ${locked && ent.tier !== 'pass' ? '<div style="margin-top:10px;font-size:12.5px;color:#64748b">You have used your free recommendation. <a href="/visa-pass" style="color:#9aa0ff;font-weight:600">Get the Visa Pass</a> for unlimited.</div>' : ''}
+        `}
+    `);
+
+    const statusColors = { considering: '#64748b', applied: '#60a5fa', admitted: '#34d399', rejected: '#fb7185' };
+    const statusOpts = ['considering', 'applied', 'admitted', 'rejected'];
+    const savedRows = (d.entries || []).map((e) => {
+        const sel = statusOpts.map((s) => `<option value="${s}"${e.status === s ? ' selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('');
+        const meta = [e.program, e.location].filter(Boolean).join(' · ');
+        return `<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid #f1f5f9">
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:700;color:#0f172a">${escapeHtml(e.university_name)}${e.source === 'ai' ? ' <span style="font-size:10px;background:rgba(124,58,237,.12);color:#6d28d9;padding:2px 6px;border-radius:6px;margin-left:6px">AI</span>' : ''}</div>
+              <div style="font-size:12.5px;color:#64748b">${escapeHtml(meta) || '—'}${e.est_tuition ? ' · ' + escapeHtml(e.est_tuition) : ''}</div>
+            </div>
+            <select onchange="setShortlistStatus(${e.id}, this.value)" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;color:${statusColors[e.status] || '#0f172a'};font-size:12.5px;padding:6px 8px">${sel}</select>
+            <button onclick="deleteShortlistUniversity(${e.id})" title="Remove" style="background:none;border:none;color:#fb7185;cursor:pointer;font-size:18px;line-height:1">&times;</button>
+          </div>`;
+    }).join('');
+    const savedCard = card(`
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-weight:800;font-size:16px;color:#0f172a">Your shortlist</div>
+          <span style="font-size:12.5px;color:#64748b">${(d.entries || []).length} saved</span>
+        </div>
+        <div style="display:flex;gap:8px;margin:10px 0 4px">
+          <input id="slManualName" placeholder="Add a university manually…" style="${inp}">
+          <button onclick="addManualUniversity()" style="background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0;border-radius:10px;padding:0 16px;font-weight:600;cursor:pointer">Add</button>
+        </div>
+        ${savedRows || '<div style="color:#64748b;font-size:13px;padding:10px 0">No universities saved yet. Use Rilono AI recommendations above or add one manually.</div>'}
+    `, 'margin-top:18px');
+
+    c.innerHTML = formCard + '<div id="slRecsContainer" style="margin-top:18px"></div>' + savedCard;
+    renderShortlistRecs();
+}
+
+function renderShortlistRecs() {
+    const cont = document.getElementById('slRecsContainer');
+    if (!cont) return;
+    if (!_shortlistRecs.length) { cont.innerHTML = ''; return; }
+    const diffColor = { reach: '#fb7185', match: '#60a5fa', safety: '#34d399' };
+    const RANK_COUNTRY_NAMES = { US: 'the US', UK: 'the UK', CA: 'Canada', AU: 'Australia' };
+    const rankCountryLabel = RANK_COUNTRY_NAMES[(currentUser && currentUser.destination_country_code) || 'US'] || 'country';
+    const rankRow = (u) => {
+        const parts = [];
+        if (u.qs_world_rank) parts.push(`QS World ${escapeHtml(u.qs_world_rank)}`);
+        if (u.country_rank) parts.push(`#${escapeHtml(u.country_rank)} in ${rankCountryLabel}`);
+        return parts.length
+            ? `<div style="font-size:11.5px;color:#b45309;font-weight:600;margin:0 0 7px">🏆 ${parts.join(' · ')}</div>`
+            : '';
+    };
+    cont.innerHTML = '<div style="font-weight:700;color:#0f172a;margin:6px 0 10px">Recommended for you</div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">'
+      + _shortlistRecs.map((u, i) => `
+        <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:14px 16px">
+          <div style="display:flex;justify-content:space-between;gap:8px">
+            <div style="font-weight:700;color:#0f172a">${escapeHtml(u.name)}</div>
+            <span style="font-size:10.5px;font-weight:700;text-transform:uppercase;color:${diffColor[u.admission_difficulty] || '#64748b'}">${escapeHtml(u.admission_difficulty || '')}</span>
+          </div>
+          <div style="font-size:12.5px;color:#64748b;margin:2px 0 6px">${escapeHtml([u.program, u.location].filter(Boolean).join(' · '))}</div>
+          ${rankRow(u)}
+          ${u.why_recommended ? `<div style="font-size:12.5px;color:#334155;margin-bottom:6px">${escapeHtml(u.why_recommended)}</div>` : ''}
+          ${u.estimated_annual_tuition ? `<div style="font-size:12px;color:#64748b">💰 ${escapeHtml(u.estimated_annual_tuition)}</div>` : ''}
+          ${(u.key_requirements && u.key_requirements.length) ? `<ul style="margin:6px 0 0;padding-left:16px;color:#64748b;font-size:12px">${u.key_requirements.map((r) => `<li>${escapeHtml(r)}</li>`).join('')}</ul>` : ''}
+          <button onclick="saveRecommendedUniversity(${i})" style="margin-top:10px;width:100%;background:#f1f5f9;color:#0f172a;border:1px solid #e2e8f0;border-radius:9px;padding:8px;font-weight:600;cursor:pointer">+ Save to shortlist</button>
+        </div>`).join('') + '</div>';
+}
+
+async function getUniversityRecommendations() {
+    const btn = document.getElementById('slRecBtn');
+    const msg = document.getElementById('slRecMsg');
+    const field = ((document.getElementById('slField') || {}).value || '').trim();
+    if (!field) { if (msg) msg.textContent = 'Enter your field of study.'; return; }
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim() || null;
+    const body = {
+        field_of_study: field, level: val('slLevel'), budget: val('slBudget'),
+        gpa: val('slGpa'), test_scores: val('slScores'), preferences: val('slPrefs'), max_results: 6,
+    };
+    if (msg) msg.textContent = '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Finding universities…'; }
+    try {
+        const res = await shortlistFetch('/recommend', { method: 'POST', body });
+        _shortlistRecs = res.universities || [];
+        if (res.entitlement) _shortlistData.entitlement = res.entitlement;
+        renderShortlistRecs();
+        if (!_shortlistRecs.length && msg) msg.textContent = 'No matches — try adjusting your inputs.';
+    } catch (e) {
+        if (msg) msg.textContent = e.status === 402 ? 'Free limit reached — get the Visa Pass for unlimited.' : (e.message || 'Could not get recommendations.');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Get recommendations'; }
+    }
+}
+
+async function saveRecommendedUniversity(idx) {
+    const u = _shortlistRecs[idx];
+    if (!u) return;
+    try {
+        await shortlistFetch('', { method: 'POST', body: {
+            university_name: u.name, program: u.program, location: u.location,
+            est_tuition: u.estimated_annual_tuition, rationale: u.why_recommended, source: 'ai',
+        }});
+        showMessage('Added to your shortlist.', 'success');
+        await loadUniversityShortlist();
+    } catch (e) { showMessage(e.message || 'Could not save university.', 'error'); }
+}
+
+async function addManualUniversity() {
+    const inp = document.getElementById('slManualName');
+    const name = ((inp && inp.value) || '').trim();
+    if (!name) return;
+    try {
+        await shortlistFetch('', { method: 'POST', body: { university_name: name, source: 'manual' } });
+        await loadUniversityShortlist();
+    } catch (e) { showMessage(e.message || 'Could not add university.', 'error'); }
+}
+
+async function setShortlistStatus(id, statusVal) {
+    try {
+        await shortlistFetch(`/${id}`, { method: 'PATCH', body: { status: statusVal } });
+        const e = (_shortlistData.entries || []).find((x) => x.id === id);
+        if (e) e.status = statusVal;
+    } catch (err) { showMessage(err.message || 'Could not update status.', 'error'); }
+}
+
+async function deleteShortlistUniversity(id) {
+    if (!confirm('Remove this university from your shortlist?')) return;
+    try {
+        await shortlistFetch(`/${id}`, { method: 'DELETE' });
+        await loadUniversityShortlist();
+    } catch (e) { showMessage(e.message || 'Could not remove university.', 'error'); }
+}
+
+// Per-destination heading for the dashboard journey tracker.
+const JOURNEY_HEADINGS = {
+    US: '🛂 Your F-1 Visa Journey',
+    UK: '🛂 Your UK Student Visa Journey',
+    CA: '🛂 Your Study Permit Journey',
+    AU: '🛂 Your Student Visa Journey',
+};
+function updateVisaJourneyHeading() {
+    const el = document.getElementById('visaJourneyHeading');
+    if (!el) return;
+    const code = (currentUser && currentUser.destination_country_code) || 'US';
+    el.textContent = JOURNEY_HEADINGS[code] || '🛂 Your Visa Journey';
+}
+
 function showDashboard(skipURLUpdate = false) {
     if (!currentUser) {
         showMessage('Please login to view dashboard', 'error');
         showLogin();
         return;
     }
+    if (needsOnboarding()) {
+        showOnboardingWizard();
+        return;
+    }
+    updateVisaJourneyHeading();
     hideAllSections();
     document.getElementById('dashboardSection').style.display = 'block';
     const navbar = document.querySelector('.navbar');
@@ -3127,6 +3505,9 @@ function updateSubscriptionUI() {
     const profileUsagePrepEl = document.getElementById('profileSubscriptionUsagePrep');
     const profileUsageMockEl = document.getElementById('profileSubscriptionUsageMock');
     const profileEnableEmailButton = document.getElementById('profileEmailNotificationsEnableBtn');
+    const profileMarketingCardEl = document.getElementById('profileMarketingEmailsCard');
+    const profileMarketingTextEl = document.getElementById('profileMarketingEmailsText');
+    const profileMarketingToggleBtn = document.getElementById('profileMarketingEmailsToggleBtn');
     const copilotInstallCtaWrap = document.getElementById('copilotInstallCtaWrap');
     const copilotFreeUpgradePrompt = document.getElementById('copilotFreeUpgradePrompt');
     const copilotUpgradeProBtn = document.getElementById('copilotUpgradeProBtn');
@@ -3348,6 +3729,7 @@ function updateSubscriptionUI() {
     if (profileEnableEmailButton) {
         profileEnableEmailButton.disabled = false;
     }
+    renderMarketingEmailPreference();
     if (profileUsageAiEl) profileUsageAiEl.textContent = formatUsageText(currentSubscription.ai_messages_used, currentSubscription.ai_messages_limit, 'AI');
     if (profileUsageChatUploadsEl) {
         profileUsageChatUploadsEl.textContent = formatWindowUsageText(
@@ -4068,6 +4450,66 @@ async function handleEnableEmailNotifications() {
     }
 }
 
+function renderMarketingEmailPreference() {
+    const card = document.getElementById('profileMarketingEmailsCard');
+    if (!card) return;
+    if (!currentUser) {
+        card.style.display = 'none';
+        return;
+    }
+    card.style.display = 'block';
+    const subscribed = currentUser.marketing_emails_consent === true;
+    const text = document.getElementById('profileMarketingEmailsText');
+    const btn = document.getElementById('profileMarketingEmailsToggleBtn');
+    if (text) {
+        text.textContent = subscribed
+            ? "You're subscribed to product tips, visa updates and occasional offers. You can unsubscribe anytime."
+            : "Get product tips, visa updates and occasional offers by email. You can unsubscribe anytime.";
+    }
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = subscribed ? 'Unsubscribe' : 'Subscribe';
+    }
+}
+
+async function handleToggleMarketingEmails() {
+    if (!authToken) {
+        showLogin();
+        return;
+    }
+    const btn = document.getElementById('profileMarketingEmailsToggleBtn');
+    const currentlySubscribed = !!(currentUser && currentUser.marketing_emails_consent === true);
+    const nextEnabled = !currentlySubscribed;
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = nextEnabled ? 'Subscribing...' : 'Unsubscribing...';
+    }
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/marketing-emails/preference`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ enabled: nextEnabled })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            showMessage(data.detail || 'Could not update your marketing email preference.', 'error');
+            return;
+        }
+        if (currentUser) {
+            currentUser.marketing_emails_consent = data.marketing_emails_consent === true;
+        }
+        showMessage(nextEnabled ? 'Subscribed to marketing emails.' : 'Unsubscribed from marketing emails.', 'success');
+    } catch (error) {
+        console.error('Marketing email preference update failed:', error);
+        showMessage('Could not update your marketing email preference. Please try again.', 'error');
+    } finally {
+        renderMarketingEmailPreference();
+    }
+}
+
 async function consumeInterviewSession(sessionType) {
     if (!authToken) {
         showLogin();
@@ -4785,7 +5227,7 @@ function renderMockInterviewModeUI() {
     } else {
         modeBadge.textContent = 'Mode: not selected';
         modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
-        guide.textContent = 'Click Start Interview, choose Voice or Chat, then proceed question by question. The AI officer closes the interview when complete.';
+        guide.textContent = 'Click Start Interview, choose Voice or Chat, then proceed question by question. The Rilono AI officer closes the interview when complete.';
     }
 
     if (state.active && state.channel === 'voice' && state.micPermission === 'unknown' && !state.micPermissionStatus && !state.micPermissionCheckPromise) {
@@ -6582,6 +7024,8 @@ function switchDashboardTab(tabName) {
         switchVisaSubTab(currentVisaSubTab);
     } else if (tabName === 'records') {
         initializeRilonoAiChat();
+    } else if (tabName === 'universities') {
+        loadUniversityShortlist();
     } else if (tabName === 'news') {
         loadF1VisaNews();
     } else if (tabName === 'admin') {
@@ -7298,16 +7742,13 @@ async function handleLogin(e) {
                 }
             }
 
-            // Check if it's an email verification error
+            // Unverified account → route into the OTP step with a fresh code.
             if (data.detail && data.detail.includes('verify your email')) {
                 const email = document.getElementById('loginEmail').value.trim();
-                showMessage(errorMessage, 'error');
-                // Show option to resend verification
-                setTimeout(() => {
-                    if (confirm('Would you like to resend the verification email?')) {
-                        resendVerificationEmail(email);
-                    }
-                }, 2000);
+                showMessage('Your email needs verifying — we just sent you a 6-digit code.', 'error');
+                showRegister();
+                showRegisterOtpStep(email);
+                resendOtp();
             } else {
                 showMessage(errorMessage, 'error');
             }
@@ -7334,6 +7775,9 @@ async function handleRegister(e) {
         return value === '' ? null : value;
     };
 
+    const marketingInput = document.getElementById('registerMarketingConsent');
+    const marketingEmailsConsent = Boolean(marketingInput && marketingInput.checked);
+
     const userData = {
         email: getValue('registerEmail'),
         password: getValue('registerPassword'),
@@ -7341,7 +7785,8 @@ async function handleRegister(e) {
         university: getValue('registerUniversity'),
         current_residence_country: getValue('registerCountry'),
         referral_code: getValue('registerReferralCode'),
-        accepted_terms_privacy: acceptedTermsPrivacy
+        accepted_terms_privacy: acceptedTermsPrivacy,
+        marketing_emails_consent: marketingEmailsConsent
         // Username is optional - will be auto-generated from email on backend
     };
     const confirmPassword = getValue('registerPasswordConfirm');
@@ -7362,14 +7807,8 @@ async function handleRegister(e) {
         return;
     }
 
-    // Validate that university email domain is valid
-    const universityInput = document.getElementById('registerUniversity');
-    if (!universityInput.value.trim()) {
-        showMessage('Please use a valid university email address. The email domain must be from a recognized university.', 'error');
-        // Re-check the email to show validation message
-        await checkUniversityByEmail(userData.email);
-        return;
-    }
+    // Open signup: a university email is no longer required (university is optional and
+    // collected later via onboarding / profile). Any valid email may register.
 
     const registerPasswordErrors = getPasswordValidationErrors(userData.password, userData.email || '');
     if (registerPasswordErrors.length > 0) {
@@ -7428,9 +7867,8 @@ async function handleRegister(e) {
 
         if (response.ok) {
             const email = userData.email;
-            showMessage(`Registration successful! Please verify your email. The link expires in ${expiryHours} hours.`, 'success');
-            document.getElementById('registerForm').reset();
-            // Reset Turnstile widget
+            showMessage('Account created — check your email for a 6-digit code.', 'success');
+            // Reset Turnstile widget (single-use token)
             if (window.turnstile) {
                 const registerWidget = document.getElementById('turnstile-register');
                 if (registerWidget) {
@@ -7441,7 +7879,8 @@ async function handleRegister(e) {
                     }
                 }
             }
-            showVerification(email, expiryHours);
+            // Step 2: collect the OTP, then auto-login into the onboarding tiles.
+            showRegisterOtpStep(email);
         } else {
             // Handle different error formats
             let errorMessage = 'Registration failed';
@@ -7458,6 +7897,105 @@ async function handleRegister(e) {
     } catch (error) {
         console.error('Registration error:', error);
         showMessage('An error occurred. Please check your connection and try again.', 'error');
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Stepped signup: Step 2 (email OTP) → auto-login → onboarding tiles
+// ---------------------------------------------------------------------------
+function showRegisterOtpStep(email) {
+    window.__pendingOtpEmail = (email || '').trim();
+    const form = document.getElementById('registerForm');
+    const otpStep = document.getElementById('registerOtpStep');
+    const social = document.getElementById('socialAuthRegister');
+    const divider = document.getElementById('socialAuthRegisterDivider');
+    const loginSwitch = document.getElementById('registerLoginSwitch');
+    const target = document.getElementById('otpEmailTarget');
+    if (form) form.style.display = 'none';
+    if (social) social.style.display = 'none';
+    if (divider) divider.style.display = 'none';
+    if (loginSwitch) loginSwitch.style.display = 'none';
+    if (otpStep) otpStep.style.display = 'block';
+    if (target) target.textContent = window.__pendingOtpEmail;
+    const otpInput = document.getElementById('registerOtpInput');
+    const otpError = document.getElementById('otpError');
+    if (otpError) otpError.style.display = 'none';
+    if (otpInput) { otpInput.value = ''; setTimeout(() => otpInput.focus(), 60); }
+}
+
+function backToRegisterStep1() {
+    const form = document.getElementById('registerForm');
+    const otpStep = document.getElementById('registerOtpStep');
+    const social = document.getElementById('socialAuthRegister');
+    const divider = document.getElementById('socialAuthRegisterDivider');
+    const loginSwitch = document.getElementById('registerLoginSwitch');
+    if (otpStep) otpStep.style.display = 'none';
+    if (form) form.style.display = '';
+    const hasSocial = social && social.children.length > 0;
+    if (social) social.style.display = hasSocial ? '' : 'none';
+    if (divider) divider.style.display = hasSocial ? '' : 'none';
+    if (loginSwitch) loginSwitch.style.display = '';
+}
+
+async function handleVerifyOtp() {
+    const otpInput = document.getElementById('registerOtpInput');
+    const otpError = document.getElementById('otpError');
+    const btn = document.getElementById('verifyOtpBtn');
+    const email = (window.__pendingOtpEmail || '').trim();
+    const code = ((otpInput && otpInput.value) || '').replace(/\D/g, '');
+    const showOtpError = (msg) => { if (otpError) { otpError.textContent = msg; otpError.style.display = 'block'; } };
+    if (otpError) otpError.style.display = 'none';
+    if (!email) { showOtpError('Something went wrong — please go back and re-enter your email.'); return; }
+    if (code.length !== 6) { showOtpError('Enter the 6-digit code from your email.'); return; }
+
+    if (btn) { btn.disabled = true; btn.textContent = 'Verifying...'; }
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/verify-otp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ email, code }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const detail = data && data.detail;
+            showOtpError(typeof detail === 'string' ? detail : 'Invalid or expired code.');
+            return;
+        }
+        // Server set the session cookie; load the user and head into onboarding.
+        authToken = COOKIE_AUTH_SENTINEL;
+        persistAuthToken(authToken);
+        let ok = await checkAuth();
+        if (!ok && data.access_token) {
+            authToken = data.access_token;
+            persistAuthToken(authToken);
+            ok = await checkAuth();
+        }
+        if (!ok) { showOtpError('Verified, but sign-in failed. Please try logging in.'); return; }
+        showMessage('Email verified — welcome to Rilono!', 'success');
+        if (otpInput) otpInput.value = '';
+        // Dashboard render triggers the onboarding wizard (onboarding not yet completed).
+        showDashboard();
+    } catch (e) {
+        console.error('OTP verify error:', e);
+        showOtpError('Could not verify right now. Please try again.');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Verify & continue'; }
+    }
+}
+
+async function resendOtp() {
+    const email = (window.__pendingOtpEmail || '').trim();
+    if (!email) return;
+    try {
+        await fetch(`${API_BASE}/api/auth/resend-otp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email }),
+        });
+        showMessage('A new code is on its way.', 'success');
+    } catch (e) {
+        showMessage('Could not resend the code. Please try again.', 'error');
     }
 }
 

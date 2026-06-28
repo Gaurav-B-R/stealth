@@ -8,20 +8,22 @@
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   <style>
     :root{
-      --bg:#0b1020; --card:#141a2e; --card-2:#1b2340; --border:#262f4d;
-      --text:#eef1f8; --muted:#9aa4c2; --brand:#6366f1; --brand-2:#8b5cf6;
-      --green:#10b981; --amber:#f59e0b; --red:#ef4444; --radius:16px;
+      --bg:#f6f8fc; --card:#ffffff; --card-2:#f1f5f9; --border:#e2e8f0;
+      --text:#0f172a; --muted:#64748b; --brand:#6366f1; --brand-2:#8b5cf6;
+      --green:#059669; --amber:#b45309; --red:#dc2626; --radius:16px;
     }
     *{box-sizing:border-box}
     body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-      background:radial-gradient(1200px 600px at 80% -10%, #1b2350 0%, var(--bg) 55%);color:var(--text);min-height:100vh}
+      background:radial-gradient(1200px 600px at 80% -10%, #eef2fb 0%, var(--bg) 55%);color:var(--text);min-height:100vh}
     a{color:inherit}
     .wrap{max-width:920px;margin:0 auto;padding:24px 18px 80px}
     .top{display:flex;align-items:center;gap:12px;margin-bottom:22px}
     .top img{width:34px;height:34px;border-radius:8px}
     .top b{font-size:18px;letter-spacing:.2px}
+    .back-link{display:inline-flex;align-items:center;gap:6px;color:var(--muted);text-decoration:none;font-size:13px;font-weight:600;padding:6px 11px;border:1px solid var(--border);border-radius:9px;transition:color .15s,border-color .15s}
+    .back-link:hover{color:#0f172a;border-color:#cbd5e1}
     .pill{margin-left:auto;font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px;border:1px solid var(--border)}
-    .pill.free{background:#1b2340;color:var(--muted)}
+    .pill.free{background:#f1f5f9;color:var(--muted)}
     .pill.pass{background:rgba(16,185,129,.14);color:var(--green);border-color:rgba(16,185,129,.3)}
     .hero{background:linear-gradient(135deg, rgba(99,102,241,.16), rgba(139,92,246,.10));
       border:1px solid var(--border);border-radius:var(--radius);padding:26px;margin-bottom:22px}
@@ -33,39 +35,39 @@
     .card h3{margin:0 0 6px;font-size:14px}
     .quota-num{font-size:26px;font-weight:800;margin:2px 0}
     .quota-sub{font-size:12px;color:var(--muted)}
-    .bar{height:6px;border-radius:99px;background:#222b49;margin-top:10px;overflow:hidden}
+    .bar{height:6px;border-radius:99px;background:#e8edf6;margin-top:10px;overflow:hidden}
     .bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--brand),var(--brand-2))}
     .locked{color:var(--amber);font-weight:700}
     .section-title{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:26px 0 12px;font-weight:700}
     .btn{appearance:none;border:0;cursor:pointer;font-weight:700;border-radius:10px;padding:11px 16px;font-size:14px;
-      background:#222b49;color:var(--text);transition:filter .15s}
+      background:#e8edf6;color:var(--text);transition:filter .15s}
     .btn:hover{filter:brightness(1.12)}
     .btn-primary{background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff}
     .btn-block{width:100%}
     .btn:disabled{opacity:.6;cursor:not-allowed}
-    .pass-card{background:linear-gradient(135deg,#1c2444,#221a45);border:1px solid #34407a}
+    .pass-card{background:linear-gradient(135deg,#eef2fb,#f4f0fc);border:1px solid #d8def0}
     .price{font-size:38px;font-weight:900;line-height:1}
     .price small{font-size:14px;color:var(--muted);font-weight:600}
     .benefits{list-style:none;padding:0;margin:14px 0 18px}
     .benefits li{padding:6px 0;font-size:14px;display:flex;gap:9px;align-items:flex-start}
     .benefits li::before{content:"✓";color:var(--green);font-weight:900}
-    .scan-drop{border:1.5px dashed var(--border);border-radius:12px;padding:18px;text-align:center;background:#10162a}
+    .scan-drop{border:1.5px dashed var(--border);border-radius:12px;padding:18px;text-align:center;background:#f8fafc}
     .flag{border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:10px;background:var(--card-2)}
     .flag.locked{filter:blur(.3px);opacity:.92;border-style:dashed}
     .flag .sev{font-size:11px;font-weight:800;text-transform:uppercase;padding:3px 8px;border-radius:99px}
-    .sev.high{background:rgba(239,68,68,.16);color:#fca5a5}
-    .sev.medium{background:rgba(245,158,11,.16);color:#fcd34d}
-    .sev.low{background:rgba(16,185,129,.16);color:#86efac}
+    .sev.high{background:rgba(239,68,68,.16);color:#b91c1c}
+    .sev.medium{background:rgba(245,158,11,.16);color:#b45309}
+    .sev.low{background:rgba(16,185,129,.16);color:#047857}
     .flag h4{margin:8px 0 4px;font-size:15px}
     .flag p{margin:0;font-size:13px;color:var(--muted);line-height:1.5}
     .unlock-banner{margin-top:12px;padding:12px 14px;border-radius:10px;background:rgba(245,158,11,.1);
-      border:1px solid rgba(245,158,11,.3);color:#fcd34d;font-size:13px;font-weight:600;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+      border:1px solid rgba(245,158,11,.3);color:#b45309;font-size:13px;font-weight:600;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
     .muted{color:var(--muted)}
-    .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#1b2340;border:1px solid var(--border);
+    .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#f1f5f9;border:1px solid var(--border);
       padding:12px 18px;border-radius:12px;font-size:14px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none;z-index:50}
     .toast.show{opacity:1}
-    .toast.error{border-color:rgba(239,68,68,.4);color:#fca5a5}
-    .toast.success{border-color:rgba(16,185,129,.4);color:#86efac}
+    .toast.error{border-color:rgba(239,68,68,.4);color:#b91c1c}
+    .toast.success{border-color:rgba(16,185,129,.4);color:#047857}
     .center-load{padding:70px;text-align:center;color:var(--muted)}
     .spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;
       display:inline-block;animation:spin .7s linear infinite;vertical-align:-2px}
@@ -82,6 +84,7 @@
 <body>
   <div class="wrap">
     <div class="top">
+      <a href="/dashboard" class="back-link" aria-label="Back to dashboard">← Dashboard</a>
       <img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'" />
       <b>Rilono · Visa Success Pass</b>
       <span class="pill free" id="statusPill">…</span>
@@ -167,7 +170,7 @@
       const f = e.features;
       const hero = isPass
         ? `<div class="hero"><h1>🎉 Your Visa Success Pass is active</h1>
-            <p>${e.pass.days_left} days left. Unlimited document audits, unlimited DS-160 auto-fills, and ${f.voice_interview.remaining} of ${f.voice_interview.limit} AI voice mock interviews remaining.</p></div>`
+            <p>${e.pass.days_left} days left. Unlimited document audits, unlimited DS-160 auto-fills, and ${f.voice_interview.remaining} of ${f.voice_interview.limit} Rilono AI voice mock interviews remaining.</p></div>`
         : `<div class="hero"><h1>Pass your visa interview on the first try</h1>
             <p>You're on the free plan: ${f.ds160_autofill.remaining} DS-160 auto-fills and ${f.red_flag_scan.remaining} red-flag scan left.
             Unlock everything with a one-time <b>${esc(e.pass.price_display)}</b> Visa Success Pass — valid ${e.pass.duration_days} days.</p></div>`;
@@ -212,7 +215,7 @@
         <div class="section-title">Other tools</div>
         <div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
           <button class="btn" id="ds160Btn">DS-160 auto-fill</button>
-          <button class="btn" id="voiceBtn">Start AI voice mock interview</button>
+          <button class="btn" id="voiceBtn">Start Rilono AI voice mock interview</button>
           <span class="muted" style="font-size:12px">Free: ${f.ds160_autofill.limit} auto-fills · voice interviews are pass-only.</span>
         </div>`;
 

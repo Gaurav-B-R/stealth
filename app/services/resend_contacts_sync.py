@@ -322,6 +322,9 @@ def _load_eligible_users(limit: int = 0) -> list[models.User]:
                 models.User.is_active.is_(True),
                 models.User.email_verified.is_(True),
                 models.User.email_notifications_enabled.is_(True),
+                # Only users who explicitly opted in to marketing emails at signup
+                # (or later in settings) are synced to the marketing audience.
+                models.User.marketing_emails_consent.is_(True),
                 models.User.email.isnot(None),
             )
             .order_by(models.User.id.asc())

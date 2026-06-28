@@ -807,6 +807,25 @@ def b2c_revenue_analytics_admin(
     return visa_pass.build_revenue_analytics(db)
 
 
+@router.get("/b2c/accounts")
+def b2c_account_cost_profit_admin(
+    request: Request,
+    limit: int = Query(100, ge=1, le=500),
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Per-account B2C economics: each student's attributed Gemini cost vs pass revenue = profit."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.b2c.accounts",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    return visa_pass.build_account_cost_profit(db, limit=limit)
+
+
 @router.post("/enterprise/calendar-reminders/run")
 def run_enterprise_calendar_reminders_admin(
     request: Request,

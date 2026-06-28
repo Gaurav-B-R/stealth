@@ -9,6 +9,7 @@ against the actual GCP/AI Studio invoice for billing.
 
 import os
 import logging
+import contextvars
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, timedelta
 
@@ -18,6 +19,34 @@ from app.database import SessionLocal
 from app import models
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Per-account attribution context
+# ---------------------------------------------------------------------------
+# A request-scoped marker of WHO is incurring AI cost, so every Gemini call can be
+# attributed to a user (B2C) or organization (B2B). Set by middleware/endpoints;
+# read by record_gemini_usage. Falls back to None (cost still recorded, unattributed).
+_usage_account: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("rilono_usage_account", default=None)
+
+
+def set_usage_account(*, email: str | None = None, user_id: int | None = None,
+                      organization_id: int | None = None) -> "contextvars.Token":
+    """Mark the current request's billing account. Returns a token for reset_usage_account()."""
+    return _usage_account.set({"email": email, "user_id": user_id, "organization_id": organization_id})
+
+
+def reset_usage_account(token: "contextvars.Token | None" = None) -> None:
+    try:
+        if token is not None:
+            _usage_account.reset(token)
+        else:
+            _usage_account.set(None)
+    except Exception:
+        pass
+
+
+def current_usage_account() -> dict | None:
+    return _usage_account.get()
 
 # Approx Gemini API pricing in USD per 1,000,000 tokens (input, output).
 # Editable here or via env (GEMINI_PRICE_<input|output>_PER_M for the default rate).
@@ -67,8 +96,26 @@ def _extract_tokens(response) -> tuple[int, int, int]:
     return pt, ot, tt
 
 
-def record_gemini_usage(source: str, model_name: str, response) -> None:
-    """Best-effort: log one Gemini call's token usage + estimated cost. Never raises."""
+def _resolve_account(db, *, user_id, organization_id) -> tuple[int | None, int | None]:
+    """Resolve (user_id, organization_id) from explicit args first, then the request
+    context. If only an email is known in context, look up the user id."""
+    if user_id is None and organization_id is None:
+        ctx = _usage_account.get() or {}
+        user_id = ctx.get("user_id")
+        organization_id = ctx.get("organization_id")
+        if user_id is None and ctx.get("email"):
+            try:
+                row = db.query(models.User.id).filter(models.User.email == ctx["email"]).first()
+                user_id = row[0] if row else None
+            except Exception:
+                user_id = None
+    return user_id, organization_id
+
+
+def record_gemini_usage(source: str, model_name: str, response, *,
+                        user_id: int | None = None, organization_id: int | None = None) -> None:
+    """Best-effort: log one Gemini call's token usage + estimated cost, attributed to the
+    account that incurred it (explicit args, else the request context). Never raises."""
     try:
         pt, ot, tt = _extract_tokens(response)
         if tt <= 0:
@@ -76,9 +123,11 @@ def record_gemini_usage(source: str, model_name: str, response) -> None:
         cost = estimate_cost(model_name, pt, ot)
         db = SessionLocal()
         try:
+            uid, oid = _resolve_account(db, user_id=user_id, organization_id=organization_id)
             db.add(models.GeminiUsageEvent(
                 source=str(source or "unknown")[:64],
                 model=str(model_name or "unknown")[:80],
+                user_id=uid, organization_id=oid,
                 prompt_tokens=pt, output_tokens=ot, total_tokens=tt,
                 estimated_cost_usd=cost,
             ))

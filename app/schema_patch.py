@@ -55,6 +55,13 @@ def ensure_user_legal_consent_column():
         if "email_notifications_unsubscribe_reason" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN email_notifications_unsubscribe_reason TEXT"))
 
+        if "marketing_emails_consent" not in columns:
+            conn.execute(
+                text("ALTER TABLE users ADD COLUMN marketing_emails_consent BOOLEAN NOT NULL DEFAULT FALSE")
+            )
+        if "marketing_emails_consent_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN marketing_emails_consent_at TIMESTAMP"))
+
         # Social login (Google/Microsoft/Apple) — which provider created/owns the account.
         if "auth_provider" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN auth_provider VARCHAR"))
@@ -84,6 +91,8 @@ def ensure_subscription_usage_columns():
             conn.execute(text("ALTER TABLE subscriptions ADD COLUMN red_flag_scans_used INTEGER NOT NULL DEFAULT 0"))
         if "pass_voice_interviews_used" not in columns:
             conn.execute(text("ALTER TABLE subscriptions ADD COLUMN pass_voice_interviews_used INTEGER NOT NULL DEFAULT 0"))
+        if "university_recommendations_used" not in columns:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN university_recommendations_used INTEGER NOT NULL DEFAULT 0"))
 
 
 def ensure_document_catalog_columns():
@@ -754,33 +763,41 @@ def ensure_enterprise_calendar_table():
     pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
     bool_false = "0" if is_sqlite else "FALSE"
     with engine.begin() as conn:
-        if _table_exists(conn, "enterprise_calendar_events"):
-            return
-        conn.execute(text(f"""
-            CREATE TABLE enterprise_calendar_events (
-                id {pk},
-                organization_id INTEGER NOT NULL,
-                client_id INTEGER,
-                title VARCHAR NOT NULL,
-                notes TEXT,
-                event_type VARCHAR NOT NULL DEFAULT 'reminder',
-                event_date DATE NOT NULL,
-                event_time VARCHAR,
-                is_done BOOLEAN NOT NULL DEFAULT {bool_false},
-                created_by_user_id INTEGER,
-                created_by_name VARCHAR,
-                created_at {ts} DEFAULT {now_default} NOT NULL,
-                updated_at {ts}
-            )
-        """))
-        for stmt in (
-            "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_organization_id ON enterprise_calendar_events(organization_id)",
-            "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_client_id ON enterprise_calendar_events(client_id)",
-            "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_event_date ON enterprise_calendar_events(event_date)",
-            "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_is_done ON enterprise_calendar_events(is_done)",
-            "CREATE INDEX IF NOT EXISTS ix_ent_calendar_org_date ON enterprise_calendar_events(organization_id, event_date)",
-        ):
-            conn.execute(text(stmt))
+        if not _table_exists(conn, "enterprise_calendar_events"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_calendar_events (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER,
+                    title VARCHAR NOT NULL,
+                    notes TEXT,
+                    event_type VARCHAR NOT NULL DEFAULT 'reminder',
+                    event_date DATE NOT NULL,
+                    event_time VARCHAR,
+                    is_done BOOLEAN NOT NULL DEFAULT {bool_false},
+                    notify_client BOOLEAN NOT NULL DEFAULT {bool_false},
+                    client_notified_at {ts},
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_organization_id ON enterprise_calendar_events(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_client_id ON enterprise_calendar_events(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_event_date ON enterprise_calendar_events(event_date)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_calendar_events_is_done ON enterprise_calendar_events(is_done)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_calendar_org_date ON enterprise_calendar_events(organization_id, event_date)",
+            ):
+                conn.execute(text(stmt))
+
+        # Additive columns for existing deployments (client @-mention notification).
+        cols = _get_table_columns(conn, "enterprise_calendar_events")
+        if "notify_client" not in cols:
+            conn.execute(text(f"ALTER TABLE enterprise_calendar_events ADD COLUMN notify_client BOOLEAN NOT NULL DEFAULT {bool_false}"))
+        if "client_notified_at" not in cols:
+            conn.execute(text(f"ALTER TABLE enterprise_calendar_events ADD COLUMN client_notified_at {ts}"))
 
 
 def ensure_enterprise_credit_tables():
@@ -929,6 +946,100 @@ def ensure_enterprise_coupons_table():
                 conn.execute(text(stmt))
 
 
+def ensure_student_journey_country_columns():
+    """
+    Multi-country B2C journey: add destination/visa fields to users and scope the
+    document_type_catalog by (country, visa type). Backfills run **once** (inside the
+    column-add branch) so existing users land on US/F-1 with onboarding marked
+    complete, while brand-new users keep NULL onboarding and must complete the wizard.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    with engine.begin() as conn:
+        # --- users -----------------------------------------------------------
+        ucols = _get_table_columns(conn, "users")
+        if "destination_country_code" not in ucols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN destination_country_code VARCHAR"))
+            conn.execute(text(
+                "UPDATE users SET destination_country_code='US' WHERE destination_country_code IS NULL"
+            ))
+        if "visa_type_key" not in ucols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN visa_type_key VARCHAR"))
+            conn.execute(text(
+                "UPDATE users SET visa_type_key='us_f1' WHERE visa_type_key IS NULL"
+            ))
+        if "university_email" not in ucols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN university_email VARCHAR"))
+        if "onboarding_completed_at" not in ucols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN onboarding_completed_at TIMESTAMP"))
+            # Existing users predate onboarding -> mark complete so they aren't gated.
+            conn.execute(text(
+                f"UPDATE users SET onboarding_completed_at={now_default} "
+                "WHERE onboarding_completed_at IS NULL"
+            ))
+
+        # --- document_type_catalog scoping -----------------------------------
+        if _table_exists(conn, "document_type_catalog"):
+            dcols = _get_table_columns(conn, "document_type_catalog")
+            added_scope = False
+            if "country_code" not in dcols:
+                conn.execute(text(
+                    "ALTER TABLE document_type_catalog ADD COLUMN country_code VARCHAR NOT NULL DEFAULT 'US'"
+                ))
+                added_scope = True
+            if "visa_type_key" not in dcols:
+                conn.execute(text(
+                    "ALTER TABLE document_type_catalog ADD COLUMN visa_type_key VARCHAR NOT NULL DEFAULT 'us_f1'"
+                ))
+                added_scope = True
+            # Replace the legacy single-column unique on document_type with the
+            # composite (country, visa, document_type) scope. Postgres-only DDL; fresh
+            # sqlite test DBs already get the composite via create_all.
+            if added_scope and not is_sqlite:
+                conn.execute(text("DROP INDEX IF EXISTS ix_document_type_catalog_document_type"))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS ix_document_type_catalog_document_type "
+                    "ON document_type_catalog(document_type)"
+                ))
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_doc_catalog_scope "
+                    "ON document_type_catalog(country_code, visa_type_key, document_type)"
+                ))
+
+
+def ensure_university_shortlist_table():
+    """Create the university_shortlist_entries table (B2C university shortlisting)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "university_shortlist_entries"):
+            return
+        conn.execute(text(f"""
+            CREATE TABLE university_shortlist_entries (
+                id {pk},
+                user_id INTEGER NOT NULL,
+                country_code VARCHAR,
+                university_name VARCHAR NOT NULL,
+                program VARCHAR,
+                location VARCHAR,
+                status VARCHAR NOT NULL DEFAULT 'considering',
+                source VARCHAR NOT NULL DEFAULT 'manual',
+                est_tuition VARCHAR,
+                rationale TEXT,
+                notes TEXT,
+                created_at {ts} DEFAULT {now_default} NOT NULL,
+                updated_at {ts}
+            )
+        """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_university_shortlist_entries_user_id ON university_shortlist_entries(user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_university_shortlist_user_created ON university_shortlist_entries(user_id, created_at)",
+        ):
+            conn.execute(text(stmt))
+
+
 def ensure_ai_optimization_events_table():
     """Ensure the ai_optimization_events table exists (Part 3 cost-optimization metrics)."""
     is_sqlite = engine.dialect.name == "sqlite"
@@ -958,9 +1069,18 @@ def ensure_ai_optimization_events_table():
 
 
 def ensure_gemini_usage_table():
-    """Ensure the gemini_usage_events table exists for the admin AI-cost tracker."""
+    """Ensure the gemini_usage_events table exists for the admin AI-cost tracker, and
+    that it carries per-account attribution columns (user_id, organization_id)."""
     with engine.begin() as conn:
         if _table_exists(conn, "gemini_usage_events"):
+            # Backfill per-account attribution columns on existing installs.
+            cols = _get_table_columns(conn, "gemini_usage_events")
+            if "user_id" not in cols:
+                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN user_id INTEGER"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_user_id ON gemini_usage_events(user_id)"))
+            if "organization_id" not in cols:
+                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN organization_id INTEGER"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_organization_id ON gemini_usage_events(organization_id)"))
             return
         if engine.dialect.name == "sqlite":
             conn.execute(text("""
@@ -968,6 +1088,8 @@ def ensure_gemini_usage_table():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source VARCHAR NOT NULL,
                     model VARCHAR NOT NULL,
+                    user_id INTEGER,
+                    organization_id INTEGER,
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
                     output_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tokens INTEGER NOT NULL DEFAULT 0,
@@ -981,6 +1103,8 @@ def ensure_gemini_usage_table():
                     id SERIAL PRIMARY KEY,
                     source VARCHAR NOT NULL,
                     model VARCHAR NOT NULL,
+                    user_id INTEGER,
+                    organization_id INTEGER,
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
                     output_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tokens INTEGER NOT NULL DEFAULT 0,
@@ -991,6 +1115,8 @@ def ensure_gemini_usage_table():
         for stmt in (
             "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_source ON gemini_usage_events(source)",
             "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_model ON gemini_usage_events(model)",
+            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_user_id ON gemini_usage_events(user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_organization_id ON gemini_usage_events(organization_id)",
             "CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_created_at ON gemini_usage_events(created_at)",
         ):
             conn.execute(text(stmt))

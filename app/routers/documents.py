@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import desc
 from app.database import get_db
 from app import models, schemas
+from app import ai_usage
 from app.auth import get_current_active_user, get_current_admin_user, verify_password
 from app.utils.security import (
     encrypt_file_with_user_password,
@@ -22,6 +23,17 @@ from app.document_catalog import (
     ensure_default_document_type_catalog,
     get_document_type_payload,
 )
+from app import visa_catalog
+
+
+def _user_visa_scope(user):
+    """Resolve a user's (country_code, visa_type_key), defaulting to US/F-1."""
+    if user is None:
+        return visa_catalog.DEFAULT_COUNTRY_CODE, visa_catalog.DEFAULT_VISA_TYPE_KEY
+    return visa_catalog.resolve_selection(
+        getattr(user, "destination_country_code", None),
+        getattr(user, "visa_type_key", None),
+    )
 from typing import Optional, List
 import os
 import uuid
@@ -425,9 +437,15 @@ def get_presigned_url(r2_key: str, expiration: int = 3600) -> str:
 
 
 @router.get("/catalog", response_model=schemas.DocumentCatalogResponse)
-def get_document_catalog(db: Session = Depends(get_db)):
+def get_document_catalog(
+    country: Optional[str] = Query(None),
+    visa_type: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    # Public endpoint: anonymous/marketing pages get the US F-1 catalog; the dashboard
+    # passes the student's destination + visa type for a personalized journey.
     ensure_default_document_type_catalog(db)
-    payload = build_document_catalog_response(db)
+    payload = build_document_catalog_response(db, country, visa_type)
     return schemas.DocumentCatalogResponse(**payload)
 
 @router.post("/upload", response_model=schemas.DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -454,8 +472,14 @@ def upload_document(
             detail="Incorrect password. Please provide your login password to encrypt the document."
         )
 
+    # Attribute the document-AI (validation/extraction) Gemini cost to this account.
+    ai_usage.set_usage_account(user_id=current_user.id)
+
     ensure_default_document_type_catalog(db)
-    catalog_items = get_document_type_payload(db, active_only=True)
+    _scope_country, _scope_visa = _user_visa_scope(current_user)
+    catalog_items = get_document_type_payload(
+        db, active_only=True, country_code=_scope_country, visa_type_key=_scope_visa
+    )
     allowed_document_types = {
         item["value"] for item in catalog_items
     }
@@ -658,7 +682,7 @@ def upload_document(
         all_documents = db.query(models.Document).filter(
             models.Document.user_id == current_user.id
         ).all()
-        status_data = calculate_visa_journey_stage(all_documents, db)
+        status_data = calculate_visa_journey_stage(all_documents, db, *_user_visa_scope(current_user))
         save_student_profile_to_r2(current_user, status_data, all_documents, db=db)
     except Exception as e:
         # Don't fail the upload if profile refresh fails.
@@ -732,21 +756,28 @@ def _is_stage_completed(
     return True
 
 
-def calculate_visa_journey_stage(documents: List[models.Document], db: Optional[Session] = None) -> dict:
+def calculate_visa_journey_stage(
+    documents: List[models.Document],
+    db: Optional[Session] = None,
+    country_code: Optional[str] = None,
+    visa_type_key: Optional[str] = None,
+) -> dict:
     """
-    Calculate the current visa journey stage based on uploaded documents.
+    Calculate the current visa journey stage based on uploaded documents, scoped to
+    the student's destination country + visa type (defaults to US F-1).
     Returns stage info and progress details.
     """
+    country_code, visa_type_key = visa_catalog.resolve_selection(country_code, visa_type_key)
     if db is not None:
         ensure_default_document_type_catalog(db)
-        document_type_catalog = get_document_type_payload(db, active_only=True)
+        document_type_catalog = get_document_type_payload(
+            db, active_only=True, country_code=country_code, visa_type_key=visa_type_key
+        )
     else:
         document_type_catalog = []
 
     if not document_type_catalog:
-        # Fallback to built-in defaults if DB is unavailable.
-        from app.document_catalog import DEFAULT_DOCUMENT_TYPES
-
+        # Fallback to built-in defaults for this scope if the DB is unavailable.
         document_type_catalog = [
             {
                 "value": row["document_type"],
@@ -760,10 +791,12 @@ def calculate_visa_journey_stage(documents: List[models.Document], db: Optional[
                 "stage_gate_requires_validation": row.get("stage_gate_requires_validation", False),
                 "stage_gate_group": row.get("stage_gate_group"),
             }
-            for row in DEFAULT_DOCUMENT_TYPES
+            for row in visa_catalog.documents_for(country_code, visa_type_key)
         ]
 
-    journey_stages = build_journey_stages(document_type_catalog)
+    journey_stages = build_journey_stages(
+        document_type_catalog, visa_catalog.journey_stages_for(country_code, visa_type_key)
+    )
 
     # Get uploaded document types.
     uploaded_doc_types = set(
@@ -1002,7 +1035,12 @@ def save_student_profile_to_r2(
     preferred_country = getattr(user, 'preferred_country', None) or "United States"
     preferred_intake = getattr(user, 'preferred_intake', None)
     preferred_year = getattr(user, 'preferred_year', None)
-    
+
+    # Personalized destination + visa type (drives the country-specific AI guidance).
+    _scope_country, _scope_visa = _user_visa_scope(user)
+    destination_country = (visa_catalog.country_meta(_scope_country) or {}).get("name") or preferred_country
+    visa_type_label = visa_catalog.visa_type_label(_scope_country, _scope_visa) or "Student Visa"
+
     # If user preferences not set, try to extract from documents
     if not preferred_intake or not preferred_year:
         for doc in documents:
@@ -1017,9 +1055,9 @@ def save_student_profile_to_r2(
     # Build comprehensive student profile
     comprehensive_data = {
         # File metadata for LLM understanding
-        "_file_description": "Complete student profile, documentation preferences, uploaded documents summary, and F1 visa journey status",
-        "_file_purpose": "Use this data to provide personalized F1 visa guidance based on the student's current status and documents",
-        
+        "_file_description": f"Complete student profile, documentation preferences, uploaded documents summary, and {visa_type_label} journey status for {destination_country}",
+        "_file_purpose": f"Use this data to provide personalized {destination_country} {visa_type_label} guidance based on the student's current status and documents",
+
         # Student Profile Information
         "student_profile": {
             "user_id": user.id,
@@ -1027,20 +1065,27 @@ def save_student_profile_to_r2(
             "email": user.email,
             "username": user.username,
             "university": user.university,
+            "university_email": getattr(user, 'university_email', None),
             "phone": user.phone,
             "visa_case_status": user.visa_case_status,
             "current_situation_story": user.current_situation_story,
             "current_residence_country": user.current_residence_country or "United States",
+            "destination_country": destination_country,
+            "destination_country_code": _scope_country,
+            "visa_type": visa_type_label,
+            "visa_type_key": _scope_visa,
             "profile_picture": user.profile_picture,
             "account_created": user.created_at.isoformat() if user.created_at else None,
             "email_verified": user.email_verified,
             "is_active": bool(user.is_active),
         },
         "user_account": user_account_snapshot,
-        
+
         # Documentation Preferences
         "documentation_preferences": {
-            "target_country": preferred_country,
+            "target_country": destination_country,
+            "destination_country_code": _scope_country,
+            "visa_type": visa_type_label,
             "current_residence_country": user.current_residence_country or "United States",
             "intake_semester": preferred_intake,
             "intake_year": preferred_year
@@ -1048,9 +1093,11 @@ def save_student_profile_to_r2(
 
         # Subscription Details
         "subscription": subscription_snapshot,
-        
+
         # Visa Journey Status (from existing calculation)
         "visa_journey": {
+            "destination_country": destination_country,
+            "visa_type": visa_type_label,
             "current_stage": status_data.get("current_stage"),
             "total_stages": status_data.get("total_stages", 7),
             "stage_name": status_data.get("stage_info", {}).get("name"),
@@ -1108,7 +1155,7 @@ def refresh_student_profile_snapshot_for_user(
     documents = db.query(models.Document).filter(
         models.Document.user_id == user.id
     ).all()
-    status_data = calculate_visa_journey_stage(documents, db)
+    status_data = calculate_visa_journey_stage(documents, db, *_user_visa_scope(user))
     return save_student_profile_to_r2(user, status_data, documents, db=db)
 
 
@@ -1150,7 +1197,7 @@ async def get_visa_journey_status(
     documents = db.query(models.Document).filter(
         models.Document.user_id == current_user.id
     ).all()
-    status_data = calculate_visa_journey_stage(documents, db)
+    status_data = calculate_visa_journey_stage(documents, db, *_user_visa_scope(current_user))
 
     # First, try to get existing profile from R2
     existing_profile = get_student_profile_from_r2(current_user.id)
@@ -1196,7 +1243,7 @@ async def refresh_visa_journey_status(
     ).all()
     
     # Calculate current journey status
-    status_data = calculate_visa_journey_stage(documents, db)
+    status_data = calculate_visa_journey_stage(documents, db, *_user_visa_scope(current_user))
     
     # Save comprehensive student profile to R2
     r2_key = save_student_profile_to_r2(current_user, status_data, documents, db=db)
@@ -1546,7 +1593,7 @@ async def delete_document(
             all_documents = db.query(models.Document).filter(
                 models.Document.user_id == current_user.id
             ).all()
-            status_data = calculate_visa_journey_stage(all_documents, db)
+            status_data = calculate_visa_journey_stage(all_documents, db, *_user_visa_scope(current_user))
             save_student_profile_to_r2(current_user, status_data, all_documents, db=db)
         except Exception as refresh_error:
             # Don't fail the delete if profile refresh fails
@@ -1596,7 +1643,7 @@ async def delete_document_admin(
                 all_documents = db.query(models.Document).filter(
                     models.Document.user_id == document_owner_id
                 ).all()
-                status_data = calculate_visa_journey_stage(all_documents, db)
+                status_data = calculate_visa_journey_stage(all_documents, db, *_user_visa_scope(document_owner))
                 save_student_profile_to_r2(document_owner, status_data, all_documents, db=db)
         except Exception as refresh_error:
             # Don't fail the delete if profile refresh fails

@@ -5,9 +5,9 @@
     <script>document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/, 'js');</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rilono — AI-Powered US Student Visa Platform</title>
+    <title>Rilono — AI-Powered Student Visa Platform · US, UK, Canada & Australia</title>
     <meta name="description"
-        content="Rilono helps F-1 students organize documents, validate them with AI, track their visa journey, and ace the interview — and gives consultancies one workspace to manage every student visa.">
+        content="Rilono helps students applying to the US, UK, Canada and Australia organize documents, validate them with Rilono AI, track their visa journey, and ace the interview — and gives consultancies one workspace to manage every student visa.">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://rilono.com/">
     <meta property="og:type" content="website">
@@ -15,12 +15,12 @@
     <meta property="og:url" content="https://rilono.com/">
     <meta property="og:title" content="Rilono — AI-Powered US Student Visa Platform">
     <meta property="og:description"
-        content="Organize documents, validate with AI, track your visa journey, and ace the F-1 interview. For students and consultancies.">
+        content="Organize documents, validate with Rilono AI, track your visa journey, and ace the visa interview — for the US, UK, Canada & Australia. For students and consultancies.">
     <meta property="og:image" content="https://rilono.com/static/logo.png">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Rilono — AI-Powered US Student Visa Platform">
     <meta name="twitter:description"
-        content="Organize documents, validate with AI, track your visa journey, and ace the F-1 interview.">
+        content="Organize documents, validate with Rilono AI, track your visa journey, and ace the visa interview — US, UK, Canada & Australia.">
     <meta name="twitter:image" content="https://rilono.com/static/logo.png">
     <link rel="icon" type="image/png" href="/static/logo.png">
     <link rel="apple-touch-icon" href="/static/logo.png">
@@ -56,6 +56,9 @@
         .products-menu a { display: block; padding: 0.8rem 0.85rem; border-radius: 10px; color: var(--text-primary); text-decoration: none; font-weight: 800; }
         .products-menu a span { display: block; margin-top: 0.18rem; color: var(--text-muted); font-size: 0.78rem; font-weight: 600; line-height: 1.35; }
         .products-menu a:hover { background: rgba(124, 92, 255, 0.14); }
+        .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--text-muted); font-weight: 800; padding: .35rem .85rem .15rem; }
+        .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
+        .products-menu .pm-divider { height: 1px; background: rgba(15,23,42,.08); margin: .4rem .55rem; }
         .nav-links a.nav-cta {
             background: var(--gradient-primary); color: #fff !important; padding: 0.55rem 1.15rem;
             border-radius: 10px; font-weight: 700; box-shadow: 0 8px 22px rgba(99,102,241,.32);
@@ -148,6 +151,27 @@
         .hp-stat { text-align: center; }
         .hp-stat b { display: block; font-size: 1.5rem; font-weight: 800; letter-spacing: -.02em; }
         .hp-stat span { color: var(--text-muted); font-size: .84rem; font-weight: 600; }
+
+        /* success / outcomes tile */
+        .hp-success { position: relative; overflow: hidden; border-radius: 24px; border: 1px solid var(--hp-line);
+            padding: 50px 40px; text-align: center;
+            background: linear-gradient(160deg, rgba(99,102,241,.13), rgba(168,85,247,.07) 58%, rgba(255,255,255,.01)); }
+        .hp-success-glow { position: absolute; top: -45%; left: 25%; right: 25%; height: 340px; pointer-events: none;
+            background: radial-gradient(closest-side, rgba(99,102,241,.28), transparent); filter: blur(18px); }
+        .hp-success-head { position: relative; max-width: 770px; margin: 0 auto 36px; }
+        .hp-success-head h2 { font-size: clamp(1.6rem, 3.2vw, 2.45rem); line-height: 1.18; margin: 16px 0 14px; letter-spacing: -.022em; }
+        .hp-success-head .lead { margin: 0 auto; }
+        .hp-success-grid { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 34px; }
+        .hp-su { background: rgba(255,255,255,.035); border: 1px solid var(--hp-line); border-radius: 16px;
+            padding: 24px 18px; text-align: left; transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+        .hp-su:hover { transform: translateY(-4px); border-color: rgba(99,102,241,.45); box-shadow: 0 18px 40px rgba(99,102,241,.18); }
+        .hp-su b { display: block; font-size: 2rem; font-weight: 850; letter-spacing: -.03em; line-height: 1; margin-bottom: 11px; }
+        .hp-su span { color: var(--text-secondary); font-size: .9rem; font-weight: 600; line-height: 1.5; }
+        .hp-success-cta { position: relative; display: flex; align-items: center; justify-content: center; gap: 18px; flex-wrap: wrap; }
+        .hp-success-cta .btn svg { width: 18px; height: 18px; }
+        .hp-success-note { color: var(--text-muted); font-size: .85rem; font-weight: 600; }
+        @media (max-width: 860px) { .hp-success-grid { grid-template-columns: repeat(2, 1fr); } .hp-success { padding: 38px 22px; } }
+        @media (max-width: 460px) { .hp-success-grid { grid-template-columns: 1fr; } }
 
         /* audience split */
         .pad { padding: 78px 0; }
@@ -283,10 +307,82 @@
             .hp-mock, .hp-float { animation: none; }
             .js .reveal { transition: none; opacity: 1; transform: none; }
         }
+
+        /* Generated brand art (Higgsfield) — premium hero showcase frame. */
+        .hp-shot {
+            position: relative; border-radius: 24px; overflow: hidden;
+            box-shadow: 0 40px 90px rgba(15,23,42,.18); border: 1px solid rgba(15,23,42,.08);
+            animation: floaty 7s ease-in-out infinite; background: #f5f0ea;
+        }
+        .hp-shot img { display: block; width: 100%; height: auto; }
+
+        /* countries grid (landmark cards) */
+        .country-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+        .country-card {
+            display: block; border-radius: 18px; overflow: hidden; text-decoration: none; color: inherit;
+            border: 1px solid var(--hp-line); background: var(--card-bg-solid, #fff);
+            transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+        }
+        .country-card:hover { transform: translateY(-6px); box-shadow: 0 18px 40px rgba(15,23,42,.14); border-color: rgba(99,102,241,.4); }
+        .country-card img { display: block; width: 100%; height: 168px; object-fit: cover; }
+        .country-meta { display: flex; align-items: center; gap: 11px; padding: 14px 16px; }
+        .country-meta .flag { font-size: 1.5rem; line-height: 1; flex: none; }
+        .country-meta b { display: block; font-size: 1rem; font-weight: 800; letter-spacing: -.01em; }
+        .country-meta span { color: var(--text-secondary); font-size: .82rem; }
+        @media (max-width: 900px) { .country-grid { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 540px) { .country-grid { grid-template-columns: 1fr; } }
+
+        /* ===================== B2C LIGHT THEME (premium homepage) ===================== */
+        body.b2c-light { background: var(--bg-color); }
+        body.b2c-light .hp {
+            --hp-line: rgba(15,23,42,.10);
+            background:
+                radial-gradient(1100px 520px at 12% -4%, rgba(99,102,241,.10), transparent 60%),
+                radial-gradient(900px 480px at 92% 2%, rgba(6,182,212,.07), transparent 55%),
+                radial-gradient(900px 700px at 50% 120%, rgba(168,85,247,.07), transparent 60%),
+                var(--bg-color);
+        }
+        body.b2c-light .navbar { background: rgba(255,255,255,.85); border-bottom: 1px solid rgba(15,23,42,.08); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+        body.b2c-light .nav-brand a { color: var(--text-primary) !important; }
+        body.b2c-light .nav-links a { color: var(--text-secondary); }
+        body.b2c-light .nav-links a:hover { color: var(--text-primary); }
+        body.b2c-light .products-menu { background: #fff; border: 1px solid rgba(15,23,42,.10); box-shadow: 0 20px 50px rgba(15,23,42,.14); }
+        body.b2c-light .eyebrow { color: #4338ca; background: rgba(99,102,241,.10); border-color: rgba(99,102,241,.25); }
+        body.b2c-light .checklist .tag,
+        body.b2c-light .aud.students .badge { color: #4338ca; background: rgba(99,102,241,.12); }
+        body.b2c-light .aud.org .badge,
+        body.b2c-light .ent-band .pill { color: #0e7490; background: rgba(6,182,212,.12); border-color: rgba(6,182,212,.28); }
+        body.b2c-light .btn-ghost { background: #fff; border-color: rgba(15,23,42,.12); }
+        body.b2c-light .btn-ghost:hover { background: #f4f6fb; border-color: rgba(15,23,42,.18); }
+        body.b2c-light .hp-float { background: #fff; border-color: rgba(15,23,42,.10); box-shadow: 0 18px 40px rgba(15,23,42,.16); }
+        body.b2c-light .hp-float-1 { color: #b45309; }
+        body.b2c-light .hp-float-2 { color: #047857; }
+        body.b2c-light .hp-mock { background: #fff; border-color: rgba(15,23,42,.10); box-shadow: 0 40px 90px rgba(15,23,42,.16); }
+        body.b2c-light .hp-mock-top { background: #f8fafc; border-bottom-color: rgba(15,23,42,.08); }
+        body.b2c-light .hp-mock-top .t { color: var(--text-muted); }
+        body.b2c-light .hp-mock-foot { border-top-color: rgba(15,23,42,.08); }
+        body.b2c-light .checklist .todo .ic { background: rgba(15,23,42,.06); }
+        body.b2c-light .hp-ai { background: rgba(99,102,241,.07); border-color: rgba(99,102,241,.20); }
+        body.b2c-light .checklist .warn .ic { color: #b45309; }
+        body.b2c-light .ring .pct b { color: var(--text-primary); }
+        body.b2c-light .hp-strip { background: #fff; border-color: rgba(15,23,42,.10); }
+        body.b2c-light .aud { background: #fff; border-color: rgba(15,23,42,.10); box-shadow: 0 10px 30px rgba(15,23,42,.05); }
+        body.b2c-light .feat { background: #fff; border-color: rgba(15,23,42,.10); }
+        body.b2c-light .feat:hover { border-color: rgba(99,102,241,.40); box-shadow: 0 14px 34px rgba(99,102,241,.12); }
+        body.b2c-light .ent-band { border-color: rgba(6,182,212,.28); background: radial-gradient(600px 300px at 88% 10%, rgba(6,182,212,.10), transparent 60%), linear-gradient(160deg, #f1fbfd, #eef3fb); }
+        body.b2c-light .ent-row { background: #fff; border-color: rgba(15,23,42,.10); }
+        body.b2c-light .faq details { background: #fff; border-color: rgba(15,23,42,.10); }
+        body.b2c-light .final { border-color: rgba(99,102,241,.30); background: radial-gradient(700px 320px at 50% -10%, rgba(99,102,241,.14), transparent 60%), linear-gradient(160deg, #f0effc, #eef2fb); }
+        body.b2c-light .lock { background: linear-gradient(160deg, rgba(99,102,241,.14), rgba(168,85,247,.08)); border-color: rgba(99,102,241,.3); }
+        body.b2c-light .lock svg { color: #4338ca; }
+        body.b2c-light .sec-list .it svg { color: #047857; }
+        body.b2c-light .hp-footer { background: #f1f5f9; border-color: rgba(15,23,42,.10); }
+        body.b2c-light .hp-footer .foot-bottom { border-color: rgba(15,23,42,.10); }
+        body.b2c-light .cookie-bar-inner { background: #fff; border-color: rgba(15,23,42,.12); box-shadow: 0 24px 70px rgba(15,23,42,.18); }
     </style>
 </head>
 
-<body>
+<body class="b2c-light">
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
@@ -309,18 +405,11 @@
                         </svg>
                     </button>
                     <div class="products-menu" id="productsMenu">
-                        <a href="/us-f1-visa">
-                            US F1-Visa
-                            <span>Student visa documents, DS-160, I-20, interview prep, and AI guidance.</span>
-                        </a>
-                        <a href="/visa-pass">
-                            Visa Success Pass
-                            <span>One-time ₹999 / 30 days — unlimited audits, red-flag scans &amp; AI mock interviews.</span>
-                        </a>
-                        <a href="/for-enterprise">
-                            Rilono Enterprise
-                            <span>Student-visa CRM for consultancies — clients, pipeline, emails &amp; dashboard.</span>
-                        </a>
+                        <div class="pm-label">Student visas</div>
+                        <a href="/us-f1-visa"><span class="pm-flag">🇺🇸</span>United States<span>F-1 · J-1 · M-1 student visas, DS-160, I-20 &amp; interview prep.</span></a>
+                        <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier 4) — CAS, financial proof &amp; interview.</span></a>
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit &amp; SDS — LOA, proof of funds &amp; biometrics.</span></a>
+                        <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 — CoE, OSHC &amp; Genuine Student.</span></a>
                     </div>
                 </div>
                 <a href="/for-enterprise">Enterprise</a>
@@ -338,19 +427,20 @@
                 <div class="grid">
                     <div class="hp-hero-copy reveal">
                         <span class="eyebrow"><span class="pulse"></span> AI-Powered Student Visa Platform</span>
-                        <h1>Your US student visa,<br><span class="grad">done right</span> — with AI by your side.</h1>
-                        <p class="sub">Rilono helps F-1 students organize every document, catch mistakes with AI before
-                            the consulate does, track the journey stage-by-stage, and walk into the interview ready.</p>
+                        <h1>Your student visa,<br><span class="grad">done right</span> — with Rilono AI by your side.</h1>
+                        <p class="sub">Rilono helps students heading to the <strong>US, UK, Canada &amp; Australia</strong>
+                            organize every document, catch mistakes with Rilono AI before the consulate does, track the journey
+                            stage-by-stage, and walk into the interview ready.</p>
                         <div class="cta-row">
                             <a href="/register" class="btn btn-primary">Start free
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </a>
-                            <a href="/us-f1-visa" class="btn btn-ghost">Explore US F-1 Visa</a>
+                            <a href="#countries" class="btn btn-ghost">Explore destinations</a>
                         </div>
                         <div class="microtrust">
                             <span>🔒 Zero-knowledge encryption</span>
                             <span>✨ No card required to start</span>
-                            <span>🎓 Built for F-1 / J-1 / M-1</span>
+                            <span>🎓 US · UK · Canada · Australia</span>
                         </div>
                     </div>
 
@@ -363,17 +453,17 @@
                             <div class="hp-mock-body">
                                 <div class="ring">
                                     <svg viewBox="0 0 120 120" width="104" height="104">
-                                        <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="11"/>
+                                        <circle cx="60" cy="60" r="52" fill="none" stroke="rgba(15,23,42,.08)" stroke-width="11"/>
                                         <circle cx="60" cy="60" r="52" fill="none" stroke="url(#rg)" stroke-width="11"
                                             stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="91.5" transform="rotate(-90 60 60)"/>
                                         <defs><linearGradient id="rg" x1="0" y1="0" x2="1" y2="1">
-                                            <stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#06b6d4"/>
+                                            <stop offset="0" stop-color="#6366f1"/><stop offset="1" stop-color="#a855f7"/>
                                         </linearGradient></defs>
                                     </svg>
                                     <div class="pct"><div><b>72%</b><small>Ready</small></div></div>
                                 </div>
                                 <ul class="checklist">
-                                    <li class="ok"><span class="ic">✓</span> Passport <span class="tag">AI verified</span></li>
+                                    <li class="ok"><span class="ic">✓</span> Passport <span class="tag">Rilono AI verified</span></li>
                                     <li class="ok"><span class="ic">✓</span> Form I-20</li>
                                     <li class="ok"><span class="ic">✓</span> DS-160 confirmation</li>
                                     <li class="warn"><span class="ic">!</span> Financial proof — needs review</li>
@@ -395,11 +485,68 @@
         <section class="hp-strip">
             <div class="wrap">
                 <div class="row">
-                    <div class="hp-stat reveal"><b class="grad">F-1 · J-1 · M-1</b><span>Student visa types supported</span></div>
+                    <div class="hp-stat reveal"><b class="grad">4 destinations</b><span>US · UK · Canada · Australia</span></div>
                     <div class="hp-stat reveal"><b class="grad">AI</b><span>Document validation &amp; guidance</span></div>
                     <div class="hp-stat reveal"><b class="grad">Zero-Knowledge</b><span>Encryption on every file</span></div>
-                    <div class="hp-stat reveal"><b class="grad">24/7</b><span>AI interview &amp; visa support</span></div>
+                    <div class="hp-stat reveal"><b class="grad">24/7</b><span>Rilono AI interview &amp; visa support</span></div>
                 </div>
+            </div>
+        </section>
+
+        <!-- ===================== SUCCESS / OUTCOMES TILE ===================== -->
+        <section class="pad" style="padding-bottom:0">
+            <div class="wrap">
+                <div class="hp-success reveal">
+                    <div class="hp-success-glow"></div>
+                    <div class="hp-success-head">
+                        <span class="eyebrow"><span class="pulse"></span> Built for outcomes</span>
+                        <h2>Secure your <span class="grad">university seat &amp; visa</span><br>— with less stress and the best shot at approval.</h2>
+                        <p class="lead">Rilono catches the document mistakes that cause refusals, drills you for the
+                            consular interview, and tracks every step — so you apply with confidence, not anxiety.</p>
+                    </div>
+                    <div class="hp-success-grid">
+                        <div class="hp-su"><b class="grad">100%</b><span>of your documents AI-checked for refusal red-flags before you ever submit</span></div>
+                        <div class="hp-su"><b class="grad">Unlimited</b><span>Rilono AI mock interviews — rehearse until you walk in interview-ready</span></div>
+                        <div class="hp-su"><b class="grad">7 stages</b><span>guided end-to-end, so no form, fee or deadline is ever missed</span></div>
+                        <div class="hp-su"><b class="grad">All-in-one</b><span>university shortlist → seat → visa stamp, in a single place</span></div>
+                    </div>
+                    <div class="hp-success-cta">
+                        <a href="/register" class="btn btn-primary">Start free — maximize your odds
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </a>
+                        <span class="hp-success-note">No card required · cancel anytime</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===================== COUNTRIES ===================== -->
+        <section class="pad" id="countries" style="padding-bottom:0">
+            <div class="wrap">
+                <div class="sec-head reveal">
+                    <h2>Study where you <span class="grad">dream</span></h2>
+                    <p class="lead">Rilono now guides student-visa journeys across four of the world's top destinations —
+                        each tailored to that country's documents, forms and interview.</p>
+                </div>
+                <div class="country-grid">
+                    <a href="/us-f1-visa" class="country-card reveal">
+                        <img src="/static/assets/brand/countries/us.webp" alt="Study in the United States — Statue of Liberty" loading="lazy">
+                        <div class="country-meta"><span class="flag">🇺🇸</span><div><b>United States</b><span>F-1 · J-1 · M-1 student visas</span></div></div>
+                    </a>
+                    <a href="/uk-student-visa" class="country-card reveal">
+                        <img src="/static/assets/brand/countries/uk.webp" alt="Study in the United Kingdom — Big Ben" loading="lazy">
+                        <div class="country-meta"><span class="flag">🇬🇧</span><div><b>United Kingdom</b><span>Student visa (Tier 4)</span></div></div>
+                    </a>
+                    <a href="/canada-study-permit" class="country-card reveal">
+                        <img src="/static/assets/brand/countries/ca.webp" alt="Study in Canada — Niagara Falls" loading="lazy">
+                        <div class="country-meta"><span class="flag">🇨🇦</span><div><b>Canada</b><span>Study Permit · SDS</span></div></div>
+                    </a>
+                    <a href="/australia-student-visa" class="country-card reveal">
+                        <img src="/static/assets/brand/countries/au.webp" alt="Study in Australia — Sydney Opera House" loading="lazy">
+                        <div class="country-meta"><span class="flag">🇦🇺</span><div><b>Australia</b><span>Subclass 500 student visa</span></div></div>
+                    </a>
+                </div>
+                <p class="lead reveal" style="text-align:center;margin:26px auto 0;font-size:.95rem">More destinations coming soon.</p>
             </div>
         </section>
 
@@ -414,12 +561,12 @@
                     <div class="aud students reveal">
                         <span class="badge">🎓 For Students</span>
                         <h3>Get your visa, stress-free</h3>
-                        <p>Everything you need to prepare a confident, complete F-1 application — guided by AI from
+                        <p>Everything you need to prepare a confident, complete visa application — guided by Rilono AI from
                             day one to interview day.</p>
                         <ul>
-                            <li><svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.4"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> AI checks your documents for mistakes</li>
+                            <li><svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.4"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> Rilono AI checks your documents for mistakes</li>
                             <li><svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.4"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> A clear, stage-by-stage visa journey</li>
-                            <li><svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.4"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> Mock interviews with real F-1 questions</li>
+                            <li><svg viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2.4"><path d="M20 6 9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg> Mock interviews with real consulate questions</li>
                         </ul>
                         <a href="/us-f1-visa" class="btn btn-primary">Start my application
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -455,7 +602,7 @@
                         <div class="ficon" style="background:linear-gradient(135deg,#6366f1,#8b5cf6)">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </div>
-                        <h4>AI document validation</h4>
+                        <h4>Rilono AI document validation</h4>
                         <p>Rilono reads your documents and flags missing pages, expiring dates, and mismatches before they cost you an interview.</p>
                     </div>
                     <div class="feat reveal">
@@ -476,8 +623,8 @@
                         <div class="ficon" style="background:linear-gradient(135deg,#ec4899,#f43f5e)">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </div>
-                        <h4>AI interview prep</h4>
-                        <p>Practice real F-1 consulate questions, get instant feedback on your answers, and build genuine confidence.</p>
+                        <h4>Rilono AI interview prep</h4>
+                        <p>Practice real consulate questions for your destination, get instant feedback on your answers, and build genuine confidence.</p>
                     </div>
                     <div class="feat reveal">
                         <div class="ficon" style="background:linear-gradient(135deg,#10b981,#34d399)">
@@ -490,7 +637,7 @@
                         <div class="ficon" style="background:linear-gradient(135deg,#8b5cf6,#6366f1)">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </div>
-                        <h4>AI guidance, 24/7</h4>
+                        <h4>Rilono AI guidance, 24/7</h4>
                         <p>Ask anything about your visa. Rilono answers using your own documents and the latest F-1 guidance — any time.</p>
                     </div>
                 </div>
@@ -507,8 +654,8 @@
                 <div class="steps">
                     <div class="step reveal"><div class="num">1</div><h4>Create your free account</h4><p>Sign up in under a minute — no card required to get started.</p></div>
                     <div class="step reveal"><div class="num">2</div><h4>Upload your documents</h4><p>Add your passport, I-20, financials and more to your encrypted vault.</p></div>
-                    <div class="step reveal"><div class="num">3</div><h4>Let AI validate &amp; guide</h4><p>Rilono checks everything, flags issues, and tells you exactly what's next.</p></div>
-                    <div class="step reveal"><div class="num">4</div><h4>Walk in interview-ready</h4><p>Practice with AI mock interviews and arrive at the consulate confident.</p></div>
+                    <div class="step reveal"><div class="num">3</div><h4>Let Rilono AI validate &amp; guide</h4><p>Rilono checks everything, flags issues, and tells you exactly what's next.</p></div>
+                    <div class="step reveal"><div class="num">4</div><h4>Walk in interview-ready</h4><p>Practice with Rilono AI mock interviews and arrive at the consulate confident.</p></div>
                 </div>
             </div>
         </section>
@@ -518,11 +665,11 @@
             <div class="wrap">
                 <div class="ent-band reveal">
                     <div>
-                        <span class="eyebrow" style="color:#a5f3fc;background:rgba(6,182,212,.12);border-color:rgba(6,182,212,.28)">Rilono Enterprise · 100% Free</span>
-                        <h2 style="margin-top:16px">Run a study-abroad consultancy? <span class="grad">Manage every student — with an AI copilot.</span></h2>
-                        <p class="lead">Track applicants from first enquiry to visa approval, keep notes, email students in one click, and just <strong>ask the built-in AI</strong> things like "who needs my attention today?" — it reads your live portal to answer. Built for offices placing students in the US, Canada, UK, Australia, Germany &amp; Ireland, and <strong>completely free</strong>.</p>
+                        <span class="eyebrow" style="color:#0e7490;background:rgba(6,182,212,.14);border-color:rgba(6,182,212,.34)">Rilono Enterprise · 100% Free</span>
+                        <h2 style="margin-top:16px">Run a study-abroad consultancy? <span class="grad">Manage every student — with a Rilono AI copilot.</span></h2>
+                        <p class="lead">Track applicants from first enquiry to visa approval, keep notes, email students in one click, and just <strong>ask the built-in Rilono AI</strong> things like "who needs my attention today?" — it reads your live portal to answer. Built for offices placing students in the US, Canada, UK, Australia, Germany &amp; Ireland, and <strong>completely free</strong>.</p>
                         <div class="pills">
-                            <span class="pill">✨ AI copilot</span>
+                            <span class="pill">✨ Rilono AI copilot</span>
                             <span class="pill">Visual pipeline</span>
                             <span class="pill">Client notes &amp; reminders</span>
                             <span class="pill">One-click emails</span>
@@ -536,10 +683,10 @@
                         </div>
                     </div>
                     <div class="ent-visual">
-                        <div class="ent-row"><span class="flag">🇺🇸</span><div><div class="nm">Rohan Mehta</div><div class="meta">F-1 Student Visa · Fall 2026</div></div><span class="st" style="background:rgba(245,158,11,.18);color:#fbbf24">Documents</span></div>
-                        <div class="ent-row"><span class="flag">🇨🇦</span><div><div class="nm">Sara Khan</div><div class="meta">Study Permit · September</div></div><span class="st" style="background:rgba(14,165,233,.18);color:#7dd3fc">Submitted</span></div>
-                        <div class="ent-row"><span class="flag">🇬🇧</span><div><div class="nm">Aisha Patel</div><div class="meta">Student Visa (Tier 4)</div></div><span class="st" style="background:rgba(139,92,246,.2);color:#c4b5fd">Interview</span></div>
-                        <div class="ent-row"><span class="flag">🇩🇪</span><div><div class="nm">Imran Ali</div><div class="meta">Type D — Study</div></div><span class="st" style="background:rgba(16,185,129,.18);color:#34d399">Approved</span></div>
+                        <div class="ent-row"><span class="flag">🇺🇸</span><div><div class="nm">Rohan Mehta</div><div class="meta">F-1 Student Visa · Fall 2026</div></div><span class="st" style="background:rgba(245,158,11,.20);color:#b45309">Documents</span></div>
+                        <div class="ent-row"><span class="flag">🇨🇦</span><div><div class="nm">Sara Khan</div><div class="meta">Study Permit · September</div></div><span class="st" style="background:rgba(14,165,233,.20);color:#0369a1">Submitted</span></div>
+                        <div class="ent-row"><span class="flag">🇬🇧</span><div><div class="nm">Aisha Patel</div><div class="meta">Student Visa (Tier 4)</div></div><span class="st" style="background:rgba(139,92,246,.20);color:#6d28d9">Interview</span></div>
+                        <div class="ent-row"><span class="flag">🇩🇪</span><div><div class="nm">Imran Ali</div><div class="meta">Type D — Study</div></div><span class="st" style="background:rgba(16,185,129,.20);color:#047857">Approved</span></div>
                     </div>
                 </div>
             </div>
@@ -575,11 +722,11 @@
                     <h2>Questions, <span class="grad">answered</span></h2>
                 </div>
                 <div class="faq">
-                    <details class="reveal" open><summary>Is Rilono free? <span class="chev">+</span></summary><div class="ans">Yes — you can create an account and start organizing your visa journey for free, including 3 DS-160 auto-fills and 1 document red-flag scan. To unlock unlimited document audits, full red-flag reveals and AI voice mock interviews, get the <a href="/visa-pass">Visa Success Pass</a> — a one-time ₹999 for 30 days (no subscription).</div></details>
+                    <details class="reveal" open><summary>Is Rilono free? <span class="chev">+</span></summary><div class="ans">Yes — you can create an account and start organizing your visa journey for free, including 3 DS-160 auto-fills and 1 document red-flag scan. To unlock unlimited document audits, full red-flag reveals and Rilono AI voice mock interviews, get the <a href="/pricing">Visa Success Pass</a> — a one-time ₹999 for 30 days (no subscription).</div></details>
                     <details class="reveal"><summary>Which visas does Rilono support? <span class="chev">+</span></summary><div class="ans">Rilono focuses on US student visas — F-1, J-1 and M-1 — with document guidance, validation and interview prep tailored to each. Consultancies using Rilono Enterprise can manage student visas across the US, Canada, UK, Australia, Germany and Ireland.</div></details>
                     <details class="reveal"><summary>Is my data secure? <span class="chev">+</span></summary><div class="ans">Absolutely. Your documents are protected with zero-knowledge encryption, meaning they're encrypted with a key derived from your password. Not even our team can read your files.</div></details>
-                    <details class="reveal"><summary>Does Rilono help with the visa interview? <span class="chev">+</span></summary><div class="ans">Yes. Rilono includes AI-powered mock interviews with real F-1 consulate-style questions and instant feedback, so you walk in prepared and confident.</div></details>
-                    <details class="reveal"><summary>I run a visa consultancy — can I use Rilono? <span class="chev">+</span></summary><div class="ans">Definitely. Rilono Enterprise is a complete CRM for study-abroad consultancies: manage every student, track their visa status through a visual pipeline, keep notes, send emails, and see everything on one dashboard. <a href="/for-enterprise" style="color:#818cf8">Explore Enterprise →</a></div></details>
+                    <details class="reveal"><summary>Does Rilono help with the visa interview? <span class="chev">+</span></summary><div class="ans">Yes. Rilono includes AI-powered mock interviews with real consulate-style questions for your destination and instant feedback, so you walk in prepared and confident.</div></details>
+                    <details class="reveal"><summary>I run a visa consultancy — can I use Rilono? <span class="chev">+</span></summary><div class="ans">Definitely. Rilono Enterprise is a complete CRM for study-abroad consultancies: manage every student, track their visa status through a visual pipeline, keep notes, send emails, and see everything on one dashboard. <a href="/for-enterprise" style="color:#4f46e5;font-weight:700">Explore Enterprise →</a></div></details>
                 </div>
             </div>
         </section>
@@ -589,13 +736,13 @@
             <div class="wrap">
                 <div class="final reveal">
                     <span class="eyebrow"><span class="pulse"></span> Start today</span>
-                    <h2 style="margin-top:18px">Your US study dream starts <span class="grad">here</span></h2>
-                    <p class="lead">Join Rilono and turn a stressful visa process into a guided, confident journey — with AI at every step.</p>
+                    <h2 style="margin-top:18px">Your study-abroad dream starts <span class="grad">here</span></h2>
+                    <p class="lead">Join Rilono and turn a stressful visa process into a guided, confident journey — with Rilono AI at every step.</p>
                     <div class="cta-row" style="justify-content:center">
                         <a href="/register" class="btn btn-primary">Create your free account
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </a>
-                        <a href="/us-f1-visa" class="btn btn-ghost">Learn about US F-1 Visa</a>
+                        <a href="#countries" class="btn btn-ghost">Explore destinations</a>
                     </div>
                 </div>
             </div>

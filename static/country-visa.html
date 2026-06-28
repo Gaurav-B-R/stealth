@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="pageTitle">Student Visa · Rilono</title>
+    <meta id="metaDesc" name="description" content="Organize every document, validate it with Rilono AI, and walk into your student-visa interview ready — with Rilono.">
+    <link rel="icon" href="/static/logo.png">
+    <style>
+        :root {
+            --ink: #0f172a; --ink-2: #475569; --muted: #64748b; --line: rgba(15, 23, 42, .10);
+            --bg: #f6f8fc; --card: #ffffff; --brand: #4f46e5; --brand-2: #7c3aed; --accent: #db2777;
+            --grad: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+            --radius: 18px;
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; }
+        a { color: inherit; }
+        .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+        .navbar { position: sticky; top: 0; z-index: 50; background: rgba(255, 255, 255, .85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+        .nav-in { max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-weight: 800; font-size: 1.3rem; }
+        .brand img { height: 34px; }
+        .nav-links { display: flex; align-items: center; gap: 26px; }
+        .nav-links a { text-decoration: none; color: var(--ink-2); font-weight: 600; font-size: .95rem; }
+        .nav-links a:hover { color: var(--ink); }
+        .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
+        @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
+
+        .btn { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 1rem; padding: 14px 24px; border-radius: 12px; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; }
+        .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 14px 34px rgba(99, 102, 241, .3); }
+        .btn-primary:hover { transform: translateY(-2px); }
+        .btn-ghost { background: #fff; color: var(--ink); border-color: var(--line); }
+        .btn-ghost:hover { background: #f1f4fb; }
+        .btn svg { width: 18px; height: 18px; }
+
+        .eyebrow { display: inline-flex; align-items: center; gap: 9px; font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); background: rgba(99, 102, 241, .1); border: 1px solid rgba(99, 102, 241, .25); padding: 7px 14px; border-radius: 999px; }
+        .eyebrow .fl { font-size: 1.1rem; }
+        .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+        .hero { padding: 64px 0 40px; }
+        .hero-grid { display: grid; grid-template-columns: 1.02fr .98fr; gap: 52px; align-items: center; }
+        .hero h1 { font-size: clamp(2.1rem, 4.6vw, 3.4rem); line-height: 1.06; letter-spacing: -.03em; font-weight: 850; margin: 20px 0 16px; }
+        .hero p.sub { color: var(--ink-2); font-size: 1.1rem; max-width: 540px; }
+        .hero-cta { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 26px; }
+        .hero-shot { border-radius: 22px; overflow: hidden; box-shadow: 0 40px 90px rgba(15, 23, 42, .18); border: 1px solid var(--line); }
+        .hero-shot img { display: block; width: 100%; height: 100%; object-fit: cover; aspect-ratio: 4 / 3; }
+        @media (max-width: 860px) { .hero-grid { grid-template-columns: 1fr; gap: 32px; } }
+
+        .sec { padding: 48px 0; }
+        .sec h2 { font-size: clamp(1.6rem, 3vw, 2.2rem); font-weight: 800; letter-spacing: -.02em; margin: 0 0 8px; }
+        .sec .lead { color: var(--ink-2); margin: 0 0 28px; max-width: 640px; }
+
+        .chips { display: flex; flex-wrap: wrap; gap: 12px; }
+        .chip { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 10px 18px; font-weight: 700; font-size: .95rem; box-shadow: 0 6px 18px rgba(15, 23, 42, .04); }
+
+        .doc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+        .doc { display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid var(--line); border-radius: 13px; padding: 14px 16px; font-weight: 600; font-size: .95rem; }
+        .doc .tick { width: 22px; height: 22px; border-radius: 7px; background: rgba(16, 185, 129, .14); color: #059669; display: grid; place-content: center; font-weight: 900; flex: none; }
+        @media (max-width: 640px) { .doc-grid { grid-template-columns: 1fr; } }
+
+        .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+        .step .num { width: 44px; height: 44px; border-radius: 13px; display: grid; place-content: center; font-weight: 800; font-size: 1.05rem; background: var(--grad); color: #fff; box-shadow: 0 10px 26px rgba(99, 102, 241, .3); margin-bottom: 14px; }
+        .step h4 { margin: 0 0 6px; font-size: 1.05rem; font-weight: 800; }
+        .step p { margin: 0; color: var(--ink-2); font-size: .92rem; }
+        @media (max-width: 860px) { .steps { grid-template-columns: 1fr 1fr; } }
+        @media (max-width: 520px) { .steps { grid-template-columns: 1fr; } }
+
+        .cta-band { text-align: center; border-radius: 24px; padding: 56px 28px; border: 1px solid rgba(99, 102, 241, .3); background: radial-gradient(700px 320px at 50% -10%, rgba(99, 102, 241, .14), transparent 60%), linear-gradient(160deg, #f0effc, #eef2fb); margin: 30px 0 56px; }
+        .cta-band h2 { margin: 0 0 10px; }
+        .cta-band p { color: var(--ink-2); margin: 0 auto 24px; max-width: 520px; }
+
+        .foot { border-top: 1px solid var(--line); background: #f1f5f9; padding: 30px 0; }
+        .foot-in { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; color: var(--muted); font-size: .85rem; }
+        .foot-in a { color: var(--ink-2); text-decoration: none; margin-left: 16px; }
+        .disclaimer { color: var(--muted); font-size: .82rem; max-width: 720px; margin: 4px auto 0; }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-in">
+            <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
+            <div class="nav-links">
+                <a href="/">Home</a>
+                <a href="/#countries">Destinations</a>
+                <a href="/for-enterprise">Enterprise</a>
+                <a href="/login">Login</a>
+                <a href="/register" class="nav-cta">Get started</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="wrap">
+        <section class="hero">
+            <div class="hero-grid">
+                <div>
+                    <span class="eyebrow"><span class="fl" id="heroFlag">🎓</span> <span id="heroEyebrow">Student visa</span></span>
+                    <h1 id="heroTitle">Study abroad, <span class="grad">done right</span></h1>
+                    <p class="sub" id="heroBlurb"></p>
+                    <div class="hero-cta">
+                        <a href="/register" class="btn btn-primary">Start free
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </a>
+                        <a href="/#countries" class="btn btn-ghost">Other destinations</a>
+                    </div>
+                </div>
+                <div class="hero-shot"><img id="heroImg" src="" alt=""></div>
+            </div>
+        </section>
+
+        <section class="sec">
+            <h2>Visas we support</h2>
+            <p class="lead" id="visaLead">Rilono guides every step of these student visas.</p>
+            <div class="chips" id="visaChips"></div>
+        </section>
+
+        <section class="sec">
+            <h2>Documents you'll need</h2>
+            <p class="lead">Rilono organizes, names and AI-checks each of these — and flags anything missing or expiring before it costs you an interview.</p>
+            <div class="doc-grid" id="docGrid"></div>
+        </section>
+
+        <section class="sec">
+            <h2>How Rilono helps</h2>
+            <p class="lead">From your first document to interview day — a guided, AI-assisted journey.</p>
+            <div class="steps">
+                <div class="step"><div class="num">1</div><h4>Personalized checklist</h4><p>Tell us your destination and program and Rilono builds your exact document checklist.</p></div>
+                <div class="step"><div class="num">2</div><h4>Upload to your vault</h4><p>Add your documents to a zero-knowledge encrypted vault — organized and ready.</p></div>
+                <div class="step"><div class="num">3</div><h4>Rilono AI reviews everything</h4><p>Rilono catches missing pages, expiring dates and mismatches before the consulate does.</p></div>
+                <div class="step"><div class="num">4</div><h4>Walk in ready</h4><p>Practice real consulate questions and track every stage from application to approval.</p></div>
+            </div>
+        </section>
+
+        <section>
+            <div class="cta-band">
+                <h2 id="ctaTitle">Your study-abroad dream starts here</h2>
+                <p>Create a free account and turn a stressful visa process into a guided, confident journey — with Rilono AI at every step.</p>
+                <a href="/register" class="btn btn-primary" style="display:inline-flex">Create your free account
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </a>
+            </div>
+        </section>
+    </main>
+
+    <footer class="foot">
+        <div class="wrap">
+            <p class="disclaimer">Rilono provides document-organization and Rilono AI guidance tools — not legal or immigration advice. Visa rules change often; always confirm requirements with the official government source for your destination.</p>
+            <div class="foot-in" style="margin-top:14px">
+                <span>© <span id="yr"></span> Rilono</span>
+                <span><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/contact">Contact</a></span>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        const COUNTRIES = {
+            "uk-student-visa": {
+                code: "UK", name: "United Kingdom", the: "the ", flag: "🇬🇧", img: "/static/assets/brand/countries/uk.webp",
+                visa: "UK Student visa",
+                blurb: "From your CAS and the 28-day financial rule to the credibility interview, Rilono organizes every UK Student visa document, checks it with Rilono AI, and gets you interview-ready.",
+                visaTypes: ["Student visa (Tier 4)", "Child Student visa", "Short-term study visa"],
+                docs: ["Valid passport", "CAS from your university", "Financial proof (28-day rule)", "English test (IELTS for UKVI / SELT)", "Tuberculosis (TB) test certificate", "Academic transcripts & qualifications", "ATAS certificate (if required)", "Proof of relationship to sponsor (if funded)"]
+            },
+            "canada-study-permit": {
+                code: "CA", name: "Canada", flag: "🇨🇦", img: "/static/assets/brand/countries/ca.webp",
+                visa: "Canada Study Permit",
+                blurb: "From your Letter of Acceptance and Provincial Attestation Letter to proof of funds and biometrics, Rilono guides every Canadian Study Permit step — including the Student Direct Stream.",
+                visaTypes: ["Study Permit", "Student Direct Stream (SDS)"],
+                docs: ["Valid passport", "Letter of Acceptance (LOA)", "Provincial Attestation Letter (PAL)", "Proof of funds (GIC for SDS)", "Language test (IELTS for SDS)", "Statement of purpose", "Medical exam", "Biometrics"]
+            },
+            "australia-student-visa": {
+                code: "AU", name: "Australia", flag: "🇦🇺", img: "/static/assets/brand/countries/au.webp",
+                visa: "Australia Student visa",
+                blurb: "From your Confirmation of Enrolment and health cover to the Genuine Student requirement, Rilono prepares every Subclass 500 document, checks it with Rilono AI, and gets you ready.",
+                visaTypes: ["Subclass 500 Student visa", "Subclass 590 Student Guardian"],
+                docs: ["Valid passport", "Confirmation of Enrolment (CoE)", "Genuine Student (GS) statement", "Overseas Student Health Cover (OSHC)", "English test (IELTS / PTE / TOEFL)", "Proof of financial capacity", "Health examination", "Academic transcripts"]
+            }
+        };
+
+        (function () {
+            const slug = location.pathname.replace(/^\/+|\/+$/g, "");
+            const c = COUNTRIES[slug] || COUNTRIES["uk-student-visa"];
+            const esc = (s) => String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+            const inName = (c.the || "") + c.name;
+
+            document.getElementById("pageTitle").textContent = `${c.visa} — Study in ${inName} · Rilono`;
+            document.getElementById("metaDesc").setAttribute("content", `Applying for a ${c.visa}? Rilono organizes every document, validates it with Rilono AI, tracks your journey, and gets you interview-ready for ${c.name}.`);
+            document.getElementById("heroFlag").textContent = c.flag;
+            document.getElementById("heroEyebrow").textContent = `${c.name} · ${c.visa}`;
+            document.getElementById("heroTitle").innerHTML = `Study in ${esc(inName)}, <span class="grad">done right</span>`;
+            document.getElementById("heroBlurb").textContent = c.blurb;
+            const img = document.getElementById("heroImg");
+            img.src = c.img; img.alt = `Study in ${inName}`;
+            document.getElementById("ctaTitle").textContent = `Your ${c.name} study dream starts here`;
+            document.getElementById("visaLead").textContent = `Rilono guides every step of these ${c.name} student visas.`;
+            document.getElementById("visaChips").innerHTML = c.visaTypes.map((v) => `<span class="chip">${esc(v)}</span>`).join("");
+            document.getElementById("docGrid").innerHTML = c.docs.map((d) => `<div class="doc"><span class="tick">✓</span> ${esc(d)}</div>`).join("");
+            document.getElementById("yr").textContent = new Date().getFullYear();
+        })();
+    </script>
+</body>
+</html>

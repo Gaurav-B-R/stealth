@@ -358,7 +358,7 @@ Remember: Output ONLY the JSON object, nothing else."""
             print("-"*80)
             print("📤 SENDING PROMPT TO GEMINI:")
             print("-"*80)
-            print(validation_prompt)
+            pass  # prompt content not logged (privacy)
             print("-"*80)
             print("⏳ Waiting for Gemini response...")
             
@@ -375,7 +375,7 @@ Remember: Output ONLY the JSON object, nothing else."""
             
             print("✅ RECEIVED RESPONSE FROM GEMINI:")
             print("-"*80)
-            print(response_text[:1000] + ("..." if len(response_text) > 1000 else ""))
+            pass  # response content not logged (privacy)
             print("="*80 + "\n")
         
         elif file_extension == ".pdf":
@@ -394,7 +394,7 @@ Remember: Output ONLY the JSON object, nothing else."""
                 print("-"*80)
                 print("📤 SENDING PROMPT TO GEMINI:")
                 print("-"*80)
-                print(validation_prompt)
+                pass  # prompt content not logged (privacy)
                 print("-"*80)
                 print("⏳ Waiting for Gemini response...")
                 
@@ -430,7 +430,7 @@ Remember: Output ONLY the JSON object, nothing else."""
                 
                 print("✅ RECEIVED RESPONSE FROM GEMINI:")
                 print("-"*80)
-                print(response_text[:1000] + ("..." if len(response_text) > 1000 else ""))
+                pass  # response content not logged (privacy)
                 print("="*80 + "\n")
             finally:
                 try:
@@ -449,7 +449,7 @@ Remember: Output ONLY the JSON object, nothing else."""
             print("-"*80)
             print("📤 SENDING PROMPT TO GEMINI:")
             print("-"*80)
-            print(prompt[:2000] + ("..." if len(prompt) > 2000 else ""))
+            pass  # prompt content not logged (privacy)
             print("-"*80)
             print("⏳ Waiting for Gemini response...")
             
@@ -458,7 +458,7 @@ Remember: Output ONLY the JSON object, nothing else."""
             
             print("✅ RECEIVED RESPONSE FROM GEMINI:")
             print("-"*80)
-            print(response_text[:1000] + ("..." if len(response_text) > 1000 else ""))
+            pass  # response content not logged (privacy)
             print("="*80 + "\n")
         
         else:
@@ -473,7 +473,7 @@ Remember: Output ONLY the JSON object, nothing else."""
                 print("-"*80)
                 print("📤 SENDING PROMPT TO GEMINI:")
                 print("-"*80)
-                print(validation_prompt)
+                pass  # prompt content not logged (privacy)
                 print("-"*80)
                 print("⏳ Waiting for Gemini response...")
                 
@@ -489,7 +489,7 @@ Remember: Output ONLY the JSON object, nothing else."""
                 
                 print("✅ RECEIVED RESPONSE FROM GEMINI:")
                 print("-"*80)
-                print(response_text[:1000] + ("..." if len(response_text) > 1000 else ""))
+                pass  # response content not logged (privacy)
                 print("="*80 + "\n")
             except:
                 return None
@@ -527,7 +527,7 @@ Remember: Output ONLY the JSON object, nothing else."""
             return result
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON response from Gemini: {str(e)}")
-            print(f"Response text: {response_text[:500]}")
+            # Privacy: do not log the response content.
             # Return a fallback response
             return {
                 "Document Validation": "Yes",
@@ -591,7 +591,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             print("-"*80)
             print("📤 SENDING PROMPT TO GEMINI:")
             print("-"*80)
-            print(prompt)
+            pass  # prompt content not logged (privacy)
             print("-"*80)
             print("⏳ Waiting for Gemini response...")
             
@@ -608,7 +608,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             
             print("✅ RECEIVED RESPONSE FROM GEMINI:")
             print("-"*80)
-            print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+            pass  # response content not logged (privacy)
             print("="*80 + "\n")
             
             return response.text
@@ -640,7 +640,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 print("-"*80)
                 print("📤 SENDING PROMPT TO GEMINI:")
                 print("-"*80)
-                print(prompt)
+                pass  # prompt content not logged (privacy)
                 print("-"*80)
                 print("⏳ Waiting for Gemini response...")
                 
@@ -679,7 +679,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 
                 print("✅ RECEIVED RESPONSE FROM GEMINI:")
                 print("-"*80)
-                print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+                pass  # response content not logged (privacy)
                 print("="*80 + "\n")
                 
                 return response.text
@@ -713,7 +713,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             print("-"*80)
             print("📤 SENDING PROMPT TO GEMINI:")
             print("-"*80)
-            print(prompt[:2000] + ("..." if len(prompt) > 2000 else ""))
+            pass  # prompt content not logged (privacy)
             print("-"*80)
             print("⏳ Waiting for Gemini response...")
             
@@ -721,7 +721,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             
             print("✅ RECEIVED RESPONSE FROM GEMINI:")
             print("-"*80)
-            print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+            pass  # response content not logged (privacy)
             print("="*80 + "\n")
             
             return response.text
@@ -746,7 +746,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 print("-"*80)
                 print("📤 SENDING PROMPT TO GEMINI:")
                 print("-"*80)
-                print(prompt)
+                pass  # prompt content not logged (privacy)
                 print("-"*80)
                 print("⏳ Waiting for Gemini response...")
                 
@@ -763,7 +763,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 
                 print("✅ RECEIVED RESPONSE FROM GEMINI:")
                 print("-"*80)
-                print(response.text[:1000] + ("..." if len(response.text) > 1000 else ""))
+                pass  # response content not logged (privacy)
                 print("="*80 + "\n")
                 
                 return response.text

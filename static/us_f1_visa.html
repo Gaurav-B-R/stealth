@@ -69,7 +69,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>F1 Student Visa Guidance | DS-160, I-20, Documents &amp; Interview | Rilono AI</title>
     <meta name="description"
-        content="Get end-to-end AI guidance for your US F1 student visa: DS-160 support, I-20 and SEVIS readiness, document checklist workflows, validation, and interview preparation.">
+        content="Get end-to-end Rilono AI guidance for your US F1 student visa: DS-160 support, I-20 and SEVIS readiness, document checklist workflows, validation, and interview preparation.">
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
     <link rel="canonical" href="https://rilono.com/">
     <meta property="og:type" content="website">
@@ -77,7 +77,7 @@
     <meta property="og:url" content="https://rilono.com/">
     <meta property="og:title" content="F1 Student Visa Guidance | DS-160, I-20, Documents &amp; Interview | Rilono AI">
     <meta property="og:description"
-        content="AI guidance for DS-160, I-20, SEVIS, F1 visa document checklist, and mock interview practice for US student visa applicants.">
+        content="Rilono AI guidance for DS-160, I-20, SEVIS, F1 visa document checklist, and mock interview practice for US student visa applicants.">
     <meta property="og:image" content="https://rilono.com/static/logo.png">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="F1 Student Visa Guidance | DS-160, I-20, Documents &amp; Interview | Rilono AI">
@@ -148,7 +148,7 @@
     <link rel="apple-touch-icon" href="/static/logo.png">
 </head>
 
-<body>
+<body class="b2c-light">
     <svg aria-hidden="true" style="position: absolute; width: 0; height: 0; overflow: hidden;">
         <defs>
             <symbol id="icon-cap" viewBox="0 0 64 64">
@@ -651,28 +651,24 @@
                         <label for="registerFullName">Full Name</label>
                         <input type="text" id="registerFullName">
                     </div>
-                    <div class="form-group">
-                        <label for="registerUniversity">University (optional)</label>
-                        <input type="text" id="registerUniversity"
-                            placeholder="Auto-filled from your email — or type your university">
-                        <small
-                            style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
-                            Auto-detected from a university email; optional otherwise.
-                        </small>
-                    </div>
-                    <div class="form-group">
-                        <label for="registerCountry">Current Country of Residence</label>
-                        <select id="registerCountry">
-                            <option value="">Select country</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="registerReferralCode">Referral Code (Optional)</label>
-                        <input type="text" id="registerReferralCode" placeholder="Enter invite code">
-                        <small
-                            style="display: block; margin-top: 0.5rem; color: var(--text-secondary); font-size: 0.875rem;">
-                            Invite benefit: both users get 1 month Pro after verification and first login.
-                        </small>
+                    <!-- These move into the post-signup onboarding tiles; kept here (hidden)
+                         so existing scripts still resolve the inputs. -->
+                    <div id="registerExtraFields" style="display:none;">
+                        <div class="form-group">
+                            <label for="registerUniversity">University (optional)</label>
+                            <input type="text" id="registerUniversity"
+                                placeholder="Auto-filled from your email — or type your university">
+                        </div>
+                        <div class="form-group">
+                            <label for="registerCountry">Current Country of Residence</label>
+                            <select id="registerCountry">
+                                <option value="">Select country</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="registerReferralCode">Referral Code (Optional)</label>
+                            <input type="text" id="registerReferralCode" placeholder="Enter invite code">
+                        </div>
                     </div>
                     <div class="form-group register-consent-group">
                         <input type="checkbox" id="registerConsent" class="register-consent-checkbox" required>
@@ -685,13 +681,43 @@
                                 Policy</a>.
                         </label>
                     </div>
+                    <div class="form-group register-consent-group">
+                        <input type="checkbox" id="registerMarketingConsent" class="register-consent-checkbox">
+                        <label for="registerMarketingConsent" class="register-consent-label">
+                            Send me product tips, visa updates &amp; occasional offers by email.
+                            You can unsubscribe anytime.
+                        </label>
+                    </div>
                     <div class="form-group" style="display: flex; justify-content: center; margin-bottom: 1rem;">
                         <div id="turnstile-register" class="cf-turnstile" data-theme="light"></div>
                     </div>
-                    <button type="submit" class="btn btn-primary">Register</button>
+                    <button type="submit" class="btn btn-primary">Continue</button>
                 </form>
-                <p class="auth-switch">Already have an account? <a href="#" onclick="showLogin(); return false;">Login
-                        here</a></p>
+
+                <!-- Step 2: verify email with a 6-digit OTP -->
+                <div id="registerOtpStep" style="display:none;">
+                    <p style="color: var(--text-secondary); font-size: 0.95rem; margin-bottom: 1.25rem;">
+                        We sent a 6-digit code to <strong id="otpEmailTarget"
+                            style="color: var(--text-primary);"></strong>. Enter it below to verify your email.
+                    </p>
+                    <div class="form-group">
+                        <label for="registerOtpInput">Verification code</label>
+                        <input type="text" id="registerOtpInput" inputmode="numeric" autocomplete="one-time-code"
+                            maxlength="6" placeholder="------"
+                            style="letter-spacing: 0.6rem; text-align: center; font-size: 1.5rem; font-weight: 700;">
+                        <small id="otpError"
+                            style="display: none; margin-top: 0.5rem; color: var(--danger-color); font-size: 0.875rem;"></small>
+                    </div>
+                    <button type="button" id="verifyOtpBtn" class="btn btn-primary" onclick="handleVerifyOtp()">Verify
+                        &amp; continue</button>
+                    <p class="auth-switch" style="margin-top: 1rem;">
+                        Didn't get the code? <a href="#" onclick="resendOtp(); return false;">Resend</a>
+                        &middot; <a href="#" onclick="backToRegisterStep1(); return false;">Change email</a>
+                    </p>
+                </div>
+
+                <p class="auth-switch" id="registerLoginSwitch">Already have an account? <a href="#"
+                        onclick="showLogin(); return false;">Login here</a></p>
             </div>
         </div>
     </div>
@@ -781,7 +807,7 @@
                         </div>
                         <div class="stat-item glass-stat">
                             <div class="stat-number stat-gradient">24/7</div>
-                            <div class="stat-label">AI Assistance</div>
+                            <div class="stat-label">Rilono AI Assistance</div>
                         </div>
                     </div>
                 </div>
@@ -881,7 +907,7 @@
                             <svg class="home-icon-svg" viewBox="0 0 64 64" role="presentation">
                                 <use href="#icon-bot"></use>
                             </svg>
-                            Context-Aware AI
+                            Context-Aware Rilono AI
                         </span>
                         <span>
                             <svg class="home-icon-svg" viewBox="0 0 64 64" role="presentation">
@@ -921,7 +947,7 @@
                             <div class="reel-scene-content-left">
                                 <div class="reel-scene-badge">Scene 1 · Document Engine</div>
                                 <h3>Upload DS-160, I-20, and financial documents once.</h3>
-                                <p>Get AI validation notes, missing-document warnings, and a stage-wise F1 visa
+                                <p>Get Rilono AI validation notes, missing-document warnings, and a stage-wise F1 visa
                                     document checklist from first upload to interview readiness.</p>
                                 <div class="reel-scene-metrics">
                                     <div><strong>20+</strong><span>Document Types</span></div>
@@ -947,13 +973,13 @@
 
                         <div class="rilono-reel-scene" data-scene-label="Rilono AI Assistant">
                             <div class="reel-scene-content-left">
-                                <div class="reel-scene-badge">Scene 2 · Personalized AI</div>
+                                <div class="reel-scene-badge">Scene 2 · Personalized Rilono AI</div>
                                 <h3>Ask anything. Rilono AI answers with your context in mind.</h3>
                                 <p>Chat guidance adapts to your profile, uploaded documents, and current journey stage
                                     for
                                     better decisions.</p>
                                 <div class="reel-scene-metrics">
-                                    <div><strong>24/7</strong><span>AI Assistance</span></div>
+                                    <div><strong>24/7</strong><span>Rilono AI Assistance</span></div>
                                     <div><strong>Profile-Aware</strong><span>Recommendations</span></div>
                                     <div><strong>Focused</strong><span>F1 Visa Scope</span></div>
                                 </div>
@@ -1119,7 +1145,7 @@
                     Meet <span class="chrome-ext-title-gradient">Rilono Copilot</span> for Chrome
                 </h2>
                 <p class="chrome-ext-subtitle reveal">
-                    Your AI side panel that reads DS-160 and other visa application pages, then gives step-by-step
+                    Your Rilono AI side panel that reads DS-160 and other visa application pages, then gives step-by-step
                     guidance right inside your browser.
                 </p>
 
@@ -1459,7 +1485,7 @@
                                     </svg>
                                 </div>
                                 <div class="chrome-ext-feature-text">
-                                    <div class="chrome-ext-feature-title">AI Copilot Chat</div>
+                                    <div class="chrome-ext-feature-title">Rilono AI Copilot Chat</div>
                                     <div class="chrome-ext-feature-desc">Ask questions about DS-160 fields, I-20
                                         details, or any visa form — get instant, context-aware answers.</div>
                                 </div>
@@ -1530,7 +1556,7 @@
                 <h2>Stop Overpaying for F1 Visa and DS-160 Help</h2>
                 <p>
                     We've been there: DS-160 confusion, I-20 anxiety, endless checklists, and expensive consultant
-                    packages for basic advice. Rilono gives you practical AI guidance for F1 visa documents and
+                    packages for basic advice. Rilono gives you practical Rilono AI guidance for F1 visa documents and
                     interview prep at a fraction of traditional costs.
                 </p>
                 <p class="value-banner-sub">
@@ -1655,7 +1681,7 @@
                                 <use href="#icon-message-check"></use>
                             </svg>
                         </div>
-                        <div class="platform-card-title">DS-160, I-20, and SEVIS AI Guidance</div>
+                        <div class="platform-card-title">DS-160, I-20, and SEVIS Rilono AI Guidance</div>
                         <div class="platform-card-desc">Get personalized answers based on your profile, documents, and
                             current visa stage.</div>
                     </div>
@@ -1719,11 +1745,11 @@
                     </div>
                     <div class="value-stat">
                         <span class="platform-stat-number indigo">Profile-Aware</span>
-                        <span class="platform-stat-label">Personalized AI</span>
+                        <span class="platform-stat-label">Personalized Rilono AI</span>
                     </div>
                     <div class="value-stat">
                         <span class="platform-stat-number purple">24/7</span>
-                        <span class="platform-stat-label">AI Assistance</span>
+                        <span class="platform-stat-label">Rilono AI Assistance</span>
                     </div>
                 </div>
             </div>
@@ -1744,7 +1770,7 @@
                             </svg>
                         </div>
                     </div>
-                    <h3>AI Answers for DS-160, I-20, and SEVIS</h3>
+                    <h3>Rilono AI Answers for DS-160, I-20, and SEVIS</h3>
                     <p>Get instant answers to F1 visa questions across DS-160, I-20, SEVIS, and financial documents.
                     </p>
                 </div>
@@ -1781,7 +1807,7 @@
                         </div>
                     </div>
                     <h3>Document Intelligence</h3>
-                    <p>AI extracts and organizes information from your documents automatically. No manual data entry.
+                    <p>Rilono AI extracts and organizes information from your documents automatically. No manual data entry.
                     </p>
                 </div>
                 <div class="feature-card reveal reveal-delay-5">
@@ -1794,7 +1820,7 @@
                     </div>
                     <h3>F1 Interview Question Practice</h3>
                     <p>Practice common F1 visa interview questions around funding, university choice, and post-study
-                        plans with AI feedback.</p>
+                        plans with Rilono AI feedback.</p>
                 </div>
                 <div class="feature-card reveal reveal-delay-6">
                     <div class="feature-icon-wrapper">
@@ -1805,7 +1831,7 @@
                         </div>
                     </div>
                     <h3>Access Anywhere</h3>
-                    <p>Your F1 documents and AI assistant available on any device — even while waiting at the embassy.
+                    <p>Your F1 documents and Rilono AI assistant available on any device — even while waiting at the embassy.
                     </p>
                 </div>
             </div>
@@ -1957,7 +1983,7 @@
                     </div>
                     <div class="cta-feature">
                         <span class="cta-check">✓</span>
-                        <span>24/7 AI assistance</span>
+                        <span>24/7 Rilono AI assistance</span>
                     </div>
                 </div>
             </div>
@@ -2085,6 +2111,15 @@
                                 </svg></span>
                             <span class="nav-label">Rilono Copilot</span>
                         </a>
+                        <a href="#" class="nav-item" data-tab="universities"
+                            onclick="switchDashboardTab('universities'); return false;">
+                            <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none"
+                                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M3 9l9-5 9 5-9 5-9-5z"></path>
+                                    <path d="M3 9v5l9 5 9-5V9"></path>
+                                    <path d="M21 9v5"></path></svg></span>
+                            <span class="nav-label">Universities</span>
+                        </a>
                         <a href="#" class="nav-item" data-tab="records"
                             onclick="switchDashboardTab('records'); return false;">
                             <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2169,7 +2204,7 @@
                                     <!-- F1 Visa Journey Tracker Widget -->
                                     <div class="dashboard-widget" style="grid-column: 1 / -1;">
                                         <div class="widget-header">
-                                            <h3>🛂 Your F1 Visa Journey</h3>
+                                            <h3 id="visaJourneyHeading">🛂 Your F1 Visa Journey</h3>
                                         </div>
                                         <div class="widget-content">
                                             <div id="visaJourneyTracker" style="padding: 1.5rem;">
@@ -2300,7 +2335,7 @@
                                                 <div>
                                                     <div class="overview-health-title">Validation Overview</div>
                                                     <div class="overview-health-subtitle">Status of uploaded documents
-                                                        and AI checks</div>
+                                                        and Rilono AI checks</div>
                                                 </div>
                                                 <div id="overviewDocumentHealthStatus" class="overview-health-badge">No
                                                     Data</div>
@@ -2447,6 +2482,17 @@
                         </div>
                     </div>
 
+                    <!-- Universities Tab -->
+                    <div id="dashboardTab-universities" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>🎓 Universities</h2>
+                            <p class="tab-subtitle">Get Rilono AI university recommendations for your destination and track your shortlist.</p>
+                        </div>
+                        <div id="universitiesContent" style="padding: 0 0 2rem;">
+                            <div style="padding:2rem;color:var(--text-secondary,#9a9cb0)">Loading…</div>
+                        </div>
+                    </div>
+
                     <!-- Profile Tab -->
                     <div id="dashboardTab-profile" class="dashboard-tab">
                         <div class="tab-header">
@@ -2548,6 +2594,17 @@
                                             class="btn btn-secondary" style="width: 100%;"
                                             onclick="handleEnableEmailNotifications()">Enable Email
                                             Notifications</button>
+                                    </div>
+                                    <div id="profileMarketingEmailsCard"
+                                        style="display: none; margin-top: 1rem; padding: 1rem; border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 12px; background: rgba(99, 102, 241, 0.07);">
+                                        <div style="font-weight: 700; margin-bottom: 0.2rem;">Marketing emails</div>
+                                        <div id="profileMarketingEmailsText"
+                                            style="color: var(--text-secondary, #cbd5e1); font-size: 0.85rem; margin-bottom: 0.85rem;">
+                                            Product tips, visa updates and occasional offers.
+                                        </div>
+                                        <button id="profileMarketingEmailsToggleBtn" type="button"
+                                            class="btn btn-secondary" style="width: 100%;"
+                                            onclick="handleToggleMarketingEmails()">Subscribe</button>
                                     </div>
                                 </div>
                             </div>
@@ -2788,7 +2845,7 @@
                     <!-- Documents Tab -->
                     <div id="dashboardTab-documents" class="dashboard-tab">
                         <div class="tab-header">
-                            <h2>AI Documentation Agent</h2>
+                            <h2>Rilono AI Documentation Agent</h2>
                             <p class="tab-subtitle">Manage your documents and preferences</p>
                         </div>
                         <div class="documents-layout">
@@ -2802,7 +2859,7 @@
                                             <div>
                                                 <div class="overview-health-title">Validation Overview</div>
                                                 <div class="overview-health-subtitle">Status of uploaded documents and
-                                                    AI checks</div>
+                                                    Rilono AI checks</div>
                                             </div>
                                             <div id="documentsHealthStatus" class="overview-health-badge">No Data</div>
                                         </div>
@@ -3086,7 +3143,7 @@
                                             </div>
                                             <div id="visaMockInterviewGuide" class="visa-mock-note">Click Start
                                                 Interview, choose Voice or Chat, then proceed question by question. The
-                                                AI officer ends the interview when complete.</div>
+                                                Rilono AI officer ends the interview when complete.</div>
                                             <div id="visaMockModePicker" class="visa-mock-mode-picker"
                                                 style="display: none;">
                                                 <div class="visa-mock-mode-title">Choose interview mode for this session
@@ -3107,7 +3164,7 @@
                                             <div class="visa-mock-transcript-label">Interview Transcript</div>
                                             <div id="visaMockInterviewLog" class="visa-mock-log">
                                                 <div class="visa-mock-log-item system">Click Start Interview and choose
-                                                    Voice or Chat to begin your visa-officer simulation. The AI officer
+                                                    Voice or Chat to begin your visa-officer simulation. The Rilono AI officer
                                                     will close it automatically.</div>
                                             </div>
                                             <div id="visaMockChatComposer" class="visa-mock-chat-composer"
@@ -3286,7 +3343,7 @@
                     <div id="dashboardTab-records" class="dashboard-tab">
                         <div class="tab-header">
                             <h2>Rilono AI</h2>
-                            <p class="tab-subtitle">Your AI assistant for visa documentation and guidance</p>
+                            <p class="tab-subtitle">Your Rilono AI assistant for visa documentation and guidance</p>
                         </div>
                         <div class="rilono-ai-container">
                             <div id="recordsRilonoAiWidget" class="rilono-ai-widget">
@@ -3435,7 +3492,7 @@
                         <div class="pricing-price">₹999<span>/ one-time</span></div>
                         <ul class="pricing-features">
                             <li>Unlimited document audits &amp; red-flag scans</li>
-                            <li>3 full AI voice mock interviews</li>
+                            <li>3 full Rilono AI voice mock interviews</li>
                             <li>Unlimited DS-160 auto-fills &amp; Chrome extension</li>
                             <li>Unlimited messages with Rilono AI</li>
                             <li>Unlimited document uploads</li>
@@ -3454,22 +3511,24 @@
         <div id="contactSection" class="section" style="display: none;">
             <div class="contact-page">
                 <div class="contact-header">
-                    <h1>Contact Us</h1>
-                    <p>Have a question, feedback, or need help? We'd love to hear from you!</p>
+                    <span class="contact-eyebrow"><span class="dot"></span> We'd love to hear from you</span>
+                    <h1>Get in <span class="contact-grad">touch</span></h1>
+                    <p>Have a question, feedback, or need a hand with your visa journey? Drop us a note — our team
+                        usually replies within a day.</p>
                 </div>
 
                 <div class="contact-content">
                     <div class="contact-form-container">
                         <form id="contactForm" class="contact-form">
-                            <div class="form-group">
-                                <label for="contactName">Your Name <span
-                                        style="color: var(--danger-color);">*</span></label>
-                                <input type="text" id="contactName" required placeholder="John Doe">
-                            </div>
-                            <div class="form-group">
-                                <label for="contactEmail">Your Email <span
-                                        style="color: var(--danger-color);">*</span></label>
-                                <input type="email" id="contactEmail" required placeholder="john@example.com">
+                            <div class="contact-form-row">
+                                <div class="form-group">
+                                    <label for="contactName">Your Name <span class="req">*</span></label>
+                                    <input type="text" id="contactName" required placeholder="John Doe">
+                                </div>
+                                <div class="form-group">
+                                    <label for="contactEmail">Your Email <span class="req">*</span></label>
+                                    <input type="email" id="contactEmail" required placeholder="john@example.com">
+                                </div>
                             </div>
                             <div class="form-group">
                                 <label for="contactUserType">I am a</label>
@@ -3482,54 +3541,63 @@
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label for="contactSubject">Subject <span
-                                        style="color: var(--danger-color);">*</span></label>
+                                <label for="contactSubject">Subject <span class="req">*</span></label>
                                 <input type="text" id="contactSubject" required placeholder="How can we help you?">
                             </div>
                             <div class="form-group">
-                                <label for="contactMessage">Message <span
-                                        style="color: var(--danger-color);">*</span></label>
+                                <label for="contactMessage">Message <span class="req">*</span></label>
                                 <textarea id="contactMessage" rows="6" required
                                     placeholder="Tell us more about your question or feedback..."></textarea>
                             </div>
                             <button type="submit" class="btn btn-primary" id="contactSubmitBtn">
                                 <span>Send Message</span>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="18" height="18"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </button>
+                            <p class="contact-form-foot">🔒 Your details are kept private and never shared.</p>
                         </form>
                     </div>
 
                     <div class="contact-info">
+                        <div class="contact-info-card contact-card-highlight">
+                            <div class="contact-info-icon">💬</div>
+                            <div class="contact-info-body">
+                                <h3>Chat with Rilono AI</h3>
+                                <p>Instant answers to visa &amp; document questions — 24/7.</p>
+                                <a href="#"
+                                    onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('rilono-ai'); } else { showRegister(); } return false;">Try
+                                    Rilono AI →</a>
+                            </div>
+                        </div>
                         <div class="contact-info-card">
                             <div class="contact-info-icon">📧</div>
-                            <h3>Email Us</h3>
-                            <p>For general inquiries:</p>
-                            <a href="mailto:contact@rilono.com">contact@rilono.com</a>
+                            <div class="contact-info-body">
+                                <h3>Email us</h3>
+                                <p>For general inquiries:</p>
+                                <a href="mailto:contact@rilono.com">contact@rilono.com</a>
+                            </div>
                         </div>
                         <div class="contact-info-card">
-                            <div class="contact-info-icon">💬</div>
-                            <h3>Chat with AI</h3>
-                            <p>Get instant answers:</p>
-                            <a href="#"
-                                onclick="event.preventDefault(); if(authToken) { showDashboard(); switchDashboardTab('rilono-ai'); } else { showRegister(); } return false;">Try
-                                Rilono AI</a>
+                            <div class="contact-info-icon">⏱️</div>
+                            <div class="contact-info-body">
+                                <h3>Response time</h3>
+                                <p>We typically reply within 24–48 hours on business days.</p>
+                            </div>
                         </div>
                         <div class="contact-info-card">
-                            <div class="contact-info-icon">🔗</div>
-                            <h3>Follow Us</h3>
-                            <p>Stay connected:</p>
-                            <a href="https://www.linkedin.com/company/rilono-ai/" target="_blank"
-                                rel="noopener noreferrer">LinkedIn</a>
-                        </div>
-                        <div class="contact-info-card">
-                            <div class="contact-info-icon">⏰</div>
-                            <h3>Response Time</h3>
-                            <p>We typically respond within 24-48 hours during business days.</p>
+                            <div class="contact-info-icon contact-icon-in">in</div>
+                            <div class="contact-info-body">
+                                <h3>Follow us</h3>
+                                <p>Stay connected for updates &amp; tips.</p>
+                                <a href="https://www.linkedin.com/company/rilono-ai/" target="_blank"
+                                    rel="noopener noreferrer">LinkedIn →</a>
+                            </div>
                         </div>
                         <div class="contact-info-card">
                             <div class="contact-info-icon">🏢</div>
-                            <h3>Business Identity</h3>
-                            <p><strong>Business:</strong> Rilono<br><strong>Office Region:</strong> Bengaluru,
-                                Karnataka, India</p>
+                            <div class="contact-info-body">
+                                <h3>Business identity</h3>
+                                <p><strong>Rilono</strong> · Bengaluru, Karnataka, India</p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -4490,7 +4558,7 @@
                         <div class="checkout-launch-benefits-title">What You Get</div>
                         <ul class="checkout-launch-benefits">
                             <li>Unlimited document audits &amp; red-flag scans</li>
-                            <li>3 full AI voice mock interviews</li>
+                            <li>3 full Rilono AI voice mock interviews</li>
                             <li>Unlimited DS-160 auto-fills</li>
                             <li>Unlimited Rilono AI messages &amp; uploads</li>
                             <li>Unlimited interview prep &amp; Copilot workflows</li>
