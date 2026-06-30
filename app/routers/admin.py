@@ -15,6 +15,7 @@ from app import models, schemas
 from app import ai_usage
 from app import enterprise_credits
 from app import enterprise_coupons
+from app import enterprise_refunds
 from app import email_service
 from app import visa_pass
 from app import ai_guardrails
@@ -1194,6 +1195,249 @@ def _get_enterprise_org_or_404(db: Session, organization_id: int) -> models.Ente
     if not org:
         raise HTTPException(status_code=404, detail="Enterprise account not found.")
     return org
+
+
+def _admin_iso(value):
+    if not value:
+        return None
+    try:
+        return value.isoformat()
+    except Exception:
+        return None
+
+
+_CREDIT_PAYMENT_KIND_LABELS = {"credits": "Credit top-up", "infra_fee": "Infrastructure fee"}
+
+
+@router.get("/enterprise/accounts/{organization_id}/details")
+def enterprise_account_details_admin(
+    request: Request,
+    organization_id: int,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Full account snapshot for one enterprise org — wallet balance, lifetime
+    credits purchased/spent, recent Razorpay purchases (with any discount applied),
+    recent credit usage, and the configured discount codes. Read-only."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.account.details",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+
+    # --- organization + members ---
+    members = (
+        db.query(models.EnterpriseOrganizationMember)
+        .filter(models.EnterpriseOrganizationMember.organization_id == org.id)
+        .all()
+    )
+    members_active = sum(1 for m in members if m.is_active)
+    admins = sum(1 for m in members if m.is_active and (m.role or "") == "admin")
+    creator = (
+        db.query(models.User).filter(models.User.id == org.created_by_user_id).first()
+        if org.created_by_user_id else None
+    )
+
+    # --- wallet (balance, lifetime purchased/spent, infra-fee state) ---
+    wallet = enterprise_credits.wallet_state(db, org.id)
+
+    # --- credit/infra purchases (Razorpay charges) ---
+    P = models.EnterpriseCreditPayment
+    payment_rows = (
+        db.query(P)
+        .filter(P.organization_id == org.id)
+        .order_by(desc(P.created_at), desc(P.id))
+        .limit(25)
+        .all()
+    )
+    purchases = []
+    for p in payment_rows:
+        refundable_paise = enterprise_refunds.payment_refundable_paise(p)
+        purchases.append({
+            "id": p.id,
+            "kind": p.kind,
+            "kind_label": _CREDIT_PAYMENT_KIND_LABELS.get(p.kind, p.kind),
+            "package_key": p.package_key,
+            "credits": int(p.credits or 0),
+            "bonus_credits": int(p.bonus_credits or 0),
+            "total_credits": int(p.credits or 0) + int(p.bonus_credits or 0),
+            "amount_paise": int(p.amount_paise or 0),
+            "amount_display": enterprise_credits.format_inr(p.amount_paise),
+            "currency": p.currency,
+            "status": p.status,
+            "provider": p.provider,
+            "razorpay_payment_id": p.razorpay_payment_id,
+            "coupon_code": p.coupon_code,
+            "coupon_percent_off": float(p.coupon_percent_off) if p.coupon_percent_off is not None else None,
+            "original_amount_display": (
+                enterprise_credits.format_inr(p.original_amount_paise) if p.original_amount_paise else None
+            ),
+            "refunded_amount_paise": int(p.refunded_amount_paise or 0),
+            "refunded_amount_display": enterprise_credits.format_inr(p.refunded_amount_paise),
+            "refundable_paise": refundable_paise,
+            "refundable_display": enterprise_credits.format_inr(refundable_paise),
+            "is_refundable": bool(refundable_paise > 0 and p.razorpay_payment_id),
+            "suggested_clawback_credits": enterprise_refunds.proportional_credits(p, refundable_paise),
+            "created_at": _admin_iso(p.created_at),
+            "verified_at": _admin_iso(p.verified_at),
+        })
+
+    # Gross collected per kind. A refund flips status to refunded/partially_refunded,
+    # so include those and net out refunds separately (total refunded is computed below).
+    def _sum_collected(kind: str) -> int:
+        return int(
+            db.query(func.coalesce(func.sum(P.amount_paise), 0))
+            .filter(
+                P.organization_id == org.id,
+                P.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
+                P.kind == kind,
+            )
+            .scalar() or 0
+        )
+
+    credit_paid = _sum_collected("credits")
+    infra_paid = _sum_collected("infra_fee")
+    verified_count = int(
+        db.query(func.count(P.id))
+        .filter(
+            P.organization_id == org.id,
+            P.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
+        )
+        .scalar() or 0
+    )
+
+    # --- recent credit usage (ledger) ---
+    T = models.EnterpriseCreditTransaction
+    txn_rows = (
+        db.query(T)
+        .filter(T.organization_id == org.id)
+        .order_by(desc(T.created_at), desc(T.id))
+        .limit(15)
+        .all()
+    )
+    recent_activity = []
+    for t in txn_rows:
+        action = enterprise_credits.get_action(t.action_key) if t.action_key else None
+        recent_activity.append({
+            "id": t.id,
+            "type": t.type,
+            "action_key": t.action_key,
+            "action_label": action["label"] if action else None,
+            "credits": int(t.credits),
+            "balance_after": int(t.balance_after),
+            "description": t.description,
+            "created_by_name": t.created_by_name,
+            "created_at": _admin_iso(t.created_at),
+        })
+
+    # --- discount codes configured for this account ---
+    coupon_rows = (
+        db.query(models.EnterpriseCoupon)
+        .filter(models.EnterpriseCoupon.organization_id == org.id)
+        .order_by(desc(models.EnterpriseCoupon.created_at), desc(models.EnterpriseCoupon.id))
+        .all()
+    )
+    coupons = [enterprise_coupons.serialize(db, c) for c in coupon_rows]
+
+    # --- refunds issued to this account ---
+    refunds = enterprise_refunds.list_refunds(db, org.id)
+    refunded_paise = enterprise_refunds.total_refunded_paise(db, org.id)
+    total_paid = credit_paid + infra_paid
+
+    return {
+        "organization": {
+            "id": int(org.id),
+            "company_name": (org.company_name or "").strip() or "Untitled Organization",
+            "subdomain_slug": org.subdomain_slug,
+            "created_by_name": (creator.full_name or creator.email) if creator else None,
+            "created_by_email": creator.email if creator else None,
+            "created_at": _admin_iso(org.created_at),
+            "members_total": len(members),
+            "members_active": members_active,
+            "admins": admins,
+        },
+        "wallet": wallet,
+        "totals": {
+            "credit_revenue_paise": credit_paid,
+            "credit_revenue_display": enterprise_credits.format_inr(credit_paid),
+            "infra_revenue_paise": infra_paid,
+            "infra_revenue_display": enterprise_credits.format_inr(infra_paid),
+            "total_paid_paise": total_paid,
+            "total_paid_display": enterprise_credits.format_inr(total_paid),
+            "refunded_paise": refunded_paise,
+            "refunded_display": enterprise_credits.format_inr(refunded_paise),
+            "net_paid_paise": total_paid - refunded_paise,
+            "net_paid_display": enterprise_credits.format_inr(total_paid - refunded_paise),
+            "verified_payment_count": verified_count,
+        },
+        "credit_value_inr": enterprise_credits.paise_to_rupees(enterprise_credits.PAISE_PER_CREDIT),
+        "razorpay_enabled": enterprise_refunds.razorpay_enabled(),
+        "purchases": purchases,
+        "recent_activity": recent_activity,
+        "coupons": coupons,
+        "refunds": refunds,
+    }
+
+
+@router.post("/enterprise/accounts/{organization_id}/refunds")
+def issue_enterprise_account_refund_admin(
+    request: Request,
+    organization_id: int,
+    payload: schemas.AdminEnterpriseRefundRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Issue a refund for one enterprise account — either a goodwill credit grant
+    or a real Razorpay money refund (with optional credit claw-back). Recorded in
+    the enterprise_refunds audit table."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.enterprise.refund",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    org = _get_enterprise_org_or_404(db, organization_id)
+    kind = (payload.kind or "").strip().lower()
+    reason = (payload.reason or "").strip() or None
+
+    if kind == "credits":
+        refund = enterprise_refunds.issue_credit_refund(
+            db, org.id, int(payload.credits or 0), reason, current_user
+        )
+    elif kind == "money":
+        if not payload.payment_id:
+            raise HTTPException(status_code=400, detail="Select a payment to refund.")
+        payment = (
+            db.query(models.EnterpriseCreditPayment)
+            .filter(
+                models.EnterpriseCreditPayment.id == int(payload.payment_id),
+                models.EnterpriseCreditPayment.organization_id == org.id,
+            )
+            .first()
+        )
+        if not payment:
+            raise HTTPException(status_code=404, detail="Payment not found for this account.")
+        amount_paise = int(round(float(payload.amount_rupees or 0) * 100))
+        refund = enterprise_refunds.issue_money_refund(
+            db, org.id, payment, amount_paise, int(payload.clawback_credits or 0), reason, current_user
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Unknown refund type.")
+
+    logger.info(
+        "Admin %s issued a %s refund for org %s (refund_id=%s, amount_paise=%s, credits_delta=%s)",
+        current_user.id, kind, org.id, refund.id, refund.amount_paise, refund.credits_delta,
+    )
+    return {
+        "refund": enterprise_refunds.serialize_refund(refund),
+        "wallet": enterprise_credits.wallet_state(db, org.id),
+    }
 
 
 @router.get("/enterprise/accounts/{organization_id}/coupons")

@@ -6,6 +6,7 @@ from datetime import timedelta, datetime
 from urllib.parse import urlparse
 from app.database import get_db
 from app import models, schemas
+from app.legal import LEGAL_TERMS_PRIVACY_VERSION
 from app.auth import (
     authenticate_user,
     create_access_token,
@@ -370,6 +371,15 @@ def register(
             detail="You must accept the Terms & Conditions and Privacy Policy to register."
         )
 
+    # Age confirmation. Minors need a parent/guardian to consent on their behalf
+    # (India DPDP: under 18; EU/UK GDPR: under 16). We capture a self-attestation
+    # here; true verifiable parental consent is a separate, fuller flow.
+    if not user.age_confirmed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You must confirm you are 18 or older, or that a parent/guardian agrees on your behalf, to register."
+        )
+
     # Whitelisted IPs (configured via IP_WHITELIST) can bypass Turnstile gating.
     turnstile_token = user.cf_turnstile_token
     ip_whitelisted = is_request_ip_whitelisted(request)
@@ -464,7 +474,15 @@ def register(
     otp_code = _generate_email_otp()
     verification_token_hash = hash_token(otp_code)
     token_expires = datetime.utcnow() + timedelta(minutes=EMAIL_OTP_EXPIRES_MINUTES)
-    
+
+    # Capture proof-of-consent: when, from where (IP + user agent), and which
+    # version of the legal documents was agreed to.
+    now = datetime.utcnow()
+    consent_ip = extract_client_ip(request) if request else None
+    consent_user_agent = (request.headers.get("user-agent") if request else None) or None
+    if consent_user_agent:
+        consent_user_agent = consent_user_agent[:1000]
+
     # Auto-fill university name from the database (ignore user-provided university)
     db_user = models.User(
         email=user.email,
@@ -476,9 +494,13 @@ def register(
         current_residence_country=user.current_residence_country or "United States",
         referral_code=generate_unique_referral_code(db),
         referred_by_user_id=referrer.id if referrer else None,
-        accepted_terms_privacy_at=datetime.utcnow(),
+        accepted_terms_privacy_at=now,
+        accepted_terms_privacy_ip=consent_ip,
+        accepted_terms_privacy_user_agent=consent_user_agent,
+        accepted_terms_privacy_version=LEGAL_TERMS_PRIVACY_VERSION,
+        age_confirmed_at=now,
         marketing_emails_consent=bool(user.marketing_emails_consent),
-        marketing_emails_consent_at=(datetime.utcnow() if user.marketing_emails_consent else None),
+        marketing_emails_consent_at=(now if user.marketing_emails_consent else None),
         email_verified=False,
         verification_token=verification_token_hash,
         verification_token_expires=token_expires
@@ -731,9 +753,13 @@ OAUTH_RATE_LIMIT = int(os.getenv("OAUTH_RATE_LIMIT", "20"))
 OAUTH_RATE_WINDOW_SECONDS = int(os.getenv("OAUTH_RATE_WINDOW_SECONDS", "300"))
 
 
-def _oauth_state_encode(provider: str, nonce: str) -> str:
+def _oauth_state_encode(provider: str, nonce: str, *, consent: bool = False) -> str:
     payload = {
         "p": provider, "n": nonce,
+        # Whether the user affirmatively accepted the Terms & Privacy (and age) before
+        # starting this flow. Required to create a *new* account via social login.
+        "c": bool(consent),
+        "v": LEGAL_TERMS_PRIVACY_VERSION,
         "exp": datetime.utcnow() + timedelta(seconds=OAUTH_STATE_TTL_SECONDS),
         "iat": datetime.utcnow(),
     }
@@ -754,8 +780,27 @@ def _app_redirect(path: str, *, error: str | None = None) -> RedirectResponse:
     return RedirectResponse(url=target, status_code=302)
 
 
-def _find_or_create_oauth_user(db: Session, *, email: str, name: str | None, provider: str) -> models.User:
-    """Find an existing user by email or create a verified one for this provider."""
+class _OAuthConsentRequired(Exception):
+    """Raised when a social login would create a *new* account but the user has not
+    affirmatively accepted the Terms & Privacy (and age confirmation)."""
+
+
+def _find_or_create_oauth_user(
+    db: Session,
+    *,
+    email: str,
+    name: str | None,
+    provider: str,
+    consent: bool = False,
+    consent_ip: str | None = None,
+    consent_user_agent: str | None = None,
+) -> models.User:
+    """Find an existing user by email or create a verified one for this provider.
+
+    For a brand-new account, an affirmative consent is required; otherwise
+    ``_OAuthConsentRequired`` is raised so the caller can send the user to the
+    sign-up page to accept the Terms. Existing users are logged in unchanged.
+    """
     email = (email or "").strip().lower()
     user = db.query(models.User).filter(models.User.email == email).first()
     if user:
@@ -765,6 +810,10 @@ def _find_or_create_oauth_user(db: Session, *, email: str, name: str | None, pro
             user.email_verified = True  # provider has verified the email
         db.commit()
         return user
+
+    # New account: never silently accept the Terms on the user's behalf.
+    if not consent:
+        raise _OAuthConsentRequired()
 
     # Username from email local-part, de-duplicated.
     base_username = (email.split("@")[0] or "user")[:40]
@@ -781,6 +830,7 @@ def _find_or_create_oauth_user(db: Session, *, email: str, name: str | None, pro
         if domain else None
     )
 
+    now = datetime.utcnow()
     user = models.User(
         email=email,
         username=username,
@@ -789,7 +839,11 @@ def _find_or_create_oauth_user(db: Session, *, email: str, name: str | None, pro
         university=(university.university_name if university else None),
         current_residence_country="United States",
         referral_code=generate_unique_referral_code(db),
-        accepted_terms_privacy_at=datetime.utcnow(),
+        accepted_terms_privacy_at=now,
+        accepted_terms_privacy_ip=consent_ip,
+        accepted_terms_privacy_user_agent=consent_user_agent,
+        accepted_terms_privacy_version=LEGAL_TERMS_PRIVACY_VERSION,
+        age_confirmed_at=now,
         email_verified=True,
         auth_provider=provider,
     )
@@ -808,7 +862,7 @@ def oauth_providers():
 
 
 @router.get("/oauth/{provider}/start")
-def oauth_start(provider: str, request: Request):
+def oauth_start(provider: str, request: Request, consent: bool = False):
     provider = (provider or "").strip().lower()
     if not social_oauth.is_enabled(provider):
         return _app_redirect("/login", error="This sign-in option isn't available right now.")
@@ -817,7 +871,9 @@ def oauth_start(provider: str, request: Request):
         limit=OAUTH_RATE_LIMIT, window_seconds=OAUTH_RATE_WINDOW_SECONDS,
     )
     nonce = _secrets.token_urlsafe(16)
-    state = _oauth_state_encode(provider, nonce)
+    # `consent=1` is appended by the sign-up view once the user ticks the consent box;
+    # it authorizes creating a new account on this social login.
+    state = _oauth_state_encode(provider, nonce, consent=bool(consent))
     return RedirectResponse(url=social_oauth.build_authorize_url(provider, state=state, nonce=nonce), status_code=302)
 
 
@@ -855,7 +911,29 @@ async def oauth_callback(provider: str, request: Request, db: Session = Depends(
         logger.warning("OAuth callback failed (%s): %s", provider, exc)
         return _app_redirect("/login", error=str(exc) or "Could not complete sign-in.")
 
-    user = _find_or_create_oauth_user(db, email=identity["email"], name=identity.get("name"), provider=provider)
+    # Proof-of-consent for new social accounts: which version, from where.
+    consent_given = bool(decoded.get("c"))
+    consent_ip = extract_client_ip(request) if request else None
+    consent_user_agent = (request.headers.get("user-agent") if request else None) or None
+    if consent_user_agent:
+        consent_user_agent = consent_user_agent[:1000]
+    try:
+        user = _find_or_create_oauth_user(
+            db,
+            email=identity["email"],
+            name=identity.get("name"),
+            provider=provider,
+            consent=consent_given,
+            consent_ip=consent_ip,
+            consent_user_agent=consent_user_agent,
+        )
+    except _OAuthConsentRequired:
+        # New user arrived without accepting the Terms (e.g. used social from the
+        # login view). Send them to sign-up to accept before the account is created.
+        return _app_redirect(
+            "/register",
+            error="Please accept the Terms & Conditions and Privacy Policy to create your account.",
+        )
     if not user.is_active:
         return _app_redirect("/login", error="Your account is deactivated. Please contact support.")
 

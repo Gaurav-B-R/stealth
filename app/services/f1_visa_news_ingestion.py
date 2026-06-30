@@ -160,6 +160,7 @@ def _already_ran_today() -> bool:
     try:
         latest = (
             db.query(models.F1VisaNewsItem)
+            .filter(models.F1VisaNewsItem.destination_country_code == "US")
             .order_by(models.F1VisaNewsItem.ingested_at.desc())
             .first()
         )
@@ -184,6 +185,7 @@ def _load_existing_news_items(db) -> List[Dict[str, str]]:
     """Load all current items from DB to provide as context to Gemini."""
     items = (
         db.query(models.F1VisaNewsItem)
+        .filter(models.F1VisaNewsItem.destination_country_code == "US")
         .order_by(models.F1VisaNewsItem.ingested_at.desc())
         .limit(F1_NEWS_MAX_STORED_ITEMS)
         .all()
@@ -209,6 +211,7 @@ def _merge_and_trim(db, new_items: List[Dict[str, str]]) -> int:
     now_utc = datetime.now(timezone.utc)
     for item in new_items:
         news_row = models.F1VisaNewsItem(
+            destination_country_code="US",
             title=item["title"],
             summary=item["summary"],
             why_it_matters=item.get("why_it_matters", ""),
@@ -220,12 +223,17 @@ def _merge_and_trim(db, new_items: List[Dict[str, str]]) -> int:
         db.add(news_row)
     db.commit()
 
-    # Trim: keep only the most recent F1_NEWS_MAX_STORED_ITEMS
-    total_count = db.query(models.F1VisaNewsItem).count()
+    # Trim: keep only the most recent F1_NEWS_MAX_STORED_ITEMS (US scope only).
+    total_count = (
+        db.query(models.F1VisaNewsItem)
+        .filter(models.F1VisaNewsItem.destination_country_code == "US")
+        .count()
+    )
     if total_count > F1_NEWS_MAX_STORED_ITEMS:
         excess = total_count - F1_NEWS_MAX_STORED_ITEMS
         oldest_to_delete = (
             db.query(models.F1VisaNewsItem)
+            .filter(models.F1VisaNewsItem.destination_country_code == "US")
             .order_by(
                 models.F1VisaNewsItem.ingested_at.asc(),
                 models.F1VisaNewsItem.id.asc(),

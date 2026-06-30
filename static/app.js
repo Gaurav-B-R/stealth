@@ -28,7 +28,8 @@ const LEGAL_LAST_UPDATED = {
     privacy: 'June 20, 2026',
     terms: 'June 20, 2026',
     refund: 'June 20, 2026',
-    delivery: 'February 12, 2026'
+    delivery: 'February 12, 2026',
+    dpa: 'June 20, 2026'
 };
 const COOKIE_CONSENT_STORAGE_KEY = 'rilono_cookie_preferences_v1';
 const COOKIE_CONSENT_VERSION = 1;
@@ -546,21 +547,60 @@ let journeyStageCatalog = [];
 let documentTypeLabelByValue = {};
 let journeyStageSelectionByWidget = {};
 
-const VISA_PREP_INTERVIEW_INSTRUCTION = `You are an F-1 visa interview coach for a student.
+// Per-destination interview framing so the AI coach/officer matches the student's
+// actual visa (US keeps the F-1 wording; UK/CA/AU get their own authority + focus).
+const VISA_INTERVIEW_CONTEXT = {
+    US: {
+        coach: 'an F-1 visa interview coach',
+        officer: 'a U.S. Visa Officer conducting a realistic F-1 interview simulation',
+        report: 'F-1 visa',
+        focus: 'university/program fit, finances, ties to home country, and post-study intent',
+    },
+    UK: {
+        coach: 'a UK Student visa credibility-interview coach',
+        officer: 'a UK visa caseworker conducting a realistic UK Student visa credibility interview simulation',
+        report: 'UK Student visa',
+        focus: 'course and university choice, finances and maintenance funds, English ability, and genuine-student intentions',
+    },
+    CA: {
+        coach: 'a Canada study permit interview coach',
+        officer: 'a Canadian visa officer conducting a realistic study permit interview simulation',
+        report: 'Canada study permit',
+        focus: 'study plan and program fit, proof of funds, ties to home country, and intent to leave after studies',
+    },
+    AU: {
+        coach: 'an Australian Student visa (subclass 500) interview coach',
+        officer: 'an Australian Department of Home Affairs officer conducting a realistic subclass 500 Genuine Student interview simulation',
+        report: 'Australian Student visa (subclass 500)',
+        focus: 'course and provider choice, Genuine Student (GS) intentions, finances and OSHC, and ties to home country',
+    },
+};
+
+function currentInterviewContext() {
+    const code = (currentUser && currentUser.destination_country_code) || 'US';
+    return VISA_INTERVIEW_CONTEXT[code] || VISA_INTERVIEW_CONTEXT.US;
+}
+
+function visaPrepInterviewInstruction() {
+    const ctx = currentInterviewContext();
+    return `You are ${ctx.coach} for a student.
 Rules:
 - Ask one question at a time.
 - After every student answer, provide short coaching with this exact structure:
   1) Feedback: what was strong/weak
   2) Improve: a better sample answer (2-4 lines)
-  3) Next Question: ask the next VO-style question
-- Focus on clarity, confidence, university/program fit, finances, ties to home country, and post-study intent.
+  3) Next Question: ask the next visa-officer-style question
+- Focus on clarity, confidence, ${ctx.focus}.
 - Keep each turn concise and practical.
 - If asked about your AI model/provider/training, do not mention Gemini, Google, or internal model names.
 - In those cases, say you are Rilono AI and continue the prep flow.`;
+}
 
-const VISA_MOCK_INTERVIEW_INSTRUCTION = `You are a U.S. Visa Officer conducting a realistic F-1 interview simulation.
+function visaMockInterviewInstruction() {
+    const ctx = currentInterviewContext();
+    return `You are ${ctx.officer}.
 Rules:
-- Stay strictly in Visa Officer role.
+- Stay strictly in the visa officer role.
 - Ask one question at a time.
 - Do NOT provide coaching, feedback, scores, or suggestions during the interview.
 - Keep responses concise and interview-like.
@@ -568,8 +608,11 @@ Rules:
 - When you decide the interview is complete, include the exact token INTERVIEW_COMPLETE in your response once (preferably at the end).
 - If asked about your AI model/provider/training, do not mention Gemini, Google, or internal model names.
 - In those cases, say you are Rilono AI and continue the interview simulation.`;
+}
 
-const VISA_MOCK_REPORT_INSTRUCTION = `You are evaluating a completed F-1 visa mock interview transcript.
+function visaMockReportInstruction() {
+    const ctx = currentInterviewContext();
+    return `You are evaluating a completed ${ctx.report} mock interview transcript.
 Generate a concise final report in plain text with these sections:
 1) Approval Probability: X%
 2) Rejection Probability: Y%
@@ -581,6 +624,7 @@ Make probabilities realistic, balanced, and sum to 100%.
 Do not use markdown formatting characters such as **, *, #, -, or backticks.
 If asked about your AI model/provider/training, do not mention Gemini, Google, or internal model names.
 In those cases, say you are Rilono AI and continue with the report task.`;
+}
 
 let visaMockInterviewState = {
     active: false,
@@ -828,6 +872,8 @@ function handleRoute(skipURLUpdate = false) {
         showRefundPolicy(skipURLUpdate);
     } else if (path === '/delivery-policy') {
         showDeliveryPolicy(skipURLUpdate);
+    } else if (path === '/dpa') {
+        showDPA(skipURLUpdate);
     } else if (path === '/contact') {
         showContact(skipURLUpdate);
     } else if (path === '/unsubscribe-email') {
@@ -1007,11 +1053,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const termsLastUpdated = document.getElementById('termsLastUpdated');
     const refundLastUpdated = document.getElementById('refundLastUpdated');
     const deliveryLastUpdated = document.getElementById('deliveryLastUpdated');
+    const dpaLastUpdated = document.getElementById('dpaLastUpdated');
     if (aboutLastUpdated) aboutLastUpdated.textContent = LEGAL_LAST_UPDATED.about;
     if (privacyLastUpdated) privacyLastUpdated.textContent = LEGAL_LAST_UPDATED.privacy;
     if (termsLastUpdated) termsLastUpdated.textContent = LEGAL_LAST_UPDATED.terms;
     if (refundLastUpdated) refundLastUpdated.textContent = LEGAL_LAST_UPDATED.refund;
     if (deliveryLastUpdated) deliveryLastUpdated.textContent = LEGAL_LAST_UPDATED.delivery;
+    if (dpaLastUpdated) dpaLastUpdated.textContent = LEGAL_LAST_UPDATED.dpa;
 
     // Restore token for same-tab refresh persistence and check authentication.
     restoreAuthToken();
@@ -1421,7 +1469,7 @@ const SOCIAL_PROVIDER_ICONS = {
     apple: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.36 12.78c-.02-2.28 1.86-3.38 1.95-3.43-1.06-1.56-2.72-1.77-3.31-1.79-1.41-.14-2.75.83-3.46.83-.71 0-1.81-.81-2.98-.79-1.53.02-2.95.89-3.74 2.26-1.6 2.77-.41 6.87 1.14 9.12.76 1.1 1.66 2.34 2.84 2.29 1.14-.05 1.57-.74 2.95-.74 1.38 0 1.76.74 2.96.71 1.22-.02 2-1.12 2.75-2.22.86-1.27 1.22-2.5 1.24-2.57-.03-.01-2.38-.91-2.4-3.62zM14.13 5.9c.63-.76 1.05-1.82.94-2.88-.91.04-2 .61-2.65 1.37-.58.67-1.09 1.75-.95 2.78 1.01.08 2.04-.51 2.66-1.27z"/></svg>',
 };
 
-function renderSocialButtons(container, providers, dividerEl) {
+function renderSocialButtons(container, providers, dividerEl, consentCheckboxIds) {
     if (!container) return;
     if (!providers || !providers.length) {
         container.innerHTML = '';
@@ -1431,9 +1479,33 @@ function renderSocialButtons(container, providers, dividerEl) {
     container.innerHTML = providers.map((p) => {
         const key = p.key;
         const icon = SOCIAL_PROVIDER_ICONS[key] || '';
-        return `<a class="social-btn social-btn-${key}" href="${API_BASE}/api/auth/oauth/${key}/start">${icon}<span>Continue with ${p.label}</span></a>`;
+        const startUrl = `${API_BASE}/api/auth/oauth/${key}/start`;
+        return `<a class="social-btn social-btn-${key}" data-oauth-start="${startUrl}" href="${startUrl}">${icon}<span>Continue with ${p.label}</span></a>`;
     }).join('');
     if (dividerEl) dividerEl.style.display = '';
+
+    // On the sign-up view, social login must carry the same affirmative consent as
+    // the email form. Require the consent box(es) to be ticked, then pass consent=1
+    // so the backend may create a new account and record proof-of-consent.
+    const requiredIds = Array.isArray(consentCheckboxIds) ? consentCheckboxIds : [];
+    if (requiredIds.length) {
+        container.querySelectorAll('a[data-oauth-start]').forEach((a) => {
+            a.addEventListener('click', (e) => {
+                const base = a.getAttribute('data-oauth-start');
+                const missing = requiredIds
+                    .map((id) => document.getElementById(id))
+                    .filter((cb) => cb && !cb.checked);
+                if (missing.length) {
+                    e.preventDefault();
+                    showMessage('Please accept the Terms & Privacy and confirm your age before continuing with social sign-up.', 'error');
+                    const first = missing[0];
+                    if (first && typeof first.focus === 'function') first.focus();
+                    return;
+                }
+                a.setAttribute('href', `${base}${base.includes('?') ? '&' : '?'}consent=1`);
+            });
+        });
+    }
 }
 
 async function loadSocialAuthButtons() {
@@ -1443,7 +1515,7 @@ async function loadSocialAuthButtons() {
         const data = await response.json();
         const providers = (data && data.providers) || [];
         renderSocialButtons(document.getElementById('socialAuthLogin'), providers, document.getElementById('socialAuthLoginDivider'));
-        renderSocialButtons(document.getElementById('socialAuthRegister'), providers, document.getElementById('socialAuthRegisterDivider'));
+        renderSocialButtons(document.getElementById('socialAuthRegister'), providers, document.getElementById('socialAuthRegisterDivider'), ['registerConsent', 'registerAgeConsent']);
     } catch (error) {
         // Social login is optional — fail silently and leave the email forms.
     }
@@ -2933,9 +3005,18 @@ async function shortlistFetch(path, opts) {
     const res = await fetch(`${API_BASE}/api/shortlist${path}`, {
         method: opts.method || 'GET',
         headers,
-        credentials: 'same-origin',
+        credentials: 'include',
         body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
+    // A 401 here is an expired/invalid login session (not an AI failure). Surface the
+    // standard "session expired" UX the rest of the app uses instead of the raw
+    // "Could not validate credentials" detail, which looks like an AI/credentials error.
+    if (res.status === 401) {
+        showMessage('Session expired. Please login again.', 'error');
+        logout();
+        const err = new Error('Session expired. Please login again.');
+        err.status = 401; throw err;
+    }
     let data = null; try { data = await res.json(); } catch (e) { /* no body */ }
     if (!res.ok) {
         const detail = data && (data.detail || data.message);
@@ -3135,6 +3216,39 @@ function updateVisaJourneyHeading() {
     el.textContent = JOURNEY_HEADINGS[code] || '🛂 Your Visa Journey';
 }
 
+// Per-destination labels for the sidebar nav, the interviews-section heading, and
+// the AI assistant copy. US keeps its F-1 wording; other countries adapt.
+const VISA_NAV_LABEL = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Canada Study Permit', AU: 'Australia Student Visa' };
+const VISA_JOURNEY_PHRASE = { US: 'F-1 visa', UK: 'UK student visa', CA: 'Canada study permit', AU: 'Australia student visa' };
+function currentVisaJourneyPhrase() {
+    const code = (currentUser && currentUser.destination_country_code) || 'US';
+    return VISA_JOURNEY_PHRASE[code] || 'student visa';
+}
+// Shorter visa prefix used inside the interviews module (the sidebar is narrow).
+const VISA_INTERVIEW_PREFIX = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Study Permit', AU: 'Student Visa' };
+function updateVisaSectionLabels() {
+    const code = (currentUser && currentUser.destination_country_code) || 'US';
+    const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    const label = `${VISA_NAV_LABEL[code] || 'Student Visa'} (Interviews)`;
+    setText('visaNavLabel', label);
+    setText('visaSectionHeading', label);
+
+    // Interviews module titles + sub-nav (the HTML hardcodes US F-1 wording).
+    const prefix = VISA_INTERVIEW_PREFIX[code] || 'Student Visa';
+    setText('subnavLabelPrep', `${prefix} Interview Prep (Rilono AI)`);
+    setText('subnavLabelMock', `${prefix} Mock Interview (Rilono AI)`);
+    setText('prepModuleTitle', `🎯 ${prefix} Interview Prep (Rilono AI)`);
+    setText('mockModuleTitle', `🧠 ${prefix} Mock Interview (Rilono AI)`);
+    setText('prepCoachingPlaceholder', `Start Prep Session to begin a guided ${currentVisaJourneyPhrase()} interview coaching flow.`);
+
+    // Keep the floating assistant tooltip on-brand for the student's destination.
+    try {
+        if (Array.isArray(floatingChatMessages) && floatingChatMessages.length) {
+            floatingChatMessages[0] = `Hey! I'm Rilono AI Assistant. Let's talk about your ${currentVisaJourneyPhrase()} journey.`;
+        }
+    } catch (e) { /* floatingChatMessages not initialized yet */ }
+}
+
 function showDashboard(skipURLUpdate = false) {
     if (!currentUser) {
         showMessage('Please login to view dashboard', 'error');
@@ -3146,6 +3260,7 @@ function showDashboard(skipURLUpdate = false) {
         return;
     }
     updateVisaJourneyHeading();
+    updateVisaSectionLabels();
     hideAllSections();
     document.getElementById('dashboardSection').style.display = 'block';
     const navbar = document.querySelector('.navbar');
@@ -3541,7 +3656,7 @@ function updateSubscriptionUI() {
         if (mockUsageEl) mockUsageEl.textContent = 'Mock: 0/2 used';
         [sidebarUpgradeButton, profileUpgradeButton].filter(Boolean).forEach((button) => {
             button.disabled = !PRO_UPGRADE_ENABLED;
-            button.textContent = PRO_UPGRADE_ENABLED ? 'Upgrade to Pro' : 'Pro Coming Soon';
+            button.textContent = PRO_UPGRADE_ENABLED ? 'Get the Visa Success Pass' : 'Coming Soon';
             button.style.opacity = PRO_UPGRADE_ENABLED ? '1' : '0.75';
             button.style.cursor = PRO_UPGRADE_ENABLED ? 'pointer' : 'not-allowed';
         });
@@ -3808,9 +3923,9 @@ function updateSubscriptionUI() {
         if (canRenew) {
             button.textContent = 'Renew Subscription';
         } else if (isPro) {
-            button.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'You are on Pro';
+            button.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'Visa Pass active';
         } else {
-            button.textContent = canUpgrade ? 'Upgrade to Pro' : 'Pro Coming Soon';
+            button.textContent = canUpgrade ? 'Get the Visa Success Pass' : 'Coming Soon';
         }
         button.style.opacity = canUpgrade || isPro ? '0.8' : '0.75';
         button.style.cursor = canUpgrade ? 'pointer' : 'not-allowed';
@@ -3837,11 +3952,11 @@ function updateSubscriptionUI() {
             if (isJourneyButton) {
                 pricingUpgradeButton.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'Switch to Journey Pass';
             } else {
-                pricingUpgradeButton.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'You are on Pro';
+                pricingUpgradeButton.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'Visa Pass active';
             }
         } else {
             if (!canUpgrade) {
-                pricingUpgradeButton.textContent = 'Pro Coming Soon';
+                pricingUpgradeButton.textContent = 'Coming Soon';
             } else if (pricingUpgradeButton.id === 'pricingProSixMonthUpgradeButton') {
                 pricingUpgradeButton.textContent = 'Get Journey Pass';
             } else {
@@ -3880,8 +3995,8 @@ function resolveFeatureLabelFromLimitMessage(detailText = '') {
     if (text.includes('chat upload limit')) return 'Rilono AI chat uploads';
     if (text.includes('chat upload')) return 'Rilono AI chat uploads';
     if (text.includes('upload limit')) return 'document uploads';
-    if (text.includes('prep limit')) return 'F-1 interview prep sessions';
-    if (text.includes('mock interview limit')) return 'F-1 mock interview sessions';
+    if (text.includes('prep limit')) return 'interview prep sessions';
+    if (text.includes('mock interview limit')) return 'mock interview sessions';
     return 'this feature';
 }
 
@@ -3910,7 +4025,7 @@ function openPlanLimitModal(detailText = '') {
     }
     if (bodyEl) {
         bodyEl.textContent = detailText
-            || `You have used all free usage for ${featureLabel}. Upgrade to Pro to continue instantly.`;
+            || `You have used all free usage for ${featureLabel}. Get the Visa Success Pass to continue instantly.`;
     }
     modal.style.display = 'flex';
 }
@@ -4554,7 +4669,7 @@ async function loadF1VisaNews() {
     if (newsRequestInFlight) return;
     newsRequestInFlight = true;
 
-    newsContainer.innerHTML = '<div class="news-loading">Loading F1 visa news...</div>';
+    newsContainer.innerHTML = '<div class="news-loading">Loading visa news...</div>';
 
     try {
         const response = await fetch(`${API_BASE}/api/news/f1-latest`, {
@@ -4570,7 +4685,8 @@ async function loadF1VisaNews() {
 
         const items = Array.isArray(data.items) ? data.items : [];
         if (items.length === 0) {
-            newsContainer.innerHTML = '<div class="news-loading">No recent F1 visa updates available.</div>';
+            const emptyDest = (data.destination_name || '').replace(/^the /, '');
+            newsContainer.innerHTML = `<div class="news-loading">No recent ${escapeHtml(emptyDest || 'visa')} student-visa updates yet. Check back soon.</div>`;
         } else {
             newsContainer.innerHTML = items.map((item) => {
                 const title = escapeHtml(item.title || 'Update');
@@ -4604,12 +4720,14 @@ async function loadF1VisaNews() {
         const fetchedText = fetchedAt && !Number.isNaN(fetchedAt.getTime())
             ? fetchedAt.toLocaleString()
             : '';
+        const destName = (data.destination_name || '').replace(/^the /, '');
+        const destPrefix = destName ? `${destName} student-visa news` : 'Visa news';
         metaInfo.textContent = fetchedText
-            ? `Last updated: ${fetchedText}`
-            : `${data.count || 0} updates available`;
+            ? `${destPrefix} · Last updated: ${fetchedText}`
+            : `${destPrefix} · ${data.count || 0} updates`;
     } catch (error) {
         console.error('Error loading F1 visa news:', error);
-        newsContainer.innerHTML = '<div class="news-loading">Unable to load F1 visa news right now.</div>';
+        newsContainer.innerHTML = '<div class="news-loading">Unable to load visa news right now. Please try again shortly.</div>';
         metaInfo.textContent = 'Failed to load updates';
     } finally {
         newsRequestInFlight = false;
@@ -4746,7 +4864,7 @@ async function loadF1InterviewExperiences(forceRefresh = false) {
 
         const items = Array.isArray(data.items) ? data.items : [];
         if (items.length === 0) {
-            container.innerHTML = '<div class="news-loading">No interview experiences found for the selected filters right now.</div>';
+            container.innerHTML = '<div class="visa-experience-state"><span class="vxs-icon">🔍</span><p>No interview experiences found for these consulates yet.<span>Try selecting more consulates, or check back a little later.</span></p></div>';
             delete container.dataset.loaded;
         } else {
             container.innerHTML = items.map((item) => {
@@ -4790,8 +4908,8 @@ async function loadF1InterviewExperiences(forceRefresh = false) {
         metaInfo.textContent = `${country} • ${consulates.length} consulate(s) • Updated ${fetchedText} (${cacheText})`;
     } catch (error) {
         console.error('Error loading F1 interview experiences:', error);
-        container.innerHTML = '<div class="news-loading">Unable to load interview experiences right now. Try again shortly.</div>';
-        metaInfo.textContent = 'Failed to load interview experiences';
+        container.innerHTML = '<div class="visa-experience-state visa-experience-state-error"><span class="vxs-icon">⚠️</span><p>Couldn\'t load interview experiences right now.<span>Check your connection and tap "Fetch Latest Experiences" to retry.</span></p></div>';
+        metaInfo.textContent = "Couldn't fetch experiences";
     } finally {
         visaInterviewRequestInFlight = false;
     }
@@ -5531,9 +5649,9 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
     updateVisaInterviewControls(mode);
 
     const initialTurnPrompt = mode === 'prep'
-        ? 'Start the prep session now. Ask the first F-1 interview question.'
+        ? 'Start the prep session now. Ask the first interview question.'
         : 'Start the mock interview now. Ask your first visa-officer question only.';
-    const instruction = mode === 'prep' ? VISA_PREP_INTERVIEW_INSTRUCTION : VISA_MOCK_INTERVIEW_INSTRUCTION;
+    const instruction = mode === 'prep' ? visaPrepInterviewInstruction() : visaMockInterviewInstruction();
     const userTurnContent = isInitialTurn ? initialTurnPrompt : `Student answer: ${studentMessage}`;
     const geminiMessage = `${instruction}\n\n${userTurnContent}`;
 
@@ -6251,7 +6369,7 @@ function downloadMockInterviewReportPdf() {
     <div class="pdf-shell">
         <div class="pdf-header">
             <div class="pdf-header-left">
-                <div class="pdf-title">F1 Mock Interview Report</div>
+                <div class="pdf-title">Mock Interview Report</div>
                 <div class="pdf-subtitle">Actionable evaluation generated from your full mock interview transcript.</div>
             </div>
             <div class="pdf-header-right">
@@ -6292,7 +6410,7 @@ async function finishVoiceMockInterview() {
 
     try {
         const transcript = buildVisaInterviewTranscript(state.history);
-        const reportPrompt = `${VISA_MOCK_REPORT_INSTRUCTION}\n\nInterview transcript:\n${transcript}`;
+        const reportPrompt = `${visaMockReportInstruction()}\n\nInterview transcript:\n${transcript}`;
         const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
             method: 'POST',
             headers: {
@@ -6531,8 +6649,8 @@ async function startVoiceInterviewSession(mode, options = {}) {
     setVisaInterviewStatus(mode, 'Starting interview...');
     updateVisaInterviewControls(mode);
     const readyMessage = mode === 'prep'
-        ? 'I am ready for my F-1 interview prep session.'
-        : 'I am ready for my F-1 visa mock interview.';
+        ? 'I am ready for my visa interview prep session.'
+        : 'I am ready for my visa mock interview.';
     await sendVisaInterviewTurn(mode, readyMessage, true);
 }
 
@@ -7236,6 +7354,16 @@ function showDeliveryPolicy(skipURLUpdate = false) {
     }
 }
 
+function showDPA(skipURLUpdate = false) {
+    hideAllSections();
+    const section = document.getElementById('dpaSection');
+    if (section) section.style.display = 'block';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!skipURLUpdate) {
+        updateURL('/dpa', false);
+    }
+}
+
 function showContact(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('contactSection').style.display = 'block';
@@ -7769,6 +7897,13 @@ async function handleRegister(e) {
         return;
     }
 
+    const ageInput = document.getElementById('registerAgeConsent');
+    const ageConfirmed = Boolean(ageInput && ageInput.checked);
+    if (!ageConfirmed) {
+        showMessage('Please confirm you are 18 or older, or that a parent/guardian agrees on your behalf.', 'error');
+        return;
+    }
+
     // Get form values and convert empty strings to null
     const getValue = (id) => {
         const value = document.getElementById(id).value.trim();
@@ -7786,6 +7921,7 @@ async function handleRegister(e) {
         current_residence_country: getValue('registerCountry'),
         referral_code: getValue('registerReferralCode'),
         accepted_terms_privacy: acceptedTermsPrivacy,
+        age_confirmed: ageConfirmed,
         marketing_emails_consent: marketingEmailsConsent
         // Username is optional - will be auto-generated from email on backend
     };
@@ -10317,6 +10453,12 @@ function updateVisaJourneyWidget(config, journeyData) {
 
         const defaultEmoji = stages[i - 1]?.emoji || '•';
         const stageNode = stageIcon.closest('.journey-stage');
+        // Sync each circle's label with the student's country — the dashboard HTML
+        // hardcodes the US F-1 labels (I-20, DS-160…), which are wrong for UK/CA/AU.
+        const stageLabelEl = stageNode ? stageNode.querySelector('.stage-label') : null;
+        if (stageLabelEl && stages[i - 1] && stages[i - 1].name) {
+            stageLabelEl.textContent = stages[i - 1].name;
+        }
         stageIcon.style.animation = 'none';
         const isCompleted = sequentialCompletionMap[i] === true;
         const isInProgress = !allStagesComplete && i === currentStage && !isCompleted;
@@ -10821,7 +10963,7 @@ async function handleDeleteAccount() {
         return;
     }
 
-    // Double confirmation
+    // Step 1: type-to-confirm
     const confirmText = 'DELETE';
     const userInput = prompt(`This action cannot be undone. All your data including documents and profile will be permanently deleted.\n\nType "${confirmText}" to confirm account deletion:`);
 
@@ -10832,17 +10974,39 @@ async function handleDeleteAccount() {
         return;
     }
 
-    // Final confirmation
-    if (!confirm('Are you absolutely sure you want to delete your account? This action is permanent and cannot be undone.')) {
+    const authHeaders = (authToken && authToken !== COOKIE_AUTH_SENTINEL)
+        ? { 'Authorization': `Bearer ${authToken}` } : {};
+
+    // Step 2: email a 6-digit confirmation code (second-factor security)
+    try {
+        const reqRes = await fetch(`${API_BASE}/api/profile/delete/request-code`, {
+            method: 'POST',
+            headers: authHeaders,
+            credentials: 'include',
+        });
+        if (!reqRes.ok) {
+            const e = await reqRes.json().catch(() => ({}));
+            showMessage(e.detail || 'Could not send the confirmation code. Please try again.', 'error');
+            return;
+        }
+    } catch (error) {
+        showMessage('Could not send the confirmation code. Please check your connection and try again.', 'error');
+        return;
+    }
+
+    // Step 3: enter the emailed code to finalize
+    const code = prompt('For your security, we emailed a 6-digit confirmation code to your account email.\n\nEnter the code to permanently delete your account:');
+    if (!code || !String(code).trim()) {
+        showMessage('Account deletion cancelled.', 'error');
         return;
     }
 
     try {
         const response = await fetch(`${API_BASE}/api/profile/`, {
             method: 'DELETE',
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
+            headers: { ...authHeaders, 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ code: String(code).trim() }),
         });
 
         if (response.ok || response.status === 204) {
@@ -11861,7 +12025,7 @@ function getMainChatWelcomeMarkup() {
         <div class="rilono-ai-message assistant">
             <div class="message-avatar"><svg viewBox="0 0 24 24" width="18" height="18" class="ai-sparkle"><use href="#icon-ai-sparkle"></use></svg></div>
             <div class="message-bubble">
-                <p><strong>Welcome! I'm Rilono AI.</strong> I'm here to guide your F1 visa journey with practical, step-by-step help.</p>
+                <p><strong>Welcome! I'm Rilono AI.</strong> I'm here to guide your ${currentVisaJourneyPhrase()} journey with practical, step-by-step help.</p>
                 <p>I can help you with:</p>
                 <p>• What to upload next (document checklist)</p>
                 <p>• Profile and visa-stage gaps you should fix first</p>

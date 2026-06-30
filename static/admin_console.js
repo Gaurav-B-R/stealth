@@ -114,6 +114,7 @@ const refs = {
     couponCreateBtn: document.getElementById('adminCouponCreateBtn'),
     couponFormError: document.getElementById('adminCouponFormError'),
     couponTableBody: document.getElementById('adminCouponTableBody'),
+    accountDetails: document.getElementById('adminAccountDetails'),
     financeMetricNetHero: document.getElementById('adminFinanceMetricNetHero'),
     financeMetricInvested: document.getElementById('adminFinanceMetricInvested'),
     financeMetricInvestedSub: document.getElementById('adminFinanceMetricInvestedSub'),
@@ -863,12 +864,12 @@ function renderFinanceTimeline(monthlySeries) {
         ...series.map((point) => Math.max(Number(point.investment_usd) || 0, Number(point.returns_usd) || 0))
     );
 
-    refs.financeTimelineChart.innerHTML = series.map((point) => {
+    const columns = series.map((point) => {
         const investment = Number(point.investment_usd) || 0;
         const returns = Number(point.returns_usd) || 0;
         const net = Number(point.net_usd) || 0;
-        const investmentHeight = Math.max((investment / maxValue) * 100, investment > 0 ? 4 : 0);
-        const returnsHeight = Math.max((returns / maxValue) * 100, returns > 0 ? 4 : 0);
+        const investmentHeight = Math.max((investment / maxValue) * 100, investment > 0 ? 2 : 0);
+        const returnsHeight = Math.max((returns / maxValue) * 100, returns > 0 ? 2 : 0);
         return `
             <div class="finance-month">
                 <div class="finance-bars" title="Invested ${escapeHtml(formatUsd(investment))}, Returns ${escapeHtml(formatUsd(returns))}">
@@ -880,6 +881,14 @@ function renderFinanceTimeline(monthlySeries) {
             </div>
         `;
     }).join('');
+
+    refs.financeTimelineChart.innerHTML = `
+        <div class="finance-timeline-legend">
+            <span class="finance-legend-item"><span class="finance-legend-dot investment"></span>Investment</span>
+            <span class="finance-legend-item"><span class="finance-legend-dot returns"></span>Returns</span>
+        </div>
+        <div class="finance-timeline-plot">${columns}</div>
+    `;
 }
 
 function renderFinanceBreakdown(breakdown) {
@@ -1576,7 +1585,9 @@ function renderEnterpriseRevenue(data) {
     const setText = (el, val) => { if (el) el.textContent = val; };
     setText(refs.revMarginHero, s.gross_margin_display || '₹0');
     setText(refs.revTotal, s.total_revenue_display || '₹0');
-    setText(refs.revTotalSub, 'Credits + infra fees');
+    setText(refs.revTotalSub, (s.refunds_paise || 0) > 0
+        ? `Net · ${s.gross_revenue_display || '₹0'} gross − ${s.refunds_display || '₹0'} refunds`
+        : 'Net of refunds · credits + infra fees');
     setText(refs.revCredits, s.credit_revenue_display || '₹0');
     setText(refs.revCreditsSub, `${(s.credit_payment_count || 0).toLocaleString()} payments`);
     setText(refs.revInfra, s.infra_revenue_display || '₹0');
@@ -1628,10 +1639,12 @@ function renderAiUsage(data) {
             refs.aiTimelineChart.innerHTML = '<div class="table-empty">No AI usage in the last 30 days.</div>';
         } else {
             const max = Math.max(1e-9, ...daily.map((d) => Number(d.cost_usd) || 0));
-            refs.aiTimelineChart.innerHTML = daily.map((d) => {
+            const columns = daily.map((d, i) => {
                 const c = Number(d.cost_usd) || 0;
                 const h = c > 0 ? Math.max((c / max) * 100, 4) : 0;
-                const label = String(d.date || '').slice(5);
+                // 30 day-labels won't all fit; show every 5th day plus the most recent.
+                const showLabel = (i % 5 === 0) || (i === daily.length - 1);
+                const label = showLabel ? String(d.date || '').slice(5) : '';
                 return `
                     <div class="finance-month">
                         <div class="finance-bars" title="${escapeHtml(d.date)} — ${escapeHtml(formatAiUsd(c))} · ${escapeHtml(formatTokens(d.tokens))} tokens">
@@ -1640,6 +1653,7 @@ function renderAiUsage(data) {
                         <div class="finance-month-label">${escapeHtml(label)}</div>
                     </div>`;
             }).join('');
+            refs.aiTimelineChart.innerHTML = `<div class="finance-timeline-plot finance-ai-daily">${columns}</div>`;
         }
     }
 
@@ -1765,14 +1779,317 @@ function setCouponFormError(message) {
 async function openCouponModal(orgId, company) {
     state.couponOrg = { id: orgId, company };
     state.couponList = [];
-    if (refs.couponModalTitle) refs.couponModalTitle.textContent = 'Discount codes';
+    if (refs.couponModalTitle) refs.couponModalTitle.textContent = 'Manage account';
     if (refs.couponModalSubtitle) refs.couponModalSubtitle.textContent = company;
     refs.couponForm?.reset();
     setCouponFormError('');
+    if (refs.accountDetails) {
+        refs.accountDetails.innerHTML = '<p class="account-details-status">Loading account details…</p>';
+    }
     renderCouponTableMessage('Loading discount codes...');
     if (refs.couponModal) refs.couponModal.hidden = false;
     document.body.classList.add('admin-modal-open');
-    await loadCoupons();
+    await Promise.all([loadAccountDetails(), loadCoupons()]);
+}
+
+async function loadAccountDetails() {
+    if (!state.couponOrg || !refs.accountDetails) return;
+    if (!await ensureAdminProtection({ silent: true })) {
+        refs.accountDetails.innerHTML = '<p class="account-details-status">Verify the security check above to load account details.</p>';
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/details`, {
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            refs.accountDetails.innerHTML = `<p class="account-details-status">${escapeHtml(normalizeErrorMessage(payload, 'Failed to load account details.'))}</p>`;
+            return;
+        }
+        renderAccountDetails(payload);
+    } catch (error) {
+        console.error('Failed to load account details:', error);
+        refs.accountDetails.innerHTML = '<p class="account-details-status">Could not load account details. Please retry.</p>';
+    }
+}
+
+function renderAccountDetails(data) {
+    if (!refs.accountDetails) return;
+    const org = data.organization || {};
+    const wallet = data.wallet || {};
+    const totals = data.totals || {};
+    const infra = wallet.infra_fee || {};
+    const purchases = Array.isArray(data.purchases) ? data.purchases : [];
+    const activity = Array.isArray(data.recent_activity) ? data.recent_activity : [];
+
+    const metaBits = [];
+    if (org.subdomain_slug) metaBits.push(`subdomain: ${escapeHtml(org.subdomain_slug)}`);
+    metaBits.push(`${Number(org.members_active || 0)} active member${Number(org.members_active) === 1 ? '' : 's'}`);
+    metaBits.push(`${Number(org.admins || 0)} admin${Number(org.admins) === 1 ? '' : 's'}`);
+    if (org.created_by_name) metaBits.push(`created by ${escapeHtml(org.created_by_name)}`);
+
+    const infraStatus = infra.is_current
+        ? `Active until ${formatDateTime(infra.paid_until)}`
+        : (infra.over_free_limit ? 'Due (past free limit)' : 'Not required yet');
+
+    const metrics = `
+        <div class="account-metrics-grid">
+            <article class="metric-card"><span>Credits remaining</span>
+                <strong>${Number(wallet.balance_credits || 0).toLocaleString()}</strong>
+                <small>${escapeHtml(wallet.balance_display || '')}</small></article>
+            <article class="metric-card"><span>Lifetime purchased</span>
+                <strong>${Number(wallet.lifetime_purchased_credits || 0).toLocaleString()}</strong>
+                <small>credits</small></article>
+            <article class="metric-card"><span>Lifetime used</span>
+                <strong>${Number(wallet.lifetime_spent_credits || 0).toLocaleString()}</strong>
+                <small>credits</small></article>
+            <article class="metric-card"><span>Total paid</span>
+                <strong>${escapeHtml(totals.total_paid_display || '₹0')}</strong>
+                <small>${Number(totals.verified_payment_count || 0)} payment${Number(totals.verified_payment_count) === 1 ? '' : 's'}</small></article>
+        </div>
+        <p class="account-meta-line">Infrastructure fee: ${escapeHtml(infraStatus)} · ${Number(infra.clients_used || 0)} / ${Number(infra.free_student_limit || 0)} free students used</p>`;
+
+    const purchaseRows = purchases.length
+        ? purchases.map((p) => {
+            const credits = p.kind === 'credits'
+                ? `+${Number(p.total_credits || 0).toLocaleString()}${p.bonus_credits ? ` <span class="account-coupon-tag">+${Number(p.bonus_credits)} bonus</span>` : ''}`
+                : '—';
+            const coupon = p.coupon_code
+                ? `<span class="account-coupon-tag">${escapeHtml(p.coupon_code)}${p.coupon_percent_off ? ` −${p.coupon_percent_off}%` : ''}</span>`
+                : '—';
+            let statusCls = 'created';
+            if (p.status === 'verified') statusCls = 'verified';
+            else if (p.status === 'failed') statusCls = 'failed';
+            else if (p.status === 'refunded' || p.status === 'partially_refunded') statusCls = 'refunded';
+            const statusLabel = (p.status || '').replace(/_/g, ' ');
+            const refundNote = (p.refunded_amount_paise > 0)
+                ? `<div class="enterprise-meta">refunded ${escapeHtml(p.refunded_amount_display)}</div>` : '';
+            return `<tr>
+                <td>${escapeHtml(formatDateTime(p.created_at))}</td>
+                <td>${escapeHtml(p.kind_label || p.kind)}${p.package_key ? `<div class="enterprise-meta">${escapeHtml(p.package_key)}</div>` : ''}</td>
+                <td>${credits}</td>
+                <td>${escapeHtml(p.amount_display || '')}${p.original_amount_display ? `<div class="enterprise-meta">was ${escapeHtml(p.original_amount_display)}</div>` : ''}</td>
+                <td>${coupon}</td>
+                <td><span class="account-status-chip ${statusCls}">${escapeHtml(statusLabel)}</span>${refundNote}</td>
+            </tr>`;
+        }).join('')
+        : '<tr><td colspan="6" class="table-empty">No purchases yet.</td></tr>';
+
+    const purchasesBlock = `
+        <h4 class="account-section-title">Purchases &amp; top-ups</h4>
+        <div class="coupon-list-wrap">
+            <table class="users-table">
+                <thead><tr><th>Date</th><th>Type</th><th>Credits</th><th>Amount</th><th>Coupon</th><th>Status</th></tr></thead>
+                <tbody>${purchaseRows}</tbody>
+            </table>
+        </div>`;
+
+    const activityBlock = activity.length ? `
+        <h4 class="account-section-title">Recent credit usage</h4>
+        <div class="account-activity">
+            ${activity.map((t) => {
+                const pos = Number(t.credits) > 0;
+                const label = t.action_label || t.description || (t.type || '').replace(/_/g, ' ');
+                const who = t.created_by_name ? ` · ${escapeHtml(t.created_by_name)}` : '';
+                return `<div class="account-activity-row">
+                    <span class="aa-main">${escapeHtml(label)}${who}</span>
+                    <span class="aa-when">${escapeHtml(formatDateTime(t.created_at))}</span>
+                    <span class="aa-credits ${pos ? 'pos' : 'neg'}">${t.credits === 0 ? '—' : (pos ? '+' : '') + Number(t.credits)}</span>
+                </div>`;
+            }).join('')}
+        </div>` : '';
+
+    state.accountDetails = data;
+    const refundsBlock = buildRefundsHistoryBlock(data);
+    const refundFormBlock = buildRefundFormBlock(data);
+
+    refs.accountDetails.innerHTML =
+        `<h4 class="account-section-title">Wallet &amp; billing</h4>` +
+        `<p class="account-meta-line" style="margin-top:-0.2rem">${metaBits.join(' · ')}</p>` +
+        metrics + purchasesBlock + refundFormBlock + refundsBlock + activityBlock;
+
+    wireRefundForm(data);
+}
+
+function buildRefundsHistoryBlock(data) {
+    const refunds = Array.isArray(data.refunds) ? data.refunds : [];
+    if (!refunds.length) return '';
+    const rows = refunds.map((r) => {
+        const isMoney = r.kind === 'money';
+        const amount = isMoney ? escapeHtml(r.amount_display || '₹0') : '—';
+        const cr = r.credits_delta ? `${r.credits_delta > 0 ? '+' : ''}${Number(r.credits_delta)} cr` : '—';
+        const statusCls = ['processed', 'completed'].includes(r.status) ? 'verified' : (r.status === 'failed' ? 'failed' : 'created');
+        const reason = r.reason ? `<div class="enterprise-meta">${escapeHtml(r.reason)}</div>` : '';
+        return `<tr>
+            <td>${escapeHtml(formatDateTime(r.created_at))}${r.created_by_name ? `<div class="enterprise-meta">by ${escapeHtml(r.created_by_name)}</div>` : ''}</td>
+            <td>${isMoney ? 'Money (Razorpay)' : 'Credits'}${reason}</td>
+            <td>${amount}</td>
+            <td>${cr}</td>
+            <td><span class="account-status-chip ${statusCls}">${escapeHtml(r.status)}</span></td>
+        </tr>`;
+    }).join('');
+    return `
+        <h4 class="account-section-title">Refunds issued</h4>
+        <div class="coupon-list-wrap">
+            <table class="users-table">
+                <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Credits</th><th>Status</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>`;
+}
+
+function buildRefundFormBlock(data) {
+    const refundable = (data.purchases || []).filter((p) => p.is_refundable);
+    const razorpayOn = !!data.razorpay_enabled;
+    const moneyOptions = refundable.map((p) =>
+        `<option value="${p.id}">${escapeHtml(p.kind_label)} · ${escapeHtml(p.amount_display)} · ${escapeHtml(formatDateTime(p.created_at))} (refundable ${escapeHtml(p.refundable_display)})</option>`
+    ).join('');
+
+    let moneyInner;
+    if (!razorpayOn) {
+        moneyInner = '<p class="account-details-status">Razorpay isn\'t configured, so money refunds are unavailable.</p>';
+    } else if (!refundable.length) {
+        moneyInner = '<p class="account-details-status">No refundable Razorpay payments on this account.</p>';
+    } else {
+        moneyInner = `
+            <div class="refund-grid">
+                <label class="coupon-field coupon-field-wide"><span>Payment to refund</span>
+                    <select id="refundPaymentSelect">${moneyOptions}</select></label>
+                <label class="coupon-field"><span>Amount (₹)</span>
+                    <input type="number" id="refundAmount" min="0.01" step="0.01" placeholder="0.00"></label>
+                <label class="coupon-field"><span>Claw back credits</span>
+                    <input type="number" id="refundClawback" min="0" step="1" placeholder="0"></label>
+                <label class="coupon-field coupon-field-wide"><span>Reason (optional)</span>
+                    <input type="text" id="refundMoneyReason" maxlength="200" placeholder="e.g. Customer requested partial refund"></label>
+            </div>
+            <button type="button" id="refundMoneyBtn" class="primary-btn small-btn refund-danger">Refund money via Razorpay</button>
+            <p class="account-meta-line" style="margin:0.4rem 0 0">⚠ This sends real money back to the customer and can't be undone.</p>`;
+    }
+
+    return `
+        <h4 class="account-section-title">Issue a refund</h4>
+        <div class="refund-tabs">
+            <button type="button" class="refund-tab active" data-refund-mode="credits">Credit / goodwill</button>
+            <button type="button" class="refund-tab" data-refund-mode="money">Money (Razorpay)</button>
+        </div>
+        <div class="refund-mode" data-mode="credits">
+            <div class="refund-grid">
+                <label class="coupon-field"><span>Credits to add</span>
+                    <input type="number" id="refundCredits" min="1" step="1" placeholder="50"></label>
+                <label class="coupon-field coupon-field-wide"><span>Reason (optional)</span>
+                    <input type="text" id="refundCreditReason" maxlength="200" placeholder="e.g. Goodwill — failed Deep Scan"></label>
+            </div>
+            <button type="button" id="refundCreditBtn" class="primary-btn small-btn">Add credits to wallet</button>
+            <p class="account-meta-line" style="margin:0.4rem 0 0">No money moves — credits are added to their wallet and logged.</p>
+        </div>
+        <div class="refund-mode hidden" data-mode="money">${moneyInner}</div>
+        <p id="refundFormError" class="coupon-form-error" hidden></p>`;
+}
+
+function setRefundError(message) {
+    const el = document.getElementById('refundFormError');
+    if (!el) return;
+    if (!message) { el.hidden = true; el.textContent = ''; return; }
+    el.textContent = message;
+    el.hidden = false;
+}
+
+function wireRefundForm(data) {
+    // mode toggle
+    document.querySelectorAll('.refund-tab').forEach((tab) => {
+        tab.addEventListener('click', () => {
+            const mode = tab.dataset.refundMode;
+            document.querySelectorAll('.refund-tab').forEach((t) => t.classList.toggle('active', t === tab));
+            document.querySelectorAll('.refund-mode').forEach((m) => m.classList.toggle('hidden', m.dataset.mode !== mode));
+            setRefundError('');
+        });
+    });
+
+    // money mode: prefill amount + clawback when a payment is selected, recompute clawback on amount change
+    const paymentSelect = document.getElementById('refundPaymentSelect');
+    const amountInput = document.getElementById('refundAmount');
+    const clawbackInput = document.getElementById('refundClawback');
+    const purchaseById = {};
+    (data.purchases || []).forEach((p) => { purchaseById[p.id] = p; });
+
+    const syncMoneyDefaults = (resetAmount) => {
+        if (!paymentSelect) return;
+        const p = purchaseById[Number(paymentSelect.value)];
+        if (!p) return;
+        if (amountInput) {
+            amountInput.max = (p.refundable_paise / 100).toFixed(2);
+            if (resetAmount) amountInput.value = (p.refundable_paise / 100).toFixed(2);
+        }
+        recomputeClawback();
+    };
+    const recomputeClawback = () => {
+        if (!paymentSelect || !clawbackInput || !amountInput) return;
+        const p = purchaseById[Number(paymentSelect.value)];
+        if (!p) return;
+        if (p.kind !== 'credits' || !p.amount_paise) { clawbackInput.value = '0'; return; }
+        const amtPaise = Math.round(Number(amountInput.value || 0) * 100);
+        const suggested = Math.round((p.total_credits || 0) * (amtPaise / p.amount_paise));
+        clawbackInput.value = String(Math.max(0, suggested));
+    };
+    if (paymentSelect) { paymentSelect.addEventListener('change', () => syncMoneyDefaults(true)); syncMoneyDefaults(true); }
+    if (amountInput) amountInput.addEventListener('input', recomputeClawback);
+
+    const creditBtn = document.getElementById('refundCreditBtn');
+    if (creditBtn) creditBtn.addEventListener('click', async () => {
+        setRefundError('');
+        const credits = Math.floor(Number((document.getElementById('refundCredits') || {}).value || 0));
+        if (!Number.isFinite(credits) || credits <= 0) { setRefundError('Enter how many credits to add.'); return; }
+        const reason = (document.getElementById('refundCreditReason') || {}).value || '';
+        await issueRefund(creditBtn, { kind: 'credits', credits, reason });
+    });
+
+    const moneyBtn = document.getElementById('refundMoneyBtn');
+    if (moneyBtn) moneyBtn.addEventListener('click', async () => {
+        setRefundError('');
+        const paymentId = Number((paymentSelect || {}).value || 0);
+        const amount = Number((amountInput || {}).value || 0);
+        const clawback = Math.floor(Number((clawbackInput || {}).value || 0));
+        const reason = (document.getElementById('refundMoneyReason') || {}).value || '';
+        if (!paymentId) { setRefundError('Select a payment to refund.'); return; }
+        if (!Number.isFinite(amount) || amount <= 0) { setRefundError('Enter the amount to refund.'); return; }
+        const company = (state.couponOrg && state.couponOrg.company) || 'this account';
+        if (!window.confirm(`Refund ₹${amount.toLocaleString()} to ${company} via Razorpay and claw back ${clawback} credits?\n\nThis moves real money and cannot be undone.`)) return;
+        await issueRefund(moneyBtn, { kind: 'money', payment_id: paymentId, amount_rupees: amount, clawback_credits: clawback, reason });
+    });
+}
+
+async function issueRefund(button, body) {
+    if (!state.couponOrg) return;
+    if (!await ensureAdminProtection({ silent: false })) return;
+    const originalLabel = button.textContent;
+    button.disabled = true;
+    button.textContent = 'Processing…';
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/enterprise/accounts/${state.couponOrg.id}/refunds`, {
+            method: 'POST',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify(body)
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            setRefundError(normalizeErrorMessage(payload, 'Refund failed.'));
+            return;
+        }
+        // success — reload the full account details to reflect the new balance/history
+        await loadAccountDetails();
+        await loadEnterpriseAccounts({ silent: true }).catch(() => {});
+    } catch (error) {
+        console.error('Refund failed:', error);
+        setRefundError('Could not issue the refund. Please retry.');
+    } finally {
+        button.disabled = false;
+        button.textContent = originalLabel;
+    }
 }
 
 function closeCouponModal() {

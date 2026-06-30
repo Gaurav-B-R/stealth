@@ -13,11 +13,26 @@ from app.auth import (
 )
 from app.referrals import ensure_user_referral_code
 from app.utils.rate_limiter import check_ip_rate_limit
+from app.utils.token_security import hash_token, token_matches
+from app.email_service import send_account_deletion_otp_email
+from datetime import datetime, timedelta
+import secrets
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 logger = logging.getLogger(__name__)
 CHANGE_PASSWORD_RATE_LIMIT = int(os.getenv("CHANGE_PASSWORD_RATE_LIMIT", "5"))
 CHANGE_PASSWORD_RATE_WINDOW_SECONDS = int(os.getenv("CHANGE_PASSWORD_RATE_WINDOW_SECONDS", "900"))
+# Account deletion requires an emailed 6-digit OTP as a second factor.
+ACCOUNT_DELETE_OTP_EXPIRES_MINUTES = int(os.getenv("ACCOUNT_DELETE_OTP_EXPIRES_MINUTES", "10"))
+ACCOUNT_DELETE_OTP_RATE_LIMIT = int(os.getenv("ACCOUNT_DELETE_OTP_RATE_LIMIT", "5"))
+ACCOUNT_DELETE_OTP_RATE_WINDOW_SECONDS = int(os.getenv("ACCOUNT_DELETE_OTP_RATE_WINDOW_SECONDS", "900"))
+ACCOUNT_DELETE_VERIFY_RATE_LIMIT = int(os.getenv("ACCOUNT_DELETE_VERIFY_RATE_LIMIT", "10"))
+ACCOUNT_DELETE_VERIFY_RATE_WINDOW_SECONDS = int(os.getenv("ACCOUNT_DELETE_VERIFY_RATE_WINDOW_SECONDS", "900"))
+
+
+def _generate_delete_otp() -> str:
+    """A 6-digit numeric code emailed to confirm account deletion."""
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def _is_safe_profile_picture_url(value: str) -> bool:
@@ -257,16 +272,68 @@ def get_user_profile(
     return user
 
 
+@router.post("/delete/request-code", status_code=status.HTTP_200_OK)
+def request_account_deletion_code(
+    request: Request,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Email a 6-digit code the user must enter to confirm account deletion."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="profile.delete.request_code",
+        limit=ACCOUNT_DELETE_OTP_RATE_LIMIT,
+        window_seconds=ACCOUNT_DELETE_OTP_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    code = _generate_delete_otp()
+    current_user.account_deletion_otp = hash_token(code)
+    current_user.account_deletion_otp_expires = datetime.utcnow() + timedelta(
+        minutes=ACCOUNT_DELETE_OTP_EXPIRES_MINUTES
+    )
+    db.commit()
+    send_account_deletion_otp_email(
+        current_user.email, code, expires_in_minutes=ACCOUNT_DELETE_OTP_EXPIRES_MINUTES
+    )
+    return {
+        "message": "A confirmation code has been sent to your email.",
+        "expires_in_minutes": ACCOUNT_DELETE_OTP_EXPIRES_MINUTES,
+    }
+
+
 @router.delete("/", status_code=status.HTTP_204_NO_CONTENT)
 def delete_account(
+    payload: schemas.AccountDeleteRequest,
+    request: Request,
     current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Delete the current user's account and all associated data"""
-    user_id = current_user.id
-    
-    # Delete the user explicitly; related documents will be removed by cascade
+    """Delete the account — requires the emailed OTP as a second factor (security)."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="profile.delete.verify",
+        limit=ACCOUNT_DELETE_VERIFY_RATE_LIMIT,
+        window_seconds=ACCOUNT_DELETE_VERIFY_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    code = "".join(ch for ch in str(payload.code or "") if ch.isdigit())
+    expires = current_user.account_deletion_otp_expires
+    if expires is not None and getattr(expires, "tzinfo", None) is not None:
+        expires = expires.replace(tzinfo=None)
+
+    if (
+        not current_user.account_deletion_otp
+        or expires is None
+        or expires < datetime.utcnow()
+        or len(code) != 6
+        or not token_matches(code, current_user.account_deletion_otp)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired confirmation code. Request a new code and try again.",
+        )
+
+    # Verified — delete the user explicitly; related data is removed by cascade.
     db.delete(current_user)
     db.commit()
-    
     return None

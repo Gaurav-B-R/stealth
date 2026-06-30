@@ -82,13 +82,28 @@ def _int_env(env_key: str, default_value: int) -> int:
         return default_value
 
 
+def charm_paise(round_paise: int) -> int:
+    """Apply charm (psychological) pricing to a round amount in paise.
+
+    A round ₹ price ending in 00 is nudged down by ₹1 so it ends in 99 — ₹1,000 → ₹999,
+    ₹3,000 → ₹2,999, ₹5,000 → ₹4,999. This is a REAL price the customer pays (the card,
+    the checkout breakdown and the Razorpay order all use it, so they always agree).
+    Amounts that aren't a whole multiple of ₹100, or are already charm-priced, are left
+    untouched so admin overrides are respected verbatim."""
+    paise = int(round_paise)
+    rupees, sub = divmod(paise, 100)
+    if sub == 0 and rupees >= 100 and rupees % 100 == 0:
+        return (rupees - 1) * 100  # e.g. 3000 → 2999, in paise: 300000 → 299900
+    return paise
+
+
 # Top-up packages. `credits` is the base amount; `bonus_credits` is promotional.
 PACKAGES = {
     "starter": {
         "key": "starter",
         "label": "Starter Pack",
         "tagline": "Low-friction entry to premium AI",
-        "amount_paise": _paise("ENTERPRISE_CREDIT_STARTER_PAISE", 100000),   # ₹1,000
+        "amount_paise": _paise("ENTERPRISE_CREDIT_STARTER_PAISE", charm_paise(100000)),   # ₹999
         "credits": _int_env("ENTERPRISE_CREDIT_STARTER_CREDITS", 100),
         "bonus_credits": _int_env("ENTERPRISE_CREDIT_STARTER_BONUS", 0),
         "is_popular": False,
@@ -97,7 +112,7 @@ PACKAGES = {
         "key": "pro",
         "label": "Pro Pack",
         "tagline": "Best value — bonus credits applied",
-        "amount_paise": _paise("ENTERPRISE_CREDIT_PRO_PAISE", 300000),       # ₹3,000
+        "amount_paise": _paise("ENTERPRISE_CREDIT_PRO_PAISE", charm_paise(300000)),       # ₹2,999
         "credits": _int_env("ENTERPRISE_CREDIT_PRO_CREDITS", 300),
         "bonus_credits": _int_env("ENTERPRISE_CREDIT_PRO_BONUS", 50),        # → 350 total
         "is_popular": True,
@@ -106,7 +121,7 @@ PACKAGES = {
         "key": "enterprise",
         "label": "Enterprise Pack",
         "tagline": "For high-volume offices",
-        "amount_paise": _paise("ENTERPRISE_CREDIT_ENTERPRISE_PAISE", 500000),  # ₹5,000
+        "amount_paise": _paise("ENTERPRISE_CREDIT_ENTERPRISE_PAISE", charm_paise(500000)),  # ₹4,999
         "credits": _int_env("ENTERPRISE_CREDIT_ENTERPRISE_CREDITS", 500),
         "bonus_credits": _int_env("ENTERPRISE_CREDIT_ENTERPRISE_BONUS", 150),  # → 650 total
         "is_popular": False,
@@ -284,6 +299,36 @@ def add_credits(
     return txn
 
 
+def apply_adjustment(
+    db: Session,
+    organization_id: int,
+    credits_delta: int,
+    *,
+    txn_type: str = "adjustment",
+    description: Optional[str] = None,
+    reference_type: Optional[str] = None,
+    reference_id: Optional[int] = None,
+    user: Optional[models.User] = None,
+    commit: bool = True,
+) -> tuple[models.EnterpriseCreditTransaction, int]:
+    """Apply a signed credit adjustment to a wallet + ledger row (used for refunds and
+    refund claw-backs). A negative delta is capped so the balance never goes below zero.
+    Returns (txn, applied_delta) where applied_delta is what actually moved the balance."""
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    delta = int(credits_delta)
+    if delta < 0:
+        delta = -min(-delta, int(wallet.balance_credits))  # never overdraw below 0
+    wallet.balance_credits = int(wallet.balance_credits) + delta
+    txn = _record_transaction(
+        db, wallet=wallet, txn_type=txn_type, credits=delta, action_key=None,
+        description=description, reference_type=reference_type, reference_id=reference_id, user=user,
+    )
+    if commit:
+        db.commit()
+        db.refresh(txn)
+    return txn, delta
+
+
 def can_afford(db: Session, organization_id: int, action_key: str) -> bool:
     if not ENFORCE:
         return True
@@ -311,6 +356,46 @@ def enforce_action_or_402(db: Session, organization_id: int, action_key: str) ->
         detail=(
             f"Not enough credits for {label}. It costs {cost} credits and your balance is "
             f"{int(wallet.balance_credits)}. Top up your Rilono Credits wallet to continue."
+        ),
+    )
+
+
+def can_afford_units(db: Session, organization_id: int, action_key: str, units: int = 1) -> bool:
+    """Whether the wallet can cover `units` of a billable action (e.g. N invited interviews)."""
+    if not ENFORCE:
+        return True
+    units = max(1, int(units))
+    needed = action_cost(action_key) * units
+    if needed <= 0:
+        return True
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    return int(wallet.balance_credits) >= needed
+
+
+def enforce_units_or_402(db: Session, organization_id: int, action_key: str, units: int = 1) -> None:
+    """Staff-facing pre-check before *issuing* N billable units (e.g. an interview link
+    that lets a client take `units` interviews). Blocks sending a link the wallet can't
+    fund, so the client never hits a dead 'contact your consultancy' wall. Raises 402
+    with an explicit, staff-readable top-up message (this is never shown to clients)."""
+    if not ENFORCE:
+        return
+    units = max(1, int(units))
+    cost_each = action_cost(action_key)
+    if cost_each <= 0:
+        return
+    needed = cost_each * units
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    balance = int(wallet.balance_credits)
+    if balance >= needed:
+        return
+    action = get_action(action_key)
+    label = action["label"] if action else "this action"
+    unit_word = label if units == 1 else f"{units}× {label}"
+    raise HTTPException(
+        status_code=402,
+        detail=(
+            f"Not enough Rilono Credits to send {unit_word}. That needs {needed} credits "
+            f"({cost_each} each) and your wallet has {balance}. Top up your wallet, then send the link."
         ),
     )
 
@@ -567,6 +652,12 @@ def get_package(package_key: str | None) -> Optional[dict]:
 # Admin revenue analytics — credit revenue vs real Gemini cost = our margin
 # ---------------------------------------------------------------------------
 
+# Payment statuses that represent money we actually collected. A refund flips a
+# payment to 'refunded' / 'partially_refunded', so revenue must include these and
+# then net out P.refunded_amount_paise.
+REVENUE_PAYMENT_STATUSES = ("verified", "partially_refunded", "refunded")
+
+
 def _money_paise(value) -> int:
     try:
         return int(value or 0)
@@ -591,27 +682,37 @@ def build_revenue_analytics(db: Session) -> dict:
     T = models.EnterpriseCreditTransaction
     W = models.EnterpriseCreditWallet
 
-    # --- Revenue (verified Razorpay payments) ------------------------------
-    credit_revenue_paise = _money_paise(
-        db.query(func.coalesce(func.sum(P.amount_paise), 0))
-        .filter(P.status == "verified", P.kind == "credits").scalar()
-    )
-    credit_payment_count = int(
-        db.query(func.count(P.id)).filter(P.status == "verified", P.kind == "credits").scalar() or 0
-    )
-    infra_revenue_paise = _money_paise(
-        db.query(func.coalesce(func.sum(P.amount_paise), 0))
-        .filter(P.status == "verified", P.kind == "infra_fee").scalar()
-    )
-    infra_payment_count = int(
-        db.query(func.count(P.id)).filter(P.status == "verified", P.kind == "infra_fee").scalar() or 0
-    )
+    # --- Revenue (collected Razorpay payments, NET of refunds) -------------
+    # A payment that was refunded has its status flipped to 'refunded' /
+    # 'partially_refunded', so we count every payment that ever cleared and then
+    # subtract what we refunded (P.refunded_amount_paise) to get true net revenue.
+    def _kind_money(kind: str) -> tuple[int, int, int]:
+        gross = _money_paise(
+            db.query(func.coalesce(func.sum(P.amount_paise), 0))
+            .filter(P.status.in_(REVENUE_PAYMENT_STATUSES), P.kind == kind).scalar()
+        )
+        refunded = _money_paise(
+            db.query(func.coalesce(func.sum(P.refunded_amount_paise), 0))
+            .filter(P.status.in_(REVENUE_PAYMENT_STATUSES), P.kind == kind).scalar()
+        )
+        count = int(
+            db.query(func.count(P.id))
+            .filter(P.status.in_(REVENUE_PAYMENT_STATUSES), P.kind == kind).scalar() or 0
+        )
+        return gross, refunded, count
+
+    credit_gross_paise, credit_refunded_paise, credit_payment_count = _kind_money("credits")
+    infra_gross_paise, infra_refunded_paise, infra_payment_count = _kind_money("infra_fee")
+    credit_revenue_paise = max(0, credit_gross_paise - credit_refunded_paise)
+    infra_revenue_paise = max(0, infra_gross_paise - infra_refunded_paise)
+    gross_revenue_paise = credit_gross_paise + infra_gross_paise
+    refunds_paise = credit_refunded_paise + infra_refunded_paise
     total_revenue_paise = credit_revenue_paise + infra_revenue_paise
 
     # --- Credits sold / spent / outstanding (deferred liability) -----------
     credits_sold = int(
         db.query(func.coalesce(func.sum(P.credits + P.bonus_credits), 0))
-        .filter(P.status == "verified", P.kind == "credits").scalar() or 0
+        .filter(P.status.in_(REVENUE_PAYMENT_STATUSES), P.kind == "credits").scalar() or 0
     )
     credits_spent = int(
         db.query(func.coalesce(func.sum(-T.credits), 0)).filter(T.type == "debit").scalar() or 0
@@ -665,12 +766,14 @@ def build_revenue_analytics(db: Session) -> dict:
             "margin_pct": action_margin_pct,
         })
 
-    # --- Recent verified payments ------------------------------------------
+    # --- Recent collected payments (incl. refunded), with net amount -------
     recent = []
     for p in (
-        db.query(P).filter(P.status == "verified")
+        db.query(P).filter(P.status.in_(REVENUE_PAYMENT_STATUSES))
         .order_by(P.verified_at.desc().nullslast(), P.id.desc()).limit(10).all()
     ):
+        refunded = int(p.refunded_amount_paise or 0)
+        net = max(0, int(p.amount_paise or 0) - refunded)
         recent.append({
             "id": p.id,
             "organization_id": p.organization_id,
@@ -679,6 +782,11 @@ def build_revenue_analytics(db: Session) -> dict:
             "credits": int(p.credits) + int(p.bonus_credits),
             "amount_paise": p.amount_paise,
             "amount_display": format_inr(p.amount_paise),
+            "status": p.status,
+            "refunded_amount_paise": refunded,
+            "refunded_display": format_inr(refunded),
+            "net_amount_paise": net,
+            "net_amount_display": format_inr(net),
             "verified_at": p.verified_at.isoformat() if p.verified_at else None,
         })
 
@@ -694,6 +802,11 @@ def build_revenue_analytics(db: Session) -> dict:
             "infra_revenue_paise": infra_revenue_paise,
             "infra_revenue_display": format_inr(infra_revenue_paise),
             "infra_payment_count": infra_payment_count,
+            # Net revenue (after refunds) is the headline; gross + refunds shown for transparency.
+            "gross_revenue_paise": gross_revenue_paise,
+            "gross_revenue_display": format_inr(gross_revenue_paise),
+            "refunds_paise": refunds_paise,
+            "refunds_display": format_inr(refunds_paise),
             "total_revenue_paise": total_revenue_paise,
             "total_revenue_display": format_inr(total_revenue_paise),
             "gemini_cost_paise": gemini_cost_paise,
@@ -712,7 +825,8 @@ def build_revenue_analytics(db: Session) -> dict:
         "packages": packages_payload(),
         "recent_payments": recent,
         "pricing_note": (
-            "Revenue is from verified Razorpay payments. Gemini cost is estimated from per-token "
-            "pricing (app.ai_usage) and converted at USD_TO_INR — cross-check the GCP invoice & FX."
+            "Revenue is net of refunds (collected Razorpay payments minus refunded amounts). "
+            "Gemini cost is estimated from per-token pricing (app.ai_usage) and converted at "
+            "USD_TO_INR — cross-check the GCP invoice & FX."
         ),
     }

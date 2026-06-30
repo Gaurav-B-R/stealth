@@ -420,6 +420,11 @@
         err.classList.remove("hidden");
         return;
       }
+      if (!f.accept_dpa.checked) {
+        err.textContent = "Please accept the Data Processing Agreement to manage your clients' data.";
+        err.classList.remove("hidden");
+        return;
+      }
       const body = {
         company_name: f.company_name.value.trim(),
         subdomain_slug: f.subdomain_slug.value.trim().toLowerCase(),
@@ -427,6 +432,7 @@
         email: f.email.value.trim(),
         password: f.password.value,
         accepted_terms_privacy: f.accept_terms.checked,
+        accepted_dpa: f.accept_dpa.checked,
         marketing_emails_consent: f.marketing_consent.checked,
       };
       try {
@@ -913,6 +919,7 @@
           <div class="field"><label>Application reference</label><input name="application_reference" value="${esc(c.application_reference || "")}"/></div>
         </details>
         ${isEdit ? "" : `<div class="field"><label>First note (optional)</label><textarea name="initial_note" placeholder="e.g. Walk-in enquiry, interested in Fall intake…"></textarea></div>`}
+        ${isEdit ? "" : `<div class="consent-field" style="display:flex;gap:8px;align-items:flex-start;margin-top:2px"><input type="checkbox" id="clientConsent" name="client_consent_confirmed" required style="width:auto;margin-top:3px"/><label for="clientConsent" style="font-size:13px;font-weight:500;line-height:1.4">This client has consented to their personal data being collected and processed through Rilono (see <a href="/dpa" target="_blank" rel="noopener">Data Processing Agreement</a>).</label></div>`}
         <div id="clientFormError" class="auth-error hidden"></div>
       </div>
       <div class="modal-foot">
@@ -967,6 +974,15 @@
       const assign = f.assigned_to_user_id.value;
       body.assigned_to_user_id = assign ? parseInt(assign, 10) : null;
       if (!isEdit && f.initial_note && f.initial_note.value.trim()) body.initial_note = f.initial_note.value.trim();
+
+      if (!isEdit) {
+        if (!f.client_consent_confirmed || !f.client_consent_confirmed.checked) {
+          err.textContent = "Please confirm the client has consented to their data being processed.";
+          err.classList.remove("hidden");
+          return;
+        }
+        body.client_consent_confirmed = true;
+      }
 
       btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
       try {
@@ -1323,15 +1339,52 @@
     }
     function openSendModal() {
       const first = (cl.full_name || "the student").split(" ")[0];
+      const cr = state.credits || {};
+      const mockCost = ((cr.actions || []).find((a) => a.key === "mock_interview") || {}).credits || 20;
+      const perInr = cr.credit_value_inr || 10;
+      const isInr = (cr.currency || "INR") === "INR";
+      const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
+      const money = (credits) => isInr ? ` (≈ ₹${Math.round(credits * perInr).toLocaleString()})` : "";
       openModal(`<div class="modal-head"><h3>Send mock interview to ${esc(first)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
         <form id="ivSendForm"><div class="modal-body">
           <p style="margin:0 0 16px;color:var(--text-2);font-size:14px;line-height:1.6">We'll email a secure link to <b>${esc(cl.email)}</b>. ${esc(first)} verifies with a one-time code, then can take the interview(s) on their own — and you'll see the results here.</p>
           <div class="field"><label>How many interviews can they take?</label>
             <input type="number" id="ivCount" min="1" max="20" value="3" /></div>
+          <div id="ivCostNote" style="background:rgba(99,102,241,.07);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--text-2);line-height:1.5;margin:-2px 0 4px"></div>
           <div id="ivSendErr" class="auth-error hidden"></div>
         </div>
         <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary" id="ivSendSave">✉ Send link</button></div></form>`);
+      function updateIvCost() {
+        const el = $("#ivCostNote"); if (!el) return;
+        const n = Math.max(1, Math.min(20, parseInt($("#ivCount").value, 10) || 1));
+        const total = n * mockCost;
+        const enforced = !!cr.enforced;
+        const short = balance !== null && balance < total;
+        // Block sending when credits are enforced and the wallet can't fund every
+        // interview — so the client never receives a link they can't use.
+        const blocked = enforced && short;
+        let balanceLine = "";
+        if (balance !== null) {
+          if (blocked) {
+            balanceLine = `<div style="margin-top:6px;color:var(--warning,#f59e0b);font-weight:600">⚠ Wallet balance: ${balance} credits — not enough to send ${n} interview${n === 1 ? "" : "s"}.
+              <button type="button" class="btn btn-soft btn-sm" style="margin-left:6px" onclick="__ent.closeModal();__ent.go('credits')">Top up wallet</button></div>`;
+          } else {
+            balanceLine = `<div style="margin-top:5px;color:var(--muted)">Wallet balance: ${balance} credits${short ? ` — only ${Math.floor(balance / mockCost)} funded right now` : ""}</div>`;
+          }
+        }
+        el.innerHTML =
+          `<div>Costs up to <b>${total} credits</b>${money(total)} for ${n} interview${n === 1 ? "" : "s"} — <b>${mockCost}</b> credits each, charged only when an interview is actually taken.</div>` +
+          balanceLine;
+        const sb = $("#ivSendSave");
+        if (sb) {
+          sb.disabled = blocked;
+          sb.title = blocked ? "Top up your wallet to send this link" : "";
+        }
+      }
+      const ic = $("#ivCount");
+      if (ic) ic.addEventListener("input", updateIvCost);
+      updateIvCost();
       $("#ivSendForm").onsubmit = async (e) => {
         e.preventDefault();
         const n = Math.max(1, Math.min(20, parseInt($("#ivCount").value, 10) || 3));
@@ -1387,9 +1440,15 @@
       if (!cl.email) {
         inner = `<p class="muted" style="margin:0;font-size:13.5px">Add an email to this client (Edit details) to send them an interview link.</p>`;
       } else if (inv && inv.live) {
+        const started = inv.started_count != null ? inv.started_count : (inv.used_count || 0);
+        const completed = inv.completed_count || 0;
+        let statusBadge;
+        if (completed > 0) statusBadge = `<span class="iv-sv ok">✓ Completed${inv.last_completed_at ? " · " + fmtDate(inv.last_completed_at) : ""}</span>`;
+        else if (started > 0) statusBadge = `<span class="iv-sv mid">⏳ Started — not completed</span>`;
+        else statusBadge = `<span class="iv-sv" style="background:#eef2f7;color:#64748b">Not started yet</span>`;
         inner = `<p class="muted" style="margin:0 0 12px;font-size:13.5px">A secure link was sent to <b>${esc(inv.email)}</b> so ${esc(first)} can practise on their own (verified by a one-time code).</p>
           <div class="iv-invite-status">
-            <div><b>${inv.used_count}/${inv.allowed_count}</b> used · <b>${inv.remaining}</b> remaining<br><span class="muted">Sent${inv.created_at ? " " + fmtDate(inv.created_at) : ""}${inv.created_by_name ? " by " + esc(inv.created_by_name) : ""}</span></div>
+            <div>${statusBadge}<br><span class="muted" style="display:inline-block;margin-top:7px">${started} started · ${completed} completed · ${inv.remaining} remaining<br>Sent${inv.created_at ? " " + fmtDate(inv.created_at) : ""}${inv.created_by_name ? " by " + esc(inv.created_by_name) : ""}</span></div>
             <div class="row"><button class="btn btn-soft btn-sm" id="ivResend">Resend / change</button><button class="btn btn-danger btn-sm" id="ivRevoke">Revoke</button></div>
           </div>`;
       } else {
@@ -1923,21 +1982,124 @@
     try {
       res = await api("/coupons/validate", { method: "POST", body: { code, context: "credits", package: pkgs[0].key } });
     } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
-    state.creditCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
-    toast(res.percent_display + " discount applied.", "success");
+    state.creditCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display, free: !!res.free };
+    toast(res.free ? `${res.percent_display} off — this top-up is free.` : res.percent_display + " discount applied.", "success");
     renderCredits();
   }
   function removeCreditCoupon() { state.creditCoupon = null; renderCredits(); }
 
-  async function topupCredits(pkg) {
-    let res;
-    const couponCode = state.creditCoupon ? state.creditCoupon.code : undefined;
-    try { res = await api("/credits/topup/checkout", { method: "POST", body: { package: pkg, coupon_code: couponCode } }); }
-    catch (ex) { toast(ex.message, "error"); return; }
-    if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); return; }
-    if (res.action !== "checkout") { toast("Top-up unavailable.", "error"); return; }
-    if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); return; }
+  // ---- Credit top-up checkout (order-review modal with live coupon + breakdown) ----
+  let checkoutCtx = null;
 
+  function openCreditCheckout(pkgKey) {
+    const pkg = (state.creditPackages || []).find((p) => p.key === pkgKey);
+    if (!pkg) { toast("Package unavailable.", "error"); return; }
+    checkoutCtx = { pkg, coupon: state.creditCoupon || null };
+    renderCheckout();
+  }
+
+  function checkoutBreakdown() {
+    const base = Number(checkoutCtx.pkg.amount_paise || 0);
+    const c = checkoutCtx.coupon;
+    const discount = c ? Math.max(0, base - Math.max(0, Math.round(base * (100 - c.percent) / 100))) : 0;
+    const total = Math.max(0, base - discount);
+    return { base, discount, total, free: total < 100 };
+  }
+
+  function renderCheckout() {
+    const pkg = checkoutCtx.pkg;
+    const c = checkoutCtx.coupon;
+    const b = checkoutBreakdown();
+    const totalCell = b.free ? `<span class="co-free">FREE</span>` : `<b>${fmtPaise(b.total)}</b>`;
+    const proceedLabel = b.free ? `Get ${pkg.total_credits} credits — free` : `Pay ${fmtPaise(b.total)} securely`;
+    const couponBlock = c
+      ? `<div class="co-coupon applied">
+           <div class="co-coupon-info"><span class="co-coupon-tag">🎟 ${esc(c.code)}</span><span class="co-coupon-msg">${esc(c.percent_display)} off applied</span></div>
+           <button type="button" class="btn btn-ghost btn-sm" id="coRemove">Remove</button>
+         </div>`
+      : `<div class="co-coupon">
+           <input id="coCouponInput" class="coupon-input" placeholder="Have a discount code?" maxlength="40"/>
+           <button type="button" class="btn btn-soft btn-sm" id="coApply">Apply</button>
+         </div>`;
+
+    openModal(`
+      <div class="modal-head"><h3>Checkout</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body co-modal">
+        <div class="co-item">
+          <div class="co-item-ic">⚡</div>
+          <div class="co-item-main">
+            <div class="co-item-title">${esc(pkg.label)}</div>
+            <div class="co-item-sub">${pkg.total_credits} credits${pkg.bonus_credits ? ` <span class="co-bonus">incl. +${pkg.bonus_credits} bonus</span>` : ""} · worth ₹${Number(pkg.value_inr || 0).toLocaleString("en-IN")} of AI actions</div>
+          </div>
+          <div class="co-item-price">${esc(pkg.amount_display)}</div>
+        </div>
+        ${couponBlock}
+        <div id="coCouponErr" class="co-coupon-err hidden"></div>
+        <div class="co-summary">
+          <div class="co-line"><span>Subtotal</span><span>${fmtPaise(b.base)}</span></div>
+          ${b.discount > 0 ? `<div class="co-line co-discount"><span>Discount · ${esc(c.code)} (${esc(c.percent_display)} off)</span><span>−${fmtPaise(b.discount)}</span></div>` : ""}
+          <div class="co-line co-total"><span>Total payable</span><span>${totalCell}</span></div>
+        </div>
+        <div class="co-note">${b.free
+          ? "✓ This order is fully covered by your discount — no payment needed."
+          : "🔒 Secure payment via Razorpay · UPI, cards &amp; NetBanking"} · Credits never expire.</div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="button" class="btn btn-primary" id="coProceed">${proceedLabel}</button>
+      </div>`);
+
+    const ap = $("#coApply"); if (ap) ap.onclick = coApplyCheckoutCoupon;
+    const rm = $("#coRemove"); if (rm) rm.onclick = coRemoveCheckoutCoupon;
+    const ci = $("#coCouponInput"); if (ci) ci.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); coApplyCheckoutCoupon(); } };
+    $("#coProceed").onclick = creditCheckoutProceed;
+  }
+
+  async function coApplyCheckoutCoupon() {
+    const input = $("#coCouponInput");
+    const code = ((input && input.value) || "").trim();
+    if (!code) { toast("Enter a discount code.", "error"); return; }
+    const btn = $("#coApply"); if (btn) { btn.disabled = true; btn.textContent = "…"; }
+    let res;
+    try {
+      res = await api("/coupons/validate", { method: "POST", body: { code, context: "credits", package: checkoutCtx.pkg.key } });
+    } catch (ex) {
+      const er = $("#coCouponErr"); if (er) { er.textContent = ex.message || "Invalid discount code."; er.classList.remove("hidden"); }
+      if (btn) { btn.disabled = false; btn.textContent = "Apply"; }
+      return;
+    }
+    checkoutCtx.coupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display, free: !!res.free };
+    state.creditCoupon = checkoutCtx.coupon;   // keep the credits page in sync
+    renderCheckout();
+  }
+
+  function coRemoveCheckoutCoupon() {
+    checkoutCtx.coupon = null;
+    state.creditCoupon = null;
+    renderCheckout();
+  }
+
+  async function creditCheckoutProceed() {
+    const pkg = checkoutCtx.pkg;
+    const couponCode = checkoutCtx.coupon ? checkoutCtx.coupon.code : undefined;
+    const btn = $("#coProceed"); if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
+    let res;
+    try { res = await api("/credits/topup/checkout", { method: "POST", body: { package: pkg.key, coupon_code: couponCode } }); }
+    catch (ex) { toast(ex.message, "error"); renderCheckout(); return; }
+
+    if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); renderCheckout(); return; }
+    if (res.action === "granted") {
+      if (res.wallet) { state.credits = res.wallet; updatePlanChip(); }
+      state.creditCoupon = null;
+      closeModal();
+      toast(res.message || "Credits added!", "success");
+      renderCredits();
+      return;
+    }
+    if (res.action !== "checkout") { toast("Top-up unavailable.", "error"); renderCheckout(); return; }
+    if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); renderCheckout(); return; }
+
+    closeModal();   // hand off to Razorpay's own secure overlay
     const rzp = new Razorpay({
       key: res.razorpay_key_id,
       amount: res.amount,
@@ -1954,7 +2116,7 @@
             razorpay_payment_id: resp.razorpay_payment_id,
             razorpay_signature: resp.razorpay_signature,
           }});
-          state.credits = v.wallet; updatePlanChip();
+          state.credits = v.wallet; state.creditCoupon = null; updatePlanChip();
           toast(v.message || "Credits added!", "success");
           renderCredits();
         } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
@@ -2615,7 +2777,7 @@
     go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
     closeModal, closeDrawer, changeRole, removeMember, checkout, setCycle,
     applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
-    topup: topupCredits, activateInfra: activateInfraFee, deepScan: runDeepScan,
+    topup: openCreditCheckout, activateInfra: activateInfraFee, deepScan: runDeepScan,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
     viewInterview: viewInterviewSession,
     calPrev, calNext, calToday, calSetMonth, calSetYear, calEvent, calAdd, calDelete, calToggleDone,

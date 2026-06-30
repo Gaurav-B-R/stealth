@@ -282,6 +282,193 @@ body {
     color: #0f172a;
 }
 
+/* ---- Enterprise account details (Manage modal) ---- */
+.account-details {
+    margin-bottom: 1.4rem;
+}
+
+.account-details-status {
+    color: #64748b;
+    font-size: 0.9rem;
+    padding: 0.4rem 0;
+    margin: 0;
+}
+
+.account-section-title {
+    margin: 0 0 0.7rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-weight: 800;
+    color: #334155;
+}
+
+.account-details .account-section-title {
+    margin-top: 1.3rem;
+}
+
+.account-meta-line {
+    color: #64748b;
+    font-size: 0.82rem;
+    margin: -0.35rem 0 0.85rem;
+}
+
+.account-metrics-grid {
+    display: grid;
+    gap: 0.6rem;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-bottom: 0.4rem;
+}
+
+.account-metrics-grid .metric-card strong {
+    font-size: 1.2rem;
+}
+
+.account-metrics-grid .metric-card small {
+    display: block;
+    margin-top: 0.15rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #64748b;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+.account-status-chip {
+    display: inline-block;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: capitalize;
+}
+
+.account-status-chip.verified {
+    background: rgba(16, 185, 129, 0.14);
+    color: #047857;
+}
+
+.account-status-chip.created {
+    background: rgba(245, 158, 11, 0.16);
+    color: #b45309;
+}
+
+.account-status-chip.failed {
+    background: rgba(239, 68, 68, 0.14);
+    color: #b91c1c;
+}
+
+.account-status-chip.refunded {
+    background: rgba(99, 102, 241, 0.14);
+    color: #4338ca;
+}
+
+/* ---- Refund form ---- */
+.refund-tabs {
+    display: inline-flex;
+    gap: 0.3rem;
+    padding: 0.25rem;
+    border-radius: 12px;
+    background: #eef2f8;
+    margin-bottom: 0.9rem;
+}
+
+.refund-tab {
+    border: 0;
+    background: transparent;
+    color: #475569;
+    font-weight: 700;
+    font-size: 0.84rem;
+    padding: 0.4rem 0.85rem;
+    border-radius: 9px;
+    cursor: pointer;
+}
+
+.refund-tab.active {
+    background: #ffffff;
+    color: #0f172a;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.refund-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem;
+    margin-bottom: 0.85rem;
+}
+
+.refund-grid .coupon-field-wide {
+    grid-column: 1 / -1;
+}
+
+.refund-mode.hidden {
+    display: none;
+}
+
+.refund-danger {
+    background: linear-gradient(135deg, #e11d48, #b91c1c) !important;
+}
+
+@media (max-width: 720px) {
+    .refund-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.account-coupon-tag {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #4338ca;
+    background: rgba(99, 102, 241, 0.12);
+    border-radius: 6px;
+    padding: 0.05rem 0.4rem;
+}
+
+.account-activity {
+    display: grid;
+    gap: 0.4rem;
+}
+
+.account-activity-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.84rem;
+    padding: 0.4rem 0.1rem;
+    border-bottom: 1px solid #eef2f8;
+}
+
+.account-activity-row .aa-main {
+    color: #0f172a;
+}
+
+.account-activity-row .aa-when {
+    color: #94a3b8;
+    font-size: 0.76rem;
+    white-space: nowrap;
+}
+
+.account-activity-row .aa-credits {
+    font-weight: 800;
+    white-space: nowrap;
+}
+
+.account-activity-row .aa-credits.pos {
+    color: #047857;
+}
+
+.account-activity-row .aa-credits.neg {
+    color: #334155;
+}
+
+@media (max-width: 720px) {
+    .account-metrics-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
 .filters-row {
     display: grid;
     gap: 0.6rem;
@@ -521,57 +708,118 @@ body {
 .finance-timeline-chart {
     min-height: 260px;
     display: flex;
-    align-items: stretch;
-    gap: 0.65rem;
-    padding: 1rem 0.9rem 0.9rem;
+    flex-direction: column;
+    gap: 0.9rem;
+    padding: 1rem 1.1rem 0.9rem;
+}
+
+.finance-timeline-legend {
+    display: flex;
+    gap: 1.25rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #475569;
+}
+
+.finance-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.finance-legend-dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+    flex: none;
+}
+
+.finance-legend-dot.investment {
+    background: #f97316;
+}
+
+.finance-legend-dot.returns {
+    background: #10b981;
+}
+
+.finance-timeline-plot {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-around;
+    gap: 0.45rem;
     overflow-x: auto;
 }
 
 .finance-month {
-    min-width: 82px;
-    display: grid;
-    grid-template-rows: 1fr auto auto;
-    gap: 0.34rem;
+    flex: 1 1 0;
+    min-width: 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
 }
 
 .finance-bars {
-    min-height: 160px;
+    height: 172px;
     display: flex;
     align-items: flex-end;
     justify-content: center;
     gap: 0.3rem;
-    border-radius: 12px;
-    padding: 0.55rem 0.4rem;
-    background: linear-gradient(180deg, #f8fafc, #eef5ff);
-    border: 1px solid #e2e8f0;
+    border-bottom: 2px solid #e2e8f0;
+    background-image: repeating-linear-gradient(
+        to top,
+        transparent 0,
+        transparent calc(33.33% - 1px),
+        #f1f5f9 calc(33.33% - 1px),
+        #f1f5f9 33.33%
+    );
 }
 
 .finance-bar {
-    width: 22px;
-    border-radius: 999px 999px 5px 5px;
-    min-height: 0;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    width: 24px;
+    max-width: 42%;
+    border-radius: 5px 5px 0 0;
+    min-height: 2px;
+    transition: height 0.45s cubic-bezier(0.22, 1, 0.36, 1), filter 0.15s ease;
 }
 
 .finance-bar.investment {
-    background: linear-gradient(180deg, #fb7185, #f97316);
+    background: linear-gradient(180deg, #fb923c, #f97316);
 }
 
 .finance-bar.returns {
-    background: linear-gradient(180deg, #34d399, #0284c7);
+    background: linear-gradient(180deg, #34d399, #10b981);
+}
+
+.finance-bars:hover .finance-bar {
+    filter: saturate(1.15) brightness(1.03);
 }
 
 .finance-month-label {
     text-align: center;
     font-size: 0.74rem;
     color: #475569;
-    font-weight: 800;
+    font-weight: 700;
 }
 
 .finance-month-net {
     text-align: center;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     font-weight: 800;
+}
+
+/* Daily AI-cost variant: 30 narrow bars that fit the card width (no giant scroll). */
+.finance-ai-daily .finance-month {
+    min-width: 0;
+    gap: 0.35rem;
+}
+.finance-ai-daily .finance-bar {
+    width: 100%;
+    max-width: 16px;
+}
+.finance-ai-daily .finance-month-label {
+    font-size: 0.62rem;
+    white-space: nowrap;
 }
 
 .finance-breakdown-chart {

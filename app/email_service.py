@@ -331,6 +331,96 @@ def send_email_otp(email: str, code: str, expires_in_minutes: int = 10) -> bool:
         return False
 
 
+def send_account_deletion_otp_email(email: str, code: str, expires_in_minutes: int = 10) -> bool:
+    """
+    Send a 6-digit code to confirm PERMANENT account deletion (a security step).
+    Sent from the no-reply transactional address.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send account-deletion OTP email - Resend not configured")
+        return False
+
+    recipient = (email or "").strip().lower()
+    code_clean = "".join(ch for ch in str(code or "") if ch.isdigit())
+    if not recipient or not code_clean:
+        print("ERROR: Cannot send account-deletion OTP email - missing recipient or code")
+        return False
+
+    minutes = max(1, int(expires_in_minutes or 10))
+    safe_code = escape(code_clean)
+    subject = f"{code_clean} is your Rilono account deletion code"
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>{escape(subject)}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+              <tr>
+                <td style="padding:24px 28px;background:linear-gradient(135deg,#b91c1c 0%,#dc2626 100%);color:#ffffff;">
+                  <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">Rilono · Security</div>
+                  <h1 style="margin:8px 0 0 0;font-size:22px;line-height:1.2;">Confirm account deletion</h1>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:26px 28px;color:#0f172a;">
+                  <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;">
+                    We received a request to <strong>permanently delete your Rilono account</strong> and all its data.
+                    Enter this code to confirm:
+                  </p>
+                  <div style="text-align:center;margin:8px 0 18px;">
+                    <div style="display:inline-block;font-size:34px;font-weight:800;letter-spacing:10px;color:#0f172a;background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:14px 22px 14px 32px;">{safe_code}</div>
+                  </div>
+                  <p style="margin:0 0 6px 0;font-size:13px;color:#64748b;line-height:1.6;">
+                    This code expires in <strong>{minutes} minutes</strong>. Deleting your account is permanent and cannot be undone.
+                  </p>
+                  <p style="margin:10px 0 0 0;font-size:13px;color:#b91c1c;line-height:1.6;">
+                    If you did NOT request this, ignore this email and change your password right away — your account stays safe.
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    """
+
+    text_content = (
+        "Confirm account deletion - Rilono\n\n"
+        "We received a request to permanently delete your Rilono account and all its data.\n"
+        f"Your confirmation code is: {code_clean}\n"
+        f"It expires in {minutes} minutes. This action is permanent and cannot be undone.\n\n"
+        "If you did NOT request this, ignore this email and change your password right away.\n"
+    )
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            print(f"Account-deletion OTP email sent to {recipient} (ID: {email_id})")
+            return True
+        print(f"Failed to send account-deletion OTP email to {recipient}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending account-deletion OTP email to {recipient}: {str(e)}")
+        return False
+
+
 def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFAULT_PUBLIC_BASE_URL) -> bool:
     """
     Send password reset email using Resend.
@@ -1563,6 +1653,149 @@ def send_enterprise_interview_code_email(
     </body></html>
     """
     text_content = f"{org_label}\n\nYour mock interview verification code is: {code}\nThis code expires in 15 minutes.\n"
+    try:
+        params = {
+            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def _interview_report_md_inline(text: str) -> str:
+    safe = escape(text)
+    safe = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", safe)
+    safe = re.sub(r"`([^`]+)`", r"<code>\1</code>", safe)
+    return safe
+
+
+def _interview_report_md_to_html(md: str) -> str:
+    """Small markdown -> email-safe HTML for the interview report (headings, bold, bullets)."""
+    lines = (md or "").split("\n")
+    parts: list[str] = []
+    in_list = [False]
+
+    def close_list():
+        if in_list[0]:
+            parts.append("</ul>")
+            in_list[0] = False
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            close_list()
+            continue
+        heading = re.match(r"^#{1,4}\s+(.*)$", stripped)
+        if heading:
+            close_list()
+            parts.append(
+                '<div style="font-size:15px;font-weight:700;color:#0f172a;margin:18px 0 8px;">'
+                f"{_interview_report_md_inline(heading.group(1))}</div>"
+            )
+            continue
+        bullet = re.match(r"^[-*•]\s+(.*)$", stripped)
+        if bullet:
+            if not in_list[0]:
+                parts.append(
+                    '<ul style="margin:0 0 12px;padding-left:20px;color:#334155;font-size:14px;line-height:1.7;">'
+                )
+                in_list[0] = True
+            parts.append(f"<li>{_interview_report_md_inline(bullet.group(1))}</li>")
+            continue
+        close_list()
+        parts.append(
+            '<p style="margin:0 0 12px;color:#334155;font-size:14px;line-height:1.7;">'
+            f"{_interview_report_md_inline(stripped)}</p>"
+        )
+    close_list()
+    return "".join(parts) or "<p>No feedback available.</p>"
+
+
+def send_enterprise_interview_report_email(
+    *,
+    to_email: str,
+    client_name: Optional[str],
+    organization_name: str,
+    destination_country: str,
+    visa_type: str,
+    decision_label: Optional[str],
+    feedback_markdown: str,
+    logo_url: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email the applicant their mock interview report (officer decision + coaching feedback)."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = (organization_name or "Your consultancy").strip()
+    name = (client_name or "").strip() or "there"
+    safe_org = escape(org_label)
+    safe_name = escape(name)
+    safe_country = escape(destination_country or "")
+    safe_visa = escape(visa_type or "")
+    report_html = _interview_report_md_to_html(feedback_markdown)
+
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
+                      'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
+
+    is_approved = (decision_label or "").lower() == "approved"
+    is_refused = (decision_label or "").lower() == "refused"
+    decision_block = ""
+    if decision_label:
+        bg = "#dcfce7" if is_approved else ("#fee2e2" if is_refused else "#eef2ff")
+        fg = "#166534" if is_approved else ("#991b1b" if is_refused else "#3730a3")
+        icon = "✅" if is_approved else ("❌" if is_refused else "•")
+        decision_block = (
+            f'<div style="background:{bg};color:{fg};padding:12px 16px;border-radius:10px;'
+            f'font-size:15px;font-weight:700;margin:0 0 18px;">{icon} Simulated decision: Visa {escape(decision_label)}</div>'
+        )
+
+    decision_text = f"Simulated decision: Visa {decision_label}\n\n" if decision_label else ""
+    subject_outcome = f" — {decision_label}" if decision_label else ""
+    subject = f"Your {destination_country} mock interview report{subject_outcome}"
+
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:26px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
+              {logo_block}
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
+              <h1 style="margin:8px 0 0 0;font-size:22px;">📋 Your mock interview report</h1>
+              <div style="margin-top:6px;font-size:13px;opacity:.9;">{safe_country} · {safe_visa}</div>
+            </td></tr>
+            <tr><td style="padding:28px;color:#0f172a;">
+              <p style="margin:0 0 16px;font-size:15px;line-height:1.7;">Hi {safe_name}, here is the report from your practice
+              interview with {safe_org}. This is a simulation to help you prepare — it is not an official decision.</p>
+              {decision_block}
+              {report_html}
+              <p style="margin:22px 0 0;font-size:13px;color:#64748b;">Keep practising and good luck with your real interview! 🎓</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        f"Hi {name},\n\nHere is the report from your practice {destination_country} interview "
+        f"({visa_type}) with {org_label}. This is a simulation, not an official decision.\n\n"
+        f"{decision_text}{feedback_markdown}\n\nGood luck with your real interview!\n"
+    )
     try:
         params = {
             "from": f"{org_label} <{_resolve_transactional_from_email()}>",

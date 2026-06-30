@@ -11,6 +11,7 @@ so this does not (and must not) read other clients' data.
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -99,8 +100,18 @@ def build_interview_system_prompt(
         "areas your role cares about over the course of the interview.\n"
         "- Be professional and polite but appropriately firm. Do not be unrealistically friendly.\n"
         "- Begin by greeting the applicant briefly and asking your first question.\n"
-        "- After roughly 8–12 questions, OR if the applicant indicates they want to stop, conclude "
-        "politely (e.g. 'Thank you, please wait for your decision.') and stop asking questions.\n"
+        "- Ask roughly 8–12 questions in total. When you have enough information to reach a "
+        "decision, OR the applicant indicates they want to stop, END the interview yourself — do "
+        "not keep asking questions afterwards.\n"
+        "- To end, give a brief in-character closing (1–2 sentences) that clearly states your "
+        "decision: whether the visa is APPROVED or REFUSED, with a short reason. For example: "
+        "'Thank you. I'm satisfied with your answers and I'm pleased to approve your student visa "
+        "today.' or 'I'm sorry, but based on this interview I'm unable to approve your visa at this "
+        "time.' Base the decision honestly on how the applicant actually performed.\n"
+        "- On the VERY LAST line of that closing message ONLY, append a status tag on its own line, "
+        "exactly one of: [[INTERVIEW_COMPLETE: APPROVED]] or [[INTERVIEW_COMPLETE: REFUSED]]. Output "
+        "this tag ONLY when you are ending the interview, never earlier, and never refer to the tag "
+        "or read it aloud to the applicant.\n"
         "- Keep everything in English unless the applicant clearly cannot, and do not invent facts "
         "about the applicant beyond the profile — ask them instead."
     )
@@ -131,6 +142,26 @@ def _model(system_instruction: str):
     return gemini_utils.genai.GenerativeModel(_model_name(), system_instruction=system_instruction)
 
 
+# The officer ends the interview by emitting this tag on the last line of its
+# closing message. We strip it from what the applicant sees and surface the
+# decision (approved/refused) to the UI so the interview can wrap up on its own.
+_COMPLETION_RE = re.compile(
+    r"\[\[\s*INTERVIEW[ _]COMPLETE\s*:\s*(APPROVED|APPROVE|REFUSED|REFUSE|REJECTED|REJECT)\s*\]\]",
+    re.IGNORECASE,
+)
+
+
+def parse_completion(text: str) -> tuple[str, bool, Optional[str]]:
+    """Return (clean_reply, finished, decision) where decision is 'approved' | 'refused' | None."""
+    raw = text or ""
+    match = _COMPLETION_RE.search(raw)
+    if not match:
+        return raw.strip(), False, None
+    decision = "approved" if match.group(1).upper().startswith("APPROV") else "refused"
+    cleaned = _COMPLETION_RE.sub("", raw).strip()
+    return cleaned, True, decision
+
+
 def run_interview_turn(
     *,
     client: models.EnterpriseClient,
@@ -139,10 +170,18 @@ def run_interview_turn(
     history: Optional[list],
     message: str,
     is_start: bool = False,
-) -> str:
-    """One officer turn. If is_start, the model opens the interview."""
+) -> dict:
+    """One officer turn. Returns {'reply', 'finished', 'decision'}.
+
+    'finished' is True when the officer has ended the interview; 'decision' is then
+    'approved' or 'refused'. If is_start, the model opens the interview.
+    """
     if not is_ai_configured():
-        return "The mock interview isn't available right now — Rilono AI isn't configured on the server."
+        return {
+            "reply": "The mock interview isn't available right now — Rilono AI isn't configured on the server.",
+            "finished": False,
+            "decision": None,
+        }
 
     system = build_interview_system_prompt(client, organization, recent_notes)
     model = _model(system)
@@ -159,7 +198,12 @@ def run_interview_turn(
     response = chat.send_message(user_message)
     ai_usage.record_gemini_usage("mock_interview", _model_name(), response)
     text = (getattr(response, "text", None) or "").strip()
-    return text or "Could you please repeat that?"
+    cleaned, finished, decision = parse_completion(text)
+    return {
+        "reply": cleaned or "Could you please repeat that?",
+        "finished": finished,
+        "decision": decision,
+    }
 
 
 def generate_interview_feedback(
@@ -167,6 +211,7 @@ def generate_interview_feedback(
     client: models.EnterpriseClient,
     organization: models.EnterpriseOrganization,
     history: list,
+    officer_decision: Optional[str] = None,
 ) -> str:
     """One-shot coaching assessment of the interview transcript (markdown)."""
     if not is_ai_configured():
@@ -197,6 +242,12 @@ def generate_interview_feedback(
         "answers.\n"
         "Be direct and practical. Do not invent facts that weren't in the transcript."
     )
+    if officer_decision in ("approved", "refused"):
+        system += (
+            f"\n\nNote: in this mock, the simulated officer's final decision was "
+            f"'{officer_decision.upper()}'. Keep your coaching consistent with that outcome, but "
+            "still give your own honest, constructive assessment."
+        )
     model = _model(system)
     response = model.start_chat(history=[]).send_message(
         "Here is the interview transcript to assess:\n\n" + transcript[:24000]

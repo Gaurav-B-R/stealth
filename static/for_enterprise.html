@@ -1292,16 +1292,143 @@
                 margin-bottom: -0.2rem;
             }
         }
+        /* =====================================================================
+           LIGHT THEME — aligns /for-enterprise with the light Home/Pricing pages.
+           Overrides the page's original dark "enterprise" styling. Appended last
+           so it wins the cascade without touching the rules above.
+           ===================================================================== */
+        :root {
+            --enterprise-ink: #0f172a;
+            --enterprise-muted: #64748b;
+            --enterprise-accent: #4f46e5;
+            --enterprise-panel: #ffffff;
+            --enterprise-line: rgba(15, 23, 42, 0.10);
+        }
+        body { background: #eef0f8; }
+        .enterprise-page {
+            color: var(--enterprise-ink);
+            background:
+                radial-gradient(1100px 520px at 12% -4%, rgba(99, 102, 241, 0.12), transparent 60%),
+                radial-gradient(900px 480px at 92% 2%, rgba(6, 182, 212, 0.10), transparent 55%),
+                radial-gradient(900px 700px at 50% 120%, rgba(168, 85, 247, 0.08), transparent 60%),
+                #eef0f8;
+        }
+        .enterprise-page::before {
+            opacity: 0.6;
+            background-image:
+                linear-gradient(rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(15, 23, 42, 0.045) 1px, transparent 1px);
+        }
+        .enterprise-eyebrow {
+            color: #4338ca;
+            border-color: rgba(99, 102, 241, 0.28);
+            background: rgba(99, 102, 241, 0.08);
+            box-shadow: 0 14px 40px rgba(99, 102, 241, 0.14);
+        }
+        .enterprise-gradient {
+            background: linear-gradient(120deg, #6366f1 0%, #a855f7 55%, #ec4899 100%);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .enterprise-hero-copy { color: #475569; }
+        .enterprise-btn-secondary {
+            color: #334155;
+            border-color: rgba(15, 23, 42, 0.14);
+            background: #ffffff;
+        }
+        .enterprise-btn-secondary:hover { border-color: rgba(15, 23, 42, 0.26); }
+        .enterprise-proof-card {
+            background: #ffffff;
+            border-color: var(--enterprise-line);
+            box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+        }
+        .enterprise-preview-glow { opacity: 0.65; }
+        .enterprise-dashboard-frame {
+            border-color: rgba(15, 23, 42, 0.10);
+            background: linear-gradient(135deg, rgba(15, 23, 42, 0.06), rgba(15, 23, 42, 0.02));
+            box-shadow: 0 44px 90px rgba(15, 23, 42, 0.20);
+        }
+        .enterprise-floating-card {
+            border-color: rgba(15, 23, 42, 0.10);
+            background: rgba(255, 255, 255, 0.94);
+            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.16);
+        }
+        .enterprise-floating-card span { color: #475569; }
+        .enterprise-strip-item { background: #ffffff; }
+        .enterprise-section { border-top-color: rgba(15, 23, 42, 0.08); }
+        .enterprise-section p { color: #475569; }
+        .enterprise-card {
+            background: linear-gradient(145deg, rgba(15, 23, 42, 0.03), rgba(15, 23, 42, 0.012)), #ffffff;
+            border-color: var(--enterprise-line);
+            box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+        }
+        .enterprise-card p { color: #475569; }
+        .enterprise-checklist,
+        .enterprise-workflow-panel {
+            background: #ffffff;
+            border-color: var(--enterprise-line);
+            box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+        }
+        .enterprise-check-row { color: #334155; border-bottom-color: rgba(15, 23, 42, 0.08); }
+        .enterprise-status-good { color: #15803d; background: rgba(34, 197, 94, 0.14); }
+        .enterprise-status-risk { color: #b45309; background: rgba(245, 158, 11, 0.16); }
+        .enterprise-flow-card { border-color: rgba(15, 23, 42, 0.08); background: #f8fafc; }
+        .enterprise-flow-card::before { color: #6d28d9; background: rgba(139, 92, 246, 0.14); }
+        .enterprise-flow-card p { color: #475569; }
+        .enterprise-cta-inner {
+            border-color: rgba(99, 102, 241, 0.22);
+            background:
+                radial-gradient(circle at 85% 16%, rgba(168, 85, 247, 0.14), transparent 22rem),
+                radial-gradient(circle at 12% 90%, rgba(236, 72, 153, 0.10), transparent 24rem),
+                linear-gradient(135deg, rgba(99, 102, 241, 0.10), rgba(255, 255, 255, 0.65)),
+                #ffffff;
+            box-shadow: 0 24px 60px rgba(15, 23, 42, 0.08);
+        }
+        .enterprise-cta-inner p { color: #475569; }
+        .enterprise-country-card {
+            background: #ffffff;
+            border-color: var(--enterprise-line);
+            color: var(--enterprise-ink);
+        }
+        .enterprise-country-card:hover { border-color: rgba(99, 102, 241, 0.5); box-shadow: 0 26px 60px rgba(15, 23, 42, 0.16); }
+        .enterprise-country-meta span { color: var(--enterprise-muted); }
+        .enterprise-grad-text {
+            background: linear-gradient(120deg, #6366f1 0%, #a855f7 55%, #ec4899 100%);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .enterprise-switch-card { border-color: var(--enterprise-line); }
+        .enterprise-switch-card.before { background: #f1f5f9; }
+        .enterprise-switch-card.before h3,
+        .enterprise-switch-card.before .switch-list li { color: #64748b; }
+        .enterprise-switch-card.after {
+            background:
+                radial-gradient(420px 220px at 80% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
+                linear-gradient(160deg, rgba(99, 102, 241, 0.08), #ffffff);
+            border-color: rgba(99, 102, 241, 0.4);
+            box-shadow: 0 30px 70px rgba(15, 23, 42, 0.10);
+        }
+        .switch-tag { color: #64748b; background: rgba(15, 23, 42, 0.05); border-color: var(--enterprise-line); }
+        .switch-tag.accent { color: #ffffff; }
+        .switch-list li { color: #475569; }
+        .enterprise-switch-stats > div {
+            border-color: var(--enterprise-line);
+            background: #ffffff;
+            box-shadow: 0 10px 28px rgba(15, 23, 42, 0.05);
+        }
+        .enterprise-switch-stats strong {
+            background: linear-gradient(120deg, #6366f1, #a855f7);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .enterprise-switch-stats span { color: var(--enterprise-muted); }
     </style>
 </head>
 
-<body>
+<body class="b2c-light">
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
-                <a href="/" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;color:white;">
+                <a href="/" style="display:flex;align-items:center;gap:0.75rem;text-decoration:none;">
                     <img src="/static/logo.png" alt="Rilono Logo" style="height:40px;width:auto;object-fit:contain;">
-                    <span style="margin:0;font-size:1.5rem;font-weight:700;">Rilono</span>
+                    <span class="nav-brand-name">Rilono</span>
                 </a>
             </div>
             <button class="mobile-nav-toggle" id="mobileNavToggle" type="button" aria-expanded="false"
@@ -1604,15 +1731,11 @@
                         <div class="enterprise-country-meta"><span class="flag">🇦🇺</span><div><b>Australia</b><span>Subclass 500 · 590</span></div></div>
                     </a>
                     <a href="https://enterprise.rilono.com/enterprise" class="enterprise-country-card">
-                        <div class="enterprise-country-art" style="background:linear-gradient(135deg,#111827 0%,#b91c1c 100%)">
-                            <span class="art-flag">🇩🇪</span><span class="art-landmark">Brandenburg Gate</span>
-                        </div>
+                        <img src="/static/assets/brand/countries/de.webp" alt="Manage Germany student visas — Brandenburg Gate" loading="lazy">
                         <div class="enterprise-country-meta"><span class="flag">🇩🇪</span><div><b>Germany</b><span>National Visa (Type D) — Study</span></div></div>
                     </a>
                     <a href="https://enterprise.rilono.com/enterprise" class="enterprise-country-card">
-                        <div class="enterprise-country-art" style="background:linear-gradient(135deg,#15803d 0%,#65a30d 100%)">
-                            <span class="art-flag">🇮🇪</span><span class="art-landmark">Cliffs of Moher</span>
-                        </div>
+                        <img src="/static/assets/brand/countries/ie.webp" alt="Manage Ireland student visas — Cliffs of Moher" loading="lazy">
                         <div class="enterprise-country-meta"><span class="flag">🇮🇪</span><div><b>Ireland</b><span>D Study Visa</span></div></div>
                     </a>
                 </div>
@@ -1646,6 +1769,7 @@
                 <a href="/contact">Contact Us</a>
                 <a href="/privacy">Privacy Policy</a>
                 <a href="/terms">Terms &amp; Conditions</a>
+                <a href="/dpa">Data Processing Agreement</a>
                 <a href="/refund-policy">Refund Policy</a>
                 <a href="/delivery-policy">Delivery Policy</a>
                 <a href="/for-enterprise" class="footer-enterprise-link">Enterprise Solutions</a>
@@ -1655,7 +1779,7 @@
             <div class="footer-social"
                 style="display:flex;align-items:center;justify-content:center;gap:1rem;margin:1rem 0;">
                 <a href="https://www.linkedin.com/company/rilono-ai/" target="_blank" rel="noopener noreferrer"
-                    style="display:flex;align-items:center;justify-content:center;width:40px;height:40px;background:rgba(255,255,255,0.05);border-radius:50%;border:1px solid rgba(255,255,255,0.1);transition:all 0.2s ease;"
+                    style="display:flex;align-items:center;justify-content:center;width:40px;height:40px;background:rgba(15,23,42,0.05);border-radius:50%;border:1px solid rgba(15,23,42,0.12);transition:all 0.2s ease;"
                     title="Follow us on LinkedIn">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
                         fill="#0A66C2">
@@ -1664,9 +1788,9 @@
                     </svg>
                 </a>
                 <a href="https://x.com/Rilono_F1_Visa" target="_blank" rel="noopener noreferrer"
-                    style="display:flex;align-items:center;justify-content:center;width:40px;height:40px;background:rgba(255,255,255,0.05);border-radius:50%;border:1px solid rgba(255,255,255,0.1);transition:all 0.2s ease;"
+                    style="display:flex;align-items:center;justify-content:center;width:40px;height:40px;background:#0f172a;border-radius:50%;border:1px solid rgba(255,255,255,0.14);transition:all 0.2s ease;"
                     title="Follow us on X">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24"
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
                         fill="#ffffff">
                         <path
                             d="M18.244 2H21.5l-7.12 8.139L22.75 22h-6.553l-5.13-6.708L5.2 22H1.94l7.614-8.7L1.5 2h6.72l4.636 6.146L18.244 2zm-1.14 18h1.8L7.247 3.895H5.318L17.104 20z" />

@@ -47,6 +47,7 @@ from app.utils.rate_limiter import (
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 from app.email_service import send_enterprise_team_invite_email, send_enterprise_client_email
 from app.email_service import send_enterprise_interview_invite_email, send_enterprise_interview_code_email
+from app.email_service import send_enterprise_interview_report_email
 from app.email_service import send_enterprise_document_request_email, send_enterprise_document_request_code_email
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
 from app.email_service import send_enterprise_support_request_email
@@ -1541,10 +1542,10 @@ ENTERPRISE_SIGNUP_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_SIGNUP_RATE_WI
 ENTERPRISE_BULK_EMAIL_MAX_RECIPIENTS = int(os.getenv("ENTERPRISE_BULK_EMAIL_MAX_RECIPIENTS", "200"))
 
 # Version (Last Updated date) of the Terms & Conditions / Privacy Policy a user
-# accepts at signup. Bump this whenever the legal documents change so the stored
-# proof-of-consent records exactly which version was agreed to. Keep in sync with
+# accepts at signup. Defined centrally in app.legal so B2C, OAuth, and enterprise
+# signups all record the same value. Keep app.legal in sync with
 # LEGAL_LAST_UPDATED.terms / .privacy in static/app.js.
-LEGAL_TERMS_PRIVACY_VERSION = "2026-03-02"
+from app.legal import LEGAL_TERMS_PRIVACY_VERSION, LEGAL_DPA_VERSION
 
 
 class EnterpriseSignupRequest(BaseModel):
@@ -1558,6 +1559,7 @@ class EnterpriseSignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=200)
     accepted_terms_privacy: bool = False
+    accepted_dpa: bool = False
     marketing_emails_consent: bool = False
     cf_turnstile_token: Optional[str] = None
 
@@ -1580,6 +1582,9 @@ class EnterpriseClientCreateRequest(BaseModel):
     application_reference: Optional[str] = Field(default=None, max_length=120)
     assigned_to_user_id: Optional[int] = None
     initial_note: Optional[str] = Field(default=None, max_length=ENTERPRISE_NOTE_MAX)
+    # Staff attestation that the client consented to having their data processed
+    # through Rilono. Enforced in the UI; recorded here as proof-of-consent.
+    client_consent_confirmed: bool = False
 
 
 class EnterpriseClientUpdateRequest(BaseModel):
@@ -2009,6 +2014,8 @@ def enterprise_create_client(
         target_date=_parse_iso_date_or_400(payload.target_date, "Target date"),
         assigned_to_user_id=payload.assigned_to_user_id,
         created_by_user_id=current_user.id,
+        client_consent_confirmed_at=(datetime.utcnow() if payload.client_consent_confirmed else None),
+        client_consent_confirmed_by_user_id=(current_user.id if payload.client_consent_confirmed else None),
     )
     _apply_client_case_fields(
         client,
@@ -3341,9 +3348,13 @@ def enterprise_coupon_validate(
         db, organization.id, payload.code, context=context
     )
     percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
-    amount = enterprise_coupons.apply_to_amount_or_400(base_amount, percent)
+    # A fully-covering discount (e.g. 100% off) leaves a ₹0 amount. Don't block —
+    # report it as free; checkout will grant the credits without Razorpay.
+    amount = enterprise_coupons.compute_discounted_amount_paise(base_amount, percent)
+    is_free = enterprise_coupons.is_free_checkout(amount)
     return {
         "valid": True,
+        "free": is_free,
         "code": enterprise_coupons.normalize_code(coupon.code),
         "percent_off": float(percent),
         "percent_display": enterprise_coupons.format_percent_off(percent) + "%",
@@ -3352,6 +3363,50 @@ def enterprise_coupon_validate(
         "discount_paise": base_amount - amount,
         "base_amount_display": credits.format_inr(base_amount),
         "amount_display": credits.format_inr(amount),
+    }
+
+
+def _grant_free_credit_topup(
+    db, organization, current_user, package, base_amount, amount, coupon_code, coupon_percent,
+):
+    """A discount covered the full amount (e.g. 100% off) → add the credits without
+    Razorpay. Records a verified 'free' payment so the redemption is counted and the
+    purchase shows in history, then credits the wallet (idempotent ledger reference)."""
+    total_credits = int(package["credits"]) + int(package["bonus_credits"])
+    payment = models.EnterpriseCreditPayment(
+        organization_id=organization.id,
+        created_by_user_id=current_user.id,
+        provider="free",
+        kind="credits",
+        package_key=package["key"],
+        credits=int(package["credits"]),
+        bonus_credits=int(package["bonus_credits"]),
+        amount_paise=int(amount),
+        original_amount_paise=int(base_amount),
+        coupon_code=coupon_code,
+        coupon_percent_off=coupon_percent,
+        currency=credits.CURRENCY,
+        razorpay_order_id=f"free_{secrets.token_hex(8)}",  # NOT NULL + unique column
+        status="verified",
+        verified_at=datetime.utcnow(),
+    )
+    db.add(payment)
+    db.flush()  # assign payment.id for the ledger reference
+    pct = enterprise_coupons.format_percent_off(coupon_percent) if coupon_percent is not None else ""
+    credits.add_credits(
+        db, organization.id, total_credits,
+        txn_type="topup",
+        description=f"{package['label']} (+{total_credits} credits · {coupon_code} {pct}% off)",
+        reference_type="payment", reference_id=payment.id,
+        user=current_user, commit=False,
+    )
+    db.commit()
+    return {
+        "action": "granted",
+        "message": f"{coupon_code} covered the full amount — {total_credits} credits added to your wallet.",
+        "total_credits": total_credits,
+        "coupon_code": coupon_code,
+        "wallet": credits.wallet_state(db, organization.id),
     }
 
 
@@ -3383,7 +3438,15 @@ def enterprise_credits_topup_checkout(
         )
         coupon_percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
         coupon_code = enterprise_coupons.normalize_code(coupon.code)
-        amount = enterprise_coupons.apply_to_amount_or_400(base_amount, coupon_percent)
+        amount = enterprise_coupons.compute_discounted_amount_paise(base_amount, coupon_percent)
+
+    # Fully covered by the discount → grant the credits for free (no Razorpay order).
+    if coupon_code and enterprise_coupons.is_free_checkout(amount):
+        return _grant_free_credit_topup(
+            db, organization, current_user, package, base_amount, amount, coupon_code, coupon_percent,
+        )
+    if amount < enterprise_coupons.MIN_CHECKOUT_PAISE:
+        raise HTTPException(status_code=400, detail="This amount is too low for online checkout.")
 
     if not _razorpay_enabled():
         return {
@@ -3670,6 +3733,12 @@ async def enterprise_signup(
             detail="You must accept the Terms & Conditions and Privacy Policy to create your workspace.",
         )
 
+    if not payload.accepted_dpa:
+        raise HTTPException(
+            status_code=400,
+            detail="You must accept the Data Processing Agreement to manage client data in your workspace.",
+        )
+
     company_name = (payload.company_name or "").strip()
     if len(company_name) < 2:
         raise HTTPException(status_code=400, detail="Company name must be at least 2 characters.")
@@ -3717,6 +3786,7 @@ async def enterprise_signup(
         accepted_terms_privacy_ip=consent_ip,
         accepted_terms_privacy_user_agent=consent_user_agent,
         accepted_terms_privacy_version=LEGAL_TERMS_PRIVACY_VERSION,
+        age_confirmed_at=datetime.utcnow(),
         marketing_emails_consent=bool(payload.marketing_emails_consent),
         marketing_emails_consent_at=(datetime.utcnow() if payload.marketing_emails_consent else None),
     )
@@ -3733,6 +3803,11 @@ async def enterprise_signup(
             randomize=True,
         ),
         created_by_user_id=user.id,
+        # Proof the organization accepted the Data Processing Agreement (it is the
+        # controller of its clients' data; Rilono is the processor).
+        dpa_accepted_at=datetime.utcnow(),
+        dpa_accepted_version=LEGAL_DPA_VERSION,
+        dpa_accepted_by_user_id=user.id,
     )
     db.add(organization)
     db.flush()
@@ -4210,7 +4285,7 @@ def enterprise_interview_chat(
 
     history = [t.model_dump() for t in (payload.history or [])]
     try:
-        reply = enterprise_interview.run_interview_turn(
+        turn = enterprise_interview.run_interview_turn(
             client=client,
             organization=organization,
             recent_notes=_recent_client_notes(db, client.id),
@@ -4222,7 +4297,12 @@ def enterprise_interview_chat(
         logger.exception("Mock interview turn failed (org_id=%s, client_id=%s)", organization.id, client.id)
         raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
 
-    response_payload = {"reply": reply, "permissions": _enterprise_permissions_for_role(role)}
+    response_payload = {
+        "reply": turn["reply"],
+        "finished": turn["finished"],
+        "decision": turn["decision"],
+        "permissions": _enterprise_permissions_for_role(role),
+    }
     if is_start:
         credits.charge_action(
             db, organization.id, "mock_interview",
@@ -4368,6 +4448,7 @@ class PublicInterviewFeedbackRequest(BaseModel):
     session_token: str = Field(..., min_length=10, max_length=4000)
     history: list[EnterpriseInterviewTurn] = Field(..., min_length=1)
     mode: str = Field(default="chat", max_length=12)
+    decision: Optional[str] = Field(default=None, max_length=20)
 
 
 def _mask_email(email: str) -> str:
@@ -4410,11 +4491,16 @@ def _interview_invite_is_live(invite: models.EnterpriseInterviewInvite) -> bool:
 def _serialize_invite_status(invite: models.EnterpriseInterviewInvite | None) -> Optional[dict]:
     if not invite:
         return None
+    started = int(invite.used_count or 0)
+    completed = int(getattr(invite, "completed_count", 0) or 0)
     return {
         "id": invite.id,
         "email": invite.email,
         "allowed_count": invite.allowed_count,
         "used_count": invite.used_count,
+        "started_count": started,
+        "completed_count": completed,
+        "last_completed_at": _iso(getattr(invite, "last_completed_at", None)),
         "remaining": _interview_invite_remaining(invite),
         "revoked": bool(invite.revoked),
         "live": _interview_invite_is_live(invite),
@@ -4482,6 +4568,11 @@ def enterprise_create_interview_invite(
     email = (client.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Add an email to this client before sending an interview link.")
+
+    # Don't send a link the wallet can't fund — otherwise the client receives the
+    # email, tries to start, and hits a confusing "contact your consultancy" wall.
+    # Require enough credits up-front to cover every interview this link offers.
+    credits.enforce_units_or_402(db, organization.id, "mock_interview", int(payload.allowed_count))
 
     # Supersede any prior invites for this client.
     db.query(models.EnterpriseInterviewInvite).filter(
@@ -4686,14 +4777,19 @@ def public_interview_chat(payload: PublicInterviewChatRequest, request: Request,
 
     history = [t.model_dump() for t in (payload.history or [])]
     try:
-        reply = enterprise_interview.run_interview_turn(
+        turn = enterprise_interview.run_interview_turn(
             client=client, organization=org, recent_notes=[],  # never leak staff notes to the client
             history=history, message=payload.message or "", is_start=bool(payload.start),
         )
     except Exception:
         logger.exception("Public interview turn failed (invite=%s)", invite.id)
         raise HTTPException(status_code=502, detail="The interviewer ran into a problem. Please try again.")
-    return {"reply": reply, "remaining": _interview_invite_remaining(invite)}
+    return {
+        "reply": turn["reply"],
+        "finished": turn["finished"],
+        "decision": turn["decision"],
+        "remaining": _interview_invite_remaining(invite),
+    }
 
 
 @router.post("/public/interview/feedback")
@@ -4707,22 +4803,63 @@ def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: 
     invite, client, org = _public_load_invite_context(db, payload.session_token)
 
     history = [t.model_dump() for t in payload.history]
+    raw_decision = (payload.decision or "").strip().lower()
+    officer_decision = raw_decision if raw_decision in ("approved", "refused") else None
     try:
-        feedback = enterprise_interview.generate_interview_feedback(client=client, organization=org, history=history)
+        feedback = enterprise_interview.generate_interview_feedback(
+            client=client, organization=org, history=history, officer_decision=officer_decision,
+        )
     except Exception:
         logger.exception("Public interview feedback failed (invite=%s)", invite.id)
         raise HTTPException(status_code=502, detail="Could not generate feedback. Please try again.")
 
+    decision_label = {"approved": "Approved", "refused": "Refused"}.get(officer_decision)
     verdict = enterprise_interview.extract_verdict(feedback)
+    # Keep the officer's decision separate from the coaching feedback so it isn't
+    # shown twice in the UI/email; fold it into the *stored* copy for staff.
+    stored_feedback = (
+        f"**Officer's decision (simulated): Visa {decision_label}**\n\n" + feedback
+        if decision_label else feedback
+    )
     session = models.EnterpriseInterviewSession(
         organization_id=org.id, client_id=client.id, conducted_by_user_id=None,
         conducted_by_name=f"{client.full_name} (self · via link)",
         mode=("voice" if payload.mode == "voice" else "chat"),
-        transcript=_json.dumps(history)[:400000], feedback=feedback, verdict=verdict,
+        transcript=_json.dumps(history)[:400000], feedback=stored_feedback, verdict=verdict,
     )
     db.add(session)
+    # Mark the invite as having a completed interview so staff can see the student
+    # actually finished it (used_count only tells us they *started*).
+    invite.completed_count = int(invite.completed_count or 0) + 1
+    invite.last_completed_at = datetime.utcnow()
     db.commit()
-    return {"feedback": feedback, "verdict": verdict, "remaining": _interview_invite_remaining(invite)}
+
+    # Email the report to the applicant who took the interview (best-effort).
+    emailed = False
+    try:
+        emailed, _mid, err = send_enterprise_interview_report_email(
+            to_email=invite.email,
+            client_name=client.full_name,
+            organization_name=org.company_name,
+            destination_country=client.destination_country_name,
+            visa_type=client.visa_type,
+            decision_label=decision_label,
+            feedback_markdown=feedback,
+            logo_url=_resolve_enterprise_logo_url(org),
+        )
+        if not emailed:
+            logger.warning("Interview report email failed for invite %s: %s", invite.id, err)
+    except Exception:
+        logger.exception("Interview report email crashed (invite=%s)", invite.id)
+
+    return {
+        "feedback": feedback,
+        "verdict": verdict,
+        "decision": decision_label,
+        "remaining": _interview_invite_remaining(invite),
+        "emailed": emailed,
+        "masked_email": _mask_email(invite.email),
+    }
 
 
 # ===========================================================================

@@ -182,8 +182,20 @@ def resolve_active_coupon_or_400(
     return coupon
 
 
+def is_free_checkout(amount_paise: int) -> bool:
+    """True when an (already discounted) amount can't be charged online (< ₹1).
+
+    A 100%-off code lands here at ₹0. Rather than blocking checkout, callers grant
+    the purchase for free server-side."""
+    return int(amount_paise) < MIN_CHECKOUT_PAISE
+
+
 def apply_to_amount_or_400(base_amount_paise: int, percent_off: Decimal) -> int:
-    """Discount an amount, rejecting results below the online-checkout floor."""
+    """Discount an amount, rejecting results below the online-checkout floor.
+
+    Use only where a free grant is NOT supported; checkout paths that can fulfil a
+    fully-covered order for free should call compute_discounted_amount_paise +
+    is_free_checkout instead."""
     amount = compute_discounted_amount_paise(base_amount_paise, percent_off)
     if amount < MIN_CHECKOUT_PAISE:
         raise HTTPException(

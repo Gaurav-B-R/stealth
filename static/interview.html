@@ -69,8 +69,14 @@
     .mic{width:46px;flex:none;border-radius:var(--radius-sm);border:1.5px solid var(--border-strong);background:var(--surface-2);font-size:17px;cursor:pointer}
     .mic.rec{background:rgba(239,68,68,.14);border-color:rgba(239,68,68,.4)}
     .voice-pref{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--text-2);font-weight:600;cursor:pointer}
-    .feedback{margin-top:18px;border:1px solid var(--border);border-radius:12px;padding:16px;background:var(--surface-2);line-height:1.6;font-size:14.5px}
-    .feedback .h{font-weight:700;margin:12px 0 5px}.feedback ul{margin:6px 0;padding-left:20px}.feedback p{margin:6px 0}
+    .feedback{margin-top:18px;border:1px solid var(--border);border-radius:12px;padding:18px;background:var(--surface-2);line-height:1.6;font-size:14.5px}
+    .feedback .h{font-weight:700;margin:14px 0 6px;color:var(--text)}.feedback ul{margin:6px 0;padding-left:20px}.feedback p{margin:6px 0}
+    .feedback ul li{margin:3px 0}
+    /* officer decision banner (shown when the interview concludes) */
+    .decision{display:flex;align-items:center;gap:9px;border-radius:12px;padding:13px 16px;font-size:15.5px;font-weight:800;margin:0 0 14px}
+    .decision span{font-size:11px;font-weight:700;opacity:.8;margin-left:auto;text-transform:uppercase;letter-spacing:.05em}
+    .decision.approve{background:rgba(16,185,129,.12);color:#047857;border:1px solid rgba(16,185,129,.32)}
+    .decision.refuse{background:rgba(239,68,68,.1);color:#b91c1c;border:1px solid rgba(239,68,68,.3)}
     .foot{text-align:center;margin-top:16px;color:var(--muted);font-size:12px}
     .remain{font-size:12.5px;color:var(--muted);font-weight:600}
   </style>
@@ -163,6 +169,7 @@
       var API = "/api/enterprise/public/interview";
       var $ = function (id) { return document.getElementById(id); };
       var info = null, sessionToken = null, history = [], voiceOn = false, busy = false, spoken = 0, recog = null;
+      var concluded = false, feedbackStarted = false, pendingDecision = null;
       var micSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
       function show(id) { ["loading","invalidView","verifyView","interviewView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
@@ -226,26 +233,40 @@
 
       if(micSupported){} // mic button shown after start
       $("startBtn").onclick=function(){ info.voice=$("voicePref").checked; voiceOn=!!info.voice; history=[]; spoken=0; busy=true;
-        $("iIntro").classList.add("hidden"); $("iChat").classList.remove("hidden"); $("feedback").classList.add("hidden"); $("afterFb").innerHTML="";
+        concluded=false; feedbackStarted=false; pendingDecision=null;
+        $("iIntro").classList.add("hidden"); $("iChat").classList.remove("hidden"); $("inRow").classList.remove("hidden"); $("endBtn").disabled=false;
+        $("feedback").classList.add("hidden"); $("feedback").innerHTML=""; $("afterFb").innerHTML="";
         if(micSupported){ $("micBtn").classList.remove("hidden"); } $("voiceBtn").textContent=voiceOn?"🔊 Voice on":"🔈 Voice off"; drawThread();
-        api("/chat",{session_token:sessionToken,start:true}).then(function(d){ history.push({role:"officer",content:d.reply}); info.remaining=d.remaining; })
-          .catch(function(ex){ alert(ex.message); $("iChat").classList.add("hidden"); renderInterview(); }).finally(function(){ busy=false; drawThread(); var a=$("answer"); if(a)a.focus(); }); };
+        api("/chat",{session_token:sessionToken,start:true}).then(function(d){ history.push({role:"officer",content:d.reply}); info.remaining=d.remaining; if(d.finished){ concluded=true; pendingDecision=d.decision||null; } })
+          .catch(function(ex){ alert(ex.message); $("iChat").classList.add("hidden"); renderInterview(); }).finally(function(){ busy=false; drawThread(); if(concluded){ concludeInterview(pendingDecision); } else { var a=$("answer"); if(a)a.focus(); } }); };
 
-      function sendAnswer(){ var a=$("answer"); var v=(a.value||"").trim(); if(!v||busy)return; var prior=history.slice(); history.push({role:"user",content:v}); a.value=""; a.style.height="auto"; busy=true; drawThread();
-        api("/chat",{session_token:sessionToken,message:v,history:prior}).then(function(d){ history.push({role:"officer",content:d.reply}); })
-          .catch(function(ex){ alert(ex.message); }).finally(function(){ busy=false; drawThread(); }); }
+      function sendAnswer(){ var a=$("answer"); var v=(a.value||"").trim(); if(!v||busy||concluded)return; var prior=history.slice(); history.push({role:"user",content:v}); a.value=""; a.style.height="auto"; busy=true; drawThread();
+        api("/chat",{session_token:sessionToken,message:v,history:prior}).then(function(d){ history.push({role:"officer",content:d.reply}); if(d.finished){ concluded=true; pendingDecision=d.decision||null; } })
+          .catch(function(ex){ alert(ex.message); }).finally(function(){ busy=false; drawThread(); if(concluded){ concludeInterview(pendingDecision); } }); }
       $("sendBtn").onclick=sendAnswer;
       $("answer").addEventListener("keydown",function(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAnswer(); } });
       $("answer").addEventListener("input",function(){ this.style.height="auto"; this.style.height=Math.min(this.scrollHeight,130)+"px"; });
 
-      $("endBtn").onclick=function(){ if(busy)return; if(history.filter(function(m){return m.role==="user";}).length===0){ alert("Answer at least one question first."); return; }
-        busy=true; stopSpeak(); $("endBtn").disabled=true; $("inRow").classList.add("hidden"); drawThread();
-        $("feedback").classList.remove("hidden"); $("feedback").innerHTML='<div class="center"><span class="spinner dark"></span><p class="muted">Preparing your feedback…</p></div>';
-        api("/feedback",{session_token:sessionToken,history:history,mode:voiceOn?"voice":"chat"}).then(function(d){ info.remaining=d.remaining;
-          $("feedback").innerHTML='<div class="h">📋 Your interview feedback</div>'+fmt(d.feedback);
+      function decisionBanner(decision){ var d=String(decision||"").toLowerCase(); if(d!=="approved"&&d!=="refused")return "";
+        var ok=d==="approved"; return '<div class="decision '+(ok?"approve":"refuse")+'">'+(ok?"✅ Visa approved":"❌ Visa refused")+'<span>Simulated · practice only</span></div>'; }
+
+      // Wrap up the interview — used both when the officer ends it themselves and when
+      // the applicant taps "End & get feedback". Generates the report and the server
+      // emails a copy to the applicant.
+      function concludeInterview(decision){ if(feedbackStarted)return; feedbackStarted=true; concluded=true; busy=true; stopSpeak();
+        $("inRow").classList.add("hidden"); $("endBtn").disabled=true; drawThread();
+        $("feedback").classList.remove("hidden");
+        $("feedback").innerHTML=decisionBanner(decision)+'<div class="center"><span class="spinner dark"></span><p class="muted" style="margin-top:10px">'+(decision?"The officer has ended the interview. ":"")+'Preparing your report…</p></div>';
+        try{ $("feedback").scrollIntoView({behavior:"smooth",block:"nearest"}); }catch(e){}
+        api("/feedback",{session_token:sessionToken,history:history,mode:voiceOn?"voice":"chat",decision:decision||null}).then(function(d){ info.remaining=d.remaining;
+          var emailNote=d.emailed?'<div class="ok" style="margin:0 0 14px">📧 A copy of this report has been emailed to '+esc(d.masked_email||"your email")+'.</div>':'';
+          $("feedback").innerHTML=decisionBanner(d.decision||decision)+emailNote+'<div class="h">📋 Your interview feedback</div>'+fmt(d.feedback);
           $("afterFb").innerHTML='<div class="remain" style="margin-bottom:12px">Interviews remaining: '+info.remaining+'</div>'+(info.remaining>0?'<button class="btn btn-soft" id="againBtn">↻ Take another interview</button>':'<div class="muted">That was your last interview on this link. Good luck! 🎓</div>');
-          var ab=$("againBtn"); if(ab) ab.onclick=function(){ $("iChat").classList.add("hidden"); renderInterview(); };
-        }).catch(function(ex){ $("feedback").innerHTML='<div class="err">'+esc(ex.message)+'</div>'; }).finally(function(){ busy=false; }); };
+          var ab=$("againBtn"); if(ab) ab.onclick=function(){ feedbackStarted=false; concluded=false; pendingDecision=null; $("iChat").classList.add("hidden"); renderInterview(); };
+        }).catch(function(ex){ $("feedback").innerHTML=decisionBanner(decision)+'<div class="err">'+esc(ex.message)+'</div>'; feedbackStarted=false; }).finally(function(){ busy=false; }); }
+
+      $("endBtn").onclick=function(){ if(busy||feedbackStarted)return; if(history.filter(function(m){return m.role==="user";}).length===0){ alert("Answer at least one question first."); return; }
+        concludeInterview(pendingDecision); };
 
       $("voiceBtn").onclick=function(){ voiceOn=!voiceOn; this.textContent=voiceOn?"🔊 Voice on":"🔈 Voice off"; if(!voiceOn)stopSpeak(); else{ var l=history[history.length-1]; if(l&&l.role==="officer")speak(l.content);} };
       $("micBtn").onclick=function(){ var SR=window.SpeechRecognition||window.webkitSpeechRecognition; if(!SR)return; var btn=this;

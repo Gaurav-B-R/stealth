@@ -19,6 +19,7 @@ class UserCreate(UserBase):
     cf_turnstile_token: Optional[str] = None  # Cloudflare Turnstile token
     referral_code: Optional[str] = None
     accepted_terms_privacy: bool = False
+    age_confirmed: bool = False  # 18+ self-attestation (or parent/guardian agreeing)
     marketing_emails_consent: bool = False  # optional opt-in for marketing emails
 
 class UserUpdate(BaseModel):
@@ -178,6 +179,17 @@ class AdminEnterpriseCouponSendEmailRequest(BaseModel):
     email: Optional[EmailStr] = None
 
 
+class AdminEnterpriseRefundRequest(BaseModel):
+    kind: str  # credits | money
+    reason: Optional[str] = None
+    # credit / goodwill refund
+    credits: Optional[int] = None
+    # money refund (Razorpay)
+    payment_id: Optional[int] = None
+    amount_rupees: Optional[float] = None   # rupees the admin wants refunded
+    clawback_credits: Optional[int] = None  # credits to deduct from the wallet (default suggested)
+
+
 class AdminCompanyFinanceSummary(BaseModel):
     total_invested_usd: float = 0
     total_returns_usd: float = 0
@@ -311,6 +323,11 @@ class OtpVerifyRequest(BaseModel):
 
 class OtpResendRequest(BaseModel):
     email: EmailStr
+
+
+class AccountDeleteRequest(BaseModel):
+    code: str
+
 
 class TokenData(BaseModel):
     username: Optional[str] = None

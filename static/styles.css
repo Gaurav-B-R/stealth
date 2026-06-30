@@ -187,6 +187,18 @@ body.b2c-light #dashboardSection .sidebar-notif-dropdown {
     background: var(--bg-secondary);
     border-color: var(--border-color);
 }
+/* Profile dropdown was hardcoded dark (#252840); give it light surfaces to match. */
+body.b2c-light #dashboardSection .sidebar-user-dropdown {
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
+    box-shadow: 0 -8px 32px rgba(15, 23, 42, 0.14);
+}
+body.b2c-light #dashboardSection .sidebar-user-dropdown a { color: var(--text-secondary); }
+body.b2c-light #dashboardSection .sidebar-user-dropdown a:hover {
+    background: rgba(15, 23, 42, 0.05);
+    color: var(--text-primary);
+}
+body.b2c-light #dashboardSection .sidebar-user-divider { background: var(--border-color); }
 
 /* Embedded Rilono AI assistant chat panel — hardcoded dark message/input surfaces. */
 body.b2c-light .rilono-ai-widget { border-color: var(--border-color); }
@@ -199,6 +211,24 @@ body.b2c-light .rilono-ai-message .message-bubble h2,
 body.b2c-light .rilono-ai-message .message-bubble h3 { color: var(--text-primary); }
 body.b2c-light .rilono-ai-message.user .message-avatar { background: var(--bg-tertiary); }
 body.b2c-light .rilono-ai-attach-btn { background: var(--bg-tertiary); }
+
+/* Floating Rilono AI chat popup — light theme. Its message area + input container
+   use hardcoded dark rgba() (not theme variables), so override them explicitly. */
+body.b2c-light .floating-chat-messages { background: var(--bg-color); }
+body.b2c-light .floating-chat-header { border-bottom: 1px solid var(--border-color); }
+body.b2c-light .chat-message.assistant .chat-message-bubble { background: var(--bg-secondary); border-color: var(--border-color); }
+body.b2c-light .chat-message.user .chat-avatar { background: var(--bg-tertiary); }
+body.b2c-light .floating-chat-input-container { background: var(--bg-secondary); border-top: 1px solid var(--border-color); }
+body.b2c-light .floating-chat-input { background: #ffffff; border-color: var(--border-color); }
+body.b2c-light .floating-chat-input:focus { background: #ffffff; }
+body.b2c-light .floating-chat-attach-btn { background: var(--bg-tertiary); border-color: var(--border-color); }
+body.b2c-light .floating-chat-popup { background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); }
+/* Expanded (maximized) chat re-darkens with #0d1428 !important — override for light. */
+body.b2c-light .rilono-ai-widget.chat-expanded,
+body.b2c-light .floating-chat-window.chat-expanded { background: var(--bg-secondary) !important; border-color: var(--border-color); }
+body.b2c-light .rilono-ai-widget.chat-expanded .rilono-ai-content,
+body.b2c-light .floating-chat-window.chat-expanded .floating-chat-messages,
+body.b2c-light .rilono-ai-widget.chat-expanded .rilono-ai-messages { background: var(--bg-color) !important; }
 
 /* Shared top chrome on the SPA pages (login/dashboard/etc.): navbar + the Copilot
    announcement bar were hardcoded dark, so the light body made nav text dark-on-dark. */
@@ -424,6 +454,18 @@ body.dashboard-active {
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+}
+
+/* Brand wordmark next to the logo. Uses the theme text color so it stays
+   visible on both the dark navbar and the light (b2c-light) navbar — the old
+   inline `color: white` made it invisible on the white /pricing header. */
+.nav-brand-name {
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+    -webkit-text-fill-color: var(--text-primary);
 }
 
 .nav-links {
@@ -2572,27 +2614,46 @@ body.dashboard-active {
 .copilot-upgrade-prompt {
     display: grid;
     gap: 0.6rem;
-    padding: 0.95rem;
+    padding: 1.15rem 1.25rem;
     border-radius: 0.95rem;
-    border: 1px solid rgba(122, 141, 255, 0.35);
-    background: linear-gradient(130deg, rgba(18, 28, 56, 0.68), rgba(49, 34, 100, 0.56));
+    border: 1px solid rgba(99, 102, 241, 0.28);
+    background: linear-gradient(130deg, rgba(99, 102, 241, 0.10), rgba(168, 85, 247, 0.08));
 }
 
 .copilot-upgrade-title {
     margin: 0;
-    font-size: 0.98rem;
-    font-weight: 700;
+    font-size: 1rem;
+    font-weight: 750;
     color: var(--text-primary);
 }
 
 .copilot-upgrade-copy {
     margin: 0;
     font-size: 0.9rem;
+    line-height: 1.55;
     color: var(--text-secondary);
+}
+
+.copilot-upgrade-actions {
+    margin-top: 0.25rem;
 }
 
 .copilot-upgrade-actions .btn {
     min-width: 170px;
+}
+
+/* The visible upgrade CTA on the light Copilot card — make it a clear, on-brand
+   filled button instead of the old faint dark-theme pill. */
+.copilot-upgrade-actions .btn-secondary {
+    background: linear-gradient(135deg, #6366f1, #7c3aed);
+    color: #ffffff;
+    border: 0;
+    box-shadow: 0 6px 16px rgba(99, 102, 241, 0.28);
+}
+
+.copilot-upgrade-actions .btn-secondary:hover {
+    filter: brightness(1.05);
+    box-shadow: 0 10px 22px rgba(99, 102, 241, 0.34);
 }
 
 .visa-mock-panel {
@@ -3648,26 +3709,113 @@ body.dashboard-active {
 .visa-consulate-chip {
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    border: 1px solid var(--border-color);
+    gap: 0.45rem;
+    border: 1.5px solid var(--border-color);
     border-radius: 999px;
     background: var(--bg-secondary);
-    color: var(--text-secondary);
-    padding: 0.32rem 0.62rem;
-    font-size: 0.8rem;
+    color: var(--text-primary);
+    padding: 0.42rem 0.85rem 0.42rem 0.6rem;
+    font-size: 0.82rem;
+    font-weight: 600;
     cursor: pointer;
     user-select: none;
-    transition: all 0.2s ease;
+    transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
 }
 
+.visa-consulate-chip:hover {
+    border-color: var(--primary-color);
+    background: rgba(99, 102, 241, 0.07);
+}
+
+/* Custom checkbox so it stays crisp on both the light chip and the filled active chip. */
 .visa-consulate-chip input {
+    appearance: none;
+    -webkit-appearance: none;
     margin: 0;
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border-radius: 5px;
+    border: 1.5px solid var(--border-color);
+    background: var(--bg-color);
+    position: relative;
+    cursor: pointer;
+}
+
+.visa-consulate-chip input:checked {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+}
+
+.visa-consulate-chip input:checked::after {
+    content: "✓";
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 900;
+    line-height: 1;
 }
 
 .visa-consulate-chip.active {
-    color: #dbeafe;
-    border-color: rgba(96, 165, 250, 0.45);
-    background: rgba(30, 64, 175, 0.25);
+    color: #ffffff;
+    border-color: transparent;
+    background: linear-gradient(135deg, #6366f1, #7c3aed);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.28);
+}
+
+.visa-consulate-chip.active input {
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.65);
+}
+
+.visa-consulate-chip.active input:checked {
+    background: #ffffff;
+    border-color: #ffffff;
+}
+
+.visa-consulate-chip.active input:checked::after {
+    color: #4f46e5;
+}
+
+.visa-experience-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.45rem;
+    padding: 1.9rem 1rem;
+    border: 1px dashed var(--border-color);
+    border-radius: 0.85rem;
+    background: var(--bg-secondary);
+}
+
+.visa-experience-state .vxs-icon {
+    font-size: 1.7rem;
+    line-height: 1;
+}
+
+.visa-experience-state p {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 0.92rem;
+    font-weight: 650;
+}
+
+.visa-experience-state p span {
+    display: block;
+    margin-top: 0.28rem;
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 400;
+}
+
+.visa-experience-state-error {
+    border-color: rgba(239, 68, 68, 0.35);
+    background: rgba(239, 68, 68, 0.05);
 }
 
 .visa-experience-item {
@@ -3702,9 +3850,9 @@ body.dashboard-active {
     border-radius: 999px;
     font-size: 0.72rem;
     font-weight: 700;
-    color: #bfdbfe;
-    border: 1px solid rgba(96, 165, 250, 0.4);
-    background: rgba(30, 64, 175, 0.24);
+    color: #4338ca;
+    border: 1px solid rgba(99, 102, 241, 0.28);
+    background: rgba(99, 102, 241, 0.12);
 }
 
 .visa-experience-source {
@@ -9498,13 +9646,20 @@ body.dashboard-active {
 }
 
 .pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
-    border-color: rgba(251, 191, 36, 0.82);
-    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.42), 0 26px 44px rgba(28, 14, 30, 0.66);
+    border-color: rgba(192, 132, 252, 0.82);
+    box-shadow: 0 0 0 1px rgba(192, 132, 252, 0.42), 0 26px 44px rgba(20, 12, 40, 0.66);
     transform: translateY(-3px);
 }
 
 .pricing-card {
+    /* These cards are always dark — pin their text to light values locally so they
+       stay readable on the light B2C page theme (/pricing) as well as the dark theme.
+       Without this, var(--text-primary)/--text-secondary resolve to dark colors on
+       the light theme, leaving dark text on a dark card. */
+    --text-primary: #f8fafc;
+    --text-secondary: #cbd5e1;
     position: relative;
+    color: var(--text-primary);
     border: 1px solid rgba(129, 140, 248, 0.2);
     border-radius: 1.15rem;
     background:
@@ -9559,16 +9714,16 @@ body.dashboard-active {
 
 .pricing-card-journey {
     background:
-        radial-gradient(circle at 92% -20%, rgba(250, 204, 21, 0.24), transparent 50%),
-        radial-gradient(circle at 8% 118%, rgba(244, 114, 182, 0.2), transparent 46%),
-        linear-gradient(165deg, rgba(36, 24, 32, 0.95), rgba(26, 18, 36, 0.94));
-    border-color: rgba(251, 191, 36, 0.42);
-    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.2), 0 16px 32px rgba(28, 14, 30, 0.5);
+        radial-gradient(circle at 88% -18%, rgba(168, 85, 247, 0.24), transparent 52%),
+        radial-gradient(circle at 6% 116%, rgba(236, 72, 153, 0.16), transparent 48%),
+        linear-gradient(160deg, rgba(26, 22, 44, 0.96), rgba(18, 18, 30, 0.96));
+    border-color: rgba(168, 85, 247, 0.5);
+    box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.22), 0 18px 36px rgba(20, 12, 40, 0.5);
 }
 
 .pricing-card-journey:hover {
-    border-color: rgba(251, 191, 36, 0.74);
-    box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.35), 0 22px 40px rgba(28, 14, 30, 0.62);
+    border-color: rgba(192, 132, 252, 0.72);
+    box-shadow: 0 0 0 1px rgba(192, 132, 252, 0.34), 0 24px 44px rgba(20, 12, 40, 0.6);
 }
 
 .pricing-badge {
@@ -9590,8 +9745,8 @@ body.dashboard-active {
 }
 
 .pricing-badge-value {
-    background: linear-gradient(135deg, #f59e0b, #ec4899);
-    box-shadow: 0 6px 16px rgba(217, 119, 6, 0.34);
+    background: var(--gradient-primary);
+    box-shadow: 0 6px 16px rgba(168, 85, 247, 0.4);
 }
 
 .pricing-card-head h2 {
@@ -9620,9 +9775,9 @@ body.dashboard-active {
 }
 
 .pricing-plan-meta-value {
-    border-color: rgba(252, 211, 77, 0.35);
-    background: rgba(146, 64, 14, 0.28);
-    color: #fde68a;
+    border-color: rgba(192, 132, 252, 0.4);
+    background: rgba(124, 58, 237, 0.24);
+    color: #e9d5ff;
 }
 
 .pricing-plan-savings {
@@ -9631,7 +9786,7 @@ body.dashboard-active {
     font-size: 0.84rem;
     font-weight: 700;
     letter-spacing: 0.01em;
-    color: #fcd34d;
+    color: #d8b4fe;
 }
 
 .pricing-price {
@@ -9685,6 +9840,17 @@ body.dashboard-active {
     margin-top: auto;
 }
 
+/* Keep any in-card coupon input readable on the dark card (its background var is
+   not pinned to the card, so force dark surface + light text explicitly). */
+.pricing-card .pricing-coupon-input {
+    background: rgba(15, 16, 26, 0.85);
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #f8fafc;
+}
+.pricing-card .pricing-coupon-input::placeholder {
+    color: rgba(203, 213, 225, 0.7);
+}
+
 .pricing-card-free .btn {
     background: linear-gradient(135deg, #7c8aff, #a78bfa);
 }
@@ -9695,8 +9861,8 @@ body.dashboard-active {
 }
 
 .pricing-card-journey .btn {
-    background: linear-gradient(135deg, #d97706, #ec4899);
-    box-shadow: 0 8px 22px rgba(217, 119, 6, 0.3);
+    background: var(--gradient-primary);
+    box-shadow: 0 8px 22px rgba(168, 85, 247, 0.32);
 }
 
 .pricing-card-pro-monthly .btn:hover,

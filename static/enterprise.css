@@ -447,6 +447,57 @@ button { font-family: inherit; cursor: pointer; }
 }
 .coupon-msg { font-size: 13px; font-weight: 600; color: var(--success); }
 
+/* ---------- Credit checkout / order-review modal ---------- */
+.co-modal { display: flex; flex-direction: column; gap: 16px; }
+.co-item {
+  display: flex; align-items: center; gap: 14px;
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; background: var(--surface-2);
+}
+.co-item-ic {
+  flex: none; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  font-size: 22px; background: var(--grad); color: #fff;
+}
+.co-item-main { flex: 1; min-width: 0; }
+.co-item-title { font-weight: 700; font-size: 15px; }
+.co-item-sub { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+.co-bonus { color: var(--success); font-weight: 600; }
+.co-item-price { font-weight: 800; font-size: 17px; white-space: nowrap; }
+
+.co-coupon {
+  display: flex; align-items: center; gap: 10px;
+  border: 1.5px dashed var(--border-strong); border-radius: 12px; padding: 10px 12px;
+}
+.co-coupon .coupon-input {
+  flex: 1; min-width: 0; padding: 9px 12px; border: 1.5px solid var(--border-strong);
+  border-radius: 9px; background: var(--surface); color: var(--text); font-size: 14px;
+}
+.co-coupon .coupon-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+.co-coupon.applied {
+  justify-content: space-between; border-style: solid; border-color: var(--success); background: rgba(16,185,129,.08);
+}
+.co-coupon-info { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.co-coupon-tag {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; font-size: 13px;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; padding: 3px 9px;
+}
+.co-coupon-msg { font-size: 13px; font-weight: 600; color: var(--success); }
+.co-coupon-err { font-size: 12.5px; color: var(--danger, #ef4444); font-weight: 600; margin: -8px 2px 0; }
+
+.co-summary { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 9px; }
+.co-line { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; color: var(--text-2); gap: 12px; }
+.co-line span:last-child { font-variant-numeric: tabular-nums; }
+.co-discount { color: var(--success); font-weight: 600; }
+.co-total {
+  margin-top: 4px; padding-top: 12px; border-top: 1px dashed var(--border-strong);
+  font-size: 16px; font-weight: 800; color: var(--text);
+}
+.co-total span:last-child { font-size: 19px; }
+.co-free {
+  color: var(--success); font-weight: 800; letter-spacing: .04em;
+  background: rgba(16,185,129,.12); border-radius: 7px; padding: 2px 10px;
+}
+.co-note { font-size: 12.5px; color: var(--text-2); text-align: center; line-height: 1.5; }
+
 .usage-bar { height: 8px; background: var(--bg-2); border-radius: 6px; overflow: hidden; margin-top: 8px; }
 .usage-fill { height: 100%; background: var(--grad); border-radius: 6px; }
 
@@ -530,7 +581,25 @@ button { font-family: inherit; cursor: pointer; }
 .cp-hmeta { position: relative; z-index: 1; flex: 1; min-width: 0; }
 .cp-hmeta h1 { margin: 0; font-size: 26px; letter-spacing: -.02em; }
 .cp-hsub { font-size: 14px; opacity: .95; margin-top: 4px; }
-.cp-hstatus { position: relative; z-index: 1; }
+.cp-hstatus { position: relative; z-index: 1; flex: none; }
+/* On the colored gradient hero the faint tinted pill is illegible, so use a frosted
+   white badge (white text + the stage colour kept only on the dot). !important beats
+   the inline background/color statusPill() sets for the light-background contexts. */
+.cp-hstatus .status-pill {
+    background: rgba(255, 255, 255, .20) !important;
+    color: #fff !important;
+    border: 1px solid rgba(255, 255, 255, .38);
+    padding: 7px 14px;
+    font-weight: 700;
+    white-space: nowrap;
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+}
+.cp-hstatus .status-pill .sd {
+    width: 8px; height: 8px;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, .55);
+}
 .cp-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 22px 0 20px; overflow-x: auto; }
 .cp-tab { background: none; border: none; padding: 12px 16px; font-size: 14.5px; font-weight: 650; color: var(--text-2); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
 .cp-tab:hover { color: var(--text); }

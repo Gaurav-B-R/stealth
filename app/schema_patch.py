@@ -39,6 +39,8 @@ def ensure_user_legal_consent_column():
             conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_user_agent TEXT"))
         if "accepted_terms_privacy_version" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN accepted_terms_privacy_version VARCHAR"))
+        if "age_confirmed_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN age_confirmed_at TIMESTAMP"))
         if "visa_case_status" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN visa_case_status VARCHAR"))
         if "current_situation_story" not in columns:
@@ -69,6 +71,26 @@ def ensure_user_legal_consent_column():
         # Server-side logout: tokens issued at/before this instant are rejected.
         if "session_invalidated_at" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN session_invalidated_at TIMESTAMP"))
+
+
+def ensure_account_deletion_otp_columns():
+    """Add the account-deletion OTP columns (secondary confirmation for B2C delete)."""
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "users")
+        if "account_deletion_otp" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN account_deletion_otp VARCHAR"))
+        if "account_deletion_otp_expires" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN account_deletion_otp_expires TIMESTAMP"))
+
+
+def ensure_university_country_column():
+    """Tag the universities registry by country (US default; AU rows are code-seeded)."""
+    with engine.begin() as conn:
+        if not _table_exists(conn, "us_universities"):
+            return
+        columns = _get_table_columns(conn, "us_universities")
+        if "country_code" not in columns:
+            conn.execute(text("ALTER TABLE us_universities ADD COLUMN country_code VARCHAR DEFAULT 'US'"))
 
 
 def ensure_subscription_usage_columns():
@@ -208,6 +230,13 @@ def ensure_enterprise_organization_columns():
             conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN subdomain_slug VARCHAR"))
         if "logo_url" not in columns:
             conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN logo_url VARCHAR"))
+        # Data Processing Agreement acceptance (proof-of-consent for the org as controller).
+        if "dpa_accepted_at" not in columns:
+            conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN dpa_accepted_at TIMESTAMP"))
+        if "dpa_accepted_version" not in columns:
+            conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN dpa_accepted_version VARCHAR"))
+        if "dpa_accepted_by_user_id" not in columns:
+            conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN dpa_accepted_by_user_id INTEGER"))
 
         conn.execute(
             text(
@@ -345,6 +374,26 @@ def ensure_f1_visa_news_table():
             ))
 
 
+def ensure_f1_visa_news_country_column():
+    """Add per-destination tagging to f1_visa_news so each user sees their own country's news."""
+    with engine.begin() as conn:
+        if not _table_exists(conn, "f1_visa_news"):
+            return
+        columns = _get_table_columns(conn, "f1_visa_news")
+        if "destination_country_code" not in columns:
+            conn.execute(text(
+                "ALTER TABLE f1_visa_news ADD COLUMN destination_country_code VARCHAR"
+            ))
+            # Existing rows were all US F-1 news — tag them so they stay scoped to US.
+            conn.execute(text(
+                "UPDATE f1_visa_news SET destination_country_code = 'US' WHERE destination_country_code IS NULL"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_f1_visa_news_destination "
+                "ON f1_visa_news (destination_country_code)"
+            ))
+
+
 def ensure_rilono_ai_chat_upload_events_table():
     """
     Ensure 24-hour Rilono AI chat upload usage table exists for quota tracking.
@@ -456,6 +505,13 @@ def ensure_enterprise_crm_tables():
                            created_by_user_id, created_at
                     FROM enterprise_students
                 """))
+
+        # Additive: end-client consent proof columns (safe for new & existing tables).
+        client_cols = _get_table_columns(conn, "enterprise_clients")
+        if "client_consent_confirmed_at" not in client_cols:
+            conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN client_consent_confirmed_at TIMESTAMP"))
+        if "client_consent_confirmed_by_user_id" not in client_cols:
+            conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN client_consent_confirmed_by_user_id INTEGER"))
 
         # --- enterprise_client_notes ------------------------------------------
         if not _table_exists(conn, "enterprise_client_notes"):
@@ -633,6 +689,24 @@ def ensure_enterprise_crm_tables():
                 conn.execute(text(stmt))
 
 
+def ensure_enterprise_interview_invite_columns():
+    """Add interview completion-tracking columns for older DBs (in-place, idempotent)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_interview_invites"):
+            return
+        columns = _get_table_columns(conn, "enterprise_interview_invites")
+        if "completed_count" not in columns:
+            conn.execute(text(
+                "ALTER TABLE enterprise_interview_invites ADD COLUMN completed_count INTEGER NOT NULL DEFAULT 0"
+            ))
+        if "last_completed_at" not in columns:
+            conn.execute(text(
+                f"ALTER TABLE enterprise_interview_invites ADD COLUMN last_completed_at {ts}"
+            ))
+
+
 def ensure_enterprise_support_requests_table():
     """Create the enterprise_support_requests table (help & feature requests)."""
     is_sqlite = engine.dialect.name == "sqlite"
@@ -724,6 +798,51 @@ def ensure_enterprise_document_request_tables():
             for stmt in (
                 "CREATE INDEX IF NOT EXISTS ix_enterprise_document_request_items_request_id ON enterprise_document_request_items(request_id)",
                 "CREATE INDEX IF NOT EXISTS ix_enterprise_document_request_items_organization_id ON enterprise_document_request_items(organization_id)",
+            ):
+                conn.execute(text(stmt))
+
+
+def ensure_enterprise_refunds_table():
+    """Create the enterprise_refunds audit table and the refunded-amount tracker on
+    credit payments. Idempotent and additive — safe to run on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_credit_payments"):
+            cols = _get_table_columns(conn, "enterprise_credit_payments")
+            if "refunded_amount_paise" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE enterprise_credit_payments "
+                    "ADD COLUMN refunded_amount_paise INTEGER NOT NULL DEFAULT 0"
+                ))
+
+        if not _table_exists(conn, "enterprise_refunds"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_refunds (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    payment_id INTEGER,
+                    kind VARCHAR NOT NULL DEFAULT 'credits',
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    currency VARCHAR NOT NULL DEFAULT 'INR',
+                    credits_delta INTEGER NOT NULL DEFAULT 0,
+                    provider VARCHAR,
+                    razorpay_payment_id VARCHAR,
+                    razorpay_refund_id VARCHAR,
+                    status VARCHAR NOT NULL DEFAULT 'completed',
+                    reason TEXT,
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_refunds_organization_id ON enterprise_refunds(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_refunds_payment_id ON enterprise_refunds(payment_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_refunds_created_at ON enterprise_refunds(created_at)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_refunds_razorpay_refund ON enterprise_refunds(razorpay_refund_id)",
             ):
                 conn.execute(text(stmt))
 

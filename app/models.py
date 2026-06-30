@@ -43,6 +43,10 @@ class User(Base):
     # even if a token copy survives in the browser (stateless JWTs are otherwise valid
     # until expiry).
     session_invalidated_at = Column(DateTime(timezone=True), nullable=True)
+    # Account-deletion second factor: a short-lived 6-digit OTP (hashed) emailed to
+    # the user. The DELETE endpoint requires it as a secondary confirmation.
+    account_deletion_otp = Column(String, nullable=True)
+    account_deletion_otp_expires = Column(DateTime(timezone=True), nullable=True)
     encryption_salt = Column(String, nullable=True)  # Salt for Zero-Knowledge encryption (base64 encoded)
     # Documentation preferences
     preferred_country = Column(String, nullable=True, default="United States")
@@ -59,6 +63,10 @@ class User(Base):
     accepted_terms_privacy_ip = Column(String, nullable=True)
     accepted_terms_privacy_user_agent = Column(Text, nullable=True)
     accepted_terms_privacy_version = Column(String, nullable=True)
+    # Age self-attestation captured at signup: the user confirmed they are 18+ (or a
+    # parent/guardian agreed on their behalf). Supports DPDP (under-18) / GDPR
+    # (under-16) minor-consent obligations.
+    age_confirmed_at = Column(DateTime(timezone=True), nullable=True)
     email_notifications_enabled = Column(Boolean, nullable=False, default=True)
     email_notifications_unsubscribed_at = Column(DateTime(timezone=True), nullable=True)
     email_notifications_unsubscribe_reason = Column(Text, nullable=True)
@@ -82,6 +90,8 @@ class USUniversity(Base):
     email_domain = Column(String, primary_key=True, nullable=False, index=True)
     university_name = Column(String, nullable=False, index=True)
     location = Column(String, nullable=True)
+    # Which country this university belongs to (US loaded externally; AU code-seeded).
+    country_code = Column(String, nullable=True, default="US", index=True)
 
 class DeveloperEmail(Base):
     __tablename__ = "developer_emails"
@@ -110,6 +120,11 @@ class EnterpriseOrganization(Base):
     subdomain_slug = Column(String, unique=True, index=True, nullable=True)
     logo_url = Column(String, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # Proof the organization accepted the Data Processing Agreement (controller↔processor
+    # terms for handling its clients' personal data). Captured at signup.
+    dpa_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    dpa_accepted_version = Column(String, nullable=True)
+    dpa_accepted_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -178,6 +193,12 @@ class EnterpriseClient(Base):
     status = Column(String, nullable=False, default="new_lead", index=True)
     priority = Column(String, nullable=False, default="normal")
     target_date = Column(Date, nullable=True)  # interview / travel / intake deadline
+
+    # Consent: the staff member confirmed this client consented to having their
+    # personal data processed by the organization through Rilono (the org is the
+    # controller; Rilono the processor). Proof-of-consent for end-client data.
+    client_consent_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    client_consent_confirmed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
     # Assignment & meta
     assigned_to_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
@@ -305,7 +326,9 @@ class EnterpriseInterviewInvite(Base):
     token_hash = Column(String, nullable=False, unique=True, index=True)  # hashed capability token
     email = Column(String, nullable=False)  # client email the link was sent to
     allowed_count = Column(Integer, nullable=False, default=1)
-    used_count = Column(Integer, nullable=False, default=0)
+    used_count = Column(Integer, nullable=False, default=0)  # interviews STARTED via the link
+    completed_count = Column(Integer, nullable=False, default=0)  # interviews FINISHED (feedback generated)
+    last_completed_at = Column(DateTime(timezone=True), nullable=True)
     # One-time email verification (OTP)
     code_hash = Column(String, nullable=True)
     code_expires_at = Column(DateTime(timezone=True), nullable=True)
@@ -548,8 +571,37 @@ class EnterpriseCreditPayment(Base):
     original_amount_paise = Column(Integer, nullable=True)  # pre-discount amount
     verified_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)
+    # Running total of money refunded against this payment (paise). When >0 the
+    # status becomes 'partially_refunded'; when it reaches amount_paise, 'refunded'.
+    refunded_amount_paise = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterpriseRefund(Base):
+    """An audit record of a refund issued to an enterprise account by a platform admin.
+
+    Two kinds:
+      * 'credits' — a goodwill credit grant added back to the wallet (no money moves).
+      * 'money'   — a real Razorpay refund against a specific credit/infra payment,
+                    optionally clawing back the corresponding credits."""
+    __tablename__ = "enterprise_refunds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    payment_id = Column(Integer, ForeignKey("enterprise_credit_payments.id"), nullable=True, index=True)
+    kind = Column(String, nullable=False, default="credits", index=True)  # credits | money
+    amount_paise = Column(Integer, nullable=False, default=0)        # money refunded (paise)
+    currency = Column(String, nullable=False, default="INR")
+    credits_delta = Column(Integer, nullable=False, default=0)       # +credits granted / -credits clawed back
+    provider = Column(String, nullable=True)                         # razorpay (money) / null (credits)
+    razorpay_payment_id = Column(String, nullable=True, index=True)
+    razorpay_refund_id = Column(String, nullable=True, unique=True, index=True)
+    status = Column(String, nullable=False, default="completed")     # completed | processed | pending | failed
+    reason = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
 
 class EnterpriseCoupon(Base):
@@ -781,6 +833,9 @@ class F1VisaNewsItem(Base):
     __tablename__ = "f1_visa_news"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Destination student-visa country this news item is about (US | UK | CA | AU | DE | IE).
+    # Lets each user see news for their own journey instead of US F-1 for everyone.
+    destination_country_code = Column(String, nullable=True, index=True, default="US")
     title = Column(String, nullable=False)
     summary = Column(Text, nullable=False)
     why_it_matters = Column(Text, nullable=True)

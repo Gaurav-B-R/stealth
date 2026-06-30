@@ -32,10 +32,13 @@ from app.schema_patch import (
     ensure_enterprise_credit_tables,
     ensure_enterprise_payment_coupon_columns,
     ensure_enterprise_crm_tables,
+    ensure_enterprise_interview_invite_columns,
     ensure_enterprise_document_request_tables,
+    ensure_enterprise_refunds_table,
     ensure_enterprise_organization_columns,
     ensure_enterprise_students_table,
     ensure_f1_visa_news_table,
+    ensure_f1_visa_news_country_column,
     ensure_referral_columns,
     ensure_rilono_ai_chat_upload_events_table,
     ensure_subscription_payment_recurring_columns,
@@ -43,8 +46,11 @@ from app.schema_patch import (
     ensure_student_journey_country_columns,
     ensure_university_shortlist_table,
     ensure_user_legal_consent_column,
+    ensure_account_deletion_otp_columns,
+    ensure_university_country_column,
 )
 from app.document_catalog import ensure_default_document_type_catalog
+from app.au_universities import seed_au_universities
 from app.token_backfill import backfill_hashed_auth_tokens
 import os
 
@@ -195,6 +201,8 @@ app.include_router(visa_pass.router)
 def startup_backfill_subscriptions():
     """Ensure existing users have default subscription + referral records."""
     ensure_user_legal_consent_column()
+    ensure_account_deletion_otp_columns()
+    ensure_university_country_column()
     ensure_referral_columns()
     ensure_subscription_usage_columns()
     ensure_subscription_payment_recurring_columns()
@@ -204,8 +212,10 @@ def startup_backfill_subscriptions():
     ensure_enterprise_organization_columns()
     ensure_enterprise_students_table()
     ensure_enterprise_crm_tables()
+    ensure_enterprise_interview_invite_columns()
     ensure_enterprise_document_request_tables()
     ensure_enterprise_credit_tables()
+    ensure_enterprise_refunds_table()
     ensure_enterprise_coupons_table()
     ensure_enterprise_payment_coupon_columns()
     ensure_enterprise_calendar_table()
@@ -214,6 +224,7 @@ def startup_backfill_subscriptions():
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_f1_visa_news_table()
+    ensure_f1_visa_news_country_column()
     ensure_rilono_ai_chat_upload_events_table()
     ensure_company_finance_entries_table()
     ensure_gemini_usage_table()
@@ -221,6 +232,7 @@ def startup_backfill_subscriptions():
     db = SessionLocal()
     try:
         ensure_default_document_type_catalog(db)
+        seed_au_universities(db)
         backfill_missing_subscriptions(db)
         backfill_missing_referral_codes(db)
         backfill_hashed_auth_tokens(db)
@@ -333,6 +345,7 @@ async def read_country_visa():
 @app.get("/terms")
 @app.get("/refund-policy")
 @app.get("/delivery-policy")
+@app.get("/dpa")
 @app.get("/login")
 @app.get("/register")
 @app.get("/dashboard")

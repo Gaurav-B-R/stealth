@@ -78,6 +78,26 @@ def _resolve_user_residence_country(user: models.User) -> str:
     return normalized or "United States"
 
 
+# Per-destination student-visa news config. The user's journey (destination_country_code)
+# decides which country's news they see; unknown/unset falls back to the US.
+NEWS_DESTINATIONS: Dict[str, Dict[str, str]] = {
+    "US": {"name": "the United States", "visa": "F-1 student visa"},
+    "UK": {"name": "the United Kingdom", "visa": "Student visa"},
+    "CA": {"name": "Canada", "visa": "study permit"},
+    "AU": {"name": "Australia", "visa": "student visa (Subclass 500)"},
+    "DE": {"name": "Germany", "visa": "national student visa (Type D)"},
+    "IE": {"name": "Ireland", "visa": "study visa (Stamp 2)"},
+}
+NEWS_DEFAULT_DESTINATION = "US"
+NEWS_ONDEMAND_TTL = timedelta(hours=int(os.getenv("NEWS_ONDEMAND_TTL_HOURS", "24") or "24"))
+_news_gen_lock = Lock()
+
+
+def _resolve_user_destination(user: models.User) -> str:
+    code = str(getattr(user, "destination_country_code", None) or "").strip().upper()
+    return code if code in NEWS_DESTINATIONS else NEWS_DEFAULT_DESTINATION
+
+
 def _clean_and_parse_json(text: str) -> Dict[str, Any]:
     response_text = (text or "").strip()
     if response_text.startswith("```json"):
@@ -580,23 +600,26 @@ def _generate_content_with_grounding(
         raise RuntimeError(f"generation_failed_after_grounding_attempts: {details}; base_error={str(exc)}")
 
 
-def _generate_f1_news_with_gemini(user_country: str) -> Dict[str, Any]:
+def _generate_news_with_gemini(
+    destination_name: str, visa_label: str, residence_country: str
+) -> Dict[str, Any]:
     client, auth_mode = _build_latest_genai_client()
 
     now_utc_iso = datetime.now(timezone.utc).isoformat()
 
-    prompt = f"""You are a research assistant for F1 student visa applicants.
-Task: Provide the latest important updates on US F1 visa news, tailored for students currently residing in {user_country}.
+    prompt = f"""You are a research assistant for {destination_name} student-visa applicants.
+Task: Provide the latest important updates on the {destination_name} {visa_label}, tailored for students from or residing in {residence_country}.
 
 Student context:
-- Current country of residence: {user_country}
+- Destination country: {destination_name}
+- Visa: {visa_label}
+- Student's current country of residence: {residence_country}
 - Current date/time (UTC): {now_utc_iso}
 
 Requirements:
-- Focus on recent and relevant updates for F1 student visa applicants in this country context.
-- Prioritize updates that materially affect students from or residing in {user_country}.
-- Include ONLY updates directly about U.S. F-1 visa policy, process, appointments, or documentation.
-- Exclude policy updates that are primarily about other countries (UK, Australia, Canada, etc.).
+- Include ONLY updates directly about the {destination_name} {visa_label}: policy, rules, process, appointments, fees, financial requirements, or documentation.
+- EXCLUDE updates that are primarily about other countries' visas (e.g., if the destination is Australia, do not include US F-1, UK, or Canada news).
+- Prioritize updates that materially affect students applying for the {destination_name} {visa_label}, especially those from or residing in {residence_country}.
 - Treat the current UTC date/time above as "now" when determining recency.
 - Include only updates published within the last {NEWS_MAX_ITEM_AGE_DAYS} days.
 - Include source links for each update
@@ -778,17 +801,10 @@ Provide 5 to 10 items."""
     )
 
 
-@router.get("/f1-latest")
-def get_f1_latest_news(
-    current_user: models.User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Return stored F1 visa news items from the database.
-    Items are ingested by the background scheduler every 24 hours.
-    """
-    items = (
+def _news_rows_for(db: Session, destination_code: str):
+    return (
         db.query(models.F1VisaNewsItem)
+        .filter(models.F1VisaNewsItem.destination_country_code == destination_code)
         .order_by(
             models.F1VisaNewsItem.ingested_at.desc(),
             models.F1VisaNewsItem.id.desc(),
@@ -797,10 +813,39 @@ def get_f1_latest_news(
         .all()
     )
 
-    last_ingested_at = (
-        items[0].ingested_at.isoformat() if items and items[0].ingested_at else None
-    )
 
+def _news_rows_are_fresh(rows, now_utc: datetime) -> bool:
+    if not rows:
+        return False
+    newest = rows[0].ingested_at
+    if not newest:
+        return False
+    if newest.tzinfo is None:
+        newest = newest.replace(tzinfo=timezone.utc)
+    return (now_utc - newest) < NEWS_ONDEMAND_TTL
+
+
+def _persist_news(db: Session, destination_code: str, items: List[Dict[str, str]]) -> None:
+    """Replace a destination's stored news with the freshly generated set."""
+    db.query(models.F1VisaNewsItem).filter(
+        models.F1VisaNewsItem.destination_country_code == destination_code
+    ).delete(synchronize_session=False)
+    now_utc = datetime.now(timezone.utc)
+    for item in items:
+        db.add(models.F1VisaNewsItem(
+            destination_country_code=destination_code,
+            title=(item.get("title") or "Update")[:500],
+            summary=item.get("summary") or "",
+            why_it_matters=item.get("why_it_matters") or None,
+            source_name=item.get("source_name") or "Source",
+            source_url=item.get("source_url") or None,
+            published_date=item.get("published_date") or "unknown",
+            ingested_at=now_utc,
+        ))
+    db.commit()
+
+
+def _serialize_news_rows(rows, destination_code: str, meta: Dict[str, str]) -> Dict[str, Any]:
     return {
         "items": [
             {
@@ -811,12 +856,51 @@ def get_f1_latest_news(
                 "source_url": item.source_url or "",
                 "published_date": item.published_date or "unknown",
             }
-            for item in items
+            for item in rows
         ],
-        "fetched_at": last_ingested_at,
+        "fetched_at": rows[0].ingested_at.isoformat() if rows and rows[0].ingested_at else None,
         "source": "stored",
-        "count": len(items),
+        "count": len(rows),
+        "destination_country_code": destination_code,
+        "destination_name": meta["name"],
+        "destination_visa": meta["visa"],
     }
+
+
+@router.get("/f1-latest")
+def get_f1_latest_news(
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the latest student-visa news for THIS user's destination country
+    (Australia → AU news, Canada → CA news, etc.; unknown destinations fall back
+    to the US). News is generated on demand and cached for ~24h per destination.
+    """
+    destination = _resolve_user_destination(current_user)
+    meta = NEWS_DESTINATIONS[destination]
+    now_utc = datetime.now(timezone.utc)
+
+    rows = _news_rows_for(db, destination)
+    if _news_rows_are_fresh(rows, now_utc):
+        return _serialize_news_rows(rows, destination, meta)
+
+    # Stale or missing → generate fresh for this destination (guarded against stampede).
+    with _news_gen_lock:
+        rows = _news_rows_for(db, destination)  # re-check inside the lock
+        if not _news_rows_are_fresh(rows, now_utc):
+            residence = _resolve_user_residence_country(current_user)
+            try:
+                result = _generate_news_with_gemini(meta["name"], meta["visa"], residence)
+                items = result.get("items") or []
+                if items:
+                    _persist_news(db, destination, items)
+                    rows = _news_rows_for(db, destination)
+            except Exception as exc:
+                # Keep serving whatever we have (possibly stale) rather than erroring out.
+                print(f"⚠ On-demand news generation failed for {destination}: {exc}")
+
+    return _serialize_news_rows(rows, destination, meta)
 
 
 @router.get("/f1-interview-experiences")
