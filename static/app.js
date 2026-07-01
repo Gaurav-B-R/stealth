@@ -3247,6 +3247,139 @@ function updateVisaSectionLabels() {
             floatingChatMessages[0] = `Hey! I'm Rilono AI Assistant. Let's talk about your ${currentVisaJourneyPhrase()} journey.`;
         }
     } catch (e) { /* floatingChatMessages not initialized yet */ }
+    updateSettingsCountryLabel();
+}
+
+const COUNTRY_DISPLAY = {
+    US: { flag: '🇺🇸', name: 'United States' },
+    UK: { flag: '🇬🇧', name: 'United Kingdom' },
+    CA: { flag: '🇨🇦', name: 'Canada' },
+    AU: { flag: '🇦🇺', name: 'Australia' },
+};
+
+function updateSettingsCountryLabel() {
+    const el = document.getElementById('settingsCurrentCountry');
+    if (!el || !currentUser) return;
+    const code = currentUser.destination_country_code || 'US';
+    const d = COUNTRY_DISPLAY[code] || { flag: '', name: code };
+    el.textContent = ` Currently: ${d.flag} ${d.name}.`;
+}
+
+async function ensureOnboardingCatalog() {
+    if (_onboardingCatalog && _onboardingCatalog.countries) return _onboardingCatalog;
+    try {
+        const r = await fetch(`${API_BASE}/api/onboarding/catalog`, { credentials: 'include' });
+        _onboardingCatalog = await r.json();
+    } catch (e) { _onboardingCatalog = { countries: [] }; }
+    return _onboardingCatalog;
+}
+
+// Change destination country from Settings — requires an emailed OTP, then re-scopes
+// the whole dashboard and prunes country-specific documents server-side.
+async function openCountryChangeModal() {
+    if (!currentUser) { showMessage('Please login first.', 'error'); return; }
+    if (document.getElementById('countryChangeOverlay')) return;
+    const cat = await ensureOnboardingCatalog();
+    const countries = (cat && cat.countries) || [];
+    const curCode = currentUser.destination_country_code || 'US';
+    const curName = (COUNTRY_DISPLAY[curCode] || {}).name || curCode;
+
+    const inp = 'width:100%;box-sizing:border-box;background:#fff;border:1px solid #e2e8f0;border-radius:11px;color:#0f172a;font-size:14px;padding:11px 12px';
+    const lbl = (t) => `<div style="font-size:12px;font-weight:700;color:#64748b;margin:0 0 6px">${t}</div>`;
+    const countryOpts = countries.map((c) => `<option value="${escapeHtml(c.code)}"${c.code === curCode ? ' selected' : ''}>${(c.flag_emoji || '')} ${escapeHtml(c.name)}</option>`).join('');
+
+    const overlay = document.createElement('div');
+    overlay.id = 'countryChangeOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:11200;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(5,6,15,.8);backdrop-filter:blur(6px);overflow-y:auto';
+    overlay.innerHTML = `
+      <div style="width:min(520px,100%);background:#fff;border:1px solid #e2e8f0;border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.5);overflow:hidden;color:#0f172a">
+        <div style="padding:24px 26px 6px">
+          <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:700">Profile · Destination</div>
+          <h2 style="margin:8px 0 4px;font-size:22px;font-weight:800">Change destination country</h2>
+          <p style="margin:0;font-size:13.5px;color:#64748b">Currently <strong>${escapeHtml(curName)}</strong>. Pick your new destination — we'll email a code to confirm.</p>
+        </div>
+        <div style="padding:16px 26px 4px">
+          <div style="margin-bottom:12px">${lbl('New destination country')}<select id="ccCountry" style="${inp}">${countryOpts}</select></div>
+          <div style="margin-bottom:12px">${lbl('Visa type')}<select id="ccVisa" style="${inp}"></select></div>
+          <div style="background:#fef9c3;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#854d0e;line-height:1.5">
+            Your <strong>passport and personal documents</strong> (transcripts, test scores, finances, SOP) are kept. Documents specific to your current country — like I-20, DS-160, SEVIS — will be <strong>removed</strong>.
+          </div>
+          <div id="ccOtpRow" style="display:none;margin-top:12px">${lbl('Enter the 6-digit code we emailed you')}<input id="ccCode" inputmode="numeric" maxlength="6" placeholder="••••••" style="${inp};letter-spacing:8px;text-align:center;font-size:18px"></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 26px 22px">
+          <button id="ccCancel" style="border:none;background:transparent;color:#64748b;font-size:14px;font-weight:600;cursor:pointer">Cancel</button>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span id="ccMsg" style="font-size:12.5px;color:#fb7185;max-width:170px"></span>
+            <button id="ccAction" style="border:none;border-radius:11px;padding:11px 20px;font-size:14px;font-weight:700;color:#fff;background:linear-gradient(135deg,#6366f1,#a855f7);cursor:pointer">Send code</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    const countrySel = overlay.querySelector('#ccCountry');
+    const visaSel = overlay.querySelector('#ccVisa');
+    const otpRow = overlay.querySelector('#ccOtpRow');
+    const codeInput = overlay.querySelector('#ccCode');
+    const action = overlay.querySelector('#ccAction');
+    const msg = overlay.querySelector('#ccMsg');
+    let codeSent = false;
+
+    const fillVisa = () => {
+        const c = countries.find((x) => x.code === countrySel.value);
+        visaSel.innerHTML = c ? c.visa_types.map((v) => `<option value="${escapeHtml(v.key)}"${v.default ? ' selected' : ''}>${escapeHtml(v.label)}</option>`).join('') : '';
+    };
+    const resetToSend = () => { codeSent = false; otpRow.style.display = 'none'; action.textContent = 'Send code'; msg.textContent = ''; };
+    fillVisa();
+    countrySel.addEventListener('change', () => { fillVisa(); resetToSend(); });
+    visaSel.addEventListener('change', resetToSend);
+
+    const close = () => { overlay.remove(); document.body.style.overflow = ''; };
+    overlay.querySelector('#ccCancel').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    const authHeaders = (authToken && authToken !== COOKIE_AUTH_SENTINEL) ? { 'Authorization': `Bearer ${authToken}` } : {};
+
+    action.addEventListener('click', async () => {
+        msg.textContent = '';
+        if (!codeSent) {
+            if (countrySel.value === (currentUser.destination_country_code || '') && visaSel.value === (currentUser.visa_type_key || '')) {
+                msg.textContent = 'That is already your destination.'; return;
+            }
+            action.disabled = true; action.textContent = 'Sending…';
+            try {
+                const res = await fetch(`${API_BASE}/api/profile/country/request-code`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders }, credentials: 'include',
+                    body: JSON.stringify({ destination_country_code: countrySel.value, visa_type_key: visaSel.value }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 401) { showMessage('Session expired. Please login again.', 'error'); close(); logout(); return; }
+                if (!res.ok) { msg.textContent = (data && data.detail) || 'Could not send code.'; action.disabled = false; action.textContent = 'Send code'; return; }
+                codeSent = true; otpRow.style.display = 'block'; action.disabled = false; action.textContent = 'Confirm change'; codeInput.focus();
+                showMessage('We emailed a confirmation code to your account email.', 'success');
+            } catch (e) { msg.textContent = 'Network error.'; action.disabled = false; action.textContent = 'Send code'; }
+        } else {
+            const code = (codeInput.value || '').replace(/\D/g, '');
+            if (code.length !== 6) { msg.textContent = 'Enter the 6-digit code.'; return; }
+            action.disabled = true; action.textContent = 'Confirming…';
+            try {
+                const res = await fetch(`${API_BASE}/api/profile/country/confirm`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeaders }, credentials: 'include',
+                    body: JSON.stringify({ code }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 401) { showMessage('Session expired. Please login again.', 'error'); close(); logout(); return; }
+                if (!res.ok) { msg.textContent = (data && data.detail) || 'Could not confirm.'; action.disabled = false; action.textContent = 'Confirm change'; return; }
+                if (data && data.destination_country_code) currentUser = data;
+                close();
+                const newName = (COUNTRY_DISPLAY[countrySel.value] || {}).name || countrySel.value;
+                showMessage(`Destination updated to ${newName}. Reloading your dashboard…`, 'success');
+                // A country change re-scopes the entire dashboard (journey, checklist, AI); a
+                // reload guarantees every panel reflects the new country with no stale state.
+                setTimeout(() => window.location.reload(), 900);
+            } catch (e) { msg.textContent = 'Network error.'; action.disabled = false; action.textContent = 'Confirm change'; }
+        }
+    });
 }
 
 function showDashboard(skipURLUpdate = false) {
@@ -8149,6 +8282,8 @@ async function logout() {
     }
     authToken = null;
     persistAuthToken(null);
+    // Drop the in-memory E2E master key so the next user must re-enter their passphrase.
+    try { if (typeof RilonoE2E !== 'undefined') RilonoE2E.lock(); } catch (_) {}
     currentUser = null;
     currentSubscription = null;
     runtimeSubscriptionNotifyState = null;
@@ -11255,20 +11390,16 @@ async function handleDocumentUpload(e) {
     }
 
     const fileInput = document.getElementById('documentFile');
-    const password = document.getElementById('documentPassword').value;
     const documentType = document.getElementById('documentType').value;
     const description = document.getElementById('documentDescription').value.trim();
     const country = document.getElementById('documentationCountry').value;
     const intake = document.getElementById('documentationIntake').value;
     const year = document.getElementById('documentationYear').value ? parseInt(document.getElementById('documentationYear').value) : null;
+    const aiConsentEl = document.getElementById('documentAiConsent');
+    const aiConsent = !!(aiConsentEl && aiConsentEl.checked);
 
     if (!fileInput.files || fileInput.files.length === 0) {
         showMessage('Please select a file to upload', 'error');
-        return;
-    }
-
-    if (!password) {
-        showMessage('Please enter your password to encrypt the document', 'error');
         return;
     }
 
@@ -11286,90 +11417,116 @@ async function handleDocumentUpload(e) {
         return;
     }
 
+    if (!window.E2E || !E2E.isSupported()) {
+        showMessage('Your browser does not support end-to-end encryption. Please use a modern browser over HTTPS.', 'error');
+        return;
+    }
+
+    // Unlock (or first-time set up) the end-to-end encryption vault. The passphrase and the
+    // master key never leave this device — the file is encrypted here before it is uploaded.
+    let master;
     try {
-        setDocumentUploadLoading(true, 'Encrypting document...', file);
-        showMessage('Encrypting and uploading document...', 'success');
-        await new Promise((resolve) => setTimeout(resolve, DOCUMENT_UPLOAD_ENCRYPTING_MS));
+        master = await RilonoE2E.ensureReady();
+    } catch (err) {
+        console.error('E2E unlock error:', err);
+        showMessage(err && err.message ? err.message : 'Could not unlock encryption.', 'error');
+        return;
+    }
+    if (!master) return; // user cancelled the passphrase prompt
+
+    // Optional, consent-based AI validation. The plaintext is sent ONCE, in memory, only when
+    // the user opted in; the server runs Gemini and returns the result WITHOUT storing it.
+    let aiValidation = null;
+    if (aiConsent) {
+        try {
+            setDocumentUploadLoading(true, 'Rilono AI is validating (read once, never stored)...', file);
+            const vfd = new FormData();
+            vfd.append('file', file);
+            vfd.append('document_type', documentType);
+            vfd.append('consent', 'true');
+            const vres = await fetch(`${API_BASE}/api/documents/ai-validate`, {
+                method: 'POST', headers: { 'Authorization': `Bearer ${authToken}` }, body: vfd
+            });
+            if (vres.ok) {
+                aiValidation = await vres.json();
+            } else {
+                const ev = await vres.json().catch(() => ({}));
+                showMessage((ev.detail || 'AI validation could not be completed') + ' — storing encrypted without it.', 'error');
+            }
+        } catch (err) {
+            console.error('AI validate error:', err);
+            showMessage('AI validation failed — storing the document encrypted without it.', 'error');
+        }
+    }
+
+    try {
+        setDocumentUploadLoading(true, 'Encrypting on your device...', file);
+        showMessage('Encrypting document on your device...', 'success');
+
+        const fileBytes = new Uint8Array(await file.arrayBuffer());
+        const { blob, wrappedDekB64 } = await E2E.encryptBytes(fileBytes, master);
 
         const formData = new FormData();
-        formData.append('file', file);
-        formData.append('password', password);  // Required for Zero-Knowledge encryption
-        formData.append('document_type', documentType);  // Required field
+        // Only ciphertext + the wrapped key leave the browser — never the plaintext.
+        formData.append('file', new Blob([blob], { type: 'application/octet-stream' }), (file.name || 'document') + '.enc');
+        formData.append('wrapped_dek', wrappedDekB64);
+        formData.append('original_filename', file.name || 'document');
+        formData.append('file_type', file.type || 'application/octet-stream');
+        formData.append('document_type', documentType);
         if (country) formData.append('country', country);
         if (intake) formData.append('intake', intake);
         if (year) formData.append('year', year);
         if (description) formData.append('description', description);
 
-        setDocumentUploadLoading(true, 'Uploading to secure storage...');
-        const uploadRequest = fetch(`${API_BASE}/api/documents/upload`, {
+        // If the user consented and AI returned details, keep the extracted JSON end-to-end
+        // encrypted too: encrypt it under the master key and upload only the ciphertext. Only
+        // the non-sensitive validity verdict (is_valid) is stored in the clear server-side.
+        if (aiValidation) {
+            formData.append('is_valid', aiValidation.is_valid ? 'true' : 'false');
+            if (aiValidation.details) {
+                const extractedBytes = new TextEncoder().encode(JSON.stringify(aiValidation.details));
+                const ext = await E2E.encryptBytes(extractedBytes, master);
+                formData.append('extracted_blob', new Blob([ext.blob], { type: 'application/octet-stream' }), 'extracted.enc');
+                formData.append('extracted_wrapped_dek', ext.wrappedDekB64);
+            }
+        }
+
+        setDocumentUploadLoading(true, 'Uploading encrypted file...');
+        const response = await fetch(`${API_BASE}/api/documents/upload-e2e`, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${authToken}`
             },
             body: formData
         });
-        await new Promise((resolve) => setTimeout(resolve, DOCUMENT_UPLOAD_UPLOADING_MS));
-
-        setDocumentUploadLoading(true, 'Rilono AI is scanning and validating...');
-        const response = await uploadRequest;
-        const data = await response.json();
-        if (documentUploadScanStartedAt > 0) {
-            const scanElapsed = Date.now() - documentUploadScanStartedAt;
-            if (scanElapsed < DOCUMENT_UPLOAD_MIN_SCAN_MS) {
-                await new Promise((resolve) => setTimeout(resolve, DOCUMENT_UPLOAD_MIN_SCAN_MS - scanElapsed));
-            }
-        }
+        const data = await response.json().catch(() => ({}));
 
         if (response.ok) {
             const documentName = file.name;
-            const docType = documentType;
-
-            // Check for validation results
-            if (data.validation) {
-                const validation = data.validation;
-                if (!validation.is_valid) {
-                    // Document validation failed
-                    const docTypeText = docType ? ` (${docType})` : '';
-                    const notificationMessage = `File: ${documentName}${docTypeText}\n\n${validation.message || 'The uploaded document does not match the specified type. Please verify and upload the correct document.'}`;
-
-                    addNotification(
-                        'Rilono AI: Document Validation Failed',
-                        notificationMessage,
-                        'error',
-                        validation.details
-                    );
-                    showMessage(validation.message || 'Document uploaded but validation failed. Please check notifications.', 'error');
-                } else {
-                    // Document validation passed
-                    const name = validation.details?.Name || '';
-                    const docTypeText = docType ? ` (${docType})` : '';
-                    const successMsg = `File: ${documentName}${docTypeText}\n\n${name ? `Extracted name: ${name}\n\n` : ''}Document validated successfully! All information has been extracted.`;
-
-                    addNotification(
-                        'Rilono AI: Document Validated',
-                        successMsg,
-                        'success',
-                        validation.details
-                    );
-                    showMessage('Document encrypted and uploaded successfully!', 'success');
-                }
+            const docTypeText = documentType ? ` (${documentType})` : '';
+            if (aiValidation) {
+                // Consent-based AI ran: surface the verdict (details were stored E2E).
+                const verdict = aiValidation.is_valid ? 'Rilono AI: Document Validated' : 'Rilono AI: Document Validation Failed';
+                const body = `File: ${documentName}${docTypeText}\n\n${aiValidation.message || (aiValidation.is_valid ? 'Document validated successfully.' : 'This document may not match the expected type — please review.')}\n\nStored end-to-end encrypted; extracted details are encrypted on your device.`;
+                addNotification(verdict, body, aiValidation.is_valid ? 'success' : 'error', aiValidation.details || null);
+                showMessage(aiValidation.is_valid ? 'Validated and stored end-to-end encrypted.' : 'Stored encrypted — AI flagged the document, see notifications.', aiValidation.is_valid ? 'success' : 'error');
             } else {
-                // No validation data (legacy or processing failed)
-                const docTypeText = docType ? ` (${docType})` : '';
                 addNotification(
-                    'Rilono AI: Document Uploaded',
-                    `File: ${documentName}${docTypeText}\n\nDocument uploaded successfully. Processing may be in progress.`,
-                    'info',
+                    'Document encrypted & stored',
+                    `File: ${documentName}${docTypeText}\n\nEncrypted on your device — our servers only ever hold ciphertext. Tick "Let Rilono AI validate" next time if you'd like AI to check it.`,
+                    'success',
                     null
                 );
-                showMessage('Document encrypted and uploaded successfully!', 'success');
+                showMessage('Document encrypted on your device and stored securely.', 'success');
             }
 
+            markE2EChatContextDirty();
             setDocumentUploadLoading(true, 'Upload complete. Syncing your documents...');
             document.getElementById('documentUploadForm').reset();
             // Also reset the searchable dropdown
             document.getElementById('documentType').value = '';
-            document.getElementById('documentTypeSearch').value = '';
+            const dts = document.getElementById('documentTypeSearch');
+            if (dts) dts.value = '';
             const dropdownItems = document.querySelectorAll('#documentTypeList .dropdown-item');
             dropdownItems.forEach(item => item.classList.remove('selected'));
             await loadMyDocuments(true, 'Refreshing your uploaded documents...');
@@ -11383,7 +11540,7 @@ async function handleDocumentUpload(e) {
             let errorMessage = 'Failed to upload document';
             if (data.detail) {
                 if (Array.isArray(data.detail)) {
-                    errorMessage = data.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join(', ');
+                    errorMessage = data.detail.map(err => `${(err.loc || []).join('.')}: ${err.msg}`).join(', ');
                 } else {
                     errorMessage = data.detail;
                 }
@@ -11793,7 +11950,8 @@ function displayDocuments(documents) {
                 day: 'numeric'
             })
             : 'Unknown date';
-        const isEncrypted = doc.encrypted_file_key || !doc.file_url;
+        const isE2E = !!doc.e2e_scheme;
+        const isEncrypted = isE2E || doc.encrypted_file_key || !doc.file_url;
         const docTypeLabel = getDocumentTypeLabel(doc.document_type);
         const validationMeta = getDocumentValidationMeta(doc);
 
@@ -11823,7 +11981,9 @@ function displayDocuments(documents) {
                         ` : ''}
                         ${doc.description ? `<div style="font-size: 0.875rem; color: var(--text-secondary); margin-top: 0.5rem; font-style: italic;">${escapeHtml(doc.description)}</div>` : ''}
                         <div style="display: flex; gap: 0.5rem; margin-top: 0.75rem;">
-                            ${isEncrypted ? `
+                            ${isE2E ? `
+                                <button onclick="downloadE2EFromButton(this)" data-document-id="${doc.id}" data-document-name="${escapeHtml(doc.original_filename || 'document')}" data-file-type="${escapeHtml(doc.file_type || '')}" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
+                            ` : isEncrypted ? `
                                 <button onclick="downloadEncryptedDocument(${doc.id})" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem;">Download</button>
                             ` : `
                                 <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
@@ -11949,6 +12109,258 @@ async function downloadEncryptedDocument(documentId) {
         }
     } catch (error) {
         console.error('Download error:', error);
+        showMessage('An error occurred while downloading the document. Please try again.', 'error');
+    }
+}
+
+// ============================================================================
+// Client-side end-to-end encryption (E2E) controller.
+// Holds the unlocked master key in memory for the session and drives the
+// passphrase setup / unlock / recovery modals. The passphrase and the master
+// key NEVER leave the browser; the server only stores opaque wrapped blobs.
+// See static/e2e_crypto.js (window.E2E) for the crypto primitives.
+// ============================================================================
+const RilonoE2E = (function () {
+    let master = null;        // Uint8Array, in-memory only (cleared on lock/logout)
+
+    function authHeaders(extra) {
+        return Object.assign({ 'Authorization': `Bearer ${authToken}` }, extra || {});
+    }
+
+    async function getVault() {
+        const r = await fetch(`${API_BASE}/api/e2e/vault`, { headers: authHeaders() });
+        if (!r.ok) throw new Error('Could not load your encryption settings.');
+        return r.json();
+    }
+
+    function makeOverlay() {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:100000;display:flex;align-items:center;justify-content:center;padding:1rem;';
+        const box = document.createElement('div');
+        box.style.cssText = 'background:var(--bg-color,#ffffff);color:var(--text-primary,#111);max-width:480px;width:100%;border-radius:14px;padding:1.5rem;box-shadow:0 20px 60px rgba(0,0,0,0.45);border:1px solid var(--border-color,#ddd);font-size:0.95rem;';
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+        return { overlay, box, remove() { try { document.body.removeChild(overlay); } catch (_) {} } };
+    }
+
+    const inputCss = 'width:100%;padding:.6rem;border-radius:8px;border:1px solid var(--border-color,#ccc);margin-bottom:.5rem;background:var(--bg-tertiary,#fff);color:var(--text-primary,#111);box-sizing:border-box;';
+    const rowCss = 'display:flex;gap:.5rem;justify-content:flex-end;margin-top:.75rem;';
+
+    function showRecoveryCode(code) {
+        return new Promise((resolve) => {
+            const o = makeOverlay();
+            o.box.innerHTML = `
+                <h3 style="margin:0 0 .5rem;">Save your recovery code</h3>
+                <p style="font-size:.9rem;color:var(--text-secondary,#666);margin:.25rem 0 .75rem;">
+                  This is the <b>only</b> way to recover your documents if you forget your passphrase.
+                  We can't recover it for you. Store it somewhere safe.</p>
+                <div style="font-family:monospace;font-size:1.15rem;letter-spacing:1px;text-align:center;padding:.75rem;border:1px dashed var(--border-color,#bbb);border-radius:10px;user-select:all;margin-bottom:.5rem;">${escapeHtml(code)}</div>
+                <div style="${rowCss}">
+                  <button id="e2eCopy" class="btn" style="padding:.5rem 1rem;">Copy</button>
+                  <button id="e2eSaved" class="btn btn-primary" style="padding:.5rem 1rem;">I've saved it</button>
+                </div>`;
+            o.box.querySelector('#e2eCopy').onclick = () => {
+                try { navigator.clipboard.writeText(code); showMessage('Recovery code copied.', 'success'); } catch (_) {}
+            };
+            o.box.querySelector('#e2eSaved').onclick = () => { o.remove(); resolve(); };
+        });
+    }
+
+    function runSetup() {
+        return new Promise((resolve, reject) => {
+            const o = makeOverlay();
+            o.box.innerHTML = `
+                <h3 style="margin:0 0 .5rem;">Protect your documents with end-to-end encryption</h3>
+                <p style="font-size:.9rem;color:var(--text-secondary,#666);margin:.25rem 0 1rem;">
+                  Choose an encryption passphrase. It's separate from your login password and
+                  <b>never leaves your device</b> — so our servers can only ever store ciphertext.</p>
+                <input id="e2eP1" type="password" autocomplete="new-password" placeholder="Encryption passphrase (min 8 chars)" style="${inputCss}">
+                <input id="e2eP2" type="password" autocomplete="new-password" placeholder="Confirm passphrase" style="${inputCss}">
+                <div id="e2eSetupErr" style="color:#ef4444;font-size:.85rem;min-height:1.1rem;"></div>
+                <div style="${rowCss}">
+                  <button id="e2eSetupCancel" class="btn" style="padding:.5rem 1rem;">Cancel</button>
+                  <button id="e2eSetupGo" class="btn btn-primary" style="padding:.5rem 1rem;">Create</button>
+                </div>`;
+            const err = o.box.querySelector('#e2eSetupErr');
+            o.box.querySelector('#e2eSetupCancel').onclick = () => { o.remove(); resolve(null); };
+            o.box.querySelector('#e2eSetupGo').onclick = async () => {
+                const p1 = o.box.querySelector('#e2eP1').value;
+                const p2 = o.box.querySelector('#e2eP2').value;
+                if (!p1 || p1.length < 8) { err.textContent = 'Passphrase must be at least 8 characters.'; return; }
+                if (p1 !== p2) { err.textContent = 'Passphrases do not match.'; return; }
+                try {
+                    const v = await E2E.createVault(p1);
+                    const r = await fetch(`${API_BASE}/api/e2e/setup`, {
+                        method: 'POST',
+                        headers: authHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({
+                            kdf: v.kdf,
+                            wrapped_master_key: v.wrapped_master_key,
+                            recovery_wrapped_master_key: v.recovery_wrapped_master_key
+                        })
+                    });
+                    if (!r.ok) {
+                        const d = await r.json().catch(() => ({}));
+                        err.textContent = (d && d.detail) ? d.detail : 'Could not set up encryption.';
+                        return;
+                    }
+                    o.remove();
+                    await showRecoveryCode(v.recoveryCode);
+                    resolve(v.masterRaw);
+                } catch (e) { reject(e); }
+            };
+            o.box.querySelector('#e2eP1').focus();
+        });
+    }
+
+    function runRecovery(vault) {
+        return new Promise((resolve) => {
+            const o = makeOverlay();
+            o.box.innerHTML = `
+                <h3 style="margin:0 0 .5rem;">Recover with your recovery code</h3>
+                <p style="font-size:.9rem;color:var(--text-secondary,#666);margin:.25rem 0 1rem;">
+                  Enter the recovery code you saved at setup, then choose a new passphrase.</p>
+                <input id="e2eRC" type="text" autocomplete="off" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" style="${inputCss}">
+                <input id="e2eRP1" type="password" autocomplete="new-password" placeholder="New passphrase (min 8 chars)" style="${inputCss}">
+                <input id="e2eRP2" type="password" autocomplete="new-password" placeholder="Confirm new passphrase" style="${inputCss}">
+                <div id="e2eRecErr" style="color:#ef4444;font-size:.85rem;min-height:1.1rem;"></div>
+                <div style="${rowCss}">
+                  <button id="e2eRecCancel" class="btn" style="padding:.5rem 1rem;">Cancel</button>
+                  <button id="e2eRecGo" class="btn btn-primary" style="padding:.5rem 1rem;">Recover</button>
+                </div>`;
+            const err = o.box.querySelector('#e2eRecErr');
+            o.box.querySelector('#e2eRecCancel').onclick = () => { o.remove(); resolve(null); };
+            o.box.querySelector('#e2eRecGo').onclick = async () => {
+                const code = o.box.querySelector('#e2eRC').value;
+                const p1 = o.box.querySelector('#e2eRP1').value;
+                const p2 = o.box.querySelector('#e2eRP2').value;
+                if (p1.length < 8) { err.textContent = 'New passphrase must be at least 8 characters.'; return; }
+                if (p1 !== p2) { err.textContent = 'Passphrases do not match.'; return; }
+                let m;
+                try { m = await E2E.unlockWithRecovery(vault, code); }
+                catch (_) { err.textContent = 'Incorrect recovery code.'; return; }
+                try {
+                    const rot = await E2E.rewrapForNewPassphrase(m, p1);
+                    const r = await fetch(`${API_BASE}/api/e2e/recover`, {
+                        method: 'POST',
+                        headers: authHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({
+                            kdf: rot.kdf,
+                            wrapped_master_key: rot.wrapped_master_key,
+                            recovery_wrapped_master_key: rot.recovery_wrapped_master_key
+                        })
+                    });
+                    if (!r.ok) { err.textContent = 'Could not save your new passphrase.'; return; }
+                    o.remove();
+                    await showRecoveryCode(rot.recoveryCode);
+                    resolve(m);
+                } catch (e) { err.textContent = 'Recovery failed. Please try again.'; }
+            };
+            o.box.querySelector('#e2eRC').focus();
+        });
+    }
+
+    function runUnlock(vault) {
+        return new Promise((resolve) => {
+            const o = makeOverlay();
+            o.box.innerHTML = `
+                <h3 style="margin:0 0 .5rem;">Unlock your encrypted documents</h3>
+                <p style="font-size:.9rem;color:var(--text-secondary,#666);margin:.25rem 0 1rem;">
+                  Enter your encryption passphrase. It never leaves your device.</p>
+                <input id="e2eUP" type="password" autocomplete="off" placeholder="Encryption passphrase" style="${inputCss}">
+                <div id="e2eUErr" style="color:#ef4444;font-size:.85rem;min-height:1.1rem;"></div>
+                <div style="${rowCss}">
+                  <button id="e2eUCancel" class="btn" style="padding:.5rem 1rem;">Cancel</button>
+                  <button id="e2eUGo" class="btn btn-primary" style="padding:.5rem 1rem;">Unlock</button>
+                </div>
+                <div style="margin-top:.75rem;font-size:.82rem;"><a href="#" id="e2eForgot" style="color:var(--text-secondary,#888);">Forgot passphrase? Use recovery code</a></div>`;
+            const err = o.box.querySelector('#e2eUErr');
+            const input = o.box.querySelector('#e2eUP');
+            const close = (v) => { o.remove(); resolve(v); };
+            o.box.querySelector('#e2eUCancel').onclick = () => close(null);
+            const go = async () => {
+                if (!input.value) { err.textContent = 'Enter your passphrase.'; return; }
+                try { close(await E2E.unlockVault(vault, input.value)); }
+                catch (_) { err.textContent = 'Incorrect passphrase. Try again.'; }
+            };
+            o.box.querySelector('#e2eUGo').onclick = go;
+            input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') go(); });
+            o.box.querySelector('#e2eForgot').onclick = async (ev) => {
+                ev.preventDefault();
+                const m = await runRecovery(vault);
+                if (m) close(m);
+            };
+            input.focus();
+        });
+    }
+
+    // Returns the in-memory master key (Uint8Array), prompting setup or unlock as needed.
+    // Returns null if the user cancels.
+    async function ensureReady() {
+        if (master) return master;
+        if (!window.E2E || !E2E.isSupported()) {
+            throw new Error('This browser does not support end-to-end encryption (needs a modern browser over HTTPS).');
+        }
+        const vault = await getVault();
+        const m = vault && vault.enabled ? await runUnlock(vault) : await runSetup();
+        if (m) master = m;
+        return m;
+    }
+
+    function lock() { master = null; }
+    function isUnlocked() { return !!master; }
+
+    return { ensureReady, lock, isUnlocked, getVault, getMaster: () => master };
+})();
+
+function downloadE2EFromButton(btn) {
+    const id = Number.parseInt(btn.dataset.documentId || '', 10);
+    if (!Number.isFinite(id)) return;
+    downloadE2EDocument(id, btn.dataset.documentName || 'document', btn.dataset.fileType || '');
+}
+
+async function downloadE2EDocument(documentId, filename, fileType) {
+    if (!authToken) { showMessage('Please login to download documents', 'error'); return; }
+    let master;
+    try {
+        master = await RilonoE2E.ensureReady();
+    } catch (err) {
+        showMessage(err && err.message ? err.message : 'Could not unlock encryption.', 'error');
+        return;
+    }
+    if (!master) return; // cancelled
+    try {
+        showMessage('Fetching and decrypting on your device...', 'success');
+        const response = await fetch(`${API_BASE}/api/documents/${documentId}/blob`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (!response.ok) {
+            const e = await response.json().catch(() => ({}));
+            showMessage(e.detail || 'Failed to fetch document.', 'error');
+            return;
+        }
+        const wrappedDek = response.headers.get('X-E2E-Wrapped-Dek');
+        if (!wrappedDek) { showMessage('This document is missing its key reference.', 'error'); return; }
+        const ciphertext = new Uint8Array(await response.arrayBuffer());
+        let plaintext;
+        try {
+            plaintext = await E2E.decryptBlob(ciphertext, wrappedDek, master);
+        } catch (_) {
+            showMessage('Could not decrypt this document with your current key.', 'error');
+            return;
+        }
+        const blob = new Blob([plaintext], { type: fileType || 'application/octet-stream' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'document';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        showMessage('Document decrypted on your device and downloaded.', 'success');
+    } catch (error) {
+        console.error('E2E download error:', error);
         showMessage('An error occurred while downloading the document. Please try again.', 'error');
     }
 }
@@ -12573,6 +12985,50 @@ function getRilonoAiMessageAttachmentIdsFromList(attachments = []) {
     return ids;
 }
 
+// Cached extracted text from the user's END-TO-END-ENCRYPTED documents, decrypted in the
+// browser. Only populated when the vault is unlocked this session; the AI otherwise sees
+// metadata only. Rebuilt lazily and marked dirty after each new E2E upload.
+let rilonoE2EDocContextCache = '';
+let rilonoE2EContextDirty = true;
+function markE2EChatContextDirty() { rilonoE2EContextDirty = true; }
+
+async function ensureE2EChatContext() {
+    // Never force a passphrase prompt just to chat: if the vault is locked, share nothing.
+    if (typeof RilonoE2E === 'undefined' || !RilonoE2E.isUnlocked()) {
+        rilonoE2EDocContextCache = '';
+        return '';
+    }
+    if (!rilonoE2EContextDirty) return rilonoE2EDocContextCache;
+    try {
+        const master = RilonoE2E.getMaster();
+        if (!master) { rilonoE2EDocContextCache = ''; return ''; }
+        const docs = await fetch(`${API_BASE}/api/documents/my-documents`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        }).then(r => r.ok ? r.json() : []);
+        const e2eDocs = (docs || []).filter(d => d.e2e_scheme && d.is_processed);
+        const parts = [];
+        for (const d of e2eDocs) {
+            try {
+                const res = await fetch(`${API_BASE}/api/documents/${d.id}/extracted-blob`, {
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                });
+                if (!res.ok) continue;
+                const wdek = res.headers.get('X-E2E-Wrapped-Dek');
+                if (!wdek) continue;
+                const ct = new Uint8Array(await res.arrayBuffer());
+                const plain = await E2E.decryptBlob(ct, wdek, master);
+                const text = new TextDecoder().decode(plain);
+                parts.push(`Document: ${d.original_filename || 'document'} (${d.document_type || ''})\n${text}`);
+            } catch (_) { /* skip any doc that fails to decrypt */ }
+        }
+        rilonoE2EDocContextCache = parts.join('\n\n---\n\n').slice(0, 60000);
+        rilonoE2EContextDirty = false;
+    } catch (_) {
+        rilonoE2EDocContextCache = '';
+    }
+    return rilonoE2EDocContextCache;
+}
+
 function getRilonoAiChatRequestPayload(message, attachmentsOverride = null) {
     const attachmentsToSend = Array.isArray(attachmentsOverride)
         ? attachmentsOverride
@@ -12582,6 +13038,10 @@ function getRilonoAiChatRequestPayload(message, attachmentsOverride = null) {
         conversation_history: rilonoAiConversationHistory.slice(-200),
         source: 'rilono_ai_chat'
     };
+
+    if (rilonoE2EDocContextCache) {
+        payload.e2e_document_context = rilonoE2EDocContextCache;
+    }
 
     if (attachmentsToSend.length > 0) {
         payload.session_attachments = attachmentsToSend.map((attachment) => ({
@@ -12631,6 +13091,8 @@ async function handleRilonoAiChatSubmit(e) {
     showRilonoAiTypingIndicator();
 
     try {
+        // Share decrypted E2E-document context if the vault is unlocked (metadata-only otherwise).
+        await ensureE2EChatContext();
         // Call the AI chat API
         const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
             method: 'POST',
@@ -13149,6 +13611,8 @@ async function handleFloatingChatSubmit(e) {
     showFloatingChatTyping();
 
     try {
+        // Share decrypted E2E-document context if the vault is unlocked (metadata-only otherwise).
+        await ensureE2EChatContext();
         // Call the AI chat API
         const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
             method: 'POST',

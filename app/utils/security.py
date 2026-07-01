@@ -1,7 +1,23 @@
 """
-Zero-Knowledge Encryption Utilities
-Implements user-held key encryption where files are encrypted with keys
-derived from the user's password. Even admins cannot decrypt files.
+User-derived-key encryption-at-rest utilities.
+
+Each file is encrypted with a random per-file key (envelope encryption). That per-file
+key is then wrapped by a key derived from the user's password via PBKDF2-HMAC-SHA256.
+The wrapped key is stored in the DB; the file ciphertext is stored in object storage.
+
+THREAT MODEL — this is NOT zero-knowledge / end-to-end encryption.
+Derivation, encryption and decryption all run SERVER-SIDE, so the plaintext file and
+the user's password both pass through the server at upload/download time. This protects
+data AT REST (a stolen DB or object-storage dump is useless without the user's password)
+but does NOT protect against a compromised server or a privileged operator who can
+observe a request in flight. Do not advertise this as "zero-knowledge" or "not even we
+can read them" — to make those claims true, key derivation and encryption must move to
+the client so plaintext never reaches the server.
+
+KEY ROTATION — because the wrapping key is derived from the password, changing the
+password requires re-wrapping every stored file key (see ``rewrap_file_key``). A
+password *reset* (no old password available) leaves previously-encrypted files
+unrecoverable by design; that is the inherent trade-off of user-held keys.
 """
 import os
 import base64
@@ -138,12 +154,48 @@ def encode_salt_for_storage(salt: bytes) -> str:
 def decode_salt_from_storage(salt_str: str) -> bytes:
     """
     Decode salt string from database to bytes.
-    
+
     Args:
         salt_str: Base64-encoded salt string
-    
+
     Returns:
         bytes: Salt bytes
     """
     return base64.b64decode(salt_str.encode('utf-8'))
+
+
+def rewrap_file_key(
+    encrypted_file_key_b64: str,
+    old_password: str,
+    new_password: str,
+    user_salt: bytes,
+) -> str:
+    """
+    Re-wrap a stored (base64) file key from the old password to the new one.
+
+    Called on password CHANGE so the user keeps access to documents that were encrypted
+    under the previous password. Only the wrapping key (derived from the password) is
+    rotated — the per-file content key is unchanged, so the file ciphertext already in
+    object storage does NOT need to be rewritten.
+
+    Args:
+        encrypted_file_key_b64: The stored, base64-encoded wrapped file key.
+        old_password: The user's current password (verified by the caller).
+        new_password: The user's new password.
+        user_salt: The user's encryption salt (raw bytes).
+
+    Returns:
+        str: The new base64-encoded wrapped file key, to persist in place of the old one.
+
+    Raises:
+        InvalidToken / ValueError / binascii.Error: if the old password cannot unwrap the
+        key (e.g. it was already orphaned by an earlier password reset). Callers should
+        catch this and skip-and-log rather than overwrite the row with a bad value.
+    """
+    wrapped = base64.b64decode(encrypted_file_key_b64.encode("utf-8"))
+    old_kek = derive_key_from_password(old_password, user_salt)
+    file_key = Fernet(old_kek).decrypt(wrapped)
+    new_kek = derive_key_from_password(new_password, user_salt)
+    new_wrapped = Fernet(new_kek).encrypt(file_key)
+    return base64.b64encode(new_wrapped).decode("utf-8")
 

@@ -421,6 +421,105 @@ def send_account_deletion_otp_email(email: str, code: str, expires_in_minutes: i
         return False
 
 
+def send_country_change_otp_email(
+    email: str, code: str, country_name: str = "", expires_in_minutes: int = 10
+) -> bool:
+    """
+    Send a 6-digit code to confirm changing the student's destination country (a
+    security step, since it re-scopes the dashboard and removes country-specific docs).
+    Sent from the no-reply transactional address.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send country-change OTP email - Resend not configured")
+        return False
+
+    recipient = (email or "").strip().lower()
+    code_clean = "".join(ch for ch in str(code or "") if ch.isdigit())
+    if not recipient or not code_clean:
+        print("ERROR: Cannot send country-change OTP email - missing recipient or code")
+        return False
+
+    minutes = max(1, int(expires_in_minutes or 10))
+    safe_code = escape(code_clean)
+    dest = (country_name or "").strip()
+    dest_html = f" to <strong>{escape(dest)}</strong>" if dest else ""
+    dest_text = f" to {dest}" if dest else ""
+    subject = f"{code_clean} is your Rilono country change code"
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>{escape(subject)}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+        <tr>
+          <td align="center">
+            <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+              <tr>
+                <td style="padding:24px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#ffffff;">
+                  <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">Rilono · Security</div>
+                  <h1 style="margin:8px 0 0 0;font-size:22px;line-height:1.2;">Confirm your destination change</h1>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:26px 28px;color:#0f172a;">
+                  <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;">
+                    We received a request to change your destination country{dest_html}.
+                    Enter this code to confirm:
+                  </p>
+                  <div style="text-align:center;margin:8px 0 18px;">
+                    <div style="display:inline-block;font-size:34px;font-weight:800;letter-spacing:10px;color:#0f172a;background:#eef2ff;border:1px solid #c7d2fe;border-radius:12px;padding:14px 22px 14px 32px;">{safe_code}</div>
+                  </div>
+                  <p style="margin:0 0 6px 0;font-size:13px;color:#64748b;line-height:1.6;">
+                    This code expires in <strong>{minutes} minutes</strong>. After confirming, your dashboard and checklist
+                    switch to the new country, and documents specific to your old country are removed (your passport and
+                    personal documents are kept).
+                  </p>
+                  <p style="margin:10px 0 0 0;font-size:13px;color:#b91c1c;line-height:1.6;">
+                    If you did NOT request this, ignore this email and change your password right away — your account stays safe.
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+    """
+
+    text_content = (
+        "Confirm destination change - Rilono\n\n"
+        f"We received a request to change your destination country{dest_text}.\n"
+        f"Your confirmation code is: {code_clean}\n"
+        f"It expires in {minutes} minutes. Documents specific to your old country are removed on confirm; "
+        "your passport and personal documents are kept.\n\n"
+        "If you did NOT request this, ignore this email and change your password right away.\n"
+    )
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            print(f"Country-change OTP email sent to {recipient} (ID: {email_id})")
+            return True
+        print(f"Failed to send country-change OTP email to {recipient}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending country-change OTP email to {recipient}: {str(e)}")
+        return False
+
+
 def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFAULT_PUBLIC_BASE_URL) -> bool:
     """
     Send password reset email using Resend.
@@ -2148,7 +2247,7 @@ def send_proactive_assistant_email(
         print("ERROR: Cannot send proactive assistant email - Resend not configured")
         return False
 
-    safe_subject = (subject or "").strip()[:140] or "Rilono F1 Visa Update"
+    safe_subject = (subject or "").strip()[:140] or "Rilono Student Visa Update"
     sanitized_body = _sanitize_ai_email_html(html_body)
     manage_url = f"{base_url.rstrip('/')}/dashboard"
     safe_unsubscribe_url = escape((unsubscribe_url or "").strip())

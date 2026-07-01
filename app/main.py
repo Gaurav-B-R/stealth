@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.services.daily_ai_notifications import (
@@ -47,10 +47,14 @@ from app.schema_patch import (
     ensure_university_shortlist_table,
     ensure_user_legal_consent_column,
     ensure_account_deletion_otp_columns,
+    ensure_country_change_otp_columns,
     ensure_university_country_column,
+    ensure_e2e_encryption_columns,
 )
 from app.document_catalog import ensure_default_document_type_catalog
 from app.au_universities import seed_au_universities
+from app.ca_universities import seed_ca_universities
+from app.uk_universities import seed_uk_universities
 from app.token_backfill import backfill_hashed_auth_tokens
 import os
 
@@ -195,6 +199,7 @@ app.include_router(notifications.router)
 app.include_router(admin.router)
 app.include_router(enterprise.router)
 app.include_router(visa_pass.router)
+app.include_router(e2e.router)
 
 
 @app.on_event("startup")
@@ -202,7 +207,9 @@ def startup_backfill_subscriptions():
     """Ensure existing users have default subscription + referral records."""
     ensure_user_legal_consent_column()
     ensure_account_deletion_otp_columns()
+    ensure_country_change_otp_columns()
     ensure_university_country_column()
+    ensure_e2e_encryption_columns()
     ensure_referral_columns()
     ensure_subscription_usage_columns()
     ensure_subscription_payment_recurring_columns()
@@ -233,6 +240,8 @@ def startup_backfill_subscriptions():
     try:
         ensure_default_document_type_catalog(db)
         seed_au_universities(db)
+        seed_ca_universities(db)
+        seed_uk_universities(db)
         backfill_missing_subscriptions(db)
         backfill_missing_referral_codes(db)
         backfill_hashed_auth_tokens(db)

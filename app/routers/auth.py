@@ -1150,8 +1150,38 @@ def reset_password(
     )
     if enterprise_credential:
         enterprise_credential.password_hash = hashed_password
+
+    # Encrypted documents are protected by a key derived from the password. A reset has
+    # no access to the OLD password, so file keys wrapped under it cannot be re-wrapped
+    # and those documents are unrecoverable by design (the inherent trade-off of
+    # user-held keys). Unlike a password *change* — which re-wraps keys — we can only be
+    # honest about it here, so the user isn't left thinking files are intact.
+    orphaned_encrypted_documents = (
+        db.query(models.Document)
+        .filter(
+            models.Document.user_id == user.id,
+            models.Document.encrypted_file_key.isnot(None),
+        )
+        .count()
+    )
     db.commit()
-    
+
+    if orphaned_encrypted_documents:
+        logger.warning(
+            "reset_password: %s encrypted document(s) for user_id=%s are now unrecoverable "
+            "(no old password to re-wrap their keys).",
+            orphaned_encrypted_documents,
+            user.id,
+        )
+        return {
+            "message": (
+                "Password reset successfully! You can now log in with your new password. "
+                "Note: documents you encrypted before this reset were protected by your "
+                "previous password and can no longer be decrypted — please re-upload them."
+            ),
+            "encrypted_documents_unrecoverable": orphaned_encrypted_documents,
+        }
+
     return {
         "message": "Password reset successfully! You can now log in with your new password."
     }

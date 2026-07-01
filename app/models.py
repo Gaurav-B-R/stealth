@@ -47,7 +47,23 @@ class User(Base):
     # the user. The DELETE endpoint requires it as a secondary confirmation.
     account_deletion_otp = Column(String, nullable=True)
     account_deletion_otp_expires = Column(DateTime(timezone=True), nullable=True)
-    encryption_salt = Column(String, nullable=True)  # Salt for Zero-Knowledge encryption (base64 encoded)
+    # Destination-country change second factor: a hashed 6-digit OTP emailed to the user,
+    # plus the pending selection they requested (applied only after the code is confirmed).
+    country_change_otp = Column(String, nullable=True)
+    country_change_otp_expires = Column(DateTime(timezone=True), nullable=True)
+    country_change_pending_country = Column(String, nullable=True)
+    country_change_pending_visa = Column(String, nullable=True)
+    encryption_salt = Column(String, nullable=True)  # Salt for legacy v1 server-side encryption (base64 encoded)
+    # --- Client-side end-to-end encryption (E2E) key vault (v2) ---
+    # The browser generates a random master key, wraps it with a passphrase-derived key
+    # (passphrase NEVER sent to the server) and with a one-time recovery code. Only these
+    # opaque wrapped blobs and the public KDF params are stored here; the server can never
+    # unwrap them. See app/routers/e2e.py and static/e2e_crypto.js.
+    e2e_enabled = Column(Boolean, nullable=False, default=False)
+    e2e_kdf = Column(String, nullable=True)  # public KDF params, e.g. "pbkdf2-sha256$600000$<saltB64>"
+    e2e_wrapped_master_key = Column(Text, nullable=True)  # master key wrapped by passphrase-derived key (base64)
+    e2e_recovery_wrapped_master_key = Column(Text, nullable=True)  # master key wrapped by recovery-code-derived key (base64)
+    e2e_setup_at = Column(DateTime(timezone=True), nullable=True)
     # Documentation preferences
     preferred_country = Column(String, nullable=True, default="United States")
     preferred_intake = Column(String, nullable=True)  # Spring or Fall
@@ -665,7 +681,16 @@ class Document(Base):
     description = Column(Text, nullable=True)  # Optional description
     is_processed = Column(Boolean, default=False)  # Whether AI has processed it
     extracted_text_file_url = Column(String, nullable=True)  # R2 URL for Gemini-extracted text file
-    encrypted_file_key = Column(Text, nullable=True)  # File encryption key encrypted with user password (base64)
+    encrypted_file_key = Column(Text, nullable=True)  # Legacy v1: file key wrapped with the login password (base64)
+    # --- Client-side E2E (v2) ---
+    # When e2e_scheme is set, the R2 object is a client-encrypted blob (AES-GCM, IV prepended)
+    # whose data-encryption key is wrapped by the user's E2E master key. The server stores only
+    # the wrapped DEK and never has the plaintext or the DEK. NULL e2e_scheme = legacy v1 row.
+    e2e_scheme = Column(String, nullable=True)  # e.g. "v2-aesgcm"; NULL = legacy server-side encryption
+    e2e_wrapped_dek = Column(Text, nullable=True)  # per-file DEK wrapped by the E2E master key (base64)
+    # Optional E2E-encrypted extracted-text artifact (from consent-based AI validation). The
+    # ciphertext lives in object storage at extracted_text_file_url; the server can't read it.
+    e2e_extracted_wrapped_dek = Column(Text, nullable=True)  # DEK for the extracted-text blob (base64)
     is_valid = Column(Boolean, nullable=True)  # Whether document validation passed (from Gemini)
     validation_message = Column(Text, nullable=True)  # Validation message from Gemini (e.g., "Document validated successfully" or error message)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

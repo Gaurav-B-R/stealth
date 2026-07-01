@@ -11,6 +11,9 @@ ENV/
 
 # Database
 *.db
+
+# Local dev document storage (LOCAL_DOC_STORAGE fallback — never used in prod)
+_local_doc_storage/
 *.sqlite
 *.sqlite3
 

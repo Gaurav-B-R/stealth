@@ -85,6 +85,49 @@ AU_UNIVERSITIES: list[tuple[str, str, str]] = [
     ("nd.edu.au", "University of Notre Dame Australia", "Fremantle, WA"),
     ("notredame.edu.au", "University of Notre Dame Australia", "Fremantle, WA"),
     ("divinity.edu.au", "University of Divinity", "Melbourne, VIC"),
+    ("avondale.edu.au", "Avondale University", "Cooranbong, NSW"),
+
+    # Public TAFEs & institutes (CRICOS-registered — VET/diploma & degree pathways
+    # heavily used by international Subclass 500 students).
+    ("tafensw.edu.au", "TAFE NSW", "Sydney, NSW"),
+    ("studenttafensw.edu.au", "TAFE NSW", "Sydney, NSW"),
+    ("tafeqld.edu.au", "TAFE Queensland", "Brisbane, QLD"),
+    ("tafesa.edu.au", "TAFE SA", "Adelaide, SA"),
+    ("tastafe.tas.edu.au", "TasTAFE", "Hobart, TAS"),
+    ("cit.edu.au", "Canberra Institute of Technology", "Canberra, ACT"),
+    ("northmetrotafe.wa.edu.au", "North Metropolitan TAFE", "Perth, WA"),
+    ("southmetrotafe.wa.edu.au", "South Metropolitan TAFE", "Perth, WA"),
+    ("melbournepolytechnic.edu.au", "Melbourne Polytechnic", "Melbourne, VIC"),
+    ("boxhill.edu.au", "Box Hill Institute", "Melbourne, VIC"),
+    ("holmesglen.edu.au", "Holmesglen Institute", "Melbourne, VIC"),
+    ("chisholm.edu.au", "Chisholm Institute", "Melbourne, VIC"),
+    ("angliss.edu.au", "William Angliss Institute", "Melbourne, VIC"),
+    ("thegordon.edu.au", "The Gordon", "Geelong, VIC"),
+    ("gotafe.vic.edu.au", "GOTAFE", "Shepparton, VIC"),
+    ("kangan.edu.au", "Kangan Institute", "Melbourne, VIC"),
+
+    # University pathway / foundation colleges (CRICOS — international student
+    # feeders into the partner university).
+    ("monashcollege.edu.au", "Monash College", "Melbourne, VIC"),
+    ("deakincollege.edu.au", "Deakin College", "Melbourne, VIC"),
+    ("curtincollege.edu.au", "Curtin College", "Perth, WA"),
+    ("utscollege.edu.au", "UTS College", "Sydney, NSW"),
+    ("unswcollege.edu.au", "UNSW College", "Sydney, NSW"),
+    ("latrobecollege.edu.au", "La Trobe College Australia", "Melbourne, VIC"),
+    ("taylorscollege.edu.au", "Taylors College", "Sydney, NSW"),
+
+    # Major private higher-education providers (CRICOS — degree-granting, high
+    # international enrolment).
+    ("kbs.edu.au", "Kaplan Business School", "Sydney, NSW"),
+    ("sae.edu.au", "SAE Institute", "Sydney, NSW"),
+    ("jmcacademy.edu.au", "JMC Academy", "Sydney, NSW"),
+    ("holmes.edu.au", "Holmes Institute", "Melbourne, VIC"),
+    ("icms.edu.au", "International College of Management, Sydney", "Sydney, NSW"),
+    ("acap.edu.au", "Australian College of Applied Professions", "Sydney, NSW"),
+    ("endeavour.edu.au", "Endeavour College of Natural Health", "Brisbane, QLD"),
+    ("aib.edu.au", "Australian Institute of Business", "Adelaide, SA"),
+    ("kent.edu.au", "Kent Institute Australia", "Sydney, NSW"),
+    ("eit.edu.au", "Engineering Institute of Technology", "Perth, WA"),
 ]
 
 

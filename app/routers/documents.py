@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Form
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Form, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.orm import Session, joinedload
+from app.utils.rate_limiter import check_ip_rate_limit
 from sqlalchemy import desc
 from app.database import get_db
 from app import models, schemas
@@ -51,7 +52,7 @@ from PIL import Image, UnidentifiedImageError
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 
-USER_ACCOUNT_SNAPSHOT_VERSION = "1.0"
+USER_ACCOUNT_SNAPSHOT_VERSION = "1.1"
 SUBSCRIPTION_SNAPSHOT_VERSION = "1.0"
 PROFILE_PRICING_MODEL_MONTHLY = "pro_monthly"
 PROFILE_PRICING_MODEL_SIX_MONTH = "pro_six_month"
@@ -64,18 +65,63 @@ R2_DOCUMENTS_BUCKET = os.getenv("R2_DOCUMENTS_BUCKET", "documents")  # Separate 
 R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL", f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "")
 
-# Initialize R2 client for documents
-if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY:
-    raise ValueError("R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set in environment variables")
+# Dev-only local-disk storage fallback. Activated ONLY when LOCAL_DOC_STORAGE is truthy,
+# so it can never silently engage in production (prod sets real R2 keys and leaves this unset).
+# It implements the small slice of the boto3 S3 client interface this module actually uses.
+LOCAL_DOC_STORAGE = str(os.getenv("LOCAL_DOC_STORAGE", "")).strip().lower() in {"1", "true", "yes", "on"}
 
-r2_client = boto3.client(
-    's3',
-    endpoint_url=R2_ENDPOINT_URL,
-    aws_access_key_id=R2_ACCESS_KEY_ID,
-    aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-    region_name='auto',
-    config=Config(signature_version='s3v4')
-)
+
+class _LocalDiskDocStore:
+    """Filesystem stand-in for R2 for local development/testing (LOCAL_DOC_STORAGE=1)."""
+
+    def __init__(self, root: str):
+        self.root = os.path.abspath(root)
+        os.makedirs(self.root, exist_ok=True)
+
+    def _path(self, key: str) -> str:
+        # Keep keys inside root; reject path traversal.
+        rel = (key or "").lstrip("/").replace("..", "_")
+        p = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        return p
+
+    def put_object(self, Bucket=None, Key=None, Body=None, ContentType=None, Metadata=None):
+        data = Body if isinstance(Body, (bytes, bytearray)) else Body.read()
+        with open(self._path(Key), "wb") as fh:
+            fh.write(data)
+        return {}
+
+    def get_object(self, Bucket=None, Key=None):
+        with open(self._path(Key), "rb") as fh:
+            return {"Body": BytesIO(fh.read())}
+
+    def delete_object(self, Bucket=None, Key=None):
+        try:
+            os.remove(self._path(Key))
+        except FileNotFoundError:
+            pass
+        return {}
+
+    def generate_presigned_url(self, *args, **kwargs):
+        return ""
+
+
+# Initialize R2 client for documents
+if LOCAL_DOC_STORAGE:
+    r2_client = _LocalDiskDocStore(os.path.join(os.path.dirname(__file__), "..", "_local_doc_storage"))
+    logger.warning("documents: LOCAL_DOC_STORAGE is ON — using local disk instead of R2 (dev only).")
+else:
+    if not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY:
+        raise ValueError("R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY must be set in environment variables")
+
+    r2_client = boto3.client(
+        's3',
+        endpoint_url=R2_ENDPOINT_URL,
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        region_name='auto',
+        config=Config(signature_version='s3v4')
+    )
 
 # Allowed document file types
 ALLOWED_DOCUMENT_EXTENSIONS = {
@@ -352,6 +398,11 @@ def build_user_account_snapshot(user: models.User) -> dict:
         "visa_case_status": user.visa_case_status,
         "current_situation_story": user.current_situation_story,
         "current_residence_country": user.current_residence_country or "United States",
+        # Destination journey — changing country/visa (e.g. onboarding to Australia)
+        # must mark the snapshot stale so it rebuilds with the correct country. Without
+        # these, a US-defaulted snapshot would persist and the AI would keep saying "US F-1".
+        "destination_country_code": getattr(user, "destination_country_code", None),
+        "visa_type_key": getattr(user, "visa_type_key", None),
         "profile_picture": user.profile_picture,
         "is_active": bool(user.is_active),
         "email_verified": bool(user.email_verified),
@@ -690,6 +741,364 @@ def upload_document(
     
     return response_data
 
+
+@router.post("/upload-e2e", status_code=status.HTTP_201_CREATED)
+def upload_document_e2e(
+    file: UploadFile = File(...),          # client-encrypted ciphertext blob (AES-GCM, IV prepended)
+    wrapped_dek: str = Form(...),          # per-file DEK wrapped by the E2E master key (base64)
+    original_filename: str = Form(...),    # real filename for display; the content stays encrypted
+    document_type: str = Form(...),
+    file_type: Optional[str] = Form(None), # original MIME type (used after the browser decrypts)
+    country: Optional[str] = Form(None),
+    intake: Optional[str] = Form(None),
+    year: Optional[int] = Form(None),
+    description: Optional[str] = Form(None),
+    # Optional outputs from a prior consent-based /ai-validate call. is_valid is a non-sensitive
+    # verdict; the extracted DETAILS stay E2E (extracted_blob is client-encrypted, like the file).
+    is_valid: Optional[bool] = Form(None),
+    extracted_blob: Optional[UploadFile] = File(None),
+    extracted_wrapped_dek: Optional[str] = Form(None),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Store a CLIENT-ENCRYPTED document (true end-to-end encryption).
+
+    The server only ever receives ciphertext plus the wrapped data-encryption key — never
+    the plaintext, the user's password, or the DEK. No Gemini/AI runs here (that is the
+    separate consent-based transient flow). The user must have an E2E vault set up
+    (POST /api/e2e/setup) so a master key exists to unwrap the DEK on download.
+    """
+    if not getattr(current_user, "e2e_enabled", False):
+        raise HTTPException(
+            status_code=409,
+            detail="Set up end-to-end encryption before uploading encrypted documents.",
+        )
+
+    wrapped_dek = (wrapped_dek or "").strip()
+    if not wrapped_dek or len(wrapped_dek) > 4096:
+        raise HTTPException(status_code=400, detail="Invalid wrapped key.")
+    try:
+        base64.b64decode(wrapped_dek, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="wrapped_dek must be valid base64.")
+
+    original_filename = (original_filename or "").strip() or "document"
+    if not is_allowed_document(original_filename):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type not allowed. Allowed types: {', '.join(sorted(ALLOWED_DOCUMENT_EXTENSIONS))}",
+        )
+
+    # Validate the document type against the catalog (same allow-list as the legacy path).
+    ensure_default_document_type_catalog(db)
+    _scope_country, _scope_visa = _user_visa_scope(current_user)
+    catalog_items = get_document_type_payload(
+        db, active_only=True, country_code=_scope_country, visa_type_key=_scope_visa
+    )
+    allowed_document_types = {item["value"] for item in catalog_items}
+    mandatory_document_types = {item["value"] for item in catalog_items if item.get("is_required")}
+    if document_type not in allowed_document_types:
+        raise HTTPException(
+            status_code=400, detail="Invalid document type. Please select a valid type from the list."
+        )
+    if document_type in mandatory_document_types:
+        existing = db.query(models.Document.id).filter(
+            models.Document.user_id == current_user.id,
+            models.Document.document_type == document_type,
+        ).first()
+        if existing:
+            label = next(
+                (i.get("label") for i in catalog_items if i.get("value") == document_type), document_type
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=f"{label} is already uploaded. Delete the existing file if you want to upload it again.",
+            )
+
+    # Enforce subscription upload limits (same rule as the legacy upload path).
+    subscription = get_or_create_user_subscription(db, current_user.id)
+    limits = get_plan_limits(subscription.plan)
+    upload_limit = limits["document_uploads_limit"]
+    if upload_limit >= 0:
+        if subscription.document_uploads_used <= 0:
+            existing_uploads = db.query(models.Document).filter(
+                models.Document.user_id == current_user.id
+            ).count()
+            if existing_uploads > 0:
+                subscription.document_uploads_used = existing_uploads
+                db.commit()
+                db.refresh(subscription)
+        if subscription.document_uploads_used >= upload_limit:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Free plan upload limit reached ({upload_limit}). "
+                    "Upgrade to Pro for unlimited document uploads."
+                ),
+            )
+
+    # Read the ciphertext (bounded). Allow a margin over the plaintext cap for AES-GCM overhead.
+    ciphertext = read_upload_file_with_limit(file, MAX_DOCUMENT_SIZE + 1024 * 1024)
+    if not ciphertext:
+        raise HTTPException(status_code=400, detail="Encrypted file is empty.")
+
+    r2_key = f"user_{current_user.id}/{uuid.uuid4()}.enc"
+    upload_document_to_r2(ciphertext, r2_key, "application/octet-stream", encrypted=True)
+
+    # Optional E2E-encrypted extracted-text artifact from a prior /ai-validate (client-encrypted,
+    # like the file itself). Stored as opaque ciphertext; the server cannot read the details.
+    extracted_r2_key = None
+    extracted_dek_value = None
+    if extracted_blob is not None and extracted_wrapped_dek:
+        extracted_wrapped_dek = extracted_wrapped_dek.strip()
+        if len(extracted_wrapped_dek) > 4096:
+            raise HTTPException(status_code=400, detail="Invalid extracted-text wrapped key.")
+        try:
+            base64.b64decode(extracted_wrapped_dek, validate=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail="extracted_wrapped_dek must be valid base64.")
+        extracted_ciphertext = read_upload_file_with_limit(extracted_blob, MAX_DOCUMENT_SIZE + 1024 * 1024)
+        if extracted_ciphertext:
+            extracted_r2_key = f"user_{current_user.id}/{uuid.uuid4()}_extracted.enc"
+            upload_document_to_r2(extracted_ciphertext, extracted_r2_key, "application/octet-stream", encrypted=True)
+            extracted_dek_value = extracted_wrapped_dek
+
+    # Persist only the non-sensitive verdict; the detailed extracted text stays E2E.
+    if is_valid is None:
+        validation_message = None
+    else:
+        validation_message = "AI-validated" if is_valid else "AI flagged — open the document to review details."
+
+    db_document = models.Document(
+        user_id=current_user.id,
+        filename=r2_key,
+        original_filename=original_filename,
+        file_url="",  # encrypted; downloaded via /{id}/blob and decrypted in-browser
+        file_size=len(ciphertext),
+        file_type=(file_type or "application/octet-stream"),
+        document_type=document_type,
+        country=country,
+        intake=intake,
+        year=year,
+        description=description,
+        is_processed=extracted_r2_key is not None,
+        extracted_text_file_url=extracted_r2_key,
+        encrypted_file_key=None,
+        e2e_scheme="v2-aesgcm",
+        e2e_wrapped_dek=wrapped_dek,
+        e2e_extracted_wrapped_dek=extracted_dek_value,
+        is_valid=is_valid,
+        validation_message=validation_message,
+    )
+    db.add(db_document)
+    subscription.document_uploads_used += 1
+    db.commit()
+    db.refresh(db_document)
+
+    # Best-effort profile snapshot refresh (uses document METADATA only — no plaintext).
+    try:
+        all_documents = db.query(models.Document).filter(
+            models.Document.user_id == current_user.id
+        ).all()
+        status_data = calculate_visa_journey_stage(all_documents, db, *_user_visa_scope(current_user))
+        save_student_profile_to_r2(current_user, status_data, all_documents, db=db)
+    except Exception as exc:
+        logger.warning("E2E upload: profile snapshot refresh failed for user_id=%s: %s", current_user.id, exc)
+
+    return {
+        "id": db_document.id,
+        "original_filename": db_document.original_filename,
+        "document_type": db_document.document_type,
+        "file_size": db_document.file_size,
+        "e2e_scheme": db_document.e2e_scheme,
+        "encrypted": True,
+        "created_at": db_document.created_at.isoformat() if db_document.created_at else None,
+        "message": "Document encrypted on your device and stored. Our servers only hold ciphertext.",
+    }
+
+
+@router.get("/{document_id}/blob")
+def download_document_blob(
+    document_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the raw CIPHERTEXT of a client-encrypted (E2E) document.
+
+    The browser unwraps the per-file DEK (from the X-E2E-Wrapped-Dek header, using the session
+    master key) and decrypts locally. The server cannot decrypt this: no password is involved
+    and no key is derivable here.
+    """
+    document = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    # Owner-only (an admin/dev could fetch the ciphertext but still couldn't decrypt it).
+    if document.user_id != current_user.id and not (current_user.is_admin or current_user.is_developer):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not document.e2e_scheme or not document.e2e_wrapped_dek:
+        raise HTTPException(
+            status_code=400,
+            detail="This document is not end-to-end encrypted. Use the standard download.",
+        )
+
+    try:
+        response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.filename)
+        ciphertext = response["Body"].read()
+    except Exception:
+        logger.exception(
+            "Failed to fetch E2E blob document_id=%s user_id=%s", document_id, current_user.id
+        )
+        raise HTTPException(status_code=500, detail="Failed to fetch document. Please try again.")
+
+    return StreamingResponse(
+        BytesIO(ciphertext),
+        media_type="application/octet-stream",
+        headers={
+            "X-E2E-Scheme": document.e2e_scheme,
+            "X-E2E-Wrapped-Dek": document.e2e_wrapped_dek,
+            "Content-Disposition": 'attachment; filename="document.enc"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get("/{document_id}/extracted-blob")
+def download_extracted_blob(
+    document_id: int,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Return the E2E-encrypted extracted-text artifact (from consent-based AI validation).
+
+    Like /blob, this is opaque ciphertext the server cannot read; the browser unwraps the DEK
+    from the X-E2E-Wrapped-Dek header with the session master key and decrypts locally. Used to
+    feed AI-chat context client-side without the server ever holding the extracted details.
+    """
+    document = db.query(models.Document).filter(models.Document.id == document_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if document.user_id != current_user.id and not (current_user.is_admin or current_user.is_developer):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not document.e2e_extracted_wrapped_dek or not document.extracted_text_file_url:
+        raise HTTPException(status_code=404, detail="No encrypted extracted text for this document.")
+
+    try:
+        response = r2_client.get_object(Bucket=R2_DOCUMENTS_BUCKET, Key=document.extracted_text_file_url)
+        ciphertext = response["Body"].read()
+    except Exception:
+        logger.exception(
+            "Failed to fetch extracted E2E blob document_id=%s user_id=%s", document_id, current_user.id
+        )
+        raise HTTPException(status_code=500, detail="Failed to fetch extracted text. Please try again.")
+
+    return StreamingResponse(
+        BytesIO(ciphertext),
+        media_type="application/octet-stream",
+        headers={
+            "X-E2E-Scheme": document.e2e_scheme or "v2-aesgcm",
+            "X-E2E-Wrapped-Dek": document.e2e_extracted_wrapped_dek,
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+AI_VALIDATE_RATE_LIMIT = int(os.getenv("AI_VALIDATE_RATE_LIMIT", "20"))
+AI_VALIDATE_RATE_WINDOW_SECONDS = int(os.getenv("AI_VALIDATE_RATE_WINDOW_SECONDS", "3600"))
+
+
+@router.post("/ai-validate")
+def ai_validate_document_transient(
+    request: Request,
+    file: UploadFile = File(...),
+    document_type: str = Form(...),
+    consent: bool = Form(...),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Consent-based, TRANSIENT AI validation for end-to-end-encrypted documents.
+
+    The browser sends the *plaintext* file here ONLY when the user explicitly opts in. We run
+    Gemini validation/extraction fully in memory, return the result, and persist NOTHING — no
+    R2 object, no DB row, no logging of the content. This is how AI features coexist with E2E:
+    the server reads the file once, with consent, and never stores it. The encrypted document
+    itself is uploaded separately via /upload-e2e, and the browser stores the returned
+    extracted JSON re-encrypted under the user's master key.
+    """
+    if not consent:
+        raise HTTPException(status_code=400, detail="AI validation requires explicit consent.")
+
+    # Rate-limit per IP to bound Gemini cost / abuse.
+    allowed, retry_after = check_ip_rate_limit(
+        request=request,
+        scope="documents.ai_validate",
+        limit=AI_VALIDATE_RATE_LIMIT,
+        window_seconds=AI_VALIDATE_RATE_WINDOW_SECONDS,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many validation requests. Please try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    upload_filename = file.filename or "document"
+    if not is_allowed_document(upload_filename):
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type not allowed. Allowed types: {', '.join(sorted(ALLOWED_DOCUMENT_EXTENSIONS))}",
+        )
+
+    # Validate the document type against the catalog.
+    ensure_default_document_type_catalog(db)
+    _scope_country, _scope_visa = _user_visa_scope(current_user)
+    catalog_items = get_document_type_payload(
+        db, active_only=True, country_code=_scope_country, visa_type_key=_scope_visa
+    )
+    if document_type not in {item["value"] for item in catalog_items}:
+        raise HTTPException(
+            status_code=400, detail="Invalid document type. Please select a valid type from the list."
+        )
+
+    # Read the plaintext into memory (bounded) and sanity-check it is a real document.
+    contents = read_upload_file_with_limit(file, MAX_DOCUMENT_SIZE)
+    validate_document_content(upload_filename, contents)
+    content_type = get_content_type(upload_filename)
+
+    # Attribute the Gemini cost to this account.
+    ai_usage.set_usage_account(user_id=current_user.id)
+
+    try:
+        student_profile_context, related_documents_context = build_upload_validation_context(
+            current_user.id, db
+        )
+        validation_result = validate_and_extract_document(
+            contents,
+            upload_filename,
+            content_type,
+            document_type,
+            current_date_for_evaluation=datetime.now().isoformat(),
+            student_profile_context=student_profile_context,
+            related_documents_context=related_documents_context,
+        )
+    except Exception:
+        logger.exception("ai-validate: Gemini processing failed for user_id=%s", current_user.id)
+        raise HTTPException(status_code=502, detail="AI validation could not be completed. Please try again.")
+    finally:
+        # Drop the plaintext reference promptly; it is never persisted anywhere.
+        contents = None
+
+    if not validation_result:
+        return {"is_valid": False, "message": "Validation could not be completed.", "details": None}
+
+    is_valid = str(validation_result.get("Document Validation", "No")).upper() == "YES"
+    message = validation_result.get("Message", "")
+    return {"is_valid": is_valid, "message": message, "details": validation_result}
+
+
 @router.get("/my-documents", response_model=List[schemas.DocumentResponse])
 async def get_my_documents(
     current_user: models.User = Depends(get_current_active_user),
@@ -705,10 +1114,12 @@ async def get_my_documents(
         models.Document.user_id == current_user.id
     ).order_by(desc(models.Document.created_at)).all()
     
-    # For encrypted documents, don't generate presigned URL (requires password to decrypt)
+    # For encrypted documents, don't generate presigned URL (a presigned URL to ciphertext
+    # would be useless). E2E docs are downloaded via /{id}/blob and decrypted in-browser;
+    # legacy v1 docs via /{id}/download with the password.
     for doc in documents:
-        if doc.encrypted_file_key:
-            doc.file_url = ""  # Empty - requires password via /download endpoint
+        if doc.encrypted_file_key or doc.e2e_scheme:
+            doc.file_url = ""
         else:
             # Legacy unencrypted document - generate presigned URL
             doc.file_url = get_presigned_url(doc.filename, expiration=3600)

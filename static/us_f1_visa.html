@@ -2706,6 +2706,17 @@
                                                 class="btn btn-secondary" style="width: 100%;">Change Password</button>
                                         </form>
                                     </div>
+                                    <div class="destination-settings"
+                                        style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
+                                        <h4 style="margin-bottom: 0.35rem; font-size: 1rem;">Destination country</h4>
+                                        <p style="color: var(--text-secondary); font-size: 0.85rem; margin: 0 0 0.75rem;">
+                                            Your dashboard, checklist, and AI guidance are tailored to this destination.
+                                            <span id="settingsCurrentCountry"
+                                                style="font-weight: 600; color: var(--text-primary);"></span>
+                                        </p>
+                                        <button type="button" onclick="openCountryChangeModal()" class="btn btn-secondary"
+                                            style="width: 100%; font-size: 0.875rem;">Change destination country</button>
+                                    </div>
                                     <div class="danger-zone"
                                         style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
                                         <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">
@@ -2945,12 +2956,13 @@
                                     <div class="widget-content">
                                         <div
                                             style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem;">
-                                            <strong style="color: #856404;">🔒 Zero-Knowledge Encryption</strong>
+                                            <strong style="color: #856404;">🔒 End-to-end encrypted</strong>
                                             <p style="color: #856404; margin: 0.5rem 0 0 0; font-size: 0.875rem;">
-                                                Your documents are encrypted with your password. Even we cannot read
-                                                them.
-                                                <strong>If you forget your password, your documents cannot be
-                                                    recovered.</strong>
+                                                Your documents are encrypted on your device with your encryption
+                                                passphrase before they're uploaded — our servers only ever store
+                                                ciphertext.
+                                                <strong>Keep your passphrase and recovery code safe; without them,
+                                                    encrypted documents can't be recovered.</strong>
                                             </p>
                                         </div>
                                         <form id="documentUploadForm">
@@ -2988,15 +3000,21 @@
                                                 </small>
                                             </div>
                                             <div class="form-group">
-                                                <label for="documentPassword">Your Password <span
-                                                        style="color: var(--danger-color);">*</span></label>
-                                                <input type="password" id="documentPassword" required
-                                                    placeholder="Enter your login password to encrypt">
-                                                <small
-                                                    style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                                    Required to encrypt your document. We use Zero-Knowledge encryption
-                                                    - your password is never stored.
-                                                </small>
+                                                <label
+                                                    style="display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; font-weight: 500;">
+                                                    <input type="checkbox" id="documentAiConsent"
+                                                        style="margin-top: 0.25rem; flex-shrink: 0;">
+                                                    <span>
+                                                        Let Rilono AI validate this document
+                                                        <small
+                                                            style="color: var(--text-secondary); display: block; margin-top: 0.25rem; font-weight: 400;">
+                                                            Optional. If enabled, the document is read once in memory to
+                                                            check its type and extract details, then discarded — it's
+                                                            never stored unencrypted. Leave unchecked to store it
+                                                            end-to-end encrypted with no AI processing.
+                                                        </small>
+                                                    </span>
+                                                </label>
                                             </div>
                                             <button type="submit" class="btn btn-primary" style="width: 100%;">Upload
                                                 Document</button>
@@ -4901,6 +4919,7 @@
                 els.forEach(function (el) { io.observe(el); });
             })();
         </script>
+        <script src="/static/e2e_crypto.js"></script>
         <script src="/static/app.js"></script>
         <script>
         (function() {

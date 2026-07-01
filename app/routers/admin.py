@@ -35,9 +35,8 @@ from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 logger = logging.getLogger(__name__)
 
-VALID_USER_PLAN_FILTERS = {"all", "free", "pro", "journey"}
+VALID_USER_PLAN_FILTERS = {"all", "free", "visa_pass"}
 VALID_USER_ROLE_FILTERS = {"all", "student", "staff", "admin", "developer"}
-PRICING_MODEL_SIX_MONTH = "pro_six_month"
 ENTERPRISE_ROLE_ADMIN = "admin"
 ENTERPRISE_ROOT_DOMAIN = (
     os.getenv("ENTERPRISE_ROOT_DOMAIN", "rilono.com").strip().lower() or "rilono.com"
@@ -282,56 +281,29 @@ def clear_admin_turnstile(
 
 def _build_plan_metrics_for_filtered_users(db: Session, filtered_user_ids_subquery) -> dict[str, int]:
     """
-    Build subscription plan metrics for the filtered user population:
-    - pro_plan_users: active pro users excluding journey-pass users
-    - journey_plan_users: active pro users whose latest verified payment is pro_six_month
+    Plan metrics for the filtered user population under the current B2C model
+    (one-time Visa Success Pass replaced the old recurring Pro / Journey plans):
+    - visa_pass_users: users with an active premium (Visa Success Pass) subscription
+    - free_users: everyone else in the filtered set
     """
     filtered_user_ids_select = select(filtered_user_ids_subquery.c.id)
 
-    active_pro_user_rows = (
-        db.query(models.Subscription.user_id)
+    total_users = (
+        db.query(func.count()).select_from(filtered_user_ids_subquery).scalar() or 0
+    )
+    visa_pass_users = (
+        db.query(func.count(func.distinct(models.Subscription.user_id)))
         .filter(
             models.Subscription.user_id.in_(filtered_user_ids_select),
             models.Subscription.plan == "pro",
             models.Subscription.status == "active",
         )
-        .all()
-    )
-    active_pro_user_ids = [row[0] for row in active_pro_user_rows if row and row[0] is not None]
-    if not active_pro_user_ids:
-        return {"pro_plan_users": 0, "journey_plan_users": 0}
-
-    ranked_verified_payments = (
-        db.query(
-            models.SubscriptionPayment.user_id.label("user_id"),
-            models.SubscriptionPayment.pricing_model.label("pricing_model"),
-            func.row_number().over(
-                partition_by=models.SubscriptionPayment.user_id,
-                order_by=models.SubscriptionPayment.id.desc(),
-            ).label("row_num"),
-        )
-        .filter(
-            models.SubscriptionPayment.status == "verified",
-            models.SubscriptionPayment.user_id.in_(active_pro_user_ids),
-        )
-        .subquery()
-    )
-
-    journey_plan_users = (
-        db.query(func.count())
-        .select_from(ranked_verified_payments)
-        .filter(
-            ranked_verified_payments.c.row_num == 1,
-            ranked_verified_payments.c.pricing_model == PRICING_MODEL_SIX_MONTH,
-        )
         .scalar()
         or 0
     )
-
-    pro_plan_users = max(len(active_pro_user_ids) - int(journey_plan_users), 0)
     return {
-        "pro_plan_users": int(pro_plan_users),
-        "journey_plan_users": int(journey_plan_users),
+        "visa_pass_users": int(visa_pass_users),
+        "free_users": max(int(total_users) - int(visa_pass_users), 0),
     }
 
 
@@ -529,37 +501,15 @@ def list_users_admin(
     elif normalized_role == "developer":
         query = query.filter(models.User.is_developer.is_(True))
 
-    active_pro_user_ids_select = select(models.Subscription.user_id).where(
+    active_pass_user_ids_select = select(models.Subscription.user_id).where(
         models.Subscription.plan == "pro",
         models.Subscription.status == "active",
     )
-    ranked_verified_payments = (
-        db.query(
-            models.SubscriptionPayment.user_id.label("user_id"),
-            models.SubscriptionPayment.pricing_model.label("pricing_model"),
-            func.row_number().over(
-                partition_by=models.SubscriptionPayment.user_id,
-                order_by=models.SubscriptionPayment.id.desc(),
-            ).label("row_num"),
-        )
-        .filter(
-            models.SubscriptionPayment.status == "verified",
-            models.SubscriptionPayment.user_id.in_(active_pro_user_ids_select),
-        )
-        .subquery()
-    )
-    journey_pass_user_ids_select = select(ranked_verified_payments.c.user_id).where(
-        ranked_verified_payments.c.row_num == 1,
-        ranked_verified_payments.c.pricing_model == PRICING_MODEL_SIX_MONTH,
-    )
 
     if normalized_plan == "free":
-        query = query.filter(~models.User.id.in_(active_pro_user_ids_select))
-    elif normalized_plan == "pro":
-        query = query.filter(models.User.id.in_(active_pro_user_ids_select))
-        query = query.filter(~models.User.id.in_(journey_pass_user_ids_select))
-    elif normalized_plan == "journey":
-        query = query.filter(models.User.id.in_(journey_pass_user_ids_select))
+        query = query.filter(~models.User.id.in_(active_pass_user_ids_select))
+    elif normalized_plan == "visa_pass":
+        query = query.filter(models.User.id.in_(active_pass_user_ids_select))
 
     total = query.count()
     filtered_user_ids_subquery = query.with_entities(models.User.id).subquery()

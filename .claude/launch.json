@@ -9,6 +9,15 @@
         "DATABASE_URL='sqlite:///./_preview.db' ENVIRONMENT='development' RESEND_API_KEY='' RAZORPAY_KEY_ID='' RAZORPAY_KEY_SECRET='' AUTH_COOKIE_DOMAIN='' AUTH_COOKIE_SECURE='false' AUTH_COOKIE_SAMESITE='lax' ENTERPRISE_ROOT_DOMAIN='localhost' ENTERPRISE_DOCS_DIR='./_docs_local' exec ./venv/bin/python -m uvicorn app.main:app --port 8097 --host 127.0.0.1 --log-level warning"
       ],
       "port": 8097
+    },
+    {
+      "name": "rilono-e2e-sandbox",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "cd /Users/gaurav/Downloads/Developer/Stealth/web_app && DATABASE_URL='sqlite:///./_e2e_sandbox.db' SECRET_KEY='sandbox-only-secret-key-not-for-prod-xyz' ENVIRONMENT='development' LOCAL_DOC_STORAGE='1' R2_ACCESS_KEY_ID='dummy' R2_SECRET_ACCESS_KEY='dummy' R2_ACCOUNT_ID='dummy' R2_DOCUMENTS_BUCKET='documents' RAZORPAY_KEY_ID='' RAZORPAY_KEY_SECRET='' RAZORPAY_WEBHOOK_SECRET='' GEMINI_API_KEY='' RESEND_API_KEY='' GOOGLE_OAUTH_CLIENT_ID='' GOOGLE_OAUTH_CLIENT_SECRET='' BASE_URL='http://127.0.0.1:8123' AUTH_COOKIE_DOMAIN='' AUTH_COOKIE_SECURE='false' AUTH_COOKIE_SAMESITE='lax' ENTERPRISE_ROOT_DOMAIN='localhost' exec ./venv/bin/python -m uvicorn app.main:app --port 8123 --host 127.0.0.1 --log-level warning"
+      ],
+      "port": 8123
     }
   ]
 }

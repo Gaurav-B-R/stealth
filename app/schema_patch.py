@@ -21,6 +21,39 @@ def _get_table_columns(conn, table_name: str):
     return {row[0] for row in result}
 
 
+def ensure_e2e_encryption_columns():
+    """
+    Add client-side end-to-end encryption (E2E v2) columns to users + documents.
+
+    Idempotent ADD COLUMN migration for environments without full migrations. The new
+    columns hold only opaque, client-wrapped key material (see app/routers/e2e.py); the
+    server can never unwrap them.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    bool_false = "0" if is_sqlite else "FALSE"
+    ts = "TIMESTAMP"
+    with engine.begin() as conn:
+        user_columns = _get_table_columns(conn, "users")
+        if "e2e_enabled" not in user_columns:
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN e2e_enabled BOOLEAN NOT NULL DEFAULT {bool_false}"))
+        if "e2e_kdf" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN e2e_kdf VARCHAR"))
+        if "e2e_wrapped_master_key" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN e2e_wrapped_master_key TEXT"))
+        if "e2e_recovery_wrapped_master_key" not in user_columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN e2e_recovery_wrapped_master_key TEXT"))
+        if "e2e_setup_at" not in user_columns:
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN e2e_setup_at {ts}"))
+
+        document_columns = _get_table_columns(conn, "documents")
+        if "e2e_scheme" not in document_columns:
+            conn.execute(text("ALTER TABLE documents ADD COLUMN e2e_scheme VARCHAR"))
+        if "e2e_wrapped_dek" not in document_columns:
+            conn.execute(text("ALTER TABLE documents ADD COLUMN e2e_wrapped_dek TEXT"))
+        if "e2e_extracted_wrapped_dek" not in document_columns:
+            conn.execute(text("ALTER TABLE documents ADD COLUMN e2e_extracted_wrapped_dek TEXT"))
+
+
 def ensure_user_legal_consent_column():
     """
     Patch users table schema in-place for environments without full migrations.
@@ -81,6 +114,20 @@ def ensure_account_deletion_otp_columns():
             conn.execute(text("ALTER TABLE users ADD COLUMN account_deletion_otp VARCHAR"))
         if "account_deletion_otp_expires" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN account_deletion_otp_expires TIMESTAMP"))
+
+
+def ensure_country_change_otp_columns():
+    """Add the destination-country change OTP + pending-selection columns (B2C)."""
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "users")
+        if "country_change_otp" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN country_change_otp VARCHAR"))
+        if "country_change_otp_expires" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN country_change_otp_expires TIMESTAMP"))
+        if "country_change_pending_country" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN country_change_pending_country VARCHAR"))
+        if "country_change_pending_visa" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN country_change_pending_visa VARCHAR"))
 
 
 def ensure_university_country_column():

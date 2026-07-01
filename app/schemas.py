@@ -85,6 +85,9 @@ class AdminUserSummary(BaseModel):
     is_developer: Optional[bool] = False
     referral_code: Optional[str] = None
     referred_by_user_id: Optional[int] = None
+    # Destination country + visa type the student is applying for (multi-country journey).
+    destination_country_code: Optional[str] = None
+    visa_type_key: Optional[str] = None
     created_at: datetime
     first_login_at: Optional[datetime] = None
     last_login_at: Optional[datetime] = None
@@ -94,8 +97,8 @@ class AdminUserSummary(BaseModel):
 
 
 class AdminUserListMetrics(BaseModel):
-    pro_plan_users: int = 0
-    journey_plan_users: int = 0
+    visa_pass_users: int = 0
+    free_users: int = 0
 
 
 class AdminEnterpriseAccountSummary(BaseModel):
@@ -329,6 +332,15 @@ class AccountDeleteRequest(BaseModel):
     code: str
 
 
+class CountryChangeRequest(BaseModel):
+    destination_country_code: str
+    visa_type_key: Optional[str] = None
+
+
+class CountryChangeConfirm(BaseModel):
+    code: str
+
+
 class TokenData(BaseModel):
     username: Optional[str] = None
 
@@ -410,6 +422,7 @@ class DocumentResponse(BaseModel):
     extracted_text_file_url: Optional[str] = None
     is_valid: Optional[bool] = None
     validation_message: Optional[str] = None
+    e2e_scheme: Optional[str] = None  # non-null => client-side E2E encrypted (download via /{id}/blob)
     created_at: datetime
     updated_at: Optional[datetime] = None
     uploader: UserResponse

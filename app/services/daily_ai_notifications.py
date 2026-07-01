@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.exc import IntegrityError
 
 from app import models
+from app import visa_catalog
 from app.database import SessionLocal
 from app.email_service import (
     build_email_notifications_unsubscribe_url,
@@ -159,8 +160,31 @@ def _clean_json_response(text: str) -> dict:
     return json.loads(value[first_brace : last_brace + 1])
 
 
+def _journey_context(user: models.User) -> dict:
+    """Resolve the student's destination country + visa type so notifications speak to
+    their actual journey (US F-1, UK Student, Canada Study Permit, Australia Subclass
+    500, …) instead of assuming US F-1."""
+    code, visa_type_key = visa_catalog.resolve_selection(
+        getattr(user, "destination_country_code", None),
+        getattr(user, "visa_type_key", None),
+    )
+    meta = visa_catalog.country_meta(code) or {}
+    country_name = (meta.get("name") or code or "").strip() or "your destination"
+    visa_label = (visa_catalog.visa_type_label(code, visa_type_key) or "").strip() or "student visa"
+    return {
+        "country_code": code,
+        "visa_type_key": visa_type_key,
+        "country_name": country_name,
+        "visa_label": visa_label,
+        "journey": f"{country_name} student visa ({visa_label})",
+    }
+
+
 def _build_analysis_prompt(user: models.User, profile_json_raw: str, document_payload: list[dict]) -> str:
     now_iso = datetime.now(timezone.utc).isoformat()
+    jc = _journey_context(user)
+    country_name = jc["country_name"]
+    visa_label = jc["visa_label"]
     if document_payload:
         documents_text_parts: list[str] = []
         for index, doc in enumerate(document_payload, 1):
@@ -178,7 +202,9 @@ def _build_analysis_prompt(user: models.User, profile_json_raw: str, document_pa
     else:
         documents_raw_text = "No extracted document files found for this user."
 
-    return f"""You are Rilono's proactive AI F1 Visa assistant.
+    return f"""You are Rilono's proactive AI student-visa assistant for a student applying to {country_name}.
+This student is pursuing a {country_name} student visa ({visa_label}). Tailor EVERYTHING —
+terminology, documents, stages, fees, forms and next steps — to {country_name} and this visa type.
 Analyze the user's full raw profile JSON and raw extracted document files.
 
 Current UTC datetime: {now_iso}
@@ -187,11 +213,23 @@ User context:
 - full_name: {user.full_name or ''}
 - email: {user.email}
 - current_residence_country: {getattr(user, 'current_residence_country', None) or ''}
+- destination_country: {country_name}
+- visa_type: {visa_label}
+
+IMPORTANT — destination is correct and expected:
+- This student's chosen destination ({country_name}) and visa type ({visa_label}) are correct. Do NOT
+  treat them as an error, and do NOT assume a US F-1 visa. Never raise a "mismatch" simply because the
+  destination is not the United States. Only flag a country/visa mismatch if the student's OWN profile
+  and documents contradict EACH OTHER (e.g. documents clearly reference a different country than
+  {country_name}) — not because they differ from the US/F-1.
+- Use the correct {country_name} vocabulary (e.g. the right visa name, forms, funding proof and
+  authorities for {country_name}); never reference US-only items (DS-160, SEVIS, I-20) unless the
+  destination is the United States.
 
 Your task:
 - First perform critical cross-validation across the raw profile and document files.
-- Identify major mismatches, contradictions, or critical missing details first (for example: identity/name mismatch, country mismatch, key timeline/date mismatch, university/program mismatch).
-- Determine if the user has delayed, missing, invalid, or risky F1-visa-related items needing action.
+- Identify major mismatches, contradictions, or critical missing details first (for example: identity/name mismatch, internal country mismatch within the student's own data, key timeline/date mismatch, university/program mismatch).
+- Determine if the user has delayed, missing, invalid, or risky {country_name} student-visa items needing action.
 - Consider timeline urgency, mandatory stage documents, invalid document validations, and obvious inconsistencies.
 - If any major mismatch exists, treat it as the highest-priority issue before routine reminders.
 
@@ -315,10 +353,11 @@ def _process_single_user(user_id: int, model: Any, model_name: str, r2_client) -
             print(f"Daily AI notifier: no action needed for user_id={user.id}")
             return False
 
-        subject = (decision.email_subject or "Action needed for your F1 visa plan").strip()[:140]
+        jc = _journey_context(user)
+        subject = (decision.email_subject or f"Action needed for your {jc['country_name']} student visa plan").strip()[:140]
         in_app_message = (decision.in_app_message or subject).strip()[:180]
         if not in_app_message:
-            in_app_message = "New action item in your F1 visa journey."
+            in_app_message = f"New action item in your {jc['country_name']} student visa journey."
 
         create_user_notification(
             session,

@@ -13,6 +13,7 @@ from app.subscriptions import (
 from app.utils.rate_limiter import check_ip_rate_limit
 from app.utils.secure_artifacts import decrypt_artifact_bytes
 from app import ai_guardrails
+from app import ai_usage
 # Import Gemini configuration
 from app.utils import gemini_service as gemini_utils
 from typing import Optional, List
@@ -144,6 +145,10 @@ class ChatMessage(BaseModel):
     conversation_history: Optional[List[dict]] = None
     session_attachments: Optional[List[ChatSessionAttachment]] = None
     source: Optional[str] = "rilono_ai_chat"
+    # Extracted text from the user's END-TO-END-ENCRYPTED documents, decrypted in the browser
+    # and supplied here only when the user has their vault unlocked. The server can't read those
+    # documents itself, so this is the only way that content reaches the AI — consented + transient.
+    e2e_document_context: Optional[str] = None
 
 class ChatResponse(BaseModel):
     response: str
@@ -291,20 +296,28 @@ def get_user_documents_context(user_id: int, db: Session) -> str:
     Returns a formatted string with document names (detailed content is attached separately).
     """
     try:
+        # List ALL of the user's documents (including end-to-end-encrypted ones) so the AI is
+        # aware of what they've uploaded. For E2E docs the server can't read the CONTENT — only
+        # the metadata below — so the detailed extracted text comes from the client (if shared).
         documents = db.query(models.Document).filter(
             models.Document.user_id == user_id,
-            models.Document.extracted_text_file_url.isnot(None)
         ).all()
-        
+
         if not documents:
             return "No documents have been uploaded yet."
-        
+
         context_parts = [f"User's Uploaded Documents ({len(documents)} total):"]
-        
+
         for doc in documents:
-            validation_status = "Valid" if doc.is_valid else "Needs Review"
-            context_parts.append(f"- {doc.document_type or 'Document'}: {doc.original_filename} [{validation_status}]")
-        
+            if doc.is_valid is None:
+                validation_status = "Not AI-checked"
+            else:
+                validation_status = "Valid" if doc.is_valid else "Needs Review"
+            e2e_note = " (end-to-end encrypted)" if getattr(doc, "e2e_scheme", None) else ""
+            context_parts.append(
+                f"- {doc.document_type or 'Document'}: {doc.original_filename} [{validation_status}]{e2e_note}"
+            )
+
         return "\n".join(context_parts)
     except Exception as e:
         print(f"Error fetching documents context: {str(e)}")
@@ -317,13 +330,17 @@ def get_user_document_files(user_id: int, db: Session) -> List[dict]:
     Returns a list of dicts with document_type, filename, and json_content.
     """
     document_files = []
-    
+
     try:
+        # Only legacy (server-side-encrypted) documents can be read here. End-to-end-encrypted
+        # docs (e2e_scheme set) hold their extracted text as client-encrypted artifacts the
+        # server has no key for — that content, if shared, arrives via ChatMessage.e2e_document_context.
         documents = db.query(models.Document).filter(
             models.Document.user_id == user_id,
-            models.Document.extracted_text_file_url.isnot(None)
+            models.Document.extracted_text_file_url.isnot(None),
+            models.Document.e2e_scheme.is_(None),
         ).all()
-        
+
         for doc in documents:
             try:
                 # Get extracted text/JSON file from R2
@@ -624,6 +641,13 @@ def build_system_prompt(
 
     return f"""{assistant_intro}
 
+AUTHORITATIVE DESTINATION (source of truth): This student is applying for the {journey_label}.
+Speak ONLY to this destination and visa type — use its correct terminology, forms, fees, documents
+and stages. If any attached profile/snapshot or document text references a different country or visa
+(for example a default to the United States / F-1), treat that as stale and IGNORE it in favour of the
+{journey_label}. Never tell this student they are on a US F-1 visa unless the destination above is
+the United States.
+
 Your role:
 {role_text}
 
@@ -745,7 +769,6 @@ Please provide a helpful response to the user's question:"""
             raise RuntimeError(f"All configured Rilono AI chat models failed: {str(last_model_error)}")
 
         try:
-            from app import ai_usage
             ai_usage.record_gemini_usage("student_ai_chat", model_name, response)
         except Exception:
             pass
@@ -896,7 +919,19 @@ def chat_with_ai(
         
         # Get documents context (summary list of uploaded documents)
         documents_context = get_user_documents_context(current_user.id, db)
-        
+
+        # Merge in extracted details the browser decrypted from the user's END-TO-END-ENCRYPTED
+        # documents and chose to share for this message (consented + transient — never stored
+        # server-side). Bounded to avoid prompt bloat / abuse.
+        client_e2e_context = (chat_message.e2e_document_context or "").strip()
+        if client_e2e_context:
+            documents_context = (
+                documents_context
+                + "\n\nExtracted details from the user's end-to-end-encrypted documents "
+                "(decrypted and shared by the user for this message):\n"
+                + client_e2e_context[:60000]
+            )
+
         # Get document files (full JSON content) to attach to the prompt
         document_files = get_user_document_files(current_user.id, db)
         

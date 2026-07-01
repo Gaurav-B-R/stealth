@@ -12,8 +12,8 @@ const state = {
     users: [],
     total: 0,
     metrics: {
-        pro_plan_users: 0,
-        journey_plan_users: 0
+        visa_pass_users: 0,
+        free_users: 0
     },
     page: 1,
     pageSize: ADMIN_PAGE_SIZE,
@@ -81,8 +81,8 @@ const refs = {
     createdHeader: document.getElementById('adminCreatedHeader'),
     lastLoginHeader: document.getElementById('adminLastLoginHeader'),
     metricTotal: document.getElementById('adminMetricTotal'),
-    metricPro: document.getElementById('adminMetricPro'),
-    metricJourney: document.getElementById('adminMetricJourney'),
+    metricPass: document.getElementById('adminMetricPass'),
+    metricFree: document.getElementById('adminMetricFree'),
     enterpriseForm: document.getElementById('adminEnterpriseFilterForm'),
     enterpriseSearch: document.getElementById('adminEnterpriseSearchInput'),
     enterpriseApplyBtn: document.getElementById('adminEnterpriseApplyBtn'),
@@ -716,7 +716,7 @@ async function handleLogout() {
     state.activeTab = 'users';
     state.users = [];
     state.total = 0;
-    state.metrics = { pro_plan_users: 0, journey_plan_users: 0 };
+    state.metrics = { visa_pass_users: 0, free_users: 0 };
     state.page = 1;
     state.loading = false;
     state.enterpriseAccounts = [];
@@ -990,9 +990,31 @@ function renderUsersTableMessage(message) {
     if (!refs.tableBody) return;
     refs.tableBody.innerHTML = `
         <tr>
-            <td colspan="7" class="table-empty">${escapeHtml(message)}</td>
+            <td colspan="8" class="table-empty">${escapeHtml(message)}</td>
         </tr>
     `;
+}
+
+const B2C_COUNTRIES = {
+    US: { flag: '🇺🇸', name: 'United States' },
+    UK: { flag: '🇬🇧', name: 'United Kingdom' },
+    CA: { flag: '🇨🇦', name: 'Canada' },
+    AU: { flag: '🇦🇺', name: 'Australia' }
+};
+const B2C_VISA_LABELS = {
+    us_f1: 'F-1 Student', us_j1: 'J-1 Exchange', us_m1: 'M-1 Vocational',
+    uk_student: 'Student (Tier 4)', uk_short_study: 'Short-Term Study',
+    ca_study_permit: 'Study Permit', ca_sds: 'SDS',
+    au_subclass500: 'Subclass 500'
+};
+
+function renderUserCountryCell(user) {
+    const code = String(user.destination_country_code || '').toUpperCase();
+    const country = B2C_COUNTRIES[code];
+    if (!country) return '<span class="user-meta">—</span>';
+    const visaLabel = B2C_VISA_LABELS[user.visa_type_key] || '';
+    return `<div class="user-name">${country.flag} ${escapeHtml(country.name)}</div>` +
+        (visaLabel ? `<div class="user-meta">${escapeHtml(visaLabel)}</div>` : '');
 }
 
 function renderUsersTable() {
@@ -1025,6 +1047,7 @@ function renderUsersTable() {
                     <div class="user-name">${escapeHtml(userName)}</div>
                     <div class="user-meta">${escapeHtml(userMeta || '-')}</div>
                 </td>
+                <td>${renderUserCountryCell(user)}</td>
                 <td><span class="role-chip">${escapeHtml(role)}</span></td>
                 <td><span class="status-chip ${isActive ? 'active' : 'inactive'}">${isActive ? 'Active' : 'Inactive'}</span></td>
                 <td>${escapeHtml(verified)}</td>
@@ -1064,8 +1087,8 @@ function renderPagination() {
 
 function renderMetrics() {
     if (refs.metricTotal) refs.metricTotal.textContent = String(state.total || 0);
-    if (refs.metricPro) refs.metricPro.textContent = String(state.metrics.pro_plan_users || 0);
-    if (refs.metricJourney) refs.metricJourney.textContent = String(state.metrics.journey_plan_users || 0);
+    if (refs.metricPass) refs.metricPass.textContent = String(state.metrics.visa_pass_users || 0);
+    if (refs.metricFree) refs.metricFree.textContent = String(state.metrics.free_users || 0);
 }
 
 function renderEnterpriseTableMessage(message) {
@@ -1269,7 +1292,7 @@ async function loadUsers({ resetPage = false } = {}) {
             const message = normalizeErrorMessage(payload, 'Failed to load users.');
             state.users = [];
             state.total = 0;
-            state.metrics = { pro_plan_users: 0, journey_plan_users: 0 };
+            state.metrics = { visa_pass_users: 0, free_users: 0 };
             renderUsersTableMessage(message);
             renderUsersSummary();
             renderMetrics();
@@ -1281,8 +1304,8 @@ async function loadUsers({ resetPage = false } = {}) {
         state.users = Array.isArray(payload.users) ? payload.users : [];
         state.total = Number(payload.total) || 0;
         state.metrics = {
-            pro_plan_users: Number(payload?.metrics?.pro_plan_users) || 0,
-            journey_plan_users: Number(payload?.metrics?.journey_plan_users) || 0
+            visa_pass_users: Number(payload?.metrics?.visa_pass_users) || 0,
+            free_users: Number(payload?.metrics?.free_users) || 0
         };
 
         const totalPages = Math.max(1, Math.ceil(state.total / state.pageSize));
@@ -1300,7 +1323,7 @@ async function loadUsers({ resetPage = false } = {}) {
         console.error('Failed to load users:', error);
         state.users = [];
         state.total = 0;
-        state.metrics = { pro_plan_users: 0, journey_plan_users: 0 };
+        state.metrics = { visa_pass_users: 0, free_users: 0 };
         renderUsersTableMessage('Could not load users. Please retry.');
         renderUsersSummary();
         renderMetrics();
