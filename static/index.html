@@ -264,10 +264,15 @@
         /* ======================= STATS ======================= */
         .hx-stats { padding: 64px 0 10px; }
         .hx-stats .row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
-        .stat { text-align: center; background: #fff; border: 1px solid var(--line); border-radius: 20px; padding: 28px 16px 24px; box-shadow: 0 8px 26px rgba(23, 28, 74, .05); transition: transform .25s ease, box-shadow .25s ease; }
-        .stat:hover { transform: translateY(-5px); box-shadow: 0 18px 44px rgba(99, 102, 241, .14); }
-        .stat b { display: block; font-family: var(--fd); font-size: clamp(1.9rem, 2.8vw, 2.5rem); font-weight: 800; letter-spacing: -.03em; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; line-height: 1.1; }
-        .stat span { color: var(--mut); font-size: .86rem; font-weight: 600; }
+        .stat { --acc: #6366f1; position: relative; overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: 20px; padding: 24px 22px 22px; box-shadow: 0 8px 26px rgba(23, 28, 74, .05); transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
+        .stat::before { content: ""; position: absolute; top: -46px; right: -46px; width: 130px; height: 130px; border-radius: 50%; background: radial-gradient(closest-side, color-mix(in srgb, var(--acc) 14%, transparent), transparent 72%); pointer-events: none; }
+        .stat:hover { transform: translateY(-5px); border-color: color-mix(in srgb, var(--acc) 38%, transparent); box-shadow: 0 18px 44px color-mix(in srgb, var(--acc) 16%, transparent); }
+        .stat-ic { display: inline-grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; margin-bottom: 14px; color: var(--acc); background: color-mix(in srgb, var(--acc) 11%, #fff); border: 1px solid color-mix(in srgb, var(--acc) 24%, transparent); }
+        .stat-ic svg { width: 20px; height: 20px; }
+        .stat b { display: block; font-family: var(--fd); font-size: clamp(2rem, 2.9vw, 2.6rem); font-weight: 800; letter-spacing: -.03em; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; line-height: 1.05; }
+        .stat b span { font: inherit; color: inherit; }
+        .stat .stat-label { display: block; margin-top: 7px; color: var(--ink); font-size: .94rem; font-weight: 750; letter-spacing: -.01em; }
+        .stat .stat-sub { display: block; margin-top: 3px; color: var(--mut); font-size: .8rem; font-weight: 600; line-height: 1.45; }
 
         /* ======================= JOURNEY (scroll-driven flight) ======================= */
         .hx-journey { padding: 100px 0 90px; }
@@ -750,10 +755,30 @@
         <section class="hx-stats">
             <div class="wrap">
                 <div class="row">
-                    <div class="stat rv"><b><span data-count="4">0</span></b><span>Destinations — US · UK · CA · AU</span></div>
-                    <div class="stat rv" style="--d:.08s"><b><span data-count="7">0</span></b><span>Guided journey stages</span></div>
-                    <div class="stat rv" style="--d:.16s"><b><span data-count="100" data-suffix="%">0%</span></b><span>Documents AI-checked for red flags</span></div>
-                    <div class="stat rv" style="--d:.24s"><b><span data-count="24" data-suffix="/7">0/7</span></b><span>Rilono AI visa &amp; interview support</span></div>
+                    <div class="stat rv" style="--acc:#6366f1">
+                        <span class="stat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 2.5 4 5.6 4 9s-1.4 6.5-4 9c-2.6-2.5-4-5.6-4-9s1.4-6.5 4-9z"/></svg></span>
+                        <b><span data-count="4">0</span></b>
+                        <span class="stat-label">Study destinations</span>
+                        <span class="stat-sub">US · UK · CA · AU</span>
+                    </div>
+                    <div class="stat rv" style="--d:.08s;--acc:#a855f7">
+                        <span class="stat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4h12M6 4v5a6 6 0 0 0 12 0V4M8 20h8M12 15v5"/></svg></span>
+                        <b><span data-count="7">0</span></b>
+                        <span class="stat-label">Guided journey stages</span>
+                        <span class="stat-sub">Step by step, admit to visa</span>
+                    </div>
+                    <div class="stat rv" style="--d:.16s;--acc:#ec4899">
+                        <span class="stat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.6-3 8.4-7 10-4-1.6-7-5.4-7-10V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg></span>
+                        <b><span data-count="100" data-suffix="%">0%</span></b>
+                        <span class="stat-label">Documents AI-checked</span>
+                        <span class="stat-sub">Red flags caught before you submit</span>
+                    </div>
+                    <div class="stat rv" style="--d:.24s;--acc:#06b6d4">
+                        <span class="stat-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2.2-2.6A8 8 0 1 1 21 12z"/><path d="M12 8.5l1 2.2 2.2 1-2.2 1-1 2.2-1-2.2-2.2-1 2.2-1 1-2.2z"/></svg></span>
+                        <b><span data-count="24" data-suffix="/7">0/7</span></b>
+                        <span class="stat-label">Rilono AI support</span>
+                        <span class="stat-sub">Visa questions &amp; interview prep</span>
+                    </div>
                 </div>
             </div>
         </section>

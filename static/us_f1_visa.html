@@ -135,9 +135,240 @@
     }
     </script>
     <link rel="stylesheet" href="/static/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
     <style>
         /* Rilono Copilot extension bar sits flush at the very top of the sticky navbar */
         .navbar>#copilotAnnouncementBar { margin-top: 0; margin-bottom: 0.7rem; border-top: none; border-bottom: 1px solid rgba(124, 138, 255, 0.18); }
+    </style>
+    <style id="f1LandingRefresh">
+        /* ============================================================
+           F-1 landing refresh — matches the rilono.com homepage design
+           language (Sora display type, indigo→purple→pink gradient,
+           flight-path & passport-stamp motifs). Scoped strictly to
+           #homepageSection so dashboard/auth views are untouched.
+           ============================================================ */
+        #homepageSection {
+            --f1-ink: #10143a;
+            --f1-ink2: #3d4265;
+            --f1-mut: #6a7091;
+            --f1-line: rgba(23, 28, 74, .10);
+            --f1-grad: linear-gradient(120deg, #6366f1, #a855f7 52%, #ec4899);
+            --f1-fd: 'Sora', 'Outfit', 'Inter', sans-serif;
+        }
+
+        /* ---------- Hero ---------- */
+        #homepageSection .homepage-hero { isolation: isolate; }
+        #homepageSection .hero-badge {
+            font-family: var(--f1-fd); font-weight: 800; letter-spacing: .14em; text-transform: uppercase;
+            font-size: .72rem; color: #4338ca; background: rgba(99, 102, 241, .09);
+            border: 1px solid rgba(99, 102, 241, .22); border-radius: 999px;
+        }
+        #homepageSection .hero-title { font-family: var(--f1-fd); letter-spacing: -.035em; line-height: 1.05; }
+        #homepageSection .title-gradient {
+            background: var(--f1-grad); -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent; background-size: 200% auto;
+        }
+        #homepageSection .title-main { color: var(--f1-ink); }
+        #homepageSection .hero-subtitle { color: var(--f1-ink2); font-size: 1.13rem; line-height: 1.7; }
+        #homepageSection .hero-buttons { gap: 14px; }
+        #homepageSection .hero-buttons .btn {
+            width: auto; display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+            font-family: var(--f1-fd); font-weight: 700; font-size: .98rem; letter-spacing: -.01em;
+            padding: 15px 26px; border-radius: 14px; border: 1px solid transparent;
+            transition: transform .22s cubic-bezier(.2, .7, .2, 1.4), box-shadow .22s ease, background .22s ease, border-color .22s ease;
+        }
+        #homepageSection .hero-buttons .btn-hero-primary, #homepageSection .hero-buttons .premium-btn {
+            background: var(--f1-grad); color: #fff; box-shadow: 0 14px 34px rgba(99, 102, 241, .35);
+        }
+        #homepageSection .hero-buttons .btn-hero-primary:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 22px 48px rgba(99, 102, 241, .45); }
+        #homepageSection .hero-buttons .btn-hero-secondary {
+            background: #fff; color: var(--f1-ink); border-color: rgba(23, 28, 74, .14);
+            box-shadow: 0 4px 14px rgba(23, 28, 74, .05); backdrop-filter: none; -webkit-backdrop-filter: none;
+        }
+        #homepageSection .hero-buttons .btn-hero-secondary:hover { transform: translateY(-3px); border-color: rgba(99, 102, 241, .45); box-shadow: 0 14px 30px rgba(23, 28, 74, .10); }
+        #homepageSection .hero-stats .stat-item {
+            background: #fff; border: 1px solid var(--f1-line); border-radius: 16px;
+            box-shadow: 0 8px 26px rgba(23, 28, 74, .05); transition: transform .25s ease, box-shadow .25s ease;
+        }
+        #homepageSection .hero-stats .stat-item:hover { transform: translateY(-4px); box-shadow: 0 16px 40px rgba(99, 102, 241, .14); }
+        #homepageSection .stat-number { font-family: var(--f1-fd); background: var(--f1-grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+
+        /* flight path behind the hero */
+        .f1-heropath { position: absolute; inset: 0; z-index: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+        .f1-heropath .jet { color: #6d5cf6; filter: drop-shadow(0 3px 8px rgba(99, 102, 241, .45)); }
+        #homepageSection .hero-container { position: relative; z-index: 1; }
+
+        /* passport stamp over the floating cards */
+        .f1-stamp {
+            position: absolute; z-index: 5; left: -8px; bottom: -26px;
+            padding: 12px 20px; border: 3px double #047857; border-radius: 12px; color: #047857;
+            font-family: var(--f1-fd); font-weight: 800; font-size: .8rem; letter-spacing: .2em; text-transform: uppercase;
+            transform: rotate(-8deg); background: rgba(255, 255, 255, .88);
+            box-shadow: 0 14px 34px rgba(23, 28, 74, .14);
+        }
+        .f1-stamp::after { content: ""; position: absolute; inset: 3px; border: 1px solid currentColor; border-radius: 8px; opacity: .35; }
+
+        /* ---------- Visa-terms marquee ---------- */
+        .f1-marquee { border-top: 1px solid var(--f1-line); border-bottom: 1px solid var(--f1-line); background: #fff; padding: 16px 0; overflow: hidden; position: relative; }
+        .f1-marquee::before, .f1-marquee::after { content: ""; position: absolute; top: 0; bottom: 0; width: 110px; z-index: 2; pointer-events: none; }
+        .f1-marquee::before { left: 0; background: linear-gradient(90deg, #fff, transparent); }
+        .f1-marquee::after { right: 0; background: linear-gradient(-90deg, #fff, transparent); }
+        .f1-mq-inner { display: flex; width: max-content; animation: f1mq 44s linear infinite; }
+        .f1-marquee:hover .f1-mq-inner { animation-play-state: paused; }
+        @keyframes f1mq { to { transform: translateX(-50%); } }
+        .f1-mq-group { display: flex; align-items: center; flex: none; }
+        .f1-mq-group span { display: inline-flex; align-items: center; gap: 9px; font-family: var(--f1-fd); font-weight: 700; font-size: .87rem; color: var(--f1-ink2); padding: 0 25px; white-space: nowrap; }
+        .f1-mq-group .sep { color: rgba(99, 102, 241, .55); padding: 0; font-size: .68rem; }
+
+        /* ---------- Section headings ---------- */
+        #homepageSection .section-title, #homepageSection .platform-title, #homepageSection .community-title,
+        #homepageSection .chrome-ext-title, #homepageSection .value-banner-content h2, #homepageSection .cta-content h2,
+        #homepageSection .remotion-copy h2 {
+            font-family: var(--f1-fd); letter-spacing: -.025em;
+        }
+
+        /* ---------- How-it-works steps + stamps ---------- */
+        #homepageSection .step-card {
+            background: #fff; border: 1px solid var(--f1-line); border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(23, 28, 74, .05); position: relative; overflow: visible;
+            transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+        }
+        #homepageSection .step-card:hover { transform: translateY(-6px); border-color: rgba(99, 102, 241, .40); box-shadow: 0 22px 52px rgba(99, 102, 241, .13); }
+        #homepageSection .step-number { background: var(--f1-grad); box-shadow: 0 10px 26px rgba(99, 102, 241, .34); font-family: var(--f1-fd); }
+        .step-stamp {
+            position: absolute; top: 18px; right: 16px;
+            padding: 7px 11px; border: 2.5px double currentColor; border-radius: 9px;
+            font-family: var(--f1-fd); font-weight: 800; font-size: .58rem; letter-spacing: .14em; text-transform: uppercase;
+            background: rgba(255, 255, 255, .94); transform: rotate(6deg); box-shadow: 0 10px 24px rgba(23, 28, 74, .10);
+        }
+        .step-stamp.indigo { color: #4f46e5; }
+        .step-stamp.pink { color: #be185d; }
+        .step-stamp.green { color: #047857; }
+        #homepageSection .step-card.reveal .step-stamp { opacity: 0; transform: rotate(6deg) scale(2); filter: blur(3px); }
+        #homepageSection .step-card.reveal.revealed .step-stamp { animation: f1StampIn .5s cubic-bezier(.25, 1.5, .4, 1) .55s forwards; }
+        @keyframes f1StampIn {
+            0% { opacity: 0; transform: rotate(6deg) scale(2); filter: blur(3px); }
+            70% { opacity: 1; transform: rotate(6deg) scale(.94); filter: blur(0); }
+            100% { opacity: 1; transform: rotate(6deg) scale(1); filter: blur(0); }
+        }
+
+        /* ---------- Card families: consistent light-premium look ---------- */
+        #homepageSection .platform-card, #homepageSection .feature-card, #homepageSection .category-card,
+        #homepageSection .community-feature {
+            background: #fff; border: 1px solid var(--f1-line); border-radius: 18px;
+            box-shadow: 0 8px 26px rgba(23, 28, 74, .04);
+            transition: transform .28s cubic-bezier(.2, .7, .2, 1), box-shadow .28s ease, border-color .28s ease;
+        }
+        #homepageSection .platform-card:hover, #homepageSection .feature-card:hover, #homepageSection .category-card:hover,
+        #homepageSection .community-feature:hover {
+            transform: translateY(-6px); border-color: rgba(99, 102, 241, .38); box-shadow: 0 22px 52px rgba(99, 102, 241, .13);
+        }
+        #homepageSection .feature-card h3, #homepageSection .platform-card-title,
+        #homepageSection .category-card h3, #homepageSection .community-feature-title,
+        #homepageSection .step-card h3, #homepageSection .chrome-ext-feature-title { font-family: var(--f1-fd); letter-spacing: -.015em; }
+
+        /* ---------- Value banner → light gradient tile ---------- */
+        #homepageSection .homepage-value-banner {
+            background:
+                radial-gradient(720px 300px at 30% -20%, rgba(99, 102, 241, .14), transparent 65%),
+                linear-gradient(165deg, #f4f2ff, #fdf3fa 55%, #f0f7ff);
+            border: 1px solid rgba(99, 102, 241, .22); border-radius: 28px;
+            box-shadow: 0 26px 70px rgba(99, 102, 241, .10);
+        }
+        #homepageSection .homepage-value-banner h2 { color: var(--f1-ink); }
+        #homepageSection .homepage-value-banner p { color: var(--f1-ink2); }
+        #homepageSection .value-banner-sub strong { color: #7c3aed !important; }
+        #homepageSection .value-stat-number { font-family: var(--f1-fd); }
+
+        /* ---------- Final CTA → cinematic departure ---------- */
+        #homepageSection .homepage-cta {
+            background: #0d1130 url('/static/assets/brand/cta-departure.jpg') center 62% / cover no-repeat;
+        }
+        #homepageSection .cta-background {
+            opacity: 1;
+            background: linear-gradient(180deg, rgba(13, 17, 48, .74), rgba(13, 17, 48, .40) 52%, rgba(13, 17, 48, .46));
+        }
+        #homepageSection .cta-content h2 { color: #fff; }
+        #homepageSection .cta-content p { color: #c4c9e8; }
+        #homepageSection .cta-features { border-top-color: rgba(255, 255, 255, .18); }
+        #homepageSection .cta-feature { color: #c4c9e8; }
+        .f1-cta-eyebrow {
+            display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px;
+            font-family: var(--f1-fd); font-size: .72rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase;
+            color: #c7d2fe; background: rgba(99, 102, 241, .22); border: 1px solid rgba(165, 180, 252, .35);
+            padding: 8px 15px; border-radius: 999px;
+        }
+        #homepageSection .cta-buttons .btn {
+            width: auto; font-family: var(--f1-fd); border-radius: 14px;
+        }
+
+        /* ---------- Icon clarity on the light theme ----------
+           The original icon containers were built for the dark theme:
+           near-white strokes, pastel colors and dark inner glows that
+           read as washed-out blobs on white cards. Flat tints + vivid
+           strokes instead. */
+        #homepageSection .step-icon {
+            width: 76px; height: 76px; margin: 1.4rem auto 1.2rem; border-radius: 20px;
+            box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
+        }
+        #homepageSection .step-icon-svg { width: 38px; height: 38px; stroke-width: 2.6; }
+        #homepageSection .step-icon-docs { background: rgba(14, 165, 233, .10); border-color: rgba(14, 165, 233, .30); }
+        #homepageSection .step-icon-docs .step-icon-svg { stroke: #0284c7; }
+        #homepageSection .step-icon-ai { background: rgba(139, 92, 246, .10); border-color: rgba(139, 92, 246, .30); }
+        #homepageSection .step-icon-ai .step-icon-svg { stroke: #7c3aed; }
+        #homepageSection .step-icon-ready { background: rgba(16, 185, 129, .10); border-color: rgba(16, 185, 129, .30); }
+        #homepageSection .step-icon-ready .step-icon-svg { stroke: #059669; }
+
+        #homepageSection .feature-icon, #homepageSection .category-icon {
+            background: rgba(99, 102, 241, .09); border-color: rgba(99, 102, 241, .26); color: #4f46e5; box-shadow: none;
+        }
+        #homepageSection .feature-card:nth-child(2) .feature-icon { color: #0284c7; background: rgba(14, 165, 233, .09); border-color: rgba(14, 165, 233, .26); }
+        #homepageSection .feature-card:nth-child(3) .feature-icon { color: #7c3aed; background: rgba(139, 92, 246, .09); border-color: rgba(139, 92, 246, .26); }
+        #homepageSection .feature-card:nth-child(4) .feature-icon { color: #db2777; background: rgba(236, 72, 153, .08); border-color: rgba(236, 72, 153, .24); }
+        #homepageSection .feature-card:nth-child(5) .feature-icon { color: #059669; background: rgba(16, 185, 129, .09); border-color: rgba(16, 185, 129, .26); }
+        #homepageSection .feature-card:nth-child(6) .feature-icon { color: #d97706; background: rgba(245, 158, 11, .10); border-color: rgba(245, 158, 11, .28); }
+        #homepageSection .category-card:nth-child(2n) .category-icon { color: #7c3aed; background: rgba(139, 92, 246, .09); border-color: rgba(139, 92, 246, .26); }
+        #homepageSection .category-card:nth-child(3n) .category-icon { color: #db2777; background: rgba(236, 72, 153, .08); border-color: rgba(236, 72, 153, .24); }
+
+        #homepageSection .platform-card-icon { box-shadow: none; }
+        #homepageSection .platform-card-icon.emerald, #homepageSection .platform-card-icon.green { color: #059669; background: rgba(16, 185, 129, .09); border-color: rgba(16, 185, 129, .26); }
+        #homepageSection .platform-card-icon.indigo { color: #4f46e5; background: rgba(99, 102, 241, .09); border-color: rgba(99, 102, 241, .26); }
+        #homepageSection .platform-card-icon.purple { color: #7c3aed; background: rgba(139, 92, 246, .09); border-color: rgba(139, 92, 246, .26); }
+        #homepageSection .platform-card-icon.pink { color: #db2777; background: rgba(236, 72, 153, .08); border-color: rgba(236, 72, 153, .24); }
+        #homepageSection .platform-card-icon.blue, #homepageSection .platform-card-icon.sky { color: #0284c7; background: rgba(14, 165, 233, .09); border-color: rgba(14, 165, 233, .26); }
+
+        #homepageSection .chrome-ext-feature-icon.cyan { color: #0e7490; background: rgba(8, 145, 178, .10); border-color: rgba(8, 145, 178, .26); }
+        #homepageSection .chrome-ext-feature-icon.purple { color: #7c3aed; background: rgba(139, 92, 246, .10); border-color: rgba(139, 92, 246, .26); }
+        #homepageSection .chrome-ext-feature-icon.emerald { color: #059669; background: rgba(16, 185, 129, .10); border-color: rgba(16, 185, 129, .26); }
+        #homepageSection .chrome-ext-feature-icon.pink { color: #db2777; background: rgba(236, 72, 153, .09); border-color: rgba(236, 72, 153, .24); }
+
+        #homepageSection .value-banner-emoji {
+            display: inline-grid; place-content: center; width: 64px; height: 64px;
+            border-radius: 18px; background: rgba(217, 119, 6, .12); color: #d97706;
+            font-size: 1.9rem; margin-bottom: 14px; box-shadow: none;
+        }
+
+        /* ---------- Community section tidy-up ---------- */
+        #homepageSection .community-private-badge { display: none; } /* redundant with the "Exclusively for Students" tag */
+        #homepageSection .community-tag-icon { color: #4f46e5; }
+        #homepageSection .community-feature { padding: 26px 20px; }
+        #homepageSection .community-feature-icon { width: 64px; height: 64px; }
+        #homepageSection .community-feature-icon.indigo { color: #4f46e5; background: rgba(99, 102, 241, .10); border-color: rgba(99, 102, 241, .30); }
+        #homepageSection .community-feature-icon.purple { color: #7c3aed; background: rgba(139, 92, 246, .10); border-color: rgba(139, 92, 246, .30); }
+        #homepageSection .community-feature-icon.pink { color: #db2777; background: rgba(236, 72, 153, .09); border-color: rgba(236, 72, 153, .28); }
+
+        @media (max-width: 768px) {
+            .f1-stamp { display: none; }
+            .f1-mq-group span { padding: 0 16px; font-size: .8rem; }
+            #homepageSection .homepage-value-banner { border-radius: 20px; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .f1-mq-inner { animation: none; }
+            .f1-heropath { display: none; }
+            #homepageSection .step-card.reveal .step-stamp { opacity: 1; transform: rotate(6deg) scale(1); filter: none; animation: none !important; }
+        }
     </style>
     <!-- Cloudflare Turnstile -->
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
@@ -766,6 +997,17 @@
                     </svg></div>
             </div>
 
+            <!-- Dashed flight path with a plane crossing the hero -->
+            <svg class="f1-heropath" viewBox="0 0 1200 640" fill="none" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                <path id="f1HeroFlight" d="M-60 560 C 240 470, 420 620, 640 420 S 1040 140, 1280 60" stroke-width="2" stroke-dasharray="3 9" stroke="rgba(99,102,241,.30)"/>
+                <g class="jet">
+                    <path d="M11 -1 0 4.5 0 6 6 5 6 9 4 10.5 4 12 7 11 10 12 10 10.5 8 9 8 5 14 6 14 4.5Z" transform="rotate(52) scale(1.5)" fill="currentColor"/>
+                    <animateMotion dur="26s" repeatCount="indefinite" rotate="auto">
+                        <mpath href="#f1HeroFlight"/>
+                    </animateMotion>
+                </g>
+            </svg>
+
             <div class="hero-container">
                 <!-- Left Column: Content -->
                 <div class="hero-content-left">
@@ -888,7 +1130,26 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Passport-stamp accent -->
+                        <div class="f1-stamp" aria-hidden="true">Visa Approved</div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- F-1 visa-terms marquee -->
+        <div class="f1-marquee" aria-hidden="true">
+            <div class="f1-mq-inner">
+                <div class="f1-mq-group">
+                    <span>🇺🇸 F-1 Student Visa</span><span class="sep">✦</span><span>DS-160</span><span class="sep">✦</span><span>Form I-20</span><span class="sep">✦</span><span>SEVIS I-901</span><span class="sep">✦</span>
+                    <span>Visa Interview</span><span class="sep">✦</span><span>Financial Proof</span><span class="sep">✦</span><span>Mock Interview</span><span class="sep">✦</span>
+                    <span>University Shortlist</span><span class="sep">✦</span><span>Document Vault</span><span class="sep">✦</span><span>Rilono AI Red-Flag Check</span><span class="sep">✦</span>
+                </div>
+                <div class="f1-mq-group">
+                    <span>🇺🇸 F-1 Student Visa</span><span class="sep">✦</span><span>DS-160</span><span class="sep">✦</span><span>Form I-20</span><span class="sep">✦</span><span>SEVIS I-901</span><span class="sep">✦</span>
+                    <span>Visa Interview</span><span class="sep">✦</span><span>Financial Proof</span><span class="sep">✦</span><span>Mock Interview</span><span class="sep">✦</span>
+                    <span>University Shortlist</span><span class="sep">✦</span><span>Document Vault</span><span class="sep">✦</span><span>Rilono AI Red-Flag Check</span><span class="sep">✦</span>
                 </div>
             </div>
         </div>
@@ -1100,6 +1361,7 @@
                     <h3>Build Your F1 Visa Document Checklist</h3>
                     <p>Upload required files like DS-160 confirmation, I-20, SEVIS receipt, and financial documents,
                         then monitor stage-wise progress in one place.</p>
+                    <span class="step-stamp indigo" aria-hidden="true">Docs Loaded</span>
                 </div>
                 <div class="step-connector"></div>
                 <div class="step-card reveal reveal-delay-2">
@@ -1119,6 +1381,7 @@
                     <h3>Practice F1 Visa Interview Questions</h3>
                     <p>Use context-aware chat, personalized F1 interview prep, and mock visa-officer practice in chat
                         or voice mode.</p>
+                    <span class="step-stamp pink" aria-hidden="true">Interview Ready</span>
                 </div>
                 <div class="step-connector"></div>
                 <div class="step-card reveal reveal-delay-3">
@@ -1132,6 +1395,7 @@
                     <h3>Track Updates and Stay Interview-Ready</h3>
                     <p>Follow latest F1 news, real interview experiences, and smart deadline alerts so you stay aligned
                         with current US student visa requirements.</p>
+                    <span class="step-stamp green" aria-hidden="true">Approved</span>
                 </div>
             </div>
         </div>
@@ -1964,6 +2228,7 @@
         <div class="homepage-cta">
             <div class="cta-background"></div>
             <div class="cta-content">
+                <span class="f1-cta-eyebrow">✈ Now boarding</span>
                 <h2>Ready for Your F1 Visa Interview?</h2>
                 <p>Practice F1 visa interview questions, organize DS-160 and I-20 documents, and walk into your
                     interview with confidence.</p>
