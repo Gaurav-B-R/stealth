@@ -146,7 +146,7 @@
         /* ======================= Flight progress bar ======================= */
         .skybar { position: fixed; top: 0; left: 0; right: 0; height: 4px; z-index: 2000; pointer-events: none; }
         .skybar .track { position: absolute; inset: 0; background: var(--grad); transform-origin: 0 50%; transform: scaleX(0); }
-        .skybar .jet { position: absolute; top: -7px; left: 0; width: 20px; height: 20px; color: #6d5cf6; filter: drop-shadow(0 2px 5px rgba(99, 102, 241, .5)); transform: translateX(-24px); }
+        .skybar .jet { position: absolute; top: -7px; left: 0; width: 20px; height: 20px; color: #6d5cf6; filter: drop-shadow(0 2px 5px rgba(99, 102, 241, .5)); transform: translateX(-24px); opacity: 0; transition: opacity .3s ease; }
 
         /* ======================= Reveal system ======================= */
         .js .rv { opacity: 0; transform: translateY(30px); transition: opacity .8s cubic-bezier(.2, .7, .2, 1), transform .8s cubic-bezier(.2, .7, .2, 1); transition-delay: var(--d, 0s); }
@@ -571,19 +571,100 @@
             .hx .pad, .hx-dest, .hx-journey, .hx-ent { padding-top: 64px; padding-bottom: 64px; }
         }
         @media (max-width: 600px) {
-            .dest-grid, .bento, .hx-stats .row { grid-template-columns: 1fr; }
+            /* rhythm & type */
+            .hx .wrap { padding: 0 18px; }
+            .hx h2 { font-size: clamp(1.55rem, 7vw, 1.9rem); }
+            .hx .sec-head { margin-bottom: 36px; }
+            .hx .pad, .hx-dest, .hx-journey, .hx-ent { padding-top: 56px; padding-bottom: 56px; }
+            .eyebrow { font-size: .6rem; letter-spacing: .1em; padding: 7px 12px; }
+
+            /* hero */
+            .hx-hero { padding: 44px 0 60px; }
+            .hx-hero .grid { gap: 44px; }
+            .hx-hero h1 { font-size: clamp(2.1rem, 10.5vw, 2.5rem); margin: 20px 0 16px; }
+            .hx-hero p.sub { font-size: 1rem; line-height: 1.65; }
             .hx-hero .cta-row .btn { flex: 1 1 100%; }
-            .aud { padding: 28px 22px; }
-            .final { padding: 66px 20px; }
+            .microtrust { font-size: .8rem; gap: 6px 14px; }
+            .blob-2 { display: none; }               /* lighter compositing on phones */
+            .blob-1 { width: 320px; height: 320px; opacity: .35; }
             .hx-float { display: none; }
-            .bp-body { grid-template-columns: 1fr; justify-items: start; gap: 16px; }
-            .out-grid { grid-template-columns: 1fr; }
-            .hx-outcomes .tile { padding: 40px 22px; }
-            .jr-card { padding: 24px 20px; }
-            .mq-group span { padding: 0 18px; font-size: .82rem; }
+
+            /* boarding pass */
+            .bp-body { grid-template-columns: 1fr; gap: 16px; }
+            .bp-body .ring { margin: 0 auto; }
             .bp-air { letter-spacing: .1em; font-size: .68rem; }
             .bp-class { white-space: nowrap; font-size: .58rem; padding: 4px 9px; }
             .bp-city b { font-size: 1.15rem; }
+
+            /* marquee */
+            .mq-group span { padding: 0 16px; font-size: .8rem; }
+            .hx-marquee::before, .hx-marquee::after { width: 60px; }
+
+            /* stats: compact 2×2 instead of a tall single column */
+            .hx-stats { padding: 44px 0 6px; }
+            .hx-stats .row { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+            .stat { padding: 18px 15px 16px; border-radius: 16px; }
+            .stat-ic { width: 34px; height: 34px; border-radius: 10px; margin-bottom: 10px; }
+            .stat-ic svg { width: 17px; height: 17px; }
+            .stat b { font-size: 1.7rem; }
+            .stat .stat-label { font-size: .82rem; margin-top: 5px; }
+            .stat .stat-sub { font-size: .7rem; }
+
+            /* journey */
+            .jr-step { padding-left: 38px; }
+            .jr-svg { left: 4px; }
+            .jr-steps { gap: 40px; }
+            .jr-card { padding: 22px 18px; }
+            .jr-card h3 { font-size: 1.18rem; }
+            .stamp { font-size: .72rem; padding: 10px 16px; letter-spacing: .16em; }
+
+            /* single-column grids */
+            .dest-grid, .bento, .out-grid { grid-template-columns: 1fr; }
+            .dest-media { height: 168px; }
+
+            /* outcomes */
+            .hx-outcomes .tile { padding: 36px 20px; border-radius: 22px; }
+            .out-visual img { max-width: 220px; }
+            .out-visual .stamp { right: 6px; bottom: 14px; }
+            .out-cta .btn { flex: 1 1 100%; }
+            .out-note { width: 100%; text-align: center; }
+
+            /* audience / enterprise / security */
+            .aud { padding: 28px 22px; }
+            .ent-band { padding: 34px 20px; border-radius: 24px; gap: 30px; }
+            .ent-band .pill { font-size: .72rem; padding: 6px 11px; }
+            .ent-row { padding: 12px 13px; }
+            .sec-band { gap: 34px; }
+            .lockwrap { min-height: 240px; }
+            .orbit-1 { width: 200px; height: 200px; }
+            .orbit-2 { width: 260px; height: 260px; }
+            .lock { width: 124px; height: 124px; border-radius: 30px; }
+            .lock svg { width: 54px; height: 54px; }
+
+            /* faq / final / footer */
+            .faq summary { padding: 16px 18px; font-size: .95rem; }
+            .faq .ans { padding: 0 18px 16px; }
+            .final { padding: 60px 20px; border-radius: 24px; }
+            .final .cta-row .btn { flex: 1 1 100%; }
+            .final .micro { font-size: .78rem; }
+            .hx-footer .cols { padding: 46px 0 30px; gap: 26px; }
+            .hx-footer .brand-col { grid-column: 1 / -1; }
+            .hx-footer .brand-col p { max-width: none; }
+            .hx-footer .foot-bottom { justify-content: center; text-align: center; }
+        }
+        @media (max-width: 400px) {
+            .hx-stats .row { gap: 10px; }
+            .stat b { font-size: 1.5rem; }
+            .bp-head { padding: 14px 16px; }
+            .bp-route { padding: 16px 16px 4px; gap: 10px; }
+            .bp-body { padding: 12px 16px 14px; }
+            .bp-ai { margin: 0 16px 16px; font-size: .78rem; }
+            .bp-stub { padding: 13px 16px; }
+            .bp-code { width: 104px; }
+        }
+        /* touch devices: hover-only accents must be visible by default */
+        @media (hover: none) {
+            .dest-stamp { opacity: 1; transform: rotate(6deg) scale(1); }
         }
         @media (prefers-reduced-motion: reduce) {
             .bpass, .hx-float, .blob-1, .blob-2, .scan-line, .wave i, .typing i, .orbit, .bp-track .jet, .hero-cue svg, .mq-inner { animation: none !important; }
@@ -1251,7 +1332,10 @@
                 var max = document.documentElement.scrollHeight - window.innerHeight;
                 var p = max > 0 ? Math.min(1, y / max) : 0;
                 skyTrack.style.transform = "scaleX(" + p + ")";
-                if (!reduceMotion) skyJet.style.transform = "translateX(" + (p * window.innerWidth - 10) + "px)";
+                if (!reduceMotion) {
+                    skyJet.style.transform = "translateX(" + (p * window.innerWidth - 10) + "px)";
+                    skyJet.style.opacity = p > 0.01 ? "1" : "0"; // keep the jet off-stage until the flight starts
+                }
                 updateJourney();
             }
             window.addEventListener("scroll", function () {

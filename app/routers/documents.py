@@ -1361,7 +1361,7 @@ def _build_subscription_snapshot_for_profile(user: models.User, db: Session) -> 
     if subscription.plan != PLAN_PRO:
         access_source = "Free Plan"
     elif referral_bonus_active:
-        access_source = "Referral Bonus (1 Month Pro)"
+        access_source = "Referral Bonus (Visa Success Pass)"
     elif has_verified_payment:
         if latest_verified_pricing_model == PROFILE_PRICING_MODEL_SIX_MONTH:
             access_source = "Journey Pass (Best Value)"

@@ -183,7 +183,7 @@ def get_referral_summary(
         "total_invited": total_invited,
         "successful_referrals": successful_referrals,
         "pending_referrals": pending_referrals,
-        "reward": "Both users receive 1 month Pro after email verification and first login",
+        "reward": "Both users receive a free 30-day Visa Success Pass after email verification and first login",
     }
 
 @router.put("/", response_model=schemas.UserResponse)

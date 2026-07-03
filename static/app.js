@@ -3671,7 +3671,7 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     if (!previousSnapshot.referralBonusActive && nextSnapshot.referralBonusActive) {
         addNotification(
             'Referral Bonus Applied',
-            '1 month Pro referral bonus is active on your account.',
+            'Your free 30-day Visa Success Pass from a referral is now active on your account.',
             'success'
         );
     }
@@ -3958,7 +3958,7 @@ function updateSubscriptionUI() {
     if (profileReferralInfoEl) {
         if (currentSubscription.referral_bonus_active) {
             const grantedAt = formatSubscriptionDateTime(currentSubscription.referral_bonus_granted_at);
-            profileReferralInfoEl.textContent = `Referral bonus active: 1-month Pro granted on ${grantedAt}.`;
+            profileReferralInfoEl.textContent = `Referral bonus active: free 30-day Visa Success Pass granted on ${grantedAt}.`;
         } else if (currentSubscription.referral_bonus_granted_at) {
             profileReferralInfoEl.textContent = `Referral bonus used on ${formatSubscriptionDateTime(currentSubscription.referral_bonus_granted_at)}.`;
         } else {

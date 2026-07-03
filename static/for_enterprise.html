@@ -1423,6 +1423,43 @@
 </head>
 
 <body class="b2c-light">
+    <style>
+        /* Products dropdown + CTA — ported from the homepage nav so the header is identical everywhere. */
+        .products-nav { position: relative; display: inline-flex; align-items: center; }
+        .products-nav::after { content: ""; position: absolute; left: -0.75rem; right: -0.75rem; top: 100%; height: 1rem; }
+        .products-nav-trigger {
+            display: inline-flex; align-items: center; gap: 0.35rem;
+            color: var(--text-secondary); text-decoration: none; font-weight: 600;
+            padding: 0.5rem 0.25rem; transition: color 0.2s ease;
+            background: transparent; border: 0; font: inherit; cursor: pointer;
+        }
+        .products-nav-trigger:hover, .products-nav:focus-within .products-nav-trigger,
+        .products-nav:hover .products-nav-trigger, .products-nav.is-open .products-nav-trigger { color: var(--text-primary); }
+        .products-nav-trigger svg { width: 14px; height: 14px; transition: transform 0.2s ease; }
+        .products-nav:hover .products-nav-trigger svg, .products-nav:focus-within .products-nav-trigger svg,
+        .products-nav.is-open .products-nav-trigger svg { transform: rotate(180deg); }
+        .products-menu {
+            position: absolute; top: calc(100% + 0.8rem); left: 50%;
+            transform: translateX(-50%) translateY(8px); min-width: 260px; padding: 0.55rem;
+            border: 1px solid rgba(23, 28, 74, .10); border-radius: 14px;
+            background: #fff; box-shadow: 0 24px 60px rgba(23, 28, 74, .16);
+            opacity: 0; visibility: hidden; pointer-events: none;
+            transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s ease; z-index: 1000;
+        }
+        .products-nav:hover .products-menu, .products-nav:focus-within .products-menu, .products-nav.is-open .products-menu {
+            opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0);
+        }
+        .products-menu a { display: block; padding: 0.8rem 0.85rem; border-radius: 10px; color: var(--text-primary); text-decoration: none; font-weight: 800; }
+        .products-menu a span { display: block; margin-top: 0.18rem; color: var(--text-muted); font-size: 0.78rem; font-weight: 600; line-height: 1.35; }
+        .products-menu a:hover { background: rgba(99, 92, 255, 0.09); }
+        .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--text-muted); font-weight: 800; padding: .35rem .85rem .15rem; }
+        .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
+        .nav-links a.nav-cta {
+            background: var(--gradient-primary); color: #fff !important; padding: 0.55rem 1.15rem;
+            border-radius: 10px; font-weight: 700; box-shadow: 0 8px 22px rgba(99, 102, 241, .30);
+        }
+        .nav-links a.nav-cta:hover { filter: brightness(1.07); }
+    </style>
     <nav class="navbar">
         <div class="nav-container">
             <div class="nav-brand">
@@ -1435,10 +1472,26 @@
                 aria-controls="navLinks" aria-label="Open navigation menu">☰</button>
             <div class="nav-links" id="navLinks">
                 <a href="/">Home</a>
-                <a href="/pricing">Pricing</a>
-                <a href="/about-us">About Us</a>
+                <div class="products-nav">
+                    <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true" aria-expanded="false" aria-controls="productsMenu">
+                        Products
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd"
+                                d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                                clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="products-menu" id="productsMenu">
+                        <div class="pm-label">Student visas</div>
+                        <a href="/us-f1-visa"><span class="pm-flag">🇺🇸</span>United States<span>F-1 · J-1 · M-1 student visas, DS-160, I-20 &amp; interview prep.</span></a>
+                        <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier 4) — CAS, financial proof &amp; interview.</span></a>
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit &amp; SDS — LOA, proof of funds &amp; biometrics.</span></a>
+                        <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 — CoE, OSHC &amp; Genuine Student.</span></a>
+                    </div>
+                </div>
                 <a href="/for-enterprise">Enterprise</a>
-                <a href="https://enterprise.rilono.com/enterprise">Enterprise Login</a>
+                <a href="/login">Login</a>
+                <a href="/register" class="nav-cta">Get started</a>
             </div>
         </div>
     </nav>
@@ -1810,6 +1863,31 @@
             this.setAttribute("aria-expanded", String(!expanded));
             nav.classList.toggle("mobile-open");
         });
+        document.getElementById("navLinks").addEventListener("click", function (e) {
+            if (e.target.closest("a")) {
+                this.classList.remove("mobile-open");
+                document.getElementById("mobileNavToggle").setAttribute("aria-expanded", "false");
+            }
+        });
+
+        // Products dropdown (same behaviour as the homepage nav).
+        (function () {
+            var productsNav = document.querySelector(".products-nav");
+            var trigger = document.getElementById("productsNavTrigger");
+            var menu = document.getElementById("productsMenu");
+            if (!productsNav || !trigger || !menu) return;
+            function setOpen(open) {
+                productsNav.classList.toggle("is-open", open);
+                trigger.setAttribute("aria-expanded", open ? "true" : "false");
+            }
+            trigger.addEventListener("click", function (e) {
+                e.preventDefault(); e.stopPropagation();
+                setOpen(!productsNav.classList.contains("is-open"));
+            });
+            menu.addEventListener("click", function (e) { if (e.target.closest("a")) setOpen(false); });
+            document.addEventListener("click", function (e) { if (!productsNav.contains(e.target)) setOpen(false); });
+            document.addEventListener("keydown", function (e) { if (e.key === "Escape") setOpen(false); });
+        })();
     </script>
 </body>
 

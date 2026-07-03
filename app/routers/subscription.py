@@ -1151,7 +1151,7 @@ def get_my_subscription(
     if subscription.plan != PLAN_PRO:
         access_source = "Free Plan"
     elif referral_bonus_active:
-        access_source = "Referral Bonus (1 Month Pro)"
+        access_source = "Referral Bonus (Visa Success Pass)"
     elif has_verified_payment:
         if latest_verified_pricing_model == PRICING_MODEL_SIX_MONTH:
             access_source = "Journey Pass (Best Value)"

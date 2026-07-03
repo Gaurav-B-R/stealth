@@ -102,7 +102,7 @@ def maybe_award_referral_bonus_on_login(
     return {
         "awarded": True,
         "message": (
-            "Referral reward unlocked: You and your referrer both received "
-            "1 month of Pro membership."
+            "Referral reward unlocked: You and your referrer each received "
+            "a free 30-day Visa Success Pass."
         ),
     }
