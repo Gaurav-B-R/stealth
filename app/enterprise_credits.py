@@ -10,8 +10,8 @@ Consultancies get the core CRM for free (up to a student limit), then:
 
 Economics (all env-overridable):
   * 1 Rilono Credit = ₹10.
-  * Top-up packages (Razorpay): Starter ₹1,000 → 100 cr; Pro ₹3,000 → 350 cr
-    (50 bonus); Enterprise ₹5,000 → 650 cr (150 bonus).
+  * Top-up packages (Razorpay, charm-priced): Starter ₹999 → 100 cr; Pro ₹2,999 → 350 cr
+    (50 bonus); Enterprise ₹4,999 → 650 cr (150 bonus).
   * Deep Scan document audit  = 5 credits  (₹50).
   * AI mock interview         = 20 credits (₹200).
 

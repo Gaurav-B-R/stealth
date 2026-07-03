@@ -31,6 +31,7 @@ from app.referrals import (
     ensure_user_referral_code,
     generate_unique_referral_code,
     get_user_by_referral_code,
+    is_disposable_email,
     maybe_award_referral_bonus_on_login,
 )
 from app.utils.rate_limiter import (
@@ -441,6 +442,11 @@ def register(
         referrer = get_user_by_referral_code(db, normalized_referral_code)
         if not referrer:
             raise HTTPException(status_code=400, detail="Invalid referral code")
+        # Anti-abuse: don't bind a referral for obvious throwaway signups. The
+        # valuable reward is additionally gated at purchase time (same-device + cap),
+        # so a self-referrer can never earn a free pass without a real payment.
+        if referrer and is_disposable_email(user.email):
+            referrer = None
     
     # Auto-generate username from email if not provided
     username = user.username

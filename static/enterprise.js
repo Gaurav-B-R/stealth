@@ -1640,7 +1640,7 @@
         try { await api("/team/users", { method: "POST", body: { email: f.email.value.trim(), full_name: f.full_name.value.trim() || null, role: f.role.value } });
           toast("Invitation sent", "success"); closeModal(); renderTeam(); }
         catch (ex) {
-          if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("billing"); return; }
+          if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("credits"); return; }
           err.textContent = ex.message; err.classList.remove("hidden"); btn.disabled = false; btn.textContent = "Send invite";
         }
       };

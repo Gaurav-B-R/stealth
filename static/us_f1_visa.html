@@ -141,6 +141,22 @@
     <style>
         /* Rilono Copilot extension bar sits flush at the very top of the sticky navbar */
         .navbar>#copilotAnnouncementBar { margin-top: 0; margin-bottom: 0.7rem; border-top: none; border-bottom: 1px solid rgba(124, 138, 255, 0.18); }
+
+        /* Navbar "Products" dropdown — lets direct visitors discover UK/CA/AU (matches homepage). */
+        .navbar .products-nav { position: relative; display: inline-flex; align-items: center; }
+        .navbar .products-nav::after { content: ""; position: absolute; left: -.75rem; right: -.75rem; top: 100%; height: 1rem; }
+        .navbar .products-nav-trigger { display: inline-flex; align-items: center; gap: .35rem; color: #475569; text-decoration: none; font-weight: 600; padding: .5rem .25rem; transition: color .2s ease; background: transparent; border: 0; font: inherit; cursor: pointer; }
+        .navbar .products-nav-trigger:hover, .navbar .products-nav:focus-within .products-nav-trigger, .navbar .products-nav:hover .products-nav-trigger, .navbar .products-nav.is-open .products-nav-trigger { color: #10143a; }
+        .navbar .products-nav-trigger svg { width: 14px; height: 14px; transition: transform .2s ease; }
+        .navbar .products-nav:hover .products-nav-trigger svg, .navbar .products-nav:focus-within .products-nav-trigger svg, .navbar .products-nav.is-open .products-nav-trigger svg { transform: rotate(180deg); }
+        .navbar .products-menu { position: absolute; top: calc(100% + .8rem); left: 50%; transform: translateX(-50%) translateY(8px); min-width: 270px; padding: .55rem; border: 1px solid rgba(23, 28, 74, .10); border-radius: 14px; background: #fff; box-shadow: 0 24px 60px rgba(23, 28, 74, .16); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, transform .18s ease, visibility .18s ease; z-index: 1200; }
+        .navbar .products-nav:hover .products-menu, .navbar .products-nav:focus-within .products-menu, .navbar .products-nav.is-open .products-menu { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+        .navbar .products-menu a { display: block; padding: .8rem .85rem; border-radius: 10px; color: #10143a; text-decoration: none; font-weight: 800; }
+        .navbar .products-menu a span { display: block; margin-top: .18rem; color: #6a7091; font-size: .78rem; font-weight: 600; line-height: 1.35; }
+        .navbar .products-menu a:hover { background: rgba(99, 92, 255, .09); }
+        .navbar .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: #6a7091; font-weight: 800; padding: .35rem .85rem .15rem; }
+        .navbar .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
+        @media (max-width: 900px) { .navbar .products-menu { left: 0; transform: none; } .navbar .products-nav:hover .products-menu, .navbar .products-nav:focus-within .products-menu, .navbar .products-nav.is-open .products-menu { transform: none; } }
     </style>
     <style id="f1LandingRefresh">
         /* ============================================================
@@ -188,11 +204,23 @@
             box-shadow: 0 4px 14px rgba(23, 28, 74, .05); backdrop-filter: none; -webkit-backdrop-filter: none;
         }
         #homepageSection .hero-buttons .btn-hero-secondary:hover { transform: translateY(-3px); border-color: rgba(99, 102, 241, .45); box-shadow: 0 14px 30px rgba(23, 28, 74, .10); }
-        #homepageSection .hero-stats .stat-item {
-            background: #fff; border: 1px solid var(--f1-line); border-radius: 16px;
-            box-shadow: 0 8px 26px rgba(23, 28, 74, .05); transition: transform .25s ease, box-shadow .25s ease;
+        /* Hero stat cards: even, padded, aligned (the base .glass-stat has no padding). */
+        #homepageSection .hero-stats {
+            border-top: none; padding-top: 0; margin-top: 2.4rem;
+            gap: 14px; align-items: stretch;
         }
-        #homepageSection .hero-stats .stat-item:hover { transform: translateY(-4px); box-shadow: 0 16px 40px rgba(99, 102, 241, .14); }
+        #homepageSection .hero-stats .stat-item {
+            flex: 1 1 0; min-width: 148px;
+            display: flex; flex-direction: column; gap: 5px;
+            padding: 16px 20px;
+            background: #fff; border: 1px solid var(--f1-line); border-radius: 16px;
+            box-shadow: 0 8px 26px rgba(23, 28, 74, .05);
+            transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+        }
+        #homepageSection .hero-stats .stat-item:hover { transform: translateY(-4px); box-shadow: 0 16px 40px rgba(99, 102, 241, .14); border-color: rgba(99, 102, 241, .28); }
+        #homepageSection .hero-stats .stat-number { font-size: 1.7rem; line-height: 1.05; }
+        #homepageSection .hero-stats .stat-label { color: var(--f1-mut); font-size: .72rem; font-weight: 700; letter-spacing: .05em; margin: 0; }
+        @media (max-width: 480px) { #homepageSection .hero-stats .stat-item { min-width: 0; } }
         #homepageSection .stat-number { font-family: var(--f1-fd); background: var(--f1-grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 
         /* flight path behind the hero */
@@ -569,6 +597,28 @@
             </button>
             <div class="nav-links" id="navLinks">
                 <a href="/" id="homeLink">Home</a>
+                <div class="products-nav" id="productsNav">
+                    <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
+                        aria-expanded="false" aria-controls="productsMenu">
+                        Products
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd"
+                                d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                                clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="products-menu" id="productsMenu">
+                        <div class="pm-label">Student visas</div>
+                        <a href="/us-f1-visa"><span class="pm-flag">🇺🇸</span>United States<span>F-1 · J-1 · M-1 student
+                                visas, DS-160, I-20 &amp; interview prep.</span></a>
+                        <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier
+                                4) — CAS, financial proof &amp; interview.</span></a>
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit &amp; SDS
+                                — LOA, proof of funds &amp; biometrics.</span></a>
+                        <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 —
+                                CoE, OSHC &amp; Genuine Student.</span></a>
+                    </div>
+                </div>
                 <a href="/pricing" onclick="event.preventDefault(); showPricing(); return false;"
                     id="pricingLink">Pricing</a>
                 <a href="/about-us" onclick="event.preventDefault(); showAboutUs(); return false;"
@@ -2999,8 +3049,8 @@
                     <div id="dashboardTab-referral" class="dashboard-tab">
                         <div class="tab-header">
                             <h2>Referral Program</h2>
-                            <p class="tab-subtitle">Invite friends — when they verify their email and log in, you both
-                                get a free 30-day Visa Success Pass.</p>
+                            <p class="tab-subtitle">Invite a friend — they get ₹200 off their first Visa Success Pass,
+                                and you earn a free 30-day Visa Success Pass the moment they purchase it.</p>
                         </div>
                         <div style="max-width: 800px; margin: 0 auto;">
                             <div class="dashboard-widget">
@@ -3113,12 +3163,8 @@
                                 <div class="profile-subscription-actions">
                                     <div class="profile-subscription-switcher">
                                         <button id="profileSubscriptionSwitchMonthlyBtn" type="button"
-                                            class="btn btn-secondary"
-                                            onclick="handleUpgradeToPro('profile', 'pro_monthly')">Choose Pro
-                                            Monthly</button>
-                                        <button id="profileSubscriptionSwitchJourneyBtn" type="button"
-                                            class="btn btn-primary"
-                                            onclick="handleUpgradeToPro('profile', 'pro_six_month')">Choose Journey
+                                            class="btn btn-primary" style="grid-column: 1 / -1;"
+                                            onclick="handleUpgradeToPro('profile')">Get the Visa Success
                                             Pass</button>
                                     </div>
                                     <button id="profileSubscriptionCancelBtn" type="button" class="btn btn-secondary"
@@ -3266,10 +3312,10 @@
                                             </div>
                                             <div class="form-group">
                                                 <label
-                                                    style="display: flex; align-items: flex-start; gap: 0.5rem; cursor: pointer; font-weight: 500;">
+                                                    style="display: flex; width: 100%; box-sizing: border-box; align-items: flex-start; gap: 0.5rem; cursor: pointer; font-weight: 500;">
                                                     <input type="checkbox" id="documentAiConsent"
-                                                        style="margin-top: 0.25rem; flex-shrink: 0;">
-                                                    <span>
+                                                        style="margin-top: 0.25rem; flex: 0 0 auto;">
+                                                    <span style="flex: 1 1 auto; min-width: 0;">
                                                         Let Rilono AI validate this document
                                                         <small
                                                             style="color: var(--text-secondary); display: block; margin-top: 0.25rem; font-weight: 400;">
@@ -3589,13 +3635,9 @@
                                                 power of Rilono Copilot in action across your application workflows.</p>
                                             <div class="visa-hub-actions copilot-upgrade-actions">
                                                 <button id="copilotUpgradeProBtn" type="button"
-                                                    class="btn btn-secondary"
-                                                    onclick="handleUpgradeToPro('copilot_tab', 'pro_monthly')">Upgrade
-                                                    to Pro</button>
-                                                <button id="copilotUpgradeJourneyBtn" type="button"
                                                     class="btn btn-primary"
-                                                    onclick="handleUpgradeToPro('copilot_tab', 'pro_six_month')">Get
-                                                    Journey Pass</button>
+                                                    onclick="handleUpgradeToPro('copilot_tab')">Get the Visa Success
+                                                    Pass</button>
                                             </div>
                                         </div>
                                     </div>
@@ -4905,8 +4947,8 @@
                     aria-label="Close">×</button>
                 <div class="referral-promo-icon">🎁</div>
                 <h2 class="referral-promo-title">Invite Friends, Earn a Free Visa Success Pass</h2>
-                <p class="referral-promo-subtitle">When your friend signs up, verifies email, and logs in, you both
-                    get a free 30-day Visa Success Pass.</p>
+                <p class="referral-promo-subtitle">Your friend gets ₹200 off their first Visa Success Pass — and the
+                    moment they buy it, you earn a free 30-day Visa Success Pass.</p>
 
                 <div class="referral-promo-field">
                     <div class="referral-promo-field-label">Your Referral Code</div>
@@ -5203,6 +5245,27 @@
                 if (notifC && !notifC.contains(e.target)) { closeDashNotifications(); }
                 if (userC && !userC.contains(e.target)) { closeDashUserMenu(); }
             });
+        })();
+        </script>
+        <script>
+        // Navbar "Products" dropdown — hover opens it on desktop (CSS); this adds
+        // click/tap toggling for touch devices plus outside-click / Escape to close.
+        (function () {
+            var nav = document.getElementById('productsNav');
+            var trigger = document.getElementById('productsNavTrigger');
+            var menu = document.getElementById('productsMenu');
+            if (!nav || !trigger || !menu) return;
+            function setOpen(open) {
+                nav.classList.toggle('is-open', open);
+                trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+            }
+            trigger.addEventListener('click', function (e) {
+                e.preventDefault(); e.stopPropagation();
+                setOpen(!nav.classList.contains('is-open'));
+            });
+            menu.addEventListener('click', function (e) { if (e.target.closest('a')) setOpen(false); });
+            document.addEventListener('click', function (e) { if (!nav.contains(e.target)) setOpen(false); });
+            document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
         })();
         </script>
 </body>

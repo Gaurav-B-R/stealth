@@ -3854,7 +3854,7 @@ function updateSubscriptionUI() {
     const isCancellationScheduled = subscriptionStatus === 'canceled';
     const hasAutoRenewInfo = typeof currentSubscription.auto_renew_enabled === 'boolean';
     const autoRenewEnabled = hasAutoRenewInfo ? Boolean(currentSubscription.auto_renew_enabled) : isPro;
-    const planLabel = isPro ? (isJourneyPassActive ? 'Journey Pass' : 'Pro') : 'Free';
+    const planLabel = isPro ? 'Visa Pass' : 'Free';
     const chatUploadWindowHours = Number(currentSubscription.rilono_ai_chat_upload_window_hours) || 24;
 
     updatePricingFocusMode(isJourneyPassActive);
@@ -3900,9 +3900,7 @@ function updateSubscriptionUI() {
         );
     }
 
-    if (profilePlanEl) profilePlanEl.textContent = isPro
-        ? (isJourneyPassActive ? 'Journey Pass' : 'Pro Plan')
-        : 'Free Plan';
+    if (profilePlanEl) profilePlanEl.textContent = isPro ? 'Visa Pass' : 'Free Plan';
     if (profileStatusEl) profileStatusEl.textContent = currentSubscription.status || 'active';
     if (profileAutoRenewEl) {
         if (!isPro) {
@@ -3993,56 +3991,33 @@ function updateSubscriptionUI() {
 
     if (profileSwitchMonthlyButton) {
         profileSwitchMonthlyButton.style.display = 'inline-flex';
-        profileSwitchMonthlyButton.style.gridColumn = '';
+        profileSwitchMonthlyButton.style.gridColumn = '1 / -1';
         if (!PRO_UPGRADE_ENABLED) {
             profileSwitchMonthlyButton.disabled = true;
             profileSwitchMonthlyButton.textContent = 'Coming Soon';
-        } else if (isJourneyPassActive) {
-            profileSwitchMonthlyButton.style.display = 'none';
-            profileSwitchMonthlyButton.disabled = true;
-            profileSwitchMonthlyButton.textContent = 'Choose Pro Monthly';
-        } else if (isPro && !((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled)) {
-            profileSwitchMonthlyButton.disabled = true;
-            profileSwitchMonthlyButton.textContent = 'Pro Monthly Active';
         } else if (isPro) {
-            profileSwitchMonthlyButton.disabled = false;
-            profileSwitchMonthlyButton.textContent = 'Renew Pro Monthly';
+            profileSwitchMonthlyButton.disabled = true;
+            profileSwitchMonthlyButton.textContent = 'Visa Pass active';
         } else {
             profileSwitchMonthlyButton.disabled = false;
-            profileSwitchMonthlyButton.textContent = 'Choose Pro Monthly';
+            profileSwitchMonthlyButton.textContent = 'Get the Visa Success Pass';
         }
     }
-
+    // Legacy "Journey Pass" switch button is retired (single product = the Visa Success Pass).
+    // The element no longer exists in the DOM; keep it hidden if an old cached page still has it.
     if (profileSwitchJourneyButton) {
-        profileSwitchJourneyButton.style.display = 'inline-flex';
-        profileSwitchJourneyButton.style.gridColumn = '';
-        if (!PRO_UPGRADE_ENABLED) {
-            profileSwitchJourneyButton.disabled = true;
-            profileSwitchJourneyButton.textContent = 'Coming Soon';
-        } else if (isJourneyPassActive) {
-            profileSwitchJourneyButton.disabled = true;
-            profileSwitchJourneyButton.textContent = 'Journey Pass Active';
-            profileSwitchJourneyButton.style.gridColumn = '1 / -1';
-        } else if (isPro) {
-            profileSwitchJourneyButton.disabled = false;
-            profileSwitchJourneyButton.textContent = 'Switch to Journey Pass';
-        } else {
-            profileSwitchJourneyButton.disabled = false;
-            profileSwitchJourneyButton.textContent = 'Choose Journey Pass';
-        }
+        profileSwitchJourneyButton.style.display = 'none';
     }
 
     if (profileSwitchHintEl) {
         profileSwitchHintEl.style.display = 'block';
         if (!PRO_UPGRADE_ENABLED) {
-            profileSwitchHintEl.textContent = 'Paid plans are currently unavailable.';
+            profileSwitchHintEl.textContent = 'The Visa Success Pass is currently unavailable.';
         } else if (!isPro) {
-            profileSwitchHintEl.textContent = 'Pick your preferred paid plan to unlock unlimited access.';
-        } else if (isJourneyPassActive) {
+            profileSwitchHintEl.textContent = 'One-time ₹999 · 30 days of unlimited access. No subscription, no auto-renew.';
+        } else {
             profileSwitchHintEl.textContent = '';
             profileSwitchHintEl.style.display = 'none';
-        } else {
-            profileSwitchHintEl.textContent = 'Pro Monthly is active. Switch to Journey Pass anytime.';
         }
     }
 

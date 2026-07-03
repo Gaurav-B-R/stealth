@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app import models
 from app import visa_pass
 from app import ai_usage
+from app import referrals
 from app.database import get_db
 from app.auth import get_current_active_user
 from app.subscriptions import get_or_create_user_subscription, PLAN_PRO
@@ -132,6 +133,24 @@ def pass_checkout(
         }
 
     amount = int(visa_pass.PASS_PRICE_PAISE)
+
+    # Referred-friend incentive: a one-time discount off their FIRST Visa Success
+    # Pass. Computed server-side (never trusted from the client) and gated by the
+    # same anti-sybil hygiene as the referrer reward.
+    is_first_pass_purchase = (
+        db.query(models.SubscriptionPayment)
+        .filter(
+            models.SubscriptionPayment.user_id == current_user.id,
+            models.SubscriptionPayment.pricing_model == visa_pass.PASS_PRICING_MODEL,
+            models.SubscriptionPayment.status == "verified",
+        )
+        .first()
+        is None
+    )
+    referral_discount = referrals.referee_discount_paise(db, current_user, is_first_pass_purchase)
+    if referral_discount > 0:
+        amount = max(100, amount - referral_discount)  # never below Razorpay's ₹1 minimum
+
     if not _razorpay_enabled():
         return {
             "action": "unavailable",
@@ -160,6 +179,7 @@ def pass_checkout(
         currency=visa_pass.CURRENCY,
         razorpay_order_id=order_id,
         pricing_model=visa_pass.PASS_PRICING_MODEL,
+        coupon_code="REFERRAL" if referral_discount > 0 else None,
         status="created",
     ))
     db.commit()
@@ -169,6 +189,8 @@ def pass_checkout(
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
         "order_id": order_id,
         "amount": amount,
+        "original_amount": int(visa_pass.PASS_PRICE_PAISE),
+        "referral_discount": int(referral_discount),
         "currency": visa_pass.CURRENCY,
         "product_label": "Visa Success Pass",
         "duration_days": visa_pass.PASS_DURATION_DAYS,
@@ -220,6 +242,12 @@ def pass_verify(
         payment_row.signature_verified_at = now
         payment_row.error_message = None
         visa_pass.grant_pass(db, current_user.id, commit=False)
+        # This is a real, paid conversion — reward the referrer (if any) now, not on
+        # the friend's free login. Best-effort: never fail the purchase over a reward.
+        try:
+            referrals.award_referral_reward_on_purchase(db, current_user, commit=False)
+        except Exception:
+            logger.exception("Referral reward on purchase failed (user_id=%s)", current_user.id)
         db.commit()
 
     subscription = get_or_create_user_subscription(db, current_user.id)

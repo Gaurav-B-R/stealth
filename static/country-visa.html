@@ -27,6 +27,22 @@
         .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
         @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
 
+        /* "Products" dropdown — same header as the homepage so it's uniform across product pages. */
+        .products-nav { position: relative; display: inline-flex; align-items: center; }
+        .products-nav::after { content: ""; position: absolute; left: -.75rem; right: -.75rem; top: 100%; height: 1rem; }
+        .products-nav-trigger { display: inline-flex; align-items: center; gap: .35rem; color: var(--ink-2); font-weight: 600; font-size: .95rem; padding: 0; background: transparent; border: 0; font-family: inherit; cursor: pointer; transition: color .2s ease; }
+        .products-nav-trigger:hover, .products-nav:focus-within .products-nav-trigger, .products-nav:hover .products-nav-trigger, .products-nav.is-open .products-nav-trigger { color: var(--ink); }
+        .products-nav-trigger svg { width: 14px; height: 14px; transition: transform .2s ease; }
+        .products-nav:hover .products-nav-trigger svg, .products-nav:focus-within .products-nav-trigger svg, .products-nav.is-open .products-nav-trigger svg { transform: rotate(180deg); }
+        .products-menu { position: absolute; top: calc(100% + .85rem); left: 50%; transform: translateX(-50%) translateY(8px); min-width: 270px; padding: .55rem; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 24px 60px rgba(15, 23, 42, .16); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, transform .18s ease, visibility .18s ease; z-index: 60; }
+        .products-nav:hover .products-menu, .products-nav:focus-within .products-menu, .products-nav.is-open .products-menu { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+        .products-menu a { display: block; padding: .8rem .85rem; border-radius: 10px; color: var(--ink); text-decoration: none; font-weight: 800; font-size: .95rem; }
+        .products-menu a span { display: block; margin-top: .18rem; color: var(--muted); font-size: .78rem; font-weight: 600; line-height: 1.35; }
+        .products-menu a:hover { background: rgba(99, 92, 255, .09); color: var(--ink); }
+        .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 800; padding: .35rem .85rem .15rem; }
+        .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
+        @media (max-width: 720px) { .products-nav { display: none; } }
+
         .btn { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 1rem; padding: 14px 24px; border-radius: 12px; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; }
         .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 14px 34px rgba(99, 102, 241, .3); }
         .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 18px 40px rgba(99, 102, 241, .42); }
@@ -233,15 +249,34 @@
         .faq details[open] summary .chev { transform: rotate(45deg); }
         .faq .ans { color: var(--ink-2); font-size: .92rem; padding: 0 0 16px; margin: 0; }
 
+        /* Image + copy band (passport product shot) */
+        .imgband { display: grid; grid-template-columns: 1fr 1fr; gap: 46px; align-items: center; }
+        .imgband .shot { border-radius: 20px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 30px 70px rgba(15, 23, 42, .14); }
+        .imgband .shot img { display: block; width: 100%; height: 100%; object-fit: cover; aspect-ratio: 4 / 3; }
+        .imgband ul { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 13px; }
+        .imgband li { display: flex; gap: 11px; align-items: flex-start; font-size: .96rem; font-weight: 600; color: var(--ink-2); }
+        .imgband li b { color: var(--ink); }
+        .imgband li .v { color: #059669; font-weight: 900; flex: none; }
+        @media (max-width: 860px) { .imgband { grid-template-columns: 1fr; gap: 26px; } }
+
+        /* Cinematic full-bleed CTA band (airport image) */
+        .cta-hero { position: relative; border-radius: 26px; overflow: hidden; margin: 30px 0 56px; min-height: 400px; display: grid; place-items: center; text-align: center; box-shadow: 0 34px 80px rgba(15, 23, 42, .22); }
+        .cta-hero > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+        .cta-hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(10, 12, 30, .52) 0%, rgba(10, 12, 30, .8) 100%); }
+        .cta-hero .inner { position: relative; z-index: 1; padding: 64px 28px; color: #fff; max-width: 660px; }
+        .cta-hero h2 { color: #fff; margin: 0 0 12px; font-size: clamp(1.7rem, 3.2vw, 2.4rem); font-weight: 800; letter-spacing: -.02em; }
+        .cta-hero p { color: rgba(255, 255, 255, .88); margin: 0 auto 26px; max-width: 500px; font-size: 1.05rem; }
+
         /* Footer — same design as the homepage (index.html .hx-footer) for uniformity. */
-        .hx-footer { background: #0d1130; color: #c6cbe8; }
+        .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); }
+        .hx-footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); }
         .hx-footer .cols { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; gap: 32px; padding: 62px 0 40px; }
         .hx-footer .brand-col img { height: 34px; margin-bottom: 14px; }
         .hx-footer .brand-col p { color: #8f96bd; font-size: .9rem; line-height: 1.65; max-width: 290px; }
         .hx-footer h5 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: #7b82ad; margin: 0 0 16px; font-weight: 800; }
         .hx-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
         .hx-footer a { color: #c6cbe8; text-decoration: none; font-size: .92rem; transition: color .2s ease; }
-        .hx-footer a:hover { color: #fff; }
+        .hx-footer a:hover { color: #d9c9ff; }
         .hx-footer .disclaimer { color: #7b82ad; font-size: .82rem; line-height: 1.6; max-width: 760px; margin: 0 0 20px; }
         .hx-footer .foot-bottom { border-top: 1px solid rgba(255, 255, 255, .09); padding: 24px 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #7b82ad; font-size: .85rem; }
         @media (max-width: 860px) { .hx-footer .cols { grid-template-columns: 1fr 1fr; } }
@@ -267,7 +302,28 @@
             <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
             <div class="nav-links">
                 <a href="/">Home</a>
-                <a href="/#countries">Destinations</a>
+                <div class="products-nav" id="productsNav">
+                    <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
+                        aria-expanded="false" aria-controls="productsMenu">
+                        Products
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd"
+                                d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                                clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="products-menu" id="productsMenu">
+                        <div class="pm-label">Student visas</div>
+                        <a href="/us-f1-visa"><span class="pm-flag">🇺🇸</span>United States<span>F-1 · J-1 · M-1 student
+                                visas, DS-160, I-20 &amp; interview prep.</span></a>
+                        <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier
+                                4) — CAS, financial proof &amp; interview.</span></a>
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit &amp; SDS
+                                — LOA, proof of funds &amp; biometrics.</span></a>
+                        <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 —
+                                CoE, OSHC &amp; Genuine Student.</span></a>
+                    </div>
+                </div>
                 <a href="/for-enterprise">Enterprise</a>
                 <a href="/login">Login</a>
                 <a href="/register" class="nav-cta">Get started</a>
@@ -313,6 +369,26 @@
             <h2 class="rv">Documents you'll need</h2>
             <p class="lead rv" style="--d:.08s">Rilono organizes, names and AI-checks each of these — and flags anything missing or expiring before it costs you an interview.</p>
             <div class="doc-grid" id="docGrid"></div>
+        </section>
+
+        <section class="sec">
+            <div class="imgband">
+                <div class="shot rv"><img src="/static/assets/brand/landing/passport-stamps.webp"
+                        alt="A well-travelled passport with visa stamps and a boarding pass" loading="lazy"></div>
+                <div>
+                    <h2 class="rv">One passport. One organized application.</h2>
+                    <p class="lead rv" style="--d:.08s">Every document your student visa needs — named, checked and
+                        encrypted in a single vault, so nothing is missing when it matters most.</p>
+                    <ul>
+                        <li class="rv" style="--d:.12s"><span class="v">✓</span> <span><b>AI-validated</b> — Rilono flags
+                                wrong dates, missing pages and mismatches automatically.</span></li>
+                        <li class="rv" style="--d:.16s"><span class="v">✓</span> <span><b>End-to-end encrypted</b> — your
+                                passport and financials stay private to you.</span></li>
+                        <li class="rv" style="--d:.20s"><span class="v">✓</span> <span><b>Always current</b> — expiring
+                                documents surfaced weeks ahead of your interview.</span></li>
+                    </ul>
+                </div>
+            </div>
         </section>
 
         <section class="sec">
@@ -388,12 +464,17 @@
         </section>
 
         <section>
-            <div class="cta-band rv">
-                <h2 id="ctaTitle">Your study-abroad dream starts here</h2>
-                <p>Create a free account and turn a stressful visa process into a guided, confident journey — with Rilono AI at every step.</p>
-                <a href="/register" class="btn btn-primary" style="display:inline-flex">Create your free account
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </a>
+            <div class="cta-hero rv">
+                <img src="/static/assets/brand/landing/student-airport.webp"
+                    alt="An international student watching a plane take off at golden hour" loading="lazy">
+                <div class="inner">
+                    <h2 id="ctaTitle">Your study-abroad dream starts here</h2>
+                    <p>Create a free account and turn a stressful visa process into a guided, confident journey — with
+                        Rilono AI at every step.</p>
+                    <a href="/register" class="btn btn-primary" style="display:inline-flex">Create your free account
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </a>
+                </div>
             </div>
         </section>
     </main>
@@ -704,6 +785,18 @@
                     shot.style.transform = `perspective(900px) rotateY(${(x * 5).toFixed(2)}deg) rotateX(${(y * -5).toFixed(2)}deg)`;
                 });
                 wrap.addEventListener("mouseleave", () => { shot.style.transform = ""; });
+            }
+
+            // Navbar "Products" dropdown — hover opens on desktop (CSS); click/tap toggle + close.
+            const pNav = document.getElementById("productsNav");
+            const pTrig = document.getElementById("productsNavTrigger");
+            const pMenu = document.getElementById("productsMenu");
+            if (pNav && pTrig && pMenu) {
+                const setOpen = (open) => { pNav.classList.toggle("is-open", open); pTrig.setAttribute("aria-expanded", open ? "true" : "false"); };
+                pTrig.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); setOpen(!pNav.classList.contains("is-open")); });
+                pMenu.addEventListener("click", (e) => { if (e.target.closest("a")) setOpen(false); });
+                document.addEventListener("click", (e) => { if (!pNav.contains(e.target)) setOpen(false); });
+                document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
             }
         })();
     </script>

@@ -525,14 +525,15 @@
         .final .micro { margin-top: 22px; color: #9aa1c9; font-size: .85rem; font-weight: 600; }
 
         /* ======================= FOOTER ======================= */
-        .hx-footer { background: #0d1130; color: #c6cbe8; }
+        .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); }
+        .hx-footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); }
         .hx-footer .cols { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; gap: 32px; padding: 62px 0 40px; }
         .hx-footer .brand-col img { height: 34px; margin-bottom: 14px; }
         .hx-footer .brand-col p { color: #8f96bd; font-size: .9rem; line-height: 1.65; max-width: 290px; }
         .hx-footer h5 { font-family: var(--fd); font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: #7b82ad; margin: 0 0 16px; font-weight: 800; }
         .hx-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
         .hx-footer a { color: #c6cbe8; text-decoration: none; font-size: .92rem; transition: color .2s ease; }
-        .hx-footer a:hover { color: #fff; }
+        .hx-footer a:hover { color: #d9c9ff; }
         .hx-footer .foot-bottom { border-top: 1px solid rgba(255, 255, 255, .09); padding: 24px 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #7b82ad; font-size: .85rem; }
 
         /* ======================= COOKIE BAR ======================= */

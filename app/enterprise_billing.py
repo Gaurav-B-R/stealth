@@ -164,6 +164,12 @@ def _format_inr(paise: int) -> str:
 
 
 def public_plans_payload() -> list[dict]:
+    # New pricing model: the platform is credit-based and free-to-use. The legacy
+    # seat-subscription plans (Starter/Growth/Scale + trial) must never be shown or
+    # sold while ENTERPRISE_FREE is on — the credit model (see enterprise_credits.py)
+    # is the only paid surface. Set ENTERPRISE_FREE=false to re-expose paid plans.
+    if ENTERPRISE_FREE:
+        return []
     payload = []
     for key in PLAN_ORDER:
         plan = PLANS[key]

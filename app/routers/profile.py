@@ -11,6 +11,7 @@ from app.auth import (
     get_password_hash,
     validate_password_strength,
 )
+from app import referrals
 from app.referrals import ensure_user_referral_code
 from app.utils.rate_limiter import check_ip_rate_limit
 from app.utils.security import rewrap_file_key, decode_salt_from_storage
@@ -183,7 +184,9 @@ def get_referral_summary(
         "total_invited": total_invited,
         "successful_referrals": successful_referrals,
         "pending_referrals": pending_referrals,
-        "reward": "Both users receive a free 30-day Visa Success Pass after email verification and first login",
+        "reward": referrals.referral_reward_summary(),
+        "referee_discount_display": referrals.referee_discount_display(),
+        "referrer_bonus_days": referrals.REFERRAL_BONUS_DAYS,
     }
 
 @router.put("/", response_model=schemas.UserResponse)
