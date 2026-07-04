@@ -35,6 +35,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
+from app import fx
 
 
 # ---------------------------------------------------------------------------
@@ -145,13 +146,38 @@ ACTIONS = {
         "description": "A full dynamic mock consular interview tailored to the client's weak points.",
         "credits": _int_env("ENTERPRISE_CREDIT_COST_MOCK_INTERVIEW", 20),
     },
+    "ai_copilot": {
+        "key": "ai_copilot",
+        "label": "Rilono AI assistant",
+        "description": (
+            f"Chat with your live portal. First {_int_env('ENTERPRISE_COPILOT_FREE_DAILY', 5)} "
+            f"messages/day are free, then {_int_env('ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE', 1)} "
+            f"credit per {_int_env('ENTERPRISE_COPILOT_MSGS_PER_CREDIT', 5)} messages."
+        ),
+        # Cost is per BUNDLE of COPILOT_MSGS_PER_CREDIT messages (not per message).
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE", 1),
+    },
 }
+
+# Rilono AI assistant (copilot) metering. The copilot is a function-calling agent
+# (the most expensive call type), so it must be metered — but gently: a free daily
+# allowance per org, then 1 credit per bundle of messages.
+COPILOT_ACTION_KEY = "ai_copilot"
+COPILOT_FREE_DAILY = _int_env("ENTERPRISE_COPILOT_FREE_DAILY", 5)          # free messages / org / day
+COPILOT_MSGS_PER_CREDIT = max(1, _int_env("ENTERPRISE_COPILOT_MSGS_PER_CREDIT", 5))  # billable msgs per credit
+
+# Free staff-run mock-interview "previews" per org. The self-serve link a student
+# takes is the real, billed product; staff can run a few in-browser test interviews
+# free (to try the software or interview a student sitting with them), then it costs
+# the normal mock_interview price. Self-serve/public interviews always charge.
+INTERVIEW_FREE_STAFF_PREVIEWS = _int_env("ENTERPRISE_INTERVIEW_FREE_STAFF_PREVIEWS", 3)
 
 # Maps a billed action to the Gemini cost-tracker `source` values it consumes, so
 # the admin report can compute real per-action margin from app.ai_usage.
 ACTION_SOURCE_MAP = {
     "deep_scan": ["deep_scan"],
     "mock_interview": ["mock_interview", "interview_feedback"],
+    "ai_copilot": ["enterprise_copilot"],
 }
 
 # Every Gemini source the enterprise platform incurs cost on (billed or not).
@@ -178,9 +204,10 @@ def format_inr(paise) -> str:
 
 
 def usd_to_inr_paise(usd) -> int:
-    """Convert a USD amount (Decimal/float) to INR paise using USD_TO_INR."""
+    """Convert a USD amount (Decimal/float) to INR paise at the live USD→INR rate
+    (falls back to the static USD_TO_INR env value when the live rate is unavailable)."""
     try:
-        rupees = Decimal(str(usd or 0)) * Decimal(str(USD_TO_INR))
+        rupees = Decimal(str(usd or 0)) * Decimal(str(fx.get_usd_to_inr()))
     except Exception:
         return 0
     return int((rupees * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
@@ -433,6 +460,169 @@ def charge_action(
 
 
 # ---------------------------------------------------------------------------
+# Rilono AI assistant (copilot) metering
+#
+# The copilot chat is a Gemini function-calling agent — the most expensive call
+# type in the app — so leaving it unmetered was a real margin leak. It is metered
+# gently: every org gets COPILOT_FREE_DAILY free messages per day, then messages
+# accrue toward a bundle and 1 credit is debited every COPILOT_MSGS_PER_CREDIT
+# billable messages (≈ ₹2/message at the default 1 credit / 5 messages).
+#
+# Flow (mirrors deep_scan: enforce before the model call, charge after success):
+#   1. copilot_precheck_or_402()  — read-only; blocks a paid message when the wallet
+#      can't cover the next bundle (raised BEFORE any Gemini tokens are spent).
+#   2. run the model.
+#   3. record_copilot_message()   — increments counters and debits on bundle rollover.
+# ---------------------------------------------------------------------------
+
+def _today_str() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def _copilot_used_today(wallet: models.EnterpriseCreditWallet) -> int:
+    """Messages already sent today (0 if the stored daily window is stale)."""
+    if wallet.copilot_usage_date == _today_str():
+        return int(wallet.copilot_msgs_today or 0)
+    return 0
+
+
+def copilot_message_is_free(db: Session, organization_id: int) -> bool:
+    """Whether the NEXT copilot message falls within today's free allowance."""
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    return _copilot_used_today(wallet) < COPILOT_FREE_DAILY
+
+
+def copilot_precheck_or_402(db: Session, organization_id: int) -> None:
+    """Pre-check before running a copilot message. Free within the daily allowance;
+    beyond it, requires enough credits to cover the next bundle. Raises 402 otherwise
+    (before any Gemini tokens are spent). No-op when enforcement is disabled."""
+    if not ENFORCE:
+        return
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    if _copilot_used_today(wallet) < COPILOT_FREE_DAILY:
+        return  # still within the free daily allowance
+    cost = action_cost(COPILOT_ACTION_KEY)
+    if cost <= 0 or int(wallet.balance_credits) >= cost:
+        return
+    raise HTTPException(
+        status_code=402,
+        detail=(
+            f"You've used today's {COPILOT_FREE_DAILY} free Rilono AI assistant messages. "
+            f"Further messages cost {cost} credit per {COPILOT_MSGS_PER_CREDIT}, and your wallet "
+            f"is empty. Top up your Rilono Credits to keep chatting."
+        ),
+    )
+
+
+def record_copilot_message(
+    db: Session,
+    organization_id: int,
+    *,
+    user: Optional[models.User] = None,
+    commit: bool = True,
+) -> dict:
+    """Record one copilot message: advance the daily counter, and (once past the free
+    allowance) accrue toward a bundle, debiting 1 credit each time a bundle completes.
+    Call AFTER the model answered successfully. Returns a compact meter for the UI."""
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+
+    # Roll the daily window if the date changed.
+    today = _today_str()
+    if wallet.copilot_usage_date != today:
+        wallet.copilot_usage_date = today
+        wallet.copilot_msgs_today = 0
+
+    wallet.copilot_msgs_today = int(wallet.copilot_msgs_today or 0) + 1
+    is_free = int(wallet.copilot_msgs_today) <= COPILOT_FREE_DAILY
+
+    charged = 0
+    txn = None
+    if not is_free:
+        # A billable message: accrue toward the next credit debit.
+        wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs or 0) + 1
+        if int(wallet.copilot_unbilled_msgs) >= COPILOT_MSGS_PER_CREDIT:
+            wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs) - COPILOT_MSGS_PER_CREDIT
+            cost = action_cost(COPILOT_ACTION_KEY) or 1
+            debit = min(cost, int(wallet.balance_credits))  # never overdraw below zero
+            if debit > 0:
+                wallet.balance_credits = int(wallet.balance_credits) - debit
+                wallet.lifetime_spent_credits = int(wallet.lifetime_spent_credits) + debit
+                charged = debit
+                txn = _record_transaction(
+                    db, wallet=wallet, txn_type="debit", credits=-debit, action_key=COPILOT_ACTION_KEY,
+                    description=f"Rilono AI assistant — {COPILOT_MSGS_PER_CREDIT} messages", user=user,
+                )
+
+    if commit:
+        db.commit()
+        if txn is not None:
+            db.refresh(txn)
+
+    used_today = int(wallet.copilot_msgs_today)
+    return {
+        "free": is_free,
+        "credits_charged": charged,
+        "free_daily": COPILOT_FREE_DAILY,
+        "used_today": used_today,
+        "free_remaining_today": max(0, COPILOT_FREE_DAILY - used_today),
+        "msgs_per_credit": COPILOT_MSGS_PER_CREDIT,
+        "balance_credits": int(wallet.balance_credits),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Staff-run mock-interview "previews" (a few free, then normal mock_interview price)
+# ---------------------------------------------------------------------------
+
+def staff_interview_preview_remaining(db: Session, organization_id: int) -> int:
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    used = int(getattr(wallet, "interview_staff_previews_used", 0) or 0)
+    return max(0, INTERVIEW_FREE_STAFF_PREVIEWS - used)
+
+
+def staff_interview_next_is_free(db: Session, organization_id: int) -> bool:
+    return staff_interview_preview_remaining(db, organization_id) > 0
+
+
+def enforce_staff_interview_or_402(db: Session, organization_id: int) -> None:
+    """Pre-check before a STAFF-run mock interview. Free while previews remain;
+    otherwise it costs the normal mock_interview price (raises 402 if unaffordable)."""
+    if staff_interview_next_is_free(db, organization_id):
+        return
+    enforce_action_or_402(db, organization_id, "mock_interview")
+
+
+def consume_staff_interview(
+    db: Session,
+    organization_id: int,
+    *,
+    user: Optional[models.User] = None,
+    reference_id: Optional[int] = None,
+    description: Optional[str] = None,
+    commit: bool = True,
+) -> dict:
+    """Called after a staff-run interview starts successfully. Consumes a free preview
+    if any remain (no charge); otherwise debits the normal mock_interview cost."""
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    used = int(getattr(wallet, "interview_staff_previews_used", 0) or 0)
+    if used < INTERVIEW_FREE_STAFF_PREVIEWS:
+        wallet.interview_staff_previews_used = used + 1
+        if commit:
+            db.commit()
+        return {
+            "charged": 0,
+            "was_preview": True,
+            "previews_remaining": max(0, INTERVIEW_FREE_STAFF_PREVIEWS - (used + 1)),
+        }
+    charge_action(
+        db, organization_id, "mock_interview",
+        user=user, reference_type="client", reference_id=reference_id,
+        description=description, commit=commit,
+    )
+    return {"charged": action_cost("mock_interview"), "was_preview": False, "previews_remaining": 0}
+
+
+# ---------------------------------------------------------------------------
 # Infrastructure server fee (₹999/mo once past the free student limit)
 # ---------------------------------------------------------------------------
 
@@ -546,6 +736,10 @@ def wallet_state(db: Session, organization_id: int) -> dict:
         "low_balance": balance < (action_cost("mock_interview") or 1),
         "actions": actions_payload(),
         "infra_fee": infra_fee_state(db, organization_id),
+        "staff_interview_previews": {
+            "free": INTERVIEW_FREE_STAFF_PREVIEWS,
+            "remaining": staff_interview_preview_remaining(db, organization_id),
+        },
     }
 
 
@@ -790,9 +984,12 @@ def build_revenue_analytics(db: Session) -> dict:
             "verified_at": p.verified_at.isoformat() if p.verified_at else None,
         })
 
+    _fx = fx.get_state()
     return {
         "currency": CURRENCY,
-        "usd_to_inr": USD_TO_INR,
+        "usd_to_inr": round(float(_fx.get("rate") or USD_TO_INR), 2),
+        "fx_source": _fx.get("source", "fallback"),          # "live" | "fallback"
+        "fx_updated_at": _fx.get("fetched_at") or None,       # epoch seconds
         "is_estimate": True,
         "credit_value_inr": paise_to_rupees(PAISE_PER_CREDIT),
         "summary": {

@@ -863,6 +863,15 @@ def chat_with_ai(
             extra_key=str(current_user.id),
         )
 
+        # Fail fast with a clean message when Gemini isn't configured, instead of
+        # doing all the profile/document work and then surfacing a raw 500 from the
+        # model call. Mirrors the enterprise interview endpoint's availability guard.
+        if not gemini_utils.is_ai_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="Rilono AI is temporarily unavailable. Please try again in a little while.",
+            )
+
         # Attribute every Gemini call in this request to the signed-in account.
         ai_usage.set_usage_account(user_id=current_user.id)
 

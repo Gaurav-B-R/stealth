@@ -156,6 +156,7 @@ const refs = {
     revOutstanding: document.getElementById('adminRevOutstanding'),
     revOutstandingSub: document.getElementById('adminRevOutstandingSub'),
     revFx: document.getElementById('adminRevFx'),
+    revFxNote: document.getElementById('adminRevFxNote'),
     revActionsBody: document.getElementById('adminRevActionsBody'),
     b2cMarginHero: document.getElementById('adminB2cMarginHero'),
     b2cRevenue: document.getElementById('adminB2cRevenue'),
@@ -1017,6 +1018,29 @@ function renderUserCountryCell(user) {
         (visaLabel ? `<div class="user-meta">${escapeHtml(visaLabel)}</div>` : '');
 }
 
+const ACQ_CHANNELS = {
+    google_organic: { label: 'Google', color: '#4285F4' }, google_ads: { label: 'Google Ads', color: '#1a73e8' },
+    bing: { label: 'Bing', color: '#0b8484' }, duckduckgo: { label: 'DuckDuckGo', color: '#de5833' }, yahoo: { label: 'Yahoo', color: '#6001d2' },
+    instagram: { label: 'Instagram', color: '#e1306c' }, facebook: { label: 'Facebook', color: '#1877f2' },
+    twitter: { label: 'X / Twitter', color: '#111827' }, linkedin: { label: 'LinkedIn', color: '#0a66c2' },
+    reddit: { label: 'Reddit', color: '#ff4500' }, youtube: { label: 'YouTube', color: '#ff0000' }, tiktok: { label: 'TikTok', color: '#010101' },
+    quora: { label: 'Quora', color: '#b92b27' }, telegram: { label: 'Telegram', color: '#229ed9' }, whatsapp: { label: 'WhatsApp', color: '#25d366' },
+    pinterest: { label: 'Pinterest', color: '#e60023' }, medium: { label: 'Medium', color: '#111827' }, github: { label: 'GitHub', color: '#24292e' },
+    chatgpt: { label: 'ChatGPT', color: '#10a37f' }, perplexity: { label: 'Perplexity', color: '#20808d' },
+    gemini: { label: 'Gemini', color: '#8b6cef' }, claude: { label: 'Claude', color: '#d97757' }, email: { label: 'Email', color: '#f59e0b' },
+    referral: { label: 'Referral', color: '#8b5cf6' }, direct: { label: 'Direct', color: '#94a3b8' },
+    other: { label: 'Other', color: '#64748b' }, untracked: { label: '', color: '#cbd5e1' }
+};
+
+function renderUserSourceBadge(user) {
+    const ch = user.acquisition_channel;
+    if (!ch || ch === 'untracked') return '';
+    const meta = ACQ_CHANNELS[ch] || ACQ_CHANNELS.other;
+    return `<div class="user-meta" style="margin-top:3px;display:inline-flex;align-items:center;gap:5px;">`
+        + `<span style="width:7px;height:7px;border-radius:50%;background:${meta.color};display:inline-block;flex:none;"></span>`
+        + `<span>via ${escapeHtml(meta.label || 'Other')}</span></div>`;
+}
+
 function renderUsersTable() {
     if (!refs.tableBody) return;
     if (!state.users.length) {
@@ -1046,6 +1070,7 @@ function renderUsersTable() {
                 <td>
                     <div class="user-name">${escapeHtml(userName)}</div>
                     <div class="user-meta">${escapeHtml(userMeta || '-')}</div>
+                    ${renderUserSourceBadge(user)}
                 </td>
                 <td>${renderUserCountryCell(user)}</td>
                 <td><span class="role-chip">${escapeHtml(role)}</span></td>
@@ -1318,6 +1343,7 @@ async function loadUsers({ resetPage = false } = {}) {
         renderUsersTable();
         renderUsersSummary();
         renderMetrics();
+        void loadAcquisitionBreakdown();
         clearFlash();
     } catch (error) {
         console.error('Failed to load users:', error);
@@ -1550,6 +1576,36 @@ async function loadB2cRevenue() {
     } catch (error) { console.error('Failed to load B2C revenue:', error); }
 }
 
+async function loadAcquisitionBreakdown() {
+    const el = document.getElementById('adminAcquisitionBreakdown');
+    const metaEl = document.getElementById('adminAcquisitionMeta');
+    if (!el) return;
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/acquisition/analytics`, { headers: buildAuthHeaders(), credentials: 'same-origin' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) { el.innerHTML = '<div class="table-empty">Could not load traffic sources.</div>'; return; }
+        const channels = (data && data.channels) || [];
+        if (!channels.length) { el.innerHTML = '<div class="table-empty">No signups yet.</div>'; return; }
+        const maxCount = Math.max.apply(null, channels.map((c) => c.count).concat(1));
+        if (metaEl) metaEl.textContent = `${data.tracked_total} tracked · +${data.new_last_30d} in 30d`;
+        el.innerHTML = channels.map((c) => {
+            const pct = Math.round((c.count / maxCount) * 100);
+            const recent = c.last_30d ? ` · +${c.last_30d} (30d)` : '';
+            return `<div class="finance-breakdown-row">
+                <div class="finance-breakdown-top">
+                    <strong><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${c.color};margin-right:7px;vertical-align:middle;"></span>${escapeHtml(c.label)}</strong>
+                    <span>${c.count}${recent}</span>
+                </div>
+                <div class="finance-breakdown-track"><span style="width:${pct}%;background:${c.color};"></span></div>
+                <div class="finance-breakdown-percent">${c.percent}% of all signups</div>
+            </div>`;
+        }).join('');
+    } catch (error) {
+        console.error('Failed to load acquisition breakdown:', error);
+        el.innerHTML = '<div class="table-empty">Could not load traffic sources.</div>';
+    }
+}
+
 function renderB2cRevenue(data) {
     const s = (data && data.summary) || {};
     const setText = (el, v) => { if (el) el.textContent = v; };
@@ -1603,6 +1659,17 @@ async function loadEnterpriseRevenue() {
     }
 }
 
+function fxNoteText(data) {
+    if (!data || data.fx_source !== 'live') return 'USD → INR · estimated (env fallback)';
+    var note = 'USD → INR · 🟢 live';
+    var ts = Number(data.fx_updated_at || 0);
+    if (ts > 0) {
+        var mins = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
+        note += ' · updated ' + (mins < 60 ? mins + 'm' : Math.round(mins / 60) + 'h') + ' ago';
+    }
+    return note;
+}
+
 function renderEnterpriseRevenue(data) {
     const s = (data && data.summary) || {};
     const setText = (el, val) => { if (el) el.textContent = val; };
@@ -1623,6 +1690,7 @@ function renderEnterpriseRevenue(data) {
     setText(refs.revOutstanding, (s.credits_outstanding || 0).toLocaleString());
     setText(refs.revOutstandingSub, `Liability ${s.credits_outstanding_display || '₹0'}`);
     if (refs.revFx) refs.revFx.textContent = `$1 = ₹${data && data.usd_to_inr != null ? data.usd_to_inr : 0}`;
+    if (refs.revFxNote) refs.revFxNote.textContent = fxNoteText(data);
 
     if (refs.revActionsBody) {
         const rows = Array.isArray(data && data.per_action) ? data.per_action : [];

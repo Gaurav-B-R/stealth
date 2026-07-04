@@ -21,6 +21,12 @@ class UserCreate(UserBase):
     accepted_terms_privacy: bool = False
     age_confirmed: bool = False  # 18+ self-attestation (or parent/guardian agreeing)
     marketing_emails_consent: bool = False  # optional opt-in for marketing emails
+    # First-touch acquisition signals captured on the landing page (see static/attribution.js).
+    acq_source: Optional[str] = None
+    acq_medium: Optional[str] = None
+    acq_campaign: Optional[str] = None
+    acq_referrer: Optional[str] = None
+    acq_landing: Optional[str] = None
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -88,6 +94,9 @@ class AdminUserSummary(BaseModel):
     # Destination country + visa type the student is applying for (multi-country journey).
     destination_country_code: Optional[str] = None
     visa_type_key: Optional[str] = None
+    # First-touch acquisition (where they came from).
+    acquisition_channel: Optional[str] = None
+    acquisition_source: Optional[str] = None
     created_at: datetime
     first_login_at: Optional[datetime] = None
     last_login_at: Optional[datetime] = None

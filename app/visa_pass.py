@@ -32,6 +32,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
+from app import fx
 from app import subscriptions as subs
 
 
@@ -115,8 +116,9 @@ def format_inr(paise) -> str:
 
 
 def usd_to_inr_paise(usd) -> int:
+    """Convert USD → INR paise at the live rate (static USD_TO_INR fallback)."""
     try:
-        rupees = Decimal(str(usd or 0)) * Decimal(str(USD_TO_INR))
+        rupees = Decimal(str(usd or 0)) * Decimal(str(fx.get_usd_to_inr()))
     except Exception:
         return 0
     return int((rupees * Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
@@ -350,7 +352,9 @@ def build_revenue_analytics(db: Session) -> dict:
 
     return {
         "currency": CURRENCY,
-        "usd_to_inr": USD_TO_INR,
+        "usd_to_inr": round(float(fx.get_state().get("rate") or USD_TO_INR), 2),
+        "fx_source": fx.get_state().get("source", "fallback"),
+        "fx_updated_at": fx.get_state().get("fetched_at") or None,
         "is_estimate": True,
         "pass": {
             "price_paise": PASS_PRICE_PAISE,
@@ -439,7 +443,9 @@ def build_account_cost_profit(db: Session, *, limit: int = 100) -> dict:
 
     return {
         "currency": CURRENCY,
-        "usd_to_inr": USD_TO_INR,
+        "usd_to_inr": round(float(fx.get_state().get("rate") or USD_TO_INR), 2),
+        "fx_source": fx.get_state().get("source", "fallback"),
+        "fx_updated_at": fx.get_state().get("fetched_at") or None,
         "is_estimate": True,
         "total_accounts": len(accounts),
         "totals": {

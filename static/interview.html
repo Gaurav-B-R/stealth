@@ -72,6 +72,19 @@
     .feedback{margin-top:18px;border:1px solid var(--border);border-radius:12px;padding:18px;background:var(--surface-2);line-height:1.6;font-size:14.5px}
     .feedback .h{font-weight:700;margin:14px 0 6px;color:var(--text)}.feedback ul{margin:6px 0;padding-left:20px}.feedback p{margin:6px 0}
     .feedback ul li{margin:3px 0}
+    .feedback .h:first-child{margin-top:0}
+    /* Verdict + readiness header badge */
+    .fb-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin:2px 0 16px}
+    .fb-verdict{display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:13px;padding:5px 13px;border-radius:999px;border:1px solid}
+    .fb-verdict::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+    .fb-v-green{color:#047857;background:#ecfdf5;border-color:#a7f3d0}
+    .fb-v-amber{color:#b45309;background:#fffbeb;border-color:#fde68a}
+    .fb-v-red{color:#be123c;background:#fef2f2;border-color:#fecaca}
+    .fb-ready{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+    .fb-ready b{color:var(--text);font-weight:700}
+    .fb-dots{display:inline-flex;gap:4px}
+    .fb-dot{width:8px;height:8px;border-radius:50%;background:#e2e8f0}
+    .fb-dot.on{background:var(--primary)}
     /* officer decision banner (shown when the interview concludes) */
     .decision{display:flex;align-items:center;gap:9px;border-radius:12px;padding:13px 16px;font-size:15.5px;font-weight:800;margin:0 0 14px}
     .decision span{font-size:11px;font-weight:700;opacity:.8;margin-left:auto;text-transform:uppercase;letter-spacing:.05em}
@@ -174,6 +187,29 @@
 
       function show(id) { ["loading","invalidView","verifyView","interviewView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
       function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+      // Pull the "**Verdict:** … · **Readiness:** N/5" line out into a coloured badge,
+      // and return the body with that line removed so it isn't shown twice.
+      function verdictBadge(text){
+        if(!text) return {head:"",body:text||""};
+        var lines=String(text).split(/\n/), idx=-1;
+        for(var i=0;i<lines.length;i++){ if(/verdict\s*:/i.test(lines[i])){ idx=i; break; } }
+        if(idx<0) return {head:"",body:text};
+        var line=lines[idx];
+        var vm=line.match(/verdict\s*:\**\s*(likely approved|borderline|needs work)/i);
+        var rm=line.match(/readiness\s*:\**\s*(\d+)\s*\/\s*5/i);
+        if(!vm&&!rm) return {head:"",body:text};
+        lines.splice(idx,1);
+        var body=lines.join("\n").replace(/^\s+/,"");
+        var head='<div class="fb-head">';
+        if(vm){ var vl=vm[1].toLowerCase();
+          var cls=vl.indexOf("approved")>=0?"fb-v-green":(vl.indexOf("borderline")>=0?"fb-v-amber":"fb-v-red");
+          head+='<span class="fb-verdict '+cls+'">'+esc(vm[1])+'</span>'; }
+        if(rm){ var n=Math.max(0,Math.min(5,parseInt(rm[1],10))), dots="";
+          for(var k=0;k<5;k++){ dots+='<span class="fb-dot'+(k<n?' on':'')+'"></span>'; }
+          head+='<span class="fb-ready">Readiness <b>'+n+'/5</b><span class="fb-dots">'+dots+'</span></span>'; }
+        head+='</div>';
+        return {head:head,body:body};
+      }
       function fmt(text){ var t=esc(text).replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>"); var lines=t.split(/\n/),html="",inList=false;
         function cl(){ if(inList){html+="</ul>";inList=false;} }
         for(var i=0;i<lines.length;i++){ var line=lines[i].replace(/\s+$/,""); var h=line.match(/^\s*#{1,4}\s+(.*)$/);
@@ -260,7 +296,8 @@
         try{ $("feedback").scrollIntoView({behavior:"smooth",block:"nearest"}); }catch(e){}
         api("/feedback",{session_token:sessionToken,history:history,mode:voiceOn?"voice":"chat",decision:decision||null}).then(function(d){ info.remaining=d.remaining;
           var emailNote=d.emailed?'<div class="ok" style="margin:0 0 14px">📧 A copy of this report has been emailed to '+esc(d.masked_email||"your email")+'.</div>':'';
-          $("feedback").innerHTML=decisionBanner(d.decision||decision)+emailNote+'<div class="h">📋 Your interview feedback</div>'+fmt(d.feedback);
+          var vb=verdictBadge(d.feedback);
+          $("feedback").innerHTML=decisionBanner(d.decision||decision)+emailNote+'<div class="h">📋 Your interview feedback</div>'+vb.head+fmt(vb.body);
           $("afterFb").innerHTML='<div class="remain" style="margin-bottom:12px">Interviews remaining: '+info.remaining+'</div>'+(info.remaining>0?'<button class="btn btn-soft" id="againBtn">↻ Take another interview</button>':'<div class="muted">That was your last interview on this link. Good luck! 🎓</div>');
           var ab=$("againBtn"); if(ab) ab.onclick=function(){ feedbackStarted=false; concluded=false; pendingDecision=null; $("iChat").classList.add("hidden"); renderInterview(); };
         }).catch(function(ex){ $("feedback").innerHTML=decisionBanner(decision)+'<div class="err">'+esc(ex.message)+'</div>'; feedbackStarted=false; }).finally(function(){ busy=false; }); }

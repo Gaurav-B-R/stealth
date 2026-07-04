@@ -90,6 +90,19 @@
                         </article>
                     </div>
 
+                    <section id="adminAcquisitionCard" class="finance-chart-card" style="margin-bottom:16px;">
+                        <div class="finance-card-header">
+                            <div>
+                                <h3>Where signups come from</h3>
+                                <p>First-party traffic-source attribution (UTM tags + referrer) for new accounts.</p>
+                            </div>
+                            <span id="adminAcquisitionMeta" style="font-size:12.5px;color:#64748b;white-space:nowrap;"></span>
+                        </div>
+                        <div id="adminAcquisitionBreakdown" class="finance-breakdown-chart">
+                            <div class="table-empty">Loading traffic sources…</div>
+                        </div>
+                    </section>
+
                     <form id="adminUsersFilterForm" class="filters-row">
                         <input type="text" id="adminUsersSearchInput" placeholder="Search email, username, name, university">
                         <select id="adminUsersPlanFilter">
@@ -430,7 +443,7 @@
                         <article class="metric-card">
                             <span>FX Rate</span>
                             <strong id="adminRevFx">$1 = ₹0</strong>
-                            <div class="metric-subtext">USD → INR (env)</div>
+                            <div class="metric-subtext" id="adminRevFxNote">USD → INR</div>
                         </article>
                     </div>
 

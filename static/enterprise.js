@@ -753,6 +753,12 @@
         ${kpiCard("linear-gradient(135deg,#10b981,#34d399)", "✅", "Approved", k.approved, k.approval_rate != null ? k.approval_rate + "% approval rate" : "View approved", "__ent.viewClients({status:'approved'})")}
         ${kpiCard("linear-gradient(135deg,#f59e0b,#f97316)", "🆕", "New this month", k.new_this_month, "this month", "__ent.viewClients({scope:'month',label:'New this month'})")}
       </div>
+      ${state.perms && state.perms.can_edit_data ? `
+      <div class="dash-cta">
+        <div class="dash-cta-ic">🎤</div>
+        <div class="dash-cta-txt"><b>Send a mock visa interview</b><span>Email a student a secure link so they can practise on their own — Rilono AI plays the visa officer and you see every result here.</span></div>
+        <button class="btn btn-primary dash-cta-btn" onclick="__ent.sendInterview()">✉ Send mock interview</button>
+      </div>` : ""}
       <div class="grid-2">
         <div class="card"><div class="card-head"><h3>Visa pipeline</h3><button class="link" onclick="__ent.go('clients')">View all →</button></div>
           <div class="card-body">${pipeRows}</div></div>
@@ -787,6 +793,69 @@
     const vt = (state.dashVisaTypes || [])[i];
     if (!vt) { openClientsFiltered({}); return; }
     openClientsFiltered({ scope: { visaType: vt }, label: "Visa type · " + vt });
+  }
+
+  // Dashboard/anywhere entry point: pick a student, then email them a mock-interview
+  // link (the primary way the feature is used). Reuses the same invite endpoint.
+  async function openSendInterviewPicker(preselectId) {
+    if (!state.perms || !state.perms.can_edit_data) { toast("Only editors and admins can send mock interviews.", "error"); return; }
+    let clients = [];
+    try { const d = await api("/clients?limit=500"); clients = (d.clients || []).filter((c) => c.email); }
+    catch (ex) { toast(ex.message, "error"); return; }
+    if (!clients.length) { toast("Add a client with an email address first, then you can send them a mock interview.", "error"); return; }
+
+    const cr = state.credits || {};
+    const mockCost = ((cr.actions || []).find((a) => a.key === "mock_interview") || {}).credits || 20;
+    const perInr = cr.credit_value_inr || 10;
+    const isInr = (cr.currency || "INR") === "INR";
+    const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
+    const money = (credits) => isInr ? ` (≈ ₹${Math.round(credits * perInr).toLocaleString()})` : "";
+    const opts = clients.map((c) => `<option value="${c.id}" ${preselectId === c.id ? "selected" : ""}>${esc(c.full_name)} — ${esc(c.email)}</option>`).join("");
+
+    openModal(`<div class="modal-head"><h3>🎤 Send a mock interview</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="sendIvForm"><div class="modal-body">
+        <p style="margin:0 0 16px;color:var(--text-2);font-size:14px;line-height:1.6">We'll email a secure link to the student. They verify with a one-time code, take the interview(s) on their own time, and every result appears in their profile here.</p>
+        <div class="field"><label>Student</label>
+          <select id="sendIvClient" class="select-mini" style="width:100%">${opts}</select></div>
+        <div class="field"><label>How many interviews can they take?</label>
+          <input type="number" id="sendIvCount" min="1" max="20" value="3" /></div>
+        <div id="sendIvCost" style="background:rgba(99,102,241,.07);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--text-2);line-height:1.5;margin:-2px 0 4px"></div>
+        <div id="sendIvErr" class="auth-error hidden"></div>
+      </div>
+      <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+      <button type="submit" class="btn btn-primary" id="sendIvSave">✉ Send link</button></div></form>`);
+
+    function updateCost() {
+      const el = $("#sendIvCost"); if (!el) return;
+      const n = Math.max(1, Math.min(20, parseInt($("#sendIvCount").value, 10) || 1));
+      const total = n * mockCost;
+      const blocked = !!cr.enforced && balance !== null && balance < total;
+      let balanceLine = "";
+      if (balance !== null) {
+        balanceLine = blocked
+          ? `<div style="margin-top:6px;color:var(--warning,#f59e0b);font-weight:600">⚠ Wallet balance: ${balance} credits — not enough for ${n} interview${n === 1 ? "" : "s"}. <button type="button" class="btn btn-soft btn-sm" style="margin-left:6px" onclick="__ent.closeModal();__ent.go('credits')">Top up</button></div>`
+          : `<div style="margin-top:5px;color:var(--muted)">Wallet balance: ${balance} credits</div>`;
+      }
+      el.innerHTML = `<div>Costs up to <b>${total} credits</b>${money(total)} for ${n} interview${n === 1 ? "" : "s"} — <b>${mockCost}</b> credits each, charged only when an interview is actually taken.</div>` + balanceLine;
+      const sb = $("#sendIvSave"); if (sb) { sb.disabled = blocked; sb.title = blocked ? "Top up your wallet to send this link" : ""; }
+    }
+    const ic = $("#sendIvCount"); if (ic) ic.addEventListener("input", updateCost);
+    updateCost();
+    $("#sendIvForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const id = parseInt($("#sendIvClient").value, 10);
+      const n = Math.max(1, Math.min(20, parseInt($("#sendIvCount").value, 10) || 3));
+      const btn = $("#sendIvSave"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+      try {
+        const r = await api(`/clients/${id}/interview/invite`, { method: "POST", body: { allowed_count: n } });
+        closeModal();
+        toast(r.message || "Mock interview link sent", r.email_sent ? "success" : "error");
+        if (state.activeClient === id) openClient(id);  // refresh the open profile
+      } catch (ex) {
+        const er = $("#sendIvErr"); er.textContent = ex.message; er.classList.remove("hidden");
+        btn.disabled = false; btn.innerHTML = "✉ Send link";
+      }
+    };
   }
 
   /* ============================================================
@@ -1044,6 +1113,7 @@
     const docs = data.documents || [];
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
     const dr = { request: undefined };  // secure document-request state (lazy-loaded)
+    let overviewEditing = false;  // inline "Edit details" mode on the Overview tab
     $("#viewTitle").textContent = cl.full_name;
 
     const detail = (label, val) => `<div class="detail-item"><label>${label}</label><div>${val || "—"}</div></div>`;
@@ -1076,7 +1146,8 @@
 
     $("#cpBack").onclick = () => navigate(state.clientReturnView || "clients");
     if (canEdit) {
-      $("#cpEdit").onclick = () => editClient(cl.id);
+      // Edit inline within the Overview pane (no popup) instead of opening a modal.
+      $("#cpEdit").onclick = () => { overviewEditing = true; showTab("overview"); };
       $("#cpDelete").onclick = () => deleteClient(cl.id);
     }
     const body = $("#cpBody");
@@ -1087,27 +1158,34 @@
       if (el) el.textContent = labels[tab] + (n ? ` (${n})` : "");
     }
 
-    function renderOverview() {
+    // Stage buttons. In view mode they are read-only (a progress indicator); they only
+    // become clickable inside the inline edit form, so a stray click can't auto-save.
+    function stageStepsHtml(interactive, current) {
       const stages = state.catalog.stages.filter((s) => s.key !== "on_hold");
       const onHold = state.catalog.stages.find((s) => s.key === "on_hold");
-      const stageFlow = stages.map((s) => {
-        const active = cl.status === s.key;
-        return `<button class="stage-step ${active ? "done" : ""}" ${active ? `style="background:${s.color}"` : ""} ${canEdit ? `onclick="__ent.setStatus(${cl.id},'${s.key}')"` : "disabled"}>${esc(s.label)}</button>`;
-      }).join("") + (onHold ? `<button class="stage-step ${cl.status === "on_hold" ? "done" : ""}" ${cl.status === "on_hold" ? `style="background:${onHold.color}"` : ""} ${canEdit ? `onclick="__ent.setStatus(${cl.id},'on_hold')"` : "disabled"}>${esc(onHold.label)}</button>` : "");
+      const cur = current != null ? current : cl.status;
+      const btn = (s) => {
+        const active = cur === s.key;
+        const style = active ? ` style="background:${s.color}"` : "";
+        const attrs = interactive ? ` data-key="${s.key}"` : " disabled";
+        return `<button type="button" class="stage-step ${active ? "done" : ""}"${style}${attrs}>${esc(s.label)}</button>`;
+      };
+      return stages.map(btn).join("") + (onHold ? btn(onHold) : "");
+    }
 
-      const assignField = `<div class="detail-item"><label>Assigned counselor</label>${
-        canEdit
-          ? `<select class="select-mini cp-assign" id="cpAssign"><option value="">Unassigned</option>${members.map((m) => `<option value="${m.user_id}" ${cl.assigned_to_user_id === m.user_id ? "selected" : ""}>${esc(m.full_name || m.email)}</option>`).join("")}</select>`
-          : `<div>${cl.assigned_to_name ? esc(cl.assigned_to_name) : "—"}</div>`
-      }</div>`;
+    function renderOverview() {
+      if (overviewEditing && canEdit) { renderOverviewEdit(); return; }
 
+      const assignField = `<div class="detail-item"><label>Assigned counselor</label><div>${cl.assigned_to_name ? esc(cl.assigned_to_name) : "—"}</div></div>`;
+      const ovFirst = (cl.full_name || "the student").split(" ")[0];
       body.innerHTML = `
+        ${canEdit ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
         <div class="cp-card">
           <div class="cp-card-head"><h3>Visa status</h3>${statusPill(cl.stage)}</div>
-          <div class="stage-flow">${stageFlow}</div>
+          <div class="stage-flow">${stageStepsHtml(false)}</div>
         </div>
         <div class="cp-card">
-          <div class="cp-card-head"><h3>Client details</h3></div>
+          <div class="cp-card-head"><h3>Client details</h3>${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEditInline">Edit details</button>` : ""}</div>
           <div class="detail-grid">
             ${detail("Email", cl.email ? esc(cl.email) : "")}
             ${detail("Phone", cl.phone ? esc(cl.phone) : "")}
@@ -1123,17 +1201,109 @@
             ${detail("Added", fmtDate(cl.created_at))}
           </div>
         </div>`;
-      const as = $("#cpAssign");
-      if (as) as.onchange = async () => {
-        const val = as.value ? parseInt(as.value, 10) : null;
-        as.disabled = true;
+      const ovIv = $("#ovSendIv");
+      if (ovIv) ovIv.onclick = () => { if (cl.email) openSendModal(); else { toast("Add an email to this client first.", "error"); editClient(cl.id); } };
+      const editInline = $("#cpEditInline");
+      if (editInline) editInline.onclick = () => { overviewEditing = true; renderOverview(); };
+    }
+
+    // Inline edit of the client details, in-pane (no popup). Save writes via PATCH and
+    // re-renders the client page so the hero + details reflect the change immediately.
+    function renderOverviewEdit() {
+      const CAT = "student";
+      const ph = splitPhone(cl.phone || "");
+      const dval = (v) => esc((v || "").slice(0, 10));
+      const prioOpts = state.catalog.priorities.map((p) => `<option value="${p.key}" ${(cl.priority || "normal") === p.key ? "selected" : ""}>${esc(p.label)}</option>`).join("");
+      const assignOpts = `<option value="">Unassigned</option>` + members.map((m) => `<option value="${m.user_id}" ${cl.assigned_to_user_id === m.user_id ? "selected" : ""}>${esc(m.full_name || m.email)}</option>`).join("");
+      let pending = cl.status;  // selected-but-unsaved visa status — only applied on Save
+      body.innerHTML = `
+        <div class="cp-card">
+          <div class="cp-card-head"><h3>Visa status</h3><span class="cpe-hint">Pick a stage — saved with the form</span></div>
+          <div class="stage-flow" id="cpeStageFlow">${stageStepsHtml(true, pending)}</div>
+        </div>
+        <div class="cp-card">
+          <div class="cp-card-head"><h3>Edit client details</h3></div>
+          <form id="cpEditForm" class="cp-edit-form">
+            <div class="detail-grid">
+              <div class="field cpe-full"><label>Full name</label><input name="full_name" value="${esc(cl.full_name || "")}" required></div>
+              <div class="field"><label>Email</label><input type="email" name="email" value="${esc(cl.email || "")}"></div>
+              <div class="field"><label>Phone</label><div class="phone-input-group"><select name="phone_cc" id="cpePhoneCc" aria-label="Phone country code"></select><input name="phone" id="cpePhone" inputmode="tel" placeholder="98765 43210"></div></div>
+              <div class="field"><label>Destination country</label><select name="destination_country_code" id="cpeCountry"></select></div>
+              <div class="field"><label>Visa type</label><select name="visa_type" id="cpeVisa"></select></div>
+              <div class="field"><label>Intake</label><select name="intake" id="cpeIntake"><option value="">—</option></select></div>
+              <div class="field"><label>Priority</label><select name="priority">${prioOpts}</select></div>
+              <div class="field"><label>Assigned counselor</label><select name="assigned_to_user_id">${assignOpts}</select></div>
+              <div class="field"><label>Key date (interview / travel)</label><input type="date" name="target_date" value="${dval(cl.target_date)}"></div>
+              <div class="field"><label>Nationality</label><input name="nationality" value="${esc(cl.nationality || "")}"></div>
+              <div class="field"><label>Date of birth</label><input type="date" name="date_of_birth" value="${dval(cl.date_of_birth)}"></div>
+              <div class="field"><label>Passport number</label><input name="passport_number" value="${esc(cl.passport_number || "")}"></div>
+              <div class="field"><label>Passport expiry</label><input type="date" name="passport_expiry" value="${dval(cl.passport_expiry)}"></div>
+              <div class="field cpe-full"><label>Application reference</label><input name="application_reference" value="${esc(cl.application_reference || "")}"></div>
+            </div>
+            <div id="cpEditError" class="auth-error hidden" style="margin-top:2px"></div>
+            <div class="cp-edit-actions">
+              <button type="button" class="btn btn-ghost btn-sm" id="cpEditCancel">Cancel</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="cpEditSave">Save changes</button>
+            </div>
+          </form>
+        </div>`;
+
+      // Visa-status stage selector — clicking only marks a pending choice (re-highlights
+      // in place, preserving the form inputs); it's written on Save changes, never on a stray click.
+      const stageFlowEl = $("#cpeStageFlow");
+      function wireStages() {
+        stageFlowEl.querySelectorAll(".stage-step[data-key]").forEach((b) => {
+          b.onclick = () => { pending = b.dataset.key; stageFlowEl.innerHTML = stageStepsHtml(true, pending); wireStages(); };
+        });
+      }
+      wireStages();
+
+      // Country → visa → intake cascade (same catalog as the add-client form).
+      const countrySel = $("#cpeCountry"), visaSel = $("#cpeVisa"), intakeSel = $("#cpeIntake");
+      function fillVisas() {
+        const ct = countryByCode(countrySel.value);
+        const visas = ct ? (ct.visa_types[CAT] || []) : [];
+        visaSel.innerHTML = visas.map((v) => `<option value="${esc(v)}" ${cl.visa_type === v ? "selected" : ""}>${esc(v)}</option>`).join("");
+        intakeSel.innerHTML = `<option value="">—</option>` + (ct ? (ct.student_intakes || []) : []).map((i) => `<option value="${esc(i)}" ${cl.intake === i ? "selected" : ""}>${esc(i)}</option>`).join("");
+      }
+      const clist = state.catalog.countries.filter((ct) => (ct.visa_types[CAT] || []).length);
+      countrySel.innerHTML = clist.map((ct) => `<option value="${ct.code}" ${cl.destination_country_code === ct.code ? "selected" : ""}>${ct.flag_emoji} ${esc(ct.name)}</option>`).join("");
+      countrySel.onchange = fillVisas;
+      fillVisas();
+      $("#cpePhoneCc").innerHTML = phoneCcOptions(ph.dial);
+      $("#cpePhone").value = ph.local;
+
+      $("#cpEditCancel").onclick = () => { overviewEditing = false; renderOverview(); };
+      $("#cpEditForm").onsubmit = async (e) => {
+        e.preventDefault();
+        const f = e.target, btn = $("#cpEditSave"), err = $("#cpEditError");
+        err.classList.add("hidden");
+        const patch = {};
+        ["full_name", "destination_country_code", "visa_type", "intake", "email", "nationality",
+          "date_of_birth", "passport_number", "passport_expiry", "priority", "target_date",
+          "application_reference"].forEach((k) => {
+          const el = f[k]; if (!el) return; const v = (el.value || "").trim(); if (v !== "") patch[k] = v;
+        });
+        const phoneLocal = (f.phone.value || "").trim();
+        if (phoneLocal) {
+          const dial = (f.phone_cc && f.phone_cc.value) || DEFAULT_DIAL;
+          patch.phone = phoneLocal[0] === "+" ? phoneLocal : (dial + " " + phoneLocal);
+        }
+        // Visa status + counselor now save with the form (no live auto-save on click).
+        patch.status = pending;
+        const assignEl = f.assigned_to_user_id;
+        patch.assigned_to_user_id = (assignEl && assignEl.value) ? parseInt(assignEl.value, 10) : null;
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
         try {
-          const r = await api("/clients/" + cl.id, { method: "PATCH", body: { assigned_to_user_id: val } });
-          cl.assigned_to_user_id = r.client.assigned_to_user_id;
-          cl.assigned_to_name = r.client.assigned_to_name;
-          toast(val ? "Counselor assigned" : "Counselor unassigned", "success");
-        } catch (ex) { toast(ex.message, "error"); as.value = cl.assigned_to_user_id || ""; }
-        finally { as.disabled = false; }
+          await api("/clients/" + cl.id, { method: "PATCH", body: patch });
+          toast("Client updated", "success");
+          overviewEditing = false;
+          openClient(cl.id);  // in-pane refresh — updates hero + details, exits edit mode
+        } catch (ex) {
+          if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); return; }
+          err.textContent = ex.message; err.classList.remove("hidden");
+          btn.disabled = false; btn.innerHTML = "Save changes";
+        }
       };
     }
 
@@ -1413,32 +1583,25 @@
       if (iv.started) return drawIvChat(w);
       const sessions = iv.sessions || [];
       w.innerHTML = `
-        <div class="cp-card iv-intro">
-          <div class="iv-orb">🎤</div>
-          <h3>AI mock visa interview</h3>
-          <p>Run a realistic ${esc(cl.destination_country_name)} student-visa interview. Rilono AI plays the visa officer — using ${esc(cl.full_name)}'s profile and notes — then gives honest, specific feedback.</p>
-          <div class="iv-start-row">
-            ${canEdit ? `<button class="btn btn-primary" id="ivStartBtn">▶ Start interview</button>` : `<div class="muted">Only editors and admins can run interviews.</div>`}
-            <label class="iv-voice-pref"><input type="checkbox" id="ivVoicePref"> 🎙 Voice mode${micSupported ? "" : " (questions read aloud)"}</label>
-          </div>
-          <div class="iv-tag">Officer adapts to <b>${esc(cl.destination_country_name)}</b> · ${esc(cl.visa_type)}</div>
-        </div>
-        ${canEdit ? sendCard() : ""}
+        ${canEdit ? sendHeroCard() : `<div class="cp-card iv-intro"><div class="iv-orb">🎤</div><h3>AI mock visa interview</h3><p class="muted">Only editors and admins can send or run mock interviews.</p></div>`}
+        ${canEdit ? staffPreviewCard() : ""}
         <div class="cp-card">
           <div class="cp-sub-label">Past mock interviews</div>
-          <div class="iv-slist">${sessions.length ? sessions.map(ivSessionRow).join("") : `<div class="muted" style="padding:6px 0">No mock interviews yet — start one above.</div>`}</div>
+          <div class="iv-slist">${sessions.length ? sessions.map(ivSessionRow).join("") : `<div class="muted" style="padding:6px 0">No mock interviews yet.</div>`}</div>
         </div>`;
-      if (canEdit) $("#ivStartBtn").onclick = () => startIv($("#ivVoicePref").checked);
       const sb = $("#ivSendBtn"); if (sb) sb.onclick = openSendModal;
       const rs = $("#ivResend"); if (rs) rs.onclick = openSendModal;
       const rv = $("#ivRevoke"); if (rv) rv.onclick = revokeInvite;
+      const pb = $("#ivStartBtn"); if (pb) pb.onclick = () => startIv($("#ivVoicePref") && $("#ivVoicePref").checked);
     }
-    function sendCard() {
+    // PRIMARY action: send the mock interview to the student (the real product).
+    function sendHeroCard() {
       const first = (cl.full_name || "the student").split(" ")[0];
       const inv = iv.invite;
       let inner;
       if (!cl.email) {
-        inner = `<p class="muted" style="margin:0;font-size:13.5px">Add an email to this client (Edit details) to send them an interview link.</p>`;
+        inner = `<p class="iv-hero-sub">Add an email to ${esc(first)} (Edit details) to send them a mock interview link.</p>
+          <button class="btn btn-primary btn-block" onclick="__ent.editClient(${cl.id})">Add an email</button>`;
       } else if (inv && inv.live) {
         const started = inv.started_count != null ? inv.started_count : (inv.used_count || 0);
         const completed = inv.completed_count || 0;
@@ -1446,16 +1609,42 @@
         if (completed > 0) statusBadge = `<span class="iv-sv ok">✓ Completed${inv.last_completed_at ? " · " + fmtDate(inv.last_completed_at) : ""}</span>`;
         else if (started > 0) statusBadge = `<span class="iv-sv mid">⏳ Started — not completed</span>`;
         else statusBadge = `<span class="iv-sv" style="background:#eef2f7;color:#64748b">Not started yet</span>`;
-        inner = `<p class="muted" style="margin:0 0 12px;font-size:13.5px">A secure link was sent to <b>${esc(inv.email)}</b> so ${esc(first)} can practise on their own (verified by a one-time code).</p>
+        inner = `<p class="iv-hero-sub">A secure link is with <b>${esc(inv.email)}</b> so ${esc(first)} can practise on their own (verified by a one-time code).</p>
           <div class="iv-invite-status">
             <div>${statusBadge}<br><span class="muted" style="display:inline-block;margin-top:7px">${started} started · ${completed} completed · ${inv.remaining} remaining<br>Sent${inv.created_at ? " " + fmtDate(inv.created_at) : ""}${inv.created_by_name ? " by " + esc(inv.created_by_name) : ""}</span></div>
             <div class="row"><button class="btn btn-soft btn-sm" id="ivResend">Resend / change</button><button class="btn btn-danger btn-sm" id="ivRevoke">Revoke</button></div>
           </div>`;
       } else {
-        inner = `<p class="muted" style="margin:0 0 12px;font-size:13.5px">Email <b>${esc(cl.email)}</b> a secure link so ${esc(first)} can take the interview themselves — they verify with a one-time code, and you'll see their results here.</p>
-          <button class="btn btn-primary btn-sm" id="ivSendBtn">✉ Send interview link</button>`;
+        inner = `<p class="iv-hero-sub">Email <b>${esc(cl.email)}</b> a secure link so ${esc(first)} can take the mock interview on their own time — they verify with a one-time code, and every result appears right here.</p>
+          <button class="btn btn-primary btn-block" id="ivSendBtn">✉ Send mock interview to ${esc(first)}</button>`;
       }
-      return `<div class="cp-card"><div class="cp-sub-label">Send to the student</div>${inner}</div>`;
+      return `<div class="cp-card iv-hero">
+        <div class="iv-hero-head"><div class="iv-orb">🎤</div>
+          <div><div class="iv-hero-badge">Recommended</div><h3>Send a mock visa interview</h3></div></div>
+        ${inner}
+        <div class="iv-tag">Officer adapts to <b>${esc(cl.destination_country_name)}</b> · ${esc(cl.visa_type)} — using ${esc(first)}'s profile</div>
+      </div>`;
+    }
+    // SECONDARY action: run it yourself, to test the software or interview a student
+    // sitting with you. A few free previews per org, then normal price.
+    function staffPreviewCard() {
+      const prevInfo = (state.credits && state.credits.staff_interview_previews) || {};
+      const prevLeft = typeof prevInfo.remaining === "number" ? prevInfo.remaining : null;
+      const mockCost = ((state.credits && state.credits.actions || []).find((a) => a.key === "mock_interview") || {}).credits || 20;
+      const costNote = prevLeft && prevLeft > 0
+        ? `<span class="iv-prev-free">${prevLeft} free preview${prevLeft === 1 ? "" : "s"} left</span>`
+        : `<span class="muted">${mockCost} credits each</span>`;
+      return `<div class="cp-card iv-preview">
+        <div class="iv-preview-row">
+          <div><div class="cp-sub-label" style="margin:0">Try it yourself</div>
+            <p class="muted" style="margin:4px 0 0;font-size:13px">Run a quick preview in your browser to test it or interview a student sitting with you.</p></div>
+          <div class="iv-preview-actions">
+            <label class="iv-voice-pref"><input type="checkbox" id="ivVoicePref"> 🎙 Voice${micSupported ? "" : " (read aloud)"}</label>
+            <button class="btn btn-soft btn-sm" id="ivStartBtn">▶ Preview it yourself</button>
+            <div class="iv-prev-note">${costNote}</div>
+          </div>
+        </div>
+      </div>`;
     }
     function ivBubble(m) {
       if (m.role === "user") return `<div class="ai-msg user"><div class="ai-bubble">${esc(m.content).replace(/\n/g, "<br>")}</div></div>`;
@@ -1463,7 +1652,7 @@
     }
     function drawIvChat(w) {
       const typing = iv.busy ? `<div class="ai-msg bot"><div class="ai-av">🧑‍✈️</div><div class="ai-bubble"><span class="ai-typing"><i></i><i></i><i></i></span></div></div>` : "";
-      const fb = iv.feedback ? `<div class="cp-card iv-feedback"><div class="cp-sub-label">📋 Interview feedback</div>${aiFormat(iv.feedback)}</div>` : "";
+      const fb = iv.feedback ? `<div class="cp-card iv-feedback"><div class="cp-sub-label">📋 Interview feedback</div>${feedbackFormat(iv.feedback)}</div>` : "";
       w.innerHTML = `
         <div class="cp-card iv-chat">
           <div class="iv-chead">
@@ -1502,7 +1691,8 @@
         const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { start: true } });
         iv.history.push({ role: "officer", content: r.reply });
         if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
-        if (r.credits_charged) toast(`Interview started · ${r.credits_charged} credits used`, "success");
+        if (r.was_preview) toast(`Preview started · free${typeof r.previews_remaining === "number" ? ` · ${r.previews_remaining} preview${r.previews_remaining === 1 ? "" : "s"} left` : ""}`, "success");
+        else if (r.credits_charged) toast(`Interview started · ${r.credits_charged} credits used`, "success");
       } catch (ex) {
         iv.started = false;
         if (ex.status === 402) { toast(ex.message, "error"); iv.busy = false; if (state.activeClient === cl.id) drawIv(); navigate("credits"); return; }
@@ -1781,6 +1971,7 @@
   const CREDIT_ACTION_META = {
     deep_scan: { label: "Deep Scan", color: "#f59e0b" },
     mock_interview: { label: "Mock interview", color: "#ec4899" },
+    ai_copilot: { label: "AI assistant", color: "#6366f1" },
     other: { label: "Usage", color: "#64748b" },
   };
   const creditActionColor = (key) => (CREDIT_ACTION_META[key] || {}).color || "#6366f1";
@@ -2251,6 +2442,39 @@
     ta.focus();
   }
 
+  // Pull "**Verdict:** … · **Readiness:** N/5" into a coloured badge; return {head, body}.
+  function verdictBadge(text) {
+    if (!text) return { head: "", body: text || "" };
+    const lines = String(text).split(/\n/);
+    let idx = -1;
+    for (let i = 0; i < lines.length; i++) { if (/verdict\s*:/i.test(lines[i])) { idx = i; break; } }
+    if (idx < 0) return { head: "", body: text };
+    const line = lines[idx];
+    const vm = line.match(/verdict\s*:\**\s*(likely approved|borderline|needs work)/i);
+    const rm = line.match(/readiness\s*:\**\s*(\d+)\s*\/\s*5/i);
+    if (!vm && !rm) return { head: "", body: text };
+    lines.splice(idx, 1);
+    const body = lines.join("\n").replace(/^\s+/, "");
+    let head = '<div class="iv-fb-head">';
+    if (vm) {
+      const vl = vm[1].toLowerCase();
+      const cls = vl.indexOf("approved") >= 0 ? "green" : (vl.indexOf("borderline") >= 0 ? "amber" : "red");
+      head += `<span class="iv-verdict iv-v-${cls}">${esc(vm[1])}</span>`;
+    }
+    if (rm) {
+      const n = Math.max(0, Math.min(5, parseInt(rm[1], 10)));
+      let dots = "";
+      for (let k = 0; k < 5; k++) dots += `<span class="iv-dot${k < n ? " on" : ""}"></span>`;
+      head += `<span class="iv-ready">Readiness <b>${n}/5</b><span class="iv-dots">${dots}</span></span>`;
+    }
+    return { head: head + "</div>", body };
+  }
+  // Feedback with the verdict badge on top of the formatted body.
+  function feedbackFormat(text) {
+    const vb = verdictBadge(text);
+    return vb.head + aiFormat(vb.body);
+  }
+
   function aiFormat(text) {
     let t = esc(text);
     t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -2331,8 +2555,18 @@
       const data = await api("/ai/chat", { method: "POST", body: { message: msg, history: priorHistory } });
       state.aiHistory = state.aiHistory.filter((m) => m.role !== "typing");
       state.aiHistory.push({ role: "model", content: data.answer || "(no answer)" });
+      // Keep the credits chip in sync when a message debited the wallet.
+      if (data.wallet) { state.credits = data.wallet; updatePlanChip(); }
     } catch (ex) {
       state.aiHistory = state.aiHistory.filter((m) => m.role !== "typing");
+      // Out of credits for the assistant → explain in-thread and point to top-up.
+      if (ex.status === 402) {
+        state.aiHistory.push({ role: "model", content: ex.message || "You're out of Rilono Credits for the AI assistant. Top up to keep chatting." });
+        toast(ex.message, "error");
+        state.aiBusy = false; renderAiThread();
+        navigate("credits");
+        return;
+      }
       state.aiHistory.push({ role: "model", content: "Sorry — " + (ex.message || "I couldn't answer that right now.") });
     } finally {
       state.aiBusy = false;
@@ -2352,7 +2586,7 @@
     openModal(`<div class="modal-head"><h3>Mock interview · ${fmtDate(s.created_at)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
       <div class="modal-body">
         <div class="cp-sub-label">📋 Feedback</div>
-        <div class="iv-feedback" style="margin-bottom:18px">${aiFormat(s.feedback || "No feedback recorded.")}</div>
+        <div class="iv-feedback" style="margin-bottom:18px">${feedbackFormat(s.feedback || "No feedback recorded.")}</div>
         <div class="cp-sub-label">Transcript</div>
         <div class="iv-thread" style="max-height:340px;overflow-y:auto">${transcript || '<div class="muted">No transcript.</div>'}</div>
       </div>
@@ -2376,17 +2610,95 @@
     showDeepScanReport(cl, res);
   }
 
-  function showDeepScanReport(cl, res) {
+  // --- Deep Scan report: parse the AI's markdown into readable, styled sections ---
+  function dsSections(md) {
+    const out = {}; let cur = "_pre"; out[cur] = [];
+    String(md || "").split(/\n/).forEach((line) => {
+      const h = line.match(/^\s*#{1,4}\s+(.*)$/);
+      if (h) { cur = h[1].trim().toLowerCase().replace(/[:*]+$/, "").trim(); out[cur] = []; }
+      else out[cur].push(line);
+    });
+    return out;
+  }
+  function dsLines(sections, keyword) {
+    const key = Object.keys(sections).find((k) => k.includes(keyword));
+    return key ? sections[key] : [];
+  }
+  function dsText(sections, keyword) {
+    return (dsLines(sections, keyword) || []).map((x) => x.trim()).filter(Boolean).join(" ").trim();
+  }
+  function dsItems(sections, keyword) {
+    const lines = dsLines(sections, keyword);
+    const items = [];
+    (lines || []).forEach((l) => {
+      const m = l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/);
+      if (m && m[1].trim()) items.push(m[1].trim());
+    });
+    if (items.length) return items.filter((x) => !/^none\b/i.test(x.replace(/[*_.]/g, "").trim()));
+    const joined = (lines || []).map((x) => x.trim()).filter(Boolean).join(" ").trim();
+    if (joined && !/^none\b/i.test(joined.replace(/[*_.#]/g, "").trim())) return [joined];
+    return [];
+  }
+  function dsInline(s) {
+    let t = esc(s);
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/`([^`]+)`/g, '<code style="background:var(--bg-2);padding:1px 5px;border-radius:5px;font-size:.92em">$1</code>');
+    return t;
+  }
+  function dsItemText(it) {
+    let cite = "";
+    it = String(it).replace(/\s*\((?:DOCUMENT|DOC)\s*#?\s*(\d+)\)\s*/gi, (m, n) => { cite += `<span class="cite">Doc ${n}</span>`; return " "; }).trim();
+    const tag = it.match(/^\*{0,2}(Missing|Stale|Expired|Outdated|Mismatch|Inconsistent|Incorrect)\*{0,2}\s*[:\-–]\s*(.*)$/i);
+    if (tag) {
+      const isMiss = /^(missing|stale|expired|outdated)$/i.test(tag[1]);
+      const bg = isMiss ? "#fef3c7" : "#fee2e2", color = isMiss ? "#b45309" : "#dc2626";
+      return `<span class="tag" style="background:${bg};color:${color}">${esc(tag[1])}</span>${dsInline(tag[2])}${cite}`;
+    }
+    return dsInline(it) + cite;
+  }
+  function dsFindingSection(title, items, cls, icon, clearMsg) {
+    if (!items.length) return `<div class="ds-sec"><div class="ds-sec-h">${title}</div><div class="ds-clear">✓ ${esc(clearMsg)}</div></div>`;
+    const rows = items.map((it) => `<div class="ds-item ${cls}"><div class="b">${icon}</div><div>${dsItemText(it)}</div></div>`).join("");
+    return `<div class="ds-sec"><div class="ds-sec-h">${title} <span class="n">${items.length}</span></div><div class="ds-list">${rows}</div></div>`;
+  }
+  function deepScanReportHtml(res) {
     const risk = (res.risk_level || "medium").toLowerCase();
-    const riskColor = risk === "high" ? "#ef4444" : risk === "low" ? "#10b981" : "#f59e0b";
-    openModal(`<div class="modal-head"><h3>🔍 Deep Scan · ${esc(cl.full_name)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
-      <div class="modal-body">
-        <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
-          <span style="background:${riskColor}1f;color:${riskColor};font-weight:700;padding:5px 12px;border-radius:999px;font-size:13px">${risk.toUpperCase()} RISK</span>
-          <span style="font-size:13px;color:var(--text-2)">${res.documents_analyzed} document${res.documents_analyzed === 1 ? "" : "s"} analyzed · ${res.credits_charged} credits</span>
-        </div>
-        <div class="iv-feedback">${aiFormat(res.report || "No findings.")}</div>
+    const sections = dsSections(res.report);
+    const overall = dsText(sections, "overall") || dsText(sections, "risk");
+    const mism = dsItems(sections, "mismatch");
+    const missing = dsItems(sections, "missing");
+    const actions = dsItems(sections, "action").length ? dsItems(sections, "action") : dsItems(sections, "recommend");
+    const meta = ({ high: { ic: "⚠️", word: "High risk" }, medium: { ic: "⚡", word: "Medium risk" }, low: { ic: "✅", word: "Low risk" } })[risk] || { ic: "⚡", word: "Medium risk" };
+    const why = overall.replace(/^\s*(HIGH|MEDIUM|LOW)\b[\s:—–-]*/i, "").trim();
+    const n = res.documents_analyzed;
+    const total = (res.documents_total != null) ? res.documents_total : n;
+    const skipped = res.documents_skipped || 0, overCap = res.documents_over_cap || 0, failed = res.extraction_failures || 0;
+    const coverBits = [];
+    if (skipped) coverBits.push(`${skipped} had no readable text yet`);
+    if (overCap) coverBits.push(`${overCap} exceeded the per-scan limit`);
+    if (failed) coverBits.push(`${failed} audited from a raw excerpt only`);
+    const coverWarn = (skipped + overCap + failed) > 0
+      ? `<div style="margin:8px 0 2px;padding:9px 12px;border-radius:9px;background:rgba(245,158,11,.12);color:#b45309;font-size:12.5px;font-weight:600;border:1px solid rgba(245,158,11,.28)">⚠️ Audited <b>${n}</b> of <b>${total}</b> documents — ${coverBits.join("; ")}.${(skipped + overCap) > 0 ? " Re-run once they're ready for full coverage." : ""}</div>`
+      : "";
+    return `
+      <div class="ds-meta"><b>${n}</b>&nbsp;of&nbsp;<b>${total}</b>&nbsp;document${total === 1 ? "" : "s"} audited&nbsp;·&nbsp;${res.credits_charged} credits</div>
+      ${coverWarn}
+      <div class="ds-risk ${risk}"><div class="ds-ic">${meta.ic}</div>
+        <div><div class="lvl">${meta.word}</div><div class="why">${why ? dsInline(why) : "See the findings below."}</div></div></div>
+      <div class="ds-stats">
+        <div class="ds-stat"><b style="color:${mism.length ? "#dc2626" : "#10b981"}">${mism.length}</b><span>Mismatches</span></div>
+        <div class="ds-stat"><b style="color:${missing.length ? "#b45309" : "#10b981"}">${missing.length}</b><span>Missing / stale</span></div>
+        <div class="ds-stat"><b style="color:#4338ca">${actions.length}</b><span>Actions</span></div>
       </div>
+      ${dsFindingSection("⚠️ Mismatches &amp; errors", mism, "err", "!", "No mismatches or errors found across the documents.")}
+      ${dsFindingSection("📄 Missing or stale documents", missing, "miss", "!", "Nothing missing — all expected documents are present and current.")}
+      ${actions.length ? `<div class="ds-sec"><div class="ds-sec-h">✅ Recommended actions <span class="n">${actions.length}</span></div>
+        <div class="ds-list">${actions.map((it, i) => `<div class="ds-item act"><div class="b">${i + 1}</div><div>${dsItemText(it)}</div></div>`).join("")}</div></div>` : ""}`;
+  }
+
+  function showDeepScanReport(cl, res) {
+    openModal(`<div class="modal-head"><h3>🔍 Deep Scan · ${esc(cl.full_name)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body">${res && res.report ? deepScanReportHtml(res) : '<div class="ds-clear">✓ No findings returned.</div>'}</div>
       <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`);
   }
 
@@ -2779,7 +3091,7 @@
     applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
     topup: openCreditCheckout, activateInfra: activateInfraFee, deepScan: runDeepScan,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
-    viewInterview: viewInterviewSession,
+    viewInterview: viewInterviewSession, sendInterview: openSendInterviewPicker,
     calPrev, calNext, calToday, calSetMonth, calSetYear, calEvent, calAdd, calDelete, calToggleDone,
   };
 

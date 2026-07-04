@@ -8097,6 +8097,13 @@ async function handleRegister(e) {
         userData.cf_turnstile_token = turnstileToken;
     }
 
+    // Attach first-touch acquisition attribution (where this visitor came from).
+    try {
+        if (typeof window.getRilonoAttribution === 'function') {
+            Object.assign(userData, window.getRilonoAttribution());
+        }
+    } catch (e) { /* attribution is best-effort — never block signup */ }
+
     try {
         const response = await fetch(`${API_BASE}/api/auth/register`, {
             method: 'POST',

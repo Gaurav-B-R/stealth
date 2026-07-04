@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app import models, schemas
 from app import ai_usage
+from app import acquisition
 from app import enterprise_credits
 from app import enterprise_coupons
 from app import enterprise_refunds
@@ -720,6 +721,24 @@ def ai_usage_analytics_admin(
         extra_key=f"user:{current_user.id}",
     )
     return ai_usage.build_ai_usage_analytics(db)
+
+
+@router.get("/acquisition/analytics")
+def acquisition_analytics_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Where signups come from — first-party traffic-source breakdown for the admin console."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.acquisition.analytics",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    return acquisition.build_analytics(db)
 
 
 @router.get("/enterprise/revenue")

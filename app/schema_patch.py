@@ -264,6 +264,23 @@ def ensure_referral_columns():
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_referred_by_user_id ON users(referred_by_user_id)"))
 
 
+def ensure_user_acquisition_columns():
+    """Patch users with first-touch acquisition (traffic-source) columns. Additive/idempotent."""
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "users")
+        for col in (
+            "acquisition_channel",
+            "acquisition_source",
+            "acquisition_medium",
+            "acquisition_campaign",
+            "acquisition_referrer",
+            "acquisition_landing_page",
+        ):
+            if col not in columns:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} VARCHAR"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_acquisition_channel ON users(acquisition_channel)"))
+
+
 def ensure_enterprise_organization_columns():
     """
     Ensure enterprise organization table has immutable subdomain storage.
@@ -618,6 +635,8 @@ def ensure_enterprise_crm_tables():
                     file_size INTEGER,
                     mime_type VARCHAR,
                     extracted_text TEXT,
+                    deep_scan_facts TEXT,
+                    deep_scan_facts_hash VARCHAR,
                     uploaded_by_user_id INTEGER,
                     uploaded_by_name VARCHAR,
                     created_at {ts} DEFAULT {now_default} NOT NULL
@@ -633,6 +652,10 @@ def ensure_enterprise_crm_tables():
             doc_cols = _get_table_columns(conn, "enterprise_client_documents")
             if "extracted_text" not in doc_cols:
                 conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN extracted_text TEXT"))
+            if "deep_scan_facts" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN deep_scan_facts TEXT"))
+            if "deep_scan_facts_hash" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN deep_scan_facts_hash VARCHAR"))
 
         # --- enterprise_interview_sessions ------------------------------------
         if not _table_exists(conn, "enterprise_interview_sessions"):
@@ -752,6 +775,39 @@ def ensure_enterprise_interview_invite_columns():
             conn.execute(text(
                 f"ALTER TABLE enterprise_interview_invites ADD COLUMN last_completed_at {ts}"
             ))
+
+
+def ensure_enterprise_demo_requests_table():
+    """Create the enterprise_demo_requests table (public 'book a demo' leads)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_demo_requests"):
+            return
+        conn.execute(text(f"""
+            CREATE TABLE enterprise_demo_requests (
+                id {pk},
+                full_name VARCHAR NOT NULL,
+                work_email VARCHAR NOT NULL,
+                company VARCHAR,
+                phone VARCHAR,
+                team_size VARCHAR,
+                students_count VARCHAR,
+                message TEXT,
+                source VARCHAR,
+                ip_address VARCHAR,
+                status VARCHAR NOT NULL DEFAULT 'new',
+                created_at {ts} DEFAULT {now_default} NOT NULL
+            )
+        """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_demo_requests_work_email ON enterprise_demo_requests(work_email)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_demo_requests_status ON enterprise_demo_requests(status)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_demo_requests_created_at ON enterprise_demo_requests(created_at)",
+        ):
+            conn.execute(text(stmt))
 
 
 def ensure_enterprise_support_requests_table():
@@ -988,6 +1044,10 @@ def ensure_enterprise_credit_tables():
                     lifetime_purchased_credits INTEGER NOT NULL DEFAULT 0,
                     lifetime_spent_credits INTEGER NOT NULL DEFAULT 0,
                     infra_fee_paid_until {ts},
+                    copilot_usage_date VARCHAR,
+                    copilot_msgs_today INTEGER NOT NULL DEFAULT 0,
+                    copilot_unbilled_msgs INTEGER NOT NULL DEFAULT 0,
+                    interview_staff_previews_used INTEGER NOT NULL DEFAULT 0,
                     created_at {ts} DEFAULT {now_default} NOT NULL,
                     updated_at {ts}
                 )
@@ -996,6 +1056,17 @@ def ensure_enterprise_credit_tables():
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_credit_wallets_org "
                 "ON enterprise_credit_wallets(organization_id)"
             ))
+        else:
+            # Existing wallets: add the copilot-metering + staff-preview columns idempotently.
+            wallet_cols = _get_table_columns(conn, "enterprise_credit_wallets")
+            if "copilot_usage_date" not in wallet_cols:
+                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN copilot_usage_date VARCHAR"))
+            if "copilot_msgs_today" not in wallet_cols:
+                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN copilot_msgs_today INTEGER NOT NULL DEFAULT 0"))
+            if "copilot_unbilled_msgs" not in wallet_cols:
+                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN copilot_unbilled_msgs INTEGER NOT NULL DEFAULT 0"))
+            if "interview_staff_previews_used" not in wallet_cols:
+                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN interview_staff_previews_used INTEGER NOT NULL DEFAULT 0"))
 
         # --- enterprise_credit_transactions -----------------------------------
         if not _table_exists(conn, "enterprise_credit_transactions"):

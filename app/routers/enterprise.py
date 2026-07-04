@@ -50,7 +50,8 @@ from app.email_service import send_enterprise_interview_invite_email, send_enter
 from app.email_service import send_enterprise_interview_report_email
 from app.email_service import send_enterprise_document_request_email, send_enterprise_document_request_code_email
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
-from app.email_service import send_enterprise_support_request_email
+from app.email_service import send_enterprise_support_request_email, send_enterprise_demo_request_email
+from app.email_service import send_enterprise_welcome_email
 from app.utils.token_security import hash_token
 
 RAZORPAY_API_BASE = os.getenv("RAZORPAY_API_BASE", "https://api.razorpay.com/v1").rstrip("/")
@@ -322,6 +323,63 @@ def _enforce_rate_limit_or_429(
             detail="Too many requests. Please try again later.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+class EnterpriseDemoRequestBody(BaseModel):
+    full_name: str = Field(..., min_length=2, max_length=120)
+    work_email: EmailStr
+    company: Optional[str] = Field(default=None, max_length=160)
+    phone: Optional[str] = Field(default=None, max_length=40)
+    team_size: Optional[str] = Field(default=None, max_length=40)
+    students_count: Optional[str] = Field(default=None, max_length=40)
+    message: Optional[str] = Field(default=None, max_length=2000)
+    source: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.post("/demo")
+def enterprise_public_demo_request(
+    payload: EnterpriseDemoRequestBody,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """PUBLIC (no auth) 'book a demo' lead from the enterprise landing page. Stores the
+    lead (so none is lost) and best-effort emails the sales inbox."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.demo_request", limit=8, window_seconds=3600,
+    )
+    name = (payload.full_name or "").strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Please enter your name.")
+
+    lead = models.EnterpriseDemoRequest(
+        full_name=name[:120],
+        work_email=str(payload.work_email).strip()[:200],
+        company=(payload.company or "").strip()[:160] or None,
+        phone=(payload.phone or "").strip()[:40] or None,
+        team_size=(payload.team_size or "").strip()[:40] or None,
+        students_count=(payload.students_count or "").strip()[:40] or None,
+        message=(payload.message or "").strip()[:2000] or None,
+        source=(payload.source or "").strip()[:200] or None,
+        ip_address=(extract_client_ip(request) if request else None),
+        status="new",
+    )
+    db.add(lead)
+    db.commit()
+
+    try:
+        send_enterprise_demo_request_email(
+            full_name=lead.full_name,
+            work_email=lead.work_email,
+            company=lead.company or "",
+            phone=lead.phone or "",
+            team_size=lead.team_size or "",
+            students_count=lead.students_count or "",
+            message=lead.message or "",
+        )
+    except Exception:
+        logger.exception("Demo-request notification email failed (lead=%s)", lead.id)
+
+    return {"message": "Thanks! Our team will email you shortly to schedule your demo."}
 
 
 def _build_default_enterprise_logo_url(
@@ -3832,6 +3890,19 @@ async def enterprise_signup(
     db.commit()
     db.refresh(user)
 
+    portal_url = _build_enterprise_portal_url(subdomain_slug, request)
+
+    # Warm welcome email to the new workspace owner — best-effort, never block signup.
+    try:
+        send_enterprise_welcome_email(
+            to_email=user.email,
+            full_name=user.full_name or "",
+            company=company_name,
+            portal_url=portal_url,
+        )
+    except Exception:
+        logger.exception("Enterprise welcome email failed for %s", user.email)
+
     access_token = create_access_token(
         data={"sub": user.email},
         expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
@@ -3848,7 +3919,7 @@ async def enterprise_signup(
             "full_name": user.full_name,
             "is_admin": user.is_admin,
         },
-        "portal_url": _build_enterprise_portal_url(subdomain_slug, request),
+        "portal_url": portal_url,
         **context,
     }
 
@@ -3916,9 +3987,14 @@ def enterprise_ai_chat(
         )
 
     # Cost guardrail: reject obviously off-topic prompts before spending model tokens.
+    # (A refused off-topic message is free — it doesn't touch the copilot meter.)
     if ai_guardrails.is_off_topic(payload.message):
         ai_guardrails.record_block(source="enterprise_copilot", detail="enterprise")
         return {"answer": ai_guardrails.OFF_TOPIC_REFUSAL, "permissions": _enterprise_permissions_for_role(role)}
+
+    # Meter the copilot: free daily allowance, then 1 credit per bundle of messages.
+    # Block a paid message the wallet can't cover BEFORE spending any Gemini tokens.
+    credits.copilot_precheck_or_402(db, organization.id)
 
     history = [turn.model_dump() for turn in (payload.history or [])]
     try:
@@ -3937,7 +4013,16 @@ def enterprise_ai_chat(
             detail="The AI assistant ran into a problem answering that. Please try again.",
         )
 
-    return {"answer": answer, "permissions": _enterprise_permissions_for_role(role)}
+    # Answered successfully → record the message against the meter (may debit a credit).
+    meter = credits.record_copilot_message(db, organization.id, user=current_user)
+    response = {
+        "answer": answer,
+        "permissions": _enterprise_permissions_for_role(role),
+        "credits_meter": meter,
+    }
+    if meter.get("credits_charged"):
+        response["wallet"] = credits.wallet_state(db, organization.id)
+    return response
 
 
 # ===========================================================================
@@ -4178,6 +4263,7 @@ def enterprise_client_deep_scan(
     )
     try:
         result = enterprise_ai.run_deep_scan_audit(
+            db=db,
             client=client,
             organization=organization,
             documents=documents,
@@ -4202,6 +4288,10 @@ def enterprise_client_deep_scan(
         "report": result["report"],
         "risk_level": result["risk_level"],
         "documents_analyzed": result["documents_analyzed"],
+        "documents_total": result.get("documents_total"),
+        "documents_skipped": result.get("documents_skipped"),
+        "documents_over_cap": result.get("documents_over_cap"),
+        "extraction_failures": result.get("extraction_failures"),
         "credits_charged": credits.action_cost("deep_scan"),
         "wallet": credits.wallet_state(db, organization.id),
     }
@@ -4278,10 +4368,11 @@ def enterprise_interview_chat(
         raise HTTPException(status_code=503, detail="The mock interview isn't available right now.")
 
     is_start = bool(payload.start)
-    # One interview = one charge, taken at the start. Hard-block before any tokens
-    # are spent if the wallet can't cover it.
+    # A STAFF-run interview is a preview/test tool — the self-serve link a student takes
+    # is the real product. Staff get a few free previews per org, then it costs the normal
+    # mock_interview price. Hard-block before any tokens are spent if unaffordable.
     if is_start:
-        credits.enforce_action_or_402(db, organization.id, "mock_interview")
+        credits.enforce_staff_interview_or_402(db, organization.id)
 
     history = [t.model_dump() for t in (payload.history or [])]
     try:
@@ -4304,12 +4395,14 @@ def enterprise_interview_chat(
         "permissions": _enterprise_permissions_for_role(role),
     }
     if is_start:
-        credits.charge_action(
-            db, organization.id, "mock_interview",
-            user=current_user, reference_type="client", reference_id=client.id,
-            description=f"Mock interview — {client.full_name}", commit=True,
+        meter = credits.consume_staff_interview(
+            db, organization.id,
+            user=current_user, reference_id=client.id,
+            description=f"Mock interview (staff preview) — {client.full_name}",
         )
-        response_payload["credits_charged"] = credits.action_cost("mock_interview")
+        response_payload["credits_charged"] = meter["charged"]
+        response_payload["was_preview"] = meter["was_preview"]
+        response_payload["previews_remaining"] = meter["previews_remaining"]
         response_payload["wallet"] = credits.wallet_state(db, organization.id)
     return response_payload
 

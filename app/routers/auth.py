@@ -23,6 +23,7 @@ from app.email_service import (
     send_password_reset_email,
     send_contact_form_email,
     send_founder_new_verified_user_alert,
+    send_student_welcome_email,
     verify_email_notifications_unsubscribe_token,
 )
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
@@ -489,6 +490,17 @@ def register(
     if consent_user_agent:
         consent_user_agent = consent_user_agent[:1000]
 
+    # First-touch acquisition attribution (where this signup came from).
+    from app import acquisition
+    acq = acquisition.classify(
+        utm_source=user.acq_source,
+        utm_medium=user.acq_medium,
+        utm_campaign=user.acq_campaign,
+        referrer=user.acq_referrer,
+        has_referral_code=bool(referrer),
+    )
+    acq_landing = (user.acq_landing or "").strip()[:500] or None
+
     # Auto-fill university name from the database (ignore user-provided university)
     db_user = models.User(
         email=user.email,
@@ -500,6 +512,12 @@ def register(
         current_residence_country=user.current_residence_country or "United States",
         referral_code=generate_unique_referral_code(db),
         referred_by_user_id=referrer.id if referrer else None,
+        acquisition_channel=acq["acquisition_channel"],
+        acquisition_source=acq["acquisition_source"],
+        acquisition_medium=acq["acquisition_medium"],
+        acquisition_campaign=acq["acquisition_campaign"],
+        acquisition_referrer=acq["acquisition_referrer"],
+        acquisition_landing_page=acq_landing,
         accepted_terms_privacy_at=now,
         accepted_terms_privacy_ip=consent_ip,
         accepted_terms_privacy_user_agent=consent_user_agent,
@@ -584,6 +602,12 @@ def verify_otp(
         _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
     except Exception:
         pass
+
+    # Warm welcome email — best-effort, never block verification.
+    try:
+        send_student_welcome_email(to_email=user.email, full_name=user.full_name or "")
+    except Exception:
+        logger.exception("Student welcome email failed for %s", user.email)
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data={"sub": user.email}, expires_delta=access_token_expires)
@@ -858,6 +882,11 @@ def _find_or_create_oauth_user(
     db.refresh(user)
     get_or_create_user_subscription(db, user.id)
     _refresh_student_profile_snapshot_safe(db=db, user_id=user.id)
+    # New OAuth signup → warm welcome email (best-effort; provider already verified email).
+    try:
+        send_student_welcome_email(to_email=user.email, full_name=user.full_name or "")
+    except Exception:
+        logger.exception("Student welcome email failed for OAuth user %s", user.email)
     return user
 
 

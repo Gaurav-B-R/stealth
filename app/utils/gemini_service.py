@@ -79,6 +79,16 @@ if not USE_VERTEX_AI:
     else:
         print("⚠ Warning: Neither service account JSON nor valid GEMINI_API_KEY found. Document text extraction will be disabled.")
 
+
+def is_ai_configured() -> bool:
+    """True when Gemini is usable via either the Vertex AI service account path
+    or a valid Gemini API key. Callers use this to fail fast with a clean
+    'temporarily unavailable' message instead of a 500 when AI isn't configured."""
+    if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
+        return True
+    key = (GEMINI_API_KEY or "").strip()
+    return bool(GENAI_AVAILABLE and key and key.startswith("AIza"))
+
 # Supported file types for Gemini
 SUPPORTED_IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 SUPPORTED_DOCUMENT_TYPES = {".pdf", ".txt"}

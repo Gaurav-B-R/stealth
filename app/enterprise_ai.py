@@ -18,7 +18,11 @@ The Gemini SDK introspects the tool function signatures at runtime to build thei
 schemas, which requires real (non-stringized) type annotations.
 """
 
+import hashlib
+import json
 import logging
+import os
+import re
 from datetime import datetime, timedelta, date
 from typing import Optional
 
@@ -591,8 +595,50 @@ def run_enterprise_ai_chat(
 # Deep Scan document audit (premium, credit-billed)
 # ---------------------------------------------------------------------------
 
-DEEP_SCAN_MAX_DOC_CHARS = 14000
-DEEP_SCAN_MAX_TOTAL_CHARS = 90000
+# Deep Scan uses a two-stage map-reduce so it scales to any file size without ever
+# silently dropping documents or overflowing the model's context:
+#   MAP    — one small call per document extracts its audit facts as structured JSON
+#            (each call sees ONE document in full → nothing is truncated or dropped).
+#   REDUCE — one call cross-references the compact facts of ALL documents at once
+#            (structured input stays tiny even for 40+ docs → sharp, complete audit).
+# Per-document extractions are cached on the document row (keyed by a text hash), so
+# re-scans only re-run the cheap reduce step.
+
+# Read each document in full up to this cap for the MAP step (a whole passport / bank
+# statement / offer letter fits comfortably; guards against pathological OCR blobs).
+DEEP_SCAN_EXTRACT_MAX_DOC_CHARS = int(os.getenv("DEEP_SCAN_EXTRACT_MAX_DOC_CHARS", "60000") or "60000")
+# Safety cap on how many documents a single scan will process.
+DEEP_SCAN_MAX_DOCUMENTS = int(os.getenv("DEEP_SCAN_MAX_DOCUMENTS", "40") or "40")
+# The REDUCE step only sees compact structured facts, which stay small even for large
+# files; this is a generous guardrail, not a real constraint.
+DEEP_SCAN_RECONCILE_MAX_CHARS = int(os.getenv("DEEP_SCAN_RECONCILE_MAX_CHARS", "160000") or "160000")
+
+
+def _deep_scan_model_name() -> str:
+    return gemini_utils.get_model_candidates(
+        primary_env="ENTERPRISE_AI_MODEL",
+        candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
+    )[0]
+
+
+def _parse_json_object(text: Optional[str]):
+    """Best-effort parse of a JSON object from a model response (tolerates code fences / prose)."""
+    s = (text or "").strip()
+    if not s:
+        return None
+    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s*```$", "", s).strip()
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+    match = re.search(r"\{.*\}", s, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            return None
+    return None
 
 
 def _deep_scan_client_block(client: models.EnterpriseClient) -> str:
@@ -609,85 +655,149 @@ def _deep_scan_client_block(client: models.EnterpriseClient) -> str:
     return "\n".join(bits)
 
 
-def _deep_scan_documents_block(documents: list) -> tuple[str, int]:
-    """Build the cross-reference corpus from documents' extracted text. Returns
-    (text_block, usable_document_count)."""
-    chunks = []
-    used = 0
-    total = 0
-    for doc in documents:
-        extracted = (getattr(doc, "extracted_text", None) or "").strip()
-        if not extracted:
-            continue
-        snippet = extracted[:DEEP_SCAN_MAX_DOC_CHARS]
-        if total + len(snippet) > DEEP_SCAN_MAX_TOTAL_CHARS:
-            snippet = snippet[: max(0, DEEP_SCAN_MAX_TOTAL_CHARS - total)]
-        if not snippet:
-            break
-        used += 1
-        total += len(snippet)
-        chunks.append(
-            f"=== DOCUMENT #{used}: {getattr(doc, 'document_type', 'Document')} "
-            f"({getattr(doc, 'original_filename', 'file')}) ===\n{snippet}"
-        )
-        if total >= DEEP_SCAN_MAX_TOTAL_CHARS:
-            break
-    return ("\n\n".join(chunks), used)
+_DEEP_SCAN_EXTRACT_SYSTEM = (
+    "You are a precise visa-document data extractor. From ONE document's text, extract only the "
+    "audit-relevant facts that are ACTUALLY present. Never guess, infer, or invent — use null or [] "
+    "when a field is absent. Preserve values exactly as written (names, numbers, dates). "
+    "Return STRICT JSON only, with no prose or code fences."
+)
+
+_DEEP_SCAN_FACTS_SCHEMA = (
+    "{\n"
+    '  "document_type": "what this document is (as labeled or clearly evident)",\n'
+    '  "person_names": ["every person name as written"],\n'
+    '  "date_of_birth": "YYYY-MM-DD or as written, else null",\n'
+    '  "passport_number": "or null",\n'
+    '  "nationality": "or null",\n'
+    '  "issue_date": "or null",\n'
+    '  "expiry_date": "or null",\n'
+    '  "institution": "school / bank / sponsor / issuer name, or null",\n'
+    '  "financials": [{"label": "", "amount": "", "currency": "", "as_of_date": ""}],\n'
+    '  "key_dates": [{"label": "", "date": ""}],\n'
+    '  "audit_notes": ["anything a visa auditor should know from THIS document only"]\n'
+    "}"
+)
+
+
+def _extract_document_facts(doc, model_name: str):
+    """MAP step: extract one document's structured facts as JSON (or None on failure)."""
+    genai = gemini_utils.genai
+    text = (getattr(doc, "extracted_text", None) or "").strip()[:DEEP_SCAN_EXTRACT_MAX_DOC_CHARS]
+    prompt = (
+        f"Return JSON with exactly these keys:\n{_DEEP_SCAN_FACTS_SCHEMA}\n\n"
+        f"DOCUMENT TYPE (as labeled by the uploader): {getattr(doc, 'document_type', 'Document')}\n"
+        f"DOCUMENT TEXT:\n{text}"
+    )
+    model = genai.GenerativeModel(model_name, system_instruction=_DEEP_SCAN_EXTRACT_SYSTEM)
+    response = model.generate_content(prompt)
+    ai_usage.record_gemini_usage("deep_scan_extract", model_name, response)
+    return _parse_json_object(getattr(response, "text", None))
+
+
+def _facts_for_document(doc, model_name: str) -> tuple[Optional[dict], str]:
+    """Return (facts, status). Reuses cached extraction when the source text is unchanged."""
+    text = (getattr(doc, "extracted_text", None) or "").strip()
+    if not text:
+        return None, "no_text"
+    text_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    if getattr(doc, "deep_scan_facts_hash", None) == text_hash and getattr(doc, "deep_scan_facts", None):
+        try:
+            return json.loads(doc.deep_scan_facts), "cached"
+        except Exception:
+            pass
+    facts = _extract_document_facts(doc, model_name)
+    if not isinstance(facts, dict):
+        return None, "extract_failed"
+    try:
+        doc.deep_scan_facts = json.dumps(facts, ensure_ascii=False)[:200000]
+        doc.deep_scan_facts_hash = text_hash
+    except Exception:
+        pass
+    return facts, "extracted"
 
 
 def run_deep_scan_audit(
     *,
+    db: Optional[Session] = None,
     client: models.EnterpriseClient,
     organization: models.EnterpriseOrganization,
     documents: list,
     current_date: Optional[str] = None,
 ) -> dict:
     """
-    Cross-reference a client's uploaded documents with Gemini to surface mismatched
-    dates/names, missing funds and timeline risks before the visa appointment.
+    Cross-reference a client's uploaded documents with Gemini (map-reduce) to surface
+    mismatched dates/names, missing funds and timeline risks before the visa appointment.
 
-    Returns a dict: {"report": <markdown>, "risk_level": "low|medium|high",
-    "documents_analyzed": int}. Raises if the AI isn't configured or no readable
-    documents exist (so the caller can avoid charging credits).
+    Reads every document in full (no silent truncation), then reconciles the extracted
+    facts across the whole file in one pass. Returns:
+      {"report": <markdown>, "risk_level": "low|medium|high",
+       "documents_analyzed": int, "documents_total": int,
+       "documents_skipped": int, "documents_over_cap": int, "extraction_failures": int}
+    Raises if the AI isn't configured or no readable documents exist (so the caller can
+    avoid charging credits).
     """
     if not is_ai_configured():
         raise RuntimeError("Deep Scan AI is not configured.")
 
-    corpus, usable = _deep_scan_documents_block(documents or [])
-    if usable == 0:
+    all_docs = list(documents or [])
+    readable = [d for d in all_docs if (getattr(d, "extracted_text", None) or "").strip()]
+    if not readable:
         raise ValueError(
             "No readable document text yet. Upload documents (PDF/images) and wait a moment "
             "for text extraction before running a Deep Scan."
         )
 
-    genai = gemini_utils.genai
-    model_name = gemini_utils.get_model_candidates(
-        primary_env="ENTERPRISE_AI_MODEL",
-        candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
-    )[0]
+    model_name = _deep_scan_model_name()
+    processed = readable[:DEEP_SCAN_MAX_DOCUMENTS]
+    over_cap = max(0, len(readable) - len(processed))
+    skipped_no_text = len(all_docs) - len(readable)
 
+    # ---- MAP: per-document structured extraction (cached) ----
+    per_doc: list[dict] = []
+    extraction_failures = 0
+    for idx, doc in enumerate(processed, start=1):
+        facts, status = _facts_for_document(doc, model_name)
+        if not isinstance(facts, dict):
+            extraction_failures += 1
+            facts = {
+                "document_type": getattr(doc, "document_type", "Document"),
+                "extraction_failed": True,
+                "raw_excerpt": (getattr(doc, "extracted_text", None) or "").strip()[:2000],
+            }
+        per_doc.append({
+            "doc_index": idx,
+            "document_type": getattr(doc, "document_type", "Document"),
+            "filename": getattr(doc, "original_filename", "file"),
+            "facts": facts,
+        })
+
+    # Persist freshly-cached extractions (best-effort; independent of the credit charge).
+    if db is not None:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    # ---- REDUCE: reconcile the compact facts across ALL documents in one pass ----
+    genai = gemini_utils.genai
     eval_date = (current_date or "").strip() or datetime.utcnow().date().isoformat()
     system = (
         "You are a meticulous senior visa-documentation auditor for a study-abroad consultancy. "
-        "You cross-reference a student's documents to catch errors BEFORE the visa appointment, "
-        "protecting the agency's university commission. Be precise, cite the document number for "
-        "every finding, and never invent facts that are not present in the provided text."
+        "You are given a CLIENT PROFILE and STRUCTURED FACTS already extracted from each uploaded "
+        "document. Cross-reference them to catch errors BEFORE the visa appointment, protecting the "
+        "agency's university commission. Be precise, cite the document index for every finding, and "
+        "never invent facts that are not present in the provided data."
     )
-    # The big, reusable part (profile + documents) is the cacheable context; the
-    # question is small and varies. See app.utils.gemini_cache (GCP Context Caching).
-    context_text = f"""{system}
-
-CLIENT PROFILE:
-{_deep_scan_client_block(client)}
-
-DOCUMENTS (extracted text):
-{corpus}"""
-
-    question = f"""Audit this student's visa file using the CLIENT PROFILE and DOCUMENTS above. Today's date for evaluation is {eval_date}.
+    facts_json = json.dumps(per_doc, ensure_ascii=False, indent=1)[:DEEP_SCAN_RECONCILE_MAX_CHARS]
+    context_text = (
+        f"CLIENT PROFILE:\n{_deep_scan_client_block(client)}\n\n"
+        f"STRUCTURED DOCUMENT FACTS (JSON array; 'doc_index' identifies each document):\n{facts_json}"
+    )
+    question = f"""Audit this student's visa file using the CLIENT PROFILE and STRUCTURED DOCUMENT FACTS above. Today's date for evaluation is {eval_date}.
 
 Cross-check across ALL documents and report:
 1. Identity consistency — name, date of birth, passport number, nationality must match across documents and the profile.
-2. Timeline compliance — bank statements older than 6 months, passport expiring within 6 months of travel, I-20/offer/intake dates already in the past.
+2. Timeline compliance — bank statements older than 6 months, passport expiring within 6 months of travel, offer/I-20/intake dates already in the past.
 3. Financial sufficiency — whether the bank balance / sponsor funds clearly cover tuition + living costs; flag if missing or ambiguous.
 4. Missing critical documents for a {client.visa_type or 'student'} visa to {client.destination_country_name or 'the destination'}.
 
@@ -695,22 +805,15 @@ Respond in concise Markdown with these sections:
 ## Overall Risk
 One of: LOW, MEDIUM, or HIGH — on its own line, followed by a one-sentence reason.
 ## Mismatches & Errors
-Bullet list. Cite the document number. If none, say "None found".
+Bullet list. Cite the document like "(Doc 2)" using its doc_index. If none, say "None found".
 ## Missing or Stale Documents
 Bullet list. If none, say "None".
 ## Recommended Actions
 A short prioritized checklist for the counselor."""
 
-    # Try the GCP context cache for the large document corpus (>50% input savings on
-    # repeat scans). Falls back to an inline prompt when caching is disabled/too small.
-    from app.utils import gemini_cache
-    response = gemini_cache.generate_content_cached(
-        prompt=question, context_text=context_text, model_name=model_name, source="deep_scan",
-    )
-    if response is None:
-        model = genai.GenerativeModel(model_name, system_instruction=system)
-        response = model.generate_content(f"{context_text}\n\n{question}")
-        ai_usage.record_gemini_usage("deep_scan", model_name, response)
+    model = genai.GenerativeModel(model_name, system_instruction=system)
+    response = model.generate_content(f"{context_text}\n\n{question}")
+    ai_usage.record_gemini_usage("deep_scan", model_name, response)
     report = (getattr(response, "text", None) or "").strip()
     if not report:
         raise RuntimeError("The Deep Scan did not return a report. Please try again.")
@@ -723,4 +826,28 @@ A short prioritized checklist for the counselor."""
     elif "LOW" in head:
         risk_level = "low"
 
-    return {"report": report, "risk_level": risk_level, "documents_analyzed": usable}
+    # Be honest about coverage — never let a counselor assume the whole file was scanned
+    # when some documents had no text, were over the cap, or failed to parse.
+    coverage_notes = []
+    if skipped_no_text:
+        coverage_notes.append(f"{skipped_no_text} had no readable text yet and were skipped")
+    if over_cap:
+        coverage_notes.append(f"{over_cap} beyond the {DEEP_SCAN_MAX_DOCUMENTS}-document limit were not scanned")
+    if extraction_failures:
+        coverage_notes.append(f"{extraction_failures} could not be fully parsed and were audited from a raw excerpt")
+    if coverage_notes:
+        report += (
+            f"\n\n---\n_Scan coverage: audited {len(processed)} of {len(all_docs)} document(s). "
+            + "; ".join(coverage_notes)
+            + "._"
+        )
+
+    return {
+        "report": report,
+        "risk_level": risk_level,
+        "documents_analyzed": len(processed),
+        "documents_total": len(all_docs),
+        "documents_skipped": skipped_no_text,
+        "documents_over_cap": over_cap,
+        "extraction_failures": extraction_failures,
+    }

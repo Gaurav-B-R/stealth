@@ -331,6 +331,161 @@ def send_email_otp(email: str, code: str, expires_in_minutes: int = 10) -> bool:
         return False
 
 
+def _welcome_feature_row(emoji: str, title: str, body: str) -> str:
+    return (
+        f'<tr>'
+        f'<td style="padding:11px 12px 11px 0;vertical-align:top;width:34px;font-size:20px">{emoji}</td>'
+        f'<td style="padding:11px 0;border-bottom:1px solid #eef0f6">'
+        f'<div style="font-weight:700;color:#0f172a;font-size:14.5px">{escape(title)}</div>'
+        f'<div style="color:#64748b;font-size:13px;margin-top:2px;line-height:1.5">{escape(body)}</div>'
+        f'</td></tr>'
+    )
+
+
+def send_student_welcome_email(
+    *,
+    to_email: str,
+    full_name: str = "",
+    base_url: str = DEFAULT_PUBLIC_BASE_URL,
+    destination_country_name: str = "",
+) -> bool:
+    """Warm onboarding email for a new B2C student, sent once after they verify.
+    Transactional (account lifecycle) — no-ops without Resend."""
+    if not RESEND_API_KEY:
+        print("Student welcome email skipped: RESEND_API_KEY not configured.")
+        return False
+    if not to_email:
+        return False
+
+    first = escape((full_name or "").strip().split(" ")[0] or "there")
+    dest = escape((destination_country_name or "").strip())
+    intro = (
+        f"You're all set to plan your {dest} student-visa journey with Rilono."
+        if dest else
+        "You're all set — Rilono is now your AI copilot for the whole student-visa journey."
+    )
+    dash_url = base_url.rstrip("/") + "/dashboard"
+    features = (
+        _welcome_feature_row("📋", "Your document checklist & vault",
+                             "A stage-by-stage checklist for your exact visa, with an encrypted vault for DS-160, I-20, financial docs and more.")
+        + _welcome_feature_row("🤖", "Rilono AI reviews everything",
+                               "It catches missing pages, expiring dates and mismatches — the red flags a consulate looks for — before you submit.")
+        + _welcome_feature_row("🎤", "AI mock interviews",
+                               "Practise realistic visa-officer questions by voice or chat, and get an honest readiness score with coaching.")
+        + _welcome_feature_row("🔔", "Deadlines & risk alerts",
+                               "Never miss an intake, appointment or submission window — Rilono keeps your timeline on track.")
+    )
+    html_content = f"""<!DOCTYPE html><html><body style="margin:0;background:#f5f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">
+      <div style="max-width:560px;margin:0 auto;padding:28px 18px">
+        <div style="background:#fff;border:1px solid #e7e9f3;border-radius:16px;overflow:hidden">
+          <div style="background:linear-gradient(135deg,#6366f1,#a855f7,#ec4899);padding:30px 26px;color:#fff">
+            <div style="font-size:13px;opacity:.9;font-weight:600">Rilono · AI student-visa platform</div>
+            <div style="font-size:23px;font-weight:800;margin-top:6px">Welcome to Rilono, {first}! 🎉</div>
+          </div>
+          <div style="padding:24px 26px">
+            <p style="margin:0 0 18px;font-size:15px;color:#0f172a;line-height:1.6">{intro} Here's what you can do:</p>
+            <table style="width:100%;border-collapse:collapse">{features}</table>
+            <div style="margin:24px 0 6px">
+              <a href="{dash_url}" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;
+                font-weight:700;font-size:15px;padding:13px 24px;border-radius:11px">Open your dashboard →</a>
+            </div>
+            <p style="margin:16px 0 0;color:#64748b;font-size:13px;line-height:1.6">
+              Free to start — no card required. Covering the US, UK, Canada &amp; Australia.
+              Questions? Just reply to this email or reach us at
+              <a href="mailto:contact@rilono.com" style="color:#6366f1">contact@rilono.com</a>.</p>
+          </div>
+        </div>
+        <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:16px">
+          You're receiving this because you created a Rilono account.</p>
+      </div></body></html>"""
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [to_email],
+            "subject": "Welcome to Rilono 🎉 Your student-visa copilot is ready",
+            "html": html_content,
+        }
+        email_response = resend.Emails.send(params)
+        if _extract_resend_email_id(email_response):
+            return True
+        print(f"Failed to send student welcome email to {to_email}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending student welcome email to {to_email}: {str(e)}")
+        return False
+
+
+def send_enterprise_welcome_email(
+    *,
+    to_email: str,
+    full_name: str = "",
+    company: str = "",
+    portal_url: str = DEFAULT_PUBLIC_BASE_URL,
+) -> bool:
+    """Onboarding email for a new B2B enterprise owner, sent once when their workspace
+    is created. Transactional — no-ops without Resend."""
+    if not RESEND_API_KEY:
+        print("Enterprise welcome email skipped: RESEND_API_KEY not configured.")
+        return False
+    if not to_email:
+        return False
+
+    first = escape((full_name or "").strip().split(" ")[0] or "there")
+    org = escape((company or "").strip() or "your consultancy")
+    portal = portal_url.rstrip("/")
+    portal_open = portal + "/enterprise"
+    features = (
+        _welcome_feature_row("🗂️", "Clients & pipeline in one place",
+                             "Track every student, document, visa stage and deadline — with team roles and assignment.")
+        + _welcome_feature_row("✨", "Rilono AI copilot",
+                               "Ask your live portal anything, spot who needs attention, and draft emails — grounded in your data.")
+        + _welcome_feature_row("🎤", "Mock interviews & Deep Scans",
+                               "Run AI visa-officer simulations and cross-check client documents. Pay-as-you-go with prepaid Rilono Credits.")
+        + _welcome_feature_row("🌐", "Your own branded portal",
+                               "Everything runs on your subdomain with your logo — your clients see your brand, not ours.")
+    )
+    html_content = f"""<!DOCTYPE html><html><body style="margin:0;background:#f5f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">
+      <div style="max-width:560px;margin:0 auto;padding:28px 18px">
+        <div style="background:#fff;border:1px solid #e7e9f3;border-radius:16px;overflow:hidden">
+          <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed,#db2777);padding:30px 26px;color:#fff">
+            <div style="font-size:13px;opacity:.9;font-weight:600">Rilono Enterprise</div>
+            <div style="font-size:23px;font-weight:800;margin-top:6px">Welcome aboard, {first}! 🎉</div>
+          </div>
+          <div style="padding:24px 26px">
+            <p style="margin:0 0 6px;font-size:15px;color:#0f172a;line-height:1.6">
+              <b>{org}</b>'s workspace is live. Here's everything you get:</p>
+            <table style="width:100%;border-collapse:collapse;margin-top:12px">{features}</table>
+            <div style="margin:24px 0 6px">
+              <a href="{portal_open}" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;
+                font-weight:700;font-size:15px;padding:13px 24px;border-radius:11px">Open your portal →</a>
+            </div>
+            <p style="margin:16px 0 0;color:#64748b;font-size:13px;line-height:1.6">
+              <b>Next steps:</b> add your first student, invite your team, and explore the AI copilot.
+              The core CRM is free for up to 50 students. Want a walkthrough? Just reply to this email.</p>
+          </div>
+        </div>
+        <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:16px">
+          You're receiving this because you created a Rilono Enterprise workspace.</p>
+      </div></body></html>"""
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [to_email],
+            "subject": "Welcome to Rilono Enterprise 🎉 Your workspace is ready",
+            "html": html_content,
+        }
+        email_response = resend.Emails.send(params)
+        if _extract_resend_email_id(email_response):
+            return True
+        print(f"Failed to send enterprise welcome email to {to_email}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending enterprise welcome email to {to_email}: {str(e)}")
+        return False
+
+
 def send_account_deletion_otp_email(email: str, code: str, expires_in_minutes: int = 10) -> bool:
     """
     Send a 6-digit code to confirm PERMANENT account deletion (a security step).
@@ -2511,6 +2666,76 @@ def send_enterprise_client_calendar_reminder_email(
 
 
 ENTERPRISE_SUPPORT_INBOX = (os.getenv("ENTERPRISE_SUPPORT_INBOX", "contact@rilono.com").strip() or "contact@rilono.com")
+
+
+ENTERPRISE_SALES_INBOX = (os.getenv("ENTERPRISE_SALES_INBOX", "").strip() or ENTERPRISE_SUPPORT_INBOX)
+
+
+def send_enterprise_demo_request_email(
+    *,
+    full_name: str,
+    work_email: str,
+    company: str = "",
+    phone: str = "",
+    team_size: str = "",
+    students_count: str = "",
+    message: str = "",
+) -> bool:
+    """Notify the sales inbox of a new 'book a demo' lead from the enterprise landing page.
+    Reply-To is the lead so sales can respond directly. No-ops without Resend."""
+    if not RESEND_API_KEY:
+        print("Enterprise demo-request email skipped: RESEND_API_KEY not configured.")
+        return False
+
+    clean_email = re.sub(r"[\r\n]+", " ", (work_email or "").strip())
+    safe = lambda v: escape(re.sub(r"[\r\n]+", " ", (v or "").strip()) or "—")
+    safe_msg = escape((message or "").strip()).replace("\n", "<br>") or "—"
+
+    rows = "".join(
+        f'<tr><td style="padding:6px 0;color:#64748b;width:130px">{label}</td>'
+        f'<td style="padding:6px 0;font-weight:600">{val}</td></tr>'
+        for label, val in [
+            ("Name", safe(full_name)),
+            ("Work email", safe(work_email)),
+            ("Company", safe(company)),
+            ("Phone", safe(phone)),
+            ("Team size", safe(team_size)),
+            ("Students / yr", safe(students_count)),
+        ]
+    )
+    html_content = f"""<!DOCTYPE html><html><body style="margin:0;background:#f5f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">
+      <div style="max-width:600px;margin:0 auto;padding:24px 18px">
+        <div style="background:#fff;border:1px solid #e7e9f3;border-radius:12px;overflow:hidden">
+          <div style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;padding:22px 24px">
+            <div style="font-size:13px;opacity:.9;font-weight:600">Rilono Enterprise</div>
+            <div style="font-size:20px;font-weight:800;margin-top:4px">🎯 New demo request</div>
+          </div>
+          <div style="padding:22px 24px;color:#0f172a">
+            <table style="width:100%;border-collapse:collapse;font-size:14px">{rows}</table>
+            <div style="margin-top:8px;color:#64748b;font-size:12px;font-weight:600">What they want to see</div>
+            <div style="margin-top:6px;padding:14px;background:#f8fafc;border:1px solid #e7e9f3;border-radius:8px;font-size:14px;line-height:1.6;color:#0f172a">{safe_msg}</div>
+          </div>
+        </div>
+        <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:14px">Reply to this email to reach the lead directly.</p>
+      </div></body></html>"""
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [ENTERPRISE_SALES_INBOX],
+            "subject": f"[Rilono Enterprise · Demo request] {(company or full_name or 'New lead').strip()[:80]}",
+            "html": html_content,
+        }
+        if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", clean_email):
+            params["reply_to"] = clean_email
+        email_response = resend.Emails.send(params)
+        if _extract_resend_email_id(email_response):
+            return True
+        print(f"Failed to send enterprise demo-request email. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending enterprise demo-request email: {str(e)}")
+        return False
 
 
 def send_enterprise_support_request_email(

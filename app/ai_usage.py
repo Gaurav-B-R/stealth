@@ -147,6 +147,7 @@ SOURCE_LABELS = {
     "student_ai_chat": "Student AI chat",
     "enterprise_copilot": "Enterprise AI copilot",
     "deep_scan": "Deep Scan document audit",
+    "deep_scan_extract": "Deep Scan — per-document extraction",
     "mock_interview": "Mock interviews",
     "interview_feedback": "Interview feedback",
     "red_flag_scan": "Red-Flag scan (Visa Pass)",

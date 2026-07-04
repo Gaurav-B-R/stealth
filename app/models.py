@@ -92,6 +92,15 @@ class User(Base):
     # records when consent was last given or withdrawn (proof of consent).
     marketing_emails_consent = Column(Boolean, nullable=False, default=False)
     marketing_emails_consent_at = Column(DateTime(timezone=True), nullable=True)
+    # First-touch acquisition attribution (where this signup came from), captured on the
+    # landing page and sent at register. acquisition_channel is the normalized bucket used
+    # for the admin traffic-source breakdown; the rest keep the raw UTM/referrer detail.
+    acquisition_channel = Column(String, nullable=True, index=True)   # google_organic|instagram|chatgpt|direct|referral|...
+    acquisition_source = Column(String, nullable=True)                # utm_source or referrer host
+    acquisition_medium = Column(String, nullable=True)                # utm_medium (organic|social|cpc|email|...)
+    acquisition_campaign = Column(String, nullable=True)              # utm_campaign
+    acquisition_referrer = Column(String, nullable=True)              # raw document.referrer (truncated)
+    acquisition_landing_page = Column(String, nullable=True)          # first landing path
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
@@ -307,6 +316,11 @@ class EnterpriseClientDocument(Base):
     file_size = Column(Integer, nullable=True)
     mime_type = Column(String, nullable=True)
     extracted_text = Column(Text, nullable=True)  # AI-extracted text contents (for the copilot)
+    # Deep Scan map-reduce cache: structured audit facts extracted from THIS document
+    # (JSON), plus a hash of the source text so the extraction is reused across scans
+    # and only re-run when the document's text actually changes.
+    deep_scan_facts = Column(Text, nullable=True)
+    deep_scan_facts_hash = Column(String, nullable=True)
     uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     uploaded_by_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
@@ -480,6 +494,25 @@ class EnterpriseSupportRequest(Base):
     )
 
 
+class EnterpriseDemoRequest(Base):
+    """A public 'book a demo' lead from the enterprise landing page (no auth). Stored so
+    no lead is lost even if the notification email fails."""
+    __tablename__ = "enterprise_demo_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    full_name = Column(String, nullable=False)
+    work_email = Column(String, nullable=False, index=True)
+    company = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    team_size = Column(String, nullable=True)        # e.g. "1-5", "6-20", "21-50", "50+"
+    students_count = Column(String, nullable=True)   # e.g. "<50", "50-200", "200-1000", "1000+"
+    message = Column(Text, nullable=True)
+    source = Column(String, nullable=True)           # utm/referrer hint (optional)
+    ip_address = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="new", index=True)  # new|contacted|scheduled|closed
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
 class EnterpriseSubscription(Base):
     """Per-organization SaaS subscription (the consultancy's own plan)."""
     __tablename__ = "enterprise_subscriptions"
@@ -537,6 +570,18 @@ class EnterpriseCreditWallet(Base):
     lifetime_purchased_credits = Column(Integer, nullable=False, default=0)
     lifetime_spent_credits = Column(Integer, nullable=False, default=0)
     infra_fee_paid_until = Column(DateTime(timezone=True), nullable=True)
+    # Rilono AI assistant (copilot) metering: a free daily allowance, then credits are
+    # debited per bundle of messages (see app/enterprise_credits.py). `copilot_usage_date`
+    # is the 'YYYY-MM-DD' the daily counter applies to; `copilot_msgs_today` is that day's
+    # message count (for the free allowance); `copilot_unbilled_msgs` is billable messages
+    # accrued toward the next credit debit (rolls over, not reset daily).
+    copilot_usage_date = Column(String, nullable=True)
+    copilot_msgs_today = Column(Integer, nullable=False, default=0)
+    copilot_unbilled_msgs = Column(Integer, nullable=False, default=0)
+    # Free staff-run mock interview "previews" consumed (the self-serve link is the
+    # real product; staff can run a few in-browser test interviews free, then it costs
+    # the normal mock_interview price). See app/enterprise_credits.py.
+    interview_staff_previews_used = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

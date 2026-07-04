@@ -187,7 +187,8 @@
         .rot-word { display: inline-block; background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; white-space: nowrap; transition: transform .45s cubic-bezier(.3, .9, .3, 1), opacity .45s ease; }
         .rot-word.out { transform: translateY(-105%); opacity: 0; transition-duration: .3s; }
         .rot-word.pre { transform: translateY(105%); opacity: 0; transition: none; }
-        .rot-flag { -webkit-text-fill-color: initial; }
+        /* SVG flag images (emoji flags don't render on Windows/Linux Chrome). */
+        .rot-flag { height: .66em; width: auto; vertical-align: baseline; margin-left: .06em; border-radius: 2px; box-shadow: 0 1px 4px rgba(15, 23, 42, .22); }
         .hx-hero p.sub { color: var(--ink2); font-size: clamp(1.02rem, 1.5vw, 1.19rem); line-height: 1.75; max-width: 545px; margin: 0; }
         .hx-hero .cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin: 32px 0 20px; }
         .microtrust { display: flex; flex-wrap: wrap; gap: 8px 20px; color: var(--mut); font-size: .87rem; font-weight: 600; }
@@ -676,6 +677,7 @@
             .bp-tilt { transform: none !important; }
         }
     </style>
+    <script src="/static/attribution.js"></script>
 </head>
 
 <body class="b2c-light">
@@ -740,7 +742,7 @@
                 <div class="grid">
                     <div class="rv">
                         <span class="eyebrow"><span class="pulse"></span> AI-powered student visa platform</span>
-                        <h1>From admit letter<br>to <span class="rot-wrap"><span class="rot-word" id="rotWord">New York&nbsp;<span class="rot-flag">🇺🇸</span></span></span></h1>
+                        <h1>From admit letter<br>to <span class="rot-wrap"><span class="rot-word" id="rotWord">New York&nbsp;<img class="rot-flag" src="/static/assets/flags/us.svg" alt="United States"></span></span></h1>
                         <p class="sub">Rilono is the AI copilot for your student-visa journey — it organizes every document,
                             catches refusal red-flags before the consulate does, and drills you until you walk into the
                             interview ready. <strong>US · UK · Canada · Australia.</strong></p>
@@ -1345,20 +1347,24 @@
 
             // ---------- Rotating destination word ----------
             var rotWords = [
-                ["New York", "🇺🇸"], ["London", "🇬🇧"], ["Toronto", "🇨🇦"], ["Sydney", "🇦🇺"]
+                ["New York", "us", "United States"], ["London", "uk", "United Kingdom"],
+                ["Toronto", "ca", "Canada"], ["Sydney", "au", "Australia"]
             ];
+            function rotHTML(w) {
+                return w[0] + '&nbsp;<img class="rot-flag" src="/static/assets/flags/' + w[1] + '.svg" alt="' + w[2] + '">';
+            }
             var rotEl = document.getElementById("rotWord");
             var rotIdx = 0;
             if (rotEl) {
                 setInterval(function () {
                     rotIdx = (rotIdx + 1) % rotWords.length;
                     if (reduceMotion) {
-                        rotEl.innerHTML = rotWords[rotIdx][0] + '&nbsp;<span class="rot-flag">' + rotWords[rotIdx][1] + "</span>";
+                        rotEl.innerHTML = rotHTML(rotWords[rotIdx]);
                         return;
                     }
                     rotEl.classList.add("out");
                     setTimeout(function () {
-                        rotEl.innerHTML = rotWords[rotIdx][0] + '&nbsp;<span class="rot-flag">' + rotWords[rotIdx][1] + "</span>";
+                        rotEl.innerHTML = rotHTML(rotWords[rotIdx]);
                         rotEl.classList.remove("out");
                         rotEl.classList.add("pre");
                         void rotEl.offsetWidth; // reflow so the enter transition plays
