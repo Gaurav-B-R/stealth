@@ -4576,12 +4576,12 @@
       "locked": false,
       "fontSize": 15,
       "fontFamily": 3,
-      "text": "Payments, pass activation, subscription lifecycle",
-      "rawText": "Payments, pass activation, subscription lifecycle",
+      "text": "Payments and Visa Success Pass activation",
+      "rawText": "Payments and Visa Success Pass activation",
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "Payments, pass activation, subscription lifecycle",
+      "originalText": "Payments and Visa Success Pass activation",
       "lineHeight": 1.25
     },
     {
@@ -4778,12 +4778,12 @@
       "locked": false,
       "fontSize": 15,
       "fontFamily": 3,
-      "text": "Browser-side DS-160 and application workflow helper",
-      "rawText": "Browser-side DS-160 and application workflow helper",
+      "text": "Browser-side visa application helper (US/UK/CA/AU)",
+      "rawText": "Browser-side visa application helper (US/UK/CA/AU)",
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "Browser-side DS-160 and application workflow helper",
+      "originalText": "Browser-side visa application helper (US/UK/CA/AU)",
       "lineHeight": 1.25
     },
     {

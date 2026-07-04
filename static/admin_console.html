@@ -103,6 +103,22 @@
                         </div>
                     </section>
 
+                    <section id="adminGrowthCard" class="finance-chart-card" style="margin-bottom:16px;">
+                        <div class="finance-card-header">
+                            <div>
+                                <h3>🎯 Conversion Agent
+                                    <span style="font-size:11px;font-weight:800;color:#6d28d9;background:rgba(124,58,237,.12);padding:2px 8px;border-radius:999px;vertical-align:middle;margin-left:6px;">INTERNAL · AI</span>
+                                </h3>
+                                <p>Which free accounts to promote the Visa Success Pass to, and how — scored on real usage, strategy by Gemini.</p>
+                            </div>
+                            <button id="adminGrowthRunBtn" type="button" class="primary-btn small-btn">Run analysis</button>
+                        </div>
+                        <div id="adminGrowthMeta" style="font-size:12.5px;color:#64748b;margin:2px 0 8px;"></div>
+                        <div id="adminGrowthResults">
+                            <div class="table-empty">Run the agent to see which accounts need a nudge and exactly what to send.</div>
+                        </div>
+                    </section>
+
                     <form id="adminUsersFilterForm" class="filters-row">
                         <input type="text" id="adminUsersSearchInput" placeholder="Search email, username, name, university">
                         <select id="adminUsersPlanFilter">
@@ -616,6 +632,18 @@
                     </table>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Full-screen account "Manage" view (opens over the console) -->
+    <div id="adminAccountDetail" class="account-detail-overlay" hidden>
+        <div class="account-detail-topbar">
+            <button id="adminAccountBackBtn" type="button" class="ghost-btn small-btn">← Back to accounts</button>
+            <div id="adminAccountTitle" class="account-detail-title">Account</div>
+            <div id="adminAccountActions" class="account-detail-actions"></div>
+        </div>
+        <div id="adminAccountBody" class="account-detail-body">
+            <div class="table-empty">Loading account…</div>
         </div>
     </div>
 

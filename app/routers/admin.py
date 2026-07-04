@@ -741,6 +741,179 @@ def acquisition_analytics_admin(
     return acquisition.build_analytics(db)
 
 
+@router.post("/growth/conversion-analysis")
+def growth_conversion_analysis_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+    limit: int = 30,
+):
+    """Internal Growth Agent — which free accounts to promote the Visa Success Pass to, and how.
+
+    Admin-only. Runs on demand (not automatically) to bound AI cost. Deterministic usage
+    scoring in Python + Gemini for the per-account conversion strategy.
+    """
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.growth.conversion",
+        limit=int(os.getenv("ADMIN_GROWTH_RATE_LIMIT", "12")),
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app import growth_agent
+    try:
+        return growth_agent.run_conversion_analysis(db, limit=limit)
+    except Exception:
+        logger.exception("Growth conversion analysis failed")
+        raise HTTPException(status_code=502, detail="The growth analysis could not be completed. Please try again.")
+
+
+def _admin_iso(value):
+    return value.isoformat() if value else None
+
+
+@router.get("/users/{user_id}/detail")
+def admin_user_detail(
+    user_id: int,
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Full per-account view for the admin 'Manage account' screen: profile, plan + usage,
+    coupons applied (and when), payments, referral, and a deterministic intent snapshot."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.user.detail",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app import subscriptions as subs
+    from app import visa_pass
+    from app import visa_catalog
+    from app import acquisition as acq
+
+    user = db.query(models.User).filter(models.User.id == int(user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    sub = db.query(models.Subscription).filter(models.Subscription.user_id == user.id).first()
+
+    dest = getattr(user, "destination_country_code", None)
+    role = "developer" if user.is_developer else ("admin" if user.is_admin else "student")
+    referred_by = None
+    if getattr(user, "referred_by_user_id", None):
+        rb = db.query(models.User).filter(models.User.id == user.referred_by_user_id).first()
+        referred_by = {"id": rb.id, "email": rb.email} if rb else None
+    referrals_made = db.query(models.User).filter(models.User.referred_by_user_id == user.id).count()
+
+    is_pass = bool(sub and visa_pass.has_active_pass(sub))
+    usage = []
+    if sub:
+        usage = [
+            {"key": "ai_messages", "label": "Rilono AI messages", "used": sub.ai_messages_used or 0, "free_limit": subs.FREE_AI_MESSAGE_LIMIT},
+            {"key": "document_uploads", "label": "Document uploads", "used": sub.document_uploads_used or 0, "free_limit": subs.FREE_DOCUMENT_UPLOAD_LIMIT},
+            {"key": "prep_sessions", "label": "Interview-prep sessions", "used": sub.prep_sessions_used or 0, "free_limit": subs.FREE_PREP_SESSION_LIMIT},
+            {"key": "mock_interviews", "label": "Mock interviews", "used": sub.mock_interviews_used or 0, "free_limit": subs.FREE_MOCK_INTERVIEW_LIMIT},
+            {"key": "red_flag_scans", "label": "Red-flag scans", "used": sub.red_flag_scans_used or 0, "free_limit": visa_pass.FREE_RED_FLAG_SCANS},
+            {"key": "ds160_autofills", "label": "DS-160 auto-fills", "used": sub.ds160_autofills_used or 0, "free_limit": visa_pass.FREE_DS160_AUTOFILLS},
+            {"key": "voice_interviews", "label": "Voice mock interviews (Pass)", "used": sub.pass_voice_interviews_used or 0, "free_limit": 0},
+        ]
+
+    payments = (
+        db.query(models.SubscriptionPayment)
+        .filter(models.SubscriptionPayment.user_id == user.id)
+        .order_by(models.SubscriptionPayment.created_at.desc())
+        .limit(50).all()
+    )
+    payment_rows = [{
+        "amount_paise": p.amount_paise, "currency": p.currency, "status": p.status,
+        "coupon_code": p.coupon_code, "coupon_percent_off": float(p.coupon_percent_off) if p.coupon_percent_off is not None else None,
+        "pricing_model": p.pricing_model, "created_at": _admin_iso(p.created_at), "verified_at": _admin_iso(p.verified_at),
+    } for p in payments]
+    # Coupons this account has applied (from payment history), newest first.
+    coupons = [{
+        "code": p.coupon_code, "percent_off": float(p.coupon_percent_off) if p.coupon_percent_off is not None else None,
+        "applied_at": _admin_iso(p.verified_at or p.created_at), "status": p.status,
+        "amount_paise": p.amount_paise, "on": "Visa Success Pass" if p.pricing_model == "visa_pass" else (p.pricing_model or "subscription"),
+    } for p in payments if p.coupon_code]
+
+    feat = growth_agent_features_safe(db, user, sub)
+
+    return {
+        "account": {
+            "id": user.id, "name": user.full_name or user.username or user.email, "email": user.email,
+            "username": user.username, "role": role, "is_active": bool(user.is_active),
+            "email_verified": bool(user.email_verified), "auth_provider": user.auth_provider or "password",
+            "country_code": dest, "country_name": (visa_catalog.country_meta(dest) or {}).get("name") if dest else None,
+            "visa_type_label": visa_catalog.visa_type_label(dest, getattr(user, "visa_type_key", None)) if dest else None,
+            "university": user.university, "university_email": getattr(user, "university_email", None),
+            "home_country": user.current_residence_country,
+            "created_at": _admin_iso(user.created_at), "first_login_at": _admin_iso(getattr(user, "first_login_at", None)),
+            "last_login_at": _admin_iso(getattr(user, "last_login_at", None)),
+            "onboarding_completed_at": _admin_iso(getattr(user, "onboarding_completed_at", None)),
+            "marketing_consent": bool(getattr(user, "marketing_emails_consent", False)),
+            "heard_about_us": getattr(user, "heard_about_us", None),
+            "heard_about_label": acq.heard_about_label(getattr(user, "heard_about_us", None)),
+            "acquisition": {
+                "channel": getattr(user, "acquisition_channel", None), "source": getattr(user, "acquisition_source", None),
+                "medium": getattr(user, "acquisition_medium", None), "campaign": getattr(user, "acquisition_campaign", None),
+                "landing_page": getattr(user, "acquisition_landing_page", None),
+            },
+            "referral": {
+                "code": getattr(user, "referral_code", None), "referred_by": referred_by,
+                "referrals_made": referrals_made, "reward_granted_at": _admin_iso(getattr(user, "referral_reward_granted_at", None)),
+            },
+        },
+        "subscription": {
+            "plan": (sub.plan if sub else "free"), "status": (sub.status if sub else None),
+            "is_pass_active": is_pass, "ends_at": _admin_iso(sub.ends_at) if sub else None,
+            "pass_days_left": visa_pass.pass_days_left(sub) if (sub and is_pass) else None,
+            "usage": usage,
+        },
+        "coupons": coupons,
+        "payments": payment_rows,
+        "intent": {
+            "score": feat["intent_score"] if feat else None,
+            "hit_any_limit": feat["hit_any_limit"] if feat else None,
+        },
+    }
+
+
+def growth_agent_features_safe(db, user, sub):
+    if not sub:
+        return None
+    try:
+        from app import growth_agent
+        return growth_agent._features_for(user, sub)
+    except Exception:
+        return None
+
+
+@router.post("/users/{user_id}/conversion-reco")
+def admin_user_conversion_reco(
+    user_id: int,
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Run the Gemini growth agent for a single account (the 'AI recommendation' button)."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.user.reco",
+        limit=int(os.getenv("ADMIN_GROWTH_RATE_LIMIT", "12")), window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app import growth_agent
+    try:
+        result = growth_agent.analyze_account(db, user_id)
+    except Exception:
+        logger.exception("Single-account conversion reco failed (user_id=%s)", user_id)
+        raise HTTPException(status_code=502, detail="Could not generate a recommendation. Please try again.")
+    if not result.get("found"):
+        raise HTTPException(status_code=404, detail="Account not found.")
+    return result
+
+
 @router.get("/enterprise/revenue")
 def enterprise_revenue_analytics_admin(
     request: Request,

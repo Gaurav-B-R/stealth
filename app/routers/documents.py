@@ -1362,24 +1362,15 @@ def _build_subscription_snapshot_for_profile(user: models.User, db: Session) -> 
         access_source = "Free Plan"
     elif referral_bonus_active:
         access_source = "Referral Bonus (Visa Success Pass)"
-    elif has_verified_payment:
-        if latest_verified_pricing_model == PROFILE_PRICING_MODEL_SIX_MONTH:
-            access_source = "Journey Pass (Best Value)"
-        elif latest_verified_provider == "coupon":
-            access_source = "Coupon Pro (Auto-Renew Off)"
-        else:
-            access_source = "Paid Pro"
-    elif ends_at and ends_at > now:
-        access_source = "Pro Access (Time-Limited)"
     else:
-        access_source = "Pro Access"
+        # Paid access is now presented uniformly as the Visa Success Pass (old Pro
+        # Monthly / Journey Pass products are retired).
+        access_source = "Visa Success Pass"
 
     if subscription.plan != PLAN_PRO:
         plan_display_name = "Free"
-    elif "journey pass" in access_source.lower():
-        plan_display_name = "Journey Pass"
     else:
-        plan_display_name = "Pro"
+        plan_display_name = "Visa Success Pass"
 
     return {
         "snapshot_version": SUBSCRIPTION_SNAPSHOT_VERSION,

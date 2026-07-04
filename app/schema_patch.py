@@ -279,6 +279,14 @@ def ensure_user_acquisition_columns():
             if col not in columns:
                 conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} VARCHAR"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_acquisition_channel ON users(acquisition_channel)"))
+        # Self-reported "How did you hear about us?" (asked once post-signup).
+        if "heard_about_us" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN heard_about_us VARCHAR"))
+        if "heard_about_us_detail" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN heard_about_us_detail VARCHAR"))
+        if "heard_about_us_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN heard_about_us_at TIMESTAMP"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_heard_about_us ON users(heard_about_us)"))
 
 
 def ensure_enterprise_organization_columns():
@@ -1342,6 +1350,8 @@ def ensure_gemini_usage_table():
             if "organization_id" not in cols:
                 conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN organization_id INTEGER"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_organization_id ON gemini_usage_events(organization_id)"))
+            if "cached_tokens" not in cols:
+                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0"))
             return
         if engine.dialect.name == "sqlite":
             conn.execute(text("""
@@ -1354,6 +1364,7 @@ def ensure_gemini_usage_table():
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
                     output_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tokens INTEGER NOT NULL DEFAULT 0,
+                    cached_tokens INTEGER NOT NULL DEFAULT 0,
                     estimated_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
                 )
@@ -1369,6 +1380,7 @@ def ensure_gemini_usage_table():
                     prompt_tokens INTEGER NOT NULL DEFAULT 0,
                     output_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tokens INTEGER NOT NULL DEFAULT 0,
+                    cached_tokens INTEGER NOT NULL DEFAULT 0,
                     estimated_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
                 )

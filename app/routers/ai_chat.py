@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app import visa_catalog
+from app import visa_pass
 from app.auth import get_current_active_user
 from app.subscriptions import (
-    PLAN_PRO,
     get_or_create_user_subscription,
     get_plan_limits,
     get_rilono_ai_chat_upload_quota_snapshot,
@@ -550,7 +550,7 @@ def enforce_and_track_session_upload_quota(
             status_code=403,
             detail=(
                 f"Free plan Rilono AI chat upload limit reached ({limit} uploads per {window_hours} hours). "
-                "Upgrade to Pro or Journey Pass for unlimited Rilono AI chat uploads."
+                "Unlock the Visa Success Pass for unlimited Rilono AI chat uploads."
             ),
         )
 
@@ -630,7 +630,7 @@ def build_system_prompt(
         "- Be concise but thorough in your responses",
         "- If you don't have information about a specific document, let the user know and guide them on what they need",
         "- For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps",
-        "- For subscription questions, treat `subscription.plan` as an internal code (free/pro). Use `subscription.plan_display_name` or `subscription.access_source` for user-facing plan names (e.g., Journey Pass).",
+        "- For subscription questions, treat `subscription.plan` as an internal code (free/pro). Use `subscription.plan_display_name` or `subscription.access_source` for user-facing plan names (e.g., Visa Success Pass).",
         "- If ATTACHED CHAT SESSION FILES are present, use them for this chat session context only",
         "- Identity guardrail: If asked about your model/provider/training details, do not mention Gemini, Google, or internal model names.",
         "- Identity guardrail: In such cases, reply that you are Rilono AI and continue helping with the user's request.",
@@ -885,12 +885,12 @@ def chat_with_ai(
         count_toward_rilono_chat_limit = source in QUOTA_TRACKED_CHAT_SOURCES
 
         subscription = get_or_create_user_subscription(db, current_user.id)
-        if source == "rilono_ai_copilot" and (subscription.plan or "").strip().lower() != PLAN_PRO:
+        if source == "rilono_ai_copilot" and not visa_pass.has_active_pass(subscription):
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    "Rilono Copilot is available only on Pro and Journey Pass plans. "
-                    "Upgrade to continue."
+                    "Rilono Copilot is available with the Visa Success Pass. "
+                    "Unlock the pass to continue."
                 ),
             )
 
@@ -901,7 +901,7 @@ def chat_with_ai(
                 status_code=403,
                 detail=(
                     f"Free plan message limit reached ({ai_limit}). "
-                    "Upgrade to Pro for unlimited Rilono AI messages."
+                    "Unlock the Visa Success Pass for unlimited Rilono AI messages."
                 )
             )
 

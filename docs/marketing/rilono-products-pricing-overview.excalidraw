@@ -2073,12 +2073,12 @@
       "locked": false,
       "fontSize": 15,
       "fontFamily": 3,
-      "text": "Browser guidance for DS-160 and visa application workflows. Helps reduce form mistakes and repeated manual effort.",
-      "rawText": "Browser guidance for DS-160 and visa application workflows. Helps reduce form mistakes and repeated manual effort.",
+      "text": "Browser guidance for visa applications across US/UK/CA/AU, using your Rilono account context to reduce form mistakes.",
+      "rawText": "Browser guidance for visa applications across US/UK/CA/AU, using your Rilono account context to reduce form mistakes.",
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": null,
-      "originalText": "Browser guidance for DS-160 and visa application workflows. Helps reduce form mistakes and repeated manual effort.",
+      "originalText": "Browser guidance for visa applications across US/UK/CA/AU, using your Rilono account context to reduce form mistakes.",
       "lineHeight": 1.25
     },
     {

@@ -361,7 +361,7 @@ const PRICING_MODEL_SIX_MONTH = 'pro_six_month';
 const PRO_PRICING_MODELS = {
     [PRICING_MODEL_MONTHLY]: {
         id: PRICING_MODEL_MONTHLY,
-        label: 'Rilono Pro Monthly',
+        label: 'Visa Success Pass',
         amountInr: 699,
         cycleLabel: '/month',
         checkoutMode: 'subscription',
@@ -369,7 +369,7 @@ const PRO_PRICING_MODELS = {
     },
     [PRICING_MODEL_SIX_MONTH]: {
         id: PRICING_MODEL_SIX_MONTH,
-        label: 'Journey Pass (Best Value)',
+        label: 'Visa Success Pass',
         amountInr: 2499,
         cycleLabel: '/6 months',
         checkoutMode: 'order',
@@ -3414,6 +3414,7 @@ function showDashboard(skipURLUpdate = false) {
     loadSubscriptionStatus(true);
     renderReferralPromotions();
     updateDashHeaderUser();
+    if (typeof maybeShowHeardAbout === 'function') maybeShowHeardAbout();
 
     // Set default tab to overview if no tab is active
     const activeTab = document.querySelector('.dashboard-tab.active');
@@ -3617,8 +3618,8 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     if (previousSnapshot.plan !== nextSnapshot.plan) {
         if (nextSnapshot.plan === 'pro') {
             addNotification(
-                'Plan Upgraded',
-                'Your subscription is now Pro. Unlimited features are active.',
+                'Visa Success Pass Active',
+                'Your Visa Success Pass is now active. Premium features are unlocked.',
                 'success'
             );
         } else {
@@ -3701,7 +3702,7 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     if (previousSnapshot.endsAt !== nextSnapshot.endsAt && !nextSnapshot.autoRenewEnabled && nextSnapshot.endsAt) {
         addNotification(
             'Access Period Updated',
-            `Your Pro access is active until ${formatSubscriptionDateTime(nextSnapshot.endsAt)}.`,
+            `Your Visa Success Pass is active until ${formatSubscriptionDateTime(nextSnapshot.endsAt)}.`,
             'info'
         );
     }
@@ -3733,8 +3734,6 @@ function updateSubscriptionUI() {
     const profileSwitchMonthlyButton = document.getElementById('profileSubscriptionSwitchMonthlyBtn');
     const profileSwitchJourneyButton = document.getElementById('profileSubscriptionSwitchJourneyBtn');
     const profileSwitchHintEl = document.getElementById('profileSubscriptionSwitchHint');
-    const pricingMonthlyUpgradeButton = document.getElementById('pricingProUpgradeButton');
-    const pricingSixMonthUpgradeButton = document.getElementById('pricingProSixMonthUpgradeButton');
     const profilePlanEl = document.getElementById('profileSubscriptionPlan');
     const profileStatusEl = document.getElementById('profileSubscriptionStatus');
     const profileAutoRenewEl = document.getElementById('profileSubscriptionAutoRenew');
@@ -3795,19 +3794,6 @@ function updateSubscriptionUI() {
         });
         [sidebarCancelButton, profileCancelButton].filter(Boolean).forEach((button) => {
             button.style.display = 'none';
-        });
-        const pricingUpgradeButtons = [pricingMonthlyUpgradeButton, pricingSixMonthUpgradeButton].filter(Boolean);
-        pricingUpgradeButtons.forEach((button) => {
-            button.disabled = !PRO_UPGRADE_ENABLED;
-            if (!PRO_UPGRADE_ENABLED) {
-                button.textContent = 'Pro Coming Soon';
-                return;
-            }
-            if (button.id === 'pricingProSixMonthUpgradeButton') {
-                button.textContent = 'Get Journey Pass';
-            } else {
-                button.textContent = 'Upgrade Monthly';
-            }
         });
 
         if (profilePlanEl) profilePlanEl.textContent = 'Free Plan';
@@ -3997,7 +3983,7 @@ function updateSubscriptionUI() {
             profileSwitchMonthlyButton.textContent = 'Coming Soon';
         } else if (isPro) {
             profileSwitchMonthlyButton.disabled = true;
-            profileSwitchMonthlyButton.textContent = 'Visa Pass active';
+            profileSwitchMonthlyButton.textContent = 'Visa Success Pass active';
         } else {
             profileSwitchMonthlyButton.disabled = false;
             profileSwitchMonthlyButton.textContent = 'Get the Visa Success Pass';
@@ -4031,7 +4017,7 @@ function updateSubscriptionUI() {
         if (canRenew) {
             button.textContent = 'Renew Subscription';
         } else if (isPro) {
-            button.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'Visa Pass active';
+            button.textContent = 'Visa Success Pass active';
         } else {
             button.textContent = canUpgrade ? 'Get the Visa Success Pass' : 'Coming Soon';
         }
@@ -4042,35 +4028,6 @@ function updateSubscriptionUI() {
     [sidebarCancelButton, profileCancelButton].filter(Boolean).forEach((button) => {
         const showCancel = isPro && subscriptionStatus === 'active' && autoRenewEnabled;
         button.style.display = showCancel ? 'block' : 'none';
-    });
-
-    [pricingMonthlyUpgradeButton, pricingSixMonthUpgradeButton].filter(Boolean).forEach((pricingUpgradeButton) => {
-        const canRenew = isPro
-            && !isJourneyPassActive
-            && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled)
-            && PRO_UPGRADE_ENABLED;
-        const isJourneyButton = pricingUpgradeButton.id === 'pricingProSixMonthUpgradeButton';
-        const canUpgrade = isJourneyButton
-            ? PRO_UPGRADE_ENABLED
-            : ((!isPro && PRO_UPGRADE_ENABLED) || canRenew);
-        pricingUpgradeButton.disabled = !canUpgrade;
-        if (canRenew) {
-            pricingUpgradeButton.textContent = isJourneyButton ? 'Get Journey Pass' : 'Renew Pro';
-        } else if (isPro) {
-            if (isJourneyButton) {
-                pricingUpgradeButton.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'Switch to Journey Pass';
-            } else {
-                pricingUpgradeButton.textContent = isJourneyPassActive ? 'Journey Pass Active' : 'Visa Pass active';
-            }
-        } else {
-            if (!canUpgrade) {
-                pricingUpgradeButton.textContent = 'Coming Soon';
-            } else if (pricingUpgradeButton.id === 'pricingProSixMonthUpgradeButton') {
-                pricingUpgradeButton.textContent = 'Get Journey Pass';
-            } else {
-                pricingUpgradeButton.textContent = 'Upgrade Monthly';
-            }
-        }
     });
 }
 
@@ -13819,4 +13776,95 @@ function scrollToChromeExtension() {
             section.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }, 100);
     }
+}
+
+/* ===================================================================
+   "How did you hear about us?" — one-time post-signup prompt (B2C).
+   Shown once on the dashboard for a signed-in student who hasn't
+   answered yet. Self-contained (injects its own markup + styles).
+   =================================================================== */
+let __hauShown = false;
+function __hauHeaders() {
+    const h = { 'Content-Type': 'application/json' };
+    if (typeof authToken !== 'undefined' && authToken && authToken !== COOKIE_AUTH_SENTINEL) {
+        h.Authorization = `Bearer ${authToken}`;
+    }
+    return h;
+}
+async function maybeShowHeardAbout() {
+    if (__hauShown) return;
+    if (typeof authToken === 'undefined' || !authToken) return;
+    try {
+        const r = await fetch(`${API_BASE}/api/onboarding/heard-about`, { headers: __hauHeaders(), credentials: 'include' });
+        if (!r.ok) return;
+        const d = await r.json();
+        if (d.answered) return;
+        __hauShown = true;
+        __renderHeardAbout(d.options || []);
+    } catch (e) { /* best-effort — never block the dashboard */ }
+}
+function __hauEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+async function __hauSend(source, detail) {
+    try {
+        await fetch(`${API_BASE}/api/onboarding/heard-about`, {
+            method: 'POST', headers: __hauHeaders(), credentials: 'include',
+            body: JSON.stringify({ source: source, detail: detail || null }),
+        });
+    } catch (e) { /* best-effort */ }
+}
+function __renderHeardAbout(options) {
+    if (document.getElementById('hauOverlay')) return;
+    if (!document.getElementById('hauStyle')) {
+        const st = document.createElement('style');
+        st.id = 'hauStyle';
+        st.textContent = `
+        #hauOverlay{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(15,23,42,.5);backdrop-filter:blur(4px);animation:hauFade .2s ease}
+        @keyframes hauFade{from{opacity:0}to{opacity:1}}
+        .hau-card{width:100%;max-width:440px;background:#fff;border-radius:20px;padding:28px 26px;box-shadow:0 30px 80px rgba(15,23,42,.28);font-family:inherit;animation:hauPop .28s cubic-bezier(.2,1.4,.4,1)}
+        @keyframes hauPop{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
+        .hau-emoji{font-size:34px;line-height:1}
+        .hau-card h3{margin:10px 0 6px;font-size:1.35rem;font-weight:800;color:#0f172a;letter-spacing:-.02em}
+        .hau-card p{margin:0 0 18px;color:#64748b;font-size:.95rem;line-height:1.5}
+        .hau-card select,.hau-card input{width:100%;padding:12px 14px;border:1.5px solid #d6d9ea;border-radius:12px;font-size:15px;color:#0f172a;background:#f8fafc;outline:none;font-family:inherit}
+        .hau-card select:focus,.hau-card input:focus{border-color:#6366f1;background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+        .hau-card input{margin-top:10px}
+        .hau-actions{display:flex;align-items:center;gap:12px;margin-top:20px}
+        .hau-submit{flex:1;border:0;cursor:pointer;padding:13px 18px;border-radius:12px;font-size:15px;font-weight:800;color:#fff;background:linear-gradient(135deg,#6366f1,#a855f7,#ec4899);box-shadow:0 10px 24px rgba(99,102,241,.34);transition:filter .15s,transform .08s}
+        .hau-submit:hover{filter:brightness(1.05)} .hau-submit:active{transform:translateY(1px)} .hau-submit:disabled{opacity:.6;cursor:not-allowed}
+        .hau-skip{background:none;border:0;color:#94a3b8;font-weight:700;font-size:.9rem;cursor:pointer;padding:6px}
+        .hau-skip:hover{color:#475569}`;
+        document.head.appendChild(st);
+    }
+    const opts = ['<option value="" disabled selected>Select an option…</option>']
+        .concat(options.map(o => `<option value="${__hauEsc(o.id)}">${__hauEsc(o.label)}</option>`)).join('');
+    const wrap = document.createElement('div');
+    wrap.id = 'hauOverlay';
+    wrap.innerHTML = `
+      <div class="hau-card" role="dialog" aria-modal="true" aria-label="How did you hear about us">
+        <div class="hau-emoji">📣</div>
+        <h3>How did you hear about us?</h3>
+        <p>Quick one — it helps us reach more students like you. (Optional)</p>
+        <select id="hauSelect">${opts}</select>
+        <input id="hauOther" type="text" maxlength="200" placeholder="Tell us a bit more…" style="display:none">
+        <div class="hau-actions">
+          <button id="hauSubmit" class="hau-submit" disabled>Submit</button>
+          <button id="hauSkip" class="hau-skip" type="button">Skip for now</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const sel = wrap.querySelector('#hauSelect');
+    const other = wrap.querySelector('#hauOther');
+    const submit = wrap.querySelector('#hauSubmit');
+    const close = () => { wrap.remove(); };
+    sel.addEventListener('change', () => {
+        submit.disabled = !sel.value;
+        other.style.display = sel.value === 'other' ? 'block' : 'none';
+    });
+    submit.addEventListener('click', () => {
+        if (!sel.value) return;
+        __hauSend(sel.value, sel.value === 'other' ? (other.value || '').trim() : null);
+        close();
+        if (typeof showMessage === 'function') showMessage('Thanks for letting us know! 🙌', 'success');
+    });
+    wrap.querySelector('#hauSkip').addEventListener('click', () => { __hauSend('skip'); close(); });
 }

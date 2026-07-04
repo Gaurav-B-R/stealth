@@ -1124,9 +1124,50 @@ def enterprise_me(
             "full_name": current_user.full_name,
             "is_admin": bool(current_user.is_admin),
             "is_developer": bool(current_user.is_developer),
+            "heard_about_answered": getattr(current_user, "heard_about_us_at", None) is not None,
         },
         **_build_enterprise_context(db, current_user, request),
     }
+
+
+class EnterpriseHeardAboutRequest(BaseModel):
+    source: str = Field(..., min_length=1, max_length=40)
+    detail: Optional[str] = Field(default=None, max_length=200)
+
+
+@router.get("/heard-about")
+def enterprise_heard_about_status(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Options + answered state for the enterprise post-signup 'How did you hear' prompt."""
+    from app import acquisition
+    _enforce_enterprise_access_or_403(db, current_user)
+    return {
+        "answered": getattr(current_user, "heard_about_us_at", None) is not None,
+        "selected": getattr(current_user, "heard_about_us", None),
+        "options": acquisition.HEARD_ABOUT_OPTIONS,
+    }
+
+
+@router.post("/heard-about")
+def enterprise_submit_heard_about(
+    payload: EnterpriseHeardAboutRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Save the self-reported 'How did you hear about us?' answer for an enterprise user."""
+    from app import acquisition
+    _enforce_enterprise_access_or_403(db, current_user)
+    if (payload.source or "").strip().lower() == "skip":
+        current_user.heard_about_us_at = datetime.utcnow()  # mark asked; don't nag again
+        db.commit()
+        return {"ok": True, "selected": None}
+    vid = acquisition.apply_self_reported_source(current_user, payload.source, payload.detail)
+    if not vid:
+        raise HTTPException(status_code=400, detail="Please choose a valid option.")
+    db.commit()
+    return {"ok": True, "selected": vid}
 
 
 @router.get("/students/options")

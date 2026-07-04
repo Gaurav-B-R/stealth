@@ -118,6 +118,72 @@ CHANNEL_META = {
 }
 
 
+# Self-reported "How did you hear about us?" — asked once post-signup on BOTH the B2C
+# student app and the B2B enterprise app. Complements first-party attribution and, in
+# particular, covers OAuth/untracked signups. Each option maps onto the channel taxonomy
+# so it can enrich the admin traffic-source card when there was no first-party signal.
+HEARD_ABOUT_OPTIONS = [
+    {"id": "google", "label": "Google Search"},
+    {"id": "chatgpt", "label": "ChatGPT"},
+    {"id": "instagram", "label": "Instagram"},
+    {"id": "youtube", "label": "YouTube"},
+    {"id": "linkedin", "label": "LinkedIn"},
+    {"id": "twitter", "label": "X (Twitter)"},
+    {"id": "facebook", "label": "Facebook"},
+    {"id": "tiktok", "label": "TikTok"},
+    {"id": "reddit", "label": "Reddit"},
+    {"id": "friend", "label": "Friend or colleague"},
+    {"id": "consultant", "label": "A visa consultant / agent"},
+    {"id": "news_blog", "label": "News or blog article"},
+    {"id": "other", "label": "Other"},
+]
+_HEARD_ABOUT_IDS = {o["id"] for o in HEARD_ABOUT_OPTIONS}
+_HEARD_ABOUT_LABELS = {o["id"]: o["label"] for o in HEARD_ABOUT_OPTIONS}
+_HEARD_TO_CHANNEL = {
+    "google": "google_organic", "chatgpt": "chatgpt", "instagram": "instagram",
+    "youtube": "youtube", "linkedin": "linkedin", "twitter": "twitter",
+    "facebook": "facebook", "tiktok": "tiktok", "reddit": "reddit",
+    "friend": "referral", "consultant": "other", "news_blog": "other", "other": "other",
+}
+
+
+def normalize_heard_about(value: Optional[str]) -> Optional[str]:
+    v = (value or "").strip().lower()
+    return v if v in _HEARD_ABOUT_IDS else None
+
+
+def heard_about_label(value: Optional[str]) -> Optional[str]:
+    return _HEARD_ABOUT_LABELS.get((value or "").strip().lower())
+
+
+def heard_about_to_channel(value: Optional[str]) -> Optional[str]:
+    return _HEARD_TO_CHANNEL.get((value or "").strip().lower())
+
+
+def apply_self_reported_source(user, value: Optional[str], detail: Optional[str] = None) -> Optional[str]:
+    """Persist the self-reported answer on the user and backfill the acquisition channel
+    when first-party attribution came up empty/untracked/direct (e.g. OAuth signups).
+
+    Returns the normalized option id, or None if the value wasn't a known option.
+    """
+    from datetime import datetime
+
+    vid = normalize_heard_about(value)
+    if not vid:
+        return None
+    user.heard_about_us = vid
+    user.heard_about_us_detail = _clip(detail, 200) if vid == "other" else None
+    user.heard_about_us_at = datetime.utcnow()
+    # Only enrich attribution when there's no real first-party signal to preserve.
+    if (user.acquisition_channel or "") in ("", "untracked", "direct", "other"):
+        channel = heard_about_to_channel(vid)
+        if channel:
+            user.acquisition_channel = channel
+            if not user.acquisition_source:
+                user.acquisition_source = f"self:{vid}"
+    return vid
+
+
 def build_analytics(db) -> dict:
     """Signup-per-channel breakdown for the admin traffic-source card."""
     from datetime import datetime, timedelta
@@ -154,11 +220,36 @@ def build_analytics(db) -> dict:
 
     # Tracked = everything except the legacy "untracked" bucket (real signal only).
     tracked_total = sum(c["count"] for c in channels if c["channel"] != "untracked")
+
+    # Self-reported "How did you hear about us?" distribution (a separate, direct signal).
+    sr_rows = (
+        db.query(models.User.heard_about_us, func.count(models.User.id))
+        .filter(models.User.heard_about_us.isnot(None))
+        .group_by(models.User.heard_about_us)
+        .all()
+    )
+    sr_total = sum(int(c) for _, c in sr_rows) or 0
+    self_reported = sorted(
+        [
+            {
+                "id": v,
+                "label": _HEARD_ABOUT_LABELS.get(v, (v or "other").replace("_", " ").title()),
+                "count": int(c),
+                "percent": round((int(c) / sr_total) * 100, 1) if sr_total else 0.0,
+            }
+            for v, c in sr_rows
+        ],
+        key=lambda x: x["count"],
+        reverse=True,
+    )
+
     return {
         "total_users": grand_total,
         "tracked_total": tracked_total,
         "new_last_30d": int(sum(int(v) for v in recent.values())),
         "channels": channels,
+        "self_reported": self_reported,
+        "self_reported_total": sr_total,
     }
 
 

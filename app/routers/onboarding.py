@@ -7,11 +7,13 @@ type drive the entire personalized dashboard journey (see app/visa_catalog.py).
 from datetime import datetime
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app import visa_catalog
 from app import enterprise_catalog
+from app import acquisition
 from app.auth import get_current_active_user
 from app.database import get_db
 
@@ -32,7 +34,14 @@ def _onboarding_state(user: models.User) -> dict:
         "university_email": getattr(user, "university_email", None),
         "home_country": user.current_residence_country,
         "intake": getattr(user, "preferred_intake", None),
+        "heard_about_answered": getattr(user, "heard_about_us_at", None) is not None,
+        "heard_about_us": getattr(user, "heard_about_us", None),
     }
+
+
+class HeardAboutRequest(BaseModel):
+    source: str = Field(..., min_length=1, max_length=40)
+    detail: str | None = Field(default=None, max_length=200)
 
 
 @router.get("/catalog")
@@ -44,6 +53,34 @@ def onboarding_catalog():
 @router.get("/status")
 def onboarding_status(current_user: models.User = Depends(get_current_active_user)):
     return _onboarding_state(current_user)
+
+
+@router.get("/heard-about")
+def heard_about_status(current_user: models.User = Depends(get_current_active_user)):
+    """Options for the 'How did you hear about us?' prompt + whether it's been answered."""
+    return {
+        "answered": getattr(current_user, "heard_about_us_at", None) is not None,
+        "selected": getattr(current_user, "heard_about_us", None),
+        "options": acquisition.HEARD_ABOUT_OPTIONS,
+    }
+
+
+@router.post("/heard-about")
+def submit_heard_about(
+    payload: HeardAboutRequest = Body(...),
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Save the self-reported 'How did you hear about us?' answer (asked once post-signup)."""
+    if (payload.source or "").strip().lower() == "skip":
+        current_user.heard_about_us_at = datetime.utcnow()  # mark asked; don't nag again
+        db.commit()
+        return {"ok": True, "selected": None}
+    vid = acquisition.apply_self_reported_source(current_user, payload.source, payload.detail)
+    if not vid:
+        raise HTTPException(status_code=400, detail="Please choose a valid option.")
+    db.commit()
+    return {"ok": True, "selected": vid}
 
 
 @router.post("", response_model=schemas.UserResponse)

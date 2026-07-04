@@ -101,6 +101,11 @@ class User(Base):
     acquisition_campaign = Column(String, nullable=True)              # utm_campaign
     acquisition_referrer = Column(String, nullable=True)              # raw document.referrer (truncated)
     acquisition_landing_page = Column(String, nullable=True)          # first landing path
+    # Self-reported "How did you hear about us?" (asked once post-signup, B2C + B2B).
+    # Complements the first-party attribution above and covers OAuth/untracked signups.
+    heard_about_us = Column(String, nullable=True, index=True)         # option id (google|chatgpt|instagram|...)
+    heard_about_us_detail = Column(String, nullable=True)             # free text when "other"
+    heard_about_us_at = Column(DateTime(timezone=True), nullable=True)  # answered timestamp (also the "asked" flag)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
@@ -957,5 +962,8 @@ class GeminiUsageEvent(Base):
     prompt_tokens = Column(Integer, nullable=False, default=0)
     output_tokens = Column(Integer, nullable=False, default=0)
     total_tokens = Column(Integer, nullable=False, default=0)
+    # Subset of prompt_tokens served from Gemini's context cache (implicit on 2.5 models,
+    # or explicit). Billed at a discount, so estimated_cost_usd already reflects it.
+    cached_tokens = Column(Integer, nullable=False, default=0)
     estimated_cost_usd = Column(Numeric(12, 6), nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

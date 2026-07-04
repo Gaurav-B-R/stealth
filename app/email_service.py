@@ -1146,12 +1146,10 @@ def _subscription_plan_label(plan: str, pricing_model: Optional[str] = None) -> 
     if normalized_plan != "pro":
         return (plan or "free").strip().title() or "Free"
 
-    normalized_model = str(pricing_model or "").strip().lower()
-    if normalized_model in {"pro_six_month", "pro_6_month", "pro_6month", "six_month", "6_month", "6month"}:
-        return "Journey Pass"
-    if normalized_model in {"pro_monthly", "pro", "monthly", ""}:
-        return "Pro Monthly"
-    return "Pro"
+    # All paid access is now presented as the Visa Success Pass. The old Pro Monthly
+    # and Journey Pass (6-month) products are retired; legacy rows still map here
+    # (pricing_model retained in the signature for callers, but no longer branched on).
+    return "Visa Success Pass"
 
 
 def send_subscription_change_email(
@@ -1180,37 +1178,37 @@ def send_subscription_change_email(
     event_key = (event_type or "subscription_updated").strip().lower()
     event_content = {
         "pro_activated": {
-            "subject": "Rilono Pro Activated",
-            "title": "Your Pro plan is active",
-            "summary": "Payment is verified and your Pro features are now unlocked.",
+            "subject": "Your Visa Success Pass is active",
+            "title": "Your Visa Success Pass is active",
+            "summary": "Payment is verified and your Visa Success Pass features are now unlocked.",
             "accent_bg": "#ecfdf5",
             "accent_fg": "#065f46",
         },
         "subscription_renewed": {
-            "subject": "Rilono Subscription Renewed",
-            "title": "Your subscription has renewed",
-            "summary": "We received your latest recurring payment and your Pro access continues.",
+            "subject": "Your Visa Success Pass has been extended",
+            "title": "Your Visa Success Pass has been extended",
+            "summary": "We received your payment and your Visa Success Pass access continues.",
             "accent_bg": "#eff6ff",
             "accent_fg": "#1e3a8a",
         },
         "auto_renew_cancelled": {
-            "subject": "Rilono Auto-Renew Cancelled",
-            "title": "Auto-renew has been turned off",
-            "summary": "Your Pro plan remains active until the current access period ends.",
+            "subject": "Rilono access update",
+            "title": "Your access setting was updated",
+            "summary": "Your Visa Success Pass remains active until the current access period ends.",
             "accent_bg": "#fffbeb",
             "accent_fg": "#92400e",
         },
         "downgraded_to_free": {
-            "subject": "Rilono Plan Changed to Free",
-            "title": "Your account is now on Free plan",
-            "summary": "Your Pro access period has ended and your account is now on Free plan.",
+            "subject": "Your Visa Success Pass has ended",
+            "title": "Your account is now on the Free plan",
+            "summary": "Your Visa Success Pass access period has ended and your account is now on the Free plan.",
             "accent_bg": "#fff7ed",
             "accent_fg": "#9a3412",
         },
         "payment_failed": {
-            "subject": "Rilono Subscription Payment Failed",
+            "subject": "Rilono payment failed",
             "title": "We could not process your payment",
-            "summary": "Please update your payment method or retry to avoid service disruption.",
+            "summary": "Please retry to activate your Visa Success Pass.",
             "accent_bg": "#fef2f2",
             "accent_fg": "#991b1b",
         },
@@ -1232,12 +1230,9 @@ def send_subscription_change_email(
     plan_label = _subscription_plan_label(plan=plan, pricing_model=pricing_model)
     active_plan_label = plan_label if plan_label.lower() != "free" else "subscription"
     if event_key == "pro_activated":
-        activation_subject = (
-            "Rilono Journey Pass Activated" if plan_label == "Journey Pass" else "Rilono Pro Activated"
-        )
         event_content = {
             **event_content,
-            "subject": activation_subject,
+            "subject": f"Rilono {plan_label} Activated",
             "title": f"Your {plan_label} is active",
             "summary": f"Payment is verified and your {active_plan_label} features are now unlocked.",
         }
@@ -1408,10 +1403,13 @@ def send_subscription_change_email(
 
 def _pricing_model_label_for_founder_email(pricing_model: Optional[str]) -> str:
     normalized = str(pricing_model or "").strip().lower()
-    if normalized in {"pro_six_month", "pro_6_month", "pro_6month", "six_month", "6_month", "6month"}:
-        return "Journey Pass (6 Months)"
-    if normalized in {"pro_monthly", "pro", "monthly", ""}:
-        return "Pro Monthly"
+    paid_models = {
+        "visa_pass",
+        "pro_six_month", "pro_6_month", "pro_6month", "six_month", "6_month", "6month",
+        "pro_monthly", "pro", "monthly", "",
+    }
+    if normalized in paid_models:
+        return "Visa Success Pass"
     return normalized.replace("_", " ").title()
 
 

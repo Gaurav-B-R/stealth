@@ -589,6 +589,66 @@
   /* ============================================================
      BOOT
      ============================================================ */
+  // "How did you hear about us?" — one-time post-signup prompt (B2B), shown once for
+  // an enterprise user who hasn't answered. Self-contained (injects markup + styles).
+  let _hauShown = false;
+  async function maybeShowEntHeardAbout(me) {
+    if (_hauShown || !me || !me.user || me.user.heard_about_answered) return;
+    try {
+      const d = await api("/heard-about");
+      if (!d || d.answered) return;
+      _hauShown = true;
+      renderEntHeardAbout(d.options || []);
+    } catch (e) { /* best-effort */ }
+  }
+  function renderEntHeardAbout(options) {
+    if (document.getElementById("hauOverlay")) return;
+    if (!document.getElementById("hauStyle")) {
+      const st = document.createElement("style");
+      st.id = "hauStyle";
+      st.textContent = `
+      #hauOverlay{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(15,23,42,.5);backdrop-filter:blur(4px)}
+      .hau-card{width:100%;max-width:440px;background:#fff;border-radius:20px;padding:28px 26px;box-shadow:0 30px 80px rgba(15,23,42,.28);animation:hauPop .28s cubic-bezier(.2,1.4,.4,1)}
+      @keyframes hauPop{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
+      .hau-card .em{font-size:34px}
+      .hau-card h3{margin:10px 0 6px;font-size:1.35rem;font-weight:800;color:#0f172a;letter-spacing:-.02em}
+      .hau-card p{margin:0 0 18px;color:#64748b;font-size:.95rem;line-height:1.5}
+      .hau-card select,.hau-card input{width:100%;padding:12px 14px;border:1.5px solid #d6d9ea;border-radius:12px;font-size:15px;color:#0f172a;background:#f8fafc;outline:none}
+      .hau-card select:focus,.hau-card input:focus{border-color:#6366f1;background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+      .hau-card input{margin-top:10px}
+      .hau-actions{display:flex;align-items:center;gap:12px;margin-top:20px}
+      .hau-submit{flex:1;border:0;cursor:pointer;padding:13px 18px;border-radius:12px;font-size:15px;font-weight:800;color:#fff;background:linear-gradient(135deg,#6366f1,#a855f7,#ec4899);box-shadow:0 10px 24px rgba(99,102,241,.34)}
+      .hau-submit:hover{filter:brightness(1.05)} .hau-submit:disabled{opacity:.6;cursor:not-allowed}
+      .hau-skip{background:none;border:0;color:#94a3b8;font-weight:700;font-size:.9rem;cursor:pointer;padding:6px}`;
+      document.head.appendChild(st);
+    }
+    const opts = ['<option value="" disabled selected>Select an option…</option>']
+      .concat(options.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`)).join("");
+    const wrap = document.createElement("div");
+    wrap.id = "hauOverlay";
+    wrap.innerHTML = `
+      <div class="hau-card" role="dialog" aria-modal="true">
+        <div class="em">📣</div>
+        <h3>How did you hear about us?</h3>
+        <p>Quick one — it helps us support more consultancies like yours. (Optional)</p>
+        <select id="hauSelect">${opts}</select>
+        <input id="hauOther" type="text" maxlength="200" placeholder="Tell us a bit more…" style="display:none">
+        <div class="hau-actions">
+          <button id="hauSubmit" class="hau-submit" disabled>Submit</button>
+          <button id="hauSkip" class="hau-skip" type="button">Skip for now</button>
+        </div>
+      </div>`;
+    document.body.appendChild(wrap);
+    const sel = wrap.querySelector("#hauSelect");
+    const other = wrap.querySelector("#hauOther");
+    const submit = wrap.querySelector("#hauSubmit");
+    const send = (source, detail) => { api("/heard-about", { method: "POST", body: { source: source, detail: detail || null } }).catch(() => {}); };
+    const close = () => wrap.remove();
+    sel.addEventListener("change", () => { submit.disabled = !sel.value; other.style.display = sel.value === "other" ? "block" : "none"; });
+    submit.addEventListener("click", () => { if (!sel.value) return; send(sel.value, sel.value === "other" ? (other.value || "").trim() : null); close(); toast("Thanks for letting us know! 🙌", "success"); });
+    wrap.querySelector("#hauSkip").addEventListener("click", () => { send("skip"); close(); });
+  }
+
   async function boot(opts) {
     opts = opts || {};
     showApp();
@@ -629,6 +689,7 @@
     $("#userAvatar").textContent = (initials(u.full_name || u.email) || "U").toUpperCase();
     $("#userAvatar").style.background = `linear-gradient(135deg, ${c1}, ${avatarColor(u.email)[1]})`;
     updatePlanChip();
+    maybeShowEntHeardAbout(me);
 
     if (!state.perms.can_edit_data) $("#topAddClient").classList.add("hidden");
 

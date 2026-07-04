@@ -122,11 +122,14 @@ def record_block(source: str, *, detail: str | None = None) -> None:
         logger.debug("Failed to record guardrail block (source=%s)", source, exc_info=True)
 
 
-def record_cache_event(kind: str, source: str, *, tokens_saved: int = 0, model: str | None = None) -> None:
-    """Persist a context-cache hit/miss. `tokens_saved` is the cached input tokens we
-    avoided re-sending on a hit. Never raises."""
+def record_cache_event(kind: str, source: str, *, tokens_saved: int = 0, model: str | None = None,
+                       cost_saved_usd=None) -> None:
+    """Persist a context-cache hit/miss. `tokens_saved` is the cached input tokens served
+    from cache on a hit. `cost_saved_usd` overrides the default full-price estimate — pass
+    the true discounted saving for implicit caching (still pay the discounted rate). Never raises."""
     try:
-        cost = ai_usage.estimate_cost(model or _GUARDRAIL_PRICING_MODEL, max(0, int(tokens_saved)), 0)
+        cost = cost_saved_usd if cost_saved_usd is not None else \
+            ai_usage.estimate_cost(model or _GUARDRAIL_PRICING_MODEL, max(0, int(tokens_saved)), 0)
         db = SessionLocal()
         try:
             db.add(models.AiOptimizationEvent(

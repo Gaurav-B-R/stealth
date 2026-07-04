@@ -190,6 +190,8 @@ function setDateColumnTimeZoneLabels() {
 function bindEvents() {
     refs.loginForm?.addEventListener('submit', handleLoginSubmit);
     refs.logoutBtn?.addEventListener('click', handleLogout);
+    document.getElementById('adminGrowthRunBtn')?.addEventListener('click', runGrowthAnalysis);
+    document.getElementById('adminAccountBackBtn')?.addEventListener('click', closeAccountDetail);
     refs.verifyProtectionBtn?.addEventListener('click', handleProtectionVerifyClick);
     refs.usersTabBtn?.addEventListener('click', () => handleTabSwitch('users'));
     refs.enterpriseTabBtn?.addEventListener('click', () => handleTabSwitch('enterprise'));
@@ -1080,8 +1082,7 @@ function renderUsersTable() {
                 <td>${escapeHtml(formatDateTime(user.last_login_at))}</td>
                 <td>
                     <div class="row-actions">
-                        <button class="${statusActionClass}" data-action="toggle-status" data-user-id="${user.id}" data-next-active="${isActive ? 'false' : 'true'}" ${disableAttr}${titleAttr}>${statusActionLabel}</button>
-                        <button class="table-btn danger" data-action="delete-user" data-user-id="${user.id}" data-user-email="${escapeHtml(user.email || 'this user')}" data-user-name="${escapeHtml(userName)}" ${disableAttr}${titleAttr}>Delete</button>
+                        <button class="table-btn" data-action="manage-user" data-user-id="${user.id}">Manage</button>
                     </div>
                 </td>
             </tr>
@@ -1588,7 +1589,7 @@ async function loadAcquisitionBreakdown() {
         if (!channels.length) { el.innerHTML = '<div class="table-empty">No signups yet.</div>'; return; }
         const maxCount = Math.max.apply(null, channels.map((c) => c.count).concat(1));
         if (metaEl) metaEl.textContent = `${data.tracked_total} tracked · +${data.new_last_30d} in 30d`;
-        el.innerHTML = channels.map((c) => {
+        const channelsHtml = channels.map((c) => {
             const pct = Math.round((c.count / maxCount) * 100);
             const recent = c.last_30d ? ` · +${c.last_30d} (30d)` : '';
             return `<div class="finance-breakdown-row">
@@ -1600,9 +1601,280 @@ async function loadAcquisitionBreakdown() {
                 <div class="finance-breakdown-percent">${c.percent}% of all signups</div>
             </div>`;
         }).join('');
+        // Self-reported "How did you hear about us?" (asked once post-signup).
+        const sr = (data && data.self_reported) || [];
+        let srHtml = '';
+        if (sr.length) {
+            srHtml = `<div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border-color,#e2e8f0);">
+                <div style="font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#94a3b8;margin-bottom:12px;">How they heard — self-reported (${data.self_reported_total})</div>`
+                + sr.map((s) => `<div class="finance-breakdown-row">
+                    <div class="finance-breakdown-top"><strong>${escapeHtml(s.label)}</strong><span>${s.count}</span></div>
+                    <div class="finance-breakdown-track"><span style="width:${s.percent}%;background:#6366f1;"></span></div>
+                    <div class="finance-breakdown-percent">${s.percent}% of self-reported</div>
+                </div>`).join('')
+                + `</div>`;
+        }
+        el.innerHTML = channelsHtml + srHtml;
     } catch (error) {
         console.error('Failed to load acquisition breakdown:', error);
         el.innerHTML = '<div class="table-empty">Could not load traffic sources.</div>';
+    }
+}
+
+// ---- Internal Conversion Agent (which free accounts to pitch the Pass to, and how) ----
+const GROWTH_INTENT_STYLE = {
+    high: { bg: 'rgba(16,185,129,.14)', fg: '#047857', label: 'HIGH' },
+    medium: { bg: 'rgba(245,158,11,.16)', fg: '#b45309', label: 'MED' },
+    low: { bg: 'rgba(148,163,184,.18)', fg: '#475569', label: 'LOW' },
+};
+
+function renderGrowthRecommendations(data) {
+    const el = document.getElementById('adminGrowthResults');
+    const metaEl = document.getElementById('adminGrowthMeta');
+    const recs = (data && data.recommendations) || [];
+    if (metaEl) {
+        const via = data.ai_used ? `${escapeHtml(data.model_used || 'Gemini')}` : 'rule-based (AI unavailable)';
+        metaEl.textContent = `${data.analyzed_count} of ${data.total_free_accounts} free accounts · strategy via ${via}`;
+    }
+    if (!recs.length) {
+        el.innerHTML = '<div class="table-empty">No free accounts to target right now.</div>';
+        return;
+    }
+    el.innerHTML = recs.map((r) => {
+        const a = r.account || {};
+        const st = GROWTH_INTENT_STYLE[r.intent] || GROWTH_INTENT_STYLE.low;
+        const limitChip = a.hit_any_limit
+            ? '<span style="font-size:10.5px;font-weight:800;color:#b91c1c;background:rgba(239,68,68,.1);padding:1px 7px;border-radius:999px;">HIT A LIMIT</span>' : '';
+        const lastSeen = a.days_since_last_login == null ? 'never logged in'
+            : (a.days_since_last_login === 0 ? 'active today' : `${a.days_since_last_login}d since login`);
+        const u = a.usage_detail || {};
+        const usage = `AI ${u.ai_messages || '-'} · Mock ${u.mock_interviews || '-'} · Uploads ${u.document_uploads || '-'} · Prep ${u.prep_sessions || '-'}`;
+        const msg = r.suggested_message
+            ? `<div style="margin-top:8px;background:#f8fafc;border:1px solid var(--border-color,#e7e9f3);border-left:3px solid #7c3aed;border-radius:8px;padding:9px 12px;font-size:13px;color:#0f172a;">
+                 “${escapeHtml(r.suggested_message)}”
+                 <button type="button" class="ghost-btn small-btn" style="margin-left:8px;padding:2px 10px;font-size:11px;" data-copy="${escapeHtml(r.suggested_message)}">Copy</button>
+               </div>` : '';
+        return `<div style="border:1px solid var(--border-color,#e7e9f3);border-radius:12px;padding:13px 15px;margin-bottom:10px;background:#fff;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <span style="font-size:11px;font-weight:900;color:#fff;background:#7c3aed;border-radius:8px;min-width:34px;text-align:center;padding:3px 7px;">${r.priority}</span>
+                <strong style="font-size:14.5px;">${escapeHtml(a.name || 'Student')}</strong>
+                <span style="font-size:12px;color:#64748b;">${escapeHtml(a.email || '')}</span>
+                <span style="font-size:10.5px;font-weight:800;color:${st.fg};background:${st.bg};padding:2px 8px;border-radius:999px;">${st.label} INTENT · ${a.intent_score}</span>
+                ${limitChip}
+                <span style="margin-left:auto;font-size:12px;color:#94a3b8;">${escapeHtml(lastSeen)}</span>
+            </div>
+            <div style="margin-top:8px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+                <span style="font-size:12.5px;font-weight:800;color:#6d28d9;">${escapeHtml(r.promotion_label || r.recommended_promotion)}</span>
+                <span style="font-size:12px;color:#475569;">— ${escapeHtml(r.segment || '')}</span>
+                <span style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.03em;">via ${escapeHtml(r.channel || 'email')}</span>
+            </div>
+            <div style="margin-top:4px;font-size:12.5px;color:#64748b;">${escapeHtml(r.reason || '')}</div>
+            <div style="margin-top:6px;font-size:11.5px;color:#94a3b8;">${escapeHtml(usage)}${a.destination ? ' · ' + escapeHtml(a.destination) : ''}</div>
+            ${msg}
+        </div>`;
+    }).join('');
+    el.querySelectorAll('button[data-copy]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            try { navigator.clipboard.writeText(btn.getAttribute('data-copy') || ''); btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); } catch (e) {}
+        });
+    });
+}
+
+async function runGrowthAnalysis() {
+    const btn = document.getElementById('adminGrowthRunBtn');
+    const el = document.getElementById('adminGrowthResults');
+    if (!el) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
+    el.innerHTML = '<div class="table-empty">The agent is scoring accounts and drafting conversion plays… this can take a few seconds.</div>';
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/growth/conversion-analysis?limit=30`, {
+            method: 'POST', headers: buildAuthHeaders(), credentials: 'same-origin',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            el.innerHTML = `<div class="table-empty">${escapeHtml((data && data.detail) || 'Could not run the analysis.')}</div>`;
+            return;
+        }
+        renderGrowthRecommendations(data);
+    } catch (error) {
+        console.error('Growth analysis failed:', error);
+        el.innerHTML = '<div class="table-empty">Could not run the analysis.</div>';
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Run analysis'; }
+    }
+}
+
+/* ===================== Account "Manage" full-screen view ===================== */
+function acctFmt(dt) { return dt ? formatDateTime(dt) : '—'; }
+function acctInr(paise) { return (paise == null) ? '—' : '₹' + (paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+
+async function openAccountDetail(userId) {
+    const overlay = document.getElementById('adminAccountDetail');
+    const body = document.getElementById('adminAccountBody');
+    const title = document.getElementById('adminAccountTitle');
+    if (!overlay || !body) return;
+    overlay.hidden = false;
+    document.body.style.overflow = 'hidden';
+    if (title) title.textContent = 'Account';
+    document.getElementById('adminAccountActions').innerHTML = '';
+    body.innerHTML = '<div class="table-empty">Loading account…</div>';
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/users/${userId}/detail`, {
+            headers: buildAuthHeaders(), credentials: 'same-origin',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            body.innerHTML = `<div class="table-empty">${escapeHtml((data && data.detail) || 'Could not load this account.')}</div>`;
+            return;
+        }
+        renderAccountDetail(userId, data);
+    } catch (error) {
+        console.error('Account detail failed:', error);
+        body.innerHTML = '<div class="table-empty">Could not load this account.</div>';
+    }
+}
+
+function closeAccountDetail() {
+    const overlay = document.getElementById('adminAccountDetail');
+    if (overlay) overlay.hidden = true;
+    document.body.style.overflow = '';
+}
+
+function renderAccountDetail(userId, data) {
+    const a = data.account || {}, sub = data.subscription || {}, intent = data.intent || {};
+    const title = document.getElementById('adminAccountTitle');
+    if (title) title.textContent = `${a.name || 'Account'} · ${a.email || ''}`;
+
+    // Top-bar actions mirror the old row buttons; only shown when this admin can manage the target.
+    const active = a.is_active;
+    const isSelf = Number(userId) === Number(state.currentUser && state.currentUser.id);
+    const canManage = !isSelf && ((a.role === 'student') || (state.currentUser && state.currentUser.is_developer));
+    document.getElementById('adminAccountActions').innerHTML = canManage
+        ? `<button class="table-btn" id="acctToggleBtn">${active ? 'Deactivate' : 'Activate'}</button>
+           <button class="table-btn danger" id="acctDeleteBtn">Delete</button>`
+        : '<span class="acct-chip grey">View only</span>';
+
+    const usageHtml = (sub.usage || []).map((u) => {
+        const lim = u.free_limit;
+        const pct = lim > 0 ? Math.min(100, Math.round((u.used / lim) * 100)) : (u.used > 0 ? 100 : 0);
+        const full = lim > 0 && u.used >= lim && !sub.is_pass_active;
+        const limLabel = sub.is_pass_active ? '∞' : (lim > 0 ? lim : '—');
+        return `<div><div class="acct-usage-row"><span>${escapeHtml(u.label)}</span><span>${u.used} / ${limLabel}</span></div>
+            <div class="acct-usage-bar"><span class="${full ? 'full' : ''}" style="width:${sub.is_pass_active ? 100 : pct}%"></span></div></div>`;
+    }).join('');
+    const planChip = sub.is_pass_active
+        ? `<span class="acct-chip green">Visa Success Pass · active${sub.pass_days_left != null ? ` (${sub.pass_days_left}d left)` : ''}</span>`
+        : '<span class="acct-chip grey">Free plan</span>';
+
+    const couponsHtml = (data.coupons || []).length
+        ? data.coupons.map((c) => `<div class="acct-line">
+            <span><strong>${escapeHtml(c.code)}</strong>${c.percent_off ? ` · ${c.percent_off}% off` : ''} <span class="acct-chip ${c.status === 'verified' ? 'green' : 'grey'}">${escapeHtml(c.status)}</span> <span style="color:#94a3b8">on ${escapeHtml(c.on)}</span></span>
+            <span style="color:#64748b">${escapeHtml(acctFmt(c.applied_at))}</span></div>`).join('')
+        : '<div class="acct-empty">No coupon codes applied on this account.</div>';
+
+    const paymentsHtml = (data.payments || []).length
+        ? data.payments.map((p) => `<div class="acct-line">
+            <span>${escapeHtml(acctInr(p.amount_paise))} <span class="acct-chip ${p.status === 'verified' ? 'green' : (p.status === 'failed' ? 'amber' : 'grey')}">${escapeHtml(p.status)}</span>${p.coupon_code ? ` · coupon <strong>${escapeHtml(p.coupon_code)}</strong>` : ''}</span>
+            <span style="color:#64748b">${escapeHtml(acctFmt(p.verified_at || p.created_at))}</span></div>`).join('')
+        : '<div class="acct-empty">No payments yet.</div>';
+
+    const acq = a.acquisition || {}, ref = a.referral || {};
+
+    document.getElementById('adminAccountBody').innerHTML = `
+      <div class="acct-grid">
+        <div style="display:grid;gap:16px">
+          <div class="acct-card"><h3>Profile</h3>
+            <dl class="acct-kv">
+              <dt>Status</dt><dd>${active ? '<span class="acct-chip green">Active</span>' : '<span class="acct-chip grey">Inactive</span>'} ${a.email_verified ? '<span class="acct-chip green">Verified</span>' : '<span class="acct-chip amber">Unverified</span>'}</dd>
+              <dt>Role</dt><dd>${escapeHtml(a.role || 'student')}</dd>
+              <dt>Sign-in</dt><dd>${escapeHtml(a.auth_provider || 'password')}</dd>
+              <dt>Destination</dt><dd>${escapeHtml(a.country_name || '—')}${a.visa_type_label ? ' · ' + escapeHtml(a.visa_type_label) : ''}</dd>
+              <dt>University</dt><dd>${escapeHtml(a.university || '—')}</dd>
+              <dt>Home country</dt><dd>${escapeHtml(a.home_country || '—')}</dd>
+              <dt>Created</dt><dd>${escapeHtml(acctFmt(a.created_at))}</dd>
+              <dt>Last login</dt><dd>${escapeHtml(acctFmt(a.last_login_at))}</dd>
+              <dt>Onboarded</dt><dd>${a.onboarding_completed_at ? escapeHtml(acctFmt(a.onboarding_completed_at)) : 'Not completed'}</dd>
+              <dt>Marketing opt-in</dt><dd>${a.marketing_consent ? 'Yes' : 'No'}</dd>
+            </dl>
+          </div>
+          <div class="acct-card"><h3>Plan &amp; usage &nbsp; ${planChip}</h3>${usageHtml || '<div class="acct-empty">No subscription record.</div>'}</div>
+          <div class="acct-card"><h3>Coupons applied &amp; when</h3>${couponsHtml}</div>
+          <div class="acct-card"><h3>Payments</h3>${paymentsHtml}</div>
+        </div>
+        <div style="display:grid;gap:16px">
+          <div class="acct-card acct-reco-card"><h3>🎯 Gemini 3.1 Pro — Conversion play</h3>
+            <div id="acctRecoBody">
+              <p style="font-size:13px;color:#64748b;margin:0 0 10px">Intent score <strong>${intent.score != null ? intent.score : '—'}</strong>${intent.hit_any_limit ? ' · <span class="acct-chip amber">hit a free limit</span>' : ''}. Run the agent for a tailored coupon/promotion + outreach message for this account.</p>
+              <button class="primary-btn small-btn" id="acctRecoBtn">Get AI recommendation</button>
+            </div>
+          </div>
+          <div class="acct-card"><h3>Acquisition</h3>
+            <dl class="acct-kv">
+              <dt>Channel</dt><dd>${escapeHtml(acq.channel || 'untracked')}</dd>
+              <dt>Source</dt><dd>${escapeHtml(acq.source || '—')}</dd>
+              <dt>Campaign</dt><dd>${escapeHtml(acq.campaign || '—')}</dd>
+              <dt>Landing page</dt><dd>${escapeHtml(acq.landing_page || '—')}</dd>
+              <dt>Heard about us</dt><dd>${escapeHtml(a.heard_about_label || '—')}</dd>
+            </dl>
+          </div>
+          <div class="acct-card"><h3>Referral</h3>
+            <dl class="acct-kv">
+              <dt>Their code</dt><dd>${escapeHtml(ref.code || '—')}</dd>
+              <dt>Referred by</dt><dd>${ref.referred_by ? escapeHtml(ref.referred_by.email) : '—'}</dd>
+              <dt>Referrals made</dt><dd>${ref.referrals_made || 0}</dd>
+              <dt>Reward granted</dt><dd>${ref.reward_granted_at ? escapeHtml(acctFmt(ref.reward_granted_at)) : '—'}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>`;
+
+    const recoBtn = document.getElementById('acctRecoBtn');
+    if (recoBtn) recoBtn.addEventListener('click', () => runAccountReco(userId));
+    const toggleBtn = document.getElementById('acctToggleBtn');
+    if (toggleBtn) toggleBtn.addEventListener('click', async () => { await updateUserStatus(userId, !active); closeAccountDetail(); });
+    const delBtn = document.getElementById('acctDeleteBtn');
+    if (delBtn) delBtn.addEventListener('click', async () => { await deleteUser(userId, a.email || 'this user', a.name || ''); closeAccountDetail(); });
+}
+
+async function runAccountReco(userId) {
+    const body = document.getElementById('acctRecoBody');
+    if (!body) return;
+    body.innerHTML = '<div class="acct-empty">Gemini 3.1 Pro is analyzing this account and drafting a play…</div>';
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/users/${userId}/conversion-reco`, {
+            method: 'POST', headers: buildAuthHeaders(), credentials: 'same-origin',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            body.innerHTML = `<div class="acct-empty">${escapeHtml((data && data.detail) || 'Could not generate a recommendation.')}</div>`;
+            return;
+        }
+        const reco = data.recommendation || {};
+        const intentClass = reco.intent === 'high' ? 'green' : (reco.intent === 'medium' ? 'amber' : 'grey');
+        const via = data.ai_used ? escapeHtml(data.model_used || 'Gemini') : 'rule-based fallback';
+        body.innerHTML = `
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <span class="acct-chip ${intentClass}">${escapeHtml(String(reco.intent || '').toUpperCase())} INTENT</span>
+            <span class="acct-chip purple">${escapeHtml(reco.promotion_label || reco.recommended_promotion || '')}</span>
+            ${data.is_pass_active ? '<span class="acct-chip green">Already on Pass</span>' : ''}
+            <span style="margin-left:auto;font-size:11px;color:#94a3b8">via ${via}</span>
+          </div>
+          <div style="font-size:12.5px;color:#475569"><strong>${escapeHtml(reco.segment || '')}</strong>${reco.reason ? ' — ' + escapeHtml(reco.reason) : ''}</div>
+          ${reco.suggested_message ? `<div class="acct-reco-msg">“${escapeHtml(reco.suggested_message)}”
+             <button type="button" class="ghost-btn small-btn" style="margin-left:8px;padding:2px 10px;font-size:11px" id="acctRecoCopy">Copy</button></div>` : ''}
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            ${reco.channel ? `<span class="acct-chip grey">channel: ${escapeHtml(reco.channel)}</span>` : ''}
+            <button class="ghost-btn small-btn" id="acctRecoRerun" style="margin-left:auto">Re-run</button>
+          </div>`;
+        const copyBtn = document.getElementById('acctRecoCopy');
+        if (copyBtn) copyBtn.addEventListener('click', function () {
+            try { navigator.clipboard.writeText(reco.suggested_message || ''); this.textContent = 'Copied'; } catch (e) { /* clipboard unavailable */ }
+        });
+        const rerun = document.getElementById('acctRecoRerun');
+        if (rerun) rerun.addEventListener('click', () => runAccountReco(userId));
+    } catch (error) {
+        console.error('Account reco failed:', error);
+        body.innerHTML = '<div class="acct-empty">Could not generate a recommendation.</div>';
     }
 }
 
@@ -1715,7 +1987,11 @@ function renderAiUsage(data) {
     const setMetric = (costEl, subEl, t) => {
         const s = t || { cost_usd: 0, tokens: 0, calls: 0 };
         if (costEl) costEl.textContent = formatAiUsd(s.cost_usd);
-        if (subEl) subEl.textContent = `${(s.calls || 0).toLocaleString()} calls · ${formatTokens(s.tokens)} tokens`;
+        if (subEl) {
+            let sub = `${(s.calls || 0).toLocaleString()} calls · ${formatTokens(s.tokens)} tokens`;
+            if (s.cache_hit_pct) sub += ` · ${s.cache_hit_pct}% cached 🟢`;
+            subEl.textContent = sub;
+        }
     };
     setMetric(refs.aiTodayCost, refs.aiTodaySub, totals.today);
     setMetric(refs.ai7Cost, refs.ai7Sub, totals.last_7_days);
@@ -2415,6 +2691,11 @@ async function handleTableActionClick(event) {
     const action = button.dataset.action;
     const userId = Number(button.dataset.userId || 0);
     if (!Number.isFinite(userId) || userId <= 0) return;
+
+    if (action === 'manage-user') {
+        await openAccountDetail(userId);
+        return;
+    }
 
     if (action === 'toggle-status') {
         const nextActive = String(button.dataset.nextActive || '').toLowerCase() === 'true';

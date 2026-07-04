@@ -183,27 +183,48 @@
         }
 
         .enterprise-proof-card {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.42rem;
             border: 1px solid var(--enterprise-line);
             border-radius: 14px;
             background: rgba(15, 23, 42, 0.56);
-            padding: 0.78rem 0.85rem;
+            padding: 0.82rem 0.88rem;
             backdrop-filter: blur(16px);
+            transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .enterprise-proof-card:hover {
+            transform: translateY(-3px);
+            border-color: rgba(99, 102, 241, 0.45);
+        }
+
+        .enterprise-proof-card .proof-ic {
+            width: 30px;
+            height: 30px;
+            border-radius: 9px;
+            background: rgba(99, 102, 241, 0.16);
+            border: 1px solid rgba(99, 102, 241, 0.28);
+            display: grid;
+            place-items: center;
+            font-size: 0.95rem;
+            flex: none;
         }
 
         .enterprise-proof-card strong {
             display: block;
-            font-size: 1.14rem;
-            letter-spacing: -0.04em;
+            font-size: 0.96rem;
+            letter-spacing: -0.01em;
+            line-height: 1.25;
         }
 
         .enterprise-proof-card span {
             display: block;
-            margin-top: 0.16rem;
             color: var(--enterprise-muted);
-            font-size: 0.68rem;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
+            font-size: 0.78rem;
+            font-weight: 600;
+            line-height: 1.45;
         }
 
         .enterprise-preview-wrap {
@@ -1022,19 +1043,26 @@
             }
 
             .enterprise-proof-card {
-                padding: 0.62rem 0.58rem;
+                padding: 0.6rem 0.62rem;
                 border-radius: 12px;
+                gap: 0.34rem;
+            }
+
+            .enterprise-proof-card .proof-ic {
+                width: 24px;
+                height: 24px;
+                border-radius: 7px;
+                font-size: 0.78rem;
             }
 
             .enterprise-proof-card strong {
-                font-size: 0.88rem;
+                font-size: 0.84rem;
                 letter-spacing: 0;
             }
 
             .enterprise-proof-card span {
-                font-size: 0.56rem;
-                line-height: 1.25;
-                letter-spacing: 0.04em;
+                font-size: 0.68rem;
+                line-height: 1.35;
             }
 
             .enterprise-preview-wrap {
@@ -1268,11 +1296,18 @@
             .enterprise-proof-card {
                 display: grid;
                 grid-template-columns: auto 1fr;
-                column-gap: 0.45rem;
-                align-items: baseline;
+                column-gap: 0.6rem;
+                row-gap: 0.06rem;
+                align-items: center;
             }
 
+            .enterprise-proof-card .proof-ic {
+                grid-row: 1 / 3;
+            }
+
+            .enterprise-proof-card strong,
             .enterprise-proof-card span {
+                grid-column: 2;
                 margin-top: 0;
             }
 
@@ -1420,6 +1455,90 @@
         }
         .enterprise-switch-stats span { color: var(--enterprise-muted); }
     </style>
+    <style>
+        /* ================= PREMIUM MOTION SYSTEM =================
+           Entrance choreography (hero), ambient loops (glow, levitation, bobbing,
+           gradient sheen), scroll reveals (auto-tagged .rv via JS), and hover
+           micro-interactions. Everything is disabled under prefers-reduced-motion. */
+
+        /* --- Hero entrance: copy column builds in, preview glides in from the right --- */
+        @keyframes entRise { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
+        @keyframes entPreview { from { opacity: 0; transform: translateX(46px) scale(.97); } to { opacity: 1; transform: none; } }
+        @keyframes entPop { from { opacity: 0; transform: translateY(18px) scale(.92); } to { opacity: 1; transform: none; } }
+        .enterprise-hero-copy-block > * { animation: entRise .75s cubic-bezier(.22, 1, .36, 1) both; }
+        .enterprise-hero-copy-block > *:nth-child(1) { animation-delay: .05s; }
+        .enterprise-hero-copy-block > *:nth-child(2) { animation-delay: .16s; }
+        .enterprise-hero-copy-block > *:nth-child(3) { animation-delay: .27s; }
+        .enterprise-hero-copy-block > *:nth-child(4) { animation-delay: .38s; }
+        .enterprise-hero-copy-block > *:nth-child(5) { animation-delay: .5s; }
+        .enterprise-preview-wrap { animation: entPreview .95s cubic-bezier(.22, 1, .36, 1) .3s both; }
+        .enterprise-floating-card { animation: entPop .7s cubic-bezier(.22, 1, .36, 1) both, entBob 6.5s ease-in-out 1.6s infinite; }
+        .enterprise-risk-card { animation-delay: .95s, 1.8s; }
+        .enterprise-ai-card { animation-delay: 1.15s, 2.6s; }
+
+        /* --- Ambient loops --- */
+        @keyframes entBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+        @keyframes entGlowDrift {
+            0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: .85; }
+            50% { transform: translate3d(2.5%, 2%, 0) scale(1.07); opacity: 1; }
+        }
+        .enterprise-preview-glow { animation: entGlowDrift 11s ease-in-out infinite; will-change: transform; }
+        @keyframes entLevitate { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+        .enterprise-dashboard-window { animation: entLevitate 8s ease-in-out 1.4s infinite; will-change: transform; }
+        /* Mouse-parallax tilt is applied by JS to the frame; keep its return smooth. */
+        .enterprise-dashboard-frame { transition: transform .45s cubic-bezier(.22, 1, .36, 1); will-change: transform; }
+
+        /* Animated gradient sheen on the headline + section gradient text */
+        @keyframes entSheen { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        .enterprise-hero h1 .enterprise-gradient,
+        .enterprise-grad-text {
+            background-image: linear-gradient(115deg, #818cf8, #a855f7 30%, #ec4899 55%, #a855f7 78%, #818cf8);
+            background-size: 220% 100%;
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            animation: entSheen 7s ease-in-out infinite;
+        }
+
+        /* Pulsing "live" dot on the hero eyebrow, if present */
+        @keyframes entPulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, .55); } 70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); } 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } }
+        .enterprise-eyebrow-dot { animation: entPulse 2.2s infinite; }
+
+        /* Switch arrow nudges toward the "after" card */
+        @keyframes entNudge { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(7px); } }
+        .switch-arrow { animation: entNudge 1.8s ease-in-out infinite; display: inline-block; }
+
+        /* --- Scroll reveals (elements are tagged .rv by JS; .in shows them) --- */
+        .rv { opacity: 0; transform: translateY(26px); transition: opacity .7s cubic-bezier(.22, 1, .36, 1) var(--d, 0s), transform .7s cubic-bezier(.22, 1, .36, 1) var(--d, 0s); }
+        .rv.in { opacity: 1; transform: none; }
+
+        /* --- Hover micro-interactions --- */
+        .enterprise-card, .enterprise-flow-card, .enterprise-country-card, .enterprise-switch-card {
+            transition: transform .22s cubic-bezier(.2, .7, .2, 1.2), box-shadow .22s ease, border-color .22s ease;
+        }
+        .enterprise-card:hover, .enterprise-flow-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(99, 102, 241, .45);
+            box-shadow: 0 22px 54px rgba(99, 102, 241, .16);
+        }
+        .enterprise-country-card:hover { transform: translateY(-5px) scale(1.015); }
+        .enterprise-btn-primary { position: relative; overflow: hidden; }
+        .enterprise-btn-primary::after {
+            content: ""; position: absolute; top: 0; bottom: 0; left: -80%; width: 45%;
+            background: linear-gradient(105deg, transparent, rgba(255, 255, 255, .38), transparent);
+            transform: skewX(-20deg); transition: left .55s ease; pointer-events: none;
+        }
+        .enterprise-btn-primary:hover::after { left: 130%; }
+
+        /* --- Accessibility: kill all motion for users who ask for it --- */
+        @media (prefers-reduced-motion: reduce) {
+            .enterprise-hero-copy-block > *, .enterprise-preview-wrap, .enterprise-floating-card,
+            .enterprise-preview-glow, .enterprise-dashboard-window, .enterprise-hero h1 .enterprise-gradient,
+            .enterprise-grad-text, .enterprise-eyebrow-dot, .switch-arrow { animation: none !important; }
+            .rv { opacity: 1 !important; transform: none !important; transition: none !important; }
+            .enterprise-dashboard-frame { transition: none; }
+        }
+    </style>
     <script src="/static/attribution.js"></script>
 </head>
 
@@ -1530,16 +1649,19 @@
                     </div>
                     <div class="enterprise-proof" aria-label="Enterprise platform highlights">
                         <div class="enterprise-proof-card">
-                            <strong>✨ Rilono AI copilot</strong>
+                            <div class="proof-ic">✨</div>
+                            <strong>Rilono AI copilot</strong>
                             <span>Ask your portal anything</span>
                         </div>
                         <div class="enterprise-proof-card">
+                            <div class="proof-ic">🗂️</div>
                             <strong>Free core CRM</strong>
                             <span>Up to 50 students</span>
                         </div>
                         <div class="enterprise-proof-card">
+                            <div class="proof-ic">👥</div>
                             <strong>Team roles</strong>
-                            <span>Admin, edit, view</span>
+                            <span>Admin, edit &amp; view</span>
                         </div>
                     </div>
                 </div>
@@ -1888,6 +2010,79 @@
             menu.addEventListener("click", function (e) { if (e.target.closest("a")) setOpen(false); });
             document.addEventListener("click", function (e) { if (!productsNav.contains(e.target)) setOpen(false); });
             document.addEventListener("keydown", function (e) { if (e.key === "Escape") setOpen(false); });
+        })();
+
+        // ---------- Premium motion: scroll reveals + dashboard parallax ----------
+        (function () {
+            var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+            if (reduceMotion) return; // CSS reduced-motion block keeps everything visible & still
+
+            // Auto-tag reveal targets (no markup changes needed). Children of the same
+            // container get a small stagger so grids cascade in.
+            var groups = [
+                ".enterprise-strip-item",
+                ".enterprise-section-heading",
+                ".enterprise-switch-card, .switch-arrow",
+                ".enterprise-switch-stats > div",
+                ".enterprise-card",
+                ".enterprise-flow-card",
+                ".enterprise-check-row",
+                ".enterprise-country-card",
+                ".enterprise-workflow-panel",
+                ".enterprise-cta-inner",
+            ];
+            var revealEls = [];
+            groups.forEach(function (sel) {
+                var els = document.querySelectorAll(sel);
+                for (var i = 0; i < els.length; i++) {
+                    var el = els[i];
+                    // Skip anything inside the hero — it has its own entrance choreography.
+                    if (el.closest && el.closest(".enterprise-hero")) continue;
+                    el.classList.add("rv");
+                    el.style.setProperty("--d", ((i % 6) * 0.09).toFixed(2) + "s");
+                    revealEls.push(el);
+                }
+            });
+            if (!("IntersectionObserver" in window)) {
+                revealEls.forEach(function (el) { el.classList.add("in"); });
+            } else {
+                var io = new IntersectionObserver(function (entries) {
+                    entries.forEach(function (entry) {
+                        if (entry.isIntersecting) { entry.target.classList.add("in"); io.unobserve(entry.target); }
+                    });
+                }, { threshold: 0.12, rootMargin: "0px 0px -8% 0px" });
+                revealEls.forEach(function (el) { io.observe(el); });
+                // Anything already in the viewport on load shows immediately.
+                setTimeout(function () {
+                    revealEls.forEach(function (el) {
+                        var r = el.getBoundingClientRect();
+                        if (r.top < window.innerHeight && r.bottom > 0) el.classList.add("in");
+                    });
+                }, 60);
+            }
+
+            // Mouse-parallax tilt on the hero dashboard (desktop pointers only).
+            var wrap = document.querySelector(".enterprise-preview-wrap");
+            var frame = document.querySelector(".enterprise-dashboard-frame");
+            var finePointer = window.matchMedia && window.matchMedia("(pointer: fine)").matches;
+            if (wrap && frame && finePointer) {
+                var raf = null;
+                wrap.addEventListener("mousemove", function (e) {
+                    if (raf) return;
+                    raf = requestAnimationFrame(function () {
+                        raf = null;
+                        var r = wrap.getBoundingClientRect();
+                        var px = (e.clientX - r.left) / r.width - 0.5;   // -0.5 … 0.5
+                        var py = (e.clientY - r.top) / r.height - 0.5;
+                        frame.style.transform =
+                            "rotateY(" + (px * 5).toFixed(2) + "deg) rotateX(" + (-py * 4).toFixed(2) + "deg)";
+                    });
+                });
+                wrap.addEventListener("mouseleave", function () {
+                    if (raf) { cancelAnimationFrame(raf); raf = null; }
+                    frame.style.transform = "";
+                });
+            }
         })();
     </script>
 </body>

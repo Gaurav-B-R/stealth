@@ -1337,3 +1337,51 @@ body.admin-modal-open {
         grid-template-columns: 1fr;
     }
 }
+
+/* ===================== Account "Manage" full-screen view ===================== */
+.account-detail-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 4000;
+    background: #f4f6fb;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.account-detail-overlay[hidden] { display: none; }
+.account-detail-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 24px;
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid #e2e8f0;
+}
+.account-detail-title { font-weight: 800; font-size: 16px; color: #0f172a; }
+.account-detail-actions { margin-left: auto; display: flex; gap: 8px; }
+.account-detail-body { max-width: 1040px; margin: 0 auto; padding: 22px 24px 60px; display: grid; gap: 16px; }
+.acct-grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 16px; align-items: start; }
+@media (max-width: 860px) { .acct-grid { grid-template-columns: 1fr; } }
+.acct-card { background: #fff; border: 1px solid #e7e9f3; border-radius: 14px; padding: 16px 18px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05); }
+.acct-card h3 { margin: 0 0 12px; font-size: 13px; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase; color: #64748b; }
+.acct-kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 12px; font-size: 13.5px; }
+.acct-kv dt { color: #94a3b8; font-weight: 600; }
+.acct-kv dd { margin: 0; color: #0f172a; word-break: break-word; }
+.acct-usage-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px dashed #eef2f7; font-size: 13px; }
+.acct-usage-row:last-child { border-bottom: 0; }
+.acct-usage-bar { height: 6px; border-radius: 999px; background: #eef2f7; overflow: hidden; margin-top: 4px; }
+.acct-usage-bar > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #6366f1, #a855f7); }
+.acct-usage-bar > span.full { background: linear-gradient(90deg, #ef4444, #f97316); }
+.acct-chip { display: inline-block; font-size: 11px; font-weight: 800; padding: 2px 9px; border-radius: 999px; }
+.acct-chip.green { background: rgba(16,185,129,.14); color: #047857; }
+.acct-chip.grey { background: rgba(148,163,184,.18); color: #475569; }
+.acct-chip.amber { background: rgba(245,158,11,.16); color: #b45309; }
+.acct-chip.purple { background: rgba(124,58,237,.12); color: #6d28d9; }
+.acct-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+.acct-line:last-child { border-bottom: 0; }
+.acct-empty { color: #94a3b8; font-size: 13px; padding: 6px 0; }
+.acct-reco-card { border: 1px solid rgba(124,58,237,.28); background: linear-gradient(160deg, rgba(124,58,237,.05), #fff); }
+.acct-reco-msg { margin-top: 10px; background: #f8fafc; border: 1px solid #e7e9f3; border-left: 3px solid #7c3aed; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #0f172a; }

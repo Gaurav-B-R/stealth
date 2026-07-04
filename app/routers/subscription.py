@@ -259,7 +259,7 @@ def _create_discounted_plan_id(
         "period": "monthly",
         "interval": 1,
         "item": {
-            "name": f"Rilono Pro Monthly ({percent_text}% OFF)",
+            "name": f"Rilono Visa Success Pass ({percent_text}% OFF)",
             "description": f"Auto-generated discounted plan from {base_plan_id}",
             "amount": discounted_amount_paise,
             "currency": currency,
@@ -352,11 +352,11 @@ def _pricing_model_prefers_recurring(pricing_model: str) -> bool:
 
 
 def _pricing_model_description(pricing_model: str, recurring: bool) -> str:
-    if pricing_model == PRICING_MODEL_SIX_MONTH:
-        return "Journey Pass (Best Value) - 6 Months One-Time"
+    # Single product now: the Visa Success Pass. `recurring` only affects the
+    # auto-renew wording for any legacy recurring subscription still on file.
     if recurring:
-        return "Rilono Pro Subscription (Auto-renew, cancel anytime)"
-    return "Rilono Pro Monthly (One-Time Payment)"
+        return "Rilono Visa Success Pass (Auto-renew, cancel anytime)"
+    return "Rilono Visa Success Pass (One-Time Payment)"
 
 
 def _pricing_model_from_payment_row(payment_row: models.SubscriptionPayment | None) -> str:
@@ -1152,21 +1152,11 @@ def get_my_subscription(
         access_source = "Free Plan"
     elif referral_bonus_active:
         access_source = "Referral Bonus (Visa Success Pass)"
-    elif has_verified_payment:
-        if latest_verified_pricing_model == PRICING_MODEL_SIX_MONTH:
-            access_source = "Journey Pass (Best Value)"
-        elif latest_verified_provider == "coupon":
-            access_source = "Coupon Pro (Auto-Renew Off)"
-        elif auto_renew_enabled is False:
-            access_source = "Paid Pro (Auto-Renew Off)"
-        elif auto_renew_enabled is True:
-            access_source = "Paid Pro (Auto-Renew On)"
-        else:
-            access_source = "Paid Pro"
-    elif ends_at and ends_at > now:
-        access_source = "Pro Access (Time-Limited)"
     else:
-        access_source = "Pro Access"
+        # Paid access is now presented uniformly as the Visa Success Pass (old Pro
+        # Monthly / Journey Pass products are retired). Auto-renew, coupon, and
+        # time-limited state are exposed via dedicated response fields, not this label.
+        access_source = "Visa Success Pass"
 
     return _build_subscription_response(
         subscription,
@@ -1234,7 +1224,7 @@ def upgrade_to_pro(
         if latest_verified_pricing_model == PRICING_MODEL_SIX_MONTH and pricing_model == PRICING_MODEL_MONTHLY:
             return {
                 "action": "already_pro",
-                "message": "Journey Pass members cannot switch to Pro Monthly while Journey Pass is active.",
+                "message": "You already have an active Visa Success Pass.",
                 "subscription": _build_subscription_response(
                     subscription,
                     db=db,

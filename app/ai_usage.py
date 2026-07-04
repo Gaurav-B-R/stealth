@@ -64,6 +64,10 @@ PRICING_PER_MILLION = {
 _DEFAULT_INPUT = float(os.getenv("GEMINI_PRICE_INPUT_PER_M", "0.30"))
 _DEFAULT_OUTPUT = float(os.getenv("GEMINI_PRICE_OUTPUT_PER_M", "2.50"))
 
+# Gemini 2.5 caches (implicit by default, or explicit) bill cached input tokens at a
+# discount. Google prices cached input at ~25% of the normal input rate (a 75% saving).
+CACHED_INPUT_MULTIPLIER = float(os.getenv("GEMINI_CACHED_INPUT_MULTIPLIER", "0.25"))
+
 
 def _rates_for(model_name: str) -> tuple[float, float]:
     name = str(model_name or "").strip().lower()
@@ -74,14 +78,19 @@ def _rates_for(model_name: str) -> tuple[float, float]:
     return best[1] if best else (_DEFAULT_INPUT, _DEFAULT_OUTPUT)
 
 
-def estimate_cost(model_name: str, prompt_tokens: int, output_tokens: int) -> Decimal:
+def estimate_cost(model_name: str, prompt_tokens: int, output_tokens: int, cached_tokens: int = 0) -> Decimal:
+    """Estimate a call's USD cost. `cached_tokens` is the subset of prompt_tokens served
+    from Gemini's context cache — billed at CACHED_INPUT_MULTIPLIER of the input rate."""
     in_rate, out_rate = _rates_for(model_name)
-    cost = (Decimal(prompt_tokens) / Decimal(1_000_000)) * Decimal(str(in_rate)) \
+    cached = max(0, min(int(cached_tokens or 0), int(prompt_tokens or 0)))
+    fresh_input = int(prompt_tokens or 0) - cached
+    cost = (Decimal(fresh_input) / Decimal(1_000_000)) * Decimal(str(in_rate)) \
+        + (Decimal(cached) / Decimal(1_000_000)) * Decimal(str(in_rate)) * Decimal(str(CACHED_INPUT_MULTIPLIER)) \
         + (Decimal(output_tokens) / Decimal(1_000_000)) * Decimal(str(out_rate))
     return cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
 
-def _extract_tokens(response) -> tuple[int, int, int]:
+def _extract_tokens(response) -> tuple[int, int, int, int]:
     um = getattr(response, "usage_metadata", None)
     if um is None:
         return 0, 0, 0
@@ -93,7 +102,8 @@ def _extract_tokens(response) -> tuple[int, int, int]:
     pt = g("prompt_token_count")
     ot = g("candidates_token_count")
     tt = g("total_token_count") or (pt + ot)
-    return pt, ot, tt
+    ct = g("cached_content_token_count")  # cached input tokens (implicit or explicit)
+    return pt, ot, tt, ct
 
 
 def _resolve_account(db, *, user_id, organization_id) -> tuple[int | None, int | None]:
@@ -117,10 +127,11 @@ def record_gemini_usage(source: str, model_name: str, response, *,
     """Best-effort: log one Gemini call's token usage + estimated cost, attributed to the
     account that incurred it (explicit args, else the request context). Never raises."""
     try:
-        pt, ot, tt = _extract_tokens(response)
+        pt, ot, tt, ct = _extract_tokens(response)
         if tt <= 0:
             return
-        cost = estimate_cost(model_name, pt, ot)
+        ct = max(0, min(ct, pt))
+        cost = estimate_cost(model_name, pt, ot, cached_tokens=ct)
         db = SessionLocal()
         try:
             uid, oid = _resolve_account(db, user_id=user_id, organization_id=organization_id)
@@ -128,12 +139,25 @@ def record_gemini_usage(source: str, model_name: str, response, *,
                 source=str(source or "unknown")[:64],
                 model=str(model_name or "unknown")[:80],
                 user_id=uid, organization_id=oid,
-                prompt_tokens=pt, output_tokens=ot, total_tokens=tt,
+                prompt_tokens=pt, output_tokens=ot, total_tokens=tt, cached_tokens=ct,
                 estimated_cost_usd=cost,
             ))
             db.commit()
         finally:
             db.close()
+        # Surface the caching win in the AI-optimization dashboard (best-effort).
+        if ct > 0:
+            try:
+                from app import ai_guardrails
+                in_rate, _ = _rates_for(model_name)
+                saved = (Decimal(ct) / Decimal(1_000_000)) * Decimal(str(in_rate)) \
+                    * (Decimal("1") - Decimal(str(CACHED_INPUT_MULTIPLIER)))
+                ai_guardrails.record_cache_event(
+                    "cache_hit", source, tokens_saved=ct, model=model_name,
+                    cost_saved_usd=saved.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP),
+                )
+            except Exception:
+                pass
     except Exception:
         logger.debug("Failed to record Gemini usage (source=%s)", source, exc_info=True)
 
@@ -153,6 +177,8 @@ SOURCE_LABELS = {
     "red_flag_scan": "Red-Flag scan (Visa Pass)",
     "ds160_autofill": "DS-160 auto-fill (Visa Pass)",
     "student_voice_interview": "Voice mock interview (Visa Pass)",
+    "growth_agent": "Conversion Agent — bulk scan (internal)",
+    "growth_agent_single": "Conversion Agent — single account (internal)",
 }
 
 
@@ -173,11 +199,21 @@ def build_ai_usage_analytics(db) -> dict:
             func.coalesce(func.sum(E.estimated_cost_usd), 0),
             func.coalesce(func.sum(E.total_tokens), 0),
             func.count(E.id),
+            func.coalesce(func.sum(E.cached_tokens), 0),
+            func.coalesce(func.sum(E.prompt_tokens), 0),
         )
         if start is not None:
             q = q.filter(E.created_at >= start)
-        cost, tokens, calls = q.one()
-        return {"cost_usd": _money(cost), "tokens": int(tokens or 0), "calls": int(calls or 0)}
+        cost, tokens, calls, cached, prompt = q.one()
+        cached = int(cached or 0); prompt = int(prompt or 0)
+        # Money saved by caching ≈ cached tokens × input rate × the 75% discount.
+        saved = round(float(cached) / 1_000_000 * float(_DEFAULT_INPUT) * (1 - CACHED_INPUT_MULTIPLIER), 6)
+        return {
+            "cost_usd": _money(cost), "tokens": int(tokens or 0), "calls": int(calls or 0),
+            "cached_tokens": cached,
+            "cache_hit_pct": round(cached / prompt * 100, 1) if prompt else 0.0,
+            "cache_saved_usd": saved,
+        }
 
     by_source = []
     for src, cost, tokens, calls in (
