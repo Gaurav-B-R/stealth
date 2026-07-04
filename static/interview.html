@@ -148,6 +148,7 @@
             <button class="btn btn-primary" id="startBtn">▶ Start interview</button>
             <div style="margin-top:14px"><label class="voice-pref"><input type="checkbox" id="voicePref"> 🎙 Voice mode</label></div>
             <div class="remain" id="iRemain" style="margin-top:14px"></div>
+            <div id="iError" class="err hidden" style="margin-top:14px"></div>
           </div>
 
           <div id="iChat" class="hidden">
@@ -164,6 +165,7 @@
               <button class="mic hidden" id="micBtn" title="Speak your answer">🎙</button>
               <button class="btn btn-primary" id="sendBtn">Send</button>
             </div>
+            <div id="iChatError" class="err hidden" style="margin-top:10px"></div>
             <div id="feedback" class="feedback hidden"></div>
             <div class="center" id="afterFb" style="margin-top:16px"></div>
           </div>
@@ -237,7 +239,9 @@
       }
 
       $("sendCodeBtn").onclick=function(){ var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Sending…';
-        api("/"+encodeURIComponent(token)+"/send-code").then(function(d){ $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
+        api("/"+encodeURIComponent(token)+"/send-code").then(function(d){
+          if(d && d.sent===false){ $("vError").textContent="We couldn't send the code right now. Please try again in a moment."; $("vError").classList.remove("hidden"); return; }
+          $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
           $("vMsg").textContent="We sent a 6-digit code to "+(d.masked_email||info.masked_email)+"."; $("vMsg").classList.remove("hidden"); $("codeInput").focus();
         }).catch(function(ex){ $("vError").textContent=ex.message; $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
       $("resendBtn").onclick=function(){ $("vError").classList.add("hidden"); $("sendCodeBtn").click(); };
@@ -267,18 +271,22 @@
       function speak(text){ if(!voiceOn||!("speechSynthesis" in window))return; try{ window.speechSynthesis.cancel(); var u=new SpeechSynthesisUtterance(String(text||"").replace(/[*_#`>]/g,"")); window.speechSynthesis.speak(u);}catch(e){} }
       function stopSpeak(){ try{ window.speechSynthesis&&window.speechSynthesis.cancel(); }catch(e){} }
 
+      // Inline error display — replaces jarring native alert() on this branded client page.
+      function showErr(id,msg){ var e=$(id); if(e){ e.textContent=msg||"Something went wrong. Please try again."; e.classList.remove("hidden"); } }
+      function hideErr(id){ var e=$(id); if(e) e.classList.add("hidden"); }
+
       if(micSupported){} // mic button shown after start
-      $("startBtn").onclick=function(){ info.voice=$("voicePref").checked; voiceOn=!!info.voice; history=[]; spoken=0; busy=true;
+      $("startBtn").onclick=function(){ info.voice=$("voicePref").checked; voiceOn=!!info.voice; history=[]; spoken=0; busy=true; hideErr("iError"); hideErr("iChatError");
         concluded=false; feedbackStarted=false; pendingDecision=null;
         $("iIntro").classList.add("hidden"); $("iChat").classList.remove("hidden"); $("inRow").classList.remove("hidden"); $("endBtn").disabled=false;
         $("feedback").classList.add("hidden"); $("feedback").innerHTML=""; $("afterFb").innerHTML="";
         if(micSupported){ $("micBtn").classList.remove("hidden"); } $("voiceBtn").textContent=voiceOn?"🔊 Voice on":"🔈 Voice off"; drawThread();
         api("/chat",{session_token:sessionToken,start:true}).then(function(d){ history.push({role:"officer",content:d.reply}); info.remaining=d.remaining; if(d.finished){ concluded=true; pendingDecision=d.decision||null; } })
-          .catch(function(ex){ alert(ex.message); $("iChat").classList.add("hidden"); renderInterview(); }).finally(function(){ busy=false; drawThread(); if(concluded){ concludeInterview(pendingDecision); } else { var a=$("answer"); if(a)a.focus(); } }); };
+          .catch(function(ex){ $("iChat").classList.add("hidden"); renderInterview(); showErr("iError", ex.message); }).finally(function(){ busy=false; drawThread(); if(concluded){ concludeInterview(pendingDecision); } else { var a=$("answer"); if(a)a.focus(); } }); };
 
-      function sendAnswer(){ var a=$("answer"); var v=(a.value||"").trim(); if(!v||busy||concluded)return; var prior=history.slice(); history.push({role:"user",content:v}); a.value=""; a.style.height="auto"; busy=true; drawThread();
+      function sendAnswer(){ var a=$("answer"); var v=(a.value||"").trim(); if(!v||busy||concluded)return; hideErr("iChatError"); var prior=history.slice(); history.push({role:"user",content:v}); a.value=""; a.style.height="auto"; busy=true; drawThread();
         api("/chat",{session_token:sessionToken,message:v,history:prior}).then(function(d){ history.push({role:"officer",content:d.reply}); if(d.finished){ concluded=true; pendingDecision=d.decision||null; } })
-          .catch(function(ex){ alert(ex.message); }).finally(function(){ busy=false; drawThread(); if(concluded){ concludeInterview(pendingDecision); } }); }
+          .catch(function(ex){ showErr("iChatError", ex.message); }).finally(function(){ busy=false; drawThread(); if(concluded){ concludeInterview(pendingDecision); } }); }
       $("sendBtn").onclick=sendAnswer;
       $("answer").addEventListener("keydown",function(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendAnswer(); } });
       $("answer").addEventListener("input",function(){ this.style.height="auto"; this.style.height=Math.min(this.scrollHeight,130)+"px"; });
@@ -302,7 +310,7 @@
           var ab=$("againBtn"); if(ab) ab.onclick=function(){ feedbackStarted=false; concluded=false; pendingDecision=null; $("iChat").classList.add("hidden"); renderInterview(); };
         }).catch(function(ex){ $("feedback").innerHTML=decisionBanner(decision)+'<div class="err">'+esc(ex.message)+'</div>'; feedbackStarted=false; }).finally(function(){ busy=false; }); }
 
-      $("endBtn").onclick=function(){ if(busy||feedbackStarted)return; if(history.filter(function(m){return m.role==="user";}).length===0){ alert("Answer at least one question first."); return; }
+      $("endBtn").onclick=function(){ if(busy||feedbackStarted)return; if(history.filter(function(m){return m.role==="user";}).length===0){ showErr("iChatError","Answer at least one question first."); return; }
         concludeInterview(pendingDecision); };
 
       $("voiceBtn").onclick=function(){ voiceOn=!voiceOn; this.textContent=voiceOn?"🔊 Voice on":"🔈 Voice off"; if(!voiceOn)stopSpeak(); else{ var l=history[history.length-1]; if(l&&l.role==="officer")speak(l.content);} };

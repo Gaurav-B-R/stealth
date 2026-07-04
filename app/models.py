@@ -513,6 +513,20 @@ class EnterpriseDemoRequest(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
 
+class EnterpriseSignupOtp(Base):
+    """Email-verification code for enterprise workspace signup. The workspace is only
+    created after the owner proves the inbox (stops junk workspaces + subdomain squatting).
+    One row per email (upserted on resend); deleted once the signup completes."""
+    __tablename__ = "enterprise_signup_otps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, nullable=False, index=True)
+    code_hash = Column(String, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class EnterpriseSubscription(Base):
     """Per-organization SaaS subscription (the consultancy's own plan)."""
     __tablename__ = "enterprise_subscriptions"

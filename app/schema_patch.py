@@ -810,6 +810,30 @@ def ensure_enterprise_demo_requests_table():
             conn.execute(text(stmt))
 
 
+def ensure_enterprise_signup_otps_table():
+    """Create the enterprise_signup_otps table (signup email-verification codes)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_signup_otps"):
+            return
+        conn.execute(text(f"""
+            CREATE TABLE enterprise_signup_otps (
+                id {pk},
+                email VARCHAR NOT NULL,
+                code_hash VARCHAR NOT NULL,
+                expires_at {ts} NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                created_at {ts} DEFAULT {now_default} NOT NULL
+            )
+        """))
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_signup_otps_email ON enterprise_signup_otps(email)"
+        ))
+
+
 def ensure_enterprise_support_requests_table():
     """Create the enterprise_support_requests table (help & feature requests)."""
     is_sqlite = engine.dialect.name == "sqlite"

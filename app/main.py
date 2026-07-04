@@ -29,6 +29,7 @@ from app.schema_patch import (
     ensure_enterprise_calendar_reminder_runs_table,
     ensure_enterprise_support_requests_table,
     ensure_enterprise_demo_requests_table,
+    ensure_enterprise_signup_otps_table,
     ensure_enterprise_coupons_table,
     ensure_enterprise_credit_tables,
     ensure_enterprise_payment_coupon_columns,
@@ -234,6 +235,7 @@ def startup_backfill_subscriptions():
     ensure_enterprise_calendar_reminder_runs_table()
     ensure_enterprise_support_requests_table()
     ensure_enterprise_demo_requests_table()
+    ensure_enterprise_signup_otps_table()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_f1_visa_news_table()

@@ -411,6 +411,28 @@
       } finally { btn.disabled = false; btn.textContent = "Send reset link"; }
     };
 
+    // Two-step signup: (1) validate the form + email a 6-digit code, (2) verify the
+    // code and only then create the workspace. Form data is held here in between.
+    let pendingSignup = null;
+
+    async function requestSignupCode(email, errEl, btn, busyLabel, idleLabel) {
+      errEl.classList.add("hidden");
+      try {
+        const body = { email };
+        const turnstileToken = await getEnterpriseTurnstileToken("signup");
+        if (turnstileToken) body.cf_turnstile_token = turnstileToken;
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> ' + busyLabel;
+        const data = await api("/signup/send-code", { method: "POST", body });
+        showSignupVerifyCard(email);
+        if (data && data.dev_code) $("#signupVerifyForm").code.value = data.dev_code; // local sandbox only
+        return true;
+      } catch (ex) {
+        errEl.textContent = ex.message; errEl.classList.remove("hidden");
+        resetEnterpriseTurnstile("signup");
+        return false;
+      } finally { btn.disabled = false; btn.textContent = idleLabel; }
+    }
+
     $("#signupForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#signupBtn");
@@ -425,7 +447,7 @@
         err.classList.remove("hidden");
         return;
       }
-      const body = {
+      pendingSignup = {
         company_name: f.company_name.value.trim(),
         subdomain_slug: f.subdomain_slug.value.trim().toLowerCase(),
         full_name: f.full_name.value.trim(),
@@ -435,18 +457,39 @@
         accepted_dpa: f.accept_dpa.checked,
         marketing_emails_consent: f.marketing_consent.checked,
       };
+      await requestSignupCode(pendingSignup.email, err, btn, "Sending code…", "Create my workspace");
+    };
+
+    $("#signupVerifyForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $("#signupVerifyBtn");
+      const err = $("#signupVerifyError"); err.classList.add("hidden");
+      if (!pendingSignup) { showSignupCard(); return; }
+      const body = Object.assign({}, pendingSignup, { email_otp: e.target.code.value.trim() });
       try {
-        const turnstileToken = await getEnterpriseTurnstileToken("signup");
-        if (turnstileToken) body.cf_turnstile_token = turnstileToken;
         btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Creating…';
         const data = await api("/signup", { method: "POST", body });
+        pendingSignup = null;
         if (redirectToPortalIfNeeded(data)) return;
         await boot({ fromAuthAction: true });
       } catch (ex) {
         err.textContent = ex.message; err.classList.remove("hidden");
-        resetEnterpriseTurnstile("signup");
-      } finally { btn.disabled = false; btn.textContent = "Create my workspace"; }
+      } finally { btn.disabled = false; btn.textContent = "Verify & create workspace"; }
     };
+
+    $("#signupResendBtn").onclick = async () => {
+      if (!pendingSignup) { showSignupCard(); return; }
+      const ok = await requestSignupCode(
+        pendingSignup.email, $("#signupVerifyError"), $("#signupResendBtn"), "Sending…", "Resend code",
+      );
+      if (ok) {
+        const err = $("#signupVerifyError");
+        err.textContent = "A fresh code is on its way — check your inbox.";
+        err.classList.remove("hidden");
+      }
+    };
+
+    $("#signupVerifyBack").onclick = () => { showSignupCard(); };
 
     $("#loginForm").onsubmit = async (e) => {
       e.preventDefault();
@@ -483,20 +526,33 @@
   function showSignupCard() {
     $("#loginCard").classList.add("hidden");
     $("#forgotCard").classList.add("hidden");
+    $("#signupVerifyCard").classList.add("hidden");
     $("#signupCard").classList.remove("hidden");
     renderEnterpriseTurnstile("signup");
   }
   function showLoginCard() {
     $("#signupCard").classList.add("hidden");
     $("#forgotCard").classList.add("hidden");
+    $("#signupVerifyCard").classList.add("hidden");
     $("#loginCard").classList.remove("hidden");
     renderEnterpriseTurnstile("login");
+  }
+  function showSignupVerifyCard(email) {
+    $("#signupCard").classList.add("hidden");
+    $("#loginCard").classList.add("hidden");
+    $("#forgotCard").classList.add("hidden");
+    $("#signupVerifyError").classList.add("hidden");
+    $("#signupVerifyEmail").textContent = email;
+    $("#signupVerifyForm").code.value = "";
+    $("#signupVerifyCard").classList.remove("hidden");
+    try { $("#signupVerifyForm").code.focus(); } catch (e) { /* noop */ }
   }
   function showForgotCard() {
     const em = ($("#loginForm").email.value || "").trim();
     if (em) $("#forgotForm").email.value = em;
     $("#loginCard").classList.add("hidden");
     $("#signupCard").classList.add("hidden");
+    $("#signupVerifyCard").classList.add("hidden");
     $("#forgotError").classList.add("hidden");
     $("#forgotSuccess").classList.add("hidden");
     $("#forgotCard").classList.remove("hidden");
@@ -936,7 +992,7 @@
       return `<tr onclick="__ent.openClient(${cl.id})">
         <td><div class="cl-name"><div class="cl-avatar" style="background:linear-gradient(135deg,${a},${b})">${esc(initials(cl.full_name).toUpperCase())}</div>
           <div><b>${esc(cl.full_name)}</b><span>${esc(cl.email || cl.phone || "—")}</span></div></div></td>
-        <td class="hide-sm"><div class="cl-dest"><span class="fl">${esc(cl.country.flag_emoji)}</span><div>${esc(cl.destination_country_name)}<small>${esc(cl.intake || cl.country.landmark || "")}</small></div></div></td>
+        <td class="hide-sm"><div class="cl-dest"><span class="fl">${esc(cl.country.flag_emoji)}</span><div>${esc(cl.destination_country_name)}<small>${esc(cl.intake || "")}</small></div></div></td>
         <td class="hide-sm">${esc(cl.visa_type)}${cl.intake ? `<br><small style="color:var(--muted)">${esc(cl.intake)}</small>` : ""}</td>
         <td>${statusPill(cl.stage)}</td>
         <td class="hide-sm">${cl.assigned_to_name ? esc(cl.assigned_to_name) : '<span style="color:var(--muted)">Unassigned</span>'}${deadline}</td>
@@ -1705,14 +1761,22 @@
       const v = (ta.value || "").trim(); if (!v || iv.busy) return;
       const prior = iv.history.slice();
       iv.history.push({ role: "user", content: v }); iv.busy = true; drawIv();
+      let ended = false;
       try {
         const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { message: v, history: prior } });
         iv.history.push({ role: "officer", content: r.reply });
+        ended = !!r.finished;  // backend signals when the AI officer has wrapped up
       } catch (ex) { toast(ex.message, "error"); }
+      // If the officer ended the interview, generate feedback automatically so staff
+      // don't have to notice and click "End & get feedback" themselves.
+      if (ended && iv.history.some((m) => m.role === "user")) {
+        toast("The officer wrapped up the interview — preparing feedback…", "success");
+        await generateIvFeedback();
+        return;
+      }
       iv.busy = false; drawIv();
     }
-    async function endIv() {
-      if (iv.busy || iv.history.filter((m) => m.role === "user").length === 0) { toast("Answer at least one question first.", "error"); return; }
+    async function generateIvFeedback() {
       iv.busy = true; ivStopSpeak(); drawIv();
       try {
         const r = await api(`/clients/${cl.id}/interview/feedback`, { method: "POST", body: { history: iv.history, mode: iv.voiceOn ? "voice" : "chat" } });
@@ -1721,6 +1785,10 @@
         toast("Feedback ready", "success");
       } catch (ex) { toast(ex.message, "error"); }
       iv.busy = false; drawIv();
+    }
+    async function endIv() {
+      if (iv.busy || iv.history.filter((m) => m.role === "user").length === 0) { toast("Answer at least one question first.", "error"); return; }
+      await generateIvFeedback();
     }
     function ivMic(btn) {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return;

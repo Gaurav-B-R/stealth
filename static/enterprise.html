@@ -21,12 +21,12 @@
       </div>
       <div class="auth-hero-body">
         <h1>Run your entire student-visa practice — with a Rilono AI copilot.</h1>
-        <p>Manage every applicant, track each student visa end-to-end, send updates, and just ask the built-in Rilono AI about your portal — built for education consultancies, and 100% free.</p>
+        <p>Manage every applicant, track each student visa end-to-end, send updates, and just ask the built-in Rilono AI about your portal — built for education consultancies. The core CRM is free; premium AI runs on pay-as-you-go credits.</p>
         <ul class="auth-points">
           <li><span class="tick">✓</span> ✨ Rilono AI copilot — ask anything about your clients &amp; statuses</li>
           <li><span class="tick">✓</span> Visual pipeline from lead to approval</li>
           <li><span class="tick">✓</span> Notes, reminders &amp; one-click student emails</li>
-          <li><span class="tick">✓</span> Free for your whole team — no card, no limits</li>
+          <li><span class="tick">✓</span> Free core CRM — no card, no seat fees</li>
         </ul>
       </div>
       <div class="auth-flags">🇺🇸 🇨🇦 🇬🇧 🇦🇺 🇩🇪 🇮🇪</div>
@@ -36,7 +36,7 @@
       <!-- Sign up -->
       <div id="signupCard" class="auth-card">
         <h2>Create your free workspace</h2>
-        <p class="sub">100% free for your whole team. No card required. Set up your consultancy in a minute.</p>
+        <p class="sub">Free core CRM for your whole team — no card required. Set up your consultancy in a minute.</p>
         <div id="signupError" class="auth-error hidden"></div>
         <form id="signupForm" autocomplete="on">
           <div class="field">
@@ -94,6 +94,29 @@
           <button type="submit" class="btn btn-primary btn-block btn-lg" id="signupBtn">Create my workspace</button>
         </form>
         <div class="auth-switch">Already have a workspace? <button type="button" id="toLogin">Sign in</button></div>
+      </div>
+
+      <!-- Signup: verify email code -->
+      <div id="signupVerifyCard" class="auth-card hidden">
+        <h2>Check your email</h2>
+        <p class="sub">We sent a 6-digit code to <b id="signupVerifyEmail"></b>. Enter it below to verify your email
+          and create your workspace.</p>
+        <div id="signupVerifyError" class="auth-error hidden"></div>
+        <form id="signupVerifyForm">
+          <div class="field">
+            <label>Verification code</label>
+            <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}"
+              placeholder="6-digit code" required
+              style="letter-spacing:.3em;text-align:center;font-size:20px;font-weight:700;" />
+            <div class="hint">The code expires in 10 minutes. Check spam if you don't see it.</div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-block btn-lg" id="signupVerifyBtn">Verify &amp; create
+            workspace</button>
+        </form>
+        <div class="auth-switch">
+          Didn't get it? <button type="button" id="signupResendBtn">Resend code</button>
+          &nbsp;·&nbsp; <button type="button" id="signupVerifyBack">Edit details</button>
+        </div>
       </div>
 
       <!-- Login -->

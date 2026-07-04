@@ -52,7 +52,8 @@ from app.email_service import send_enterprise_document_request_email, send_enter
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
 from app.email_service import send_enterprise_support_request_email, send_enterprise_demo_request_email
 from app.email_service import send_enterprise_welcome_email
-from app.utils.token_security import hash_token
+from app.email_service import send_email_otp
+from app.utils.token_security import hash_token, token_matches
 
 RAZORPAY_API_BASE = os.getenv("RAZORPAY_API_BASE", "https://api.razorpay.com/v1").rstrip("/")
 
@@ -1620,6 +1621,8 @@ class EnterpriseSignupRequest(BaseModel):
     accepted_dpa: bool = False
     marketing_emails_consent: bool = False
     cf_turnstile_token: Optional[str] = None
+    # 6-digit email-verification code from /signup/send-code (required to create the workspace).
+    email_otp: Optional[str] = Field(default=None, max_length=10)
 
 
 class EnterpriseClientCreateRequest(BaseModel):
@@ -3762,6 +3765,101 @@ def _verify_credit_payment_or_402(
     return payment_row
 
 
+ENTERPRISE_SIGNUP_OTP_EXPIRES_MINUTES = int(os.getenv("ENTERPRISE_SIGNUP_OTP_EXPIRES_MINUTES", "10") or "10")
+ENTERPRISE_SIGNUP_OTP_MAX_ATTEMPTS = int(os.getenv("ENTERPRISE_SIGNUP_OTP_MAX_ATTEMPTS", "5") or "5")
+
+
+class EnterpriseSignupSendCodeRequest(BaseModel):
+    email: EmailStr
+    cf_turnstile_token: Optional[str] = None
+
+
+@router.post("/signup/send-code")
+def enterprise_signup_send_code(
+    payload: EnterpriseSignupSendCodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Step 1 of workspace signup: email the owner a 6-digit code. The workspace itself
+    is only created by /signup once the code is verified — so unverified emails never
+    produce junk workspaces or claim subdomains."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.signup_send_code", limit=6, window_seconds=3600,
+    )
+
+    # Bot gate lives on this step (the final /signup is gated by the code itself).
+    turnstile_token = (payload.cf_turnstile_token or "").strip()
+    if is_turnstile_enabled() and not is_request_ip_whitelisted(request):
+        if turnstile_token:
+            client_ip = extract_client_ip(request) if request else None
+            if not verify_turnstile_token(turnstile_token, client_ip):
+                raise HTTPException(status_code=400, detail="Security verification failed. Please try again.")
+        elif _is_turnstile_required():
+            raise HTTPException(status_code=400, detail="Security verification is required.")
+
+    email = payload.email.lower().strip()
+    if db.query(models.User).filter(models.User.email == email).first():
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email already exists. Please sign in instead.",
+        )
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    row = (
+        db.query(models.EnterpriseSignupOtp)
+        .filter(models.EnterpriseSignupOtp.email == email)
+        .first()
+    )
+    expires_at = datetime.utcnow() + timedelta(minutes=ENTERPRISE_SIGNUP_OTP_EXPIRES_MINUTES)
+    if row:
+        row.code_hash = hash_token(code)
+        row.expires_at = expires_at
+        row.attempts = 0
+    else:
+        db.add(models.EnterpriseSignupOtp(email=email, code_hash=hash_token(code), expires_at=expires_at))
+    db.commit()
+
+    sent = send_email_otp(email, code, expires_in_minutes=ENTERPRISE_SIGNUP_OTP_EXPIRES_MINUTES)
+    result = {
+        "message": f"We've emailed a 6-digit code to {email}.",
+        "expires_in_minutes": ENTERPRISE_SIGNUP_OTP_EXPIRES_MINUTES,
+    }
+    if not sent:
+        if _is_development_env():
+            # Local sandbox without an email provider — surface the code for testing.
+            result["dev_code"] = code
+        else:
+            raise HTTPException(
+                status_code=502,
+                detail="We couldn't send the verification email right now. Please try again in a moment.",
+            )
+    return result
+
+
+def _verify_signup_otp_or_400(db: Session, email: str, code: Optional[str]) -> models.EnterpriseSignupOtp:
+    """Validate the signup email code; raises 400 with a friendly message otherwise."""
+    code_clean = "".join(ch for ch in str(code or "") if ch.isdigit())
+    if len(code_clean) != 6:
+        raise HTTPException(status_code=400, detail="Enter the 6-digit code we emailed you.")
+    row = (
+        db.query(models.EnterpriseSignupOtp)
+        .filter(models.EnterpriseSignupOtp.email == email)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=400, detail="No verification code found for this email — please request a new one.")
+    expires = row.expires_at.replace(tzinfo=None) if getattr(row.expires_at, "tzinfo", None) else row.expires_at
+    if expires < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That code has expired — please request a new one.")
+    if int(row.attempts or 0) >= ENTERPRISE_SIGNUP_OTP_MAX_ATTEMPTS:
+        raise HTTPException(status_code=400, detail="Too many incorrect attempts — please request a new code.")
+    if not token_matches(code_clean, row.code_hash):
+        row.attempts = int(row.attempts or 0) + 1
+        db.commit()
+        raise HTTPException(status_code=400, detail="That code isn't right — please check the email and try again.")
+    return row
+
+
 @router.post("/signup")
 async def enterprise_signup(
     payload: EnterpriseSignupRequest,
@@ -3776,14 +3874,8 @@ async def enterprise_signup(
         window_seconds=ENTERPRISE_SIGNUP_RATE_WINDOW_SECONDS,
     )
 
-    turnstile_token = (payload.cf_turnstile_token or "").strip()
-    if is_turnstile_enabled() and not is_request_ip_whitelisted(request):
-        if turnstile_token:
-            client_ip = extract_client_ip(request) if request else None
-            if not verify_turnstile_token(turnstile_token, client_ip):
-                raise HTTPException(status_code=400, detail="Security verification failed. Please try again.")
-        elif _is_turnstile_required():
-            raise HTTPException(status_code=400, detail="Security verification is required.")
+    # Bot-gating (Turnstile) happens at /signup/send-code; this step is gated by the
+    # emailed code itself, which is a stronger proof (a verified, reachable inbox).
 
     if not payload.accepted_terms_privacy:
         raise HTTPException(
@@ -3816,6 +3908,9 @@ async def enterprise_signup(
             status_code=409,
             detail="An account with this email already exists. Please sign in instead.",
         )
+
+    # The owner must prove the inbox before anything is created (or a subdomain claimed).
+    otp_row = _verify_signup_otp_or_400(db, email, payload.email_otp)
 
     _assert_subdomain_available(db=db, subdomain_slug=subdomain_slug)
 
@@ -3887,6 +3982,8 @@ async def enterprise_signup(
 
     user.last_login_at = datetime.utcnow()
     user.first_login_at = datetime.utcnow()
+    # The signup code is single-use: burn it with the same commit that creates the workspace.
+    db.delete(otp_row)
     db.commit()
     db.refresh(user)
 
@@ -4790,7 +4887,7 @@ def public_interview_send_code(token: str, request: Request, db: Session = Depen
     )
     if not sent:
         logger.warning("Interview code email failed for invite %s: %s", invite.id, err)
-    return {"sent": True, "masked_email": _mask_email(invite.email)}
+    return {"sent": bool(sent), "masked_email": _mask_email(invite.email)}
 
 
 @router.post("/public/interview/{token}/verify")
@@ -5264,7 +5361,7 @@ def public_document_request_send_code(token: str, request: Request, db: Session 
     )
     if not sent:
         logger.warning("Document request code email failed for request %s: %s", req.id, err)
-    return {"sent": True, "masked_email": _mask_email(req.email)}
+    return {"sent": bool(sent), "masked_email": _mask_email(req.email)}
 
 
 @router.post("/public/document-request/{token}/verify")

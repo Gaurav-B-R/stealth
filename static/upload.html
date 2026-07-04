@@ -161,7 +161,9 @@
       }
 
       $("sendCodeBtn").onclick=function(){ var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Sending…';
-        api("/"+encodeURIComponent(token)+"/send-code").then(function(d){ $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
+        api("/"+encodeURIComponent(token)+"/send-code").then(function(d){
+          if(d && d.sent===false){ $("vError").textContent="We couldn't send the code right now. Please try again in a moment."; $("vError").classList.remove("hidden"); return; }
+          $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
           $("vMsg").textContent="We sent a 6-digit code to "+(d.masked_email||info.masked_email)+"."; $("vMsg").classList.remove("hidden"); $("codeInput").focus();
         }).catch(function(ex){ $("vError").textContent=ex.message; $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
       $("resendBtn").onclick=function(){ $("vError").classList.add("hidden"); $("sendCodeBtn").click(); };

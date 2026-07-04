@@ -538,6 +538,14 @@
         .hx-footer .foot-bottom { border-top: 1px solid rgba(255, 255, 255, .09); padding: 24px 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #7b82ad; font-size: .85rem; }
 
         /* ======================= COOKIE BAR ======================= */
+        /* The bar lives OUTSIDE <main class="hx">, so it must re-declare the .hx design
+           tokens its buttons use — otherwise var(--grad) resolves to nothing and the
+           Accept button renders white-on-white (invisible). */
+        .cookie-bar {
+            --ink: #10143a;
+            --grad: linear-gradient(120deg, #6366f1, #a855f7 52%, #ec4899);
+            --fd: 'Sora', 'Inter', -apple-system, sans-serif;
+        }
         .cookie-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1500; padding: 14px 16px; display: flex; justify-content: center; transform: translateY(130%); transition: transform .45s cubic-bezier(.2, .7, .2, 1); }
         .cookie-bar.show { transform: none; }
         .cookie-bar-inner { width: 100%; max-width: 1080px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; background: #fff; border: 1px solid rgba(23, 28, 74, .12); border-radius: 16px; padding: 16px 20px; box-shadow: 0 24px 70px rgba(23, 28, 74, .2); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }

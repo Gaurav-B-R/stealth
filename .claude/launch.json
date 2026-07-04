@@ -6,7 +6,7 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": [
         "-lc",
-        "DATABASE_URL='sqlite:///./_preview.db' ENVIRONMENT='development' GEMINI_API_KEY='' RESEND_API_KEY='' RAZORPAY_KEY_ID='' RAZORPAY_KEY_SECRET='' RAZORPAY_WEBHOOK_SECRET='' AUTH_COOKIE_DOMAIN='' AUTH_COOKIE_SECURE='false' AUTH_COOKIE_SAMESITE='lax' ENTERPRISE_ROOT_DOMAIN='localhost' ENTERPRISE_DOCS_DIR='./_docs_local' exec ./venv/bin/python -m uvicorn app.main:app --port ${PORT:-8097} --host 127.0.0.1 --log-level warning"
+        "DATABASE_URL='sqlite:///./_preview.db' ENVIRONMENT='development' GEMINI_API_KEY='' RESEND_API_KEY='' RAZORPAY_KEY_ID='' RAZORPAY_KEY_SECRET='' RAZORPAY_WEBHOOK_SECRET='' AUTH_COOKIE_DOMAIN='' AUTH_COOKIE_SECURE='false' AUTH_COOKIE_SAMESITE='lax' ENTERPRISE_ROOT_DOMAIN='localhost' ENTERPRISE_PORTAL_PORT='' ENTERPRISE_PORTAL_SCHEME='http' ENTERPRISE_DOCS_DIR='./_docs_local' exec ./venv/bin/python -m uvicorn app.main:app --port ${PORT:-8097} --host 127.0.0.1 --log-level warning"
       ],
       "port": 8097,
       "autoPort": true
