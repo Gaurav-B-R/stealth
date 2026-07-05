@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
+from app.utils.field_encryption import EncryptedString
 
 class User(Base):
     __tablename__ = "users"
@@ -106,6 +107,14 @@ class User(Base):
     heard_about_us = Column(String, nullable=True, index=True)         # option id (google|chatgpt|instagram|...)
     heard_about_us_detail = Column(String, nullable=True)             # free text when "other"
     heard_about_us_at = Column(DateTime(timezone=True), nullable=True)  # answered timestamp (also the "asked" flag)
+    # Final visa DECISION (outcome capture) — closes the journey loop past interview prep so we can
+    # compute an approval rate (esp. red-flag-scan users vs. not). Self-reported by the student on the
+    # dashboard, or set by an admin. NULL = no decision recorded yet. See app/routers/outcomes.py.
+    visa_decision = Column(String, nullable=True, index=True)          # approved|refused|withdrawn|deferred
+    visa_decision_at = Column(DateTime(timezone=True), nullable=True)  # when the decision was recorded
+    visa_decision_source = Column(String, nullable=True)              # self_reported|admin
+    # Lets the "did you get your decision?" dashboard card be snoozed so we don't nag; NULL = show if eligible.
+    visa_decision_prompt_snoozed_until = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
@@ -210,7 +219,9 @@ class EnterpriseClient(Base):
     phone = Column(String, nullable=True)
     nationality = Column(String, nullable=True)
     date_of_birth = Column(Date, nullable=True)
-    passport_number = Column(String, nullable=True)
+    # Passport number is a government identifier — stored encrypted at rest.
+    # (Encrypted values are not substring-searchable; excluded from client search.)
+    passport_number = Column(EncryptedString, nullable=True)
     passport_expiry = Column(Date, nullable=True)
 
     # Visa case

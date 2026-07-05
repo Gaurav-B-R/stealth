@@ -182,8 +182,9 @@ def send_verification_email(
         </div>
         
         <div style="text-align: center; margin-top: 30px; padding: 20px; color: #9ca3af; font-size: 12px;">
-            <p style="margin: 0;">© 2025 Rilono. All rights reserved.</p>
+            <p style="margin: 0;">© 2026 Rilono. All rights reserved.</p>
             <p style="margin: 5px 0 0 0;">Your F1 Visa Documentation Companion</p>
+            <p style="margin: 5px 0 0 0;">Rilono · Bengaluru, Karnataka, India</p>
         </div>
     </body>
     </html>
@@ -199,7 +200,8 @@ def send_verification_email(
     
     This verification link will expire in {expires_in_hours} hours. If you didn't create an account with Rilono, please ignore this email.
     
-    © 2025 Rilono. All rights reserved.
+    Rilono · Bengaluru, Karnataka, India
+    © 2026 Rilono. All rights reserved.
     """
     
     try:
@@ -742,8 +744,9 @@ def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFA
         </div>
         
         <div style="text-align: center; margin-top: 30px; padding: 20px; color: #9ca3af; font-size: 12px;">
-            <p style="margin: 0;">© 2025 Rilono. All rights reserved.</p>
+            <p style="margin: 0;">© 2026 Rilono. All rights reserved.</p>
             <p style="margin: 5px 0 0 0;">Your Student Marketplace</p>
+            <p style="margin: 5px 0 0 0;">Rilono · Bengaluru, Karnataka, India</p>
         </div>
     </body>
     </html>
@@ -759,7 +762,8 @@ def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFA
     
     This link will expire in 1 hour. If you didn't request a password reset, please ignore this email.
     
-    © 2025 Rilono. All rights reserved.
+    Rilono · Bengaluru, Karnataka, India
+    © 2026 Rilono. All rights reserved.
     """
     
     try:
@@ -877,6 +881,7 @@ def send_university_change_email(email: str, new_university: str, change_token: 
         <div style="text-align: center; margin-top: 30px; padding: 20px; color: #9ca3af; font-size: 12px;">
             <p style="margin: 0;">© 2026 Rilono. All rights reserved.</p>
             <p style="margin: 5px 0 0 0;">Your F1 Student Visa Assistant</p>
+            <p style="margin: 5px 0 0 0;">Rilono · Bengaluru, Karnataka, India</p>
         </div>
     </body>
     </html>
@@ -896,7 +901,8 @@ def send_university_change_email(email: str, new_university: str, change_token: 
     New Email: {email}
     
     This link will expire in 24 hours. If you didn't request this change, please ignore this email.
-    
+
+    Rilono · Bengaluru, Karnataka, India
     © 2026 Rilono. All rights reserved.
     """
     
@@ -1365,6 +1371,7 @@ def send_subscription_change_email(
         f"Manage Subscription: {manage_url}\n\n"
         f"{unsubscribe_text_line}"
         "If this change wasn't made by you, contact contact@rilono.com.\n\n"
+        "Rilono · Bengaluru, Karnataka, India\n"
         "© 2026 Rilono. All rights reserved."
     )
 

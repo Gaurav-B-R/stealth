@@ -281,6 +281,21 @@ def ensure_referral_columns():
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_referred_by_user_id ON users(referred_by_user_id)"))
 
 
+def ensure_visa_outcome_columns():
+    """Patch users with visa-DECISION outcome-capture columns (approved/refused loop). Additive/idempotent."""
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "users")
+        if "visa_decision" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN visa_decision VARCHAR"))
+        if "visa_decision_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN visa_decision_at TIMESTAMP"))
+        if "visa_decision_source" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN visa_decision_source VARCHAR"))
+        if "visa_decision_prompt_snoozed_until" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN visa_decision_prompt_snoozed_until TIMESTAMP"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_users_visa_decision ON users(visa_decision)"))
+
+
 def ensure_user_acquisition_columns():
     """Patch users with first-touch acquisition (traffic-source) columns. Additive/idempotent."""
     with engine.begin() as conn:

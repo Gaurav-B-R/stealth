@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e, outcomes
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.services.daily_ai_notifications import (
@@ -46,6 +46,7 @@ from app.schema_patch import (
     ensure_f1_visa_news_table,
     ensure_f1_visa_news_country_column,
     ensure_referral_columns,
+    ensure_visa_outcome_columns,
     ensure_rilono_ai_chat_upload_events_table,
     ensure_subscription_payment_recurring_columns,
     ensure_subscription_usage_columns,
@@ -220,6 +221,7 @@ app.include_router(admin.router)
 app.include_router(enterprise.router)
 app.include_router(visa_pass.router)
 app.include_router(e2e.router)
+app.include_router(outcomes.router)
 
 
 @app.on_event("startup")
@@ -232,6 +234,7 @@ def startup_backfill_subscriptions():
     ensure_e2e_encryption_columns()
     ensure_subscription_payments_user_id_nullable()
     ensure_referral_columns()
+    ensure_visa_outcome_columns()
     ensure_user_acquisition_columns()
     ensure_subscription_usage_columns()
     ensure_subscription_payment_recurring_columns()
@@ -568,6 +571,26 @@ async def read_preserved_public_spa_routes(request: Request):
     # /dashboard is the OAuth landing + the authed home view; it must serve the SPA
     # (us_f1_visa.html with app.js), not the marketing index.html the catch-all returns.
     return _serve_us_f1_spa(request)
+
+
+@app.get("/blog/how-to-use-rilono-ai-copilot")
+@app.get("/blog/how-to-use-rilono-ai-copilot/")
+async def read_copilot_blog():
+    """Serve the Rilono Copilot how-to guide (static blog article; carries its own SEO meta)."""
+    page = _read_static_html("blog-copilot-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/how-to-use-rilono-ai-us-f1-visa")
+@app.get("/blog/how-to-use-rilono-ai-us-f1-visa/")
+async def read_us_f1_blog():
+    """Serve the US F-1 "how to use Rilono AI" guide (static blog article; own SEO meta)."""
+    page = _read_static_html("blog-us-f1-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
 
 
 @app.get("/enterprise")

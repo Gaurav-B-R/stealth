@@ -275,7 +275,7 @@ def build_org_tools(db: Session, organization_id: int) -> list:
                 func.lower(models.EnterpriseClient.full_name).like(like),
                 func.lower(models.EnterpriseClient.email).like(like),
                 func.lower(models.EnterpriseClient.phone).like(like),
-                func.lower(models.EnterpriseClient.passport_number).like(like),
+                # passport_number is encrypted at rest and not substring-searchable.
                 func.lower(models.EnterpriseClient.application_reference).like(like),
             ))
         n = max(1, min(int(limit or 20), 50))
@@ -478,6 +478,78 @@ def build_org_tools(db: Session, organization_id: int) -> list:
             return {"client": client.full_name, "documents": [], "note": "No documents matched."}
         return {"client": client.full_name, "documents": out}
 
+    def list_upcoming_calendar_events(within_days: int = 30, include_done: bool = False) -> dict:
+        """List this consultancy's calendar for the near term — use this for any question
+        about the schedule, calendar, upcoming events, deadlines, interviews, biometrics,
+        appointments, follow-ups, who has something coming up, or what's overdue.
+
+        Includes BOTH team-scheduled events (interviews, appointments, biometrics, document
+        deadlines, follow-ups) AND auto-derived client key dates: each active client's
+        interview/travel key date, and any client passport expiring in the window. Recently
+        overdue items (past ~14 days, not yet done) are included so nothing is missed.
+        - within_days: how far ahead to look, 1-180 (default 30).
+        - include_done: set true to also include events already marked done.
+        """
+        try:
+            days = max(1, min(int(within_days or 30), 180))
+        except Exception:
+            days = 30
+        today = date.today()
+        start = today - timedelta(days=14)   # also surface recently-overdue items
+        end = today + timedelta(days=days)
+
+        name_cache: dict = {}
+
+        def _cname(cid):
+            if not cid:
+                return None
+            if cid not in name_cache:
+                row = (db.query(models.EnterpriseClient.full_name)
+                       .filter(models.EnterpriseClient.id == cid,
+                               models.EnterpriseClient.organization_id == organization_id).first())
+                name_cache[cid] = row[0] if row else None
+            return name_cache[cid]
+
+        events: list = []
+        mq = (db.query(models.EnterpriseCalendarEvent)
+              .filter(models.EnterpriseCalendarEvent.organization_id == organization_id,
+                      models.EnterpriseCalendarEvent.event_date >= start,
+                      models.EnterpriseCalendarEvent.event_date <= end))
+        if not include_done:
+            mq = mq.filter(models.EnterpriseCalendarEvent.is_done.is_(False))
+        for ev in mq.order_by(models.EnterpriseCalendarEvent.event_date).all():
+            d = ev.event_date
+            events.append({
+                "date": d.isoformat() if d else None, "time": ev.event_time,
+                "title": ev.title, "type": ev.event_type, "client": _cname(ev.client_id),
+                "notes": (ev.notes or "")[:200] or None, "done": bool(ev.is_done),
+                "overdue": bool(d and d < today and not ev.is_done), "source": "scheduled",
+            })
+        for c in (db.query(models.EnterpriseClient)
+                  .filter(models.EnterpriseClient.organization_id == organization_id,
+                          models.EnterpriseClient.target_date.isnot(None),
+                          models.EnterpriseClient.target_date >= start,
+                          models.EnterpriseClient.target_date <= end,
+                          models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED])).all()):
+            d = c.target_date
+            events.append({"date": d.isoformat() if d else None, "time": None,
+                           "title": f"Key date — {c.full_name}", "type": "client_deadline",
+                           "client": c.full_name, "stage": _stage_label(c.status),
+                           "overdue": bool(d and d < today), "source": "client_key_date"})
+        for c in (db.query(models.EnterpriseClient)
+                  .filter(models.EnterpriseClient.organization_id == organization_id,
+                          models.EnterpriseClient.passport_expiry.isnot(None),
+                          models.EnterpriseClient.passport_expiry >= start,
+                          models.EnterpriseClient.passport_expiry <= end).all()):
+            d = c.passport_expiry
+            events.append({"date": d.isoformat() if d else None, "time": None,
+                           "title": f"Passport expiry — {c.full_name}", "type": "passport_expiry",
+                           "client": c.full_name, "overdue": bool(d and d < today),
+                           "source": "client_key_date"})
+        events.sort(key=lambda e: (e["date"] or "", e["time"] or "99:99", e["title"] or ""))
+        return {"today": today.isoformat(), "within_days": days,
+                "count": len(events), "events": events[:60]}
+
     return [
         get_portal_overview,
         count_clients,
@@ -488,6 +560,7 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         get_team_workload,
         list_client_documents,
         read_client_document,
+        list_upcoming_calendar_events,
     ]
 
 
@@ -525,6 +598,10 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "letters, financial proofs, transcripts, etc.) via the document tools. Use them when asked what a "
         "document says or contains (e.g. a passport number/expiry, or amounts in a bank statement). If a "
         "document's text hasn't been extracted yet, say it isn't available to read.\n"
+        "- For anything about the schedule, calendar, upcoming events, deadlines, interviews, biometrics, "
+        "appointments, follow-ups or what's overdue, call list_upcoming_calendar_events — it covers both "
+        "team-scheduled events and auto-derived client key dates (interview/travel dates, passport expiries). "
+        "Lead with what's soonest or overdue, and name the client and date.\n"
         "- Use light formatting for readability: short **bold** labels and tight bullet lists; keep it "
         "skimmable. Don't pad with filler or repeat the question back, and never invent data.\n"
         "- You can read data but cannot make changes; if asked to edit, add, or email a client, say so and "

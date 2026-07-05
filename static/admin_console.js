@@ -191,6 +191,7 @@ function bindEvents() {
     refs.loginForm?.addEventListener('submit', handleLoginSubmit);
     refs.logoutBtn?.addEventListener('click', handleLogout);
     document.getElementById('adminGrowthRunBtn')?.addEventListener('click', runGrowthAnalysis);
+    document.getElementById('adminInsightsRefreshBtn')?.addEventListener('click', loadGrowthInsights);
     document.getElementById('adminAccountBackBtn')?.addEventListener('click', closeAccountDetail);
     refs.verifyProtectionBtn?.addEventListener('click', handleProtectionVerifyClick);
     refs.usersTabBtn?.addEventListener('click', () => handleTabSwitch('users'));
@@ -1345,6 +1346,7 @@ async function loadUsers({ resetPage = false } = {}) {
         renderUsersSummary();
         renderMetrics();
         void loadAcquisitionBreakdown();
+        void loadGrowthInsights();
         clearFlash();
     } catch (error) {
         console.error('Failed to load users:', error);
@@ -1704,6 +1706,78 @@ async function runGrowthAnalysis() {
     }
 }
 
+/* ===================== Activation funnel + approval rate ===================== */
+async function loadGrowthInsights() {
+    const funnelEl = document.getElementById('adminFunnelBody');
+    const outcomesEl = document.getElementById('adminOutcomesBody');
+    if (!funnelEl && !outcomesEl) return;
+    try {
+        const [fRes, oRes] = await Promise.all([
+            fetch(`${API_BASE}/api/admin/growth/funnel`, { headers: buildAuthHeaders(), credentials: 'same-origin' }),
+            fetch(`${API_BASE}/api/admin/growth/outcomes`, { headers: buildAuthHeaders(), credentials: 'same-origin' }),
+        ]);
+        if (fRes.ok) { renderFunnel(await fRes.json().catch(() => ({}))); }
+        else if (funnelEl) { funnelEl.innerHTML = '<div class="table-empty">Could not load the funnel.</div>'; }
+        if (oRes.ok) { renderOutcomes(await oRes.json().catch(() => ({}))); }
+        else if (outcomesEl) { outcomesEl.innerHTML = '<div class="table-empty">Could not load approval data.</div>'; }
+    } catch (error) {
+        console.error('Growth insights failed:', error);
+        if (funnelEl) funnelEl.innerHTML = '<div class="table-empty">Could not load insights.</div>';
+    }
+}
+
+function renderFunnel(data) {
+    const el = document.getElementById('adminFunnelBody');
+    if (!el) return;
+    const stages = (data && data.stages) || [];
+    if (!stages.length) { el.innerHTML = '<div class="table-empty">No students yet.</div>'; return; }
+    const max = Math.max(1, ...stages.map((s) => s.users || 0));
+    const kc = (data && data.key_conversions) || {};
+    const bars = stages.map((s) => {
+        const w = Math.max(2, Math.round(((s.users || 0) / max) * 100));
+        const pct = s.pct_of_signups != null ? `${s.pct_of_signups}%` : '—';
+        return `<div class="funnel-row">
+            <div class="funnel-row-top"><span>${escapeHtml(s.label)}</span><span><strong>${(s.users || 0).toLocaleString()}</strong> · ${pct}</span></div>
+            <div class="funnel-bar"><span style="width:${w}%"></span></div></div>`;
+    }).join('');
+    const conv = (label, v) => `<span class="acct-chip grey">${label}: <strong>${v != null ? v + '%' : '—'}</strong></span>`;
+    el.innerHTML = `${bars}
+        <div class="funnel-conv">
+            ${conv('activated→scan', kc.activated_to_scan)}
+            ${conv('scan→purchase', kc.scan_to_purchase)}
+            ${conv('signup→purchase', kc.overall_signup_to_purchase)}
+        </div>
+        ${data.biggest_leak ? `<div class="funnel-leak">⚠️ Biggest drop-off: <strong>${escapeHtml(data.biggest_leak)}</strong></div>` : ''}`;
+}
+
+function renderOutcomes(data) {
+    const el = document.getElementById('adminOutcomesBody');
+    if (!el) return;
+    const overall = (data && data.overall) || {};
+    const scan = (data && data.red_flag_scan_users) || {};
+    const noscan = (data && data.non_red_flag_scan_users) || {};
+    const base = (data && data.market_baseline) || {};
+    if (!overall.total_recorded) {
+        el.innerHTML = '<div class="table-empty">No visa decisions recorded yet. Students report these from their dashboard once they finish interview prep.</div>';
+        return;
+    }
+    const rate = (v) => (v != null ? `${v}%` : '—');
+    const lift = data.red_flag_lift_pts;
+    el.innerHTML = `
+        <div class="outcome-hero">
+            <div class="outcome-hero-num">${rate(scan.approval_rate)}</div>
+            <div class="outcome-hero-cap">approval rate for <strong>red-flag-scan users</strong><br>
+                <span style="color:#94a3b8">${scan.decided_on_merits || 0} decisions · vs ~${base.low}–${base.high}% market baseline</span></div>
+        </div>
+        <div class="outcome-compare">
+            <div><span>Red-flag users</span><strong style="color:#047857">${rate(scan.approval_rate)}</strong><small>${scan.approved || 0}/${scan.decided_on_merits || 0}</small></div>
+            <div><span>Did not scan</span><strong>${rate(noscan.approval_rate)}</strong><small>${noscan.approved || 0}/${noscan.decided_on_merits || 0}</small></div>
+            <div><span>Overall</span><strong>${rate(overall.approval_rate)}</strong><small>${overall.approved || 0}/${overall.decided_on_merits || 0}</small></div>
+        </div>
+        ${lift != null ? `<div class="funnel-conv"><span class="acct-chip ${lift >= 0 ? 'green' : 'amber'}">Red-flag lift: <strong>${lift >= 0 ? '+' : ''}${lift} pts</strong></span></div>` : ''}
+        ${data.sample_is_thin ? '<div class="funnel-leak">⚠️ Small sample — don’t quote this rate publicly until more decisions are in.</div>' : ''}`;
+}
+
 /* ===================== Account "Manage" full-screen view ===================== */
 function acctFmt(dt) { return dt ? formatDateTime(dt) : '—'; }
 function acctInr(paise) { return (paise == null) ? '—' : '₹' + (paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
@@ -1788,7 +1862,8 @@ function renderAccountDetail(userId, data) {
             <span style="color:#64748b">${escapeHtml(acctFmt(p.verified_at || p.created_at))}</span></div>`).join('')
         : '<div class="acct-empty">No payments yet.</div>';
 
-    const acq = a.acquisition || {}, ref = a.referral || {};
+    const acq = a.acquisition || {}, ref = a.referral || {}, vd = a.visa_decision || {};
+    const vdChipClass = { approved: 'green', refused: 'amber', withdrawn: 'grey', deferred: 'grey' }[vd.decision] || 'grey';
 
     document.getElementById('adminAccountBody').innerHTML = `
       <div class="acct-grid">
@@ -1818,6 +1893,20 @@ function renderAccountDetail(userId, data) {
               <button class="primary-btn small-btn" id="acctRecoBtn">Get AI recommendation</button>
             </div>
           </div>
+          <div class="acct-card"><h3>Visa decision (outcome)</h3>
+            <div id="acctDecisionBody">
+              <div style="margin-bottom:8px">${vd.decision
+                ? `<span class="acct-chip ${vdChipClass}">${escapeHtml(String(vd.decision).toUpperCase())}</span> <span style="color:#94a3b8;font-size:12px">${vd.decision_at ? acctFmt(vd.decision_at) : ''}${vd.source ? ' · ' + escapeHtml(vd.source) : ''}</span>`
+                : '<span class="acct-empty">No decision recorded yet.</span>'}</div>
+              <div class="acct-decision-set">
+                <button type="button" class="table-btn" data-decision="approved">Approved</button>
+                <button type="button" class="table-btn" data-decision="refused">Refused</button>
+                <button type="button" class="table-btn" data-decision="withdrawn">Withdrawn</button>
+                <button type="button" class="table-btn" data-decision="deferred">Deferred</button>
+                ${vd.decision ? '<button type="button" class="table-btn danger" data-decision="clear">Clear</button>' : ''}
+              </div>
+            </div>
+          </div>
           <div class="acct-card"><h3>Acquisition</h3>
             <dl class="acct-kv">
               <dt>Channel</dt><dd>${escapeHtml(acq.channel || 'untracked')}</dd>
@@ -1844,6 +1933,26 @@ function renderAccountDetail(userId, data) {
     if (toggleBtn) toggleBtn.addEventListener('click', async () => { const ok = await updateUserStatus(userId, !active, a.email || a.name || ''); if (ok) closeAccountDetail(); });
     const delBtn = document.getElementById('acctDeleteBtn');
     if (delBtn) delBtn.addEventListener('click', async () => { await deleteUser(userId, a.email || 'this user', a.name || ''); closeAccountDetail(); });
+    document.querySelectorAll('#acctDecisionBody .acct-decision-set button').forEach((btn) => {
+        btn.addEventListener('click', () => setAccountVisaDecision(userId, btn.getAttribute('data-decision')));
+    });
+}
+
+async function setAccountVisaDecision(userId, decision) {
+    const body = document.getElementById('acctDecisionBody');
+    if (!body) return;
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/users/${userId}/visa-decision`, {
+            method: 'POST', headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin', body: JSON.stringify({ decision }),
+        });
+        if (!response.ok) { showFlash('Could not update the decision.', 'error'); return; }
+        // Re-open the detail so the whole view (incl. approval analytics upstream) reflects the change.
+        openAccountDetail(userId);
+    } catch (error) {
+        console.error('Set visa decision failed:', error);
+        showFlash('Could not update the decision.', 'error');
+    }
 }
 
 async function runAccountReco(userId) {

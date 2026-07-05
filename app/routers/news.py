@@ -531,6 +531,16 @@ def _generate_content_with_grounding(
     grounding_errors: List[str] = []
     _log_gemini_prompt(label, model_name, prompt, extra="grounding=enabled")
 
+    def _record_usage(resp: Any) -> None:
+        # Token usage/cost for the admin AI-cost analytics ("label" is the source key,
+        # e.g. news.f1_ingestion). Search-grounding REQUEST fees are billed separately
+        # by Google and are not token-based, so they're not captured here.
+        try:
+            from app import ai_usage
+            ai_usage.record_gemini_usage(label, model_name, resp)
+        except Exception:
+            pass
+
     # Primary latest SDK path: google_search tool.
     if latest_genai_types:
         try:
@@ -544,6 +554,7 @@ def _generate_content_with_grounding(
                 config=config,
             )
             _log_gemini_response(label, model_name, response, extra="grounding_method=google_genai_google_search")
+            _record_usage(response)
             return response, {
                 "grounded": True,
                 "grounding_method": "google_genai_google_search",
@@ -564,6 +575,7 @@ def _generate_content_with_grounding(
                 config=config,
             )
             _log_gemini_response(label, model_name, response, extra="grounding_method=google_genai_google_search_retrieval")
+            _record_usage(response)
             return response, {
                 "grounded": True,
                 "grounding_method": "google_genai_google_search_retrieval",
@@ -590,6 +602,7 @@ def _generate_content_with_grounding(
             response,
             extra=f"grounding_method=fallback_non_grounded; errors={' | '.join(grounding_errors) if grounding_errors else 'none'}"
         )
+        _record_usage(response)
         return response, {
             "grounded": False,
             "grounding_method": "fallback_non_grounded",

@@ -234,7 +234,15 @@ def update_profile(
 ):
     """Update current user's profile"""
     update_data = user_update.dict(exclude_unset=True)
-    
+
+    # Don't let a user blank out their name — it breaks greetings ("Hi !") and
+    # DS-160 autofill (empty surname/given names). Trim and require non-empty.
+    if "full_name" in update_data:
+        cleaned_name = (update_data.get("full_name") or "").strip()
+        if not cleaned_name:
+            raise HTTPException(status_code=400, detail="Please enter your full name.")
+        update_data["full_name"] = cleaned_name
+
     # University is not editable - it's derived from .edu email at registration
     protected_fields = {'university', 'email', 'username', 'is_active', 'is_verified'}
     
@@ -655,3 +663,113 @@ def confirm_country_change(
         current_user.id, country, visa, len(removed_types),
     )
     return current_user
+
+
+# Rate limit for the data-export endpoint (right of access / portability).
+DATA_EXPORT_RATE_LIMIT = int(os.getenv("DATA_EXPORT_RATE_LIMIT", "5"))
+DATA_EXPORT_RATE_WINDOW_SECONDS = int(os.getenv("DATA_EXPORT_RATE_WINDOW_SECONDS", "3600"))
+
+
+def _iso(value):
+    """Serialize a datetime/date to ISO-8601, or pass through None."""
+    return value.isoformat() if value is not None and hasattr(value, "isoformat") else value
+
+
+@router.get("/export")
+def export_my_data(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Self-service data export (GDPR right of access / data portability, India DPDP).
+
+    Returns a machine-readable JSON copy of the account data we hold about the user:
+    profile, consents, subscription, and document metadata. Document file *contents*
+    are not included — they can be downloaded individually from the dashboard (and E2E
+    files can only be decrypted client-side with the user's passphrase).
+    """
+    from fastapi.responses import JSONResponse
+
+    check_ip_rate_limit(
+        request=request,
+        scope="profile.data_export",
+        limit=DATA_EXPORT_RATE_LIMIT,
+        window_seconds=DATA_EXPORT_RATE_WINDOW_SECONDS,
+    )
+
+    u = current_user
+    subscription = (
+        db.query(models.Subscription)
+        .filter(models.Subscription.user_id == u.id)
+        .first()
+    )
+    documents = (
+        db.query(models.Document)
+        .filter(models.Document.user_id == u.id)
+        .order_by(models.Document.created_at.desc())
+        .all()
+    )
+
+    export = {
+        "export_generated_at": datetime.utcnow().isoformat() + "Z",
+        "notice": (
+            "This is a copy of the personal data Rilono holds about your account. "
+            "Document file contents are not included; download them from your dashboard. "
+            "For questions contact grievance@rilono.com."
+        ),
+        "account": {
+            "id": u.id,
+            "email": u.email,
+            "username": u.username,
+            "full_name": u.full_name,
+            "university": getattr(u, "university", None),
+            "university_email": getattr(u, "university_email", None),
+            "phone": getattr(u, "phone", None),
+            "current_residence_country": getattr(u, "current_residence_country", None),
+            "preferred_country": getattr(u, "preferred_country", None),
+            "destination_country_code": getattr(u, "destination_country_code", None),
+            "visa_type_key": getattr(u, "visa_type_key", None),
+            "auth_provider": getattr(u, "auth_provider", None),
+            "email_verified": getattr(u, "email_verified", None),
+            "referral_code": getattr(u, "referral_code", None),
+            "referred_by_user_id": getattr(u, "referred_by_user_id", None),
+            "created_at": _iso(getattr(u, "created_at", None)),
+            "first_login_at": _iso(getattr(u, "first_login_at", None)),
+            "last_login_at": _iso(getattr(u, "last_login_at", None)),
+            "onboarding_completed_at": _iso(getattr(u, "onboarding_completed_at", None)),
+        },
+        "consents": {
+            "accepted_terms_privacy_at": _iso(getattr(u, "accepted_terms_privacy_at", None)),
+            "accepted_terms_privacy_version": getattr(u, "accepted_terms_privacy_version", None),
+            "accepted_terms_privacy_ip": getattr(u, "accepted_terms_privacy_ip", None),
+            "age_confirmed_at": _iso(getattr(u, "age_confirmed_at", None)),
+            "marketing_emails_consent": getattr(u, "marketing_emails_consent", None),
+            "marketing_emails_consent_at": _iso(getattr(u, "marketing_emails_consent_at", None)),
+            "email_notifications_enabled": getattr(u, "email_notifications_enabled", None),
+        },
+        "subscription": None if subscription is None else {
+            "plan": subscription.plan,
+            "status": subscription.status,
+            "started_at": _iso(getattr(subscription, "started_at", None)),
+            "ends_at": _iso(getattr(subscription, "ends_at", None)),
+            "ai_messages_used": getattr(subscription, "ai_messages_used", None),
+        },
+        "documents": [
+            {
+                "id": d.id,
+                "original_filename": d.original_filename,
+                "document_type": d.document_type,
+                "country": d.country,
+                "file_size": d.file_size,
+                "is_encrypted_end_to_end": bool(getattr(d, "e2e_scheme", None)),
+                "created_at": _iso(getattr(d, "created_at", None)),
+            }
+            for d in documents
+        ],
+    }
+
+    filename = f"rilono-data-export-{u.id}-{datetime.utcnow().strftime('%Y%m%d')}.json"
+    return JSONResponse(
+        content=export,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

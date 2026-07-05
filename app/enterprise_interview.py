@@ -2,12 +2,15 @@
 Rilono Enterprise — AI mock visa interview.
 
 A Gemini chat that role-plays the SPECIFIC visa officer for a client's destination
-and visa type, conducting a realistic mock interview seeded with the client's
-profile + notes. After the interview, a separate pass produces a coaching
-assessment (verdict, readiness score, strengths, weaknesses, tips).
+and visa type, conducting a realistic, demanding mock interview grounded in the
+client's own profile, uploaded documents, and counselor notes so it can ask the
+toughest, most personalized questions and cross-examine inconsistencies. After the
+interview, a separate pass produces a coaching assessment (verdict, readiness
+score, strengths, weaknesses, tips).
 
-No tools / no DB access from the model here — it's a pure role-play conversation,
-so this does not (and must not) read other clients' data.
+No tools / no live DB access from the model here — it's a pure role-play
+conversation seeded only with THIS client's own data, so it never reads other
+clients' data.
 """
 
 import logging
@@ -76,29 +79,80 @@ def _client_context_block(client: models.EnterpriseClient, recent_notes: list) -
     return "\n".join(lines)
 
 
+# Per-document caps keep the interview grounded without bloating the prompt (which
+# also keeps the stable system-instruction cache-friendly).
+_DOC_TEXT_CAP = 1800
+_DOCS_TOTAL_CAP = 14000
+_MAX_DOCS = 12
+
+
+def _documents_context_block(documents: list) -> str:
+    """Format THIS client's uploaded documents (type + bounded extracted text) so the
+    officer can ask document-specific questions and catch inconsistencies. Empty when
+    the client has no documents on file."""
+    docs = list(documents or [])[:_MAX_DOCS]
+    if not docs:
+        return ""
+    lines = []
+    total = 0
+    for i, d in enumerate(docs, 1):
+        dtype = str(getattr(d, "document_type", "") or "Document").strip() or "Document"
+        fname = str(getattr(d, "original_filename", "") or "").strip()
+        lines.append(f"--- Document {i}: {dtype}" + (f" ({fname})" if fname else "") + " ---")
+        text = str(getattr(d, "extracted_text", "") or "").strip()
+        if not text:
+            lines.append("(on file; contents not yet extracted)")
+            continue
+        remaining = _DOCS_TOTAL_CAP - total
+        if remaining <= 0:
+            lines.append("(further document contents omitted for brevity)")
+            break
+        snippet = text[: min(_DOC_TEXT_CAP, remaining)]
+        total += len(snippet)
+        lines.append(snippet)
+    body = "\n".join(lines)
+    return (
+        "\n\n=== APPLICANT'S UPLOADED DOCUMENTS (for your context only — do NOT read them aloud; "
+        "use them to ask pointed, specific questions and to catch any inconsistencies) ===\n"
+        f"{body}\n=== END DOCUMENTS ==="
+    )
+
+
 def build_interview_system_prompt(
     client: models.EnterpriseClient,
     organization: models.EnterpriseOrganization,
     recent_notes: list,
+    documents: Optional[list] = None,
 ) -> str:
     persona = _officer_persona(client.destination_country_code)
     context = _client_context_block(client, recent_notes)
+    documents_block = _documents_context_block(documents)
     applicant = client.full_name
     return (
         f"You are {persona}\n\n"
-        f"You are conducting a REALISTIC MOCK visa interview for the applicant below. Treat it "
-        f"exactly like a real interview at the visa window. The applicant is practising.\n\n"
-        f"=== APPLICANT PROFILE ===\n{context}\n=== END PROFILE ===\n\n"
+        f"You are conducting a REALISTIC, DEMANDING MOCK visa interview for the applicant below. Treat "
+        f"it exactly like a real, high-pressure interview at the visa window. The applicant is "
+        f"practising and must be genuinely challenged so the real interview feels easier.\n\n"
+        f"=== APPLICANT PROFILE ===\n{context}\n=== END PROFILE ==={documents_block}\n\n"
         "RULES (follow strictly):\n"
         f"- Stay completely in character as the officer. Address {applicant} directly. Never say you "
         "are an AI, never break character, and never give feedback, scores or coaching DURING the "
         "interview.\n"
         "- Ask ONE question at a time, then wait for the answer. Keep your turns short — a brief, "
         "natural reaction (optional) plus a single question. Do not lecture.\n"
-        "- Conduct a natural interview: react to what the applicant actually says and ask relevant "
-        "follow-ups (including probing or slightly challenging ones, like a real officer). Cover the "
-        "areas your role cares about over the course of the interview.\n"
-        "- Be professional and polite but appropriately firm. Do not be unrealistically friendly.\n"
+        "- Use the applicant's PROFILE and UPLOADED DOCUMENTS to ask the toughest, most SPECIFIC "
+        "questions for THIS applicant — never generic textbook questions. Ground questions in real "
+        "details (course, institution, tuition and living costs, funds and sponsor, test scores, "
+        "gaps, work history, family and home-country ties).\n"
+        "- Cross-examine. If an answer is vague, rehearsed, evasive, over-confident, or inconsistent "
+        "with the documents/profile (e.g. funds look short, a sponsor is unclear, ties are weak, or "
+        "timelines don't add up), press hard with a sharper, pointed follow-up instead of moving on.\n"
+        "- Progressively escalate the difficulty as the interview proceeds; do not let the applicant "
+        "settle into a comfort zone.\n"
+        "- Conduct a natural interview: react to what the applicant actually says and cover the areas "
+        "your role cares about over the course of the interview.\n"
+        "- Be professional and polite but firm and appropriately skeptical. Do not be unrealistically "
+        "friendly or hand the applicant an easy pass.\n"
         "- Begin by greeting the applicant briefly and asking your first question.\n"
         "- Ask roughly 8–12 questions in total. When you have enough information to reach a "
         "decision, OR the applicant indicates they want to stop, END the interview yourself — do "
@@ -113,7 +167,7 @@ def build_interview_system_prompt(
         "this tag ONLY when you are ending the interview, never earlier, and never refer to the tag "
         "or read it aloud to the applicant.\n"
         "- Keep everything in English unless the applicant clearly cannot, and do not invent facts "
-        "about the applicant beyond the profile — ask them instead."
+        "about the applicant beyond the profile/documents — ask them instead."
     )
 
 
@@ -170,6 +224,7 @@ def run_interview_turn(
     history: Optional[list],
     message: str,
     is_start: bool = False,
+    documents: Optional[list] = None,
 ) -> dict:
     """One officer turn. Returns {'reply', 'finished', 'decision'}.
 
@@ -183,7 +238,7 @@ def run_interview_turn(
             "decision": None,
         }
 
-    system = build_interview_system_prompt(client, organization, recent_notes)
+    system = build_interview_system_prompt(client, organization, recent_notes, documents)
     model = _model(system)
     chat = model.start_chat(history=_convert_history(history))
 
@@ -212,6 +267,7 @@ def generate_interview_feedback(
     organization: models.EnterpriseOrganization,
     history: list,
     officer_decision: Optional[str] = None,
+    documents: Optional[list] = None,
 ) -> str:
     """One-shot coaching assessment of the interview transcript (markdown)."""
     if not is_ai_configured():
@@ -246,6 +302,13 @@ def generate_interview_feedback(
         "- No long paragraphs, no quoting the transcript back, no repetition, no preamble or sign-off.\n"
         "- Be specific and practical. Never invent facts that weren't in the transcript."
     )
+    documents_block = _documents_context_block(documents)
+    if documents_block:
+        system += (
+            "\n\nUse the applicant's uploaded documents below to judge whether their answers were "
+            "backed by real evidence; specifically flag any answer that contradicted or wasn't "
+            "supported by these documents (e.g. funds, sponsor, ties, timelines)." + documents_block
+        )
     if officer_decision in ("approved", "refused"):
         system += (
             f"\n\nNote: in this mock, the simulated officer's final decision was "

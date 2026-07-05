@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Every hyperlink on this article opens in a new tab (default target for the page).
+         Only `target` is set — no href — so relative URL resolution is unchanged. -->
+    <base target="_blank">
+    <title>How to Use Rilono AI Copilot — Your AI Side Panel for Visa Applications · Rilono</title>
+    <meta name="description" content="A step-by-step guide to Rilono AI Copilot for Chrome: install it, connect your Rilono account, inspect any visa application page, and get field-by-field guidance personalized to your US, UK, Canada or Australia student-visa journey.">
+    <link rel="canonical" href="https://rilono.com/blog/how-to-use-rilono-ai-copilot">
+    <meta property="og:title" content="How to Use Rilono AI Copilot — Your AI Side Panel for Visa Applications">
+    <meta property="og:description" content="Install Copilot, connect your Rilono account, and get personalized field-by-field guidance on DS-160, CAS, study permit and Subclass 500 application pages.">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://rilono.com/blog/how-to-use-rilono-ai-copilot">
+    <link rel="icon" href="/static/logo.png">
+    <style>
+        :root {
+            --ink: #0f172a; --ink-2: #475569; --muted: #64748b; --line: rgba(15, 23, 42, .10);
+            --bg: #f6f8fc; --card: #ffffff; --brand: #4f46e5; --brand-2: #7c3aed; --accent: #db2777;
+            --grad: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.7; }
+        a { color: var(--brand); }
+        .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+        .navbar { position: sticky; top: 0; z-index: 50; background: rgba(255, 255, 255, .85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+        .nav-in { max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-weight: 800; font-size: 1.3rem; }
+        .brand img { height: 34px; }
+        .nav-links { display: flex; align-items: center; gap: 26px; }
+        .nav-links a { text-decoration: none; color: var(--ink-2); font-weight: 600; font-size: .95rem; }
+        .nav-links a:hover { color: var(--ink); }
+        .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
+        @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
+
+        /* "Products" dropdown — same header as the homepage so it's uniform across product pages. */
+        .products-nav { position: relative; display: inline-flex; align-items: center; }
+        .products-nav::after { content: ""; position: absolute; left: -.75rem; right: -.75rem; top: 100%; height: 1rem; }
+        .products-nav-trigger { display: inline-flex; align-items: center; gap: .35rem; color: var(--ink-2); font-weight: 600; font-size: .95rem; padding: 0; background: transparent; border: 0; font-family: inherit; cursor: pointer; transition: color .2s ease; }
+        .products-nav-trigger:hover, .products-nav:focus-within .products-nav-trigger, .products-nav:hover .products-nav-trigger, .products-nav.is-open .products-nav-trigger { color: var(--ink); }
+        .products-nav-trigger svg { width: 14px; height: 14px; transition: transform .2s ease; }
+        .products-nav:hover .products-nav-trigger svg, .products-nav:focus-within .products-nav-trigger svg, .products-nav.is-open .products-nav-trigger svg { transform: rotate(180deg); }
+        .products-menu { position: absolute; top: calc(100% + .85rem); left: 50%; transform: translateX(-50%) translateY(8px); min-width: 270px; padding: .55rem; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 24px 60px rgba(15, 23, 42, .16); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, transform .18s ease, visibility .18s ease; z-index: 60; }
+        .products-nav:hover .products-menu, .products-nav:focus-within .products-menu, .products-nav.is-open .products-menu { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+        .products-menu a { display: block; padding: .8rem .85rem; border-radius: 10px; color: var(--ink); text-decoration: none; font-weight: 800; font-size: .95rem; }
+        .products-menu a span { display: block; margin-top: .18rem; color: var(--muted); font-size: .78rem; font-weight: 600; line-height: 1.35; }
+        .products-menu a:hover { background: rgba(99, 92, 255, .09); color: var(--ink); }
+        .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 800; padding: .35rem .85rem .15rem; }
+        .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
+        @media (max-width: 720px) { .products-nav { display: none; } }
+
+        /* article shell */
+        .post { max-width: 760px; margin: 0 auto; padding: 48px 24px 40px; }
+        .post-eyebrow { display: inline-flex; align-items: center; gap: 9px; font-size: .78rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); background: rgba(99, 102, 241, .1); border: 1px solid rgba(99, 102, 241, .25); padding: 6px 14px; border-radius: 999px; }
+        .post h1 { font-size: clamp(1.9rem, 4vw, 2.7rem); line-height: 1.15; letter-spacing: -.02em; font-weight: 850; margin: 18px 0 10px; }
+        .post .standfirst { font-size: 1.12rem; color: var(--ink-2); margin: 0 0 14px; }
+        .post-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: .85rem; font-weight: 600; padding-bottom: 22px; border-bottom: 1px solid var(--line); margin-bottom: 30px; }
+        .post h2 { font-size: 1.45rem; font-weight: 800; letter-spacing: -.01em; margin: 42px 0 12px; }
+        .post h3 { font-size: 1.08rem; font-weight: 800; margin: 26px 0 8px; }
+        .post p, .post li { color: #334155; font-size: 1rem; }
+        .post ul, .post ol { padding-left: 22px; }
+        .post li { margin-bottom: 7px; }
+        .post code { background: #eef0f8; border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; font-size: .88em; color: #4338ca; }
+
+        /* step cards */
+        .step-card { display: flex; gap: 16px; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; margin: 14px 0; box-shadow: 0 8px 24px rgba(15, 23, 42, .05); }
+        .step-card .n { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-content: center; font-weight: 800; font-size: 1.05rem; background: var(--grad); color: #fff; box-shadow: 0 8px 20px rgba(99, 102, 241, .3); }
+        .step-card h3 { margin: 2px 0 6px; }
+        .step-card p { margin: 0 0 6px; font-size: .95rem; }
+        .step-card p:last-child { margin-bottom: 0; }
+
+        /* callouts */
+        .callout { border-radius: 14px; padding: 14px 18px; margin: 18px 0; font-size: .95rem; border: 1px solid; }
+        .callout p { margin: 0; font-size: .95rem; }
+        .callout.safe { background: #ecfdf5; border-color: rgba(16, 185, 129, .35); }
+        .callout.safe p { color: #065f46; }
+        .callout.note { background: #eff6ff; border-color: rgba(59, 130, 246, .35); }
+        .callout.note p { color: #1e3a8a; }
+        .callout.warn { background: #fffbeb; border-color: rgba(245, 158, 11, .4); }
+        .callout.warn p { color: #92400e; }
+
+        /* country table */
+        .country-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: .92rem; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 8px 24px rgba(15, 23, 42, .05); }
+        .country-table th, .country-table td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+        .country-table th { background: #f1f4fb; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+        .country-table td:first-child { white-space: nowrap; font-weight: 700; }
+        .country-table tr:last-child td { border-bottom: none; }
+
+        /* prompt chips */
+        .prompt-box { background: linear-gradient(160deg, #f6f7ff, #fbf7ff); border: 1px solid rgba(99, 102, 241, .25); border-radius: 14px; padding: 16px 18px; margin: 12px 0; }
+        .prompt-box p { margin: 0 0 10px; font-size: .93rem; color: #3730a3; font-style: italic; }
+        .prompt-box p:last-child { margin-bottom: 0; }
+
+        /* FAQ */
+        .faq details { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 0 18px; margin-bottom: 10px; }
+        .faq details[open] { border-color: rgba(99, 102, 241, .4); }
+        .faq summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 14px 0; font-weight: 700; font-size: .96rem; }
+        .faq summary::-webkit-details-marker { display: none; }
+        .faq summary .chev { flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-content: center; background: rgba(99, 102, 241, .1); color: var(--brand); font-weight: 900; transition: transform .3s ease; }
+        .faq details[open] summary .chev { transform: rotate(45deg); }
+        .faq .ans { color: var(--ink-2); font-size: .92rem; padding: 0 0 15px; margin: 0; }
+
+        /* CTA band */
+        .cta-band { text-align: center; border-radius: 20px; padding: 40px 26px; border: 1px solid rgba(99, 102, 241, .3); background: radial-gradient(600px 280px at 50% -10%, rgba(99, 102, 241, .14), transparent 60%), linear-gradient(160deg, #f0effc, #eef2fb); margin: 44px 0 10px; }
+        .cta-band h2 { margin: 0 0 8px; }
+        .cta-band p { margin: 0 auto 20px; max-width: 480px; }
+        .btn { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 1rem; padding: 13px 24px; border-radius: 12px; text-decoration: none; }
+        .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 14px 34px rgba(99, 102, 241, .3); }
+        .btn-ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); margin-left: 10px; }
+        .cta-fineprint { font-size: .8rem; color: var(--muted); margin-top: 12px !important; }
+
+        /* footer (matches homepage) */
+        .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); margin-top: 56px; }
+        .hx-footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); }
+        .hx-footer .cols { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 32px; padding: 52px 0 34px; }
+        .hx-footer .brand-col img { height: 34px; margin-bottom: 14px; }
+        .hx-footer .brand-col p { color: #8f96bd; font-size: .9rem; line-height: 1.65; max-width: 290px; }
+        .hx-footer h5 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: #7b82ad; margin: 0 0 16px; font-weight: 800; }
+        .hx-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+        .hx-footer a { color: #c6cbe8; text-decoration: none; font-size: .92rem; }
+        .hx-footer a:hover { color: #d9c9ff; }
+        .hx-footer .foot-bottom { border-top: 1px solid rgba(255, 255, 255, .09); padding: 22px 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #7b82ad; font-size: .85rem; }
+        @media (max-width: 860px) { .hx-footer .cols { grid-template-columns: 1fr 1fr; } }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-in">
+            <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
+            <div class="nav-links">
+                <a href="/">Home</a>
+                <div class="products-nav" id="productsNav">
+                    <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
+                        aria-expanded="false" aria-controls="productsMenu">
+                        Products
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd"
+                                d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                                clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="products-menu" id="productsMenu">
+                        <div class="pm-label">Student visas</div>
+                        <a href="/us-f1-visa"><span class="pm-flag">🇺🇸</span>United States<span>F-1 · J-1 · M-1 student
+                                visas, DS-160, I-20 &amp; interview prep.</span></a>
+                        <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier
+                                4) — CAS, financial proof &amp; interview.</span></a>
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit &amp; SDS
+                                — LOA, proof of funds &amp; biometrics.</span></a>
+                        <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 —
+                                CoE, OSHC &amp; Genuine Student.</span></a>
+                    </div>
+                </div>
+                <a href="/pricing">Pricing</a>
+                <a href="/for-enterprise">Enterprise</a>
+                <a href="/login">Login</a>
+                <a href="/register" class="nav-cta">Get started</a>
+            </div>
+        </div>
+    </nav>
+
+    <article class="post">
+        <span class="post-eyebrow">Guide · Rilono Copilot</span>
+        <h1>How to use Rilono AI Copilot: your AI side panel for visa applications</h1>
+        <p class="standfirst">Government visa forms don't come with a helpful colleague sitting next to you. Rilono Copilot is the next best thing — a Chrome side panel that reads the application page you're on and tells you exactly what to enter, personalized to your Rilono profile, documents and journey stage.</p>
+        <div class="post-meta">
+            <span>The Rilono Team</span>
+            <span>·</span>
+            <span>Updated July 2026</span>
+            <span>·</span>
+            <span>7 min read</span>
+        </div>
+
+        <h2>What is Rilono Copilot?</h2>
+        <p>Rilono Copilot is a Chrome extension that opens as a <strong>side panel</strong> next to whatever page you're working on — a DS-160 section, your CAS details, an IRCC study-permit form, or an ImmiAccount application. Click <strong>Inspect Page</strong> and Copilot reads the visible text, form fields and buttons on the page, then answers your questions with guidance that draws on your Rilono account: your destination and visa type, your profile, your uploaded and validated documents, and where you are in your journey.</p>
+        <p>Because it's connected to your account, the guidance adapts to your destination automatically. A student headed to Canada sees Study Permit, PAL and GIC context; a UK-bound student gets CAS and 28-day financial-rule guidance; Australia applicants get CoE, OSHC and Genuine Student support; US applicants get DS-160, I-20 and SEVIS help.</p>
+        <div class="callout safe">
+            <p><strong>100% read-only.</strong> Copilot never types, submits or modifies anything on any page. It reads on-screen context when you ask it to, and you stay in full control of your application.</p>
+        </div>
+
+        <h2>Before you start</h2>
+        <ul>
+            <li><strong>A Chromium browser</strong> — Chrome, Edge, Brave or any Chromium-based browser.</li>
+            <li><strong>A Rilono account</strong> with your destination country chosen — <a href="/register">create one free</a> if you haven't. If you skipped onboarding, pick your destination on rilono.com first so Copilot can personalize.</li>
+            <li><strong>The Visa Success Pass</strong> — the extension is free to install, and Copilot's chat workflows unlock with the <a href="/pricing">Visa Success Pass</a>.</li>
+            <li><strong>A logged-in rilono.com tab</strong> — Copilot securely reuses your existing website session instead of asking you to log in again, so keep one rilono.com tab open while you work.</li>
+        </ul>
+
+        <h2>Setting up in four steps</h2>
+
+        <div class="step-card">
+            <span class="n">1</span>
+            <div>
+                <h3>Install the extension</h3>
+                <p>Add <a href="https://chromewebstore.google.com/detail/rilono-copilot/ggfiafmfibondlacgdigbeigccnecplh" target="_blank" rel="noopener noreferrer">Rilono Copilot from the Chrome Web Store</a>, then pin it to your toolbar so it's one click away. Clicking the icon opens the side panel.</p>
+            </div>
+        </div>
+
+        <div class="step-card">
+            <span class="n">2</span>
+            <div>
+                <h3>Connect your Rilono account</h3>
+                <p>Open the side panel. If you're not connected yet, click <strong>Open Rilono Login</strong>, sign in on rilono.com, then return to the panel and click <strong>"I am logged in."</strong> The header will show your name and destination — for example, <em>🇨🇦 Connected as Rohan · Canada</em>.</p>
+                <p>There's no separate extension password: Copilot rides on your website session, which is why a rilono.com tab needs to stay open.</p>
+            </div>
+        </div>
+
+        <div class="step-card">
+            <span class="n">3</span>
+            <div>
+                <h3>Open your application and click Inspect Page</h3>
+                <p>Navigate to the form you're filling — a government portal, your university's document pages, or a financial form. Click <strong>Inspect Page</strong> in the panel. The first time you use it on a new site, Chrome asks for one-time permission to read that site; allow it and Copilot captures the page's visible text, fields and buttons as context for your chat.</p>
+                <p>The capture is attached to your session as a "Page Inspection" card — nothing is typed into the page, and password fields are always masked.</p>
+            </div>
+        </div>
+
+        <div class="step-card">
+            <span class="n">4</span>
+            <div>
+                <h3>Ask what to fill</h3>
+                <p>Now just ask. Copilot references the exact field labels it saw and tells you what to enter, cross-checked against your profile and documents. If something is ambiguous or missing from your profile, it asks you a clarifying question instead of guessing.</p>
+            </div>
+        </div>
+
+        <h2>What this looks like for your country</h2>
+        <table class="country-table">
+            <tr><th>Destination</th><th>Where Copilot helps</th></tr>
+            <tr><td>🇺🇸 United States</td><td>DS-160 sections and consistency checks, I-20 request forms, SEVIS fee steps, financial-proof fields, interview readiness.</td></tr>
+            <tr><td>🇬🇧 United Kingdom</td><td>The Student visa application on GOV.UK, entering your CAS reference correctly, 28-day financial evidence, IHS payment, ATAS.</td></tr>
+            <tr><td>🇨🇦 Canada</td><td>Study permit (IMM 1294) fields, DLI number from your LOA, PAL/TAL, GIC and proof of funds, biometrics steps.</td></tr>
+            <tr><td>🇦🇺 Australia</td><td>ImmiAccount Subclass 500 application, CoE details, OSHC policy info, Genuine Student answers, financial capacity evidence.</td></tr>
+        </table>
+        <p>The quick-action buttons under the chat also adapt to your destination — a Canada account sees GIC and study-permit shortcuts where a US account sees DS-160 help.</p>
+
+        <h2>Attachments and sessions</h2>
+        <ul>
+            <li><strong>Attach supporting files</strong> to a chat — up to 8 files per session, 8&nbsp;MB each, 20&nbsp;MB total. Images, PDFs, Word and Excel files all work. Attachments are <strong>session-only</strong>: they're sent with your message and never stored by the extension.</li>
+            <li><strong>Start a New Session per form.</strong> Switching from your visa form to a different application (or a different family member's profile)? Click <strong>New Session</strong> so context from one form doesn't bleed into another.</li>
+            <li><strong>Check the Usage Guide tab</strong> inside the panel for a compact version of this workflow whenever you need a reminder.</li>
+        </ul>
+
+        <h2>Prompts that work well</h2>
+        <div class="prompt-box">
+            <p>"I am filling [form name/section]. Ask me all missing details one by one."</p>
+            <p>"Inspect this page and tell me exactly what to fill in each visible field."</p>
+            <p>"Check my answers against my profile and documents — flag anything inconsistent before I submit."</p>
+            <p>"If multiple options are valid for this field, explain the tradeoffs and ask which applies to me."</p>
+        </div>
+        <p>The pattern behind all of these: tell Copilot <em>which form and section you're on</em>, give it the page with Inspect Page, and ask it to verify against your account data before you commit anything.</p>
+
+        <h2>Privacy and safety, plainly</h2>
+        <ul>
+            <li><strong>Read-only, always.</strong> Copilot cannot type, click, submit or modify anything on any page. Inspecting a page requires your explicit click, and non-Rilono sites need your one-time permission.</li>
+            <li><strong>No separate credentials.</strong> The extension never sees or stores your password — it reuses your existing rilono.com session.</li>
+            <li><strong>Session-only attachments.</strong> Files you attach in the panel travel with that message and aren't retained by the extension; only lightweight conversation history is kept locally so your chat survives a browser restart.</li>
+            <li><strong>Encrypted vault documents stay encrypted.</strong> If you use Rilono's end-to-end encrypted vault, those document contents are readable only on your device — Copilot sees their names and validation status, not their contents.</li>
+        </ul>
+
+        <h2>Troubleshooting</h2>
+        <div class="faq">
+            <details>
+                <summary>Copilot says it can't find my Rilono session<span class="chev">+</span></summary>
+                <p class="ans">Make sure a rilono.com tab is open and logged in, refresh that tab, then click "I am logged in" in the panel. If your session expired, log in on rilono.com again first.</p>
+            </details>
+            <details>
+                <summary>Inspect Page says access was blocked<span class="chev">+</span></summary>
+                <p class="ans">Chrome asks for per-site permission the first time you inspect a new website. Click Inspect Page again and choose Allow when prompted. Inspect works on regular http(s) pages — not on browser settings pages or PDFs opened directly in a tab.</p>
+            </details>
+            <details>
+                <summary>My chat says Copilot needs the Visa Success Pass<span class="chev">+</span></summary>
+                <p class="ans">Copilot workflows are part of the <a href="/pricing">Visa Success Pass</a>. Once the pass is active on your account, Copilot unlocks automatically — no extra setup in the extension.</p>
+            </details>
+            <details>
+                <summary>The answers reference the wrong country<span class="chev">+</span></summary>
+                <p class="ans">Copilot follows the destination on your Rilono account. If you recently changed destinations on rilono.com, click the refresh icon in the panel header so it picks up your new journey.</p>
+            </details>
+        </div>
+
+        <div class="cta-band">
+            <h2>Fill your next form with a copilot beside you</h2>
+            <p>Install the extension, connect your account, and let Rilono AI double-check every field before you submit.</p>
+            <a class="btn btn-primary" href="https://chromewebstore.google.com/detail/rilono-copilot/ggfiafmfibondlacgdigbeigccnecplh" target="_blank" rel="noopener noreferrer">Add Rilono Copilot to Chrome</a>
+            <a class="btn btn-ghost" href="/register">Create your Rilono account</a>
+            <p class="cta-fineprint">Free to install on Chrome, Edge, Brave &amp; all Chromium browsers · Copilot workflows unlock with the Visa Success Pass</p>
+        </div>
+    </article>
+
+    <footer class="hx-footer">
+        <div class="wrap">
+            <div class="cols">
+                <div class="brand-col">
+                    <img src="/static/logo.png" alt="Rilono">
+                    <p>The AI-powered platform for student visas to the US, UK, Canada &amp; Australia — helping students and consultancies prepare confident, complete applications.</p>
+                </div>
+                <div>
+                    <h5>Product</h5>
+                    <ul>
+                        <li><a href="/us-f1-visa">US F-1 Visa</a></li>
+                        <li><a href="/uk-student-visa">UK Student Visa</a></li>
+                        <li><a href="/canada-study-permit">Canada Study Permit</a></li>
+                        <li><a href="/australia-student-visa">Australia Subclass 500</a></li>
+                        <li><a href="/pricing">Pricing</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h5>Legal</h5>
+                    <ul>
+                        <li><a href="/privacy">Privacy Policy</a></li>
+                        <li><a href="/terms">Terms of Service</a></li>
+                        <li><a href="/refund-policy">Refund Policy</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="foot-bottom">
+                <span>© <span id="yr"></span> Rilono. All rights reserved.</span>
+                <span>Made for international students 🌍</span>
+            </div>
+        </div>
+    </footer>
+    <script>
+        document.getElementById("yr").textContent = new Date().getFullYear();
+
+        // Navbar "Products" dropdown — hover opens on desktop (CSS); click/tap toggle + close.
+        (function () {
+            const pNav = document.getElementById("productsNav");
+            const pTrig = document.getElementById("productsNavTrigger");
+            const pMenu = document.getElementById("productsMenu");
+            if (pNav && pTrig && pMenu) {
+                const setOpen = (open) => { pNav.classList.toggle("is-open", open); pTrig.setAttribute("aria-expanded", open ? "true" : "false"); };
+                pTrig.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); setOpen(!pNav.classList.contains("is-open")); });
+                pMenu.addEventListener("click", (e) => { if (e.target.closest("a")) setOpen(false); });
+                document.addEventListener("click", (e) => { if (!pNav.contains(e.target)) setOpen(false); });
+                document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
+            }
+        })();
+    </script>
+</body>
+</html>

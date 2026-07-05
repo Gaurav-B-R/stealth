@@ -5,6 +5,12 @@ Every Gemini call's token usage (from the response's usage_metadata) is logged w
 an estimated USD cost so the admin console can show how much we're spending on the
 Gemini API. The cost is an ESTIMATE from published per-token pricing — cross-check
 against the actual GCP/AI Studio invoice for billing.
+
+Known gaps vs the invoice (kept deliberately, documented here):
+- Google Search grounding (news feed/ingestion) is billed PER REQUEST above a free
+  tier, not per token — those request fees are not modeled here.
+- Explicit context-cache STORAGE (per token-hour) is not modeled; only the cached-
+  input token discount is.
 """
 
 import os
@@ -64,24 +70,36 @@ PRICING_PER_MILLION = {
 _DEFAULT_INPUT = float(os.getenv("GEMINI_PRICE_INPUT_PER_M", "0.30"))
 _DEFAULT_OUTPUT = float(os.getenv("GEMINI_PRICE_OUTPUT_PER_M", "2.50"))
 
+# Pro models charge a higher rate once the prompt exceeds a context threshold:
+# model-key -> (prompt_token_threshold, input_rate, output_rate) for the large tier.
+LONG_CONTEXT_TIERS = {
+    "gemini-2.5-pro": (200_000, 2.50, 15.00),
+    "gemini-1.5-pro": (128_000, 2.50, 10.00),
+}
+
 # Gemini 2.5 caches (implicit by default, or explicit) bill cached input tokens at a
 # discount. Google prices cached input at ~25% of the normal input rate (a 75% saving).
 CACHED_INPUT_MULTIPLIER = float(os.getenv("GEMINI_CACHED_INPUT_MULTIPLIER", "0.25"))
 
 
-def _rates_for(model_name: str) -> tuple[float, float]:
+def _rates_for(model_name: str, prompt_tokens: int = 0) -> tuple[float, float]:
     name = str(model_name or "").strip().lower()
     best = None
     for key, rates in PRICING_PER_MILLION.items():
         if key in name and (best is None or len(key) > len(best[0])):
             best = (key, rates)
-    return best[1] if best else (_DEFAULT_INPUT, _DEFAULT_OUTPUT)
+    if best is None:
+        return (_DEFAULT_INPUT, _DEFAULT_OUTPUT)
+    tier = LONG_CONTEXT_TIERS.get(best[0])
+    if tier and int(prompt_tokens or 0) > tier[0]:
+        return (tier[1], tier[2])
+    return best[1]
 
 
 def estimate_cost(model_name: str, prompt_tokens: int, output_tokens: int, cached_tokens: int = 0) -> Decimal:
     """Estimate a call's USD cost. `cached_tokens` is the subset of prompt_tokens served
     from Gemini's context cache — billed at CACHED_INPUT_MULTIPLIER of the input rate."""
-    in_rate, out_rate = _rates_for(model_name)
+    in_rate, out_rate = _rates_for(model_name, prompt_tokens)
     cached = max(0, min(int(cached_tokens or 0), int(prompt_tokens or 0)))
     fresh_input = int(prompt_tokens or 0) - cached
     cost = (Decimal(fresh_input) / Decimal(1_000_000)) * Decimal(str(in_rate)) \
@@ -100,7 +118,10 @@ def _extract_tokens(response) -> tuple[int, int, int, int]:
         except (TypeError, ValueError):
             return 0
     pt = g("prompt_token_count")
-    ot = g("candidates_token_count")
+    # Thinking models (Gemini 2.5+) report reasoning tokens separately in
+    # thoughts_token_count, but Google BILLS them at the output rate — omitting
+    # them silently undercounts every thinking-model call's cost.
+    ot = g("candidates_token_count") + g("thoughts_token_count")
     tt = g("total_token_count") or (pt + ot)
     ct = g("cached_content_token_count")  # cached input tokens (implicit or explicit)
     return pt, ot, tt, ct
@@ -180,6 +201,10 @@ SOURCE_LABELS = {
     "student_voice_interview": "Voice mock interview (Visa Success Pass)",
     "growth_agent": "Conversion Agent — bulk scan (internal)",
     "growth_agent_single": "Conversion Agent — single account (internal)",
+    "news.f1_latest": "Visa news feed (grounded search)",
+    "news.f1_interview_experiences": "Interview experiences feed (grounded search)",
+    "news.f1_ingestion": "Visa news ingestion (scheduled, grounded)",
+    "daily_ai_notifier": "Daily AI notifications",
 }
 
 

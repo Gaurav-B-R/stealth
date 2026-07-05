@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Every hyperlink on this article opens in a new tab (default target for the page).
+         Only `target` is set — no href — so relative URL resolution is unchanged. -->
+    <base target="_blank">
+    <title>How to Use Rilono AI for Your US Student Visa (F-1) — A Smart, Efficient Guide · Rilono</title>
+    <meta name="description" content="A practical guide to using Rilono AI efficiently for your US F-1 student visa: build your profile, upload and AI-validate documents, track the 7-stage journey, cross-check with Rilono AI chat, prep your interview, and fill the DS-160 with Rilono Copilot.">
+    <link rel="canonical" href="https://rilono.com/blog/how-to-use-rilono-ai-us-f1-visa">
+    <meta property="og:title" content="How to Use Rilono AI for Your US Student Visa (F-1)">
+    <meta property="og:description" content="Build your profile, AI-validate every document, track all 7 F-1 stages, cross-check with Rilono AI, and walk into your visa interview ready.">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://rilono.com/blog/how-to-use-rilono-ai-us-f1-visa">
+    <link rel="icon" href="/static/logo.png">
+    <style>
+        :root {
+            --ink: #0f172a; --ink-2: #475569; --muted: #64748b; --line: rgba(15, 23, 42, .10);
+            --bg: #f6f8fc; --card: #ffffff; --brand: #4f46e5; --brand-2: #7c3aed; --accent: #db2777;
+            --grad: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.7; }
+        a { color: var(--brand); }
+        .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+        .navbar { position: sticky; top: 0; z-index: 50; background: rgba(255, 255, 255, .85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+        .nav-in { max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-weight: 800; font-size: 1.3rem; }
+        .brand img { height: 34px; }
+        .nav-links { display: flex; align-items: center; gap: 26px; }
+        .nav-links a { text-decoration: none; color: var(--ink-2); font-weight: 600; font-size: .95rem; }
+        .nav-links a:hover { color: var(--ink); }
+        .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
+        @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
+
+        /* "Products" dropdown — same header as the homepage so it's uniform across product pages. */
+        .products-nav { position: relative; display: inline-flex; align-items: center; }
+        .products-nav::after { content: ""; position: absolute; left: -.75rem; right: -.75rem; top: 100%; height: 1rem; }
+        .products-nav-trigger { display: inline-flex; align-items: center; gap: .35rem; color: var(--ink-2); font-weight: 600; font-size: .95rem; padding: 0; background: transparent; border: 0; font-family: inherit; cursor: pointer; transition: color .2s ease; }
+        .products-nav-trigger:hover, .products-nav:focus-within .products-nav-trigger, .products-nav:hover .products-nav-trigger, .products-nav.is-open .products-nav-trigger { color: var(--ink); }
+        .products-nav-trigger svg { width: 14px; height: 14px; transition: transform .2s ease; }
+        .products-nav:hover .products-nav-trigger svg, .products-nav:focus-within .products-nav-trigger svg, .products-nav.is-open .products-nav-trigger svg { transform: rotate(180deg); }
+        .products-menu { position: absolute; top: calc(100% + .85rem); left: 50%; transform: translateX(-50%) translateY(8px); min-width: 270px; padding: .55rem; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 24px 60px rgba(15, 23, 42, .16); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, transform .18s ease, visibility .18s ease; z-index: 60; }
+        .products-nav:hover .products-menu, .products-nav:focus-within .products-menu, .products-nav.is-open .products-menu { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+        .products-menu a { display: block; padding: .8rem .85rem; border-radius: 10px; color: var(--ink); text-decoration: none; font-weight: 800; font-size: .95rem; }
+        .products-menu a span { display: block; margin-top: .18rem; color: var(--muted); font-size: .78rem; font-weight: 600; line-height: 1.35; }
+        .products-menu a:hover { background: rgba(99, 92, 255, .09); color: var(--ink); }
+        .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 800; padding: .35rem .85rem .15rem; }
+        .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
+        @media (max-width: 720px) { .products-nav { display: none; } }
+
+        /* article shell */
+        .post { max-width: 760px; margin: 0 auto; padding: 48px 24px 40px; }
+        .post-eyebrow { display: inline-flex; align-items: center; gap: 9px; font-size: .78rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); background: rgba(99, 102, 241, .1); border: 1px solid rgba(99, 102, 241, .25); padding: 6px 14px; border-radius: 999px; }
+        .post h1 { font-size: clamp(1.9rem, 4vw, 2.7rem); line-height: 1.15; letter-spacing: -.02em; font-weight: 850; margin: 18px 0 10px; }
+        .post .standfirst { font-size: 1.12rem; color: var(--ink-2); margin: 0 0 14px; }
+        .post-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: .85rem; font-weight: 600; padding-bottom: 22px; border-bottom: 1px solid var(--line); margin-bottom: 30px; }
+        .post h2 { font-size: 1.45rem; font-weight: 800; letter-spacing: -.01em; margin: 42px 0 12px; }
+        .post h3 { font-size: 1.08rem; font-weight: 800; margin: 26px 0 8px; }
+        .post p, .post li { color: #334155; font-size: 1rem; }
+        .post ul, .post ol { padding-left: 22px; }
+        .post li { margin-bottom: 7px; }
+        .post code { background: #eef0f8; border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; font-size: .88em; color: #4338ca; }
+        .post .toc { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 22px; margin: 8px 0 30px; box-shadow: 0 8px 24px rgba(15, 23, 42, .05); }
+        .post .toc h4 { margin: 0 0 8px; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+        .post .toc ol { margin: 0; padding-left: 20px; }
+        .post .toc li { margin-bottom: 4px; font-weight: 600; }
+
+        /* callouts */
+        .callout { border-radius: 14px; padding: 14px 18px; margin: 18px 0; font-size: .95rem; border: 1px solid; }
+        .callout p { margin: 0; font-size: .95rem; }
+        .callout.safe { background: #ecfdf5; border-color: rgba(16, 185, 129, .35); }
+        .callout.safe p { color: #065f46; }
+        .callout.note { background: #eff6ff; border-color: rgba(59, 130, 246, .35); }
+        .callout.note p { color: #1e3a8a; }
+        .callout.warn { background: #fffbeb; border-color: rgba(245, 158, 11, .4); }
+        .callout.warn p { color: #92400e; }
+
+        /* journey / doc table */
+        .country-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: .92rem; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 8px 24px rgba(15, 23, 42, .05); }
+        .country-table th, .country-table td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+        .country-table th { background: #f1f4fb; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+        .country-table td:first-child { white-space: nowrap; font-weight: 700; }
+        .country-table tr:last-child td { border-bottom: none; }
+
+        /* prompt chips */
+        .prompt-box { background: linear-gradient(160deg, #f6f7ff, #fbf7ff); border: 1px solid rgba(99, 102, 241, .25); border-radius: 14px; padding: 16px 18px; margin: 12px 0; }
+        .prompt-box p { margin: 0 0 10px; font-size: .93rem; color: #3730a3; font-style: italic; }
+        .prompt-box p:last-child { margin-bottom: 0; }
+
+        /* FAQ */
+        .faq details { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 0 18px; margin-bottom: 10px; }
+        .faq details[open] { border-color: rgba(99, 102, 241, .4); }
+        .faq summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 14px 0; font-weight: 700; font-size: .96rem; }
+        .faq summary::-webkit-details-marker { display: none; }
+        .faq summary .chev { flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-content: center; background: rgba(99, 102, 241, .1); color: var(--brand); font-weight: 900; transition: transform .3s ease; }
+        .faq details[open] summary .chev { transform: rotate(45deg); }
+        .faq .ans { color: var(--ink-2); font-size: .92rem; padding: 0 0 15px; margin: 0; }
+
+        /* CTA band */
+        .cta-band { text-align: center; border-radius: 20px; padding: 40px 26px; border: 1px solid rgba(99, 102, 241, .3); background: radial-gradient(600px 280px at 50% -10%, rgba(99, 102, 241, .14), transparent 60%), linear-gradient(160deg, #f0effc, #eef2fb); margin: 44px 0 10px; }
+        .cta-band h2 { margin: 0 0 8px; }
+        .cta-band p { margin: 0 auto 20px; max-width: 480px; }
+        .btn { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 1rem; padding: 13px 24px; border-radius: 12px; text-decoration: none; }
+        .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 14px 34px rgba(99, 102, 241, .3); }
+        .btn-ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); margin-left: 10px; }
+        .cta-fineprint { font-size: .8rem; color: var(--muted); margin-top: 12px !important; }
+
+        /* footer (matches homepage) */
+        .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); margin-top: 56px; }
+        .hx-footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); }
+        .hx-footer .cols { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 32px; padding: 52px 0 34px; }
+        .hx-footer .brand-col img { height: 34px; margin-bottom: 14px; }
+        .hx-footer .brand-col p { color: #8f96bd; font-size: .9rem; line-height: 1.65; max-width: 290px; }
+        .hx-footer h5 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: #7b82ad; margin: 0 0 16px; font-weight: 800; }
+        .hx-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+        .hx-footer a { color: #c6cbe8; text-decoration: none; font-size: .92rem; }
+        .hx-footer a:hover { color: #d9c9ff; }
+        .hx-footer .foot-bottom { border-top: 1px solid rgba(255, 255, 255, .09); padding: 22px 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #7b82ad; font-size: .85rem; }
+        @media (max-width: 860px) { .hx-footer .cols { grid-template-columns: 1fr 1fr; } }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-in">
+            <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
+            <div class="nav-links">
+                <a href="/">Home</a>
+                <div class="products-nav" id="productsNav">
+                    <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
+                        aria-expanded="false" aria-controls="productsMenu">
+                        Products
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd"
+                                d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                                clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="products-menu" id="productsMenu">
+                        <div class="pm-label">Student visas</div>
+                        <a href="/us-f1-visa"><span class="pm-flag">🇺🇸</span>United States<span>F-1 · J-1 · M-1 student
+                                visas, DS-160, I-20 &amp; interview prep.</span></a>
+                        <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier
+                                4) — CAS, financial proof &amp; interview.</span></a>
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit &amp; SDS
+                                — LOA, proof of funds &amp; biometrics.</span></a>
+                        <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 —
+                                CoE, OSHC &amp; Genuine Student.</span></a>
+                    </div>
+                </div>
+                <a href="/pricing">Pricing</a>
+                <a href="/for-enterprise">Enterprise</a>
+                <a href="/login">Login</a>
+                <a href="/register" class="nav-cta">Get started</a>
+            </div>
+        </div>
+    </nav>
+
+    <article class="post">
+        <span class="post-eyebrow">Guide · US F-1 Visa</span>
+        <h1>How to use Rilono AI for your US student visa (F-1): a smart, efficient guide</h1>
+        <p class="standfirst">The F-1 journey has a lot of moving parts — admission, the I-20, the DS-160, the SEVIS fee, financial proof and a nerve-wracking consular interview. Rilono AI turns that scramble into a guided, checked, stage-by-stage process. Here's how to use it efficiently so nothing slips before your interview.</p>
+        <div class="post-meta">
+            <span>The Rilono Team</span>
+            <span>·</span>
+            <span>Updated July 2026</span>
+            <span>·</span>
+            <span>9 min read</span>
+        </div>
+
+        <div class="toc">
+            <h4>What's inside</h4>
+            <ol>
+                <li>Set up your account and profile</li>
+                <li>Upload documents into your encrypted vault</li>
+                <li>Follow the 7-stage F-1 journey</li>
+                <li>Chat with Rilono AI (mismatch-first)</li>
+                <li>Prepare for the visa interview</li>
+                <li>Fill the DS-160 with Rilono Copilot</li>
+                <li>Power features on the Visa Success Pass</li>
+                <li>Seven habits to get the most out of Rilono</li>
+            </ol>
+        </div>
+
+        <h2>What Rilono AI does for F-1 students</h2>
+        <p>Rilono AI isn't a generic chatbot. It's grounded in <strong>your</strong> data — your profile, your uploaded documents, and exactly where you are in the F-1 process — so its guidance is specific to you. Its core job is <strong>mismatch-first review</strong>: before it suggests your next step, it cross-checks your profile and documents for contradictions (a name spelled differently on your passport and I-20, a funding gap, a missing page) and flags those first. That's the difference between "here's some general advice" and "your DS-160 surname doesn't match your passport — fix that before you submit."</p>
+        <p>New to Rilono? Start with the <a href="/us-f1-visa">US F-1 product page</a>, then <a href="/register">create a free account</a>. This guide assumes you're aiming for a US F-1 student visa.</p>
+
+        <h2>Step 1 — Set up your account and profile</h2>
+        <h3>Choose United States and complete onboarding</h3>
+        <p>When you sign up, pick <strong>United States</strong> as your destination and <strong>F-1</strong> as your visa type. This is what makes every stage, checklist and AI answer F-1-specific rather than generic.</p>
+        <p>Add your intake semester and year too — Rilono uses them to give you timeline-aware guidance (when to book your interview, when to pay the SEVIS fee).</p>
+        <div class="callout note">
+            <p><strong>Why this matters:</strong> the more complete your profile — full legal name, university, home country, current situation — the sharper Rilono AI's personalization. A half-filled profile gets you half-personalized answers.</p>
+        </div>
+
+        <h2>Step 2 — Upload your documents into the encrypted vault</h2>
+        <p>Your dashboard builds an exact F-1 document checklist. Upload each item and Rilono AI extracts, reads and validates it — flagging missing pages, wrong dates, and inconsistencies. The typical F-1 set:</p>
+        <table class="country-table">
+            <tr><th>Stage</th><th>Documents Rilono tracks</th></tr>
+            <tr><td>Profile &amp; tests</td><td>Passport, academic transcripts, standardized test scores (TOEFL / IELTS / Duolingo, and GRE/GMAT if relevant), SOP &amp; LORs, resume/CV.</td></tr>
+            <tr><td>Admission &amp; funds</td><td>University admission/offer letter, bank statements, bank balance certificate, loan sanction/approval letter, affidavit of support and sponsor income proof.</td></tr>
+            <tr><td>I-20 &amp; DS-160</td><td>Signed Form I-20 (and previous I-20s), DS-160 confirmation and full application, 2×2 photograph, travel history.</td></tr>
+            <tr><td>Fees &amp; interview</td><td>SEVIS I-901 fee receipt, MRV visa-fee receipt, visa appointment letter, and after approval, your stamped F-1 visa.</td></tr>
+            <tr><td>Pre-departure</td><td>Immunization / vaccination records and remaining arrival documents.</td></tr>
+        </table>
+        <div class="callout safe">
+            <p><strong>Your documents stay private.</strong> Rilono offers an end-to-end encrypted vault: your passport and financials are encrypted on your device with a passphrase only you hold. Even Rilono stores only ciphertext.</p>
+        </div>
+
+        <h2>Step 3 — Follow the 7-stage F-1 journey</h2>
+        <p>Rilono tracks your visa process as seven stages and always shows your next best action. Uploading and validating the right documents advances you automatically.</p>
+        <table class="country-table">
+            <tr><th>Stage</th><th>What it means &amp; what's next</th></tr>
+            <tr><td>1 · Getting Started</td><td>Build your profile with core academic and test documents.</td></tr>
+            <tr><td>2 · Admission Received</td><td>Admission confirmed — upload your admission proof and a financial-proof document.</td></tr>
+            <tr><td>3 · I-20 Received</td><td>Upload and validate your signed Form I-20, then start your DS-160.</td></tr>
+            <tr><td>4 · DS-160 Filed</td><td>Upload your full DS-160 and 2×2 photo; next, pay your SEVIS I-901 and visa fees.</td></tr>
+            <tr><td>5 · Fees Paid</td><td>SEVIS payment done — book your interview slot and gather interview documents.</td></tr>
+            <tr><td>6 · Visa Interview</td><td>Prepare your interview packet and run confidence prep and mock interviews.</td></tr>
+            <tr><td>7 · Ready to Fly!</td><td>Visa approved — finish pre-departure documents and travel readiness.</td></tr>
+        </table>
+
+        <h2>Step 4 — Chat with Rilono AI the right way</h2>
+        <p>Rilono AI already has your profile, documents and current stage in context — you don't need to re-explain your situation. Because it reviews for mismatches first, the most valuable way to use it is to ask it to <em>check</em>, not just to <em>tell</em>. Prompts that work well:</p>
+        <div class="prompt-box">
+            <p>"Cross-check my passport, I-20 and DS-160 for any name, date or number mismatches before my interview."</p>
+            <p>"Based on my documents, what is my single next step and what am I still missing?"</p>
+            <p>"Is my financial proof strong enough for my I-20 amount? What would a visa officer question?"</p>
+            <p>"Review my SOP for consistency with my study plan and finances."</p>
+        </div>
+        <p>Ask one focused question at a time, and act on the flagged mismatches before asking "what's next" — fixing inconsistencies early is exactly what prevents a 214(b) surprise at the window.</p>
+
+        <h2>Step 5 — Prepare for the visa interview</h2>
+        <p>The consular interview is short and high-stakes. Use Rilono's <strong>interview-prep sessions</strong> to rehearse real F-1 questions — study plans, finances, ties to home, post-study intent — and <strong>AI mock interviews</strong> to practice under realistic pressure and get scored, specific feedback. On the Visa Success Pass you also get full <strong>AI voice mock interviews</strong> that feel closer to the real thing.</p>
+        <div class="callout note">
+            <p><strong>Efficient loop:</strong> run a mock, read the feedback, fix your weakest two answers, run another. Two or three focused rounds beat re-reading a list of questions ten times.</p>
+        </div>
+
+        <h2>Step 6 — Fill the DS-160 with Rilono Copilot</h2>
+        <p>When you sit down to actually fill the DS-160 on the government site, install <a href="https://chromewebstore.google.com/detail/rilono-copilot/ggfiafmfibondlacgdigbeigccnecplh">Rilono Copilot</a> — a Chrome side panel that reads the page you're on and tells you, field by field, what to enter, checked against your Rilono profile and documents. It's 100% read-only: it never types or submits for you.</p>
+        <p>New to the extension? Read the full walkthrough: <a href="/blog/how-to-use-rilono-ai-copilot">How to use Rilono AI Copilot</a>.</p>
+
+        <h2>Step 7 — Power features on the Visa Success Pass</h2>
+        <p>Every account starts free with room to try each tool — AI messages, document uploads, interview-prep and mock interviews. The <a href="/pricing">Visa Success Pass</a> is a one-time, 30-day unlock (no subscription) that opens the tools you lean on hardest in the final push:</p>
+        <ul>
+            <li><strong>Unlimited Rilono AI messages and document audits</strong> — check everything, as many times as you need.</li>
+            <li><strong>Document Red-Flag scan (full reveal)</strong> — a deep audit that surfaces every inconsistency, not just the first one.</li>
+            <li><strong>DS-160 auto-fill</strong> — maps your saved profile into DS-160 fields so you fill the form faster and more consistently.</li>
+            <li><strong>AI voice mock interviews</strong> — realistic spoken practice with feedback.</li>
+            <li><strong>Unlimited Rilono Copilot</strong> usage in the Chrome extension.</li>
+        </ul>
+
+        <h2>Seven habits that make Rilono efficient</h2>
+        <ol>
+            <li><strong>Complete your profile first.</strong> Personalization is only as good as the data behind it.</li>
+            <li><strong>Upload early, not the night before.</strong> The AI can only catch a mismatch it can see — give it your documents while there's still time to fix things.</li>
+            <li><strong>Fix flags before asking "what's next."</strong> Resolve contradictions the moment Rilono surfaces them.</li>
+            <li><strong>Keep names, dates and numbers identical</strong> across passport, I-20 and DS-160 — the single most common cause of trouble.</li>
+            <li><strong>Run a Red-Flag scan before you submit</strong> the DS-160 and again before the interview.</li>
+            <li><strong>Practice out loud.</strong> A voice mock interview exposes gaps that reading never will.</li>
+            <li><strong>Let the journey tracker drive.</strong> Trust the "next best action" instead of guessing the order of steps.</li>
+        </ol>
+
+        <h2>Frequently asked questions</h2>
+        <div class="faq">
+            <details>
+                <summary>Does Rilono give legal or immigration advice?<span class="chev">+</span></summary>
+                <p class="ans">No. Rilono provides document-organization and AI guidance tools, not legal or immigration advice. Visa rules change often — always confirm requirements with the official US government source.</p>
+            </details>
+            <details>
+                <summary>Do I need to pay to try Rilono AI?<span class="chev">+</span></summary>
+                <p class="ans">No — create a free account and you get a starting allowance of AI messages, document uploads, interview-prep and mock interviews. The <a href="/pricing">Visa Success Pass</a> unlocks unlimited usage and the premium tools when you're in the thick of it.</p>
+            </details>
+            <details>
+                <summary>Will Rilono AI fill or submit my DS-160 for me?<span class="chev">+</span></summary>
+                <p class="ans">No. Rilono Copilot is read-only — it guides you field by field but never types or submits. DS-160 auto-fill maps your profile data so you can enter it faster and more consistently, but you stay in control of every field.</p>
+            </details>
+            <details>
+                <summary>How does Rilono keep my passport and financial documents private?<span class="chev">+</span></summary>
+                <p class="ans">With an end-to-end encrypted vault: documents are encrypted on your device with a passphrase only you hold, and Rilono stores only ciphertext. You choose what to share into a given AI chat.</p>
+            </details>
+        </div>
+
+        <div class="cta-band">
+            <h2>Walk into your F-1 interview ready</h2>
+            <p>Organize every document, catch mismatches before the consulate does, and practice until you're confident — with Rilono AI at every stage.</p>
+            <a class="btn btn-primary" href="/register">Create your free account</a>
+            <a class="btn btn-ghost" href="/us-f1-visa">Explore the F-1 product</a>
+            <p class="cta-fineprint">Free to start · Visa Success Pass unlocks unlimited AI, Red-Flag scans, DS-160 auto-fill &amp; voice mock interviews</p>
+        </div>
+    </article>
+
+    <footer class="hx-footer">
+        <div class="wrap">
+            <div class="cols">
+                <div class="brand-col">
+                    <img src="/static/logo.png" alt="Rilono">
+                    <p>The AI-powered platform for student visas to the US, UK, Canada &amp; Australia — helping students and consultancies prepare confident, complete applications.</p>
+                </div>
+                <div>
+                    <h5>Product</h5>
+                    <ul>
+                        <li><a href="/us-f1-visa">US F-1 Visa</a></li>
+                        <li><a href="/uk-student-visa">UK Student Visa</a></li>
+                        <li><a href="/canada-study-permit">Canada Study Permit</a></li>
+                        <li><a href="/australia-student-visa">Australia Subclass 500</a></li>
+                        <li><a href="/pricing">Pricing</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h5>Legal</h5>
+                    <ul>
+                        <li><a href="/privacy">Privacy Policy</a></li>
+                        <li><a href="/terms">Terms of Service</a></li>
+                        <li><a href="/refund-policy">Refund Policy</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="foot-bottom">
+                <span>© <span id="yr"></span> Rilono. All rights reserved.</span>
+                <span>Made for international students 🌍</span>
+            </div>
+        </div>
+    </footer>
+    <script>
+        document.getElementById("yr").textContent = new Date().getFullYear();
+
+        // Navbar "Products" dropdown — hover opens on desktop (CSS); click/tap toggle + close.
+        (function () {
+            const pNav = document.getElementById("productsNav");
+            const pTrig = document.getElementById("productsNavTrigger");
+            const pMenu = document.getElementById("productsMenu");
+            if (pNav && pTrig && pMenu) {
+                const setOpen = (open) => { pNav.classList.toggle("is-open", open); pTrig.setAttribute("aria-expanded", open ? "true" : "false"); };
+                pTrig.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); setOpen(!pNav.classList.contains("is-open")); });
+                pMenu.addEventListener("click", (e) => { if (e.target.closest("a")) setOpen(false); });
+                document.addEventListener("click", (e) => { if (!pNav.contains(e.target)) setOpen(false); });
+                document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
+            }
+        })();
+    </script>
+</body>
+</html>

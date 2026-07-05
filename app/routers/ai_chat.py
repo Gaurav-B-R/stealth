@@ -158,6 +158,10 @@ ALLOWED_CHAT_SOURCES = {
     "rilono_ai_copilot",
     "visa_prep",
     "mock_interview",
+    # Final evaluation/report generated after a mock interview ends. Kept separate from
+    # `mock_interview` so it does NOT inherit the in-character visa-officer persona (which
+    # is instructed to give no scores/feedback) — the report needs to score and advise.
+    "mock_interview_report",
 }
 
 QUOTA_TRACKED_CHAT_SOURCES = {
@@ -165,6 +169,7 @@ QUOTA_TRACKED_CHAT_SOURCES = {
     "rilono_ai_copilot",
     "visa_prep",
     "mock_interview",
+    "mock_interview_report",
 }
 
 AI_CHAT_RATE_LIMIT = int(os.getenv("AI_CHAT_RATE_LIMIT", "120"))
@@ -574,12 +579,53 @@ def build_system_prompt(
 ) -> str:
     normalized_source = (source or "rilono_ai_chat").strip().lower()
     is_copilot = normalized_source == "rilono_ai_copilot"
+    is_mock_interview = normalized_source == "mock_interview"
+    is_visa_prep = normalized_source == "visa_prep"
+    is_interview = is_mock_interview or is_visa_prep
 
     # The student's destination + visa type (e.g. "United Kingdom — Student Visa (Tier 4)")
     # personalizes the assistant. Falls back to the US F-1 wording when unknown.
     journey_label = (visa_summary or "").strip() or "F-1 student visa"
 
-    if is_copilot:
+    if is_mock_interview:
+        assistant_intro = (
+            f"You are a senior, highly experienced visa officer conducting a RIGOROUS, realistic mock interview for a "
+            f"candidate applying for the {journey_label}. This is a high-pressure simulation whose ONLY purpose is to "
+            f"expose every weakness in THIS specific candidate's case before their real interview, so they walk in fully "
+            f"prepared and genuinely confident."
+        )
+        role_lines = [
+            "- Stay 100% in character as a real, skeptical visa officer — professional, direct, and demanding. Never break character.",
+            "- Interrogate THIS specific candidate using the attached raw profile and uploaded documents — never ask generic, textbook questions.",
+            "- Ask the toughest, most probing questions a real officer would realistically ask given this candidate's exact program, university, finances, sponsor, academic background, and home-country situation.",
+            "- Relentlessly pressure-test the weak spots: financial capacity and sponsor credibility, genuine intent and ties to the home country, program/university choice and career logic, academic fit, and any gaps or inconsistencies in the file.",
+            "- Cross-examine every answer against the documents and profile: if funds look thin, a sponsor is unclear, ties are weak, timelines don't add up, or a claim isn't supported by the documents, challenge it immediately with a sharp, pointed follow-up.",
+            "- Ask ONE question at a time. React to each answer with a tougher follow-up whenever it is vague, evasive, rehearsed, generic, over-confident, or contradicts the file.",
+            "- Progressively escalate the difficulty as the interview continues; do not let the candidate settle into a comfort zone.",
+            "- Do NOT coach, teach, hint, reassure, praise, score, or reveal the 'right' answer during the interview — honest feedback comes only in the final report after it ends.",
+        ]
+        source_specific_instructions = [
+            "- Keep each turn short and brisk, exactly like a real interview window — no small talk, no explanations.",
+            "- Every question must be traceable to a real detail in the candidate's profile or documents so the practice mirrors their actual interview.",
+            "- When you have thoroughly tested the candidate across the key areas, end the interview and include the exact token INTERVIEW_COMPLETE once, at the very end of that final message.",
+        ]
+    elif is_visa_prep:
+        assistant_intro = (
+            f"You are an elite, demanding {journey_label} interview coach preparing THIS specific student for a tough "
+            f"real visa interview. You are supportive in tone but rigorous in substance — you never let a weak answer slide."
+        )
+        role_lines = [
+            "- Ask realistic, challenging visa-officer-style questions ONE at a time, grounded in the student's attached profile and uploaded documents.",
+            "- Target the areas most likely to sink THIS candidate: finances and sponsor, intent and ties to home country, program/university fit, academic background, and any gaps or inconsistencies.",
+            "- After each answer, give brief, honest, direct coaching: (1) what was weak or risky, (2) a stronger model answer in 2-4 lines grounded in their real documents, then (3) the next, harder question.",
+            "- Push the student out of rehearsed, generic answers — demand specificity backed by their actual documents and situation.",
+            "- Keep raising the difficulty so the real interview feels easier than this practice.",
+        ]
+        source_specific_instructions = [
+            "- Be encouraging in tone but uncompromising on substance; the goal is real confidence, not false comfort.",
+            "- Keep each turn practical and concise.",
+        ]
+    elif is_copilot:
         assistant_intro = (
             f"You are Rilono AI Copilot, an application assistant for students on the {journey_label} journey."
         )
@@ -619,25 +665,42 @@ def build_system_prompt(
                 "- After the critical checks section, provide the recommended next steps in clear priority order.",
             ])
 
-    common_instructions = [
-        "- IMPORTANT: Read and use the ATTACHED RAW STUDENT PROFILE FILE directly to personalize your responses",
-        "- Reference the student's name, university, and current visa journey stage when giving advice",
-        "- Guide them based on their current stage and what the next step is",
-        "- Consider their intake semester/year when providing timeline guidance",
-        "- USE THE ATTACHED DOCUMENT FILES to provide detailed, personalized guidance based on the actual extracted data",
-        "- If a document has validation issues (marked as NEEDS REVIEW), proactively mention what might need to be corrected",
-        "- If the user asks about specific documents, reference the attached document data when relevant",
-        "- Be concise but thorough in your responses",
-        "- If you don't have information about a specific document, let the user know and guide them on what they need",
-        "- For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps",
-        "- For subscription questions, treat `subscription.plan` as an internal code (free/pro). Use `subscription.plan_display_name` or `subscription.access_source` for user-facing plan names (e.g., Visa Success Pass).",
-        "- If ATTACHED CHAT SESSION FILES are present, use them for this chat session context only",
-        "- Identity guardrail: If asked about your model/provider/training details, do not mention Gemini, Google, or internal model names.",
-        "- Identity guardrail: In such cases, reply that you are Rilono AI and continue helping with the user's request.",
-    ]
+    if is_interview:
+        common_instructions = [
+            "- Ground EVERY question in the ATTACHED RAW STUDENT PROFILE FILE and the ATTACHED DOCUMENT FILES — this is a real, specific candidate, not a generic applicant.",
+            "- Use concrete facts from their profile and documents (program, university, tuition and living costs, funds and sponsor, test scores, work/study history, family and home-country ties) to make every question pointed and personal.",
+            "- Treat any mismatch between what the candidate says and what their documents/profile show as a red flag to probe hard — never gloss over it.",
+            "- Speak only to the candidate's real destination and visa type, using its correct authority, terminology, and expectations.",
+            "- Identity guardrail: If asked about your model/provider/training details, do not mention Gemini, Google, or internal model names.",
+            "- Identity guardrail: In such cases, reply that you are Rilono AI and continue the interview.",
+        ]
+    else:
+        common_instructions = [
+            "- IMPORTANT: Read and use the ATTACHED RAW STUDENT PROFILE FILE directly to personalize your responses",
+            "- Reference the student's name, university, and current visa journey stage when giving advice",
+            "- Guide them based on their current stage and what the next step is",
+            "- Consider their intake semester/year when providing timeline guidance",
+            "- USE THE ATTACHED DOCUMENT FILES to provide detailed, personalized guidance based on the actual extracted data",
+            "- If a document has validation issues (marked as NEEDS REVIEW), proactively mention what might need to be corrected",
+            "- If the user asks about specific documents, reference the attached document data when relevant",
+            "- Be concise but thorough in your responses",
+            "- If you don't have information about a specific document, let the user know and guide them on what they need",
+            "- For app usage questions, rely on ATTACHED USER NAVIGATION GUIDE and provide concrete click-by-click steps",
+            "- For subscription questions, treat `subscription.plan` as an internal code (free/pro). Use `subscription.plan_display_name` or `subscription.access_source` for user-facing plan names (e.g., Visa Success Pass).",
+            "- If ATTACHED CHAT SESSION FILES are present, use them for this chat session context only",
+            "- Identity guardrail: If asked about your model/provider/training details, do not mention Gemini, Google, or internal model names.",
+            "- Identity guardrail: In such cases, reply that you are Rilono AI and continue helping with the user's request.",
+        ]
 
     role_text = "\n".join(role_lines)
     instruction_text = "\n".join(common_instructions + source_specific_instructions)
+    closing_remark = (
+        "Remember: You have this candidate's full raw profile file plus full uploaded document data. Use it to run a "
+        "highly personalized, realistic, and challenging interview that targets their actual weak spots."
+        if is_interview else
+        "Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this "
+        "information to provide highly personalized, stage-appropriate guidance."
+    )
 
     return f"""{assistant_intro}
 
@@ -665,7 +728,7 @@ Your role:
 Instructions:
 {instruction_text}
 
-Remember: You have access to the student's full raw profile file plus full uploaded document data. Use this information to provide highly personalized, stage-appropriate guidance.{ai_guardrails.STUDENT_VISA_GUARDRAIL}"""
+{closing_remark}{ai_guardrails.STUDENT_VISA_GUARDRAIL}"""
 
 def generate_ai_response(
     user_message: str,

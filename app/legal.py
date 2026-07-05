@@ -8,8 +8,8 @@ value so we can prove exactly which version of the documents a user agreed to, a
 so we can later detect users who consented to an older version and re-prompt them.
 """
 
-# Matches the Privacy Policy / Terms "Last Updated" date shown to users.
-LEGAL_TERMS_PRIVACY_VERSION = "2026-06-20"
+# Matches the most recent Privacy Policy / Terms "Last Updated" date shown to users.
+LEGAL_TERMS_PRIVACY_VERSION = "2026-07-05"
 
 # Version of the enterprise Data Processing Agreement (DPA) accepted by organizations
 # that handle their own clients' personal data through Rilono Enterprise.

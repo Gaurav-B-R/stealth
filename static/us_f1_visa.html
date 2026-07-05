@@ -2686,6 +2686,8 @@
                         <div class="overview-layout">
                             <div class="overview-main">
                                 <div class="dashboard-grid overview-main-grid">
+                                    <!-- Visa-decision outcome capture (shown only when eligible; closes the journey loop) -->
+                                    <div id="visaDecisionPromptCard" style="grid-column: 1 / -1; display: none;"></div>
                                     <!-- F1 Visa Journey Tracker Widget -->
                                     <div class="dashboard-widget" style="grid-column: 1 / -1;">
                                         <div class="widget-header">
@@ -3194,10 +3196,20 @@
                                     <div class="danger-zone"
                                         style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
                                         <h4 style="color: var(--danger-color); margin-bottom: 0.5rem; font-size: 1rem;">
-                                            Danger Zone</h4>
+                                            Delete account</h4>
+                                        <p style="color: var(--text-secondary); font-size: 0.85rem; line-height: 1.6; margin: 0 0 0.85rem;">
+                                            Your privacy is yours. Deleting your account <strong>permanently erases
+                                            everything tied to you</strong> — your profile, every uploaded document, your
+                                            AI chats and your journey progress — from our systems and from our
+                                            <strong>encrypted cloud storage</strong>. Nothing is retained and it cannot be
+                                            undone. For your security we'll email a one-time code to confirm it's really
+                                            you. (We keep only de-identified payment records the law requires, with your
+                                            personal details removed — see our <a href="/privacy" target="_blank"
+                                                rel="noopener" style="color: var(--primary-color);">Privacy Policy</a>.)
+                                        </p>
                                         <button type="button" onclick="handleDeleteAccount()" class="btn"
                                             style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete
-                                            Account</button>
+                                            my account &amp; all my data</button>
                                     </div>
                                 </div>
                             </div>
@@ -4607,7 +4619,20 @@
                     <p>AI outputs may be incomplete or incorrect. You should consult qualified professionals for legal
                         or immigration guidance.</p>
 
-                    <h3>7.3 Data Handling for AI Responses</h3>
+                    <h3>7.3 Regulated Immigration Advice</h3>
+                    <p>Rilono is a self-service software platform for organizing documents and preparing applications. It
+                        is not a law firm or a registered or licensed immigration adviser, and it does not provide
+                        immigration, migration, or legal advice or representation. In particular, Rilono is not regulated
+                        by, and does not act as, an immigration adviser under the regimes governing paid immigration
+                        assistance in the countries we support — including the College of Immigration and Citizenship
+                        Consultants (CICC) in Canada, the Office of the Migration Agents Registration Authority
+                        (OMARA/MARA) in Australia, and the Immigration Advice Authority (IAA, formerly OISC) in the United
+                        Kingdom. For advice on your specific circumstances, you should consult a lawyer or a duly
+                        registered/licensed immigration or migration professional in the relevant country. Where you use
+                        Rilono through a consultancy or agency, that organization — not Rilono — is responsible for any
+                        advice it gives you and for holding any licence its jurisdiction requires.</p>
+
+                    <h3>7.4 Data Handling for AI Responses</h3>
                     <p>To provide personalized results, Rilono may process your basic profile data and document-related
                         data with third-party AI services (including Gemini AI) solely for generating responses tailored
                         to your case. Uploaded original files are stored with encryption controls. Rilono does not use

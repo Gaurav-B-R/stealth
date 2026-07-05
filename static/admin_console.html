@@ -119,6 +119,26 @@
                         </div>
                     </section>
 
+                    <section id="adminInsightsCard" class="finance-chart-card" style="margin-bottom:16px;">
+                        <div class="finance-card-header">
+                            <div>
+                                <h3>📊 Activation funnel &amp; approval rate</h3>
+                                <p>Where students drop off on the way to the Pass, and the visa-decision approval rate — segmented by red-flag-scan usage.</p>
+                            </div>
+                            <button id="adminInsightsRefreshBtn" type="button" class="ghost-btn small-btn">Refresh</button>
+                        </div>
+                        <div class="insights-grid">
+                            <div class="insights-col">
+                                <div class="insights-col-title">Activation funnel</div>
+                                <div id="adminFunnelBody"><div class="table-empty">Loading…</div></div>
+                            </div>
+                            <div class="insights-col">
+                                <div class="insights-col-title">Visa-decision approval rate</div>
+                                <div id="adminOutcomesBody"><div class="table-empty">Loading…</div></div>
+                            </div>
+                        </div>
+                    </section>
+
                     <form id="adminUsersFilterForm" class="filters-row">
                         <input type="text" id="adminUsersSearchInput" placeholder="Search email, username, name, university">
                         <select id="adminUsersPlanFilter">

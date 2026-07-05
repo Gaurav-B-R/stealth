@@ -26,7 +26,7 @@ const RILONO_AI_PUBLIC_ERROR_MESSAGE = 'Sorry, I encountered an issue while resp
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
     privacy: 'June 20, 2026',
-    terms: 'June 20, 2026',
+    terms: 'July 5, 2026',
     refund: 'June 20, 2026',
     delivery: 'February 12, 2026',
     dpa: 'June 20, 2026'
@@ -639,14 +639,15 @@ function currentInterviewContext() {
 
 function visaPrepInterviewInstruction() {
     const ctx = currentInterviewContext();
-    return `You are ${ctx.coach} for a student.
+    return `You are ${ctx.coach} for a student. Be supportive but rigorous — prepare them for a tough real interview.
 Rules:
-- Ask one question at a time.
+- Ask challenging, realistic visa-officer-style questions one at a time, grounded in the student's attached profile and uploaded documents.
 - After every student answer, provide short coaching with this exact structure:
-  1) Feedback: what was strong/weak
-  2) Improve: a better sample answer (2-4 lines)
-  3) Next Question: ask the next visa-officer-style question
+  1) Feedback: what was strong/weak (be honest and direct)
+  2) Improve: a stronger sample answer (2-4 lines), specific to their real documents and situation
+  3) Next Question: ask the next, harder visa-officer-style question
 - Focus on clarity, confidence, ${ctx.focus}.
+- Push the student out of rehearsed, generic answers; demand specificity backed by their real documents.
 - Keep each turn concise and practical.
 - If asked about your AI model/provider/training, do not mention Gemini, Google, or internal model names.
 - In those cases, say you are Rilono AI and continue the prep flow.`;
@@ -654,14 +655,16 @@ Rules:
 
 function visaMockInterviewInstruction() {
     const ctx = currentInterviewContext();
-    return `You are ${ctx.officer}.
+    return `You are ${ctx.officer}. This is a demanding, high-pressure mock interview meant to expose this specific candidate's weak spots before the real one, so they walk in confident.
 Rules:
-- Stay strictly in the visa officer role.
-- Ask one question at a time.
-- Do NOT provide coaching, feedback, scores, or suggestions during the interview.
+- Stay strictly in the visa officer role — skeptical, professional, and tough. Never break character.
+- Use the candidate's attached profile and uploaded documents to ask the hardest, most personalized questions possible — never generic textbook questions.
+- Concentrate your toughest scrutiny on ${ctx.focus}.
+- Ask one question at a time, and cross-examine: if an answer is vague, rehearsed, over-confident, or contradicts their documents/profile, hit back with a sharper follow-up.
+- Progressively escalate the difficulty as the interview goes on.
+- Do NOT provide coaching, feedback, scores, hints, or reassurance during the interview.
 - Keep responses concise and interview-like.
-- If answer is vague, ask a direct follow-up question.
-- When you decide the interview is complete, include the exact token INTERVIEW_COMPLETE in your response once (preferably at the end).
+- When you have thoroughly tested the candidate, include the exact token INTERVIEW_COMPLETE in your response once (at the end).
 - If asked about your AI model/provider/training, do not mention Gemini, Google, or internal model names.
 - In those cases, say you are Rilono AI and continue the interview simulation.`;
 }
@@ -669,14 +672,15 @@ Rules:
 function visaMockReportInstruction() {
     const ctx = currentInterviewContext();
     return `You are evaluating a completed ${ctx.report} mock interview transcript.
+Cross-check the candidate's answers against their attached profile and uploaded documents; reward answers backed by their real evidence and penalize vague, rehearsed, or unsupported ones.
 Generate a concise final report in plain text with these sections:
 1) Approval Probability: X%
 2) Rejection Probability: Y%
 3) Decision Drivers (3-5 bullets)
 4) Strengths (3 bullets)
-5) Risk Areas (3 bullets)
+5) Risk Areas (3 bullets, specific to this candidate's real profile/documents)
 6) Top Improvements Before Real Interview (3 actionable bullets)
-Make probabilities realistic, balanced, and sum to 100%.
+Make probabilities realistic, balanced, honest (do not inflate), and sum to 100%.
 Do not use markdown formatting characters such as **, *, #, -, or backticks.
 If asked about your AI model/provider/training, do not mention Gemini, Google, or internal model names.
 In those cases, say you are Rilono AI and continue with the report task.`;
@@ -3471,6 +3475,7 @@ function showDashboard(skipURLUpdate = false) {
     renderReferralPromotions();
     updateDashHeaderUser();
     if (typeof maybeShowHeardAbout === 'function') maybeShowHeardAbout();
+    if (typeof loadVisaDecisionPrompt === 'function') void loadVisaDecisionPrompt();
 
     // Set default tab to overview if no tab is active
     const activeTab = document.querySelector('.dashboard-tab.active');
@@ -4274,7 +4279,7 @@ async function handleUpgradeToPro(source = '', preferredPricingModel = PRICING_M
     const subscriptionStatus = String(currentSubscription?.status || '').toLowerCase();
     const isJourneyPassActive = String(currentSubscription?.access_source || '').toLowerCase().includes('journey pass');
     if (currentSubscription?.is_pro && isJourneyPassActive && requestedPricingModel === PRICING_MODEL_MONTHLY) {
-        showMessage('Journey Pass members cannot switch to Pro Monthly while Journey Pass is active.', 'error');
+        showMessage('Your Visa Success Pass is already active.', 'error');
         return;
     }
     const activePricingModel = currentSubscription?.is_pro
@@ -4298,7 +4303,7 @@ async function handleUpgradeToPro(source = '', preferredPricingModel = PRICING_M
     if (currentSubscription?.is_pro && !canRenewExistingPro && !canSwitchPaidModel) {
         showMessage(
             isJourneyPassActive
-                ? 'Your Journey Pass is already active.'
+                ? 'Your Visa Success Pass is already active.'
                 : 'Your account already has an active paid plan.',
             'success'
         );
@@ -6541,7 +6546,7 @@ async function finishVoiceMockInterview() {
             body: JSON.stringify({
                 message: reportPrompt,
                 conversation_history: [],
-                source: 'mock_interview'
+                source: 'mock_interview_report'
             })
         });
 
@@ -8825,7 +8830,22 @@ function initializeSearchableDropdowns() {
     const searchInput = documentTypeDropdown.querySelector('.dropdown-search');
     const hiddenInput = documentTypeDropdown.querySelector('input[type="hidden"]');
     const dropdownList = documentTypeDropdown.querySelector('.dropdown-list');
-    const items = Array.from(dropdownList.querySelectorAll('.dropdown-item'));
+
+    const getItems = () => Array.from(dropdownList.querySelectorAll('.dropdown-item[data-value]'));
+
+    function selectItem(item) {
+        if (!item || item.classList.contains('rule-hidden')) return;
+        const value = item.dataset.value || '';
+        if (!value) return;
+
+        searchInput.value = item.textContent.trim();
+        hiddenInput.value = value;
+
+        getItems().forEach(i => i.classList.remove('selected', 'highlighted'));
+        item.classList.add('selected');
+
+        documentTypeDropdown.classList.remove('open');
+    }
 
     // Open dropdown on focus
     searchInput.addEventListener('focus', () => {
@@ -8841,26 +8861,16 @@ function initializeSearchableDropdowns() {
         // Clear selection if user is typing
         if (searchTerm) {
             hiddenInput.value = '';
-            items.forEach(item => item.classList.remove('selected'));
+            getItems().forEach(item => item.classList.remove('selected'));
         }
     });
 
-    // Handle item selection
-    items.forEach(item => {
-        item.addEventListener('click', () => {
-            if (item.classList.contains('rule-hidden')) return;
-            const value = item.dataset.value;
-            const text = item.textContent;
-
-            searchInput.value = text;
-            hiddenInput.value = value;
-
-            // Update selected state
-            items.forEach(i => i.classList.remove('selected'));
-            item.classList.add('selected');
-
-            documentTypeDropdown.classList.remove('open');
-        });
+    // Handle item selection. The document catalog can be re-rendered after login/profile
+    // personalization, so delegate clicks instead of binding only to the initial items.
+    dropdownList.addEventListener('click', (event) => {
+        const item = event.target.closest('.dropdown-item[data-value]');
+        if (!item || !dropdownList.contains(item)) return;
+        selectItem(item);
     });
 
     // Close dropdown on click outside
@@ -8871,16 +8881,14 @@ function initializeSearchableDropdowns() {
             // If no valid selection, clear the input
             if (!hiddenInput.value && searchInput.value) {
                 // Try to find an exact match
-                const matchingItem = Array.from(items).find(
+                const matchingItem = getItems().find(
                     item => (
-                        item.textContent.toLowerCase() === searchInput.value.toLowerCase() &&
+                        item.textContent.trim().toLowerCase() === searchInput.value.trim().toLowerCase() &&
                         !item.classList.contains('rule-hidden')
                     )
                 );
                 if (matchingItem) {
-                    hiddenInput.value = matchingItem.dataset.value;
-                    searchInput.value = matchingItem.textContent;
-                    matchingItem.classList.add('selected');
+                    selectItem(matchingItem);
                 } else {
                     searchInput.value = '';
                 }
@@ -8890,7 +8898,7 @@ function initializeSearchableDropdowns() {
 
     // Handle keyboard navigation
     searchInput.addEventListener('keydown', (e) => {
-        const visibleItems = Array.from(items).filter(item => !item.classList.contains('hidden'));
+        const visibleItems = getItems().filter(item => !item.classList.contains('hidden') && !item.classList.contains('rule-hidden'));
         const currentIndex = visibleItems.findIndex(item => item.classList.contains('highlighted'));
 
         if (e.key === 'ArrowDown') {
@@ -8908,9 +8916,9 @@ function initializeSearchableDropdowns() {
             e.preventDefault();
             const highlightedItem = visibleItems.find(item => item.classList.contains('highlighted'));
             if (highlightedItem) {
-                highlightedItem.click();
+                selectItem(highlightedItem);
             } else if (visibleItems.length === 1) {
-                visibleItems[0].click();
+                selectItem(visibleItems[0]);
             }
         } else if (e.key === 'Escape') {
             documentTypeDropdown.classList.remove('open');
@@ -8919,7 +8927,7 @@ function initializeSearchableDropdowns() {
 
     function filterItems(searchTerm) {
         let hasResults = false;
-        items.forEach(item => {
+        getItems().forEach(item => {
             const text = item.textContent.toLowerCase();
             const matches = text.includes(searchTerm);
             const blockedByRule = item.classList.contains('rule-hidden');
@@ -8944,7 +8952,7 @@ function initializeSearchableDropdowns() {
     }
 
     function highlightItem(visibleItems, index) {
-        items.forEach(item => item.classList.remove('highlighted'));
+        getItems().forEach(item => item.classList.remove('highlighted'));
         if (visibleItems[index]) {
             visibleItems[index].classList.add('highlighted');
             visibleItems[index].scrollIntoView({ block: 'nearest' });
@@ -8956,7 +8964,7 @@ function initializeSearchableDropdowns() {
         searchInput,
         hiddenInput,
         dropdownList,
-        items,
+        getItems,
         filterItems
     };
 }
@@ -9843,6 +9851,71 @@ async function loadReferralSummary() {
             statsEl.textContent = 'Unable to load referral stats right now.';
         }
         renderReferralPromotions();
+    }
+}
+
+/* ===================== Visa-decision outcome capture ===================== */
+function outcomeAuthHeaders(json = false) {
+    const h = {};
+    if (typeof authToken !== 'undefined' && authToken) h['Authorization'] = `Bearer ${authToken}`;
+    if (json) h['Content-Type'] = 'application/json';
+    return h;
+}
+
+async function loadVisaDecisionPrompt() {
+    const card = document.getElementById('visaDecisionPromptCard');
+    if (!card) return;
+    try {
+        const res = await fetch(`${API_BASE}/api/outcomes/status`, { headers: outcomeAuthHeaders(), credentials: 'same-origin' });
+        if (!res.ok) { card.style.display = 'none'; return; }
+        const data = await res.json().catch(() => ({}));
+        if (!data || !data.prompt_eligible) { card.style.display = 'none'; return; }
+        renderVisaDecisionPrompt(card);
+    } catch (e) {
+        card.style.display = 'none';
+    }
+}
+
+function renderVisaDecisionPrompt(card) {
+    card.innerHTML = `
+        <div class="dashboard-widget decision-capture">
+            <div class="widget-content" style="padding:1.25rem 1.5rem;">
+                <div class="decision-capture-row">
+                    <div>
+                        <h3 style="margin:0 0 4px;">🎓 Did you get your visa decision?</h3>
+                        <p style="margin:0;color:#64748b;font-size:.9rem;">Let us know how it went — it helps us improve, and it stays private to your account.</p>
+                    </div>
+                    <div class="decision-capture-btns">
+                        <button type="button" class="decision-btn approve" data-decision="approved">✅ Approved</button>
+                        <button type="button" class="decision-btn refuse" data-decision="refused">❌ Refused</button>
+                        <button type="button" class="decision-btn ghost" data-decision="__snooze">Not yet</button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    card.style.display = 'block';
+    card.querySelectorAll('.decision-btn').forEach((btn) => {
+        btn.addEventListener('click', () => submitVisaDecision(btn.getAttribute('data-decision'), card));
+    });
+}
+
+async function submitVisaDecision(decision, card) {
+    try {
+        if (decision === '__snooze') {
+            await fetch(`${API_BASE}/api/outcomes/snooze`, { method: 'POST', headers: outcomeAuthHeaders(), credentials: 'same-origin' });
+            card.style.display = 'none';
+            return;
+        }
+        const res = await fetch(`${API_BASE}/api/outcomes/visa-decision`, {
+            method: 'POST', headers: outcomeAuthHeaders(true), credentials: 'same-origin',
+            body: JSON.stringify({ decision }),
+        });
+        if (!res.ok) { showMessage('Could not save that — please try again.', 'error'); return; }
+        card.style.display = 'none';
+        if (decision === 'approved') showMessage('Congratulations! 🎉 So glad Rilono was part of your journey.', 'success');
+        else showMessage('Thanks for letting us know. Your next attempt can go better — we’re here to help.', 'success');
+    } catch (e) {
+        showMessage('Could not save that — please try again.', 'error');
     }
 }
 
@@ -11111,7 +11184,7 @@ async function handleDeleteAccount() {
 
     // Step 1: type-to-confirm
     const confirmText = 'DELETE';
-    const userInput = prompt(`This action cannot be undone. All your data including documents and profile will be permanently deleted.\n\nType "${confirmText}" to confirm account deletion:`);
+    const userInput = prompt(`Permanently delete your Rilono account?\n\nThis erases everything tied to your account — your profile, every uploaded document, your AI chats and your journey progress — from our systems, including from our encrypted cloud storage. None of your personal data is kept, and it cannot be undone.\n\nType "${confirmText}" to continue:`);
 
     if (userInput !== confirmText) {
         if (userInput !== null) {
@@ -11156,7 +11229,7 @@ async function handleDeleteAccount() {
         });
 
         if (response.ok || response.status === 204) {
-            showMessage('Your account has been deleted successfully.', 'success');
+            showMessage('Your account and all your data have been permanently erased from our systems. Thank you for using Rilono.', 'success');
             // Clear auth state and logout
             authToken = null;
             persistAuthToken(null);

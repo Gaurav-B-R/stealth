@@ -268,6 +268,11 @@ def _analyze_user(model: Any, prompt: str, user_id: int, model_name: str) -> Dai
     print("=" * 90)
 
     response = model.generate_content(prompt)
+    try:
+        from app import ai_usage
+        ai_usage.record_gemini_usage("daily_ai_notifier", model_name, response, user_id=user_id)
+    except Exception:
+        pass
     response_text = str(getattr(response, "text", "") or "")
 
     print("\n" + "-" * 90)

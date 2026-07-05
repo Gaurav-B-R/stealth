@@ -2015,7 +2015,7 @@ def enterprise_list_clients(
             func.lower(models.EnterpriseClient.email).like(like),
             func.lower(models.EnterpriseClient.phone).like(like),
             func.lower(models.EnterpriseClient.nationality).like(like),
-            func.lower(models.EnterpriseClient.passport_number).like(like),
+            # passport_number is encrypted at rest and therefore not substring-searchable.
             func.lower(models.EnterpriseClient.application_reference).like(like),
             func.lower(models.EnterpriseClient.visa_type).like(like),
             func.lower(models.EnterpriseClient.intake).like(like),
@@ -2097,6 +2097,15 @@ def enterprise_create_client(
     full_name = (payload.full_name or "").strip()
     if len(full_name) < 2:
         raise HTTPException(status_code=400, detail="Client name must be at least 2 characters.")
+
+    # The org is the data controller and must attest the client consented to having
+    # their data processed through Rilono. Enforce it server-side (not just in the UI)
+    # so the DPA proof-of-consent trail can't have gaps.
+    if not payload.client_consent_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Please confirm this client has consented to having their data processed through Rilono before adding them.",
+        )
 
     if payload.assigned_to_user_id and not _is_active_org_member(db, organization.id, payload.assigned_to_user_id):
         raise HTTPException(status_code=400, detail="Assigned team member is not part of this organization.")
@@ -4471,6 +4480,21 @@ def _recent_client_notes(db: Session, client_id: int, limit: int = 6):
     )
 
 
+def _recent_client_documents(db: Session, client_id: int, limit: int = 12):
+    """This client's uploaded documents (newest first) so the mock interview can be
+    grounded in — and cross-examine against — the applicant's real evidence."""
+    return (
+        db.query(models.EnterpriseClientDocument)
+        .filter(models.EnterpriseClientDocument.client_id == int(client_id))
+        .order_by(
+            models.EnterpriseClientDocument.created_at.desc(),
+            models.EnterpriseClientDocument.id.desc(),
+        )
+        .limit(limit)
+        .all()
+    )
+
+
 def _serialize_interview_session(s: models.EnterpriseInterviewSession, include_detail: bool = False) -> dict:
     data = {
         "id": s.id,
@@ -4518,6 +4542,7 @@ def enterprise_interview_chat(
             client=client,
             organization=organization,
             recent_notes=_recent_client_notes(db, client.id),
+            documents=_recent_client_documents(db, client.id),
             history=history,
             message=payload.message or "",
             is_start=is_start,
@@ -4566,6 +4591,7 @@ def enterprise_interview_feedback(
     try:
         feedback = enterprise_interview.generate_interview_feedback(
             client=client, organization=organization, history=history,
+            documents=_recent_client_documents(db, client.id),
         )
     except Exception:
         logger.exception("Mock interview feedback failed (org_id=%s, client_id=%s)", organization.id, client.id)
@@ -5010,6 +5036,7 @@ def public_interview_chat(payload: PublicInterviewChatRequest, request: Request,
     try:
         turn = enterprise_interview.run_interview_turn(
             client=client, organization=org, recent_notes=[],  # never leak staff notes to the client
+            documents=_recent_client_documents(db, client.id),  # the applicant's own documents
             history=history, message=payload.message or "", is_start=bool(payload.start),
         )
     except Exception:
@@ -5039,6 +5066,7 @@ def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: 
     try:
         feedback = enterprise_interview.generate_interview_feedback(
             client=client, organization=org, history=history, officer_decision=officer_decision,
+            documents=_recent_client_documents(db, client.id),  # the applicant's own documents
         )
     except Exception:
         logger.exception("Public interview feedback failed (invite=%s)", invite.id)

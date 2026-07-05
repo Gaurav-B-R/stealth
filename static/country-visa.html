@@ -708,6 +708,13 @@
                     q: "Does my bank statement meet the 28-day rule?",
                     a: "Your balance qualifies, but the funds must sit untouched for 28 full days — your statement shows 24 so far. I'll tell you the exact date it's safe to apply."
                 },
+                scenesTitle: "UK moments waiting for you",
+                scenesLead: "London icons, Oxford lawns, Cambridge halls — study where centuries of ambition still feel alive.",
+                scenes: [
+                    { label: "Westminster at golden hour", place: "London, England", img: "/static/assets/brand/countries/uk.webp" },
+                    { label: "Oxford college lawns", place: "Oxford, England", img: "/static/assets/brand/countries/uk-oxford-campus.webp" },
+                    { label: "King's College Chapel", place: "Cambridge, England", img: "/static/assets/brand/countries/uk-cambridge-kings.webp" }
+                ],
                 copilot: {
                     student: "Priya", url: "visas-immigration.service.gov.uk",
                     kicker: "GOV.UK", kickerClass: "",
@@ -871,7 +878,7 @@
             // Animated scene postcards (only when the country defines them)
             if (Array.isArray(c.scenes) && c.scenes.length) {
                 document.getElementById("scenesSec").style.display = "";
-                document.getElementById("scenesTitle").textContent = `${c.name} moments waiting for you`;
+                document.getElementById("scenesTitle").textContent = c.scenesTitle || `${c.name} moments waiting for you`;
                 document.getElementById("scenesLead").textContent = c.scenesLead || "";
                 document.getElementById("scenesRow").innerHTML = c.scenes.map((s, i) =>
                     `<div class="scene rv" style="--d:${(0.08 * i).toFixed(2)}s">${s.img ? `<div class="ph"><img src="${esc(s.img)}" alt="${esc(s.label)}" loading="lazy" onerror="this.closest('.scene').style.display='none'"></div>` : s.svg}<div class="cap">${esc(s.label)}<small>${esc(s.place)}</small></div></div>`).join("");

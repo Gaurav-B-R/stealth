@@ -4285,6 +4285,20 @@ body.dashboard-active {
     top: 1rem;
 }
 
+#dashboardTab-documents .documents-upload-widget input[type="checkbox"] {
+    width: auto;
+    min-width: 1rem;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+#dashboardTab-documents .documents-upload-widget label span,
+#dashboardTab-documents .documents-upload-widget small {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
 #dashboardTab-documents .documents-list-widget {
     margin-top: 1.5rem;
 }
@@ -15374,3 +15388,15 @@ svg {
 .social-auth-divider { display: flex; align-items: center; text-align: center; margin: 16px 0; color: var(--text-muted); font-size: 0.8rem; }
 .social-auth-divider::before, .social-auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--border-color); }
 .social-auth-divider span { padding: 0 12px; white-space: nowrap; }
+
+/* ===== Visa-decision outcome capture card (dashboard overview) ===== */
+.decision-capture { border: 1px solid rgba(99,102,241,.28) !important; background: linear-gradient(150deg, rgba(99,102,241,.06), rgba(168,85,247,.04)) !important; }
+.decision-capture-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.decision-capture-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.decision-btn { border: 1px solid var(--border-color, #e2e8f0); background: #fff; color: #0f172a; font-weight: 700; font-size: .88rem; padding: 8px 14px; border-radius: 10px; cursor: pointer; transition: transform .08s ease, box-shadow .12s ease; }
+.decision-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(15,23,42,.08); }
+.decision-btn.approve { border-color: rgba(16,185,129,.4); color: #047857; }
+.decision-btn.approve:hover { background: rgba(16,185,129,.08); }
+.decision-btn.refuse { border-color: rgba(239,68,68,.4); color: #b91c1c; }
+.decision-btn.refuse:hover { background: rgba(239,68,68,.07); }
+.decision-btn.ghost { color: #64748b; }

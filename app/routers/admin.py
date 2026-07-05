@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from jose import JWTError, jwt
 from sqlalchemy import bindparam, case, desc, func, inspect, or_, select, text
 from sqlalchemy.orm import Session, aliased
@@ -769,6 +769,43 @@ def growth_conversion_analysis_admin(
         raise HTTPException(status_code=502, detail="The growth analysis could not be completed. Please try again.")
 
 
+@router.get("/growth/funnel")
+def growth_funnel_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+    days: int = 0,
+):
+    """B2C activation funnel: signup -> activated -> ran red-flag scan -> purchased Visa Pass.
+    `days` > 0 windows by signup recency; 0 = all-time. Cheap aggregate queries (no AI)."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.growth.funnel",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app import growth_funnel
+    return growth_funnel.build_activation_funnel(db, days=days or None)
+
+
+@router.get("/growth/outcomes")
+def growth_outcomes_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Visa-decision approval rate from the outcome-capture loop, segmented by red-flag-scan usage.
+    Powers the pricing-power stat ('approved at X% vs. the ~35-48% market baseline')."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.growth.outcomes",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app import growth_funnel
+    return growth_funnel.build_outcome_analytics(db)
+
+
 def _admin_iso(value):
     return value.isoformat() if value else None
 
@@ -871,6 +908,11 @@ def admin_user_detail(
                 "code": getattr(user, "referral_code", None), "referred_by": referred_by,
                 "referrals_made": referrals_made, "reward_granted_at": _admin_iso(getattr(user, "referral_reward_granted_at", None)),
             },
+            "visa_decision": {
+                "decision": getattr(user, "visa_decision", None),
+                "decision_at": _admin_iso(getattr(user, "visa_decision_at", None)),
+                "source": getattr(user, "visa_decision_source", None),
+            },
         },
         "subscription": {
             "plan": (sub.plan if sub else "free"), "status": (sub.status if sub else None),
@@ -920,6 +962,45 @@ def admin_user_conversion_reco(
     if not result.get("found"):
         raise HTTPException(status_code=404, detail="Account not found.")
     return result
+
+
+@router.post("/users/{user_id}/visa-decision")
+def admin_set_visa_decision(
+    user_id: int,
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+    payload: dict = Body(...),
+):
+    """Admin override to record/clear a student's final visa decision from the Manage view.
+    Feeds the same approval-rate analytics as the student's self-report."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.user.decision",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    user = db.query(models.User).filter(models.User.id == int(user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    decision = str(payload.get("decision") or "").strip().lower()
+    valid = ("approved", "refused", "withdrawn", "deferred")
+    if decision in ("", "none", "clear"):
+        user.visa_decision = None
+        user.visa_decision_at = None
+        user.visa_decision_source = None
+    elif decision in valid:
+        user.visa_decision = decision
+        user.visa_decision_at = datetime.utcnow()
+        user.visa_decision_source = "admin"
+    else:
+        raise HTTPException(status_code=422, detail="Invalid decision.")
+    db.commit()
+    return {
+        "decision": user.visa_decision,
+        "decision_at": _admin_iso(user.visa_decision_at),
+        "source": user.visa_decision_source,
+    }
 
 
 @router.get("/enterprise/revenue")
