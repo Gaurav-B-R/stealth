@@ -110,7 +110,9 @@ class User(Base):
     
     documents = relationship("Document", back_populates="uploader", cascade="all, delete-orphan")
     subscription = relationship("Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan")
-    subscription_payments = relationship("SubscriptionPayment", back_populates="user", cascade="all, delete-orphan")
+    # NOT delete-orphan: payment (financial) records must be RETAINED for accounting/tax after
+    # account deletion. delete_account de-links them (nulls user_id) instead of deleting them.
+    subscription_payments = relationship("SubscriptionPayment", back_populates="user", cascade="save-update, merge")
     notifications = relationship("UserNotification", back_populates="user", cascade="all, delete-orphan")
 
 class USUniversity(Base):
@@ -818,7 +820,9 @@ class SubscriptionPayment(Base):
     __tablename__ = "subscription_payments"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # Nullable so a payment (financial record) can be RETAINED and de-identified on account
+    # deletion rather than hard-deleted (financial record-retention vs. right-to-erasure).
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     provider = Column(String, nullable=False, default="razorpay")  # razorpay
     plan = Column(String, nullable=False, default="pro")  # pro
     amount_paise = Column(Integer, nullable=False)

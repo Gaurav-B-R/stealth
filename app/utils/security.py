@@ -21,32 +21,59 @@ unrecoverable by design; that is the inherent trade-off of user-held keys.
 """
 import os
 import base64
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.backends import default_backend
 
-def derive_key_from_password(password: str, salt: bytes) -> bytes:
+# PBKDF2 work factor. New wraps use the OWASP-aligned cost; documents wrapped before it was
+# raised are still readable via the fallback in _unwrap_file_key — so raising this does NOT
+# strand old data (that was the trap flagged in the audit).
+PBKDF2_ITERATIONS = 600_000
+LEGACY_PBKDF2_ITERATIONS = 100_000
+
+
+def derive_key_from_password(password: str, salt: bytes, iterations: int = PBKDF2_ITERATIONS) -> bytes:
     """
-    Derive a "Key-Wrapping Key" from the User's Password using PBKDF2.
-    This key is used to encrypt/decrypt the file encryption keys.
-    
+    Derive a "Key-Wrapping Key" from the user's password using PBKDF2-HMAC-SHA256.
+
+    New wraps use PBKDF2_ITERATIONS; pass LEGACY_PBKDF2_ITERATIONS to derive the key for
+    documents that were wrapped before the cost was raised.
+
     Args:
         password: User's password (plain text, from login session)
-        salt: Salt bytes (should be unique per user, stored in database)
-    
+        salt: Salt bytes (unique per user, stored in the database)
+        iterations: PBKDF2 iteration count (defaults to the current cost)
+
     Returns:
-        bytes: 32-byte key suitable for Fernet encryption
+        bytes: 32-byte urlsafe-base64 key suitable for Fernet
     """
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
-        iterations=100000,
+        iterations=iterations,
         backend=default_backend()
     )
     key = kdf.derive(password.encode('utf-8'))
     return base64.urlsafe_b64encode(key)
+
+
+def _unwrap_file_key(wrapped_file_key: bytes, password: str, salt: bytes) -> bytes:
+    """
+    Unwrap a Fernet-wrapped file key, trying the current then the legacy PBKDF2 cost.
+
+    This lets us raise the KDF cost for new documents while still decrypting ones wrapped at
+    the old 100k cost. Raises InvalidToken if neither works (wrong password / corrupted /
+    orphaned by an earlier reset).
+    """
+    for iterations in (PBKDF2_ITERATIONS, LEGACY_PBKDF2_ITERATIONS):
+        try:
+            kek = derive_key_from_password(password, salt, iterations)
+            return Fernet(kek).decrypt(wrapped_file_key)
+        except InvalidToken:
+            continue
+    raise InvalidToken("Could not unwrap the file key with any known KDF cost.")
 
 def encrypt_file_with_user_password(file_bytes: bytes, user_password: str, user_salt: bytes) -> tuple:
     """
@@ -112,19 +139,9 @@ def decrypt_file_with_user_password(
         ValueError: If password is incorrect or data is corrupted
     """
     try:
-        # Step 1: Derive key from user's password
-        user_key_bytes = derive_key_from_password(user_password, user_salt)
-        f_user = Fernet(user_key_bytes)
-        
-        # Step 2: Decrypt the file key using user's password-derived key
-        file_key = f_user.decrypt(encrypted_file_key)
-        
-        # Step 3: Decrypt the file content using the decrypted file key
-        f_file = Fernet(file_key)
-        decrypted_file_bytes = f_file.decrypt(encrypted_file_data)
-        
-        return decrypted_file_bytes
-        
+        # Unwrap the file key (tries current then legacy PBKDF2 cost), then decrypt the file.
+        file_key = _unwrap_file_key(encrypted_file_key, user_password, user_salt)
+        return Fernet(file_key).decrypt(encrypted_file_data)
     except Exception as e:
         # Wrong password, corrupted data, or other decryption error
         raise ValueError(f"Decryption failed: {str(e)}. This may indicate incorrect password or corrupted data.")
@@ -193,9 +210,8 @@ def rewrap_file_key(
         catch this and skip-and-log rather than overwrite the row with a bad value.
     """
     wrapped = base64.b64decode(encrypted_file_key_b64.encode("utf-8"))
-    old_kek = derive_key_from_password(old_password, user_salt)
-    file_key = Fernet(old_kek).decrypt(wrapped)
-    new_kek = derive_key_from_password(new_password, user_salt)
+    file_key = _unwrap_file_key(wrapped, old_password, user_salt)  # tries current + legacy cost
+    new_kek = derive_key_from_password(new_password, user_salt)     # re-wrap at the current cost
     new_wrapped = Fernet(new_kek).encrypt(file_key)
     return base64.b64encode(new_wrapped).decode("utf-8")
 

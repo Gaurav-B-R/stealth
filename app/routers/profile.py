@@ -525,7 +525,17 @@ def delete_account(
     except Exception:
         logger.exception("delete_account: R2 purge failed for user_id=%s; proceeding with DB delete", current_user.id)
 
-    # Verified — delete the user explicitly; related data is removed by cascade.
+    # Retain payment (financial) records for accounting/tax obligations, but sever the PII link:
+    # null the user_id so the row survives account deletion de-identified rather than being
+    # cascade-deleted. Amounts + Razorpay IDs remain for reconciliation; the user link does not.
+    try:
+        db.query(models.SubscriptionPayment).filter(
+            models.SubscriptionPayment.user_id == current_user.id
+        ).update({models.SubscriptionPayment.user_id: None}, synchronize_session=False)
+    except Exception:
+        logger.exception("delete_account: failed to de-link payment records for user_id=%s", current_user.id)
+
+    # Verified — delete the user explicitly; other related data is removed by cascade.
     db.delete(current_user)
     db.commit()
     return None

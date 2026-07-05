@@ -1,19 +1,27 @@
 import base64
 import hashlib
+import logging
 import os
 
 from cryptography.fernet import Fernet, InvalidToken
 
+logger = logging.getLogger(__name__)
 
 ARTIFACT_PREFIX = b"RILONO_ARTIFACT_ENC_V1:"
-_ARTIFACT_SECRET = (
-    os.getenv("ARTIFACT_ENCRYPTION_KEY", "").strip()
-    or os.getenv("SECRET_KEY", "").strip()
-)
+_DEDICATED_ARTIFACT_KEY = os.getenv("ARTIFACT_ENCRYPTION_KEY", "").strip()
+_ARTIFACT_SECRET = _DEDICATED_ARTIFACT_KEY or os.getenv("SECRET_KEY", "").strip()
 
 if not _ARTIFACT_SECRET:
     raise RuntimeError(
         "ARTIFACT_ENCRYPTION_KEY or SECRET_KEY must be set to encrypt artifact data."
+    )
+
+if not _DEDICATED_ARTIFACT_KEY:
+    # Sharing SECRET_KEY means rotating the JWT secret also invalidates every stored artifact.
+    logger.warning(
+        "ARTIFACT_ENCRYPTION_KEY is not set; falling back to SECRET_KEY for artifact encryption. "
+        "Set a dedicated ARTIFACT_ENCRYPTION_KEY so JWT signing and artifact encryption can be "
+        "rotated independently."
     )
 
 _artifact_key = base64.urlsafe_b64encode(hashlib.sha256(_ARTIFACT_SECRET.encode("utf-8")).digest())

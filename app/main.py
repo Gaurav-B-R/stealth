@@ -18,6 +18,10 @@ from app.services.enterprise_calendar_reminders import (
     start_enterprise_calendar_reminder_scheduler,
     stop_enterprise_calendar_reminder_scheduler,
 )
+from app.services.document_retention import (
+    start_document_retention_scheduler,
+    stop_document_retention_scheduler,
+)
 from app.schema_patch import (
     ensure_ai_optimization_events_table,
     ensure_company_finance_entries_table,
@@ -53,6 +57,7 @@ from app.schema_patch import (
     ensure_country_change_otp_columns,
     ensure_university_country_column,
     ensure_e2e_encryption_columns,
+    ensure_subscription_payments_user_id_nullable,
 )
 from app.document_catalog import ensure_default_document_type_catalog
 from app.au_universities import seed_au_universities
@@ -70,10 +75,20 @@ APP_NAME = os.getenv("APP_NAME", "Rilono").strip() or "Rilono"
 APP_VERSION = os.getenv("APP_VERSION", "1.3.2").strip() or "1.3.2"
 ENTERPRISE_ROOT_DOMAIN = (os.getenv("ENTERPRISE_ROOT_DOMAIN", "rilono.com").strip().lower() or "rilono.com").lstrip(".")
 
+# Interactive API docs expose the full endpoint surface; keep them OFF in production.
+# Enabled only when ENVIRONMENT=development. Can be force-enabled with ENABLE_API_DOCS=1.
+_docs_enabled = (
+    os.getenv("ENVIRONMENT", "production").strip().lower() == "development"
+    or str(os.getenv("ENABLE_API_DOCS", "")).strip().lower() in {"1", "true", "yes", "on"}
+)
+
 app = FastAPI(
     title=APP_NAME,
     description="AI-powered F1 student visa documentation assistant",
-    version=APP_VERSION
+    version=APP_VERSION,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 DEFAULT_CORS_ORIGINS = [
@@ -215,6 +230,7 @@ def startup_backfill_subscriptions():
     ensure_country_change_otp_columns()
     ensure_university_country_column()
     ensure_e2e_encryption_columns()
+    ensure_subscription_payments_user_id_nullable()
     ensure_referral_columns()
     ensure_user_acquisition_columns()
     ensure_subscription_usage_columns()
@@ -259,6 +275,7 @@ def startup_backfill_subscriptions():
     start_daily_ai_notification_scheduler()
     start_f1_news_ingestion_scheduler()
     start_enterprise_calendar_reminder_scheduler()
+    start_document_retention_scheduler()
     from app import fx
     fx.prime()  # warm the live USD→INR rate in the background
 
@@ -268,6 +285,7 @@ def shutdown_background_services():
     stop_daily_ai_notification_scheduler()
     stop_f1_news_ingestion_scheduler()
     stop_enterprise_calendar_reminder_scheduler()
+    stop_document_retention_scheduler()
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")

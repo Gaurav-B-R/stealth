@@ -1,10 +1,12 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+# fastapi/python-multipart bumped to fix CVE-2024-24762 (ReDoS via multipart);
+# python-jose bumped to fix CVE-2024-33663 (JWT algorithm confusion) + CVE-2024-33664 (DoS).
+fastapi==0.115.6
+uvicorn[standard]==0.30.6
 sqlalchemy==2.0.36
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]==3.4.0
 passlib[bcrypt]==1.7.4
 bcrypt>=4.0.0,<5.0.0
-python-multipart==0.0.6
+python-multipart==0.0.18
 pydantic==2.9.2
 pydantic-settings==2.6.1
 python-dotenv==1.0.0

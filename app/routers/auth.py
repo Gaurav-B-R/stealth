@@ -800,6 +800,42 @@ def _oauth_state_decode(token: str) -> dict:
     return _jose_jwt.decode(token, _AUTH_SECRET_KEY, algorithms=[_AUTH_ALGORITHM])
 
 
+OAUTH_NONCE_COOKIE_NAME = os.getenv("OAUTH_NONCE_COOKIE_NAME", "rilono_oauth_nonce").strip() or "rilono_oauth_nonce"
+
+
+def _set_oauth_nonce_cookie(request: Request, response: Response, nonce: str) -> None:
+    """Bind the OAuth flow to THIS browser: store the flow nonce in a short-lived HttpOnly
+    cookie at /start and require it to match the state nonce at /callback. An attacker can't
+    set this cookie in a victim's browser, which blocks login-CSRF / session fixation.
+
+    Apple returns via a cross-site POST (form_post), and a SameSite=lax cookie is NOT sent on
+    cross-site POST — so use SameSite=none (requires Secure) on https. On local http we fall
+    back to lax (Secure/None is invalid without https; Apple isn't tested on localhost).
+    """
+    secure = _resolve_auth_cookie_secure(request)
+    samesite = "none" if secure else "lax"
+    response.set_cookie(
+        key=OAUTH_NONCE_COOKIE_NAME,
+        value=nonce,
+        max_age=OAUTH_STATE_TTL_SECONDS,
+        httponly=True,
+        secure=secure,
+        samesite=samesite,
+        domain=_effective_cookie_domain(request),
+        path="/",
+    )
+
+
+def _clear_oauth_nonce_cookie(response: Response, request: Request | None = None) -> None:
+    domains: list[str | None] = [None]
+    if request is not None:
+        eff = _effective_cookie_domain(request)
+        if eff and eff not in domains:
+            domains.append(eff)
+    for d in domains:
+        response.delete_cookie(key=OAUTH_NONCE_COOKIE_NAME, domain=d, path="/")
+
+
 def _app_redirect(path: str, *, error: str | None = None) -> RedirectResponse:
     base = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL).rstrip("/")
     target = path if path.startswith("http") else f"{base}{path}"
@@ -909,7 +945,10 @@ def oauth_start(provider: str, request: Request, consent: bool = False):
     # `consent=1` is appended by the sign-up view once the user ticks the consent box;
     # it authorizes creating a new account on this social login.
     state = _oauth_state_encode(provider, nonce, consent=bool(consent))
-    return RedirectResponse(url=social_oauth.build_authorize_url(provider, state=state, nonce=nonce), status_code=302)
+    resp = RedirectResponse(url=social_oauth.build_authorize_url(provider, state=state, nonce=nonce), status_code=302)
+    # Bind this flow to the browser so the callback can't be replayed in someone else's session.
+    _set_oauth_nonce_cookie(request, resp, nonce)
+    return resp
 
 
 @router.api_route("/oauth/{provider}/callback", methods=["GET", "POST"])
@@ -938,6 +977,16 @@ async def oauth_callback(provider: str, request: Request, db: Session = Depends(
             raise ValueError("provider mismatch")
     except (_JWTError, ValueError):
         return _app_redirect("/login", error="Your sign-in link expired. Please try again.")
+
+    # Login-CSRF / session-fixation defense: the state nonce must match the HttpOnly cookie set
+    # on THIS browser at /start. An attacker can't set that cookie in a victim's browser, so a
+    # pre-generated flow can't be completed in (and hijack) someone else's session.
+    cookie_nonce = (request.cookies.get(OAUTH_NONCE_COOKIE_NAME) or "").strip()
+    state_nonce = str(decoded.get("n") or "")
+    if not cookie_nonce or not state_nonce or not _secrets.compare_digest(cookie_nonce, state_nonce):
+        resp = _app_redirect("/login", error="Your sign-in session couldn't be verified. Please try again.")
+        _clear_oauth_nonce_cookie(resp, request)
+        return resp
 
     try:
         tokens = social_oauth.exchange_code(provider, code)
@@ -987,6 +1036,7 @@ async def oauth_callback(provider: str, request: Request, db: Session = Depends(
     access_token = create_access_token(data={"sub": user.email}, expires_delta=access_token_expires)
     response = _app_redirect("/dashboard")
     _set_auth_cookie(request, response, access_token, int(access_token_expires.total_seconds()))
+    _clear_oauth_nonce_cookie(response, request)  # one-time use — drop the flow nonce
     logger.info(
         "OAuth login OK: %s via %s | host=%s scheme=%s | cookie name=%s secure=%s domain=%r samesite=%s -> %s",
         user.email, provider, request.url.hostname, request.url.scheme, AUTH_COOKIE_NAME,

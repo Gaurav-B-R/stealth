@@ -21,6 +21,23 @@ def _get_table_columns(conn, table_name: str):
     return {row[0] for row in result}
 
 
+def ensure_subscription_payments_user_id_nullable():
+    """Allow subscription_payments.user_id to be NULL so payment (financial) records can be
+    RETAINED and de-identified on account deletion instead of hard-deleted.
+
+    Postgres-only ALTER (idempotent); new SQLite DBs already get this from the model via
+    create_all, and existing dev SQLite DBs are throwaway so no rebuild is attempted.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        try:
+            conn.execute(text("ALTER TABLE subscription_payments ALTER COLUMN user_id DROP NOT NULL"))
+        except Exception:
+            # Already nullable, or the table doesn't exist yet — safe to ignore.
+            pass
+
+
 def ensure_e2e_encryption_columns():
     """
     Add client-side end-to-end encryption (E2E v2) columns to users + documents.
