@@ -93,7 +93,7 @@ def estimate_cost(model_name: str, prompt_tokens: int, output_tokens: int, cache
 def _extract_tokens(response) -> tuple[int, int, int, int]:
     um = getattr(response, "usage_metadata", None)
     if um is None:
-        return 0, 0, 0
+        return 0, 0, 0, 0
     def g(attr):
         try:
             return int(getattr(um, attr, 0) or 0)
@@ -174,9 +174,9 @@ SOURCE_LABELS = {
     "deep_scan_extract": "Deep Scan — per-document extraction",
     "mock_interview": "Mock interviews",
     "interview_feedback": "Interview feedback",
-    "red_flag_scan": "Red-Flag scan (Visa Pass)",
-    "ds160_autofill": "DS-160 auto-fill (Visa Pass)",
-    "student_voice_interview": "Voice mock interview (Visa Pass)",
+    "red_flag_scan": "Red-Flag scan (Rilono Copilot)",
+    "ds160_autofill": "DS-160 auto-fill (Rilono Copilot)",
+    "student_voice_interview": "Voice mock interview (Rilono Copilot)",
     "growth_agent": "Conversion Agent — bulk scan (internal)",
     "growth_agent_single": "Conversion Agent — single account (internal)",
 }

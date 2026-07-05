@@ -809,14 +809,17 @@ def admin_user_detail(
     is_pass = bool(sub and visa_pass.has_active_pass(sub))
     usage = []
     if sub:
+        # "group" tells the admin UI which surface each quota belongs to. DS-160 auto-fill,
+        # red-flag scan and voice interview are metered by the Rilono Copilot (Chrome extension),
+        # not the main web app — so they're grouped separately to avoid looking like missing app features.
         usage = [
-            {"key": "ai_messages", "label": "Rilono AI messages", "used": sub.ai_messages_used or 0, "free_limit": subs.FREE_AI_MESSAGE_LIMIT},
-            {"key": "document_uploads", "label": "Document uploads", "used": sub.document_uploads_used or 0, "free_limit": subs.FREE_DOCUMENT_UPLOAD_LIMIT},
-            {"key": "prep_sessions", "label": "Interview-prep sessions", "used": sub.prep_sessions_used or 0, "free_limit": subs.FREE_PREP_SESSION_LIMIT},
-            {"key": "mock_interviews", "label": "Mock interviews", "used": sub.mock_interviews_used or 0, "free_limit": subs.FREE_MOCK_INTERVIEW_LIMIT},
-            {"key": "red_flag_scans", "label": "Red-flag scans", "used": sub.red_flag_scans_used or 0, "free_limit": visa_pass.FREE_RED_FLAG_SCANS},
-            {"key": "ds160_autofills", "label": "DS-160 auto-fills", "used": sub.ds160_autofills_used or 0, "free_limit": visa_pass.FREE_DS160_AUTOFILLS},
-            {"key": "voice_interviews", "label": "Voice mock interviews (Pass)", "used": sub.pass_voice_interviews_used or 0, "free_limit": 0},
+            {"key": "ai_messages", "label": "Rilono AI messages", "group": "Web app", "used": sub.ai_messages_used or 0, "free_limit": subs.FREE_AI_MESSAGE_LIMIT},
+            {"key": "document_uploads", "label": "Document uploads", "group": "Web app", "used": sub.document_uploads_used or 0, "free_limit": subs.FREE_DOCUMENT_UPLOAD_LIMIT},
+            {"key": "prep_sessions", "label": "Interview-prep sessions", "group": "Web app", "used": sub.prep_sessions_used or 0, "free_limit": subs.FREE_PREP_SESSION_LIMIT},
+            {"key": "mock_interviews", "label": "Mock interviews", "group": "Web app", "used": sub.mock_interviews_used or 0, "free_limit": subs.FREE_MOCK_INTERVIEW_LIMIT},
+            {"key": "red_flag_scans", "label": "Red-flag scan", "group": "Rilono Copilot", "used": sub.red_flag_scans_used or 0, "free_limit": visa_pass.FREE_RED_FLAG_SCANS},
+            {"key": "ds160_autofills", "label": "DS-160 auto-fill", "group": "Rilono Copilot", "used": sub.ds160_autofills_used or 0, "free_limit": visa_pass.FREE_DS160_AUTOFILLS},
+            {"key": "voice_interviews", "label": "Voice mock interview", "group": "Rilono Copilot", "used": sub.pass_voice_interviews_used or 0, "free_limit": 0},
         ]
 
     payments = (

@@ -1754,12 +1754,19 @@ function renderAccountDetail(userId, data) {
            <button class="table-btn danger" id="acctDeleteBtn">Delete</button>`
         : '<span class="acct-chip grey">View only</span>';
 
+    let lastUsageGroup = null;
     const usageHtml = (sub.usage || []).map((u) => {
         const lim = u.free_limit;
         const pct = lim > 0 ? Math.min(100, Math.round((u.used / lim) * 100)) : (u.used > 0 ? 100 : 0);
         const full = lim > 0 && u.used >= lim && !sub.is_pass_active;
         const limLabel = sub.is_pass_active ? '∞' : (lim > 0 ? lim : '—');
-        return `<div><div class="acct-usage-row"><span>${escapeHtml(u.label)}</span><span>${u.used} / ${limLabel}</span></div>
+        let header = '';
+        if (u.group && u.group !== lastUsageGroup) {
+            lastUsageGroup = u.group;
+            const tag = u.group === 'Rilono Copilot' ? ' <span class="acct-chip purple">Chrome extension</span>' : '';
+            header = `<div class="acct-usage-group">${escapeHtml(u.group)}${tag}</div>`;
+        }
+        return `${header}<div><div class="acct-usage-row"><span>${escapeHtml(u.label)}</span><span>${u.used} / ${limLabel}</span></div>
             <div class="acct-usage-bar"><span class="${full ? 'full' : ''}" style="width:${sub.is_pass_active ? 100 : pct}%"></span></div></div>`;
     }).join('');
     const planChip = sub.is_pass_active
