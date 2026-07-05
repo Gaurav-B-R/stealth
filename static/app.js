@@ -11904,7 +11904,7 @@ function displayDocuments(documents) {
                         </div>
                         <div style="font-size: 0.875rem; color: var(--text-secondary);">
                             ${escapeHtml(doc.original_filename || 'Uploaded file')} • ${fileSizeMB} MB • ${uploadDate}
-                            ${isEncrypted ? ' • <span style="color: #34d399;">🔒 Encrypted</span>' : ''}
+                            ${isE2E ? ' • <span style="color: #34d399;">🔒 End-to-end encrypted</span>' : (isEncrypted ? ' • <span style="color: #f59e0b;">🔒 Encrypted (legacy) — re-upload for end-to-end encryption</span>' : '')}
                         </div>
                         ${renderMetaBadges(doc.document_type)}
                         <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
