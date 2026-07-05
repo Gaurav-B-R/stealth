@@ -3,9 +3,30 @@ from threading import Lock
 from typing import Any, Dict
 
 import requests
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
+
+# Detected visitor country (ISO-3166 alpha-2) -> best supported display currency.
+# Eurozone members map to EUR; everything unlisted defaults to USD on the client.
+_COUNTRY_TO_CURRENCY = {
+    "IN": "INR", "GB": "GBP", "CA": "CAD", "AU": "AUD",
+    "AE": "AED", "SG": "SGD", "JP": "JPY", "US": "USD",
+    # Eurozone
+    "DE": "EUR", "FR": "EUR", "IT": "EUR", "ES": "EUR", "NL": "EUR", "IE": "EUR",
+    "AT": "EUR", "BE": "EUR", "PT": "EUR", "GR": "EUR", "FI": "EUR", "LU": "EUR",
+    "SK": "EUR", "SI": "EUR", "EE": "EUR", "LV": "EUR", "LT": "EUR", "CY": "EUR",
+    "MT": "EUR", "HR": "EUR",
+}
+# CDN-provided visitor-country headers, in priority order. Present only when the app
+# is proxied through that CDN; otherwise the client falls back to locale/timezone.
+_GEO_COUNTRY_HEADERS = (
+    "cf-ipcountry",          # Cloudflare
+    "x-vercel-ip-country",   # Vercel
+    "x-appengine-country",   # Google App Engine
+    "x-country-code",        # generic reverse proxies
+    "fastly-geo-country",    # Fastly (when geo is enabled)
+)
 
 SUPPORTED_CURRENCIES = ("USD", "INR", "GBP", "CAD", "AUD", "EUR", "AED", "SGD", "JPY")
 FRANKFURTER_SUPPORTED_CURRENCIES = ("USD", "INR", "GBP", "CAD", "AUD", "EUR", "SGD", "JPY")
@@ -151,3 +172,23 @@ def get_exchange_rates(refresh: bool = Query(default=False)) -> Dict[str, Any]:
                 cached=False,
                 stale=True,
             )
+
+
+@router.get("/geo")
+def detect_geo(request: Request) -> Dict[str, Any]:
+    """Best-effort visitor country → display currency, from CDN geo headers only.
+
+    No external API calls and no IP address is read or stored — this just reflects the
+    country header a fronting CDN (Cloudflare/Vercel/etc.) already attached. Returns
+    nulls when unavailable, and the client falls back to browser locale / timezone.
+    """
+    country = None
+    source = None
+    for header in _GEO_COUNTRY_HEADERS:
+        value = (request.headers.get(header) or "").strip().upper()
+        # Two-letter ISO code; skip CDN "unknown"/Tor placeholders.
+        if len(value) == 2 and value.isalpha() and value not in {"XX", "T1", "AP"}:
+            country, source = value, header
+            break
+    currency = _COUNTRY_TO_CURRENCY.get(country) if country else None
+    return {"country_code": country, "currency": currency, "source": source}

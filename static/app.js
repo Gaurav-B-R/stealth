@@ -356,6 +356,9 @@ window.openCookieSettings = openCookieSettingsModal;
 const PRICING_BASE_USD = {
     free: 0
 };
+// The one-time Visa Success Pass is charged ₹999 in INR by the backend/Razorpay.
+// The pricing page displays a local-currency estimate but the actual charge stays INR.
+const PRICING_PASS_INR = 999;
 const PRICING_MODEL_MONTHLY = 'pro_monthly';
 const PRICING_MODEL_SIX_MONTH = 'pro_six_month';
 const PRO_PRICING_MODELS = {
@@ -433,6 +436,59 @@ const PRICING_COUNTRY_CONFIG = {
     SG: { country: 'Singapore', currency: 'SGD' },
     JP: { country: 'Japan', currency: 'JPY' }
 };
+
+// Geo → currency helpers: auto-pick the visitor's currency on first visit (display only;
+// the actual charge always stays INR via Razorpay).
+const PRICING_COUNTRY_TO_CURRENCY = {
+    IN: 'INR', GB: 'GBP', CA: 'CAD', AU: 'AUD', AE: 'AED', SG: 'SGD', JP: 'JPY', US: 'USD',
+    DE: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR', NL: 'EUR', IE: 'EUR', AT: 'EUR', BE: 'EUR',
+    PT: 'EUR', GR: 'EUR', FI: 'EUR', LU: 'EUR', SK: 'EUR', SI: 'EUR', EE: 'EUR', LV: 'EUR',
+    LT: 'EUR', CY: 'EUR', MT: 'EUR', HR: 'EUR'
+};
+const PRICING_TZ_COUNTRY = {
+    'Asia/Kolkata': 'IN', 'Asia/Calcutta': 'IN', 'Europe/London': 'GB',
+    'America/Toronto': 'CA', 'America/Vancouver': 'CA', 'America/Edmonton': 'CA', 'America/Winnipeg': 'CA', 'America/Halifax': 'CA', 'America/St_Johns': 'CA',
+    'Australia/Sydney': 'AU', 'Australia/Melbourne': 'AU', 'Australia/Brisbane': 'AU', 'Australia/Perth': 'AU', 'Australia/Adelaide': 'AU', 'Australia/Hobart': 'AU',
+    'Asia/Dubai': 'AE', 'Asia/Singapore': 'SG', 'Asia/Tokyo': 'JP',
+    'Europe/Berlin': 'DE', 'Europe/Paris': 'FR', 'Europe/Madrid': 'ES', 'Europe/Rome': 'IT', 'Europe/Amsterdam': 'NL', 'Europe/Dublin': 'IE', 'Europe/Vienna': 'AT', 'Europe/Brussels': 'BE', 'Europe/Lisbon': 'PT', 'Europe/Athens': 'GR', 'Europe/Helsinki': 'FI'
+};
+
+// Resolve any country code to one of the supported pricing-config keys (matched by currency,
+// so e.g. any Eurozone country maps to the EUR entry).
+function pricingConfigCodeForCountry(cc) {
+    if (!cc) return null;
+    cc = String(cc).toUpperCase();
+    if (PRICING_COUNTRY_CONFIG[cc]) return cc;
+    const currency = PRICING_COUNTRY_TO_CURRENCY[cc];
+    if (!currency) return null;
+    return Object.keys(PRICING_COUNTRY_CONFIG).find((k) => PRICING_COUNTRY_CONFIG[k].currency === currency) || null;
+}
+
+// Best-effort visitor country: CDN geo header → browser locale region → timezone → US.
+async function detectPricingCountry() {
+    try {
+        const r = await fetch(`${API_BASE}/api/pricing/geo`, { credentials: 'same-origin' });
+        if (r.ok) {
+            const d = await r.json().catch(() => ({}));
+            const code = pricingConfigCodeForCountry(d && d.country_code);
+            if (code) return code;
+        }
+    } catch (e) { /* fall through to client-side signals */ }
+    try {
+        const langs = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language];
+        for (const l of langs) {
+            const m = String(l || '').match(/[-_]([A-Za-z]{2})\b/);
+            const code = m && pricingConfigCodeForCountry(m[1]);
+            if (code) return code;
+        }
+    } catch (e) { /* no locale region */ }
+    try {
+        const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || '';
+        const code = pricingConfigCodeForCountry(PRICING_TZ_COUNTRY[tz]);
+        if (code) return code;
+    } catch (e) { /* no timezone */ }
+    return 'US';
+}
 
 const VISA_INTERVIEW_CONSULATE_MAP = {
     India: ['New Delhi', 'Mumbai', 'Chennai', 'Hyderabad', 'Kolkata'],
@@ -7272,7 +7328,8 @@ function initializePricingSelector() {
     if (!countrySelect) return;
 
     const savedCountry = localStorage.getItem('pricingCountry');
-    const countryCode = PRICING_COUNTRY_CONFIG[savedCountry] ? savedCountry : 'US';
+    const hasSaved = Boolean(PRICING_COUNTRY_CONFIG[savedCountry]);
+    const countryCode = hasSaved ? savedCountry : 'US';
     const searchParams = new URLSearchParams(window.location.search);
     const shouldForceRefresh = searchParams.get('fx_refresh') === '1';
     countrySelect.value = countryCode;
@@ -7281,6 +7338,18 @@ function initializePricingSelector() {
     void ensurePricingExchangeRates(shouldForceRefresh).then(() => {
         updatePricingByCountry(countrySelect.value || countryCode);
     });
+
+    // First visit (no saved choice): auto-detect the visitor's country and switch the
+    // default currency to theirs — unless they pick one manually in the meantime.
+    if (!hasSaved) {
+        detectPricingCountry().then((detected) => {
+            if (!detected || detected === countrySelect.value) return;
+            if (localStorage.getItem('pricingCountry')) return;  // user chose meanwhile
+            try { localStorage.setItem('pricingCountry', detected); } catch (e) { /* storage blocked */ }
+            countrySelect.value = detected;
+            updatePricingByCountry(detected);
+        });
+    }
 }
 
 function handlePricingCountryChange(countryCode) {
@@ -7352,26 +7421,29 @@ function ensurePricingExchangeRates(forceRefresh = false) {
 function updatePricingByCountry(countryCode) {
     const config = PRICING_COUNTRY_CONFIG[countryCode] || PRICING_COUNTRY_CONFIG.US;
     const freePriceEl = document.getElementById('pricingFreePrice');
-    const proMonthlyPriceEl = document.getElementById('pricingProPrice');
-    const proSixMonthPriceEl = document.getElementById('pricingProSixMonthPrice');
+    const passPriceEl = document.getElementById('pricingPassPrice');
+    const passBillingNoteEl = document.getElementById('pricingPassBillingNote');
     const hintEl = document.getElementById('pricingCurrencyHint');
     const rate = pricingRatesByCurrency[config.currency] || PRICING_FALLBACK_RATES[config.currency] || 1;
     const inrRate = pricingRatesByCurrency.INR || PRICING_FALLBACK_RATES.INR || 1;
 
-    const monthlyConfig = getPricingModelConfig(PRICING_MODEL_MONTHLY);
-    const sixMonthConfig = getPricingModelConfig(PRICING_MODEL_SIX_MONTH);
+    const isInr = config.currency === 'INR';
     const convertedFree = PRICING_BASE_USD.free * rate;
-    const convertedMonthly = (monthlyConfig.amountInr / inrRate) * rate;
-    const convertedSixMonth = (sixMonthConfig.amountInr / inrRate) * rate;
+    // Convert the ₹999 pass to the selected currency for display; the real charge stays INR.
+    const convertedPass = (PRICING_PASS_INR / inrRate) * rate;
 
     if (freePriceEl) {
         freePriceEl.innerHTML = `${formatCurrencyAmount(convertedFree, config.currency)}<span>/month</span>`;
     }
-    if (proMonthlyPriceEl) {
-        proMonthlyPriceEl.innerHTML = `${formatCurrencyAmount(convertedMonthly, config.currency)}<span>/month</span>`;
+    if (passPriceEl) {
+        passPriceEl.innerHTML = `${isInr ? '' : '≈ '}${formatCurrencyAmount(convertedPass, config.currency)}<span>/ one-time</span>`;
     }
-    if (proSixMonthPriceEl) {
-        proSixMonthPriceEl.innerHTML = `${formatCurrencyAmount(convertedSixMonth, config.currency)}<span>/6 months</span>`;
+    if (passBillingNoteEl) {
+        // Non-INR shoppers see an estimate, so be upfront that checkout is billed in INR.
+        passBillingNoteEl.textContent = isInr
+            ? ''
+            : `Billed in Indian Rupees (${formatCurrencyAmount(PRICING_PASS_INR, 'INR')}) at checkout.`;
+        passBillingNoteEl.style.display = passBillingNoteEl.textContent ? 'block' : 'none';
     }
     if (hintEl) {
         hintEl.textContent = `Currency: ${config.currency} (${config.country})`;

@@ -267,6 +267,110 @@
         .cta-hero h2 { color: #fff; margin: 0 0 12px; font-size: clamp(1.7rem, 3.2vw, 2.4rem); font-weight: 800; letter-spacing: -.02em; }
         .cta-hero p { color: rgba(255, 255, 255, .88); margin: 0 auto 26px; max-width: 500px; font-size: 1.05rem; }
 
+        /* ============ Rilono Copilot for Chrome — animated showcase ============ */
+        .cpx-band { position: relative; border-radius: 26px; padding: 44px 40px 40px; overflow: hidden; color: #e7e9f8; border: 1px solid rgba(124, 138, 255, .28); background: radial-gradient(640px 300px at 82% -10%, rgba(168, 85, 247, .22), transparent 60%), radial-gradient(560px 300px at 8% 110%, rgba(99, 102, 241, .2), transparent 60%), linear-gradient(160deg, #16142f 0%, #1c1839 55%, #221a45 100%); }
+        .cpx-band h2 { color: #fff; margin: 14px 0 10px; font-size: clamp(1.6rem, 3vw, 2.2rem); font-weight: 800; letter-spacing: -.02em; }
+        .cpx-band .cpx-sub { color: #b9bede; max-width: 640px; margin: 0 0 30px; }
+        .cpx-grad { background: linear-gradient(90deg, #8b93ff, #c084fc, #f472b6); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .cpx-badge { display: inline-flex; align-items: center; gap: 8px; font-size: .74rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: #c7cbff; background: rgba(124, 138, 255, .14); border: 1px solid rgba(124, 138, 255, .35); padding: 7px 14px; border-radius: 999px; }
+        .cpx-badge i { width: 8px; height: 8px; border-radius: 50%; background: #34d399; box-shadow: 0 0 10px rgba(52, 211, 153, .9); animation: beacon 2.2s ease-in-out infinite; }
+        .cpx-grid { display: grid; grid-template-columns: 1.12fr .88fr; gap: 38px; align-items: center; }
+        @media (max-width: 900px) { .cpx-grid { grid-template-columns: 1fr; } }
+
+        /* browser mockup */
+        .cpx-browser { border-radius: 16px; overflow: hidden; border: 1px solid rgba(124, 138, 255, .3); box-shadow: 0 30px 70px rgba(5, 6, 20, .55); background: #fff; }
+        .cpx-chrome { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #eef0f8; border-bottom: 1px solid rgba(15, 23, 42, .08); }
+        .cpx-chrome .dots { display: flex; gap: 5px; }
+        .cpx-chrome .dots i { width: 9px; height: 9px; border-radius: 50%; }
+        .cpx-chrome .dots i:nth-child(1) { background: #f87171; } .cpx-chrome .dots i:nth-child(2) { background: #fbbf24; } .cpx-chrome .dots i:nth-child(3) { background: #34d399; }
+        .cpx-url { flex: 1; display: flex; align-items: center; gap: 7px; background: #fff; border: 1px solid rgba(15, 23, 42, .1); border-radius: 8px; padding: 5px 11px; font-size: .72rem; font-weight: 700; color: #475569; }
+        .cpx-url svg { width: 11px; height: 11px; color: #059669; flex: none; }
+        .cpx-body { position: relative; height: 412px; }
+        .cpx-scene { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr 218px; opacity: 0; visibility: hidden; transition: opacity .5s ease, visibility .5s ease; }
+        .cpx-scene.is-active { opacity: 1; visibility: visible; }
+
+        /* mock application page (left pane) */
+        .cpx-page { background: #f7f8fb; padding: 16px 18px; overflow: hidden; border-right: 1px solid rgba(15, 23, 42, .08); }
+        .cpx-page-kicker { font-size: .6rem; font-weight: 900; letter-spacing: .06em; color: #fff; background: #0b0c0c; display: inline-block; padding: 3px 8px; border-radius: 3px; margin-bottom: 10px; }
+        .cpx-page-kicker.ca { background: #26374a; } .cpx-page-kicker.au { background: #00558b; }
+        .cpx-page-title { font-size: .88rem; font-weight: 800; color: #111827; line-height: 1.25; margin-bottom: 2px; }
+        .cpx-page-sub { font-size: .68rem; color: #64748b; font-weight: 600; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid rgba(15, 23, 42, .1); }
+        .cpx-fg { margin-bottom: 12px; position: relative; }
+        .cpx-fl { font-size: .66rem; font-weight: 800; color: #334155; margin-bottom: 5px; }
+        .cpx-fi { background: #fff; border: 1px solid #cbd5e1; border-radius: 7px; padding: 7px 10px; font-size: .7rem; font-weight: 600; color: #0f172a; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+        .cpx-fi svg { width: 12px; height: 12px; color: #94a3b8; flex: none; }
+        .cpx-fi .ph { color: #94a3b8; font-weight: 500; }
+        /* staggered scan highlight on inspect */
+        .cpx-scene.is-active .cpx-scan .cpx-fi { animation: cpxScan 1.1s ease both; animation-delay: calc(.7s + var(--i, 0) * .75s); }
+        @keyframes cpxScan { 0% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); border-color: #cbd5e1; } 35% { box-shadow: 0 0 0 4px rgba(99, 102, 241, .22); border-color: #6366f1; } 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); border-color: #a5b4fc; } }
+        .cpx-laser { position: absolute; left: 0; width: calc(100% - 218px); height: 3px; border-radius: 3px; background: linear-gradient(90deg, transparent, rgba(99, 102, 241, .95), rgba(192, 132, 252, .95), transparent); box-shadow: 0 0 18px rgba(124, 138, 255, .8); opacity: 0; pointer-events: none; }
+        .cpx-scene.is-active .cpx-laser { animation: cpxLaser 2.6s ease-in-out .4s 1 both; }
+        @keyframes cpxLaser { 0% { top: 8%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { top: 92%; opacity: 0; } }
+        .cpx-page.blur .cpx-fg, .cpx-page.blur .cpx-page-title, .cpx-page.blur .cpx-page-sub { filter: blur(2.2px); opacity: .75; }
+
+        /* Rilono side panel (right pane) */
+        .cpx-panel { background: linear-gradient(180deg, #131226, #191735); display: flex; flex-direction: column; }
+        .cpx-ph { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(124, 138, 255, .18); }
+        .cpx-logo { width: 24px; height: 24px; border-radius: 8px; background: var(--grad); color: #fff; font-weight: 900; font-size: .72rem; display: grid; place-content: center; flex: none; }
+        .cpx-pb-name { font-size: .7rem; font-weight: 800; color: #fff; line-height: 1.1; }
+        .cpx-pb-status { display: flex; align-items: center; gap: 5px; font-size: .56rem; color: #93e6c3; font-weight: 700; }
+        .cpx-pb-status i { width: 5px; height: 5px; border-radius: 50%; background: #34d399; box-shadow: 0 0 6px rgba(52, 211, 153, .9); flex: none; }
+        .cpx-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 7px 12px; border-bottom: 1px solid rgba(124, 138, 255, .14); }
+        .cpx-tb-badge { font-size: .5rem; font-weight: 900; letter-spacing: .08em; color: #a5b0ff; }
+        .cpx-tb-btn { font-size: .56rem; font-weight: 800; color: #fff; background: linear-gradient(90deg, #6366f1, #a855f7); border-radius: 6px; padding: 4px 8px; white-space: nowrap; }
+        .cpx-scene.is-active .cpx-tb-btn.pulse { animation: cpxPulse 1.6s ease-in-out 2; }
+        @keyframes cpxPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(168, 85, 247, .0); } 50% { box-shadow: 0 0 0 5px rgba(168, 85, 247, .3); } }
+        .cpx-chat { flex: 1; padding: 10px 11px; display: flex; flex-direction: column; gap: 7px; overflow: hidden; }
+        .cpx-m { max-width: 94%; flex-shrink: 0; border-radius: 10px; padding: 7px 9px; font-size: .62rem; line-height: 1.45; color: #dfe2f7; background: rgba(124, 138, 255, .12); border: 1px solid rgba(124, 138, 255, .2); opacity: 0; transform: translateY(8px); }
+        .cpx-m strong { color: #fff; }
+        .cpx-m.user { align-self: flex-end; background: rgba(236, 72, 153, .16); border-color: rgba(236, 72, 153, .3); }
+        .cpx-m.notice { display: flex; gap: 6px; align-items: flex-start; font-size: .56rem; color: #fde68a; background: rgba(250, 204, 21, .1); border-color: rgba(250, 204, 21, .3); }
+        .cpx-m.notice svg { width: 11px; height: 11px; flex: none; margin-top: 1px; }
+        .cpx-hl { color: #c4b5fd; font-weight: 800; }
+        .cpx-scene.is-active .cpx-m { animation: cpxUp .45s ease forwards; animation-delay: var(--d, 0s); }
+        @keyframes cpxUp { to { opacity: 1; transform: none; } }
+        .cpx-typing { display: inline-flex; gap: 3px; align-items: center; padding: 2px 0; }
+        .cpx-typing i { width: 4px; height: 4px; border-radius: 50%; background: #a5b4fc; animation: demoDot 1.1s ease-in-out infinite; }
+        .cpx-typing i:nth-child(2) { animation-delay: .18s; } .cpx-typing i:nth-child(3) { animation-delay: .36s; }
+        .cpx-scene.is-active .cpx-m.hide-later { animation: cpxUp .45s ease forwards, cpxGone .2s linear forwards; animation-delay: var(--d, 0s), 4.4s; }
+        @keyframes cpxGone { to { opacity: 0; visibility: hidden; position: absolute; } }
+        .cpx-shield-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 8px; padding: 14px; }
+        .cpx-shield { width: 44px; height: 44px; border-radius: 50%; display: grid; place-content: center; color: #6ee7b7; background: rgba(52, 211, 153, .12); border: 1px solid rgba(52, 211, 153, .4); }
+        .cpx-shield svg { width: 22px; height: 22px; }
+        .cpx-scene.is-active .cpx-shield { animation: cpxPulseG 2.2s ease-in-out infinite; }
+        @keyframes cpxPulseG { 0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); } 50% { box-shadow: 0 0 0 9px rgba(52, 211, 153, .14); } }
+        .cpx-shield-t { font-size: .74rem; font-weight: 800; color: #fff; }
+        .cpx-shield-d { font-size: .6rem; color: #b9bede; line-height: 1.5; max-width: 180px; }
+        .cpx-composer { display: flex; align-items: center; gap: 6px; margin: 0 11px 10px; background: rgba(124, 138, 255, .1); border: 1px solid rgba(124, 138, 255, .2); border-radius: 9px; padding: 6px 9px; font-size: .58rem; color: #8f96bd; }
+
+        /* scene selector pills */
+        .cpx-steps { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+        .cpx-step-btn { display: inline-flex; align-items: center; gap: 7px; border: 1px solid rgba(124, 138, 255, .3); background: rgba(124, 138, 255, .08); color: #b9bede; border-radius: 999px; padding: 6px 13px; font-size: .74rem; font-weight: 700; cursor: pointer; font-family: inherit; transition: all .25s ease; }
+        .cpx-step-btn .n { width: 17px; height: 17px; border-radius: 50%; display: grid; place-content: center; font-size: .62rem; font-weight: 900; background: rgba(124, 138, 255, .18); }
+        .cpx-step-btn.on { color: #fff; border-color: rgba(168, 85, 247, .65); background: rgba(124, 138, 255, .16); }
+        .cpx-step-btn.on .n { background: linear-gradient(90deg, #6366f1, #a855f7); color: #fff; }
+
+        /* right column: features + CTA */
+        .cpx-feats { display: grid; gap: 13px; }
+        .cpx-feat { display: flex; gap: 12px; align-items: flex-start; }
+        .cpx-feat .ic { width: 36px; height: 36px; border-radius: 11px; display: grid; place-content: center; font-size: 1rem; background: rgba(124, 138, 255, .14); border: 1px solid rgba(124, 138, 255, .25); flex: none; }
+        .cpx-feat b { display: block; font-size: .95rem; color: #fff; }
+        .cpx-feat p { margin: 2px 0 0; color: #b9bede; font-size: .85rem; line-height: 1.5; }
+        .cpx-cta { margin-top: 24px; }
+        .cpx-install { display: inline-flex; align-items: center; gap: 10px; background: var(--grad); color: #fff; text-decoration: none; font-weight: 800; font-size: 1rem; padding: 14px 24px; border-radius: 13px; box-shadow: 0 16px 40px rgba(124, 92, 246, .4); transition: transform .2s ease, box-shadow .2s ease; }
+        .cpx-install:hover { transform: translateY(-2px); box-shadow: 0 20px 50px rgba(168, 85, 247, .5); }
+        .cpx-install svg { width: 19px; height: 19px; }
+        .cpx-cta-note { margin: 10px 0 0; font-size: .8rem; color: #8f96bd; }
+        .cpx-cta-note strong { color: #c7cbff; font-weight: 800; }
+        @media (max-width: 600px) {
+            .cpx-band { padding: 30px 20px 28px; }
+            .cpx-scene { grid-template-columns: 1fr; }
+            .cpx-page { display: none; }
+            .cpx-laser { display: none; }
+            .cpx-body { height: 340px; }
+            .cpx-badge { font-size: .6rem; letter-spacing: .05em; padding: 6px 11px; }
+        }
+
         /* Footer — same design as the homepage (index.html .hx-footer) for uniformity. */
         .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); }
         .hx-footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); }
@@ -293,6 +397,9 @@
             .demo-row { opacity: 1; transform: none; }
             .demo-chat .a .typing { display: none; }
             .demo-chat .a .ans { opacity: 1; }
+            .cpx-m { opacity: 1; transform: none; }
+            .cpx-m.hide-later, .cpx-typing { display: none; }
+            .cpx-laser { display: none; }
         }
     </style>
     <script src="/static/attribution.js"></script>
@@ -325,6 +432,7 @@
                                 CoE, OSHC &amp; Genuine Student.</span></a>
                     </div>
                 </div>
+                <a href="/pricing">Pricing</a>
                 <a href="/for-enterprise">Enterprise</a>
                 <a href="/login">Login</a>
                 <a href="/register" class="nav-cta">Get started</a>
@@ -424,6 +532,62 @@
                 <div class="step"><div class="num">2</div><h4>Upload to your vault</h4><p>Add your documents to an end-to-end encrypted vault — organized and ready.</p></div>
                 <div class="step"><div class="num">3</div><h4>Rilono AI reviews everything</h4><p>Rilono catches missing pages, expiring dates and mismatches before the consulate does.</p></div>
                 <div class="step"><div class="num">4</div><h4>Walk in ready</h4><p>Practice real consulate questions and track every stage from application to approval.</p></div>
+            </div>
+        </section>
+
+        <section class="sec" id="copilotSec">
+            <div class="cpx-band rv">
+                <span class="cpx-badge"><i></i> Chrome extension · <span id="cpxBadgeLabel">Now live</span></span>
+                <h2>Meet <span class="cpx-grad">Rilono Copilot</span> for Chrome</h2>
+                <p class="cpx-sub" id="cpxSub">Your Rilono AI side panel that reads the visa application page you're on
+                    and answers with guidance personalized to your Rilono profile.</p>
+                <div class="cpx-grid">
+                    <div>
+                        <div class="cpx-browser">
+                            <div class="cpx-chrome">
+                                <span class="dots"><i></i><i></i><i></i></span>
+                                <span class="cpx-url"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2.5" aria-hidden="true">
+                                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                                    </svg><span id="cpxUrl">online portal</span></span>
+                            </div>
+                            <div class="cpx-body" id="cpxPlayer" aria-label="Animated demo of Rilono Copilot guiding a visa application"></div>
+                        </div>
+                        <div class="cpx-steps" id="cpxSteps" role="tablist" aria-label="Copilot demo scenes"></div>
+                    </div>
+                    <div>
+                        <div class="cpx-feats">
+                            <div class="cpx-feat"><span class="ic">🔎</span><span><b>Inspect Page</b>
+                                    <p id="cpxFeatInspect">Reads the on-screen form and gives field-by-field guidance —
+                                        no copy-pasting into a chatbot.</p></span></div>
+                            <div class="cpx-feat"><span class="ic">👤</span><span><b>Personalized to your account</b>
+                                    <p>Answers use your Rilono profile, documents and journey stage — not generic
+                                        internet advice.</p></span></div>
+                            <div class="cpx-feat"><span class="ic">🛡️</span><span><b>100% read-only</b>
+                                    <p>Copilot never types, submits or modifies your form data. Your application stays
+                                        in your hands.</p></span></div>
+                            <div class="cpx-feat"><span class="ic">🌐</span><span><b>Works on official portals</b>
+                                    <p id="cpxFeatPortals">Government application pages, university portals, financial
+                                        forms — Copilot adapts to the page you're on.</p></span></div>
+                        </div>
+                        <div class="cpx-cta">
+                            <a href="https://chromewebstore.google.com/detail/rilono-copilot/ggfiafmfibondlacgdigbeigccnecplh"
+                                target="_blank" rel="noopener noreferrer" class="cpx-install">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.5" />
+                                    <circle cx="12" cy="12" r="4" fill="currentColor" opacity="0.35" />
+                                    <path d="M12 2a10 10 0 0 1 8.66 5H12" stroke="currentColor" stroke-width="1.5" fill="none" />
+                                    <path d="M2 12a10 10 0 0 1 3.34-7.47L9.17 12" stroke="currentColor" stroke-width="1.5" fill="none" />
+                                    <path d="M12 22a10 10 0 0 1-6.83-2.68L12 12" stroke="currentColor" stroke-width="1.5" fill="none" />
+                                </svg>
+                                Add to Chrome — it's free
+                            </a>
+                            <p class="cpx-cta-note">Free to install on Chrome, Edge, Brave &amp; all Chromium browsers ·
+                                Copilot workflows unlock with the <strong>Visa Success Pass</strong></p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -543,6 +707,28 @@
                     rows: [["CAS statement", "ok", "Verified"], ["TB test certificate", "ok", "Verified"], ["28-day bank statement", "warn", "AI flagged"]],
                     q: "Does my bank statement meet the 28-day rule?",
                     a: "Your balance qualifies, but the funds must sit untouched for 28 full days — your statement shows 24 so far. I'll tell you the exact date it's safe to apply."
+                },
+                copilot: {
+                    student: "Priya", url: "visas-immigration.service.gov.uk",
+                    kicker: "GOV.UK", kickerClass: "",
+                    pageTitle: "Apply for a Student visa", pageSub: "Sponsor and money details",
+                    sub: "Your Rilono AI side panel reads your UK Student visa application as you fill it — CAS, 28-day finances, IHS — and answers with guidance personalized to your Rilono profile.",
+                    portals: "GOV.UK application pages, CAS details, financial evidence forms — Copilot adapts to the page you're on.",
+                    fields: [
+                        ["CAS reference number", "", "As issued on your CAS statement"],
+                        ["Sponsor licence number", "", "Printed on your CAS"],
+                        ["Money you have available (£)", "", "£"]
+                    ],
+                    guide: [
+                        'I inspected this <strong>Student visa application</strong>. Your CAS from <span class="cpx-hl">University of Manchester</span> is verified in Rilono — enter the reference exactly as issued on your CAS statement.',
+                        '<strong>Sponsor licence number:</strong> it\'s printed on your CAS — I\'ve highlighted where it appears in your document.',
+                        '<strong>Money available:</strong> use the closing balance from your verified 28-day bank statement — your funds clear the maintenance requirement for Manchester.'
+                    ],
+                    chat: {
+                        ai: 'Your maintenance funds must stay in the account for <strong>28 consecutive days</strong> before you apply.',
+                        user: "Which date can I apply from?",
+                        answer: 'Based on the bank statement in your Rilono vault, your 28-day window completes on <strong>18 April</strong> — you can apply from <span class="cpx-hl">19 April</span>.'
+                    }
                 }
             },
             "canada-study-permit": {
@@ -563,61 +749,32 @@
                 },
                 scenesLead: "Niagara's thunder, aurora skies, mountain lakes — study where the postcards are real.",
                 scenes: [
-                    { label: "Northern Lights", place: "Yukon & beyond", svg: `
-                        <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated northern lights">
-                          <defs>
-                            <linearGradient id="nsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0b1035"/><stop offset="1" stop-color="#1b2a5e"/></linearGradient>
-                            <linearGradient id="aur1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#34d399" stop-opacity="0"/><stop offset=".5" stop-color="#34d399" stop-opacity=".75"/><stop offset="1" stop-color="#22d3ee" stop-opacity="0"/></linearGradient>
-                            <linearGradient id="aur2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a855f7" stop-opacity="0"/><stop offset=".5" stop-color="#a855f7" stop-opacity=".6"/><stop offset="1" stop-color="#6366f1" stop-opacity="0"/></linearGradient>
-                          </defs>
-                          <rect width="400" height="240" fill="url(#nsky)"/>
-                          <g class="aur"><path d="M40 20 C70 90, 50 150, 90 205 L130 205 C95 150, 115 90, 85 20 Z" fill="url(#aur1)"/></g>
-                          <g class="aur a2"><path d="M160 10 C185 85, 170 150, 205 205 L245 205 C215 150, 230 85, 205 10 Z" fill="url(#aur2)"/></g>
-                          <g class="aur a3"><path d="M280 25 C305 95, 290 155, 325 205 L360 205 C332 155, 345 95, 322 25 Z" fill="url(#aur1)"/></g>
-                          <circle class="tw" cx="50" cy="45" r="1.6" fill="#fff"/><circle class="tw t2" cx="140" cy="30" r="1.3" fill="#fff"/>
-                          <circle class="tw t3" cx="250" cy="55" r="1.7" fill="#fff"/><circle class="tw t4" cx="345" cy="35" r="1.4" fill="#fff"/>
-                          <circle class="tw t2" cx="305" cy="90" r="1.2" fill="#fff"/><circle class="tw" cx="105" cy="95" r="1.2" fill="#fff"/>
-                          <path d="M0 205 L55 150 L95 190 L150 135 L210 200 L265 155 L320 205 L400 165 L400 240 L0 240 Z" fill="#0a1128"/>
-                          <path d="M0 214 L400 196 L400 240 L0 240 Z" fill="#060b1e"/>
-                        </svg>` },
-                    { label: "Moraine Lake", place: "Banff, Alberta", svg: `
-                        <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated mountain lake">
-                          <defs>
-                            <linearGradient id="msky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#bfe3ff"/><stop offset="1" stop-color="#e8f4ff"/></linearGradient>
-                            <linearGradient id="lake" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0e7490"/></linearGradient>
-                          </defs>
-                          <rect width="400" height="240" fill="url(#msky)"/>
-                          <g class="cloud-slow" opacity=".85"><ellipse cx="60" cy="42" rx="34" ry="11" fill="#fff"/><ellipse cx="88" cy="36" rx="24" ry="9" fill="#fff"/></g>
-                          <path d="M-10 150 L70 55 L120 120 L180 40 L250 140 L310 70 L410 150 Z" fill="#475569"/>
-                          <path d="M52 77 L70 55 L88 77 L70 92 Z" fill="#f1f5f9"/><path d="M162 62 L180 40 L198 62 L180 78 Z" fill="#f1f5f9"/><path d="M294 89 L310 70 L326 89 L310 103 Z" fill="#f1f5f9"/>
-                          <rect y="150" width="400" height="90" fill="url(#lake)"/>
-                          <g class="shimmer" opacity=".5"><rect x="40" y="168" width="90" height="3" rx="1.5" fill="#fff"/><rect x="200" y="188" width="120" height="3" rx="1.5" fill="#fff"/><rect x="90" y="208" width="70" height="3" rx="1.5" fill="#fff"/></g>
-                          <path d="M20 150 L34 128 L48 150 Z" fill="#166534"/><path d="M44 150 L56 132 L68 150 Z" fill="#15803d"/>
-                          <path d="M340 150 L354 126 L368 150 Z" fill="#166534"/><path d="M362 150 L374 132 L386 150 Z" fill="#15803d"/>
-                        </svg>` },
-                    { label: "CN Tower at dusk", place: "Toronto, Ontario", svg: `
-                        <svg viewBox="0 0 400 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Animated Toronto skyline">
-                          <defs>
-                            <linearGradient id="dsky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#312e81"/><stop offset=".55" stop-color="#7c3aed"/><stop offset="1" stop-color="#fb7185"/></linearGradient>
-                          </defs>
-                          <rect width="400" height="240" fill="url(#dsky)"/>
-                          <circle cx="320" cy="88" r="26" fill="#fde68a" opacity=".9"/>
-                          <g fill="#171a37">
-                            <rect x="30" y="120" width="34" height="90"/><rect x="74" y="96" width="30" height="114"/><rect x="112" y="132" width="26" height="78"/>
-                            <rect x="238" y="108" width="34" height="102"/><rect x="282" y="128" width="28" height="82"/><rect x="318" y="112" width="36" height="98"/>
-                            <rect x="196" y="60" width="10" height="150"/><ellipse cx="201" cy="78" rx="20" ry="12"/><rect x="199" y="30" width="4" height="34"/>
-                          </g>
-                          <circle class="beacon" cx="201" cy="27" r="3.5" fill="#f87171"/>
-                          <g fill="#fde68a">
-                            <rect class="tw" x="80" y="106" width="5" height="5"/><rect class="tw t3" x="92" y="122" width="5" height="5"/>
-                            <rect class="tw t2" x="246" y="118" width="5" height="5"/><rect class="tw t4" x="258" y="140" width="5" height="5"/>
-                            <rect class="tw t3" x="326" y="124" width="5" height="5"/><rect class="tw" x="340" y="146" width="5" height="5"/>
-                            <rect class="tw t4" x="38" y="132" width="5" height="5"/><rect class="tw t2" x="120" y="142" width="5" height="5"/>
-                          </g>
-                          <rect y="210" width="400" height="30" fill="#0f1231"/>
-                          <g class="shimmer" opacity=".4"><rect x="150" y="218" width="100" height="2.5" rx="1" fill="#fca5a5"/></g>
-                        </svg>` }
-                ]
+                    { label: "Northern Lights", place: "Yukon & beyond", img: "/static/assets/brand/countries/ca-northern-lights.webp" },
+                    { label: "Moraine Lake", place: "Banff, Alberta", img: "/static/assets/brand/countries/ca-moraine-lake.webp" },
+                    { label: "CN Tower at dusk", place: "Toronto, Ontario", img: "/static/assets/brand/countries/ca-toronto-cn-tower.webp" }
+                ],
+                copilot: {
+                    student: "Rohan", url: "secure.cic.gc.ca",
+                    kicker: "Government of Canada", kickerClass: "ca",
+                    pageTitle: "Study permit application (IMM 1294)", pageSub: "Details of intended study in Canada",
+                    sub: "Your Rilono AI side panel reads your Study Permit application as you fill it — DLI, PAL, proof of funds, IMM forms — and answers with guidance personalized to your Rilono profile.",
+                    portals: "IRCC secure account, IMM forms, GCKey portals — Copilot adapts to the page you're on.",
+                    fields: [
+                        ["Designated Learning Institution (DLI #)", "", "O19XXXXXXXXX"],
+                        ["Provincial Attestation Letter (PAL)", "PAL_UWaterloo.pdf ✓", ""],
+                        ["Funds available for my stay (CAD)", "", "$"]
+                    ],
+                    guide: [
+                        'I inspected your <strong>IMM 1294 study permit form</strong>. Your Letter of Acceptance from <span class="cpx-hl">University of Waterloo</span> is verified in Rilono — your DLI number starts with <span class="cpx-hl">O19</span> and is printed on the LOA.',
+                        '<strong>PAL:</strong> your Provincial Attestation Letter is already validated in your vault — attach that same PDF here.',
+                        '<strong>Funds:</strong> enter the total from your GIC certificate plus your first-year tuition receipt — both verified in Rilono.'
+                    ],
+                    chat: {
+                        ai: 'IRCC expects clear proof of funds — your GIC plus first-year tuition.',
+                        user: "Is my GIC enough on its own?",
+                        answer: 'Your GIC on file covers the living-cost requirement, and your verified tuition receipt covers year one — together your proof of funds is <span class="cpx-hl">complete</span>.'
+                    }
+                }
             },
             "australia-student-visa": {
                 code: "AU", name: "Australia", flag: "🇦🇺", img: "/static/assets/brand/countries/au.webp",
@@ -647,7 +804,29 @@
                     { label: "Sydney Harbour at dusk", place: "Opera House & the Bridge", img: "/static/assets/brand/countries/au-sydney.webp" },
                     { label: "Flinders Street Station", place: "Melbourne, VIC", img: "/static/assets/brand/countries/au-melbourne.webp" },
                     { label: "Jacaranda season on campus", place: "Sydney, NSW", img: "/static/assets/brand/countries/au-campus.webp" }
-                ]
+                ],
+                copilot: {
+                    student: "Ananya", url: "online.immi.gov.au",
+                    kicker: "ImmiAccount", kickerClass: "au",
+                    pageTitle: "Student visa (subclass 500)", pageSub: "Education provider and health cover",
+                    sub: "Your Rilono AI side panel reads your Subclass 500 application as you fill it — CoE, OSHC, Genuine Student answers — and answers with guidance personalized to your Rilono profile.",
+                    portals: "ImmiAccount, CoE and OSHC pages, university portals — Copilot adapts to the page you're on.",
+                    fields: [
+                        ["Confirmation of Enrolment (CoE) number", "", "As issued by your provider"],
+                        ["OSHC policy number", "", "From your certificate"],
+                        ["Genuine Student (GS) responses", "", "Your written answers"]
+                    ],
+                    guide: [
+                        'I inspected your <strong>subclass 500 application</strong>. Your CoE from <span class="cpx-hl">Monash University</span> is verified in Rilono — copy the CoE number exactly as issued.',
+                        '<strong>OSHC:</strong> your policy in Rilono covers your full course dates — enter the policy number from your certificate.',
+                        '<strong>GS responses:</strong> before you type, I can draft talking points from your profile — academics, course choice and career plan.'
+                    ],
+                    chat: {
+                        ai: 'Your Genuine Student answers carry real weight in subclass 500 decisions.',
+                        user: "What should my GS answer focus on?",
+                        answer: 'From your Rilono profile: tie your B.Tech, your <strong>Master of Data Science CoE at Monash</strong>, and your career plan back home into one consistent story — I\'ve drafted three talking points.'
+                    }
+                }
             }
         };
 
@@ -730,6 +909,49 @@
                 document.getElementById("faqTitle").textContent = `${c.visa} questions, answered`;
                 document.getElementById("faqList").innerHTML = c.faq.map((f, i) =>
                     `<details class="rv" style="--d:${(0.05 * i).toFixed(2)}s"><summary>${esc(f.q)}<span class="chev">+</span></summary><p class="ans">${esc(f.a)}</p></details>`).join("");
+            }
+
+            // ============ Rilono Copilot showcase (animated 3-scene demo) ============
+            const cp = c.copilot;
+            if (!cp) {
+                document.getElementById("copilotSec").style.display = "none";
+            } else {
+                document.getElementById("cpxBadgeLabel").textContent = `Built for ${c.code === "UK" ? "UK" : c.name}-bound students`;
+                document.getElementById("cpxSub").textContent = cp.sub;
+                document.getElementById("cpxUrl").textContent = cp.url;
+                if (cp.portals) document.getElementById("cpxFeatPortals").textContent = cp.portals;
+
+                const chev = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+                const field = (f, i, scan) => `<div class="cpx-fg${scan ? " cpx-scan" : ""}" style="--i:${i}"><div class="cpx-fl">${esc(f[0])}</div><div class="cpx-fi">${f[1] ? `<span>${esc(f[1])}</span>` : `<span class="ph">${esc(f[2] || "")}</span>`}${chev}</div></div>`;
+                const page = (blur) => `<div class="cpx-page${blur ? " blur" : ""}"><span class="cpx-page-kicker ${cp.kickerClass || ""}">${esc(cp.kicker)}</span><div class="cpx-page-title">${esc(cp.pageTitle)}</div><div class="cpx-page-sub">${esc(cp.pageSub)}</div>${cp.fields.map((f, i) => field(f, i, !blur)).join("")}</div>`;
+                const head = `<div class="cpx-ph"><span class="cpx-logo">R</span><div><div class="cpx-pb-name">Rilono AI</div><div class="cpx-pb-status"><i></i>Connected as ${esc(cp.student)} on rilono.com</div></div></div>`;
+                const notice = '<div class="cpx-m notice" style="--d:.3s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg><span>Read-only. Copilot never types or submits for you.</span></div>';
+
+                const scene1 = `${page(false)}<div class="cpx-panel">${head}<div class="cpx-toolbar"><span class="cpx-tb-badge">RILONO AI COPILOT</span><span class="cpx-tb-btn pulse">Inspect Page</span></div><div class="cpx-chat">${notice}${cp.guide.map((g, i) => `<div class="cpx-m" style="--d:${(2.4 + i).toFixed(1)}s">${g}</div>`).join("")}</div></div><div class="cpx-laser"></div>`;
+                const scene2 = `${page(false)}<div class="cpx-panel">${head}<div class="cpx-chat"><div class="cpx-m" style="--d:.4s">${cp.chat.ai}</div><div class="cpx-m user" style="--d:1.6s">${esc(cp.chat.user)}</div><div class="cpx-m hide-later" style="--d:2.6s"><span class="cpx-typing"><i></i><i></i><i></i></span></div><div class="cpx-m" style="--d:4.6s">${cp.chat.answer}</div></div><div class="cpx-composer">Ask about any field on this page…</div></div>`;
+                const scene3 = `${page(true)}<div class="cpx-panel">${head}<div class="cpx-shield-wrap"><span class="cpx-shield"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg></span><span class="cpx-shield-t">100% Read-Only Safety</span><span class="cpx-shield-d">Rilono Copilot <strong>never types, submits or modifies</strong> your form data. Your application stays completely in your control.</span></div><div class="cpx-composer">Input protected…</div></div>`;
+
+                const sceneDefs = [["Inspect Page", scene1], ["Ask anything", scene2], ["Read-only safe", scene3]];
+                const player = document.getElementById("cpxPlayer");
+                const stepsRow = document.getElementById("cpxSteps");
+                player.innerHTML = sceneDefs.map((s, i) => `<div class="cpx-scene${i === 0 ? " is-active" : ""}">${s[1]}</div>`).join("");
+                stepsRow.innerHTML = sceneDefs.map((s, i) => `<button type="button" class="cpx-step-btn${i === 0 ? " on" : ""}" role="tab" aria-selected="${i === 0}" data-i="${i}"><span class="n">${i + 1}</span>${esc(s[0])}</button>`).join("");
+
+                const sceneNodes = Array.from(player.children);
+                const stepBtns = Array.from(stepsRow.children);
+                let cpCur = 0, cpTimer = null;
+                const showScene = (i) => {
+                    cpCur = i;
+                    sceneNodes.forEach((n, j) => n.classList.toggle("is-active", j === i));
+                    stepBtns.forEach((b, j) => { b.classList.toggle("on", j === i); b.setAttribute("aria-selected", j === i ? "true" : "false"); });
+                };
+                const playCp = () => { if (cpTimer || reduceMotion) return; cpTimer = setInterval(() => showScene((cpCur + 1) % sceneNodes.length), 8000); };
+                const stopCp = () => { if (cpTimer) { clearInterval(cpTimer); cpTimer = null; } };
+                stepBtns.forEach((b) => b.addEventListener("click", () => { stopCp(); showScene(+b.dataset.i); playCp(); }));
+                const cpBand = document.querySelector("#copilotSec .cpx-band");
+                cpBand.addEventListener("mouseenter", stopCp);
+                cpBand.addEventListener("mouseleave", playCp);
+                new IntersectionObserver((es) => es.forEach((e) => { e.isIntersecting ? playCp() : stopCp(); }), { threshold: 0.25 }).observe(player);
             }
 
             // Drifting motifs in the hero (maple leaves for Canada)
