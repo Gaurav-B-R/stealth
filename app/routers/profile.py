@@ -104,6 +104,43 @@ def _prune_documents_for_country_change(db: Session, user: models.User, new_coun
     return removed
 
 
+def _purge_all_user_r2_objects(db: Session, user: models.User) -> int:
+    """Erase every R2 object belonging to a user (documents, extracted text, profile snapshot).
+
+    Called on account deletion so the actual sensitive files are removed from object storage —
+    not just their database rows. The DB cascade removes the Document rows but does NOT touch
+    R2, so without this a user's uploaded passports / financial statements would linger in
+    storage indefinitely after they delete their account (a right-to-erasure gap). Best-effort:
+    a failure on one object is logged but must not block the deletion. Returns keys attempted.
+    """
+    r2_client = R2_DOCUMENTS_BUCKET = None
+    try:
+        from app.routers.documents import r2_client as _r2, R2_DOCUMENTS_BUCKET as _bucket
+        r2_client, R2_DOCUMENTS_BUCKET = _r2, _bucket
+    except Exception:
+        pass
+    if r2_client is None:
+        logger.warning("delete_account: R2 client unavailable; could not purge objects for user_id=%s", user.id)
+        return 0
+
+    # Read every object key BEFORE the DB rows are cascade-deleted.
+    keys: list[str] = []
+    for doc in db.query(models.Document).filter(models.Document.user_id == user.id).all():
+        if doc.filename:
+            keys.append(doc.filename)
+        if doc.extracted_text_file_url:
+            keys.append(doc.extracted_text_file_url)
+    keys.append(f"user_{user.id}/STUDENT_PROFILE_AND_F1_VISA_STATUS.json")
+
+    for key in keys:
+        try:
+            r2_client.delete_object(Bucket=R2_DOCUMENTS_BUCKET, Key=key)
+        except Exception:
+            logger.warning("delete_account: failed to delete R2 object key=%s for user_id=%s", key, user.id)
+    logger.info("delete_account: purged %s R2 object(s) for user_id=%s", len(keys), user.id)
+    return len(keys)
+
+
 def _is_safe_profile_picture_url(value: str) -> bool:
     """Allow only absolute http(s) URLs or root-relative paths."""
     if not value:
@@ -479,6 +516,14 @@ def delete_account(
             status_code=400,
             detail="Invalid or expired confirmation code. Request a new code and try again.",
         )
+
+    # Erase the user's sensitive files from object storage BEFORE removing the DB rows. The DB
+    # cascade deletes Document rows but does NOT touch R2, so this prevents uploaded passports /
+    # financial documents from lingering in storage after account deletion (right-to-erasure).
+    try:
+        _purge_all_user_r2_objects(db, current_user)
+    except Exception:
+        logger.exception("delete_account: R2 purge failed for user_id=%s; proceeding with DB delete", current_user.id)
 
     # Verified — delete the user explicitly; related data is removed by cascade.
     db.delete(current_user)
