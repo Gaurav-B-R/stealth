@@ -250,6 +250,114 @@
         .f1-mq-group span { display: inline-flex; align-items: center; gap: 9px; font-family: var(--f1-fd); font-weight: 700; font-size: .87rem; color: var(--f1-ink2); padding: 0 25px; white-space: nowrap; }
         .f1-mq-group .sep { color: rgba(99, 102, 241, .55); padding: 0; font-size: .68rem; }
 
+        /* ---------- US photo postcard section ---------- */
+        #homepageSection .f1-photo-moments {
+            padding: 74px 24px 82px;
+            background:
+                radial-gradient(720px 320px at 12% 18%, rgba(59, 130, 246, .10), transparent 62%),
+                radial-gradient(680px 280px at 85% 0%, rgba(236, 72, 153, .10), transparent 62%),
+                #f7f9ff;
+        }
+        #homepageSection .f1-photo-moments-inner { max-width: 1160px; margin: 0 auto; }
+        #homepageSection .f1-photo-copy { max-width: 680px; margin-bottom: 26px; }
+        #homepageSection .f1-photo-copy h2 {
+            margin: 0 0 10px;
+            color: var(--f1-ink);
+            font-family: var(--f1-fd);
+            font-size: clamp(2rem, 4vw, 3.25rem);
+            line-height: 1.04;
+            letter-spacing: -.04em;
+        }
+        #homepageSection .f1-photo-copy p {
+            margin: 0;
+            color: var(--f1-ink2);
+            font-size: 1.05rem;
+            line-height: 1.7;
+        }
+        #homepageSection .f1-photo-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 18px;
+        }
+        #homepageSection .f1-photo-card {
+            position: relative;
+            overflow: hidden;
+            border-radius: 22px;
+            background: #fff;
+            border: 1px solid rgba(23, 28, 74, .10);
+            box-shadow: 0 20px 50px rgba(23, 28, 74, .09);
+            transform: translateZ(0);
+            transition: transform .28s ease, box-shadow .28s ease, border-color .28s ease;
+        }
+        #homepageSection .f1-photo-card:hover {
+            transform: translateY(-7px);
+            border-color: rgba(99, 102, 241, .28);
+            box-shadow: 0 30px 70px rgba(99, 102, 241, .16);
+        }
+        #homepageSection .f1-photo-media {
+            position: relative;
+            aspect-ratio: 16 / 10;
+            overflow: hidden;
+            background: #dbeafe;
+        }
+        #homepageSection .f1-photo-media img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+            transform: scale(1.02);
+            transition: transform 8s ease;
+        }
+        #homepageSection .f1-photo-card:hover .f1-photo-media img { transform: scale(1.12) translate(-1.5%, -1%); }
+        #homepageSection .f1-photo-media::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, transparent 45%, rgba(8, 13, 32, .38));
+            pointer-events: none;
+        }
+        #homepageSection .f1-photo-badge {
+            position: absolute;
+            left: 14px;
+            top: 14px;
+            z-index: 1;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            color: #fff;
+            background: rgba(8, 13, 32, .48);
+            border: 1px solid rgba(255, 255, 255, .22);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            font-family: var(--f1-fd);
+            font-size: .74rem;
+            font-weight: 800;
+            letter-spacing: .02em;
+        }
+        #homepageSection .f1-photo-caption {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 16px 18px 18px;
+        }
+        #homepageSection .f1-photo-caption strong {
+            display: block;
+            color: var(--f1-ink);
+            font-family: var(--f1-fd);
+            font-size: 1rem;
+            line-height: 1.25;
+        }
+        #homepageSection .f1-photo-caption span {
+            color: var(--f1-mut);
+            font-weight: 700;
+            font-size: .82rem;
+            line-height: 1.35;
+            text-align: right;
+        }
+
         /* ---------- Section headings ---------- */
         #homepageSection .section-title, #homepageSection .platform-title, #homepageSection .community-title,
         #homepageSection .chrome-ext-title, #homepageSection .value-banner-content h2, #homepageSection .cta-content h2,
@@ -390,6 +498,8 @@
         @media (max-width: 768px) {
             .f1-stamp { display: none; }
             .f1-mq-group span { padding: 0 16px; font-size: .8rem; }
+            #homepageSection .f1-photo-moments { padding: 54px 18px 62px; }
+            #homepageSection .f1-photo-grid { grid-template-columns: 1fr; }
             #homepageSection .homepage-value-banner { border-radius: 20px; }
         }
         @media (prefers-reduced-motion: reduce) {
@@ -1203,6 +1313,55 @@
                 </div>
             </div>
         </div>
+
+        <!-- United States moments -->
+        <section class="f1-photo-moments" aria-labelledby="f1MomentsTitle">
+            <div class="f1-photo-moments-inner">
+                <div class="f1-photo-copy reveal">
+                    <span class="hero-badge" style="margin-bottom: 16px;">
+                        <span class="badge-icon" aria-hidden="true"><span class="glowing-dot"></span></span>
+                        <span>Study where the postcards are real</span>
+                    </span>
+                    <h2 id="f1MomentsTitle">United States moments waiting for you</h2>
+                    <p>From campus evenings to city icons and west-coast bridges, Rilono helps you prepare for the visa journey before the dream becomes your daily routine.</p>
+                </div>
+
+                <div class="f1-photo-grid">
+                    <article class="f1-photo-card reveal reveal-delay-1">
+                        <div class="f1-photo-media">
+                            <span class="f1-photo-badge">🇺🇸 Arrival icon</span>
+                            <img src="/static/assets/brand/countries/us.webp" alt="Statue of Liberty in New York for students arriving in the United States" loading="lazy">
+                        </div>
+                        <div class="f1-photo-caption">
+                            <strong>Statue of Liberty</strong>
+                            <span>New York, NY</span>
+                        </div>
+                    </article>
+
+                    <article class="f1-photo-card reveal reveal-delay-2">
+                        <div class="f1-photo-media">
+                            <span class="f1-photo-badge">🎓 Campus life</span>
+                            <img src="/static/assets/brand/countries/us-campus-maryland.webp" alt="University of Maryland campus at dusk" loading="lazy">
+                        </div>
+                        <div class="f1-photo-caption">
+                            <strong>Campus lights at dusk</strong>
+                            <span>College Park, MD</span>
+                        </div>
+                    </article>
+
+                    <article class="f1-photo-card reveal reveal-delay-3">
+                        <div class="f1-photo-media">
+                            <span class="f1-photo-badge">🌉 West coast</span>
+                            <img src="/static/assets/brand/countries/us-golden-gate.webp" alt="Golden Gate Bridge in San Francisco" loading="lazy">
+                        </div>
+                        <div class="f1-photo-caption">
+                            <strong>Golden Gate Bridge</strong>
+                            <span>San Francisco, CA</span>
+                        </div>
+                    </article>
+                </div>
+            </div>
+        </section>
 
         <!-- Remotion-Style Product Reel -->
         <div class="homepage-remotion-video">

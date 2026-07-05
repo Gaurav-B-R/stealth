@@ -97,7 +97,9 @@ FEATURES = {
 # here and instead attributed precisely per-account via user_id (see account report).
 # (Dropped phantom sources `ds160_autofill` [no Gemini] and `student_voice_interview`
 #  [never recorded — voice runs through the chat endpoint as student_ai_chat].)
-B2C_COST_SOURCES = ["student_ai_chat", "red_flag_scan", "university_shortlist"]
+# `student_ai_chat_copilot` is the Chrome-extension Copilot chat (split out of
+# student_ai_chat so the admin AI-cost view can show extension spend separately).
+B2C_COST_SOURCES = ["student_ai_chat", "student_ai_chat_copilot", "red_flag_scan", "university_shortlist"]
 
 
 # ---------------------------------------------------------------------------

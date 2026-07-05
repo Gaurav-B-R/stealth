@@ -769,7 +769,14 @@ Please provide a helpful response to the user's question:"""
             raise RuntimeError(f"All configured Rilono AI chat models failed: {str(last_model_error)}")
 
         try:
-            ai_usage.record_gemini_usage("student_ai_chat", model_name, response)
+            # Attribute Copilot (Chrome extension) chats to their own usage source so the
+            # admin AI-cost analytics can break out extension spend from website chat.
+            usage_source = (
+                "student_ai_chat_copilot"
+                if (source or "").strip().lower() == "rilono_ai_copilot"
+                else "student_ai_chat"
+            )
+            ai_usage.record_gemini_usage(usage_source, model_name, response)
         except Exception:
             pass
 

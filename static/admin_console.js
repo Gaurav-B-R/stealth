@@ -1756,18 +1756,21 @@ function renderAccountDetail(userId, data) {
 
     let lastUsageGroup = null;
     const usageHtml = (sub.usage || []).map((u) => {
-        const lim = u.free_limit;
+        // Effective limit: pass holders get u.pass_limit (-1 = unlimited), free accounts get
+        // u.free_limit. Pass features can still be capped (e.g. voice interviews: 3 per pass).
+        const lim = sub.is_pass_active ? (u.pass_limit === undefined ? -1 : u.pass_limit) : u.free_limit;
+        const unlimited = lim < 0;
         const pct = lim > 0 ? Math.min(100, Math.round((u.used / lim) * 100)) : (u.used > 0 ? 100 : 0);
-        const full = lim > 0 && u.used >= lim && !sub.is_pass_active;
-        const limLabel = sub.is_pass_active ? '∞' : (lim > 0 ? lim : '—');
+        const full = !unlimited && lim > 0 && u.used >= lim;
+        const limLabel = unlimited ? '∞' : (lim > 0 ? lim : '—');
         let header = '';
         if (u.group && u.group !== lastUsageGroup) {
             lastUsageGroup = u.group;
-            const tag = u.group === 'Rilono Copilot' ? ' <span class="acct-chip purple">Chrome extension</span>' : '';
+            const tag = u.group === 'Visa Success Pass features' ? ' <span class="acct-chip purple">web app</span>' : '';
             header = `<div class="acct-usage-group">${escapeHtml(u.group)}${tag}</div>`;
         }
         return `${header}<div><div class="acct-usage-row"><span>${escapeHtml(u.label)}</span><span>${u.used} / ${limLabel}</span></div>
-            <div class="acct-usage-bar"><span class="${full ? 'full' : ''}" style="width:${sub.is_pass_active ? 100 : pct}%"></span></div></div>`;
+            <div class="acct-usage-bar"><span class="${full ? 'full' : ''}" style="width:${unlimited ? 100 : pct}%"></span></div></div>`;
     }).join('');
     const planChip = sub.is_pass_active
         ? `<span class="acct-chip green">Visa Success Pass · active${sub.pass_days_left != null ? ` (${sub.pass_days_left}d left)` : ''}</span>`
@@ -1838,7 +1841,7 @@ function renderAccountDetail(userId, data) {
     const recoBtn = document.getElementById('acctRecoBtn');
     if (recoBtn) recoBtn.addEventListener('click', () => runAccountReco(userId));
     const toggleBtn = document.getElementById('acctToggleBtn');
-    if (toggleBtn) toggleBtn.addEventListener('click', async () => { await updateUserStatus(userId, !active); closeAccountDetail(); });
+    if (toggleBtn) toggleBtn.addEventListener('click', async () => { const ok = await updateUserStatus(userId, !active, a.email || a.name || ''); if (ok) closeAccountDetail(); });
     const delBtn = document.getElementById('acctDeleteBtn');
     if (delBtn) delBtn.addEventListener('click', async () => { await deleteUser(userId, a.email || 'this user', a.name || ''); closeAccountDetail(); });
 }
@@ -2706,7 +2709,7 @@ async function handleTableActionClick(event) {
 
     if (action === 'toggle-status') {
         const nextActive = String(button.dataset.nextActive || '').toLowerCase() === 'true';
-        await updateUserStatus(userId, nextActive);
+        await updateUserStatus(userId, nextActive, String(button.dataset.userEmail || ''));
         return;
     }
 
@@ -2717,8 +2720,19 @@ async function handleTableActionClick(event) {
     }
 }
 
-async function updateUserStatus(userId, nextIsActive) {
-    if (!await ensureAdminProtection({ silent: false })) return;
+async function updateUserStatus(userId, nextIsActive, userLabel = '') {
+    if (!await ensureAdminProtection({ silent: false })) return false;
+
+    // Secondary confirmation — activating/deactivating is an account state change
+    // that must never fire from an accidental single click (mirrors delete).
+    const who = (userLabel || '').trim() || 'this account';
+    const confirmed = window.confirm(
+        nextIsActive
+            ? `Reactivate ${who}?\n\nThey will be able to sign in again.`
+            : `Deactivate ${who}?\n\nThey will be signed out and blocked from signing in until you reactivate the account.`
+    );
+    if (!confirmed) return false;
+
     setRowActionsDisabled(true);
     try {
         const response = await fetch(`${API_BASE}/api/admin/users/${userId}/status`, {
@@ -2737,12 +2751,14 @@ async function updateUserStatus(userId, nextIsActive) {
 
         showFlash(`User ${nextIsActive ? 'activated' : 'deactivated'} successfully.`, 'success');
         await loadUsers({ resetPage: false });
+        return true;
     } catch (error) {
         console.error('Status update failed:', error);
         showFlash('Failed to update user status.', 'error');
     } finally {
         setRowActionsDisabled(false);
     }
+    return false;
 }
 
 async function deleteUser(userId, userEmail, userName) {
