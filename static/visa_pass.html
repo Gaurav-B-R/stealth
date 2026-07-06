@@ -142,7 +142,7 @@
       $("#statusPill").style.display="none";
       $("#app").innerHTML = `<div class="card auth-gate">
         <h2>Sign in to view your Visa Success Pass</h2>
-        <p class="muted">Log in to rilono.com to see your free scans, DS-160 auto-fills and unlock the pass.</p>
+        <p class="muted">Log in to rilono.com to see your free scans and unlock the pass.</p>
         <p style="margin-top:18px"><a class="btn btn-primary" href="/">Go to Rilono</a></p></div>`;
     }
 
@@ -170,9 +170,9 @@
       const f = e.features;
       const hero = isPass
         ? `<div class="hero"><h1>🎉 Your Visa Success Pass is active</h1>
-            <p>${e.pass.days_left} days left. Unlimited document audits, unlimited DS-160 auto-fills, and ${f.voice_interview.remaining} of ${f.voice_interview.limit} Rilono AI voice mock interviews remaining.</p></div>`
+            <p>${e.pass.days_left} days left. Unlimited document audits, and ${f.voice_interview.remaining} of ${f.voice_interview.limit} Rilono AI voice mock interviews remaining.</p></div>`
         : `<div class="hero"><h1>Pass your visa interview on the first try</h1>
-            <p>You're on the free plan: ${f.ds160_autofill.remaining} DS-160 auto-fills and ${f.red_flag_scan.remaining} red-flag scan left.
+            <p>You're on the free plan: ${f.red_flag_scan.remaining} red-flag scan left.
             Unlock everything with a one-time <b>${esc(e.pass.price_display)}</b> Visa Success Pass — valid ${e.pass.duration_days} days.</p></div>`;
 
       const passCard = isPass ? "" : `
@@ -194,7 +194,6 @@
         ${hero}
         <div class="section-title">Your features</div>
         <div class="grid">
-          ${quotaCard(f.ds160_autofill)}
           ${quotaCard(f.red_flag_scan)}
           ${quotaCard(f.voice_interview)}
         </div>
@@ -214,14 +213,12 @@
 
         <div class="section-title">Other tools</div>
         <div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
-          <button class="btn" id="ds160Btn">DS-160 auto-fill</button>
           <button class="btn" id="voiceBtn">Start Rilono AI voice mock interview</button>
-          <span class="muted" style="font-size:12px">Free: ${f.ds160_autofill.limit} auto-fills · voice interviews are pass-only.</span>
+          <span class="muted" style="font-size:12px">Voice mock interviews are pass-only.</span>
         </div>`;
 
       const buy=$("#buyBtn"); if(buy) buy.onclick=checkout;
       $("#scanBtn").onclick=runScan;
-      $("#ds160Btn").onclick=runDs160;
       $("#voiceBtn").onclick=runVoice;
     }
 
@@ -260,12 +257,6 @@
       box.innerHTML = `<div style="margin-top:6px"><div class="muted" style="font-size:13px;margin:8px 0">${esc(r.summary||"")}</div>${flags}${banner}</div>`;
     }
 
-    async function runDs160(){
-      const btn=$("#ds160Btn"); btn.disabled=true;
-      try{ const r=await api("/api/pass/ds160/autofill",{method:"POST"}); STATE.entitlements=r.entitlements; render();
-        toast("DS-160 fields ready ("+Object.keys(r.fields).length+" mapped)","success"); }
-      catch(ex){ btn.disabled=false; if(paywall(ex))return; toast(ex.message,"error"); }
-    }
     async function runVoice(){
       const btn=$("#voiceBtn"); btn.disabled=true;
       try{ const r=await api("/api/pass/voice-interview/consume",{method:"POST"}); STATE.entitlements=r.entitlements; render();

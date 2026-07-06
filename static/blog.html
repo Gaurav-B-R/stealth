@@ -38,7 +38,8 @@
         .nav-links a:hover { color: var(--ink); }
         .nav-links a[aria-current="page"] { color: var(--ink); }
         .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
-        @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
+        .nav-toggle { display: none; background: transparent; border: 0; color: var(--ink); cursor: pointer; padding: 6px; margin: -6px -6px -6px 0; border-radius: 8px; }
+        .nav-toggle svg { width: 26px; height: 26px; display: block; }
 
         /* "Products" dropdown — same header as the homepage so it's uniform across product pages. */
         .products-nav { position: relative; display: inline-flex; align-items: center; }
@@ -54,7 +55,19 @@
         .products-menu a:hover { background: rgba(99, 92, 255, .09); color: var(--ink); }
         .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 800; padding: .35rem .85rem .15rem; }
         .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
-        @media (max-width: 720px) { .products-nav { display: none; } }
+        @media (max-width: 720px) {
+            .nav-toggle { display: inline-flex; }
+            .nav-links { position: absolute; top: 100%; left: 0; right: 0; flex-direction: column; align-items: stretch; gap: 2px; background: #fff; border-bottom: 1px solid var(--line); box-shadow: 0 24px 48px rgba(15, 23, 42, .14); padding: 10px 16px 16px; display: none; }
+            .nav-links.open { display: flex; }
+            .nav-links > a { display: block; padding: 12px 10px; border-radius: 10px; font-size: 1rem; }
+            .nav-links > a:hover { background: rgba(99, 102, 241, .06); }
+            .nav-cta { text-align: center; margin-top: 8px; padding: 12px; }
+            .products-nav { display: block; position: static; }
+            .products-nav-trigger { display: none; }
+            .products-menu { position: static; opacity: 1; visibility: visible; pointer-events: auto; transform: none; box-shadow: none; border: 0; padding: 0; min-width: 0; background: transparent; }
+            .products-menu a { padding: 10px 10px; }
+            .products-menu .pm-label { padding: 8px 10px 2px; }
+        }
 
         /* blog index */
         .blog-hero { max-width: 900px; margin: 0 auto; padding: 52px 24px 6px; text-align: center; }
@@ -103,7 +116,8 @@
             { "@type": "BlogPosting", "headline": "How to use Rilono AI for your US student visa (F-1)", "url": "https://rilono.com/blog/how-to-use-rilono-ai-us-f1-visa" },
             { "@type": "BlogPosting", "headline": "How to use Rilono AI for your UK Student visa", "url": "https://rilono.com/blog/how-to-use-rilono-ai-uk-student-visa" },
             { "@type": "BlogPosting", "headline": "How to use Rilono AI for your Canada study permit", "url": "https://rilono.com/blog/how-to-use-rilono-ai-canada-study-permit" },
-            { "@type": "BlogPosting", "headline": "How to use Rilono AI for your Australia student visa (Subclass 500)", "url": "https://rilono.com/blog/how-to-use-rilono-ai-australia-student-visa" }
+            { "@type": "BlogPosting", "headline": "How to use Rilono AI for your Australia student visa (Subclass 500)", "url": "https://rilono.com/blog/how-to-use-rilono-ai-australia-student-visa" },
+            { "@type": "BlogPosting", "headline": "Manage every student visa in one platform (for consultancies)", "url": "https://rilono.com/blog/student-visa-crm-for-consultancies" }
         ]
     }
     </script>
@@ -112,7 +126,10 @@
     <nav class="navbar">
         <div class="nav-in">
             <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
-            <div class="nav-links">
+            <button class="nav-toggle" id="navToggle" type="button" aria-label="Toggle menu" aria-expanded="false" aria-controls="navLinks">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+            </button>
+            <div class="nav-links" id="navLinks">
                 <a href="/">Home</a>
                 <div class="products-nav" id="productsNav">
                     <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
@@ -193,6 +210,16 @@
             <p>Track all 7 Subclass 500 stages, get your OSHC and finances right, and strengthen your Genuine Student answers.</p>
             <span class="more">Read the guide →</span>
         </a>
+
+        <a class="blog-card featured" href="/blog/student-visa-crm-for-consultancies">
+            <span class="flag">🏢</span>
+            <span class="body">
+                <span class="tag">For consultancies · Rilono Enterprise</span>
+                <h3>Manage every student visa in one platform</h3>
+                <p>How consultancies and small firms run their whole practice — clients, documents, AI checks, mock interviews and team workflow — on one AI-checked platform.</p>
+                <span class="more">Read the guide →</span>
+            </span>
+        </a>
     </main>
 
     <footer class="hx-footer">
@@ -243,6 +270,17 @@
                 document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
             }
         })();
+    </script>
+    <script>
+    (function () {
+        var t = document.getElementById('navToggle'), n = document.getElementById('navLinks');
+        if (!t || !n) return;
+        var setOpen = function (o) { n.classList.toggle('open', o); t.setAttribute('aria-expanded', o ? 'true' : 'false'); };
+        t.addEventListener('click', function (e) { e.stopPropagation(); setOpen(!n.classList.contains('open')); });
+        n.addEventListener('click', function (e) { if (e.target.closest('a')) setOpen(false); });
+        document.addEventListener('click', function (e) { if (!n.contains(e.target) && !t.contains(e.target)) setOpen(false); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+    })();
     </script>
 </body>
 </html>

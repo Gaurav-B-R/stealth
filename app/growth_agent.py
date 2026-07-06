@@ -13,9 +13,8 @@ Architecture (deliberate, learned from Deep Scan):
   segment, the specific promotion/offer, a ready-to-send message, the channel and a
   priority for each account. This is what an "advanced thinking model" is good at.
 
-Model: configurable via ADMIN_GROWTH_AGENT_MODEL, defaulting to a capable thinking model
-(gemini-2.5-pro). NOTE: there is no "Gemini 3.1 Pro" model id; point the env at any newer
-model when it ships.
+Model: configurable via ADMIN_GROWTH_AGENT_MODEL, defaulting to a stable capable model
+with a fast fallback.
 
 This module is INTERNAL. It is only ever reached through admin-gated endpoints.
 """
@@ -66,12 +65,15 @@ _PROMOTION_IDS = {p["id"] for p in PROMOTION_PLAYS}
 
 
 def _model_candidates() -> list:
-    """Ordered models to try. Defaults to Google's latest thinking model with fallbacks;
-    override entirely via ADMIN_GROWTH_AGENT_MODEL / ADMIN_GROWTH_AGENT_MODEL_CANDIDATES."""
+    """Ordered models to try.
+
+    Keep defaults on stable model IDs. Preview IDs expire and can break admin actions if
+    an environment variable is not set.
+    """
     return gemini_utils.get_model_candidates(
         primary_env="ADMIN_GROWTH_AGENT_MODEL",
         candidates_env="ADMIN_GROWTH_AGENT_MODEL_CANDIDATES",
-        defaults=["gemini-3.1-pro-preview", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+        defaults=["gemini-2.5-pro", "gemini-2.5-flash"],
     )
 
 
@@ -212,7 +214,7 @@ def _build_prompt(candidates: list[dict]) -> str:
 
 PRODUCT: the "Visa Success Pass" — a one-time {price} purchase granting 30 days of full
 access: unlimited Rilono AI chat, unlimited document uploads & red-flag audits, 3 AI voice
-mock interviews, unlimited DS-160 auto-fills and the Chrome copilot. The free tier is
+mock interviews, and unlimited Rilono Copilot (Chrome extension). The free tier is
 capped (25 AI messages, 5 uploads, 3 interview-prep sessions, 2 mock interviews, 1 red-flag
 scan). A referred user's FIRST Pass is ₹200 off.
 

@@ -914,7 +914,7 @@ button { font-family: inherit; cursor: pointer; }
     border-radius: 12px; padding: 11px 13px;
 }
 .cal-check { display: flex; align-items: center; gap: 10px; flex: 1; cursor: pointer; font-size: 13.5px; color: var(--text); }
-.cal-check input { width: 17px; height: 17px; accent-color: var(--primary); cursor: pointer; flex: none; }
+.cal-check input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--primary); cursor: pointer; flex: none; }
 .cal-check input:disabled { cursor: not-allowed; }
 .cal-check b { color: var(--primary); font-weight: 750; }
 .cal-mention-clear {

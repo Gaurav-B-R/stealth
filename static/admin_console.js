@@ -1635,7 +1635,7 @@ function renderGrowthRecommendations(data) {
     const metaEl = document.getElementById('adminGrowthMeta');
     const recs = (data && data.recommendations) || [];
     if (metaEl) {
-        const via = data.ai_used ? `${escapeHtml(data.model_used || 'Gemini')}` : 'rule-based (AI unavailable)';
+        const via = data.ai_used ? 'Rilono AI' : 'rule-based (AI unavailable)';
         metaEl.textContent = `${data.analyzed_count} of ${data.total_free_accounts} free accounts · strategy via ${via}`;
     }
     if (!recs.length) {
@@ -1887,7 +1887,7 @@ function renderAccountDetail(userId, data) {
           <div class="acct-card"><h3>Payments</h3>${paymentsHtml}</div>
         </div>
         <div style="display:grid;gap:16px">
-          <div class="acct-card acct-reco-card"><h3>🎯 Gemini 3.1 Pro — Conversion play</h3>
+          <div class="acct-card acct-reco-card"><h3>🎯 Rilono AI — Conversion play</h3>
             <div id="acctRecoBody">
               <p style="font-size:13px;color:#64748b;margin:0 0 10px">Intent score <strong>${intent.score != null ? intent.score : '—'}</strong>${intent.hit_any_limit ? ' · <span class="acct-chip amber">hit a free limit</span>' : ''}. Run the agent for a tailored coupon/promotion + outreach message for this account.</p>
               <button class="primary-btn small-btn" id="acctRecoBtn">Get AI recommendation</button>
@@ -1958,7 +1958,7 @@ async function setAccountVisaDecision(userId, decision) {
 async function runAccountReco(userId) {
     const body = document.getElementById('acctRecoBody');
     if (!body) return;
-    body.innerHTML = '<div class="acct-empty">Gemini 3.1 Pro is analyzing this account and drafting a play…</div>';
+    body.innerHTML = '<div class="acct-empty">Rilono AI is analyzing this account and drafting a play…</div>';
     try {
         const response = await fetch(`${API_BASE}/api/admin/users/${userId}/conversion-reco`, {
             method: 'POST', headers: buildAuthHeaders(), credentials: 'same-origin',
@@ -1970,7 +1970,7 @@ async function runAccountReco(userId) {
         }
         const reco = data.recommendation || {};
         const intentClass = reco.intent === 'high' ? 'green' : (reco.intent === 'medium' ? 'amber' : 'grey');
-        const via = data.ai_used ? escapeHtml(data.model_used || 'Gemini') : 'rule-based fallback';
+        const via = data.ai_used ? 'Rilono AI' : 'rule-based fallback';
         body.innerHTML = `
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
             <span class="acct-chip ${intentClass}">${escapeHtml(String(reco.intent || '').toUpperCase())} INTENT</span>

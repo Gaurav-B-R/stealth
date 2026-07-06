@@ -42,7 +42,7 @@
             {
                 "@type": "FAQPage",
                 "mainEntity": [
-                    { "@type": "Question", "name": "Is Rilono free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — you can create an account and start organizing your visa journey for free, including 3 DS-160 auto-fills and 1 document red-flag scan. To unlock unlimited document audits, full red-flag reveals and Rilono AI voice mock interviews, get the Visa Success Pass — a one-time ₹999 for 30 days (no subscription)." } },
+                    { "@type": "Question", "name": "Is Rilono free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — you can create an account and start organizing your visa journey for free, including 1 document red-flag scan. To unlock unlimited document audits, full red-flag reveals and Rilono AI voice mock interviews, get the Visa Success Pass — a one-time ₹999 for 30 days (no subscription)." } },
                     { "@type": "Question", "name": "Which visas does Rilono support?", "acceptedAnswer": { "@type": "Answer", "text": "Rilono focuses on US student visas — F-1, J-1 and M-1 — with document guidance, validation and interview prep tailored to each. Consultancies using Rilono Enterprise can manage student visas across the US, Canada, UK, Australia, Germany and Ireland." } },
                     { "@type": "Question", "name": "Is my data secure?", "acceptedAnswer": { "@type": "Answer", "text": "Absolutely. Your documents are end-to-end encrypted on your device with a passphrase only you hold, so we only ever store ciphertext we can't read. Our AI reviews a document only when you explicitly ask, and never stores it." } },
                     { "@type": "Question", "name": "Does Rilono help with the visa interview?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Rilono includes AI-powered mock interviews with real consulate-style questions for your destination and instant feedback, so you walk in prepared and confident." } },
@@ -684,6 +684,32 @@
             .hero-path, .skybar .jet, .jr-jet { display: none; }
             .bp-tilt { transform: none !important; }
         }
+
+        /* ===================== TESTIMONIAL ===================== */
+        .hx-testi .testi-card {
+            display: grid; grid-template-columns: minmax(0, 300px) 1fr; gap: 38px; align-items: center;
+            max-width: 940px; margin: 0 auto; background: var(--card); border: 1px solid var(--line);
+            border-radius: 26px; padding: 30px; box-shadow: 0 26px 64px rgba(23, 28, 74, .09);
+        }
+        .hx-testi .testi-photo { position: relative; }
+        .hx-testi .testi-photo img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 20px; display: block; }
+        .hx-testi .testi-badge {
+            position: absolute; left: 14px; bottom: 14px; display: inline-flex; align-items: center; gap: 6px;
+            background: rgba(255, 255, 255, .95); color: #0f7a3d; font-weight: 800; font-size: .78rem;
+            padding: 7px 12px; border-radius: 999px; box-shadow: 0 12px 28px rgba(23, 28, 74, .18);
+        }
+        .hx-testi .testi-stars { color: #f5a623; letter-spacing: 3px; font-size: 1.05rem; margin-bottom: 14px; }
+        .hx-testi blockquote {
+            margin: 0 0 22px; font-family: var(--fd); font-size: clamp(1.12rem, 1.7vw, 1.42rem);
+            line-height: 1.5; font-weight: 600; color: var(--ink);
+        }
+        .hx-testi figcaption b { display: block; font-family: var(--fd); font-weight: 800; color: var(--ink); font-size: 1.02rem; }
+        .hx-testi figcaption span { color: var(--mut); font-weight: 600; font-size: .9rem; }
+        @media (max-width: 760px) {
+            .hx-testi .testi-card { grid-template-columns: 1fr; gap: 22px; padding: 22px; text-align: center; }
+            .hx-testi .testi-photo img { max-width: 300px; margin: 0 auto; }
+            .hx-testi .testi-stars { text-align: center; }
+        }
     </style>
     <script src="/static/attribution.js"></script>
 </head>
@@ -1027,6 +1053,34 @@
             </div>
         </section>
 
+        <!-- ===================== TESTIMONIAL ===================== -->
+        <section class="pad hx-testi" style="padding-top:0">
+            <div class="wrap">
+                <div class="sec-head rv">
+                    <span class="eyebrow"><span class="pulse"></span> Success story</span>
+                    <h2 style="margin-top:18px">Real students. <span class="grad">Real approvals.</span></h2>
+                </div>
+                <figure class="testi-card rv">
+                    <div class="testi-photo">
+                        <img src="/static/assets/testimonials/prathyaksh-paramashiva.webp"
+                            alt="Prathyaksh Paramashiva in front of the Statue of Liberty after his US F-1 student visa was approved"
+                            loading="lazy" width="900" height="900">
+                        <span class="testi-badge">🇺🇸 F-1 Approved</span>
+                    </div>
+                    <div>
+                        <div class="testi-stars" aria-label="5 out of 5 stars">★★★★★</div>
+                        <blockquote>“Rilono checked every one of my documents before I submitted and drilled me with
+                            mock interviews that felt exactly like the real thing. I walked into my F-1 interview calm and
+                            confident — and got my visa for Clark University.”</blockquote>
+                        <figcaption>
+                            <b>Prathyaksh Paramashiva</b>
+                            <span>F-1 student · Clark University, USA</span>
+                        </figcaption>
+                    </div>
+                </figure>
+            </div>
+        </section>
+
         <!-- ===================== AUDIENCE SPLIT ===================== -->
         <section class="pad" style="padding-top:0">
             <div class="wrap">
@@ -1203,7 +1257,7 @@
                     <h2>Questions, <span class="grad">answered</span></h2>
                 </div>
                 <div class="faq">
-                    <details class="rv" open><summary>Is Rilono free? <span class="chev">+</span></summary><div class="ans">Yes — you can create an account and start organizing your visa journey for free, including 3 DS-160 auto-fills and 1 document red-flag scan. To unlock unlimited document audits, full red-flag reveals and Rilono AI voice mock interviews, get the <a href="/pricing">Visa Success Pass</a> — a one-time ₹999 for 30 days (no subscription).</div></details>
+                    <details class="rv" open><summary>Is Rilono free? <span class="chev">+</span></summary><div class="ans">Yes — you can create an account and start organizing your visa journey for free, including 1 document red-flag scan. To unlock unlimited document audits, full red-flag reveals and Rilono AI voice mock interviews, get the <a href="/pricing">Visa Success Pass</a> — a one-time ₹999 for 30 days (no subscription).</div></details>
                     <details class="rv"><summary>Which visas does Rilono support? <span class="chev">+</span></summary><div class="ans">Rilono focuses on US student visas — F-1, J-1 and M-1 — with document guidance, validation and interview prep tailored to each. Consultancies using Rilono Enterprise can manage student visas across the US, Canada, UK, Australia, Germany and Ireland.</div></details>
                     <details class="rv"><summary>Is my data secure? <span class="chev">+</span></summary><div class="ans">Absolutely. Your documents are end-to-end encrypted on your device with a passphrase only you hold, so we only ever store ciphertext we can't read. Our AI reviews a document only when you explicitly ask, and never stores it.</div></details>
                     <details class="rv"><summary>Does Rilono help with the visa interview? <span class="chev">+</span></summary><div class="ans">Yes. Rilono includes AI-powered mock interviews with real consulate-style questions for your destination and instant feedback, so you walk in prepared and confident.</div></details>

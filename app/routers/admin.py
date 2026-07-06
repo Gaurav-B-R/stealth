@@ -849,7 +849,7 @@ def admin_user_detail(
         # "group" tells the admin UI which surface each quota belongs to. Every counter here
         # is consumed in the web app; the Chrome extension (Rilono Copilot) has no counters
         # of its own — Copilot chat is pass-gated and shares the "Rilono AI messages" quota.
-        # Red-flag scan, DS-160 auto-fill, voice interview and university shortlist are the
+        # Red-flag scan, voice interview and university shortlist are the
         # Visa-Success-Pass-metered features (see app/visa_pass.py FEATURES); "pass_limit"
         # is what a pass holder gets (-1 = unlimited), so the UI can render truthful limits
         # (e.g. voice interviews are capped at 3 even on the pass, not unlimited).
@@ -859,7 +859,6 @@ def admin_user_detail(
             {"key": "prep_sessions", "label": "Interview-prep sessions", "group": "Web app", "used": sub.prep_sessions_used or 0, "free_limit": subs.FREE_PREP_SESSION_LIMIT, "pass_limit": -1},
             {"key": "mock_interviews", "label": "Mock interviews", "group": "Web app", "used": sub.mock_interviews_used or 0, "free_limit": subs.FREE_MOCK_INTERVIEW_LIMIT, "pass_limit": -1},
             {"key": "red_flag_scans", "label": "Red-flag scan", "group": "Visa Success Pass features", "used": sub.red_flag_scans_used or 0, "free_limit": visa_pass.FREE_RED_FLAG_SCANS, "pass_limit": visa_pass.FEATURES["red_flag_scan"]["pass_limit"]},
-            {"key": "ds160_autofills", "label": "DS-160 auto-fill", "group": "Visa Success Pass features", "used": sub.ds160_autofills_used or 0, "free_limit": visa_pass.FREE_DS160_AUTOFILLS, "pass_limit": visa_pass.FEATURES["ds160_autofill"]["pass_limit"]},
             {"key": "voice_interviews", "label": "Voice mock interview", "group": "Visa Success Pass features", "used": sub.pass_voice_interviews_used or 0, "free_limit": 0, "pass_limit": visa_pass.FEATURES["voice_interview"]["pass_limit"]},
             {"key": "university_shortlists", "label": "AI university shortlist", "group": "Visa Success Pass features", "used": getattr(sub, "university_recommendations_used", 0) or 0, "free_limit": visa_pass.FREE_UNIVERSITY_RECOMMENDATIONS, "pass_limit": visa_pass.FEATURES["university_shortlist"]["pass_limit"]},
         ]

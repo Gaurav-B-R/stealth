@@ -41,7 +41,8 @@
         .nav-links a { text-decoration: none; color: var(--ink-2); font-weight: 600; font-size: .95rem; }
         .nav-links a:hover { color: var(--ink); }
         .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
-        @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
+        .nav-toggle { display: none; background: transparent; border: 0; color: var(--ink); cursor: pointer; padding: 6px; margin: -6px -6px -6px 0; border-radius: 8px; }
+        .nav-toggle svg { width: 26px; height: 26px; display: block; }
 
         /* "Products" dropdown — same header as the homepage so it's uniform across product pages. */
         .products-nav { position: relative; display: inline-flex; align-items: center; }
@@ -57,7 +58,19 @@
         .products-menu a:hover { background: rgba(99, 92, 255, .09); color: var(--ink); }
         .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 800; padding: .35rem .85rem .15rem; }
         .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
-        @media (max-width: 720px) { .products-nav { display: none; } }
+        @media (max-width: 720px) {
+            .nav-toggle { display: inline-flex; }
+            .nav-links { position: absolute; top: 100%; left: 0; right: 0; flex-direction: column; align-items: stretch; gap: 2px; background: #fff; border-bottom: 1px solid var(--line); box-shadow: 0 24px 48px rgba(15, 23, 42, .14); padding: 10px 16px 16px; display: none; }
+            .nav-links.open { display: flex; }
+            .nav-links > a { display: block; padding: 12px 10px; border-radius: 10px; font-size: 1rem; }
+            .nav-links > a:hover { background: rgba(99, 102, 241, .06); }
+            .nav-cta { text-align: center; margin-top: 8px; padding: 12px; }
+            .products-nav { display: block; position: static; }
+            .products-nav-trigger { display: none; }
+            .products-menu { position: static; opacity: 1; visibility: visible; pointer-events: auto; transform: none; box-shadow: none; border: 0; padding: 0; min-width: 0; background: transparent; }
+            .products-menu a { padding: 10px 10px; }
+            .products-menu .pm-label { padding: 8px 10px 2px; }
+        }
 
         /* article shell */
         .post { max-width: 760px; margin: 0 auto; padding: 48px 24px 40px; }
@@ -106,6 +119,31 @@
         .faq summary .chev { flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-content: center; background: rgba(99, 102, 241, .1); color: var(--brand); font-weight: 900; transition: transform .3s ease; }
         .faq details[open] summary .chev { transform: rotate(45deg); }
         .faq .ans { color: var(--ink-2); font-size: .92rem; padding: 0 0 15px; margin: 0; }
+
+        /* value strip + comparison (conversion) */
+        .value-strip { margin: 30px 0; border-radius: 18px; padding: 22px 24px; border: 1px solid rgba(99, 102, 241, .25); background: linear-gradient(160deg, #f5f4ff, #fdf5ff); }
+        .value-strip h3 { margin: 0 0 4px; font-size: 1.12rem; font-weight: 800; }
+        .value-strip > p { margin: 0 0 16px; color: var(--ink-2); font-size: .95rem; }
+        .value-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        .value-item { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; }
+        .value-item .ic { font-size: 1.25rem; }
+        .value-item b { display: block; font-size: .9rem; margin: 5px 0 2px; }
+        .value-item span { color: var(--muted); font-size: .8rem; line-height: 1.4; }
+        .value-cta { margin-top: 16px; }
+        .value-cta a { display: inline-flex; align-items: center; gap: 6px; font-weight: 800; color: var(--brand); text-decoration: none; font-size: .95rem; }
+        .value-cta a:hover { text-decoration: underline; }
+        .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+        .cmp-col { border-radius: 16px; padding: 22px; border: 1px solid var(--line); }
+        .cmp-col.old { background: #fff; }
+        .cmp-col.new { background: linear-gradient(165deg, #f5f4ff, #fdf5ff); border-color: rgba(99, 102, 241, .35); box-shadow: 0 14px 34px rgba(99, 102, 241, .1); }
+        .cmp-col h4 { margin: 0 0 14px; font-size: .82rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; color: var(--muted); }
+        .cmp-col.new h4 { color: var(--brand); }
+        .cmp-col ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+        .cmp-col li { display: flex; gap: 10px; align-items: flex-start; font-size: .92rem; font-weight: 600; }
+        .cmp-col .x { color: #f43f5e; font-weight: 900; flex: none; }
+        .cmp-col .v { color: #059669; font-weight: 900; flex: none; }
+        .cmp-col.old li { color: var(--ink-2); }
+        @media (max-width: 640px) { .value-grid { grid-template-columns: 1fr 1fr; } .cmp { grid-template-columns: 1fr; } }
 
         /* CTA band */
         .cta-band { text-align: center; border-radius: 20px; padding: 40px 26px; border: 1px solid rgba(99, 102, 241, .3); background: radial-gradient(600px 280px at 50% -10%, rgba(99, 102, 241, .14), transparent 60%), linear-gradient(160deg, #f0effc, #eef2fb); margin: 44px 0 10px; }
@@ -164,7 +202,10 @@
     <nav class="navbar">
         <div class="nav-in">
             <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
-            <div class="nav-links">
+            <button class="nav-toggle" id="navToggle" type="button" aria-label="Toggle menu" aria-expanded="false" aria-controls="navLinks">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+            </button>
+            <div class="nav-links" id="navLinks">
                 <a href="/">Home</a>
                 <div class="products-nav" id="productsNav">
                     <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
@@ -228,6 +269,18 @@
         <p>New to Rilono? Start with the <a href="/canada-study-permit">Canada study-permit page</a>, then <a href="/register">create a free account</a>. This guide assumes you're applying for a Canadian study permit.</p>
         <div class="callout note">
             <p><strong>One important update:</strong> the Student Direct Stream (SDS) was closed by IRCC on 8 November 2024. All study-permit applications now go through the single regular stream — so this guide (and Rilono) focus on getting that one application complete and consistent. Always confirm current rules on the official IRCC source.</p>
+        </div>
+
+        <div class="value-strip">
+            <h3>Why students choose Rilono</h3>
+            <p>Everything you need for a confident, complete application — without paying an agent for basic document checks.</p>
+            <div class="value-grid">
+                <div class="value-item"><span class="ic">🛡️</span><b>AI-checked documents</b><span>Mismatches flagged before an officer ever sees them.</span></div>
+                <div class="value-item"><span class="ic">🕒</span><b>Guidance 24/7</b><span>Answers the moment you need them, day or night.</span></div>
+                <div class="value-item"><span class="ic">🔐</span><b>End-to-end encrypted</b><span>Only you can read your documents — not even us.</span></div>
+                <div class="value-item"><span class="ic">🎓</span><b>Free to start</b><span>Use the full journey; upgrade only when you're ready.</span></div>
+            </div>
+            <div class="value-cta"><a href="/register">Start free — it takes two minutes →</a></div>
         </div>
 
         <h2>Step 1 — Set up your account and profile</h2>
@@ -330,6 +383,29 @@
             </details>
         </div>
 
+        <h2>The old way vs. the Rilono way</h2>
+        <p>Thousands of students still juggle folders, forwards and expensive agents for basic checks. You don't have to.</p>
+        <div class="cmp">
+            <div class="cmp-col old">
+                <h4>Without Rilono</h4>
+                <ul>
+                    <li><span class="x">✕</span> Scattered PDFs, screenshots and WhatsApp forwards</li>
+                    <li><span class="x">✕</span> Guessing what the visa officer actually wants</li>
+                    <li><span class="x">✕</span> Paying an agent heavily for basic document checks</li>
+                    <li><span class="x">✕</span> Finding a missing page or mismatch the week you apply</li>
+                </ul>
+            </div>
+            <div class="cmp-col new">
+                <h4>With Rilono</h4>
+                <ul>
+                    <li><span class="v">✓</span> One encrypted vault — every document organized and AI-checked</li>
+                    <li><span class="v">✓</span> Personalized to your destination, stage and documents</li>
+                    <li><span class="v">✓</span> Mismatches and gaps flagged weeks before you submit</li>
+                    <li><span class="v">✓</span> Start free; a one-time Visa Success Pass, never a subscription</li>
+                </ul>
+            </div>
+        </div>
+
         <div class="cta-band">
             <h2>Submit your study permit with confidence</h2>
             <p>Organize every document, catch mismatches before IRCC does, and build a consistent, complete file — with Rilono AI at every stage.</p>
@@ -387,6 +463,17 @@
                 document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
             }
         })();
+    </script>
+    <script>
+    (function () {
+        var t = document.getElementById('navToggle'), n = document.getElementById('navLinks');
+        if (!t || !n) return;
+        var setOpen = function (o) { n.classList.toggle('open', o); t.setAttribute('aria-expanded', o ? 'true' : 'false'); };
+        t.addEventListener('click', function (e) { e.stopPropagation(); setOpen(!n.classList.contains('open')); });
+        n.addEventListener('click', function (e) { if (e.target.closest('a')) setOpen(false); });
+        document.addEventListener('click', function (e) { if (!n.contains(e.target) && !t.contains(e.target)) setOpen(false); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+    })();
     </script>
 </body>
 </html>

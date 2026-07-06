@@ -633,6 +633,16 @@ async def read_uk_blog():
     return HTMLResponse(page)
 
 
+@app.get("/blog/student-visa-crm-for-consultancies")
+@app.get("/blog/student-visa-crm-for-consultancies/")
+async def read_enterprise_blog():
+    """Serve the Rilono Enterprise (B2B) guide for consultancies (static blog; own SEO meta)."""
+    page = _read_static_html("blog-enterprise-visa-management-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
 @app.get("/enterprise")
 async def read_enterprise():
     """Serve the standalone enterprise dashboard page."""

@@ -6,7 +6,6 @@ Surfaces both the rilono.com web app and the Chrome extension. Endpoints:
   POST /api/pass/checkout               — create one-time Razorpay order (₹999)
   POST /api/pass/verify                 — verify signature → grant 30-day pass
   POST /api/pass/red-flag-scan          — Gemini red-flag audit (free=1 blurred, pass=full)
-  POST /api/pass/ds160/autofill         — DS-160 auto-fill (free 3, pass unlimited)
   POST /api/pass/voice-interview/consume— meter an AI voice mock interview (pass: 3)
 
 The pass itself is a 30-day Pro grant (app.subscriptions); this router owns the
@@ -317,38 +316,6 @@ async def red_flag_scan(
         "total_flags": total,
         "hidden_flags": 0 if reveal_all else max(0, total - 1),
         "reveal_all": reveal_all,
-        "entitlements": visa_pass.entitlements_state(db, subscription),
-    }
-
-
-@router.post("/ds160/autofill")
-def ds160_autofill(
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_active_user),
-):
-    _rate_limit_or_429(request, "pass.ds160", int(os.getenv("VISA_PASS_DS160_RATE_LIMIT", "60")), 600, current_user.id)
-    subscription = get_or_create_user_subscription(db, current_user.id)
-    visa_pass.enforce_feature_or_402(db, subscription, "ds160_autofill")
-
-    # Map the user's known profile into DS-160 fields the extension can fill.
-    fields = {
-        "surname": (current_user.full_name or "").split(" ")[-1] if current_user.full_name else "",
-        "given_names": " ".join((current_user.full_name or "").split(" ")[:-1]) if current_user.full_name else "",
-        "full_name": current_user.full_name or "",
-        "email": current_user.email or "",
-        "phone": current_user.phone or "",
-        "country_of_residence": current_user.current_residence_country or "",
-        "intended_university": current_user.university or "",
-        "purpose_of_travel": "Study (F-1 student)",
-        "intended_intake": current_user.preferred_intake or "",
-        "intended_year": current_user.preferred_year or "",
-    }
-    used = visa_pass.consume_feature(db, subscription, "ds160_autofill", commit=True)
-
-    return {
-        "fields": fields,
-        "autofills_used": used,
         "entitlements": visa_pass.entitlements_state(db, subscription),
     }
 

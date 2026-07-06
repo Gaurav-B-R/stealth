@@ -1,5 +1,5 @@
 """
-Rilono Enterprise AI copilot.
+Rilono Enterprise AI assistant.
 
 A Gemini function-calling agent that answers consultancy staff questions about
 their own portal ("how many got approved this week?", "who needs my attention?",
@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 
 MAX_HISTORY_TURNS = 12
 
+INTERNAL_PROVIDER_DISCLOSURE_PATTERN = re.compile(
+    r"\b(?:gemini[-\w.]*|google\s+generative\s+ai|google\s+genai|vertex\s+ai)\b",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Availability
@@ -47,6 +52,21 @@ def is_ai_configured() -> bool:
     """True when a usable Gemini API key is present for the standard SDK path."""
     key = (gemini_utils.GEMINI_API_KEY or "").strip()
     return bool(gemini_utils.GENAI_AVAILABLE and key and key.startswith("AIza"))
+
+
+def sanitize_public_ai_text(text: str) -> str:
+    """Keep internal provider/model names out of user-visible assistant text."""
+    value = str(text or "").strip()
+    if not value:
+        return value
+    return INTERNAL_PROVIDER_DISCLOSURE_PATTERN.sub("Rilono AI", value)
+
+
+def _enterprise_model_candidates() -> list[str]:
+    return gemini_utils.get_model_candidates(
+        primary_env="ENTERPRISE_AI_MODEL",
+        candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +593,7 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
     stages = ", ".join(f"{s['label']} ({s['key']})" for s in catalog.CLIENT_STAGES)
     countries = ", ".join(c["name"] for c in catalog.COUNTRIES)
     return (
-        f"You are Rilono Copilot, the AI assistant inside the Rilono Enterprise portal for "
+        f"You are the Rilono AI Assistant inside the Rilono Enterprise portal for "
         f"the student-visa consultancy \"{organization_name}\". You are helping {user_name} "
         f"(role: {role}).\n\n"
         f"Today is {today} (UTC).\n\n"
@@ -638,16 +658,11 @@ def run_enterprise_ai_chat(
     message: str,
     history: Optional[list] = None,
 ) -> str:
-    """Run one turn of the enterprise AI copilot. Returns the assistant's text answer."""
+    """Run one turn of the enterprise AI assistant. Returns the assistant's text answer."""
     if not is_ai_configured():
         return ("The AI assistant isn't configured yet — an administrator needs to enable "
                 "Rilono AI on the server.")
 
-    genai = gemini_utils.genai
-    model_name = gemini_utils.get_model_candidates(
-        primary_env="ENTERPRISE_AI_MODEL",
-        candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
-    )[0]
     tools = build_org_tools(db, organization.id)
     system = _system_instruction(
         organization_name=organization.company_name or "your consultancy",
@@ -655,17 +670,25 @@ def run_enterprise_ai_chat(
         role=role,
     )
 
-    model = genai.GenerativeModel(model_name, tools=tools, system_instruction=system)
-    chat = model.start_chat(
-        history=_convert_history(history),
-        enable_automatic_function_calling=True,
-    )
-    response = chat.send_message((message or "").strip()[:4000])
-    ai_usage.record_gemini_usage("enterprise_copilot", model_name, response)
-    text = (getattr(response, "text", None) or "").strip()
-    if not text:
-        return "I couldn't find an answer to that. Try rephrasing, or ask about your clients, statuses or recent activity."
-    return text
+    last_error = None
+    for model_name in _enterprise_model_candidates():
+        try:
+            model = gemini_utils.genai.GenerativeModel(model_name, tools=tools, system_instruction=system)
+            chat = model.start_chat(
+                history=_convert_history(history),
+                enable_automatic_function_calling=True,
+            )
+            response = chat.send_message((message or "").strip()[:4000])
+            ai_usage.record_gemini_usage("enterprise_copilot", model_name, response)
+            text = (getattr(response, "text", None) or "").strip()
+            if not text:
+                return "I couldn't find an answer to that. Try rephrasing, or ask about your clients, statuses or recent activity."
+            return sanitize_public_ai_text(text)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            logger.warning("Enterprise AI model attempt failed (%s)", model_name, exc_info=True)
+
+    raise RuntimeError("Enterprise AI assistant could not answer right now.") from last_error
 
 
 # ---------------------------------------------------------------------------
@@ -692,10 +715,7 @@ DEEP_SCAN_RECONCILE_MAX_CHARS = int(os.getenv("DEEP_SCAN_RECONCILE_MAX_CHARS", "
 
 
 def _deep_scan_model_name() -> str:
-    return gemini_utils.get_model_candidates(
-        primary_env="ENTERPRISE_AI_MODEL",
-        candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
-    )[0]
+    return _enterprise_model_candidates()[0]
 
 
 def _parse_json_object(text: Optional[str]):

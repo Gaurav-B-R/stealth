@@ -236,7 +236,7 @@ def update_profile(
     update_data = user_update.dict(exclude_unset=True)
 
     # Don't let a user blank out their name — it breaks greetings ("Hi !") and
-    # DS-160 autofill (empty surname/given names). Trim and require non-empty.
+    # downstream personalization. Trim and require non-empty.
     if "full_name" in update_data:
         cleaned_name = (update_data.get("full_name") or "").strip()
         if not cleaned_name:

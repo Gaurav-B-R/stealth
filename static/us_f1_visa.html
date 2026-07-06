@@ -357,6 +357,38 @@
             line-height: 1.35;
             text-align: right;
         }
+        /* ===== Student testimonial ===== */
+        #homepageSection .f1-testi { padding: 6px 24px 78px; background: #f7f9ff; }
+        #homepageSection .f1-testi-inner { max-width: 1000px; margin: 0 auto; }
+        #homepageSection .f1-testi-head { max-width: 680px; margin: 0 auto 28px; text-align: center; }
+        #homepageSection .f1-testi-head h2 {
+            margin: 14px 0 0; color: var(--f1-ink); font-family: var(--f1-fd);
+            font-size: clamp(1.7rem, 3.4vw, 2.6rem); line-height: 1.06; letter-spacing: -.035em;
+        }
+        #homepageSection .f1-testi-head .grad { background: var(--f1-grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+        #homepageSection .f1-testi-card {
+            display: grid; grid-template-columns: minmax(0, 300px) 1fr; gap: 36px; align-items: center;
+            background: #fff; border: 1px solid var(--f1-line); border-radius: 26px; padding: 30px;
+            box-shadow: 0 26px 64px rgba(23, 28, 74, .10);
+        }
+        #homepageSection .f1-testi-photo { position: relative; }
+        #homepageSection .f1-testi-photo img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 20px; display: block; }
+        #homepageSection .f1-testi-badge {
+            position: absolute; left: 14px; bottom: 14px; display: inline-flex; align-items: center; gap: 6px;
+            background: rgba(255, 255, 255, .95); color: #0f7a3d; font-family: var(--f1-fd); font-weight: 800;
+            font-size: .78rem; padding: 7px 12px; border-radius: 999px; box-shadow: 0 12px 28px rgba(23, 28, 74, .18);
+        }
+        #homepageSection .f1-testi-stars { color: #f5a623; letter-spacing: 3px; font-size: 1.05rem; margin-bottom: 14px; }
+        #homepageSection .f1-testi-card blockquote {
+            margin: 0 0 22px; font-family: var(--f1-fd); font-size: clamp(1.12rem, 1.7vw, 1.42rem);
+            line-height: 1.5; font-weight: 600; color: var(--f1-ink);
+        }
+        #homepageSection .f1-testi-card figcaption b { display: block; font-family: var(--f1-fd); font-weight: 800; color: var(--f1-ink); font-size: 1.02rem; }
+        #homepageSection .f1-testi-card figcaption span { color: var(--f1-mut); font-weight: 700; font-size: .9rem; }
+        @media (max-width: 760px) {
+            #homepageSection .f1-testi-card { grid-template-columns: 1fr; gap: 22px; padding: 22px; text-align: center; }
+            #homepageSection .f1-testi-photo img { max-width: 300px; margin: 0 auto; }
+        }
 
         /* ---------- Section headings ---------- */
         #homepageSection .section-title, #homepageSection .platform-title, #homepageSection .community-title,
@@ -1361,6 +1393,37 @@
                         </div>
                     </article>
                 </div>
+            </div>
+        </section>
+
+        <!-- ===================== STUDENT TESTIMONIAL ===================== -->
+        <section class="f1-testi" aria-labelledby="f1TestiTitle">
+            <div class="f1-testi-inner">
+                <div class="f1-testi-head reveal">
+                    <span class="hero-badge">
+                        <span class="badge-icon" aria-hidden="true"><span class="glowing-dot"></span></span>
+                        <span>Success story</span>
+                    </span>
+                    <h2 id="f1TestiTitle">From application to <span class="grad">approved F-1 visa</span></h2>
+                </div>
+                <figure class="f1-testi-card reveal reveal-delay-1">
+                    <div class="f1-testi-photo">
+                        <img src="/static/assets/testimonials/prathyaksh-paramashiva.webp"
+                            alt="Prathyaksh Paramashiva in front of the Statue of Liberty after his US F-1 student visa was approved"
+                            loading="lazy" width="900" height="900">
+                        <span class="f1-testi-badge">🇺🇸 F-1 Approved</span>
+                    </div>
+                    <div>
+                        <div class="f1-testi-stars" aria-label="5 out of 5 stars">★★★★★</div>
+                        <blockquote>“Rilono checked every one of my documents before I submitted and drilled me with
+                            mock interviews that felt exactly like the real thing. I walked into my F-1 interview calm and
+                            confident — and got my visa for Clark University.”</blockquote>
+                        <figcaption>
+                            <b>Prathyaksh Paramashiva</b>
+                            <span>F-1 student · Clark University, USA</span>
+                        </figcaption>
+                    </div>
+                </figure>
             </div>
         </section>
 
@@ -4002,7 +4065,7 @@
                         <ul class="pricing-features">
                             <li>Unlimited document audits &amp; red-flag scans</li>
                             <li>3 full Rilono AI voice mock interviews</li>
-                            <li>Unlimited DS-160 auto-fills &amp; Chrome extension</li>
+                            <li>Unlimited Rilono Copilot (Chrome extension)</li>
                             <li>Unlimited messages with Rilono AI</li>
                             <li>Unlimited document uploads</li>
                             <li>Unlimited Rilono Copilot workflows</li>
@@ -5225,7 +5288,6 @@
                         <ul class="checkout-launch-benefits">
                             <li>Unlimited document audits &amp; red-flag scans</li>
                             <li>3 full Rilono AI voice mock interviews</li>
-                            <li>Unlimited DS-160 auto-fills</li>
                             <li>Unlimited Rilono AI messages &amp; uploads</li>
                             <li>Unlimited interview prep &amp; Copilot workflows</li>
                             <li>Priority support</li>

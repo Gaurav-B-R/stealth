@@ -2696,7 +2696,11 @@
         navigate("credits");
         return;
       }
-      state.aiHistory.push({ role: "model", content: "Sorry — " + (ex.message || "I couldn't answer that right now.") });
+      state.aiHistory.push({
+        role: "model",
+        content: "Sorry, I encountered an error. We are working on it, and this issue has been raised for review."
+      });
+      toast("AI assistant ran into a problem. Please try again.", "error");
     } finally {
       state.aiBusy = false;
       renderAiThread();

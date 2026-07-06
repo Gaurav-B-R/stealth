@@ -8867,6 +8867,12 @@ function initializeSearchableDropdowns() {
 
     // Handle item selection. The document catalog can be re-rendered after login/profile
     // personalization, so delegate clicks instead of binding only to the initial items.
+    // Suppress the default mousedown behavior on an item so a click-with-micro-drag can't
+    // turn into a text selection (which was silently swallowing the click) and so the
+    // search input doesn't blur before the click lands.
+    dropdownList.addEventListener('mousedown', (event) => {
+        if (event.target.closest('.dropdown-item[data-value]')) event.preventDefault();
+    });
     dropdownList.addEventListener('click', (event) => {
         const item = event.target.closest('.dropdown-item[data-value]');
         if (!item || !dropdownList.contains(item)) return;

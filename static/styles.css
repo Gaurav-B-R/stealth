@@ -1158,6 +1158,9 @@ body.dashboard-active {
 
 .searchable-dropdown.open .dropdown-list {
     display: block;
+    /* Sit above the floating AI chat widget (z-index 9999) so its greeting popup
+       can never intercept clicks on the lower dropdown items. */
+    z-index: 10001;
 }
 
 .searchable-dropdown.open .dropdown-search {
@@ -1171,6 +1174,10 @@ body.dashboard-active {
     color: var(--text-primary);
     font-size: 0.9rem;
     border-bottom: 1px solid var(--border-color);
+    /* Prevent a click-with-micro-drag from becoming a text selection instead of a
+       click, which silently swallowed option selection (esp. on trackpads). */
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .searchable-dropdown .dropdown-item:last-child {

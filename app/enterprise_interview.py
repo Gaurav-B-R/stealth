@@ -21,7 +21,7 @@ from typing import Optional
 from app import models
 from app import ai_usage
 from app import enterprise_catalog as catalog
-from app.enterprise_ai import is_ai_configured  # reuse the same availability check
+from app.enterprise_ai import is_ai_configured, sanitize_public_ai_text  # reuse the same availability check
 from app.utils import gemini_service as gemini_utils
 
 logger = logging.getLogger(__name__)
@@ -185,15 +185,15 @@ def _convert_history(history: Optional[list]) -> list:
     return out
 
 
-def _model_name() -> str:
+def _model_candidates() -> list[str]:
     return gemini_utils.get_model_candidates(
         primary_env="ENTERPRISE_AI_MODEL",
         candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
-    )[0]
+    )
 
 
-def _model(system_instruction: str):
-    return gemini_utils.genai.GenerativeModel(_model_name(), system_instruction=system_instruction)
+def _model(model_name: str, system_instruction: str):
+    return gemini_utils.genai.GenerativeModel(model_name, system_instruction=system_instruction)
 
 
 # The officer ends the interview by emitting this tag on the last line of its
@@ -238,10 +238,6 @@ def run_interview_turn(
             "decision": None,
         }
 
-    system = build_interview_system_prompt(client, organization, recent_notes, documents)
-    model = _model(system)
-    chat = model.start_chat(history=_convert_history(history))
-
     if is_start:
         user_message = (
             "[The applicant has just sat down at the visa window and is ready. Greet them briefly "
@@ -250,15 +246,26 @@ def run_interview_turn(
     else:
         user_message = (message or "").strip()[:3000] or "(no answer given)"
 
-    response = chat.send_message(user_message)
-    ai_usage.record_gemini_usage("mock_interview", _model_name(), response)
-    text = (getattr(response, "text", None) or "").strip()
-    cleaned, finished, decision = parse_completion(text)
-    return {
-        "reply": cleaned or "Could you please repeat that?",
-        "finished": finished,
-        "decision": decision,
-    }
+    system = build_interview_system_prompt(client, organization, recent_notes, documents)
+    last_error = None
+    for model_name in _model_candidates():
+        try:
+            model = _model(model_name, system)
+            chat = model.start_chat(history=_convert_history(history))
+            response = chat.send_message(user_message)
+            ai_usage.record_gemini_usage("mock_interview", model_name, response)
+            text = sanitize_public_ai_text((getattr(response, "text", None) or "").strip())
+            cleaned, finished, decision = parse_completion(text)
+            return {
+                "reply": cleaned or "Could you please repeat that?",
+                "finished": finished,
+                "decision": decision,
+            }
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            logger.warning("Enterprise interview model attempt failed (%s)", model_name, exc_info=True)
+
+    raise RuntimeError("The mock interview could not answer right now.") from last_error
 
 
 def generate_interview_feedback(
@@ -315,12 +322,21 @@ def generate_interview_feedback(
             f"'{officer_decision.upper()}'. Keep your coaching consistent with that outcome, but "
             "still give your own honest, constructive assessment."
         )
-    model = _model(system)
-    response = model.start_chat(history=[]).send_message(
-        "Here is the interview transcript to assess:\n\n" + transcript[:24000]
-    )
-    ai_usage.record_gemini_usage("interview_feedback", _model_name(), response)
-    return (getattr(response, "text", None) or "").strip() or "No feedback could be generated."
+    last_error = None
+    for model_name in _model_candidates():
+        try:
+            model = _model(model_name, system)
+            response = model.start_chat(history=[]).send_message(
+                "Here is the interview transcript to assess:\n\n" + transcript[:24000]
+            )
+            ai_usage.record_gemini_usage("interview_feedback", model_name, response)
+            text = sanitize_public_ai_text((getattr(response, "text", None) or "").strip())
+            return text or "No feedback could be generated."
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            logger.warning("Enterprise feedback model attempt failed (%s)", model_name, exc_info=True)
+
+    raise RuntimeError("Interview feedback could not be generated right now.") from last_error
 
 
 def extract_verdict(feedback_text: str) -> Optional[str]:

@@ -25,7 +25,8 @@
         .nav-links a { text-decoration: none; color: var(--ink-2); font-weight: 600; font-size: .95rem; }
         .nav-links a:hover { color: var(--ink); }
         .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
-        @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
+        .nav-toggle { display: none; background: transparent; border: 0; color: var(--ink); cursor: pointer; padding: 6px; margin: -6px -6px -6px 0; border-radius: 8px; }
+        .nav-toggle svg { width: 26px; height: 26px; display: block; }
 
         /* "Products" dropdown — same header as the homepage so it's uniform across product pages. */
         .products-nav { position: relative; display: inline-flex; align-items: center; }
@@ -41,7 +42,19 @@
         .products-menu a:hover { background: rgba(99, 92, 255, .09); color: var(--ink); }
         .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 800; padding: .35rem .85rem .15rem; }
         .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
-        @media (max-width: 720px) { .products-nav { display: none; } }
+        @media (max-width: 720px) {
+            .nav-toggle { display: inline-flex; }
+            .nav-links { position: absolute; top: 100%; left: 0; right: 0; flex-direction: column; align-items: stretch; gap: 2px; background: #fff; border-bottom: 1px solid var(--line); box-shadow: 0 24px 48px rgba(15, 23, 42, .14); padding: 10px 16px 16px; display: none; }
+            .nav-links.open { display: flex; }
+            .nav-links > a { display: block; padding: 12px 10px; border-radius: 10px; font-size: 1rem; }
+            .nav-links > a:hover { background: rgba(99, 102, 241, .06); }
+            .nav-cta { text-align: center; margin-top: 8px; padding: 12px; }
+            .products-nav { display: block; position: static; }
+            .products-nav-trigger { display: none; }
+            .products-menu { position: static; opacity: 1; visibility: visible; pointer-events: auto; transform: none; box-shadow: none; border: 0; padding: 0; min-width: 0; background: transparent; }
+            .products-menu a { padding: 10px 10px; }
+            .products-menu .pm-label { padding: 8px 10px 2px; }
+        }
 
         .btn { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 1rem; padding: 14px 24px; border-radius: 12px; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; }
         .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 14px 34px rgba(99, 102, 241, .3); }
@@ -408,7 +421,10 @@
     <nav class="navbar">
         <div class="nav-in">
             <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
-            <div class="nav-links">
+            <button class="nav-toggle" id="navToggle" type="button" aria-label="Toggle menu" aria-expanded="false" aria-controls="navLinks">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+            </button>
+            <div class="nav-links" id="navLinks">
                 <a href="/">Home</a>
                 <div class="products-nav" id="productsNav">
                     <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
@@ -1030,6 +1046,17 @@
                 document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
             }
         })();
+    </script>
+    <script>
+    (function () {
+        var t = document.getElementById('navToggle'), n = document.getElementById('navLinks');
+        if (!t || !n) return;
+        var setOpen = function (o) { n.classList.toggle('open', o); t.setAttribute('aria-expanded', o ? 'true' : 'false'); };
+        t.addEventListener('click', function (e) { e.stopPropagation(); setOpen(!n.classList.contains('open')); });
+        n.addEventListener('click', function (e) { if (e.target.closest('a')) setOpen(false); });
+        document.addEventListener('click', function (e) { if (!n.contains(e.target) && !t.contains(e.target)) setOpen(false); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+    })();
     </script>
 </body>
 </html>

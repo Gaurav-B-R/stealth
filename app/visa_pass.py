@@ -5,7 +5,6 @@ Indian students are anxious but price-sensitive and hate subscriptions (they onl
 to pass the visa interview once). So instead of a recurring plan we use:
 
   1. A FREEMIUM HOOK on signup / Chrome-extension install:
-       * 3 free DS-160 auto-fills
        * 1 free document "Red Flag" scan (shows ONE error, blurs the rest)
   2. A ONE-TIME "Visa Success Pass" — ₹999, 30-day validity (under the ₹1000
      psychological line). Unlocks:
@@ -46,7 +45,6 @@ PASS_DURATION_DAYS = int(os.getenv("VISA_PASS_DURATION_DAYS", "30") or "30")
 PASS_PRICING_MODEL = "visa_pass"  # stored on SubscriptionPayment.pricing_model
 
 # Freemium quota (free tier) + pass quota.
-FREE_DS160_AUTOFILLS = int(os.getenv("VISA_PASS_FREE_DS160", "3") or "3")
 FREE_RED_FLAG_SCANS = int(os.getenv("VISA_PASS_FREE_RED_FLAG", "1") or "1")
 PASS_VOICE_INTERVIEWS = int(os.getenv("VISA_PASS_VOICE_INTERVIEWS", "3") or "3")
 FREE_UNIVERSITY_RECOMMENDATIONS = int(os.getenv("VISA_PASS_FREE_UNIVERSITY_RECS", "1") or "1")
@@ -60,15 +58,8 @@ USD_TO_INR = float(os.getenv("USD_TO_INR", "86") or "86")
 
 UNLIMITED = -1
 
-# The three metered Visa-Pass features.
+# The metered Visa-Pass features.
 FEATURES = {
-    "ds160_autofill": {
-        "key": "ds160_autofill",
-        "label": "DS-160 auto-fill",
-        "counter": "ds160_autofills_used",
-        "free_limit": FREE_DS160_AUTOFILLS,
-        "pass_limit": UNLIMITED,
-    },
     "red_flag_scan": {
         "key": "red_flag_scan",
         "label": "Document Red-Flag scan",
