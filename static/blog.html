@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <base target="_blank">
+    <title>Rilono Blog — Guides for Student Visa Applicants · Rilono</title>
+    <meta name="description" content="Practical, up-to-date guides on using Rilono AI for your student visa — the US F-1, UK Student visa, Canada study permit, Australia Subclass 500, and Rilono Copilot for Chrome.">
+    <meta name="author" content="Rilono">
+    <link rel="canonical" href="https://rilono.com/blog">
+    <meta property="og:site_name" content="Rilono">
+    <meta property="og:title" content="Rilono Blog — Guides for Student Visa Applicants">
+    <meta property="og:description" content="Practical guides on using Rilono AI for the US, UK, Canada and Australia student visas, plus Rilono Copilot for Chrome.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://rilono.com/blog">
+    <meta property="og:image" content="https://rilono.com/static/logo.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Rilono Blog — Guides for Student Visa Applicants">
+    <meta name="twitter:description" content="Practical guides on using Rilono AI for the US, UK, Canada and Australia student visas, plus Rilono Copilot for Chrome.">
+    <meta name="twitter:image" content="https://rilono.com/static/logo.png">
+    <link rel="icon" href="/static/logo.png">
+    <style>
+        :root {
+            --ink: #0f172a; --ink-2: #475569; --muted: #64748b; --line: rgba(15, 23, 42, .10);
+            --bg: #f6f8fc; --card: #ffffff; --brand: #4f46e5; --brand-2: #7c3aed; --accent: #db2777;
+            --grad: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.7; }
+        a { color: var(--brand); }
+        .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+        .navbar { position: sticky; top: 0; z-index: 50; background: rgba(255, 255, 255, .85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+        .nav-in { max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-weight: 800; font-size: 1.3rem; }
+        .brand img { height: 34px; }
+        .nav-links { display: flex; align-items: center; gap: 26px; }
+        .nav-links a { text-decoration: none; color: var(--ink-2); font-weight: 600; font-size: .95rem; }
+        .nav-links a:hover { color: var(--ink); }
+        .nav-links a[aria-current="page"] { color: var(--ink); }
+        .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
+        @media (max-width: 720px) { .nav-links a:not(.nav-cta) { display: none; } }
+
+        /* "Products" dropdown — same header as the homepage so it's uniform across product pages. */
+        .products-nav { position: relative; display: inline-flex; align-items: center; }
+        .products-nav::after { content: ""; position: absolute; left: -.75rem; right: -.75rem; top: 100%; height: 1rem; }
+        .products-nav-trigger { display: inline-flex; align-items: center; gap: .35rem; color: var(--ink-2); font-weight: 600; font-size: .95rem; padding: 0; background: transparent; border: 0; font-family: inherit; cursor: pointer; transition: color .2s ease; }
+        .products-nav-trigger:hover, .products-nav:focus-within .products-nav-trigger, .products-nav:hover .products-nav-trigger, .products-nav.is-open .products-nav-trigger { color: var(--ink); }
+        .products-nav-trigger svg { width: 14px; height: 14px; transition: transform .2s ease; }
+        .products-nav:hover .products-nav-trigger svg, .products-nav:focus-within .products-nav-trigger svg, .products-nav.is-open .products-nav-trigger svg { transform: rotate(180deg); }
+        .products-menu { position: absolute; top: calc(100% + .85rem); left: 50%; transform: translateX(-50%) translateY(8px); min-width: 270px; padding: .55rem; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 24px 60px rgba(15, 23, 42, .16); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, transform .18s ease, visibility .18s ease; z-index: 60; }
+        .products-nav:hover .products-menu, .products-nav:focus-within .products-menu, .products-nav.is-open .products-menu { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+        .products-menu a { display: block; padding: .8rem .85rem; border-radius: 10px; color: var(--ink); text-decoration: none; font-weight: 800; font-size: .95rem; }
+        .products-menu a span { display: block; margin-top: .18rem; color: var(--muted); font-size: .78rem; font-weight: 600; line-height: 1.35; }
+        .products-menu a:hover { background: rgba(99, 92, 255, .09); color: var(--ink); }
+        .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 800; padding: .35rem .85rem .15rem; }
+        .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
+        @media (max-width: 720px) { .products-nav { display: none; } }
+
+        /* blog index */
+        .blog-hero { max-width: 900px; margin: 0 auto; padding: 52px 24px 6px; text-align: center; }
+        .blog-hero .eyebrow { display: inline-flex; align-items: center; gap: 9px; font-size: .78rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); background: rgba(99, 102, 241, .1); border: 1px solid rgba(99, 102, 241, .25); padding: 6px 14px; border-radius: 999px; }
+        .blog-hero h1 { font-size: clamp(2rem, 4vw, 2.8rem); line-height: 1.12; letter-spacing: -.02em; font-weight: 850; margin: 18px 0 10px; }
+        .blog-hero p { font-size: 1.1rem; color: var(--ink-2); max-width: 620px; margin: 0 auto; }
+        .blog-grid { max-width: 900px; margin: 0 auto; padding: 30px 24px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+        .blog-card { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px; box-shadow: 0 10px 28px rgba(15, 23, 42, .06); text-decoration: none; color: inherit; transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
+        .blog-card:hover { transform: translateY(-5px); border-color: rgba(99, 102, 241, .4); box-shadow: 0 22px 48px rgba(99, 102, 241, .14); }
+        .blog-card.featured { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 22px; }
+        .blog-card .flag { font-size: 2rem; line-height: 1; flex: none; width: 54px; height: 54px; border-radius: 14px; display: grid; place-content: center; background: rgba(99, 102, 241, .08); border: 1px solid var(--line); }
+        .blog-card .tag { font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+        .blog-card h3 { margin: 8px 0 6px; font-size: 1.12rem; font-weight: 800; line-height: 1.25; letter-spacing: -.01em; }
+        .blog-card p { margin: 0; color: var(--ink-2); font-size: .92rem; }
+        .blog-card .more { margin-top: 14px; color: var(--brand); font-weight: 800; font-size: .9rem; }
+        .blog-card.featured .body { display: flex; flex-direction: column; }
+        .blog-card.featured .more { margin-top: 10px; }
+        @media (max-width: 720px) {
+            .blog-grid { grid-template-columns: 1fr; }
+            .blog-card.featured { flex-direction: column; align-items: flex-start; gap: 14px; }
+        }
+
+        /* footer (matches homepage) */
+        .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); margin-top: 40px; }
+        .hx-footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); }
+        .hx-footer .cols { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 32px; padding: 52px 0 34px; }
+        .hx-footer .brand-col img { height: 34px; margin-bottom: 14px; }
+        .hx-footer .brand-col p { color: #8f96bd; font-size: .9rem; line-height: 1.65; max-width: 290px; }
+        .hx-footer h5 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: #7b82ad; margin: 0 0 16px; font-weight: 800; }
+        .hx-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+        .hx-footer a { color: #c6cbe8; text-decoration: none; font-size: .92rem; }
+        .hx-footer a:hover { color: #d9c9ff; }
+        .hx-footer .foot-bottom { border-top: 1px solid rgba(255, 255, 255, .09); padding: 22px 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #7b82ad; font-size: .85rem; }
+        @media (max-width: 860px) { .hx-footer .cols { grid-template-columns: 1fr 1fr; } }
+    </style>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "Blog",
+        "name": "Rilono Blog",
+        "url": "https://rilono.com/blog",
+        "description": "Guides on using Rilono AI for student visas — US, UK, Canada, Australia, and Rilono Copilot for Chrome.",
+        "publisher": { "@type": "Organization", "name": "Rilono", "logo": { "@type": "ImageObject", "url": "https://rilono.com/static/logo.png" } },
+        "blogPost": [
+            { "@type": "BlogPosting", "headline": "How to use Rilono AI Copilot", "url": "https://rilono.com/blog/how-to-use-rilono-ai-copilot" },
+            { "@type": "BlogPosting", "headline": "How to use Rilono AI for your US student visa (F-1)", "url": "https://rilono.com/blog/how-to-use-rilono-ai-us-f1-visa" },
+            { "@type": "BlogPosting", "headline": "How to use Rilono AI for your UK Student visa", "url": "https://rilono.com/blog/how-to-use-rilono-ai-uk-student-visa" },
+            { "@type": "BlogPosting", "headline": "How to use Rilono AI for your Canada study permit", "url": "https://rilono.com/blog/how-to-use-rilono-ai-canada-study-permit" },
+            { "@type": "BlogPosting", "headline": "How to use Rilono AI for your Australia student visa (Subclass 500)", "url": "https://rilono.com/blog/how-to-use-rilono-ai-australia-student-visa" }
+        ]
+    }
+    </script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-in">
+            <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
+            <div class="nav-links">
+                <a href="/">Home</a>
+                <div class="products-nav" id="productsNav">
+                    <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
+                        aria-expanded="false" aria-controls="productsMenu">
+                        Products
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd"
+                                d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                                clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="products-menu" id="productsMenu">
+                        <div class="pm-label">Student visas</div>
+                        <a href="/us-f1-visa"><span class="pm-flag">🇺🇸</span>United States<span>F-1 · J-1 · M-1 student
+                                visas, DS-160, I-20 &amp; interview prep.</span></a>
+                        <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier
+                                4) — CAS, financial proof &amp; interview.</span></a>
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit &amp; SDS
+                                — LOA, proof of funds &amp; biometrics.</span></a>
+                        <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 —
+                                CoE, OSHC &amp; Genuine Student.</span></a>
+                    </div>
+                </div>
+                <a href="/blog" aria-current="page">Blog</a>
+                <a href="/pricing">Pricing</a>
+                <a href="/for-enterprise">Enterprise</a>
+                <a href="/login">Login</a>
+                <a href="/register" class="nav-cta">Get started</a>
+            </div>
+        </div>
+    </nav>
+
+    <header class="blog-hero">
+        <span class="eyebrow">Rilono Guides</span>
+        <h1>Guides for your student-visa journey</h1>
+        <p>Practical, up-to-date walkthroughs on getting the most out of Rilono AI — for every destination we support, and for Rilono Copilot in your browser.</p>
+    </header>
+
+    <main class="blog-grid">
+        <a class="blog-card featured" href="/blog/how-to-use-rilono-ai-copilot">
+            <span class="flag">🧭</span>
+            <span class="body">
+                <span class="tag">Rilono Copilot · Chrome extension</span>
+                <h3>How to use Rilono AI Copilot</h3>
+                <p>Your AI side panel for visa application pages — install it, connect your account, and get field-by-field guidance personalized to your Rilono profile.</p>
+                <span class="more">Read the guide →</span>
+            </span>
+        </a>
+
+        <a class="blog-card" href="/blog/how-to-use-rilono-ai-us-f1-visa">
+            <span class="flag">🇺🇸</span>
+            <span class="tag">United States · F-1</span>
+            <h3>How to use Rilono AI for your US student visa (F-1)</h3>
+            <p>Build your profile, AI-validate documents, track all 7 stages, cross-check, and prep your visa interview.</p>
+            <span class="more">Read the guide →</span>
+        </a>
+
+        <a class="blog-card" href="/blog/how-to-use-rilono-ai-uk-student-visa">
+            <span class="flag">🇬🇧</span>
+            <span class="tag">United Kingdom · Student visa</span>
+            <h3>How to use Rilono AI for your UK Student visa</h3>
+            <p>Master the 28-day financial rule, track all 7 stages, and rehearse your credibility interview.</p>
+            <span class="more">Read the guide →</span>
+        </a>
+
+        <a class="blog-card" href="/blog/how-to-use-rilono-ai-canada-study-permit">
+            <span class="flag">🇨🇦</span>
+            <span class="tag">Canada · Study Permit</span>
+            <h3>How to use Rilono AI for your Canada study permit</h3>
+            <p>Cross-check your LOA, PAL, GIC and proof of funds, and build a complete, consistent file.</p>
+            <span class="more">Read the guide →</span>
+        </a>
+
+        <a class="blog-card" href="/blog/how-to-use-rilono-ai-australia-student-visa">
+            <span class="flag">🇦🇺</span>
+            <span class="tag">Australia · Subclass 500</span>
+            <h3>How to use Rilono AI for your Australia student visa</h3>
+            <p>Track all 7 Subclass 500 stages, get your OSHC and finances right, and strengthen your Genuine Student answers.</p>
+            <span class="more">Read the guide →</span>
+        </a>
+    </main>
+
+    <footer class="hx-footer">
+        <div class="wrap">
+            <div class="cols">
+                <div class="brand-col">
+                    <img src="/static/logo.png" alt="Rilono">
+                    <p>The AI-powered platform for student visas to the US, UK, Canada &amp; Australia — helping students and consultancies prepare confident, complete applications.</p>
+                </div>
+                <div>
+                    <h5>Product</h5>
+                    <ul>
+                        <li><a href="/us-f1-visa">US F-1 Visa</a></li>
+                        <li><a href="/uk-student-visa">UK Student Visa</a></li>
+                        <li><a href="/canada-study-permit">Canada Study Permit</a></li>
+                        <li><a href="/australia-student-visa">Australia Subclass 500</a></li>
+                        <li><a href="/pricing">Pricing</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h5>Legal</h5>
+                    <ul>
+                        <li><a href="/privacy">Privacy Policy</a></li>
+                        <li><a href="/terms">Terms of Service</a></li>
+                        <li><a href="/refund-policy">Refund Policy</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="foot-bottom">
+                <span>© <span id="yr"></span> Rilono. All rights reserved.</span>
+                <span>Made for international students 🌍</span>
+            </div>
+        </div>
+    </footer>
+    <script>
+        document.getElementById("yr").textContent = new Date().getFullYear();
+
+        // Navbar "Products" dropdown — hover opens on desktop (CSS); click/tap toggle + close.
+        (function () {
+            const pNav = document.getElementById("productsNav");
+            const pTrig = document.getElementById("productsNavTrigger");
+            const pMenu = document.getElementById("productsMenu");
+            if (pNav && pTrig && pMenu) {
+                const setOpen = (open) => { pNav.classList.toggle("is-open", open); pTrig.setAttribute("aria-expanded", open ? "true" : "false"); };
+                pTrig.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); setOpen(!pNav.classList.contains("is-open")); });
+                pMenu.addEventListener("click", (e) => { if (e.target.closest("a")) setOpen(false); });
+                document.addEventListener("click", (e) => { if (!pNav.contains(e.target)) setOpen(false); });
+                document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
+            }
+        })();
+    </script>
+</body>
+</html>

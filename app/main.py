@@ -573,6 +573,16 @@ async def read_preserved_public_spa_routes(request: Request):
     return _serve_us_f1_spa(request)
 
 
+@app.get("/blog")
+@app.get("/blog/")
+async def read_blog_index():
+    """Serve the blog index (lists every Rilono guide; carries its own SEO meta)."""
+    page = _read_static_html("blog.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
 @app.get("/blog/how-to-use-rilono-ai-copilot")
 @app.get("/blog/how-to-use-rilono-ai-copilot/")
 async def read_copilot_blog():
@@ -588,6 +598,36 @@ async def read_copilot_blog():
 async def read_us_f1_blog():
     """Serve the US F-1 "how to use Rilono AI" guide (static blog article; own SEO meta)."""
     page = _read_static_html("blog-us-f1-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/how-to-use-rilono-ai-canada-study-permit")
+@app.get("/blog/how-to-use-rilono-ai-canada-study-permit/")
+async def read_canada_blog():
+    """Serve the Canada study-permit "how to use Rilono AI" guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-canada-study-permit-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/how-to-use-rilono-ai-australia-student-visa")
+@app.get("/blog/how-to-use-rilono-ai-australia-student-visa/")
+async def read_australia_blog():
+    """Serve the Australia Subclass 500 "how to use Rilono AI" guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-australia-student-visa-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/how-to-use-rilono-ai-uk-student-visa")
+@app.get("/blog/how-to-use-rilono-ai-uk-student-visa/")
+async def read_uk_blog():
+    """Serve the UK Student visa "how to use Rilono AI" guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-uk-student-visa-guide.html")
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)
