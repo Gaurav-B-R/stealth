@@ -369,7 +369,7 @@ def send_student_welcome_email(
     dash_url = base_url.rstrip("/") + "/dashboard"
     features = (
         _welcome_feature_row("📋", "Your document checklist & vault",
-                             "A stage-by-stage checklist for your exact visa, with an encrypted vault for DS-160, I-20, financial docs and more.")
+                             "A stage-by-stage checklist for your exact visa, with an encrypted vault for visa forms, admission letters, financial docs and more.")
         + _welcome_feature_row("🤖", "Rilono AI reviews everything",
                                "It catches missing pages, expiring dates and mismatches — the red flags a consulate looks for — before you submit.")
         + _welcome_feature_row("🎤", "AI mock interviews",
@@ -392,7 +392,7 @@ def send_student_welcome_email(
                 font-weight:700;font-size:15px;padding:13px 24px;border-radius:11px">Open your dashboard →</a>
             </div>
             <p style="margin:16px 0 0;color:#64748b;font-size:13px;line-height:1.6">
-              Free to start — no card required. Covering the US, UK, Canada &amp; Australia.
+              Free to start — no card required. Covering the US, UK, Canada, Australia &amp; Germany.
               Questions? Just reply to this email or reach us at
               <a href="mailto:contact@rilono.com" style="color:#6366f1">contact@rilono.com</a>.</p>
           </div>

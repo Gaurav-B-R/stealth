@@ -166,6 +166,48 @@ def build_generative_model(model_name: str):
         _instrument_usage(model, model_name)
     return model
 
+# Destination-specific date/validity rules injected into the upload-validation prompt so
+# a UK/CA/AU/DE student's documents are judged by THEIR authority's rules (not US ones).
+_DESTINATION_TIMELINE_RULES = {
+    "US": (
+        "- I-20: flag as invalid if the program start/reporting date is already in the past.\n"
+        "- DS-160 and appointment/payment artifacts (DS-160 confirmation, SEVIS/MRV receipts, "
+        "biometric/consular confirmations): flag if expired, stale, or not for the current visa cycle.\n"
+        "- Financial proof: US consulates prefer bank statements no older than ~6 months."
+    ),
+    "UK": (
+        "- CAS statement: flag if the course start date is in the past, or the CAS was issued more than "
+        "6 months before the visa application (CAS is generally valid for one application within 6 months).\n"
+        "- Financial evidence (UKVI 28-day rule): funds must be held for 28 CONSECUTIVE days, and the "
+        "statement's closing date must be within 31 days of the visa application date — flag statements "
+        "that are older than ~31 days or do not show a 28-day history.\n"
+        "- IHS payment confirmation: must correspond to the current application.\n"
+        "- TB test certificate: valid for 6 months from an approved clinic — flag if older.\n"
+        "- ATAS certificate (if present): valid for 6 months from issue — flag if older.\n"
+        "- UKVI eVisa/share-code evidence: flag if the passport/travel-document details do not match "
+        "the student's profile or decision notice."
+    ),
+    "CA": (
+        "- Letter of Acceptance (LOA): flag if the program start date is already in the past.\n"
+        "- PAL/TAL (provincial attestation): must be valid for the current application cycle.\n"
+        "- GIC certificate & proof of funds: flag stale statements (older than ~6 months) or amounts "
+        "below the current IRCC requirement when evidence is available.\n"
+        "- Biometrics/medical: flag expired confirmations (medical exams are valid ~12 months)."
+    ),
+    "AU": (
+        "- CoE (Confirmation of Enrolment): flag if the course start date is already in the past.\n"
+        "- OSHC (health cover): coverage must start on/before arrival and span the study period.\n"
+        "- Financial capacity evidence: flag statements older than ~6 months.\n"
+        "- English test: most tests are accepted within 2 years of the test date — flag older results."
+    ),
+    "DE": (
+        "- Blocked account (Sperrkonto) confirmation: must show the current required amount and be recent.\n"
+        "- University admission (Zulassungsbescheid): flag if the program start date is in the past.\n"
+        "- Health insurance confirmation: must cover the intended stay."
+    ),
+}
+
+
 def validate_and_extract_document(
     file_contents: bytes,
     filename: str,
@@ -174,6 +216,8 @@ def validate_and_extract_document(
     current_date_for_evaluation: Optional[str] = None,
     student_profile_context: Optional[str] = None,
     related_documents_context: Optional[str] = None,
+    destination_country_code: Optional[str] = None,
+    destination_summary: Optional[str] = None,
 ) -> Optional[dict]:
     """
     Validate document type and extract information using Gemini AI.
@@ -244,27 +288,39 @@ CROSS-VALIDATION REQUIREMENTS (MANDATORY):
 6. If evidence is insufficient, do not invent facts; explicitly state uncertainty.
 """
 
+        destination_code_value = str(destination_country_code or "US").strip().upper() or "US"
+        destination_summary_value = (destination_summary or "").strip()
+        destination_rules = _DESTINATION_TIMELINE_RULES.get(
+            destination_code_value, _DESTINATION_TIMELINE_RULES["US"]
+        )
+        destination_line = (
+            f"This student is applying for: {destination_summary_value}. Judge every document by THAT "
+            "destination's immigration rules and terminology — do not apply another country's rules."
+            if destination_summary_value else
+            "Judge the document by the student's destination immigration rules."
+        )
+
         timeline_rules_block = f"""
 Current Date for Evaluation: {evaluation_date_value}
+{destination_line}
 
 STRICT DATE/TIMELINE COMPLIANCE RULES (MANDATORY):
 1. Cross-reference all document dates against the Current Date for Evaluation.
 2. Bank statements / financial liquid-funds proofs:
-   - Flag as invalid if the statement date is older than 6 months from the Current Date for Evaluation.
-   - Include the detected age in months in the reason.
+   - Unless the destination-specific rules below say otherwise, flag as invalid if the statement date is older than 6 months from the Current Date for Evaluation.
+   - Include the detected age in the reason.
 3. Passport:
    - Flag as invalid if passport expiry is less than 6 months from expected travel/program-start date.
    - If expected travel/program-start date is unavailable, compare expiry against Current Date for Evaluation and state that assumption explicitly.
-4. I-20 / university offer / university admission letters:
+4. University offer / admission / enrolment confirmations:
    - Flag as invalid if intake term, program start date, or reporting date is already in the past relative to Current Date for Evaluation.
-5. DS-160 and appointment/payment artifacts (DS-160 confirmation/application, SEVIS/MRV receipts, biometric/consular confirmations, interview confirmations):
-   - Flag as invalid if dates are expired, stale, or clearly not compliant for the current visa cycle.
+5. Destination-specific rules for {destination_code_value}:
+{destination_rules}
 6. Other date-sensitive documents:
    - Apply the same timeline-compliance logic; if expiry/validity is past, mark invalid.
 7. If any date check fails:
    - Set "Document Validation" to "No"
-   - Put a clear failure explanation in "Message" (this is the review reason field shown to the user).
-   - Example: "Bank statement is 8 months old. US Consulates require statements to be no older than 6 months."
+   - Put a clear failure explanation in "Message" (this is the review reason field shown to the user), citing the destination's own rule (e.g. UKVI's 28-day rule for the UK, consulate recency expectations for the US).
 8. If the document does not contain enough date evidence, do NOT invent dates; mention the assumption/limitation clearly.
 """
 
@@ -785,7 +841,8 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
         print(f"Error extracting text from document with Gemini: {str(e)}")
         return None
 
-RED_FLAG_PROMPT = """You are a US/UK/Canada study-visa document auditor. Inspect this document and
+RED_FLAG_PROMPT = """You are an expert study-visa document auditor for Rilono's supported destinations
+(US, UK, Canada, Australia, Germany and future student-visa destinations). Inspect this document and
 find "red flags" — concrete errors or risks that could cause a visa refusal (expired/stale dates,
 name/DOB/passport-number mismatches, insufficient or unexplained funds, missing signatures/stamps,
 wrong document for the claimed purpose, sponsor/financial gaps).

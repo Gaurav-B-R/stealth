@@ -219,7 +219,7 @@ COUNTRIES = [
         "accent": "#eef2ff",
         "student_intakes": ["January", "September"],
         "visa_types": {
-            VISA_CATEGORY_STUDENT: ["Student Visa (Tier 4)", "Child Student Visa", "Short-Term Study Visa"],
+            VISA_CATEGORY_STUDENT: ["Student Visa", "Child Student Visa", "Short-Term Study Visa"],
         },
     },
     {

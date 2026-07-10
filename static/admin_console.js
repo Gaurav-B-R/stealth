@@ -1007,7 +1007,7 @@ const B2C_COUNTRIES = {
 };
 const B2C_VISA_LABELS = {
     us_f1: 'F-1 Student', us_j1: 'J-1 Exchange', us_m1: 'M-1 Vocational',
-    uk_student: 'Student (Tier 4)', uk_short_study: 'Short-Term Study',
+    uk_student: 'Student Visa', uk_short_study: 'Short-Term Study',
     ca_study_permit: 'Study Permit', ca_sds: 'SDS',
     au_subclass500: 'Subclass 500'
 };

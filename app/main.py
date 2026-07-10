@@ -442,14 +442,19 @@ _COUNTRY_ROUTE_META = {
         "canonical": f"{SITE_ORIGIN}/uk-student-visa",
     },
     "/canada-study-permit": {
-        "title": "Canada Study Permit & SDS Guidance — Documents & Interview · Rilono",
-        "description": "Get your Canada study permit ready with Rilono AI: SDS and non-SDS document checklists, GIC and proof-of-funds validation, and interview preparation.",
+        "title": "Canada Study Permit Guidance — Documents & Interview · Rilono",
+        "description": "Get your Canada study permit ready with Rilono AI: document checklists, GIC and proof-of-funds validation, and interview preparation.",
         "canonical": f"{SITE_ORIGIN}/canada-study-permit",
     },
     "/australia-student-visa": {
         "title": "Australia Student Visa (Subclass 500) Guidance · Rilono",
-        "description": "Prepare your Australia Student visa (subclass 500) with Rilono AI: CoE, GTE/GS statement, financial evidence and document validation, end to end.",
+        "description": "Prepare your Australia Student visa (subclass 500) with Rilono AI: CoE, Genuine Student (GS) statement, financial evidence and document validation, end to end.",
         "canonical": f"{SITE_ORIGIN}/australia-student-visa",
+    },
+    "/germany-student-visa": {
+        "title": "Germany Student Visa Guidance — National Visa (Type D), Sperrkonto & APS · Rilono",
+        "description": "Prepare your Germany student visa (National Visa Type D) with Rilono AI: admission, blocked account (Sperrkonto), APS verification, health insurance and document validation, end to end.",
+        "canonical": f"{SITE_ORIGIN}/germany-student-visa",
     },
 }
 
@@ -544,8 +549,10 @@ async def read_us_f1_visa(request: Request):
 @app.get("/canada-study-permit/")
 @app.get("/australia-student-visa")
 @app.get("/australia-student-visa/")
+@app.get("/germany-student-visa")
+@app.get("/germany-student-visa/")
 async def read_country_visa(request: Request):
-    """Serve the data-driven per-country student-visa landing page (UK/Canada/Australia)."""
+    """Serve the data-driven per-country student-visa landing page (UK/Canada/Australia/Germany)."""
     normalized = (request.url.path or "").rstrip("/")
     page = _read_static_html("country-visa.html")
     if page is None:

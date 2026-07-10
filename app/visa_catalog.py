@@ -21,7 +21,7 @@ from typing import Any, Optional
 from app import enterprise_catalog
 
 # Destination countries enabled for B2C in this build (subset of the enterprise catalog).
-LAUNCH_COUNTRY_CODES = ["US", "UK", "CA", "AU"]
+LAUNCH_COUNTRY_CODES = ["US", "UK", "CA", "AU", "DE"]
 
 DEFAULT_COUNTRY_CODE = "US"
 DEFAULT_VISA_TYPE_KEY = "us_f1"
@@ -403,13 +403,13 @@ US_F1_DOCUMENTS: list[dict[str, Any]] = [
 
 
 # ===========================================================================
-# UK — Student Visa (Tier 4). First-draft content; editable.
+# UK — Student Visa. First-draft content; editable.
 # ===========================================================================
 
 UK_STUDENT_STAGES: list[dict[str, Any]] = [
     {"stage": 1, "name": "Getting Started", "emoji": "📝",
-     "description": "Build your profile with academics and an approved English test.",
-     "next_step": "Upload your passport, transcripts and English test score"},
+     "description": "Build your profile with academics and English-language evidence.",
+     "next_step": "Upload your passport, transcripts and English-language evidence"},
     {"stage": 2, "name": "Offer Received", "emoji": "🎓",
      "description": "Conditional or unconditional offer from your university.",
      "next_step": "Upload your university offer letter"},
@@ -422,9 +422,9 @@ UK_STUDENT_STAGES: list[dict[str, Any]] = [
     {"stage": 5, "name": "Visa Application", "emoji": "🛂",
      "description": "Submit the online application, give biometrics, and ATAS if required.",
      "next_step": "Upload your application confirmation and biometric appointment"},
-    {"stage": 6, "name": "Decision & Vignette", "emoji": "📘",
-     "description": "Visa decision and 90-day entry vignette / BRP collection.",
-     "next_step": "Upload your entry vignette or decision letter"},
+    {"stage": 6, "name": "Decision & eVisa", "emoji": "📘",
+     "description": "Visa decision, travel permission, and UKVI eVisa access.",
+     "next_step": "Upload your decision notice, entry vignette, or eVisa confirmation"},
     {"stage": 7, "name": "Ready to Fly!", "emoji": "✈️",
      "description": "Finalize accommodation, travel and pre-departure documents.",
      "next_step": "Upload remaining arrival documents and finalize travel plans"},
@@ -433,7 +433,7 @@ UK_STUDENT_STAGES: list[dict[str, Any]] = [
 UK_STUDENT_DOCUMENTS: list[dict[str, Any]] = [
     {"document_type": "passport", "label": "Passport", "sort_order": 10,
      "is_required": True, "journey_stage": 1, "stage_gate_required": True, "stage_gate_requires_validation": True},
-    {"document_type": "english-language-test", "label": "Approved English Test (IELTS UKVI / PTE)", "sort_order": 20,
+    {"document_type": "english-language-test", "label": "English Language Evidence (SELT / CAS / University Assessment)", "sort_order": 20,
      "is_required": True, "journey_stage": 1, "stage_gate_required": True, "stage_gate_requires_validation": True},
     {"document_type": "academic-transcripts", "label": "Academic Transcripts & Certificates", "sort_order": 30,
      "is_required": False, "journey_stage": 1, "stage_gate_required": False, "stage_gate_requires_validation": False},
@@ -445,6 +445,8 @@ UK_STUDENT_DOCUMENTS: list[dict[str, Any]] = [
     {"document_type": "financial-evidence", "label": "28-Day Financial Evidence / Bank Statement", "sort_order": 140,
      "is_required": True, "journey_stage": 4, "stage_gate_required": True, "stage_gate_requires_validation": True,
      "stage_gate_group": "financial_proof"},
+    {"document_type": "financial-sponsor-consent", "label": "Financial Sponsor Consent Letter (if sponsored in last 12 months)", "sort_order": 145,
+     "is_required": False, "journey_stage": 4, "stage_gate_required": False, "stage_gate_requires_validation": False},
     {"document_type": "ihs-payment-confirmation", "label": "IHS Payment Confirmation", "sort_order": 150,
      "is_required": True, "journey_stage": 4, "stage_gate_required": True, "stage_gate_requires_validation": True},
     {"document_type": "tb-test-certificate", "label": "TB Test Certificate (if applicable)", "sort_order": 160,
@@ -457,9 +459,17 @@ UK_STUDENT_DOCUMENTS: list[dict[str, Any]] = [
      "is_required": True, "journey_stage": 5, "stage_gate_required": True, "stage_gate_requires_validation": True},
     {"document_type": "biometric-appointment-confirmation", "label": "Biometric Appointment Confirmation", "sort_order": 195,
      "is_required": False, "journey_stage": 5, "stage_gate_required": False, "stage_gate_requires_validation": False},
-    {"document_type": "entry-vignette", "label": "Entry Vignette / Decision Letter", "sort_order": 240,
+    {"document_type": "parent-guardian-consent", "label": "Parent/Guardian Consent Letter (if under 18)", "sort_order": 200,
+     "is_required": False, "journey_stage": 5, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "relationship-proof-under-18", "label": "Birth Certificate / Parent Relationship Proof (if under 18)", "sort_order": 205,
+     "is_required": False, "journey_stage": 5, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "current-uk-immigration-status", "label": "Current UK Immigration Permission / eVisa Share Code (if applying in the UK)", "sort_order": 210,
+     "is_required": False, "journey_stage": 5, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "entry-vignette", "label": "Entry Vignette / UKVI Decision Notice", "sort_order": 240,
      "is_required": True, "journey_stage": 6, "stage_gate_required": True, "stage_gate_requires_validation": True},
-    {"document_type": "brp", "label": "Biometric Residence Permit (BRP)", "sort_order": 245,
+    {"document_type": "ukvi-evisa-confirmation", "label": "UKVI eVisa / Share Code Confirmation", "sort_order": 245,
+     "is_required": False, "journey_stage": 6, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "brp", "label": "Legacy BRP Evidence (if previously issued)", "sort_order": 250,
      "is_required": False, "journey_stage": 6, "stage_gate_required": False, "stage_gate_requires_validation": False},
     {"document_type": "accommodation-proof", "label": "Accommodation Confirmation", "sort_order": 280,
      "is_required": False, "journey_stage": 7, "stage_gate_required": False, "stage_gate_requires_validation": False},
@@ -539,9 +549,9 @@ AU_STUDENT_STAGES: list[dict[str, Any]] = [
     {"stage": 2, "name": "Offer & CoE", "emoji": "🎓",
      "description": "Offer letter and Confirmation of Enrolment (CoE).",
      "next_step": "Upload your offer letter and CoE"},
-    {"stage": 3, "name": "GTE & OSHC", "emoji": "🌏",
-     "description": "Genuine Temporary Entrant statement and Overseas Student Health Cover.",
-     "next_step": "Upload your GTE statement and OSHC certificate"},
+    {"stage": 3, "name": "Genuine Student & OSHC", "emoji": "🌏",
+     "description": "Genuine Student (GS) responses and Overseas Student Health Cover (OSHC).",
+     "next_step": "Prepare your Genuine Student (GS) responses and upload your OSHC certificate"},
     {"stage": 4, "name": "Finances", "emoji": "💰",
      "description": "Evidence of financial capacity for tuition and living costs.",
      "next_step": "Upload your financial capacity evidence"},
@@ -569,7 +579,7 @@ AU_STUDENT_DOCUMENTS: list[dict[str, Any]] = [
     {"document_type": "confirmation-of-enrolment", "label": "Confirmation of Enrolment (CoE)", "sort_order": 110,
      "is_required": True, "journey_stage": 2, "stage_gate_required": True, "stage_gate_requires_validation": True,
      "stage_gate_group": "admission_proof"},
-    {"document_type": "gte-statement", "label": "Genuine Temporary Entrant (GTE) Statement", "sort_order": 120,
+    {"document_type": "gte-statement", "label": "Genuine Student (GS) Statement", "sort_order": 120,
      "is_required": True, "journey_stage": 3, "stage_gate_required": True, "stage_gate_requires_validation": True},
     {"document_type": "oshc-certificate", "label": "Overseas Student Health Cover (OSHC)", "sort_order": 130,
      "is_required": True, "journey_stage": 3, "stage_gate_required": True, "stage_gate_requires_validation": True},
@@ -590,6 +600,78 @@ AU_STUDENT_DOCUMENTS: list[dict[str, Any]] = [
 
 
 # ===========================================================================
+# Germany — National Visa (Type D) for study. First-draft content; editable.
+# ===========================================================================
+
+DE_STUDY_STAGES: list[dict[str, Any]] = [
+    {"stage": 1, "name": "Getting Started", "emoji": "📝",
+     "description": "Build your profile with passport, academics, language proof and CV.",
+     "next_step": "Upload your passport, academic records, language proof and CV"},
+    {"stage": 2, "name": "Admission Path", "emoji": "🎓",
+     "description": "University admission, conditional admission, preparatory course or applicant proof.",
+     "next_step": "Upload your admission letter or student-applicant proof"},
+    {"stage": 3, "name": "Funding & Insurance", "emoji": "💶",
+     "description": "Show proof of financing and health/travel insurance for Germany.",
+     "next_step": "Upload blocked account, scholarship, sponsor or other financial proof and insurance"},
+    {"stage": 4, "name": "Visa Application", "emoji": "📋",
+     "description": "Prepare the national visa application, declarations, photos and supporting letters.",
+     "next_step": "Upload your German national visa application packet"},
+    {"stage": 5, "name": "Appointment & Biometrics", "emoji": "🏛️",
+     "description": "Book/attend the embassy or consulate appointment and keep fee/appointment proof.",
+     "next_step": "Upload appointment confirmation and visa-fee receipt"},
+    {"stage": 6, "name": "Decision & Visa", "emoji": "🛂",
+     "description": "German national visa decision and stamped Type D visa.",
+     "next_step": "Upload your stamped national visa or decision letter"},
+    {"stage": 7, "name": "Ready for Germany", "emoji": "✈️",
+     "description": "Plan accommodation, enrolment, city registration and residence-permit next steps.",
+     "next_step": "Upload accommodation/enrolment proof and finalize arrival documents"},
+]
+
+DE_STUDY_DOCUMENTS: list[dict[str, Any]] = [
+    {"document_type": "passport", "label": "Passport", "sort_order": 10,
+     "is_required": True, "journey_stage": 1, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "academic-transcripts", "label": "Academic Transcripts & Certificates", "sort_order": 20,
+     "is_required": True, "journey_stage": 1, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "language-certificate", "label": "Language Certificate (German / English)", "sort_order": 30,
+     "is_required": False, "journey_stage": 1, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "resume", "label": "Resume/CV", "sort_order": 40,
+     "is_required": True, "journey_stage": 1, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "motivation-letter", "label": "Motivation Letter / Statement of Purpose", "sort_order": 50,
+     "is_required": False, "journey_stage": 1, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "passport-photos", "label": "Biometric Passport Photos", "sort_order": 60,
+     "is_required": False, "journey_stage": 1, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "german-admission-applicant-proof", "label": "Admission / Conditional Admission / Student Applicant Proof", "sort_order": 100,
+     "is_required": True, "journey_stage": 2, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "aps-certificate", "label": "APS Certificate (if applicable)", "sort_order": 130,
+     "is_required": False, "journey_stage": 2, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "proof-of-financial-resources", "label": "Proof of Financial Resources (Blocked Account / Scholarship / Sponsor)", "sort_order": 150,
+     "is_required": True, "journey_stage": 3, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "health-insurance-proof", "label": "Health / Travel Insurance Proof", "sort_order": 190,
+     "is_required": True, "journey_stage": 3, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "national-visa-application", "label": "National Visa Application Form / VIDEX", "sort_order": 210,
+     "is_required": True, "journey_stage": 4, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "declaration-of-accuracy", "label": "Declaration of Accuracy / Signed Declarations", "sort_order": 220,
+     "is_required": False, "journey_stage": 4, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "cover-letter-study-plan", "label": "Cover Letter / Study Plan", "sort_order": 230,
+     "is_required": False, "journey_stage": 4, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "visa-appointment-confirmation", "label": "German Visa Appointment Confirmation", "sort_order": 250,
+     "is_required": True, "journey_stage": 5, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "visa-fee-receipt", "label": "Visa Fee Receipt", "sort_order": 260,
+     "is_required": False, "journey_stage": 5, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "stamped-national-visa", "label": "Stamped German National Visa (Type D)", "sort_order": 280,
+     "is_required": True, "journey_stage": 6, "stage_gate_required": True, "stage_gate_requires_validation": True},
+    {"document_type": "visa-decision-letter", "label": "Visa Decision Letter", "sort_order": 290,
+     "is_required": False, "journey_stage": 6, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "accommodation-proof", "label": "Accommodation Proof in Germany", "sort_order": 310,
+     "is_required": False, "journey_stage": 7, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "enrolment-confirmation", "label": "University Enrolment Confirmation", "sort_order": 320,
+     "is_required": False, "journey_stage": 7, "stage_gate_required": False, "stage_gate_requires_validation": False},
+    {"document_type": "residence-permit-appointment", "label": "Residence Permit / City Registration Appointment", "sort_order": 330,
+     "is_required": False, "journey_stage": 7, "stage_gate_required": False, "stage_gate_requires_validation": False},
+]
+
+
+# ===========================================================================
 # Registries
 # ===========================================================================
 
@@ -603,15 +685,22 @@ VISA_TYPES: dict[str, list[dict[str, Any]]] = {
         {"key": "us_m1", "label": "M-1 Vocational Student", "journey": "us_f1"},
     ],
     "UK": [
-        {"key": "uk_student", "label": "Student Visa (Tier 4)", "journey": "uk_student"},
+        {"key": "uk_student", "label": "Student Visa", "journey": "uk_student"},
         {"key": "uk_short_study", "label": "Short-Term Study Visa", "journey": "uk_student"},
     ],
     "CA": [
+        # Student Direct Stream (SDS) was discontinued by IRCC on 8 Nov 2024; all applications
+        # now go through the single regular Study Permit stream. Any legacy account still carrying
+        # visa_type_key="ca_sds" resolves gracefully to ca_study_permit (see resolve_selection).
         {"key": "ca_study_permit", "label": "Study Permit", "journey": "ca_study_permit"},
-        {"key": "ca_sds", "label": "Student Direct Stream (SDS)", "journey": "ca_study_permit"},
     ],
     "AU": [
         {"key": "au_subclass500", "label": "Subclass 500 Student Visa", "journey": "au_subclass500"},
+    ],
+    "DE": [
+        {"key": "de_type_d_study", "label": "National Visa (Type D) – Study", "journey": "de_type_d_study"},
+        {"key": "de_student_applicant", "label": "Student Applicant Visa", "journey": "de_type_d_study"},
+        {"key": "de_language_course", "label": "Language Course Visa", "journey": "de_type_d_study"},
     ],
 }
 
@@ -621,6 +710,7 @@ JOURNEYS: dict[str, dict[str, list[dict[str, Any]]]] = {
     "uk_student": {"stages": UK_STUDENT_STAGES, "documents": UK_STUDENT_DOCUMENTS},
     "ca_study_permit": {"stages": CA_STUDY_STAGES, "documents": CA_STUDY_DOCUMENTS},
     "au_subclass500": {"stages": AU_STUDENT_STAGES, "documents": AU_STUDENT_DOCUMENTS},
+    "de_type_d_study": {"stages": DE_STUDY_STAGES, "documents": DE_STUDY_DOCUMENTS},
 }
 
 # Flat (country_code, visa_type_key) -> visa-type dict, for quick lookup/validation.

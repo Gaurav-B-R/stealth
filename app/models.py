@@ -35,7 +35,7 @@ class User(Base):
     # Personalized student journey (multi-country). Existing users are backfilled to
     # US/us_f1 with onboarding marked complete; new users leave these NULL until they
     # finish the post-signup onboarding (destination country + visa type are required).
-    destination_country_code = Column(String, nullable=True)  # US | UK | CA | AU
+    destination_country_code = Column(String, nullable=True)  # US | UK | CA | AU | DE
     visa_type_key = Column(String, nullable=True)             # us_f1 | uk_student | ...
     university_email = Column(String, nullable=True)
     onboarding_completed_at = Column(DateTime(timezone=True), nullable=True)

@@ -189,6 +189,26 @@
     </div>`;
   }
 
+  function defaultApiErrorMessage(status, fallback) {
+    if (fallback) return fallback;
+    if (status === 401) return "Your session has expired. Please sign in again.";
+    if (status === 403) return "You do not have permission to perform this action.";
+    if (status === 404) return "The requested item could not be found.";
+    if (status === 408 || status === 504) return "The request timed out. Please try again.";
+    if (status === 429) return "Too many requests. Please wait a moment and try again.";
+    if (status >= 500) return "Sorry, we encountered an error. The issue has been logged. Please try again shortly.";
+    return "We couldn't complete that request. Please check the information and try again.";
+  }
+
+  function publicApiErrorMessage(status, detail, fallback) {
+    const message = typeof detail === "string" ? detail.trim().replace(/\s+/g, " ") : "";
+    const internalDetail = /(?:gemini|generative\s*ai|vertex\s*ai|openai|anthropic|claude|model(?:s)?\/|api[_ -]?key|traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
+    if (!message || message.length > 300 || status >= 500 || internalDetail.test(message)) {
+      return defaultApiErrorMessage(status, fallback);
+    }
+    return message;
+  }
+
   async function api(path, opts) {
     opts = opts || {};
     const res = await fetch(API + path, {
@@ -201,7 +221,7 @@
     try { data = await res.json(); } catch (e) { /* no body */ }
     if (!res.ok) {
       const detail = data && (data.detail || data.message);
-      const err = new Error(typeof detail === "string" ? detail : "Request failed");
+      const err = new Error(publicApiErrorMessage(res.status, detail));
       err.status = res.status; err.data = data;
       throw err;
     }

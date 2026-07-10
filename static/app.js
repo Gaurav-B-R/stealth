@@ -604,7 +604,7 @@ let documentTypeLabelByValue = {};
 let journeyStageSelectionByWidget = {};
 
 // Per-destination interview framing so the AI coach/officer matches the student's
-// actual visa (US keeps the F-1 wording; UK/CA/AU get their own authority + focus).
+// actual visa (US keeps the F-1 wording; other destinations get their own authority + focus).
 const VISA_INTERVIEW_CONTEXT = {
     US: {
         coach: 'an F-1 visa interview coach',
@@ -629,6 +629,12 @@ const VISA_INTERVIEW_CONTEXT = {
         officer: 'an Australian Department of Home Affairs officer conducting a realistic subclass 500 Genuine Student interview simulation',
         report: 'Australian Student visa (subclass 500)',
         focus: 'course and provider choice, Genuine Student (GS) intentions, finances and OSHC, and ties to home country',
+    },
+    DE: {
+        coach: 'a German student visa interview coach',
+        officer: 'a German embassy or consulate visa officer conducting a realistic National Visa (Type D) study interview simulation',
+        report: 'German student visa / National Visa (Type D)',
+        focus: 'course and university fit, admission status, proof of financing such as blocked account or scholarship, health insurance, and credible study intent',
     },
 };
 
@@ -3171,7 +3177,7 @@ function renderShortlistRecs() {
     if (!cont) return;
     if (!_shortlistRecs.length) { cont.innerHTML = ''; return; }
     const diffColor = { reach: '#fb7185', match: '#60a5fa', safety: '#34d399' };
-    const RANK_COUNTRY_NAMES = { US: 'the US', UK: 'the UK', CA: 'Canada', AU: 'Australia' };
+    const RANK_COUNTRY_NAMES = { US: 'the US', UK: 'the UK', CA: 'Canada', AU: 'Australia', DE: 'Germany' };
     const rankCountryLabel = RANK_COUNTRY_NAMES[(currentUser && currentUser.destination_country_code) || 'US'] || 'country';
     const rankRow = (u) => {
         const parts = [];
@@ -3268,6 +3274,7 @@ const JOURNEY_HEADINGS = {
     UK: '🛂 Your UK Student Visa Journey',
     CA: '🛂 Your Study Permit Journey',
     AU: '🛂 Your Student Visa Journey',
+    DE: '🛂 Your German Student Visa Journey',
 };
 function updateVisaJourneyHeading() {
     const el = document.getElementById('visaJourneyHeading');
@@ -3278,14 +3285,14 @@ function updateVisaJourneyHeading() {
 
 // Per-destination labels for the sidebar nav, the interviews-section heading, and
 // the AI assistant copy. US keeps its F-1 wording; other countries adapt.
-const VISA_NAV_LABEL = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Canada Study Permit', AU: 'Australia Student Visa' };
-const VISA_JOURNEY_PHRASE = { US: 'F-1 visa', UK: 'UK student visa', CA: 'Canada study permit', AU: 'Australia student visa' };
+const VISA_NAV_LABEL = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Canada Study Permit', AU: 'Australia Student Visa', DE: 'German Student Visa' };
+const VISA_JOURNEY_PHRASE = { US: 'F-1 visa', UK: 'UK student visa', CA: 'Canada study permit', AU: 'Australia student visa', DE: 'German student visa' };
 function currentVisaJourneyPhrase() {
     const code = (currentUser && currentUser.destination_country_code) || 'US';
     return VISA_JOURNEY_PHRASE[code] || 'student visa';
 }
 // Shorter visa prefix used inside the interviews module (the sidebar is narrow).
-const VISA_INTERVIEW_PREFIX = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Study Permit', AU: 'Student Visa' };
+const VISA_INTERVIEW_PREFIX = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Study Permit', AU: 'Student Visa', DE: 'German Visa' };
 function updateVisaSectionLabels() {
     const code = (currentUser && currentUser.destination_country_code) || 'US';
     const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
@@ -3315,6 +3322,7 @@ const COUNTRY_DISPLAY = {
     UK: { flag: '🇬🇧', name: 'United Kingdom' },
     CA: { flag: '🇨🇦', name: 'Canada' },
     AU: { flag: '🇦🇺', name: 'Australia' },
+    DE: { flag: '🇩🇪', name: 'Germany' },
 };
 
 function updateSettingsCountryLabel() {

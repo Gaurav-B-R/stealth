@@ -315,21 +315,45 @@ def _ensure_additional_scope_catalogs(db: Session) -> None:
     rows are left untouched so admin customizations survive. Each scope commits on its
     own and rolls back on failure, so a legacy DB (e.g. a pre-migration single-unique
     document_type) degrades gracefully to US-only instead of crashing startup."""
+    scoped_default_label_repairs: dict[tuple[str, str], dict[str, set[str]]] = {
+        ("UK", "uk_student"): {
+            "english-language-test": {"Approved English Test (IELTS UKVI / PTE)"},
+            "entry-vignette": {"Entry Vignette / Decision Letter"},
+            "brp": {"Biometric Residence Permit (BRP)"},
+        },
+    }
     for country_code, journey_key in visa_catalog.catalog_scopes():
         if (country_code, journey_key) == (_US_COUNTRY, _US_VISA):
             continue
         try:
-            existing_types = {
-                row.document_type
+            existing_by_type = {
+                row.document_type: row
                 for row in _scoped_query(db, country_code, journey_key, active_only=False).all()
             }
-            added = False
+            changed = False
+            default_label_repairs = scoped_default_label_repairs.get((country_code, journey_key), {})
             for row in visa_catalog.documents_for(country_code, journey_key):
-                if row["document_type"] in existing_types:
+                existing = existing_by_type.get(row["document_type"])
+                if existing:
+                    stale_default_labels = default_label_repairs.get(existing.document_type)
+                    if stale_default_labels and existing.label in stale_default_labels:
+                        for field in (
+                            "label",
+                            "sort_order",
+                            "is_required",
+                            "journey_stage",
+                            "stage_gate_required",
+                            "stage_gate_requires_validation",
+                            "stage_gate_group",
+                        ):
+                            value = row.get(field)
+                            if getattr(existing, field) != value:
+                                setattr(existing, field, value)
+                                changed = True
                     continue
                 db.add(models.DocumentTypeCatalog(**row, country_code=country_code, visa_type_key=journey_key))
-                added = True
-            if added:
+                changed = True
+            if changed:
                 db.commit()
         except Exception:
             db.rollback()

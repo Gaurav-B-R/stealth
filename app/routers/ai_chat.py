@@ -583,7 +583,7 @@ def build_system_prompt(
     is_visa_prep = normalized_source == "visa_prep"
     is_interview = is_mock_interview or is_visa_prep
 
-    # The student's destination + visa type (e.g. "United Kingdom — Student Visa (Tier 4)")
+    # The student's destination + visa type (e.g. "United Kingdom — Student Visa")
     # personalizes the assistant. Falls back to the US F-1 wording when unknown.
     journey_label = (visa_summary or "").strip() or "F-1 student visa"
 

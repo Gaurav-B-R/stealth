@@ -442,10 +442,12 @@
                                 visas, DS-160, I-20 &amp; interview prep.</span></a>
                         <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier
                                 4) — CAS, financial proof &amp; interview.</span></a>
-                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit &amp; SDS
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit
                                 — LOA, proof of funds &amp; biometrics.</span></a>
                         <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 —
                                 CoE, OSHC &amp; Genuine Student.</span></a>
+                        <a href="/germany-student-visa"><span class="pm-flag">🇩🇪</span>Germany<span>National Visa (Type D) —
+                                Sperrkonto, APS &amp; admission.</span></a>
                     </div>
                 </div>
                 <a href="/blog">Blog</a>
@@ -666,7 +668,7 @@
             <div class="cols">
                 <div class="brand-col">
                     <img src="/static/logo.png" alt="Rilono">
-                    <p>The AI-powered platform for student visas to the US, UK, Canada &amp; Australia — helping
+                    <p>The AI-powered platform for student visas to the US, UK, Canada, Australia &amp; Germany — helping
                         students and consultancies prepare confident, complete applications.</p>
                 </div>
                 <div>
@@ -676,6 +678,7 @@
                         <li><a href="/uk-student-visa">UK Student Visa</a></li>
                         <li><a href="/canada-study-permit">Canada Study Permit</a></li>
                         <li><a href="/australia-student-visa">Australia Subclass 500</a></li>
+                        <li><a href="/germany-student-visa">Germany Student Visa</a></li>
                         <li><a href="/for-enterprise">Rilono Enterprise</a></li>
                         <li><a href="/pricing">Pricing</a></li>
                     </ul>
@@ -713,10 +716,10 @@
                 code: "UK", name: "United Kingdom", the: "the ", flag: "🇬🇧", img: "/static/assets/brand/countries/uk.webp",
                 visa: "UK Student visa", motif: "🎓",
                 blurb: "From your CAS and the 28-day financial rule to the credibility interview, Rilono organizes every UK Student visa document, checks it with Rilono AI, and gets you interview-ready.",
-                visaTypes: ["Student visa (Tier 4)", "Child Student visa", "Short-term study visa"],
-                docs: ["Valid passport", "CAS from your university", "Financial proof (28-day rule)", "English test (IELTS for UKVI / SELT)", "Tuberculosis (TB) test certificate", "Academic transcripts & qualifications", "ATAS certificate (if required)", "Proof of relationship to sponsor (if funded)"],
+                visaTypes: ["Student visa", "Child Student visa", "Short-term study visa"],
+                docs: ["Valid passport", "CAS from your university", "Financial proof (28-day rule)", "English-language evidence", "IHS payment confirmation", "Tuberculosis (TB) test certificate", "Academic transcripts & qualifications", "ATAS certificate (if required)", "Financial sponsor consent (if sponsored)", "Under-18 consent and relationship proof (if applicable)", "UKVI eVisa or share-code confirmation"],
                 floats: ["CAS matched", "28-day rule checked", "Interview-ready"],
-                stats: [["7", "guided journey stages"], ["15", "documents tracked"], ["60", "UK institutions"], ["24/7", "Rilono AI support"]],
+                stats: [["7", "guided journey stages"], ["20", "documents tracked"], ["60", "UK institutions"], ["24/7", "Rilono AI support"]],
                 unis: ["University of Oxford", "University of Cambridge", "Imperial College London", "UCL", "University of Edinburgh", "University of Manchester", "King's College London", "LSE", "University of Warwick", "University of Bristol", "University of Glasgow", "Durham University"],
                 coachFeature: { t: "Credibility interview coaching", p: "Practice the UKVI credibility interview with AI feedback on course fit, finances and intentions." },
                 demo: {
@@ -758,10 +761,10 @@
             "canada-study-permit": {
                 code: "CA", name: "Canada", flag: "🇨🇦", img: "/static/assets/brand/countries/ca.webp",
                 visa: "Canada Study Permit", motif: "🍁",
-                blurb: "From your Letter of Acceptance and Provincial Attestation Letter to proof of funds and biometrics, Rilono guides every Canadian Study Permit step — including the Student Direct Stream.",
-                visaTypes: ["Study Permit", "Student Direct Stream (SDS)"],
-                docs: ["Valid passport", "Letter of Acceptance (LOA)", "Provincial Attestation Letter (PAL)", "Proof of funds (GIC for SDS)", "Language test (IELTS for SDS)", "Statement of purpose", "Medical exam", "Biometrics"],
-                floats: ["LOA verified", "PAL / TAL checked", "GIC-ready for SDS"],
+                blurb: "From your Letter of Acceptance and Provincial Attestation Letter to proof of funds and biometrics, Rilono guides every Canadian Study Permit step, from application to biometrics.",
+                visaTypes: ["Study Permit"],
+                docs: ["Valid passport", "Letter of Acceptance (LOA)", "Provincial Attestation Letter (PAL)", "Proof of funds (GIC or bank statements)", "Language test (IELTS / PTE / TOEFL)", "Statement of purpose", "Medical exam", "Biometrics"],
+                floats: ["LOA verified", "PAL / TAL checked", "Proof of funds ready"],
                 stats: [["7", "guided journey stages"], ["13", "documents tracked"], ["129", "Canadian institutions"], ["24/7", "Rilono AI support"]],
                 unis: ["University of Toronto", "UBC", "McGill University", "University of Waterloo", "McMaster University", "University of Alberta", "Western University", "Queen's University", "SAIT", "Seneca Polytechnic", "Conestoga College", "Dawson College"],
                 coachFeature: { t: "SOP & study-plan coaching", p: "AI feedback that sharpens your statement of purpose and study plan before you submit." },
@@ -849,6 +852,52 @@
                         ai: 'Your Genuine Student answers carry real weight in subclass 500 decisions.',
                         user: "What should my GS answer focus on?",
                         answer: 'From your Rilono profile: tie your B.Tech, your <strong>Master of Data Science CoE at Monash</strong>, and your career plan back home into one consistent story — I\'ve drafted three talking points.'
+                    }
+                }
+            },
+            "germany-student-visa": {
+                code: "DE", name: "Germany", flag: "🇩🇪", img: "/static/assets/brand/countries/de.webp",
+                visa: "Germany Student visa", motif: "🎓",
+                blurb: "From university admission and the blocked account (Sperrkonto) to APS verification and health insurance, Rilono organizes every German student-visa document, checks it with Rilono AI, and gets you ready for your National Visa (Type D).",
+                visaTypes: ["National Visa (Type D) — Study", "Student Applicant Visa", "Language Course Visa"],
+                docs: ["Valid passport", "University admission (Zulassung) letter", "Blocked account (Sperrkonto) confirmation", "APS certificate (if required for your country)", "Academic transcripts & certificates", "Language certificate (German TestDaF/DSH or English IELTS/TOEFL)", "Health insurance confirmation", "Motivation letter (Motivationsschreiben)"],
+                floats: ["Admission matched", "Sperrkonto funded", "APS verified"],
+                stats: [["7", "guided journey stages"], ["20", "documents tracked"], ["300", "German institutions"], ["24/7", "Rilono AI support"]],
+                unis: ["Technical University of Munich", "LMU Munich", "Heidelberg University", "Humboldt University of Berlin", "Free University of Berlin", "RWTH Aachen", "Karlsruhe Institute of Technology", "University of Freiburg", "University of Tübingen", "University of Göttingen", "TU Berlin", "University of Mannheim"],
+                coachFeature: { t: "Motivation letter coaching", p: "Rilono AI drafts and sharpens your Motivationsschreiben / statement of purpose against what German admissions committees actually look for." },
+                demo: {
+                    title: "Your Germany study-visa journey", stage: "Stage 3 of 7 · Funding & Insurance",
+                    rows: [["Admission letter (Zulassung)", "ok", "Verified"], ["Blocked account (Sperrkonto)", "ok", "Verified"], ["Health insurance", "warn", "AI flagged"]],
+                    q: "Is my blocked account enough to apply?",
+                    a: "Your Sperrkonto is funded to the current annual minimum the German mission requires, so that box is ticked. The gap now is health insurance — you need cover that starts on your entry date. I'll show you exactly what to upload."
+                },
+                faq: [
+                    { q: "What is a blocked account (Sperrkonto)?", a: "It's a special German bank account that proves you can cover your living costs. You deposit the year's required amount up front and can withdraw a set sum each month after you arrive. German missions update the annual figure regularly — Rilono keeps your checklist pointed at the current amount and AI-checks your confirmation before you apply." },
+                    { q: "Do I need an APS certificate?", a: "It depends on your country. Applicants from India, China, Vietnam and a few others must have their academic documents verified by the Akademische Prüfstelle (APS) before applying. Rilono flags whether APS applies to you and tracks it as its own step so it never blocks your appointment." },
+                    { q: "Do I have to speak German?", a: "Only if your programme is taught in German — then you'll show TestDaF or DSH. Many Master's and international programmes are taught in English and accept IELTS or TOEFL. Rilono adapts your document checklist to your programme's language of instruction." },
+                    { q: "Is health insurance mandatory before I apply?", a: "Yes — you need valid health cover for your stay, and travel/incoming insurance for the period before your public insurance starts. Rilono tracks your cover dates so they line up with your admission and entry date." },
+                    { q: "How long does a German student visa take?", a: "It varies by mission and season — many National Visa (Type D) decisions land in several weeks, but appointment waits can be long, so apply early. A complete, consistent file with no re-requests is the biggest accelerator, which is exactly what Rilono is built to give you." }
+                ],
+                copilot: {
+                    student: "Aarav", url: "videx-national.diplo.de",
+                    kicker: "VIDEX · Auswärtiges Amt", kickerClass: "",
+                    pageTitle: "National Visa application (VIDEX)", pageSub: "Study purpose and financing",
+                    sub: "Your Rilono AI side panel reads your German National Visa (VIDEX) application as you fill it — admission, blocked account, insurance — and answers with guidance personalized to your Rilono profile.",
+                    portals: "VIDEX national-visa forms, uni-assist portals, Sperrkonto and insurance pages — Copilot adapts to the page you're on.",
+                    fields: [
+                        ["University admission (Zulassung) number", "", "As printed on your admission letter"],
+                        ["Blocked account confirmation", "Sperrkonto_confirmation.pdf ✓", ""],
+                        ["Funds in blocked account (€)", "", "€"]
+                    ],
+                    guide: [
+                        'I inspected your <strong>National Visa (VIDEX) application</strong>. Your admission from <span class="cpx-hl">TU Munich</span> is verified in Rilono — enter the admission number exactly as printed on your Zulassung.',
+                        '<strong>Blocked account:</strong> your Sperrkonto confirmation is already validated in your vault — attach that same PDF here.',
+                        '<strong>Funds:</strong> enter the balance from your blocked-account confirmation — it meets the current annual minimum the mission requires.'
+                    ],
+                    chat: {
+                        ai: 'German missions want your blocked account funded to the current annual minimum before you apply.',
+                        user: "Does my Sperrkonto balance qualify?",
+                        answer: 'The confirmation in your Rilono vault shows your blocked account funded to this year\'s minimum for <strong>TU Munich</strong> — your proof of funds is <span class="cpx-hl">complete</span>.'
                     }
                 }
             }

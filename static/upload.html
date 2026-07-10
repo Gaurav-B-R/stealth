@@ -143,13 +143,26 @@
 
       function show(id) { ["loading","invalidView","verifyView","uploadView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
       function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+      function publicError(status, detail, fallback){
+        var msg=typeof detail==="string"?detail.trim().replace(/\s+/g," "):"";
+        var internal=/(?:gemini|generative\s*ai|vertex\s*ai|openai|anthropic|claude|model(?:s)?\/|api[_ -]?key|traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
+        if(!msg||msg.length>300||status>=500||internal.test(msg)){
+          if(status===404)return fallback||"This link is invalid or has expired.";
+          if(status===408||status===504)return "The request timed out. Please try again.";
+          if(status===429)return "Too many requests. Please wait a moment and try again.";
+          return fallback||"Sorry, we encountered an error. Please try again shortly.";
+        }
+        return msg;
+      }
+      function apiError(r,d,fallback){ var ex=new Error(publicError(r.status,d&&(d.detail||d.message),fallback)); ex.status=r.status; ex.publicSafe=true; return ex; }
+      function safeError(ex,fallback){ return ex&&ex.publicSafe&&ex.message?ex.message:(fallback||"Sorry, we encountered an error. Please try again shortly."); }
       function api(path, body){ return fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})})
-        .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw new Error((d&&(d.detail||d.message))||"Something went wrong"); return d; }); }); }
+        .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw apiError(r,d); return d; }); }); }
 
       function load(){
-        fetch(API+"/"+encodeURIComponent(token)).then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw new Error((d&&d.detail)||"Invalid link"); return d; }); })
+        fetch(API+"/"+encodeURIComponent(token)).then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw apiError(r,d,"This link is invalid or has expired."); return d; }); })
           .then(function(d){ info=d; renderVerify(); })
-          .catch(function(ex){ $("invalidMsg").textContent=ex.message||"This link is invalid or has expired."; show("invalidView"); });
+          .catch(function(ex){ $("invalidMsg").textContent=safeError(ex,"This link is invalid or has expired."); show("invalidView"); });
       }
 
       function renderVerify(){
@@ -165,13 +178,13 @@
           if(d && d.sent===false){ $("vError").textContent="We couldn't send the code right now. Please try again in a moment."; $("vError").classList.remove("hidden"); return; }
           $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
           $("vMsg").textContent="We sent a 6-digit code to "+(d.masked_email||info.masked_email)+"."; $("vMsg").classList.remove("hidden"); $("codeInput").focus();
-        }).catch(function(ex){ $("vError").textContent=ex.message; $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
+        }).catch(function(ex){ $("vError").textContent=safeError(ex); $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
       $("resendBtn").onclick=function(){ $("vError").classList.add("hidden"); $("sendCodeBtn").click(); };
       $("verifyBtn").onclick=function(){ var code=($("codeInput").value||"").trim(); $("vError").classList.add("hidden");
         if(code.length<4){ $("vError").textContent="Enter the 6-digit code."; $("vError").classList.remove("hidden"); return; }
         var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Verifying…';
         api("/"+encodeURIComponent(token)+"/verify",{code:code}).then(function(d){ sessionToken=d.session_token; items=d.items||[]; info.message=d.message; renderUpload(); })
-          .catch(function(ex){ $("vError").textContent=ex.message; $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Verify & continue"; }); };
+          .catch(function(ex){ $("vError").textContent=safeError(ex); $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Verify & continue"; }); };
       $("codeInput").addEventListener("keydown",function(e){ if(e.key==="Enter") $("verifyBtn").click(); });
 
       function renderUpload(){
@@ -225,9 +238,9 @@
         btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Uploading…';
         var fd=new FormData(); fd.append("session_token",sessionToken); fd.append("item_id",String(id)); fd.append("file",f);
         fetch(API+"/upload",{method:"POST",body:fd})
-          .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw new Error((d&&(d.detail||d.message))||"Upload failed"); return d; }); })
+          .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw apiError(r,d,"We couldn't upload this document. Please try again."); return d; }); })
           .then(function(d){ items=d.items||items; delete picked[id]; drawItems(); })
-          .catch(function(ex){ $("uError").textContent=ex.message; $("uError").classList.remove("hidden"); btn.disabled=false; btn.textContent="Upload"; });
+          .catch(function(ex){ $("uError").textContent=safeError(ex,"We couldn't upload this document. Please try again."); $("uError").classList.remove("hidden"); btn.disabled=false; btn.textContent="Upload"; });
       }
 
       load();

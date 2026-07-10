@@ -640,7 +640,11 @@ def upload_document(
             db,
         )
 
-        # Validate document type and extract information
+        # Validate document type and extract information (judged by the student's OWN
+        # destination's rules — e.g. UKVI 28-day funds rule for UK, I-20/DS-160 for US).
+        _dest_code, _dest_visa = _user_visa_scope(current_user)
+        _dest_name = (visa_catalog.country_meta(_dest_code) or {}).get("name", _dest_code)
+        _dest_label = visa_catalog.visa_type_label(_dest_code, _dest_visa) or "Student Visa"
         validation_result = validate_and_extract_document(
             contents,
             original_filename,
@@ -649,6 +653,8 @@ def upload_document(
             current_date_for_evaluation=datetime.now().isoformat(),
             student_profile_context=student_profile_context,
             related_documents_context=related_documents_context,
+            destination_country_code=_dest_code,
+            destination_summary=f"{_dest_name} — {_dest_label}",
         )
         
         if validation_result:
@@ -1075,6 +1081,9 @@ def ai_validate_document_transient(
         student_profile_context, related_documents_context = build_upload_validation_context(
             current_user.id, db
         )
+        _dest_code, _dest_visa = _user_visa_scope(current_user)
+        _dest_name = (visa_catalog.country_meta(_dest_code) or {}).get("name", _dest_code)
+        _dest_label = visa_catalog.visa_type_label(_dest_code, _dest_visa) or "Student Visa"
         validation_result = validate_and_extract_document(
             contents,
             upload_filename,
@@ -1083,6 +1092,8 @@ def ai_validate_document_transient(
             current_date_for_evaluation=datetime.now().isoformat(),
             student_profile_context=student_profile_context,
             related_documents_context=related_documents_context,
+            destination_country_code=_dest_code,
+            destination_summary=f"{_dest_name} — {_dest_label}",
         )
     except Exception:
         logger.exception("ai-validate: Gemini processing failed for user_id=%s", current_user.id)

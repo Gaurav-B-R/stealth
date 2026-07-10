@@ -1,7 +1,8 @@
 """
-Background scheduler that ingests F1 visa news from Gemini once every 24 hours
-and stores them in the f1_visa_news table.  Users read pre-loaded data; no
-client-triggered fetching is needed.
+Background scheduler that ingests student-visa news from Gemini once every 24 hours
+and stores them in the f1_visa_news table — one scope per LAUNCH destination
+(US, UK, CA, AU, …), so every student's news feed is pre-loaded, not just US F-1.
+Users read pre-loaded data; the router's on-demand generation remains a fallback.
 
 Architecture follows the exact same pattern as daily_ai_notifications.py.
 """
@@ -37,6 +38,19 @@ F1_NEWS_MAX_STORED_ITEMS = max(
     10, int(os.getenv("F1_NEWS_MAX_STORED_ITEMS", "50") or "50")
 )
 
+
+def _ingestion_destinations() -> list[str]:
+    """Destination codes to prefetch news for. Defaults to the launched countries that
+    the news router knows how to describe; override with F1_NEWS_DESTINATIONS=US,UK,…"""
+    _ensure_news_helpers()
+    raw = os.getenv("F1_NEWS_DESTINATIONS", "").strip()
+    if raw:
+        requested = [c.strip().upper() for c in raw.split(",") if c.strip()]
+    else:
+        from app import visa_catalog
+        requested = list(visa_catalog.LAUNCH_COUNTRY_CODES)
+    return [c for c in requested if c in _NEWS_DESTINATIONS] or ["US"]
+
 # ---------------------------------------------------------------------------
 # Lazy imports from news router (avoids circular-import at module load time)
 # ---------------------------------------------------------------------------
@@ -52,6 +66,7 @@ _extract_grounding_urls = None
 _enrich_items_with_grounding_urls = None
 _NEWS_MAX_ITEM_AGE_DAYS = 365
 _ALLOW_NON_GROUNDED_NEWS_FALLBACK = False
+_NEWS_DESTINATIONS: Dict[str, Dict[str, str]] = {}
 
 
 def _ensure_news_helpers():
@@ -62,6 +77,7 @@ def _ensure_news_helpers():
     global _sanitize_item_published_date, _filter_recent_news_items
     global _extract_grounding_urls, _enrich_items_with_grounding_urls
     global _NEWS_MAX_ITEM_AGE_DAYS, _ALLOW_NON_GROUNDED_NEWS_FALLBACK
+    global _NEWS_DESTINATIONS
 
     if _news_helpers_loaded:
         return
@@ -77,6 +93,7 @@ def _ensure_news_helpers():
         _enrich_items_with_grounding_urls as _eiwgu,
         NEWS_MAX_ITEM_AGE_DAYS,
         ALLOW_NON_GROUNDED_NEWS_FALLBACK,
+        NEWS_DESTINATIONS,
     )
 
     _build_latest_genai_client = _blgc
@@ -89,6 +106,7 @@ def _ensure_news_helpers():
     _enrich_items_with_grounding_urls = _eiwgu
     _NEWS_MAX_ITEM_AGE_DAYS = NEWS_MAX_ITEM_AGE_DAYS
     _ALLOW_NON_GROUNDED_NEWS_FALLBACK = ALLOW_NON_GROUNDED_NEWS_FALLBACK
+    _NEWS_DESTINATIONS = NEWS_DESTINATIONS
     _news_helpers_loaded = True
 
 
@@ -154,13 +172,27 @@ def _is_due_for_today(now_utc: datetime) -> bool:
     return now_utc >= target
 
 
-def _already_ran_today() -> bool:
-    """Check if ingestion already ran today by looking at the most recent item's ingested_at."""
+# Completed-today marker per destination. The DB check below only sees runs that
+# INSERTED rows — a run that found "no new items" writes nothing, and without this
+# guard the scheduler would re-call Gemini every poll (~5 min) for the rest of the
+# day for that destination. In-memory is fine: a restart costs at most one extra
+# check per destination.
+_last_completed_utc_date: Dict[str, str] = {}
+
+
+def _mark_completed_today(destination_code: str) -> None:
+    _last_completed_utc_date[destination_code] = datetime.now(timezone.utc).date().isoformat()
+
+
+def _already_ran_today(destination_code: str = "US") -> bool:
+    """Check if ingestion already ran today for this destination (most recent ingested_at)."""
+    if _last_completed_utc_date.get(destination_code) == datetime.now(timezone.utc).date().isoformat():
+        return True
     db = SessionLocal()
     try:
         latest = (
             db.query(models.F1VisaNewsItem)
-            .filter(models.F1VisaNewsItem.destination_country_code == "US")
+            .filter(models.F1VisaNewsItem.destination_country_code == destination_code)
             .order_by(models.F1VisaNewsItem.ingested_at.desc())
             .first()
         )
@@ -181,11 +213,11 @@ def _already_ran_today() -> bool:
 # DB helpers
 # ---------------------------------------------------------------------------
 
-def _load_existing_news_items(db) -> List[Dict[str, str]]:
-    """Load all current items from DB to provide as context to Gemini."""
+def _load_existing_news_items(db, destination_code: str = "US") -> List[Dict[str, str]]:
+    """Load this destination's current items from DB to provide as dedupe context to Gemini."""
     items = (
         db.query(models.F1VisaNewsItem)
-        .filter(models.F1VisaNewsItem.destination_country_code == "US")
+        .filter(models.F1VisaNewsItem.destination_country_code == destination_code)
         .order_by(models.F1VisaNewsItem.ingested_at.desc())
         .limit(F1_NEWS_MAX_STORED_ITEMS)
         .all()
@@ -203,15 +235,15 @@ def _load_existing_news_items(db) -> List[Dict[str, str]]:
     ]
 
 
-def _merge_and_trim(db, new_items: List[Dict[str, str]]) -> int:
-    """Insert new items into DB, then trim to keep only the latest N items."""
+def _merge_and_trim(db, new_items: List[Dict[str, str]], destination_code: str = "US") -> int:
+    """Insert new items into this destination's scope, then trim to the latest N items."""
     if not new_items:
         return 0
 
     now_utc = datetime.now(timezone.utc)
     for item in new_items:
         news_row = models.F1VisaNewsItem(
-            destination_country_code="US",
+            destination_country_code=destination_code,
             title=item["title"],
             summary=item["summary"],
             why_it_matters=item.get("why_it_matters", ""),
@@ -223,17 +255,17 @@ def _merge_and_trim(db, new_items: List[Dict[str, str]]) -> int:
         db.add(news_row)
     db.commit()
 
-    # Trim: keep only the most recent F1_NEWS_MAX_STORED_ITEMS (US scope only).
+    # Trim: keep only the most recent F1_NEWS_MAX_STORED_ITEMS (this scope only).
     total_count = (
         db.query(models.F1VisaNewsItem)
-        .filter(models.F1VisaNewsItem.destination_country_code == "US")
+        .filter(models.F1VisaNewsItem.destination_country_code == destination_code)
         .count()
     )
     if total_count > F1_NEWS_MAX_STORED_ITEMS:
         excess = total_count - F1_NEWS_MAX_STORED_ITEMS
         oldest_to_delete = (
             db.query(models.F1VisaNewsItem)
-            .filter(models.F1VisaNewsItem.destination_country_code == "US")
+            .filter(models.F1VisaNewsItem.destination_country_code == destination_code)
             .order_by(
                 models.F1VisaNewsItem.ingested_at.asc(),
                 models.F1VisaNewsItem.id.asc(),
@@ -263,7 +295,11 @@ MODEL_CANDIDATES = gemini_utils.get_model_candidates(
 )
 
 
-def _build_ingestion_prompt(existing_items: List[Dict[str, str]]) -> str:
+def _build_ingestion_prompt(
+    existing_items: List[Dict[str, str]],
+    destination_name: str = "the United States",
+    visa_label: str = "F-1 student visa",
+) -> str:
     now_utc_iso = datetime.now(timezone.utc).isoformat()
 
     if existing_items:
@@ -278,16 +314,16 @@ EXISTING ITEMS (DO NOT REPEAT THESE):
     else:
         existing_context = "We have no existing news items yet. Provide the latest updates."
 
-    return f"""You are a research assistant for F1 student visa applicants.
-Task: Provide the latest important updates on US F1 visa news.
+    return f"""You are a research assistant for {destination_name} {visa_label} applicants.
+Task: Provide the latest important updates on the {destination_name} {visa_label}.
 
 Current date/time (UTC): {now_utc_iso}
 
 {existing_context}
 
 Requirements:
-- Focus only on recent and relevant updates directly about U.S. F-1 visa policy, process, appointments, or documentation.
-- Exclude policy updates primarily about other countries (UK, Australia, Canada, etc.).
+- Focus only on recent and relevant updates directly about the {destination_name} {visa_label}: policy, rules, process, appointments, fees, financial requirements, or documentation.
+- Exclude policy updates primarily about OTHER countries' visas (e.g. if the destination is the United Kingdom, do not include US F-1, Canada, or Australia news).
 - Treat the current UTC date/time above as "now" when determining recency.
 - Include only updates published within the last {_NEWS_MAX_ITEM_AGE_DAYS} days.
 - Do NOT include any items that duplicate or substantially overlap with the existing items listed above.
@@ -315,20 +351,22 @@ Output JSON format:
 Provide 4 to 8 NEW items only. If no new qualifying updates exist beyond what is already stored, return an empty items array."""
 
 
-def _fetch_new_items_from_gemini() -> List[Dict[str, str]]:
-    """Call Gemini with existing items as context, return only new items."""
+def _fetch_new_items_from_gemini(destination_code: str = "US") -> List[Dict[str, str]]:
+    """Call Gemini with this destination's existing items as context, return only new items."""
     _ensure_news_helpers()
+
+    meta = _NEWS_DESTINATIONS.get(destination_code) or {"name": "the United States", "visa": "F-1 student visa"}
 
     db = SessionLocal()
     try:
-        existing_items = _load_existing_news_items(db)
+        existing_items = _load_existing_news_items(db, destination_code)
     finally:
         db.close()
 
     # _build_latest_genai_client may raise HTTPException (FastAPI) or RuntimeError
     # which is fine — we catch Exception at the caller level.
     client, auth_mode = _build_latest_genai_client()
-    prompt = _build_ingestion_prompt(existing_items)
+    prompt = _build_ingestion_prompt(existing_items, destination_name=meta["name"], visa_label=meta["visa"])
     now_utc = datetime.now(timezone.utc)
     last_error = None
 
@@ -338,7 +376,7 @@ def _fetch_new_items_from_gemini() -> List[Dict[str, str]]:
                 client,
                 prompt,
                 model_name=model_name,
-                label="news.f1_ingestion",
+                label=f"news.ingestion.{destination_code.lower()}",
                 allow_non_grounded_fallback=_ALLOW_NON_GROUNDED_NEWS_FALLBACK,
             )
             # Extract real source URLs from grounding metadata.
@@ -360,7 +398,7 @@ def _fetch_new_items_from_gemini() -> List[Dict[str, str]]:
                 now_utc=now_utc,
             )
             print(
-                f"F1 news ingestion: model={model_name} "
+                f"News ingestion [{destination_code}]: model={model_name} "
                 f"grounded={generation_meta.get('grounded')} "
                 f"new_items={len(items)} "
                 f"grounding_urls_available={len(grounding_urls)} "
@@ -369,10 +407,10 @@ def _fetch_new_items_from_gemini() -> List[Dict[str, str]]:
             return items
         except Exception as exc:
             last_error = exc
-            print(f"F1 news ingestion model attempt failed [{model_name}]: {str(exc)}")
+            print(f"News ingestion [{destination_code}] model attempt failed [{model_name}]: {str(exc)}")
             continue
 
-    print(f"F1 news ingestion: all model attempts failed: {str(last_error)}")
+    print(f"News ingestion [{destination_code}]: all model attempts failed: {str(last_error)}")
     return []
 
 
@@ -382,26 +420,46 @@ def _fetch_new_items_from_gemini() -> List[Dict[str, str]]:
 
 def run_f1_news_ingestion_job(force: bool = False) -> dict:
     """
-    Run a single ingestion cycle.  Called by the scheduler or manually.
-    Returns a status dict.
+    Run a single ingestion cycle across ALL launch destinations (US, UK, CA, AU, …).
+    Called by the scheduler or manually. Returns a status dict with per-destination
+    results; destinations that already ran today are skipped individually, so a
+    mid-run failure never blocks the remaining countries the next poll.
     """
-    if not force and _already_ran_today():
-        return {"status": "skipped", "reason": "already_ran_today"}
+    per_destination: Dict[str, dict] = {}
+    any_ran = False
 
-    try:
-        new_items = _fetch_new_items_from_gemini()
-        if not new_items:
-            return {"status": "completed", "new_items_added": 0, "reason": "no_new_items"}
+    for destination_code in _ingestion_destinations():
+        if not force and _already_ran_today(destination_code):
+            per_destination[destination_code] = {"status": "skipped", "reason": "already_ran_today"}
+            continue
 
-        db = SessionLocal()
+        any_ran = True
         try:
-            added = _merge_and_trim(db, new_items)
-            return {"status": "completed", "new_items_added": added}
-        finally:
-            db.close()
-    except Exception as exc:
-        print(f"F1 news ingestion job failed: {str(exc)}")
-        return {"status": "failed", "error": str(exc)}
+            new_items = _fetch_new_items_from_gemini(destination_code)
+            if not new_items:
+                _mark_completed_today(destination_code)
+                per_destination[destination_code] = {
+                    "status": "completed", "new_items_added": 0, "reason": "no_new_items",
+                }
+                continue
+
+            db = SessionLocal()
+            try:
+                added = _merge_and_trim(db, new_items, destination_code)
+                _mark_completed_today(destination_code)
+                per_destination[destination_code] = {"status": "completed", "new_items_added": added}
+            finally:
+                db.close()
+        except Exception as exc:
+            print(f"News ingestion job failed [{destination_code}]: {str(exc)}")
+            per_destination[destination_code] = {"status": "failed", "error": str(exc)}
+
+    if not any_ran:
+        return {"status": "skipped", "reason": "already_ran_today", "destinations": per_destination}
+    overall = "failed" if all(
+        r.get("status") == "failed" for r in per_destination.values()
+    ) else "completed"
+    return {"status": overall, "destinations": per_destination}
 
 
 # ---------------------------------------------------------------------------
