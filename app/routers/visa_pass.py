@@ -18,6 +18,7 @@ import hashlib
 import secrets
 import logging
 from datetime import datetime
+from typing import Optional
 
 import requests
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -92,6 +93,12 @@ class PassVerifyRequest(BaseModel):
     razorpay_signature: str = Field(..., min_length=6, max_length=256)
 
 
+class PassCheckoutRequest(BaseModel):
+    # Optional discount code (admin-issued per-account "conversion play" coupons or
+    # global codes). Validated server-side; the client never sets the price.
+    coupon_code: Optional[str] = Field(default=None, max_length=64)
+
+
 # ---------------------------------------------------------------------------
 # Status
 # ---------------------------------------------------------------------------
@@ -116,6 +123,7 @@ def pass_status(
 @router.post("/checkout")
 def pass_checkout(
     request: Request,
+    payload: Optional[PassCheckoutRequest] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
@@ -150,6 +158,29 @@ def pass_checkout(
     if referral_discount > 0:
         amount = max(100, amount - referral_discount)  # never below Razorpay's ₹1 minimum
 
+    # Optional coupon code (admin-issued per-account or global). Reuses the exact
+    # validation the recurring checkout uses: existence, per-account restriction and
+    # per-user usage caps all enforced server-side. Applied AFTER the referral
+    # discount; validated before the Razorpay gate so a bad code errors cleanly.
+    coupon_code = None
+    coupon_percent_off = None
+    coupon_discount = 0
+    raw_coupon = (payload.coupon_code if payload else None) or ""
+    if raw_coupon.strip():
+        from app.routers.subscription import (
+            _normalize_coupon_code,
+            _get_coupon_details,
+            _compute_discounted_amount_paise,
+        )
+        coupon_code = _normalize_coupon_code(raw_coupon)
+        if not coupon_code:
+            raise HTTPException(status_code=400, detail="Invalid coupon code.")
+        percent_off, _max_uses = _get_coupon_details(db, coupon_code, current_user.id)
+        discounted = max(100, _compute_discounted_amount_paise(amount, percent_off))
+        coupon_discount = amount - discounted
+        coupon_percent_off = float(percent_off)
+        amount = discounted
+
     if not _razorpay_enabled():
         return {
             "action": "unavailable",
@@ -178,7 +209,8 @@ def pass_checkout(
         currency=visa_pass.CURRENCY,
         razorpay_order_id=order_id,
         pricing_model=visa_pass.PASS_PRICING_MODEL,
-        coupon_code="REFERRAL" if referral_discount > 0 else None,
+        coupon_code=coupon_code or ("REFERRAL" if referral_discount > 0 else None),
+        coupon_percent_off=coupon_percent_off,
         status="created",
     ))
     db.commit()
@@ -190,6 +222,9 @@ def pass_checkout(
         "amount": amount,
         "original_amount": int(visa_pass.PASS_PRICE_PAISE),
         "referral_discount": int(referral_discount),
+        "coupon_code": coupon_code,
+        "coupon_percent_off": coupon_percent_off,
+        "coupon_discount": int(coupon_discount),
         "currency": visa_pass.CURRENCY,
         "product_label": "Visa Success Pass",
         "duration_days": visa_pass.PASS_DURATION_DAYS,

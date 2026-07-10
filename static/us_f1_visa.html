@@ -882,6 +882,12 @@
             <div class="auth-card">
                 <h2>Login</h2>
                 <div class="social-auth" id="socialAuthLogin"></div>
+                <p class="social-consent-note" id="socialConsentNoteLogin" style="display:none;">
+                    By continuing, you agree to our
+                    <a href="/terms" onclick="event.preventDefault(); showTerms(); return false;">Terms &amp; Conditions</a>
+                    and <a href="/privacy" onclick="event.preventDefault(); showPrivacy(); return false;">Privacy Policy</a>,
+                    and confirm you are 18+ (or a parent/guardian agrees on your behalf).
+                </p>
                 <div class="social-auth-divider" id="socialAuthLoginDivider" style="display:none;"><span>or</span></div>
                 <form id="loginForm">
                     <div class="form-group">
@@ -1051,6 +1057,12 @@
             <div class="auth-card">
                 <h2>Create Account</h2>
                 <div class="social-auth" id="socialAuthRegister"></div>
+                <p class="social-consent-note" id="socialConsentNoteRegister" style="display:none;">
+                    By continuing, you agree to our
+                    <a href="/terms" onclick="event.preventDefault(); showTerms(); return false;">Terms &amp; Conditions</a>
+                    and <a href="/privacy" onclick="event.preventDefault(); showPrivacy(); return false;">Privacy Policy</a>,
+                    and confirm you are 18+ (or a parent/guardian agrees on your behalf).
+                </p>
                 <div class="social-auth-divider" id="socialAuthRegisterDivider" style="display:none;"><span>or sign up with email</span></div>
                 <form id="registerForm">
                     <div class="form-group">
@@ -2987,7 +2999,7 @@
                                                     <p>• Profile and visa-stage gaps you should fix first</p>
                                                     <p>• Interview prep, mock questions, and answer quality</p>
                                                     <p>• Important deadlines, risks, and updates</p>
-                                                    <p>Tell me your current stage (I-20, DS-160, fees, or interview),
+                                                    <p class="ai-stage-hint">Tell me your current stage (I-20, DS-160, fees, or interview),
                                                         and I'll suggest your best next step.</p>
                                                 </div>
                                             </div>
@@ -3847,10 +3859,10 @@
                                 </div>
                                 <div class="widget-content">
                                     <div class="visa-hub-content">
-                                        <p class="visa-hub-copy">Rilono Copilot is a Chrome side-panel assistant for
+                                        <p class="visa-hub-copy" id="copilotWhatCopy1">Rilono Copilot is a Chrome side-panel assistant for
                                             students navigating F-1 visa applications. It helps you move through active
                                             forms step by step with context-aware guidance.</p>
-                                        <p class="visa-hub-copy">It focuses on application workflows like DS-160,
+                                        <p class="visa-hub-copy" id="copilotWhatCopy2">It focuses on application workflows like DS-160,
                                             university I-20 requests, and related health/onboarding forms, while
                                             helping you maintain answer consistency and submission accuracy.</p>
                                         <div class="visa-hub-meta">
@@ -3886,7 +3898,7 @@
                                     <h3>🧩 Where you can use it</h3>
                                 </div>
                                 <div class="widget-content">
-                                    <ul class="visa-hub-list">
+                                    <ul class="visa-hub-list" id="copilotWhereList">
                                         <li>DS-160 and visa appointment workflows</li>
                                         <li>University I-20 request portals</li>
                                         <li>Health and onboarding forms in your F-1 journey</li>
@@ -3957,7 +3969,7 @@
                                                 <p>• Profile and visa-stage gaps you should fix first</p>
                                                 <p>• Interview prep, mock questions, and answer quality</p>
                                                 <p>• Important deadlines, risks, and updates</p>
-                                                <p>Tell me your current stage (I-20, DS-160, fees, or interview), and
+                                                <p class="ai-stage-hint">Tell me your current stage (I-20, DS-160, fees, or interview), and
                                                     I'll suggest your best next step.</p>
                                             </div>
                                         </div>
@@ -5301,6 +5313,11 @@
                         <p id="checkoutLaunchMode" class="checkout-launch-plan-note">One-time payment · valid 30 days ·
                             no subscription, no auto-renew.</p>
                     </div>
+                </div>
+                <div class="checkout-launch-coupon" style="margin:10px 0 2px">
+                    <input type="text" id="checkoutLaunchCouponCode" class="pricing-coupon-input"
+                        placeholder="Have a coupon code? (optional)" maxlength="32" autocomplete="off"
+                        autocapitalize="characters" spellcheck="false" style="width:100%">
                 </div>
                 <div class="checkout-launch-actions">
                     <button type="button" class="btn btn-secondary" onclick="closeCheckoutLaunchModal(false)">Maybe

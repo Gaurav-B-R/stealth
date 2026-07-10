@@ -1865,6 +1865,19 @@ function renderAccountDetail(userId, data) {
     const acq = a.acquisition || {}, ref = a.referral || {}, vd = a.visa_decision || {};
     const vdChipClass = { approved: 'green', refused: 'amber', withdrawn: 'grey', deferred: 'grey' }[vd.decision] || 'grey';
 
+    // Coupon codes issued FOR this account (per-account "conversion play" offers).
+    const offers = data.coupon_offers || [];
+    const offersHtml = offers.length
+        ? offers.map((c) => `<div class="acct-line">
+            <span><strong>${escapeHtml(c.code)}</strong> · ${c.percent_off}% off
+              · used ${c.verified_uses}${c.max_uses_per_user != null ? ` / ${c.max_uses_per_user}` : ' (no cap)'}
+            </span>
+            <span style="display:inline-flex;align-items:center;gap:8px;color:#64748b">${c.created_at ? escapeHtml(acctFmt(c.created_at)) : ''}
+              <button type="button" class="table-btn danger" data-coupon-delete="${escapeHtml(c.code)}">Delete</button></span>
+          </div>`).join('')
+        : '<div class="acct-empty">No coupon codes issued for this account yet.</div>';
+    const suggestedCode = `${String((a.name || 'SAVE').split(' ')[0] || 'SAVE').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || 'SAVE'}20`;
+
     document.getElementById('adminAccountBody').innerHTML = `
       <div class="acct-grid">
         <div style="display:grid;gap:16px">
@@ -1892,6 +1905,28 @@ function renderAccountDetail(userId, data) {
               <p style="font-size:13px;color:#64748b;margin:0 0 10px">Intent score <strong>${intent.score != null ? intent.score : '—'}</strong>${intent.hit_any_limit ? ' · <span class="acct-chip amber">hit a free limit</span>' : ''}. Run the agent for a tailored coupon/promotion + outreach message for this account.</p>
               <button class="primary-btn small-btn" id="acctRecoBtn">Get AI recommendation</button>
             </div>
+          </div>
+          <div class="acct-card"><h3>Coupon codes for this account</h3>
+            <p style="font-size:12px;color:#94a3b8;margin:0 0 10px">Only this account can redeem these codes — at the
+              Visa Success Pass checkout. Deleting a code stops future use; past payments keep their discount.</p>
+            <div id="acctCouponList">${offersHtml}</div>
+            <form id="acctCouponForm" class="coupon-form" style="margin-top:12px">
+              <div class="coupon-form-grid">
+                <label class="coupon-field">
+                  <span>Code</span>
+                  <input type="text" id="acctCouponCode" placeholder="${escapeHtml(suggestedCode)}" maxlength="32" autocomplete="off">
+                </label>
+                <label class="coupon-field coupon-field-narrow">
+                  <span>% off</span>
+                  <input type="number" id="acctCouponPct" placeholder="20" min="0.01" max="100" step="0.01">
+                </label>
+                <label class="coupon-field coupon-field-narrow">
+                  <span>Max uses</span>
+                  <input type="number" id="acctCouponMax" value="1" min="1" step="1">
+                </label>
+              </div>
+              <button type="submit" class="primary-btn small-btn" id="acctCouponCreateBtn">Create coupon</button>
+            </form>
           </div>
           <div class="acct-card"><h3>Visa decision (outcome)</h3>
             <div id="acctDecisionBody">
@@ -1936,6 +1971,75 @@ function renderAccountDetail(userId, data) {
     document.querySelectorAll('#acctDecisionBody .acct-decision-set button').forEach((btn) => {
         btn.addEventListener('click', () => setAccountVisaDecision(userId, btn.getAttribute('data-decision')));
     });
+    const couponForm = document.getElementById('acctCouponForm');
+    if (couponForm) couponForm.addEventListener('submit', (e) => { e.preventDefault(); void createAccountCoupon(userId); });
+    document.querySelectorAll('#acctCouponList [data-coupon-delete]').forEach((btn) => {
+        btn.addEventListener('click', () => deleteAccountCoupon(userId, btn.getAttribute('data-coupon-delete')));
+    });
+}
+
+// Create a coupon code restricted to this account (the actionable half of the
+// growth agent's "offer them a tailored coupon" recommendation).
+async function createAccountCoupon(userId) {
+    if (!await ensureAdminProtection({ silent: false })) return;
+    const codeInput = document.getElementById('acctCouponCode');
+    const pctInput = document.getElementById('acctCouponPct');
+    const maxInput = document.getElementById('acctCouponMax');
+    const createBtn = document.getElementById('acctCouponCreateBtn');
+
+    const code = String(codeInput?.value || '').trim().toUpperCase();
+    const pct = Number(pctInput?.value || 0);
+    const maxRaw = String(maxInput?.value || '').trim();
+    const maxUses = maxRaw === '' ? null : Number(maxRaw);
+    if (!code) { showFlash('Enter a coupon code (e.g. HENRY20).', 'error'); codeInput?.focus(); return; }
+    if (!Number.isFinite(pct) || pct <= 0 || pct > 100) { showFlash('Enter a discount between 0 and 100 percent.', 'error'); pctInput?.focus(); return; }
+    if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1)) { showFlash('Max uses must be a whole number of at least 1 (or empty for unlimited).', 'error'); maxInput?.focus(); return; }
+
+    if (createBtn) { createBtn.disabled = true; createBtn.textContent = 'Creating…'; }
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/coupons`, {
+            method: 'POST',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify({ code, percent_off: pct, max_uses_per_user: maxUses, restricted_to_user_id: userId }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(normalizeErrorMessage(payload, 'Failed to create the coupon.'), 'error');
+            return;
+        }
+        showFlash(`Coupon ${code} created for this account.`, 'success');
+        await openAccountDetail(userId);
+    } catch (error) {
+        console.error('Create coupon failed:', error);
+        showFlash('Failed to create the coupon.', 'error');
+    } finally {
+        if (createBtn) { createBtn.disabled = false; createBtn.textContent = 'Create coupon'; }
+    }
+}
+
+async function deleteAccountCoupon(userId, code) {
+    if (!await ensureAdminProtection({ silent: false })) return;
+    if (!window.confirm(`Delete coupon "${code}"?\n\nStudents will no longer be able to apply it. Past payments keep their discount.`)) return;
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/coupons/${encodeURIComponent(code)}`, {
+            method: 'DELETE',
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin',
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(normalizeErrorMessage(payload, 'Failed to delete the coupon.'), 'error');
+            return;
+        }
+        showFlash(`Coupon ${code} deleted.`, 'success');
+        await openAccountDetail(userId);
+    } catch (error) {
+        console.error('Delete coupon failed:', error);
+        showFlash('Failed to delete the coupon.', 'error');
+    }
 }
 
 async function setAccountVisaDecision(userId, decision) {

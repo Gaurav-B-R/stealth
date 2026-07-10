@@ -256,6 +256,21 @@ def ensure_coupon_usage_limit_column():
             conn.execute(text("ALTER TABLE coupon_codes ADD COLUMN max_uses_per_user INTEGER"))
 
 
+def ensure_coupon_account_columns():
+    """
+    Per-account coupons (admin console): restrict a code to one user + track creation time.
+    """
+    with engine.begin() as conn:
+        columns = _get_table_columns(conn, "coupon_codes")
+        if "coupon_code" not in columns:
+            return
+
+        if "restricted_to_user_id" not in columns:
+            conn.execute(text("ALTER TABLE coupon_codes ADD COLUMN restricted_to_user_id INTEGER"))
+        if "created_at" not in columns:
+            conn.execute(text("ALTER TABLE coupon_codes ADD COLUMN created_at TIMESTAMP"))
+
+
 def ensure_referral_columns():
     """
     Patch users table schema for referral program fields in environments without full migrations.

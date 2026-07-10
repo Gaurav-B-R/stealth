@@ -889,6 +889,10 @@ class CouponCode(Base):
     coupon_code = Column(String, primary_key=True, index=True, nullable=False)
     percent_off = Column(Numeric(5, 2), nullable=False)
     max_uses_per_user = Column(Integer, nullable=True)
+    # Per-account coupon (admin console "conversion play"): when set, only this user
+    # can apply the code at checkout. NULL = a global code anyone can use.
+    restricted_to_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
 
 
 class UserNotification(Base):

@@ -810,6 +810,32 @@ def _admin_iso(value):
     return value.isoformat() if value else None
 
 
+def _serialize_coupon_code(db: Session, row: models.CouponCode) -> dict:
+    """B2C coupon code + live usage stats for the admin console."""
+    verified_uses = int(
+        db.query(func.count(models.SubscriptionPayment.id))
+        .filter(
+            models.SubscriptionPayment.status == "verified",
+            func.upper(models.SubscriptionPayment.coupon_code) == str(row.coupon_code or "").upper(),
+        )
+        .scalar() or 0
+    )
+    restricted_email = None
+    restricted_to = getattr(row, "restricted_to_user_id", None)
+    if restricted_to is not None:
+        u = db.query(models.User.email).filter(models.User.id == int(restricted_to)).first()
+        restricted_email = u[0] if u else None
+    return {
+        "code": row.coupon_code,
+        "percent_off": float(row.percent_off) if row.percent_off is not None else None,
+        "max_uses_per_user": row.max_uses_per_user,
+        "restricted_to_user_id": restricted_to,
+        "restricted_to_email": restricted_email,
+        "verified_uses": verified_uses,
+        "created_at": _admin_iso(getattr(row, "created_at", None)),
+    }
+
+
 @router.get("/users/{user_id}/detail")
 def admin_user_detail(
     user_id: int,
@@ -883,6 +909,17 @@ def admin_user_detail(
 
     feat = growth_agent_features_safe(db, user, sub)
 
+    # Coupon codes issued FOR this account (admin "conversion play" offers).
+    coupon_offer_rows = (
+        db.query(models.CouponCode)
+        .filter(models.CouponCode.restricted_to_user_id == user.id)
+        .all()
+    )
+    coupon_offers = sorted(
+        (_serialize_coupon_code(db, r) for r in coupon_offer_rows),
+        key=lambda c: c["created_at"] or "", reverse=True,
+    )
+
     return {
         "account": {
             "id": user.id, "name": user.full_name or user.username or user.email, "email": user.email,
@@ -920,12 +957,122 @@ def admin_user_detail(
             "usage": usage,
         },
         "coupons": coupons,
+        "coupon_offers": coupon_offers,
         "payments": payment_rows,
         "intent": {
             "score": feat["intent_score"] if feat else None,
             "hit_any_limit": feat["hit_any_limit"] if feat else None,
         },
     }
+
+
+@router.get("/coupons")
+def list_coupon_codes_admin(
+    request: Request,
+    user_id: int | None = None,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """List B2C coupon codes (all, or only those issued to one account via ?user_id=)."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.coupons.list",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    q = db.query(models.CouponCode)
+    if user_id is not None:
+        q = q.filter(models.CouponCode.restricted_to_user_id == int(user_id))
+    rows = q.all()
+    coupons = sorted(
+        (_serialize_coupon_code(db, r) for r in rows),
+        key=lambda c: c["created_at"] or "", reverse=True,
+    )
+    return {"coupons": coupons}
+
+
+@router.post("/coupons")
+def create_coupon_code_admin(
+    request: Request,
+    payload: schemas.AdminCouponCodeCreateRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Create a B2C coupon code — optionally restricted to one student account."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.coupons.create",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app.routers.subscription import _normalize_coupon_code
+
+    code = _normalize_coupon_code(payload.code)
+    if not code or len(code) < 3 or len(code) > 32:
+        raise HTTPException(status_code=400, detail="Enter a code of 3–32 letters/numbers (-, _ allowed).")
+
+    try:
+        percent = Decimal(str(payload.percent_off)).quantize(Decimal("0.01"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Enter a valid discount percentage.")
+    if percent <= Decimal("0") or percent > Decimal("100"):
+        raise HTTPException(status_code=400, detail="Discount must be between 0 and 100 percent.")
+
+    max_uses = payload.max_uses_per_user
+    if max_uses is not None:
+        max_uses = int(max_uses)
+        if max_uses < 1:
+            raise HTTPException(status_code=400, detail="Max uses per user must be at least 1 (or empty for unlimited).")
+
+    restricted_to = payload.restricted_to_user_id
+    if restricted_to is not None:
+        target = db.query(models.User).filter(models.User.id == int(restricted_to)).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Account to restrict this coupon to was not found.")
+
+    existing = db.query(models.CouponCode).filter(
+        func.upper(models.CouponCode.coupon_code) == code
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Coupon code '{code}' already exists.")
+
+    row = models.CouponCode(
+        coupon_code=code,
+        percent_off=percent,
+        max_uses_per_user=max_uses,
+        restricted_to_user_id=int(restricted_to) if restricted_to is not None else None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"coupon": _serialize_coupon_code(db, row)}
+
+
+@router.delete("/coupons/{code}")
+def delete_coupon_code_admin(
+    code: str,
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Delete a B2C coupon code (past payments keep their recorded code/discount)."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.coupons.delete",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app.routers.subscription import _normalize_coupon_code
+
+    normalized = _normalize_coupon_code(code)
+    row = db.query(models.CouponCode).filter(
+        func.upper(models.CouponCode.coupon_code) == normalized
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Coupon code not found.")
+    db.delete(row)
+    db.commit()
+    return {"deleted": True, "code": normalized}
 
 
 def growth_agent_features_safe(db, user, sub):

@@ -1535,11 +1535,18 @@ const SOCIAL_PROVIDER_ICONS = {
     apple: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.36 12.78c-.02-2.28 1.86-3.38 1.95-3.43-1.06-1.56-2.72-1.77-3.31-1.79-1.41-.14-2.75.83-3.46.83-.71 0-1.81-.81-2.98-.79-1.53.02-2.95.89-3.74 2.26-1.6 2.77-.41 6.87 1.14 9.12.76 1.1 1.66 2.34 2.84 2.29 1.14-.05 1.57-.74 2.95-.74 1.38 0 1.76.74 2.96.71 1.22-.02 2-1.12 2.75-2.22.86-1.27 1.22-2.5 1.24-2.57-.03-.01-2.38-.91-2.4-3.62zM14.13 5.9c.63-.76 1.05-1.82.94-2.88-.91.04-2 .61-2.65 1.37-.58.67-1.09 1.75-.95 2.78 1.01.08 2.04-.51 2.66-1.27z"/></svg>',
 };
 
-function renderSocialButtons(container, providers, dividerEl, consentCheckboxIds) {
+function renderSocialButtons(container, providers, dividerEl, options) {
     if (!container) return;
+    const opts = options || {};
+    const consentNoteEl = opts.consentNoteEl || null;
+    const clickwrapConsent = !!opts.clickwrapConsent;
     if (!providers || !providers.length) {
         container.innerHTML = '';
+        // Clear any inline override so the CSS rule `.social-auth:empty { display:none }`
+        // governs an empty container (no stale inline display left from the load race).
+        container.style.display = '';
         if (dividerEl) dividerEl.style.display = 'none';
+        if (consentNoteEl) consentNoteEl.style.display = 'none';
         return;
     }
     container.innerHTML = providers.map((p) => {
@@ -1548,26 +1555,22 @@ function renderSocialButtons(container, providers, dividerEl, consentCheckboxIds
         const startUrl = `${API_BASE}/api/auth/oauth/${key}/start`;
         return `<a class="social-btn social-btn-${key}" data-oauth-start="${startUrl}" href="${startUrl}">${icon}<span>Continue with ${p.label}</span></a>`;
     }).join('');
+    // Buttons are present now — un-stick any inline `display:none` a view-switch
+    // (e.g. backToRegisterStep1) may have set while the container was momentarily empty
+    // during the async providers fetch. Without this the buttons render but stay hidden
+    // (the "Google button disappears on hard refresh" bug).
+    container.style.display = '';
     if (dividerEl) dividerEl.style.display = '';
+    if (consentNoteEl) consentNoteEl.style.display = '';
 
-    // On the sign-up view, social login must carry the same affirmative consent as
-    // the email form. Require the consent box(es) to be ticked, then pass consent=1
-    // so the backend may create a new account and record proof-of-consent.
-    const requiredIds = Array.isArray(consentCheckboxIds) ? consentCheckboxIds : [];
-    if (requiredIds.length) {
+    // Clickwrap consent: clicking a provider button IS the affirmative acceptance of the
+    // Terms & Privacy (and age), disclosed inline in `consentNoteEl`. We pass consent=1 so
+    // the backend may create a new account and record proof-of-consent (version, IP, UA,
+    // timestamp). No separate checkbox to hunt for — clean one-tap social sign-up.
+    if (clickwrapConsent) {
         container.querySelectorAll('a[data-oauth-start]').forEach((a) => {
-            a.addEventListener('click', (e) => {
+            a.addEventListener('click', () => {
                 const base = a.getAttribute('data-oauth-start');
-                const missing = requiredIds
-                    .map((id) => document.getElementById(id))
-                    .filter((cb) => cb && !cb.checked);
-                if (missing.length) {
-                    e.preventDefault();
-                    showMessage('Please accept the Terms & Privacy and confirm your age before continuing with social sign-up.', 'error');
-                    const first = missing[0];
-                    if (first && typeof first.focus === 'function') first.focus();
-                    return;
-                }
                 a.setAttribute('href', `${base}${base.includes('?') ? '&' : '?'}consent=1`);
             });
         });
@@ -1580,8 +1583,18 @@ async function loadSocialAuthButtons() {
         if (!response.ok) return;
         const data = await response.json();
         const providers = (data && data.providers) || [];
-        renderSocialButtons(document.getElementById('socialAuthLogin'), providers, document.getElementById('socialAuthLoginDivider'));
-        renderSocialButtons(document.getElementById('socialAuthRegister'), providers, document.getElementById('socialAuthRegisterDivider'), ['registerConsent', 'registerAgeConsent']);
+        renderSocialButtons(
+            document.getElementById('socialAuthLogin'),
+            providers,
+            document.getElementById('socialAuthLoginDivider'),
+            { consentNoteEl: document.getElementById('socialConsentNoteLogin'), clickwrapConsent: true }
+        );
+        renderSocialButtons(
+            document.getElementById('socialAuthRegister'),
+            providers,
+            document.getElementById('socialAuthRegisterDivider'),
+            { consentNoteEl: document.getElementById('socialConsentNoteRegister'), clickwrapConsent: true }
+        );
     } catch (error) {
         // Social login is optional — fail silently and leave the email forms.
     }
@@ -3293,6 +3306,40 @@ function currentVisaJourneyPhrase() {
 }
 // Shorter visa prefix used inside the interviews module (the sidebar is narrow).
 const VISA_INTERVIEW_PREFIX = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Study Permit', AU: 'Student Visa', DE: 'German Visa' };
+
+// Rilono Copilot tab + AI-chat welcome copy per destination (the HTML defaults to US F-1 wording).
+const COPILOT_TAB_COPY = {
+    US: {
+        what1: "Rilono Copilot is a Chrome side-panel assistant for students navigating F-1 visa applications. It helps you move through active forms step by step with context-aware guidance.",
+        what2: "It focuses on application workflows like DS-160, university I-20 requests, and related health/onboarding forms, while helping you maintain answer consistency and submission accuracy.",
+        where: ['DS-160 and visa appointment workflows', 'University I-20 request portals', 'Health and onboarding forms in your F-1 journey', 'Any application pages where you need guided field-by-field help'],
+        stages: 'I-20, DS-160, fees, or interview',
+    },
+    UK: {
+        what1: "Rilono Copilot is a Chrome side-panel assistant for students navigating the UK Student visa application. It helps you move through active forms step by step with context-aware guidance.",
+        what2: "It focuses on application workflows like the GOV.UK Student visa form, CAS details and the IHS payment, while helping you maintain answer consistency and submission accuracy.",
+        where: ['GOV.UK Student visa application pages', 'CAS details and sponsor information', 'IHS payment and financial-evidence steps', 'Any application pages where you need guided field-by-field help'],
+        stages: 'CAS, visa application, IHS, or interview',
+    },
+    CA: {
+        what1: "Rilono Copilot is a Chrome side-panel assistant for students navigating the Canada study permit application. It helps you move through active forms step by step with context-aware guidance.",
+        what2: "It focuses on application workflows like IRCC's IMM 1294 form, LOA and PAL details, and GIC / proof-of-funds steps, while helping you maintain answer consistency and submission accuracy.",
+        where: ['IRCC secure account and IMM 1294 study-permit forms', 'LOA and Provincial Attestation Letter (PAL) details', 'GIC and proof-of-funds steps', 'Any application pages where you need guided field-by-field help'],
+        stages: 'LOA, PAL, proof of funds, or biometrics',
+    },
+    AU: {
+        what1: "Rilono Copilot is a Chrome side-panel assistant for students navigating the Australia Subclass 500 student visa application. It helps you move through active forms step by step with context-aware guidance.",
+        what2: "It focuses on application workflows like the ImmiAccount Subclass 500 form, CoE and OSHC details, and your Genuine Student answers, while helping you maintain answer consistency and submission accuracy.",
+        where: ['ImmiAccount Subclass 500 application pages', 'CoE and OSHC details', 'Genuine Student (GS) responses', 'Any application pages where you need guided field-by-field help'],
+        stages: 'CoE, GS statement, OSHC, or lodgement',
+    },
+    DE: {
+        what1: "Rilono Copilot is a Chrome side-panel assistant for students navigating the German student visa (National Visa Type D) application. It helps you move through active forms step by step with context-aware guidance.",
+        what2: "It focuses on application workflows like the VIDEX national-visa form, university admission and blocked-account (Sperrkonto) steps, and APS verification, while helping you maintain answer consistency and submission accuracy.",
+        where: ['VIDEX national-visa application pages', 'uni-assist and university admission portals', 'Blocked account (Sperrkonto) and health-insurance steps', 'Any application pages where you need guided field-by-field help'],
+        stages: 'admission, blocked account, APS, or appointment',
+    },
+};
 function updateVisaSectionLabels() {
     const code = (currentUser && currentUser.destination_country_code) || 'US';
     const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
@@ -3307,6 +3354,18 @@ function updateVisaSectionLabels() {
     setText('prepModuleTitle', `🎯 ${prefix} Interview Prep (Rilono AI)`);
     setText('mockModuleTitle', `🧠 ${prefix} Mock Interview (Rilono AI)`);
     setText('prepCoachingPlaceholder', `Start Prep Session to begin a guided ${currentVisaJourneyPhrase()} interview coaching flow.`);
+
+    // Rilono Copilot tab copy (the HTML defaults to US F-1 wording).
+    const cop = COPILOT_TAB_COPY[code] || COPILOT_TAB_COPY.US;
+    setText('copilotWhatCopy1', cop.what1);
+    setText('copilotWhatCopy2', cop.what2);
+    const whereEl = document.getElementById('copilotWhereList');
+    if (whereEl) whereEl.innerHTML = cop.where.map((w) => `<li>${escapeHtml(w)}</li>`).join('');
+
+    // AI-chat welcome "current stage" hint (floating chat + Rilono AI tab copies).
+    document.querySelectorAll('.ai-stage-hint').forEach((el) => {
+        el.textContent = `Tell me your current stage (${cop.stages}), and I'll suggest your best next step.`;
+    });
 
     // Keep the floating assistant tooltip on-brand for the student's destination.
     try {
@@ -4193,6 +4252,8 @@ async function openVisaPassCheckout() {
     const modal = document.getElementById('checkoutLaunchModal');
     if (!modal) { await startVisaPassPayment(); return; }
     checkoutLaunchResolver = null; // never fire the legacy recurring resolver
+    const couponField = document.getElementById('checkoutLaunchCouponCode');
+    if (couponField) couponField.value = '';
     const continueBtn = document.getElementById('checkoutLaunchContinueBtn');
     if (continueBtn) {
         continueBtn.disabled = false;
@@ -4207,16 +4268,26 @@ async function startVisaPassPayment() {
     const setBtn = (txt, disabled) => { if (continueBtn) { continueBtn.textContent = txt; continueBtn.disabled = disabled; } };
     setBtn('Opening checkout…', true);
 
+    // Optional coupon (admin-issued per-account offer or a public code). Validated
+    // and priced entirely server-side.
+    const couponInput = document.getElementById('checkoutLaunchCouponCode');
+    const couponCode = String(couponInput?.value || '').trim().toUpperCase();
+
     let data;
     try {
         const response = await fetch(`${API_BASE}/api/pass/checkout`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+            body: JSON.stringify(couponCode ? { coupon_code: couponCode } : {}),
         });
         data = await response.json().catch(() => ({}));
-        if (!response.ok) { showMessage(data.detail || 'Could not start checkout.', 'error'); setBtn('Continue to pay', false); return; }
+        if (!response.ok) { showMessage(data.detail || 'Could not start checkout.', 'error'); setBtn('Continue to pay', false); if (couponCode) couponInput?.focus(); return; }
     } catch (ex) {
         showMessage('Could not start checkout. Please try again.', 'error'); setBtn('Continue to pay', false); return;
+    }
+
+    if (data.coupon_code && data.coupon_discount > 0) {
+        showMessage(`Coupon ${data.coupon_code} applied — ${data.coupon_percent_off}% off. You pay ₹${(data.amount / 100).toLocaleString('en-IN')}.`, 'success');
     }
 
     if (data.action === 'already_active') {
@@ -8202,11 +8273,13 @@ function showRegisterOtpStep(email) {
     const otpStep = document.getElementById('registerOtpStep');
     const social = document.getElementById('socialAuthRegister');
     const divider = document.getElementById('socialAuthRegisterDivider');
+    const note = document.getElementById('socialConsentNoteRegister');
     const loginSwitch = document.getElementById('registerLoginSwitch');
     const target = document.getElementById('otpEmailTarget');
     if (form) form.style.display = 'none';
     if (social) social.style.display = 'none';
     if (divider) divider.style.display = 'none';
+    if (note) note.style.display = 'none';
     if (loginSwitch) loginSwitch.style.display = 'none';
     if (otpStep) otpStep.style.display = 'block';
     if (target) target.textContent = window.__pendingOtpEmail;
@@ -8221,12 +8294,17 @@ function backToRegisterStep1() {
     const otpStep = document.getElementById('registerOtpStep');
     const social = document.getElementById('socialAuthRegister');
     const divider = document.getElementById('socialAuthRegisterDivider');
+    const note = document.getElementById('socialConsentNoteRegister');
     const loginSwitch = document.getElementById('registerLoginSwitch');
     if (otpStep) otpStep.style.display = 'none';
     if (form) form.style.display = '';
     const hasSocial = social && social.children.length > 0;
-    if (social) social.style.display = hasSocial ? '' : 'none';
+    // Clear the inline display so CSS `.social-auth:empty { display:none }` governs an
+    // empty container; if the async providers fetch finishes later, renderSocialButtons
+    // will populate + reveal it without a stale inline none blocking it.
+    if (social) social.style.display = '';
     if (divider) divider.style.display = hasSocial ? '' : 'none';
+    if (note) note.style.display = hasSocial ? '' : 'none';
     if (loginSwitch) loginSwitch.style.display = '';
 }
 

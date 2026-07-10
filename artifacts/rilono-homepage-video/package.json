@@ -1,0 +1,13 @@
+{
+  "name": "rilono-homepage-video-preview",
+  "private": true,
+  "scripts": {
+    "render": "remotion render src/index.jsx RilonoHomepagePreview rilono-homepage-preview.mp4 --codec h264 --crf 18"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.419",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.419"
+  }
+}

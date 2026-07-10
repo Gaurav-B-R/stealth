@@ -28,6 +28,7 @@ from app.schema_patch import (
     ensure_gemini_usage_table,
     ensure_coupon_percent_column,
     ensure_coupon_usage_limit_column,
+    ensure_coupon_account_columns,
     ensure_document_catalog_columns,
     ensure_enterprise_calendar_table,
     ensure_enterprise_calendar_reminder_runs_table,
@@ -257,6 +258,7 @@ def startup_backfill_subscriptions():
     ensure_enterprise_signup_otps_table()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
+    ensure_coupon_account_columns()
     ensure_f1_visa_news_table()
     ensure_f1_visa_news_country_column()
     ensure_rilono_ai_chat_upload_events_table()

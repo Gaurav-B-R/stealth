@@ -221,6 +221,12 @@ def _get_coupon_details(db: Session, coupon_code: str, user_id: int) -> tuple[De
     if not coupon_row:
         raise HTTPException(status_code=400, detail="Invalid coupon code.")
 
+    # Per-account coupons: usable only by the user they were issued to. Reply with the
+    # same "invalid" message as a missing code so the code's existence isn't leaked.
+    restricted_to = getattr(coupon_row, "restricted_to_user_id", None)
+    if restricted_to is not None and int(restricted_to) != int(user_id):
+        raise HTTPException(status_code=400, detail="Invalid coupon code.")
+
     percent_off = _parse_coupon_percent_off(coupon_row.percent_off)
     max_uses_per_user = _parse_coupon_max_uses_per_user(coupon_row.max_uses_per_user)
     if max_uses_per_user is not None:

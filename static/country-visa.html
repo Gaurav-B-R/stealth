@@ -263,15 +263,18 @@
         .faq .ans { color: var(--ink-2); font-size: .92rem; padding: 0 0 16px; margin: 0; }
 
         /* Student testimonial (data-driven; shows only when the country defines one) */
-        .cv-testi { display: grid; grid-template-columns: minmax(0, 300px) 1fr; gap: 38px; align-items: center; max-width: 940px; margin: 26px auto 0; background: var(--card); border: 1px solid var(--line); border-radius: 26px; padding: 30px; box-shadow: 0 26px 64px rgba(23, 28, 74, .09); }
-        .cv-testi-photo { position: relative; }
-        .cv-testi-photo img { width: 100%; height: auto; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 20px; display: block; }
-        .cv-testi-badge { position: absolute; left: 12px; bottom: 12px; background: #fff; color: var(--ink); font-weight: 800; font-size: .82rem; padding: 7px 12px; border-radius: 999px; box-shadow: 0 12px 28px rgba(23, 28, 74, .18); }
-        .cv-testi-stars { color: #f5a623; letter-spacing: 3px; font-size: 1.05rem; margin-bottom: 14px; }
-        .cv-testi blockquote { margin: 0 0 16px; font-size: 1.15rem; line-height: 1.5; font-weight: 600; color: var(--ink); }
-        .cv-testi figcaption b { display: block; font-weight: 800; color: var(--ink); font-size: 1.02rem; }
-        .cv-testi figcaption span { color: var(--muted); font-weight: 600; font-size: .9rem; }
-        @media (max-width: 760px) { .cv-testi { grid-template-columns: 1fr; gap: 22px; padding: 22px; text-align: center; } .cv-testi-photo img { max-width: 300px; margin: 0 auto; } }
+        .cv-twall { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; max-width: 1000px; margin: 26px auto 0; }
+        .cv-tm { position: relative; overflow: hidden; margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 24px 26px; box-shadow: 0 12px 34px rgba(23, 28, 74, .06); transition: transform .3s cubic-bezier(.2, .7, .2, 1), box-shadow .3s ease, border-color .3s ease; }
+        .cv-tm:hover { transform: translateY(-5px); box-shadow: 0 22px 52px rgba(23, 28, 74, .12); border-color: rgba(99, 102, 241, .35); }
+        .cv-tm::before { content: "\201C"; position: absolute; top: -34px; right: 2px; font-size: 10rem; line-height: 1; font-weight: 800; color: rgba(99, 102, 241, .07); pointer-events: none; }
+        .cv-tm-head { display: flex; align-items: center; gap: 13px; margin-bottom: 13px; }
+        .cv-tm-avatar { width: 54px; height: 54px; border-radius: 50%; object-fit: cover; flex: none; border: 2px solid #fff; box-shadow: 0 6px 16px rgba(23, 28, 74, .2); }
+        .cv-tm-head figcaption b { display: block; font-weight: 800; color: var(--ink); font-size: .96rem; line-height: 1.25; }
+        .cv-tm-head figcaption span { color: var(--muted); font-weight: 600; font-size: .8rem; }
+        .cv-tm-chip { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; background: rgba(16, 185, 129, .1); color: #0f7a3d; font-weight: 800; font-size: .7rem; padding: 5px 10px; border-radius: 999px; white-space: nowrap; }
+        .cv-tm-stars { color: #f5a623; letter-spacing: 2px; font-size: .85rem; margin-bottom: 9px; }
+        .cv-tm blockquote { margin: 0; font-size: .93rem; line-height: 1.65; font-weight: 500; color: var(--ink-2); }
+        @media (max-width: 760px) { .cv-twall { grid-template-columns: 1fr; gap: 14px; } .cv-tm { padding: 20px; } .cv-tm-chip { display: none; } }
 
         /* Image + copy band (passport product shot) */
         .imgband { display: grid; grid-template-columns: 1fr 1fr; gap: 46px; align-items: center; }
@@ -655,17 +658,7 @@
         <section class="sec" id="testiSec" style="display:none">
             <h2 class="rv" id="testiTitle">Real students. <span class="grad">Real approvals.</span></h2>
             <p class="lead rv" style="--d:.08s" id="testiLead">From documents to decision — here's how it goes when your file is complete.</p>
-            <figure class="cv-testi rv" style="--d:.12s">
-                <div class="cv-testi-photo">
-                    <img id="testiImg" src="" alt="" loading="lazy" width="900" height="900">
-                    <span class="cv-testi-badge" id="testiBadge"></span>
-                </div>
-                <div>
-                    <div class="cv-testi-stars" aria-label="5 out of 5 stars">★★★★★</div>
-                    <blockquote id="testiQuote"></blockquote>
-                    <figcaption><b id="testiName"></b><span id="testiRole"></span></figcaption>
-                </div>
-            </figure>
+            <div class="cv-twall" id="testiList"></div>
         </section>
 
         <section class="sec" id="faqSec" style="display:none">
@@ -912,14 +905,24 @@
                     { q: "Is health insurance mandatory before I apply?", a: "Yes — you need valid health cover for your stay, and travel/incoming insurance for the period before your public insurance starts. Rilono tracks your cover dates so they line up with your admission and entry date." },
                     { q: "How long does a German student visa take?", a: "It varies by mission and season — many National Visa (Type D) decisions land in several weeks, but appointment waits can be long, so apply early. A complete, consistent file with no re-requests is the biggest accelerator, which is exactly what Rilono is built to give you." }
                 ],
-                testimonial: {
-                    img: "/static/assets/testimonials/darshith-suresh.jpg",
-                    alt: "Darshith Suresh in front of Dresden's historic skyline after his Germany student visa was approved",
-                    badge: "🇩🇪 Visa Approved",
-                    quote: "Honestly, the German student visa felt like ten separate checklists — blocked account, APS, insurance, admission — and no idea what order to do them in. Rilono put it all in one place and even caught that my APS certificate spelled my name differently from my passport. I fixed it weeks early instead of at the embassy counter, and my Type D visa for BTU Cottbus came through without a single follow-up.",
-                    name: "Darshith Suresh",
-                    role: "Student · BTU Cottbus, Germany"
-                },
+                testimonials: [
+                    {
+                        img: "/static/assets/testimonials/darshith-suresh.jpg",
+                        alt: "Darshith Suresh in front of Dresden's historic skyline after his Germany student visa was approved",
+                        badge: "🇩🇪 Visa Approved", pos: "50% 42%",
+                        quote: "Honestly, the German student visa felt like ten separate checklists — blocked account, APS, insurance, admission — and no idea what order to do them in. Rilono put it all in one place and even caught that my APS certificate spelled my name differently from my passport. I fixed it weeks early instead of at the embassy counter, and my Type D visa for BTU Cottbus came through without a single follow-up.",
+                        name: "Darshith Suresh",
+                        role: "BTU Cottbus, Germany"
+                    },
+                    {
+                        img: "/static/assets/testimonials/bharat-krishna.jpg",
+                        alt: "Bharat Krishna in front of the Reichstag in Berlin after his Germany student visa was approved",
+                        badge: "🇩🇪 Visa Approved", pos: "43% 40%",
+                        quote: "Everyone warned me that German visa appointments are a lottery, so I grabbed a slot early — then panicked because half my file wasn't ready. Rilono's tracker laid out exactly what to finish each week, checked my VIDEX answers against my documents, and caught that my health insurance didn't start until after my flight date. My Type D visa for TU Darmstadt came through in under a month.",
+                        name: "Bharat Krishna",
+                        role: "Technical University of Darmstadt, Germany"
+                    }
+                ],
                 copilot: {
                     student: "Aarav", url: "videx-national.diplo.de",
                     kicker: "VIDEX · Auswärtiges Amt", kickerClass: "",
@@ -1026,16 +1029,21 @@
                     `<details class="rv" style="--d:${(0.05 * i).toFixed(2)}s"><summary>${esc(f.q)}<span class="chev">+</span></summary><p class="ans">${esc(f.a)}</p></details>`).join("");
             }
 
-            // ============ Student testimonial (only when the country defines one) ============
-            const t = c.testimonial;
-            if (t) {
+            // ============ Student testimonials (only when the country defines them) ============
+            const testis = Array.isArray(c.testimonials) ? c.testimonials : (c.testimonial ? [c.testimonial] : []);
+            if (testis.length) {
                 document.getElementById("testiSec").style.display = "";
-                const timg = document.getElementById("testiImg");
-                timg.src = t.img; timg.alt = t.alt || `${t.name} after their ${c.name} student visa was approved`;
-                document.getElementById("testiBadge").textContent = t.badge || `${c.flag} Visa Approved`;
-                document.getElementById("testiQuote").textContent = `“${t.quote}”`;
-                document.getElementById("testiName").textContent = t.name;
-                document.getElementById("testiRole").textContent = t.role || "";
+                document.getElementById("testiList").innerHTML = testis.map((t, i) => `
+                    <figure class="cv-tm rv" style="--d:${(0.08 + 0.08 * i).toFixed(2)}s">
+                        <div class="cv-tm-head">
+                            <img class="cv-tm-avatar" src="${esc(t.img)}" alt="${esc(t.alt || `${t.name} after their ${c.name} student visa was approved`)}"
+                                loading="lazy" width="108" height="108"${t.pos ? ` style="object-position:${esc(t.pos)}"` : ""}>
+                            <figcaption><b>${esc(t.name)}</b><span>${esc(t.role || "")}</span></figcaption>
+                            <span class="cv-tm-chip">${esc(t.badge || `${c.flag} Visa Approved`)}</span>
+                        </div>
+                        <div class="cv-tm-stars" aria-label="5 out of 5 stars">★★★★★</div>
+                        <blockquote>“${esc(t.quote)}”</blockquote>
+                    </figure>`).join("");
             }
 
             // ============ Rilono Copilot showcase (animated 3-scene demo) ============

@@ -168,6 +168,14 @@ class AdminEnterpriseCredentialCreateResponse(BaseModel):
     message: str
 
 
+class AdminCouponCodeCreateRequest(BaseModel):
+    """B2C (student) coupon code — optionally restricted to one account."""
+    code: str
+    percent_off: float
+    max_uses_per_user: Optional[int] = 1
+    restricted_to_user_id: Optional[int] = None
+
+
 class AdminEnterpriseCouponCreateRequest(BaseModel):
     code: str
     percent_off: float
