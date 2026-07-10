@@ -687,7 +687,8 @@ def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFA
         base_url: Base URL of the application (for reset link)
     
     Returns:
-        bool: True if email was sent successfully, False otherwise
+        bool: True if the provider accepted the request for processing. Final
+        delivery or suppression is reported asynchronously by the provider.
     """
     if not RESEND_API_KEY:
         print(f"ERROR: Cannot send password reset email - Resend not configured")
@@ -779,19 +780,17 @@ def send_password_reset_email(email: str, reset_token: str, base_url: str = DEFA
         
         email_response = resend.Emails.send(params)
         
-        # Check if email was sent successfully
-        # Resend response can be a dict with 'id' key or an object with 'id' attribute
-        email_id = None
-        if isinstance(email_response, dict):
-            email_id = email_response.get('id')
-        elif email_response and hasattr(email_response, 'id'):
-            email_id = email_response.id
+        # An ID confirms provider acceptance, not final inbox delivery.
+        email_id = _extract_resend_email_id(email_response)
         
         if email_id:
-            print(f"Password reset email sent successfully to {email} (ID: {email_id})")
+            print(
+                f"Password reset email accepted by provider for {email} "
+                f"(ID: {email_id}); final delivery is pending"
+            )
             return True
         else:
-            print(f"Failed to send password reset email to {email}. Response: {email_response}")
+            print(f"Email provider did not accept password reset email for {email}. Response: {email_response}")
             return False
             
     except Exception as e:

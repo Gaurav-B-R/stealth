@@ -95,12 +95,16 @@ SUPPORTED_DOCUMENT_TYPES = {".pdf", ".txt"}
 UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS = int(
     os.getenv("UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS", "120000") or "120000"
 )
-DEFAULT_GEMINI_MODEL = (os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash")
+# Primary model everywhere: Gemini 3.1 Pro (strongest reasoning). Fallbacks stay on
+# LIVE model ids only — gemini-2.0-flash / gemini-1.5-* are retired and now 404 on
+# the v1beta API, so they must never appear in a candidate chain.
+DEFAULT_GEMINI_MODEL = (os.getenv("GEMINI_MODEL", "gemini-3.1-pro").strip() or "gemini-3.1-pro")
 DEFAULT_GEMINI_MODEL_CANDIDATES = [
     DEFAULT_GEMINI_MODEL,
+    "gemini-3.1-pro",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-pro",
     "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
 ]
 
 
@@ -134,7 +138,7 @@ def get_model_candidates(
     )
 
 
-def _instrument_usage(model, model_name: str):
+def _instrument_usage(model, model_name: str, usage_source: str = "document_ai"):
     """Wrap generate_content so every document-AI call logs its token usage/cost."""
     try:
         original = model.generate_content
@@ -145,7 +149,7 @@ def _instrument_usage(model, model_name: str):
         resp = original(*args, **kwargs)
         try:
             from app import ai_usage
-            ai_usage.record_gemini_usage("document_ai", model_name, resp)
+            ai_usage.record_gemini_usage(usage_source, model_name, resp)
         except Exception:
             pass
         return resp
@@ -156,15 +160,40 @@ def _instrument_usage(model, model_name: str):
         pass
 
 
-def build_generative_model(model_name: str):
+def build_generative_model(model_name: str, usage_source: str = "document_ai"):
     model = None
     if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
         model = GenerativeModel(model_name)
     elif GENAI_AVAILABLE:
         model = genai.GenerativeModel(model_name)
     if model is not None:
-        _instrument_usage(model, model_name)
+        _instrument_usage(model, model_name, usage_source)
     return model
+
+
+def _generate_content_with_fallback(
+    model_names: list[str],
+    content,
+    usage_source: str = "document_ai",
+):
+    """Generate with each configured model until one succeeds."""
+    last_error = None
+    for model_name in _dedupe_model_names(model_names):
+        try:
+            model = build_generative_model(model_name, usage_source=usage_source)
+            if model is None:
+                continue
+            return model.generate_content(content)
+        except Exception as exc:
+            last_error = exc
+            print(
+                f"AI model candidate '{model_name}' failed during {usage_source}; "
+                "trying the next configured candidate."
+            )
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("No configured AI model is available")
 
 # Destination-specific date/validity rules injected into the upload-validation prompt so
 # a UK/CA/AU/DE student's documents are judged by THEIR authority's rules (not US ones).
@@ -241,15 +270,11 @@ def validate_and_extract_document(
     try:
         file_extension = os.path.splitext(filename)[1].lower()
         
-        # Initialize the model. Keep it configurable so retired model names do not break uploads.
-        document_model_name = get_model_candidates(
+        # Try configured candidates in order so a retired model does not break uploads.
+        document_model_candidates = get_model_candidates(
             primary_env="GEMINI_DOCUMENT_MODEL",
             candidates_env="GEMINI_DOCUMENT_MODEL_CANDIDATES",
-        )[0]
-        model = build_generative_model(document_model_name)
-        if model is None:
-            print("Error: Neither Vertex AI nor standard Gemini API available")
-            return None
+        )
         
         evaluation_date_value = (current_date_for_evaluation or "").strip() or datetime.now().isoformat()
         profile_context_value = (student_profile_context or "").strip()
@@ -433,9 +458,13 @@ Remember: Output ONLY the JSON object, nothing else."""
                 image.save(img_bytes, format='JPEG')
                 img_bytes.seek(0)
                 image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
-                response = model.generate_content([validation_prompt, image_part])
+                response = _generate_content_with_fallback(
+                    document_model_candidates, [validation_prompt, image_part]
+                )
             else:
-                response = model.generate_content([validation_prompt, image])
+                response = _generate_content_with_fallback(
+                    document_model_candidates, [validation_prompt, image]
+                )
             
             response_text = response.text.strip()
             
@@ -468,7 +497,9 @@ Remember: Output ONLY the JSON object, nothing else."""
                     with open(tmp_path, 'rb') as f:
                         pdf_data = f.read()
                     pdf_part = Part.from_data(pdf_data, mime_type="application/pdf")
-                    response = model.generate_content([validation_prompt, pdf_part])
+                    response = _generate_content_with_fallback(
+                        document_model_candidates, [validation_prompt, pdf_part]
+                    )
                 else:
                     pdf_file = genai.upload_file(
                         path=tmp_path,
@@ -485,7 +516,9 @@ Remember: Output ONLY the JSON object, nothing else."""
                         raise Exception(f"File processing failed: {pdf_file.state}")
                     
                     print("✅ PDF uploaded, generating content...")
-                    response = model.generate_content([validation_prompt, pdf_file])
+                    response = _generate_content_with_fallback(
+                        document_model_candidates, [validation_prompt, pdf_file]
+                    )
                     
                     try:
                         genai.delete_file(pdf_file.name)
@@ -519,7 +552,7 @@ Remember: Output ONLY the JSON object, nothing else."""
             print("-"*80)
             print("⏳ Waiting for Gemini response...")
             
-            response = model.generate_content(prompt)
+            response = _generate_content_with_fallback(document_model_candidates, prompt)
             response_text = response.text.strip()
             
             print("✅ RECEIVED RESPONSE FROM GEMINI:")
@@ -548,9 +581,13 @@ Remember: Output ONLY the JSON object, nothing else."""
                     image.save(img_bytes, format='JPEG')
                     img_bytes.seek(0)
                     image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
-                    response = model.generate_content([validation_prompt, image_part])
+                    response = _generate_content_with_fallback(
+                        document_model_candidates, [validation_prompt, image_part]
+                    )
                 else:
-                    response = model.generate_content([validation_prompt, image])
+                    response = _generate_content_with_fallback(
+                        document_model_candidates, [validation_prompt, image]
+                    )
                 response_text = response.text.strip()
                 
                 print("✅ RECEIVED RESPONSE FROM GEMINI:")
@@ -626,15 +663,11 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
     try:
         file_extension = os.path.splitext(filename)[1].lower()
         
-        # Initialize the model. Keep it configurable so retired model names do not break extraction.
-        document_model_name = get_model_candidates(
+        # Try configured candidates in order so a retired model does not break extraction.
+        document_model_candidates = get_model_candidates(
             primary_env="GEMINI_DOCUMENT_MODEL",
             candidates_env="GEMINI_DOCUMENT_MODEL_CANDIDATES",
-        )[0]
-        model = build_generative_model(document_model_name)
-        if model is None:
-            print("Error: Neither Vertex AI nor standard Gemini API available")
-            return None
+        )
         
         # Handle different file types
         if file_extension in SUPPORTED_IMAGE_TYPES:
@@ -667,10 +700,14 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                 image.save(img_bytes, format='JPEG')
                 img_bytes.seek(0)
                 image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
-                response = model.generate_content([prompt, image_part])
+                response = _generate_content_with_fallback(
+                    document_model_candidates, [prompt, image_part]
+                )
             else:
                 # Standard API format
-                response = model.generate_content([prompt, image])
+                response = _generate_content_with_fallback(
+                    document_model_candidates, [prompt, image]
+                )
             
             print("✅ RECEIVED RESPONSE FROM GEMINI:")
             print("-"*80)
@@ -715,7 +752,9 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                     with open(tmp_path, 'rb') as f:
                         pdf_data = f.read()
                     pdf_part = Part.from_data(pdf_data, mime_type="application/pdf")
-                    response = model.generate_content([prompt, pdf_part])
+                    response = _generate_content_with_fallback(
+                        document_model_candidates, [prompt, pdf_part]
+                    )
                 else:
                     # Standard API - upload file first
                     print("📤 Uploading PDF to Gemini...")
@@ -735,7 +774,9 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                         raise Exception(f"File processing failed: {pdf_file.state}")
                     
                     print("✅ PDF uploaded, generating content...")
-                    response = model.generate_content([prompt, pdf_file])
+                    response = _generate_content_with_fallback(
+                        document_model_candidates, [prompt, pdf_file]
+                    )
                     
                     # Clean up uploaded file
                     try:
@@ -783,7 +824,7 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
             print("-"*80)
             print("⏳ Waiting for Gemini response...")
             
-            response = model.generate_content(prompt)
+            response = _generate_content_with_fallback(document_model_candidates, prompt)
             
             print("✅ RECEIVED RESPONSE FROM GEMINI:")
             print("-"*80)
@@ -822,10 +863,14 @@ def extract_text_from_document(file_contents: bytes, filename: str, mime_type: s
                     image.save(img_bytes, format='JPEG')
                     img_bytes.seek(0)
                     image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
-                    response = model.generate_content([prompt, image_part])
+                    response = _generate_content_with_fallback(
+                        document_model_candidates, [prompt, image_part]
+                    )
                 else:
                     # Standard API format
-                    response = model.generate_content([prompt, image])
+                    response = _generate_content_with_fallback(
+                        document_model_candidates, [prompt, image]
+                    )
                 
                 print("✅ RECEIVED RESPONSE FROM GEMINI:")
                 print("-"*80)
@@ -870,18 +915,10 @@ def scan_document_red_flags(file_contents: bytes, filename: str, mime_type: str)
         return None
 
     try:
-        model_name = get_model_candidates(
+        model_candidates = get_model_candidates(
             primary_env="GEMINI_DOCUMENT_MODEL",
             candidates_env="GEMINI_DOCUMENT_MODEL_CANDIDATES",
-        )[0]
-        # Build the model WITHOUT the document_ai usage instrumentation so this call
-        # is attributed to "red_flag_scan" (not "document_ai").
-        if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
-            model = GenerativeModel(model_name)
-        elif GENAI_AVAILABLE:
-            model = genai.GenerativeModel(model_name)
-        else:
-            return None
+        )
 
         prompt = RED_FLAG_PROMPT.format(eval_date=datetime.now().date().isoformat())
         file_extension = os.path.splitext(filename)[1].lower()
@@ -890,9 +927,15 @@ def scan_document_red_flags(file_contents: bytes, filename: str, mime_type: str)
             image = Image.open(io.BytesIO(file_contents))
             if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                 buf = io.BytesIO(); image.save(buf, format="JPEG"); buf.seek(0)
-                response = model.generate_content([prompt, Part.from_data(buf.read(), mime_type="image/jpeg")])
+                response = _generate_content_with_fallback(
+                    model_candidates,
+                    [prompt, Part.from_data(buf.read(), mime_type="image/jpeg")],
+                    usage_source="red_flag_scan",
+                )
             else:
-                response = model.generate_content([prompt, image])
+                response = _generate_content_with_fallback(
+                    model_candidates, [prompt, image], usage_source="red_flag_scan"
+                )
         elif file_extension == ".pdf":
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -900,7 +943,11 @@ def scan_document_red_flags(file_contents: bytes, filename: str, mime_type: str)
             try:
                 if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
                     with open(tmp_path, "rb") as f:
-                        response = model.generate_content([prompt, Part.from_data(f.read(), mime_type="application/pdf")])
+                        response = _generate_content_with_fallback(
+                            model_candidates,
+                            [prompt, Part.from_data(f.read(), mime_type="application/pdf")],
+                            usage_source="red_flag_scan",
+                        )
                 else:
                     import time
                     pdf_file = genai.upload_file(path=tmp_path, mime_type="application/pdf")
@@ -908,7 +955,11 @@ def scan_document_red_flags(file_contents: bytes, filename: str, mime_type: str)
                         time.sleep(2); pdf_file = genai.get_file(pdf_file.name)
                     if pdf_file.state.name == "FAILED":
                         raise Exception("PDF processing failed")
-                    response = model.generate_content([prompt, pdf_file])
+                    response = _generate_content_with_fallback(
+                        model_candidates,
+                        [prompt, pdf_file],
+                        usage_source="red_flag_scan",
+                    )
                     try: genai.delete_file(pdf_file.name)
                     except Exception: pass
             finally:
@@ -916,13 +967,11 @@ def scan_document_red_flags(file_contents: bytes, filename: str, mime_type: str)
                 except Exception: pass
         else:
             text_content = file_contents.decode("utf-8", errors="ignore")
-            response = model.generate_content(prompt + f"\n\nDocument content:\n{text_content[:50000]}")
-
-        try:
-            from app import ai_usage
-            ai_usage.record_gemini_usage("red_flag_scan", model_name, response)
-        except Exception:
-            pass
+            response = _generate_content_with_fallback(
+                model_candidates,
+                prompt + f"\n\nDocument content:\n{text_content[:50000]}",
+                usage_source="red_flag_scan",
+            )
 
         import json
         raw = (response.text or "").strip()

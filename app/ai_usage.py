@@ -58,6 +58,10 @@ def current_usage_account() -> dict | None:
 # Editable here or via env (GEMINI_PRICE_<input|output>_PER_M for the default rate).
 # Keys are matched as substrings of the model name (longest match wins).
 PRICING_PER_MILLION = {
+    # Gemini 3-series Pro (substring match also covers gemini-3.1-pro-preview).
+    # Based on Gemini 3 Pro list pricing (≤200k context) — cross-check the invoice.
+    "gemini-3.1-pro": (2.00, 12.00),
+    "gemini-3-pro": (2.00, 12.00),
     "gemini-2.5-pro": (1.25, 10.00),
     "gemini-2.5-flash-lite": (0.10, 0.40),
     "gemini-2.5-flash": (0.30, 2.50),

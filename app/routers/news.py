@@ -658,14 +658,10 @@ Output JSON format:
 
 Provide 4 to 8 items. If no qualifying recent updates exist, return an empty items array."""
 
+    # Inherit the master chain (Gemini 3.1 Pro first, live fallbacks only).
     model_candidates = gemini_utils.get_model_candidates(
         primary_env="F1_LATEST_NEWS_MODEL",
         candidates_env="F1_LATEST_NEWS_MODEL_CANDIDATES",
-        defaults=[
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        ],
     )
     last_error = None
     empty_result: Optional[Dict[str, Any]] = None
@@ -772,14 +768,10 @@ Output JSON format:
 
 Provide 5 to 10 items."""
 
+    # Inherit the master chain (Gemini 3.1 Pro first, live fallbacks only).
     model_candidates = gemini_utils.get_model_candidates(
         primary_env="F1_INTERVIEW_EXPERIENCES_MODEL",
         candidates_env="F1_INTERVIEW_EXPERIENCES_MODEL_CANDIDATES",
-        defaults=[
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-        ],
     )
     last_error = None
 

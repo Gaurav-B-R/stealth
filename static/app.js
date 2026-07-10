@@ -8366,7 +8366,7 @@ async function handleForgotPassword(e) {
         const data = await response.json();
 
         if (response.ok) {
-            showMessage(data.message || 'Password reset link has been sent to your email.', 'success');
+            showMessage(data.message || 'Your password reset request has been received.', 'success');
             // Show success message in the form
             document.getElementById('forgotPasswordSection').innerHTML = `
                 <div class="auth-card">
@@ -8374,8 +8374,8 @@ async function handleForgotPassword(e) {
                         <div style="font-size: 4rem; margin-bottom: 1rem; color: var(--success-color);">✓</div>
                         <h2 style="margin-bottom: 1rem;">Check Your Email</h2>
                         <p style="color: var(--text-secondary); margin-bottom: 2rem;">
-                            We've sent a password reset link to <strong>${escapeHtml(email)}</strong>. 
-                            Please check your inbox.
+                            If an account exists for <strong>${escapeHtml(email)}</strong> and email can be delivered,
+                            a password reset link should arrive shortly. Check your inbox and spam folder.
                         </p>
                         <p style="color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 2rem;">
                             The link will expire in 1 hour.

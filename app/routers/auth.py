@@ -1125,7 +1125,10 @@ def forgot_password(
             )
     
     generic_message = {
-        "message": "If an account with this email exists, a password reset link has been sent."
+        "message": (
+            "If an account with this email exists, a password reset email has been requested. "
+            "Check your inbox and spam folder in a few minutes."
+        )
     }
 
     # Find user by email
@@ -1147,11 +1150,11 @@ def forgot_password(
     
     # Password reset is transactional; do not gate it on email_notifications_enabled.
     base_url = os.getenv("BASE_URL", DEFAULT_PUBLIC_BASE_URL)
-    email_sent = send_password_reset_email(user.email, reset_token, base_url)
+    email_accepted = send_password_reset_email(user.email, reset_token, base_url)
     
-    if not email_sent:
+    if not email_accepted:
         # Log only, keep external response generic to prevent enumeration.
-        print(f"Warning: Failed to send password reset email to {email}")
+        print(f"Warning: Email provider did not accept password reset email for {email}")
 
     return generic_message
 

@@ -221,7 +221,7 @@
         cl(); return html||"<p></p>"; }
       function publicError(status, detail, fallback){
         var msg=typeof detail==="string"?detail.trim().replace(/\s+/g," "):"";
-        var internal=/(?:gemini|generative\s*ai|vertex\s*ai|openai|anthropic|claude|model(?:s)?\/|api[_ -]?key|traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
+        var internal=/(?:gemini|generative\s*ai|vertex\s*ai|openai|anthropic|claude|model(?:s)?\/|\bmodel\b.*(?:not\s+found|unavailable|deprecated|retired|no\s+longer\s+available)|failed\s+to\s+generate|api[_ -]?key|traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
         if(!msg||msg.length>300||status>=500||internal.test(msg)){
           if(status===404)return fallback||"This link is invalid or has expired.";
           if(status===408||status===504)return "The request timed out. Please try again.";

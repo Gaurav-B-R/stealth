@@ -42,7 +42,7 @@ def _model_name() -> str:
             candidates_env="UNIVERSITY_SHORTLIST_MODEL_CANDIDATES",
         )[0]
     except Exception:
-        return os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        return os.getenv("GEMINI_MODEL", "gemini-3.1-pro")
 
 
 def _model_and_name():

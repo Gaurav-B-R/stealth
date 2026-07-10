@@ -1030,7 +1030,7 @@ const ACQ_CHANNELS = {
     quora: { label: 'Quora', color: '#b92b27' }, telegram: { label: 'Telegram', color: '#229ed9' }, whatsapp: { label: 'WhatsApp', color: '#25d366' },
     pinterest: { label: 'Pinterest', color: '#e60023' }, medium: { label: 'Medium', color: '#111827' }, github: { label: 'GitHub', color: '#24292e' },
     chatgpt: { label: 'ChatGPT', color: '#10a37f' }, perplexity: { label: 'Perplexity', color: '#20808d' },
-    gemini: { label: 'Gemini', color: '#8b6cef' }, claude: { label: 'Claude', color: '#d97757' }, email: { label: 'Email', color: '#f59e0b' },
+    gemini: { label: 'AI Referral', color: '#8b6cef' }, claude: { label: 'AI Referral', color: '#d97757' }, email: { label: 'Email', color: '#f59e0b' },
     referral: { label: 'Referral', color: '#8b5cf6' }, direct: { label: 'Direct', color: '#94a3b8' },
     other: { label: 'Other', color: '#64748b' }, untracked: { label: '', color: '#cbd5e1' }
 };
@@ -2075,7 +2075,7 @@ function renderEnterpriseRevenue(data) {
     setText(refs.revInfraSub, `${(s.infra_payment_count || 0).toLocaleString()} payments`);
     setText(refs.revCost, s.gemini_cost_display || '₹0');
     setText(refs.revMargin, s.gross_margin_display || '₹0');
-    setText(refs.revMarginSub, s.margin_pct != null ? `${s.margin_pct}% margin` : 'Revenue − Gemini cost');
+    setText(refs.revMarginSub, s.margin_pct != null ? `${s.margin_pct}% margin` : 'Revenue − AI cost');
     setText(refs.revCreditsSold, (s.credits_sold || 0).toLocaleString());
     setText(refs.revCreditsSoldSub, `${(s.credits_spent || 0).toLocaleString()} spent`);
     setText(refs.revOutstanding, (s.credits_outstanding || 0).toLocaleString());
@@ -2144,7 +2144,7 @@ function renderAiUsage(data) {
     }
 
     renderAiBreakdown(refs.aiSourceChart, (data && data.by_source) || [], (r) => r.label);
-    renderAiBreakdown(refs.aiModelChart, (data && data.by_model) || [], (r) => r.model);
+    renderAiBreakdown(refs.aiModelChart, (data && data.by_model) || [], (_r, index) => `AI Model ${index + 1}`);
 }
 
 function renderAiBreakdown(el, rows, labelFn) {
@@ -2152,12 +2152,12 @@ function renderAiBreakdown(el, rows, labelFn) {
     const list = Array.isArray(rows) ? rows.slice() : [];
     if (!list.length) { el.innerHTML = '<div class="table-empty">No AI usage recorded yet.</div>'; return; }
     const total = list.reduce((sum, r) => sum + (Number(r.cost_usd) || 0), 0) || 1;
-    el.innerHTML = list.map((r) => {
+    el.innerHTML = list.map((r, index) => {
         const amount = Number(r.cost_usd) || 0;
         const pct = Math.min(Math.max((amount / total) * 100, 0), 100);
         return `
             <div class="finance-breakdown-row">
-                <div class="finance-breakdown-top"><strong>${escapeHtml(labelFn(r) || '—')}</strong><span>${escapeHtml(formatAiUsd(amount))}</span></div>
+                <div class="finance-breakdown-top"><strong>${escapeHtml(labelFn(r, index) || '—')}</strong><span>${escapeHtml(formatAiUsd(amount))}</span></div>
                 <div class="finance-breakdown-track"><span style="width: ${pct.toFixed(2)}%"></span></div>
                 <div class="finance-breakdown-percent">${escapeHtml((r.calls || 0).toLocaleString())} calls · ${escapeHtml(formatTokens(r.tokens))} tokens</div>
             </div>`;

@@ -284,14 +284,11 @@ def _merge_and_trim(db, new_items: List[Dict[str, str]], destination_code: str =
 # Gemini interaction
 # ---------------------------------------------------------------------------
 
+# Inherit the master chain (Gemini 3.1 Pro first, live fallbacks only — the old
+# explicit list here included retired gemini-2.0/1.5 ids that 404 in production).
 MODEL_CANDIDATES = gemini_utils.get_model_candidates(
     primary_env="F1_NEWS_MODEL",
     candidates_env="F1_NEWS_MODEL_CANDIDATES",
-    defaults=[
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash",
-    ],
 )
 
 

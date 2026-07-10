@@ -73,7 +73,7 @@ def _model_candidates() -> list:
     return gemini_utils.get_model_candidates(
         primary_env="ADMIN_GROWTH_AGENT_MODEL",
         candidates_env="ADMIN_GROWTH_AGENT_MODEL_CANDIDATES",
-        defaults=["gemini-2.5-pro", "gemini-2.5-flash"],
+        defaults=["gemini-3.1-pro", "gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
     )
 
 

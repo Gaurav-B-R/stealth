@@ -202,28 +202,45 @@
 
   function publicApiErrorMessage(status, detail, fallback) {
     const message = typeof detail === "string" ? detail.trim().replace(/\s+/g, " ") : "";
-    const internalDetail = /(?:gemini|generative\s*ai|vertex\s*ai|openai|anthropic|claude|model(?:s)?\/|api[_ -]?key|traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
+    const internalDetail = /(?:gemini|generative\s*ai|vertex\s*ai|openai|anthropic|claude|model(?:s)?\/|\bmodel\b.*(?:not\s+found|unavailable|deprecated|retired|no\s+longer\s+available)|failed\s+to\s+generate|api[_ -]?key|traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
     if (!message || message.length > 300 || status >= 500 || internalDetail.test(message)) {
       return defaultApiErrorMessage(status, fallback);
     }
     return message;
   }
 
+  function makePublicApiError(response, data, fallback) {
+    const detail = data && (data.detail || data.message);
+    const err = new Error(publicApiErrorMessage(response.status, detail, fallback));
+    err.status = response.status;
+    err.data = data;
+    err.publicSafe = true;
+    return err;
+  }
+
+  function publicClientError(message) {
+    const err = new Error(message);
+    err.publicSafe = true;
+    return err;
+  }
+
   async function api(path, opts) {
     opts = opts || {};
-    const res = await fetch(API + path, {
-      method: opts.method || "GET",
-      credentials: "include",
-      headers: opts.body ? { "Content-Type": "application/json" } : {},
-      body: opts.body ? JSON.stringify(opts.body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(API + path, {
+        method: opts.method || "GET",
+        credentials: "include",
+        headers: opts.body ? { "Content-Type": "application/json" } : {},
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+      });
+    } catch (_error) {
+      throw publicClientError("We couldn't reach Rilono. Check your connection and try again.");
+    }
     let data = null;
     try { data = await res.json(); } catch (e) { /* no body */ }
     if (!res.ok) {
-      const detail = data && (data.detail || data.message);
-      const err = new Error(publicApiErrorMessage(res.status, detail));
-      err.status = res.status; err.data = data;
-      throw err;
+      throw makePublicApiError(res, data);
     }
     return data;
   }
@@ -298,14 +315,14 @@
   async function getEnterpriseTurnstileToken(key) {
     await initializeEnterpriseTurnstile();
     if (enterpriseTurnstile.loadFailed) {
-      throw new Error("Security check could not load. Refresh the page and try again.");
+      throw publicClientError("Security check could not load. Refresh the page and try again.");
     }
     if (!enterpriseTurnstile.siteKey) return "";
     await renderEnterpriseTurnstile(key);
 
     const widgetId = enterpriseTurnstile.widgets[key];
     if (enterpriseTurnstile.loadFailed || !window.turnstile || widgetId === null) {
-      throw new Error("Security check could not load. Refresh the page and try again.");
+      throw publicClientError("Security check could not load. Refresh the page and try again.");
     }
 
     let token = "";
@@ -314,7 +331,7 @@
     } catch (error) {
       token = "";
     }
-    if (!token) throw new Error("Please complete the security check.");
+    if (!token) throw publicClientError("Please complete the security check.");
     return token;
   }
 
@@ -420,13 +437,16 @@
           body: JSON.stringify(payload),
         });
         const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error((data && (data.detail || data.message)) || "Could not send reset email.");
-        ok.innerHTML = "If an account exists for <b>" + esc(email) + "</b>, a password reset link is on its way. Check your inbox (and spam folder).";
+        if (!res.ok) throw makePublicApiError(res, data, "We couldn't process the password reset request. Please try again.");
+        ok.innerHTML = "If an account exists for <b>" + esc(email) + "</b> and email can be delivered, a password reset link should arrive shortly. Check your inbox and spam folder.";
         ok.classList.remove("hidden");
         f.reset();
         resetEnterpriseTurnstile("forgot");
       } catch (ex) {
-        err.textContent = ex.message; err.classList.remove("hidden");
+        err.textContent = ex && ex.publicSafe
+          ? ex.message
+          : "Sorry, we encountered an error. Please try again shortly.";
+        err.classList.remove("hidden");
         resetEnterpriseTurnstile("forgot");
       } finally { btn.disabled = false; btn.textContent = "Send reset link"; }
     };
@@ -1493,7 +1513,7 @@
           try {
             const res = await fetch(API + "/clients/" + cl.id + "/documents", { method: "POST", credentials: "include", body: fd });
             const out = await res.json().catch(() => null);
-            if (!res.ok) throw new Error((out && (out.detail || out.message)) || "Upload failed");
+            if (!res.ok) throw makePublicApiError(res, out, "We couldn't upload this document. Please try again.");
             docs.unshift(out.document); tabCount("documents", docs.length); toast("Document uploaded", "success"); renderDocs();
           } catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Upload document"; }
         };

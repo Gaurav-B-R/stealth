@@ -262,6 +262,17 @@
         .faq details[open] summary .chev { transform: rotate(45deg); }
         .faq .ans { color: var(--ink-2); font-size: .92rem; padding: 0 0 16px; margin: 0; }
 
+        /* Student testimonial (data-driven; shows only when the country defines one) */
+        .cv-testi { display: grid; grid-template-columns: minmax(0, 300px) 1fr; gap: 38px; align-items: center; max-width: 940px; margin: 26px auto 0; background: var(--card); border: 1px solid var(--line); border-radius: 26px; padding: 30px; box-shadow: 0 26px 64px rgba(23, 28, 74, .09); }
+        .cv-testi-photo { position: relative; }
+        .cv-testi-photo img { width: 100%; height: auto; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 20px; display: block; }
+        .cv-testi-badge { position: absolute; left: 12px; bottom: 12px; background: #fff; color: var(--ink); font-weight: 800; font-size: .82rem; padding: 7px 12px; border-radius: 999px; box-shadow: 0 12px 28px rgba(23, 28, 74, .18); }
+        .cv-testi-stars { color: #f5a623; letter-spacing: 3px; font-size: 1.05rem; margin-bottom: 14px; }
+        .cv-testi blockquote { margin: 0 0 16px; font-size: 1.15rem; line-height: 1.5; font-weight: 600; color: var(--ink); }
+        .cv-testi figcaption b { display: block; font-weight: 800; color: var(--ink); font-size: 1.02rem; }
+        .cv-testi figcaption span { color: var(--muted); font-weight: 600; font-size: .9rem; }
+        @media (max-width: 760px) { .cv-testi { grid-template-columns: 1fr; gap: 22px; padding: 22px; text-align: center; } .cv-testi-photo img { max-width: 300px; margin: 0 auto; } }
+
         /* Image + copy band (passport product shot) */
         .imgband { display: grid; grid-template-columns: 1fr 1fr; gap: 46px; align-items: center; }
         .imgband .shot { border-radius: 20px; overflow: hidden; border: 1px solid var(--line); box-shadow: 0 30px 70px rgba(15, 23, 42, .14); }
@@ -641,6 +652,22 @@
             </div>
         </section>
 
+        <section class="sec" id="testiSec" style="display:none">
+            <h2 class="rv" id="testiTitle">Real students. <span class="grad">Real approvals.</span></h2>
+            <p class="lead rv" style="--d:.08s" id="testiLead">From documents to decision — here's how it goes when your file is complete.</p>
+            <figure class="cv-testi rv" style="--d:.12s">
+                <div class="cv-testi-photo">
+                    <img id="testiImg" src="" alt="" loading="lazy" width="900" height="900">
+                    <span class="cv-testi-badge" id="testiBadge"></span>
+                </div>
+                <div>
+                    <div class="cv-testi-stars" aria-label="5 out of 5 stars">★★★★★</div>
+                    <blockquote id="testiQuote"></blockquote>
+                    <figcaption><b id="testiName"></b><span id="testiRole"></span></figcaption>
+                </div>
+            </figure>
+        </section>
+
         <section class="sec" id="faqSec" style="display:none">
             <h2 class="rv" id="faqTitle">Questions students ask</h2>
             <p class="lead rv" style="--d:.08s">Quick answers — and Rilono AI in your dashboard for everything else, 24/7.</p>
@@ -871,6 +898,13 @@
                     q: "Is my blocked account enough to apply?",
                     a: "Your Sperrkonto is funded to the current annual minimum the German mission requires, so that box is ticked. The gap now is health insurance — you need cover that starts on your entry date. I'll show you exactly what to upload."
                 },
+                scenesTitle: "Germany moments waiting for you",
+                scenesLead: "Berlin river light, Heidelberg history, Munich campus life — study where ideas have shaped the world.",
+                scenes: [
+                    { label: "Museum Island at golden hour", place: "Berlin", img: "/static/assets/brand/countries/de-berlin.webp" },
+                    { label: "Heidelberg old town", place: "Baden-Württemberg", img: "/static/assets/brand/countries/de-heidelberg.webp" },
+                    { label: "University life in autumn", place: "Munich, Bavaria", img: "/static/assets/brand/countries/de-munich-campus.webp" }
+                ],
                 faq: [
                     { q: "What is a blocked account (Sperrkonto)?", a: "It's a special German bank account that proves you can cover your living costs. You deposit the year's required amount up front and can withdraw a set sum each month after you arrive. German missions update the annual figure regularly — Rilono keeps your checklist pointed at the current amount and AI-checks your confirmation before you apply." },
                     { q: "Do I need an APS certificate?", a: "It depends on your country. Applicants from India, China, Vietnam and a few others must have their academic documents verified by the Akademische Prüfstelle (APS) before applying. Rilono flags whether APS applies to you and tracks it as its own step so it never blocks your appointment." },
@@ -878,6 +912,14 @@
                     { q: "Is health insurance mandatory before I apply?", a: "Yes — you need valid health cover for your stay, and travel/incoming insurance for the period before your public insurance starts. Rilono tracks your cover dates so they line up with your admission and entry date." },
                     { q: "How long does a German student visa take?", a: "It varies by mission and season — many National Visa (Type D) decisions land in several weeks, but appointment waits can be long, so apply early. A complete, consistent file with no re-requests is the biggest accelerator, which is exactly what Rilono is built to give you." }
                 ],
+                testimonial: {
+                    img: "/static/assets/testimonials/darshith-suresh.jpg",
+                    alt: "Darshith Suresh in front of Dresden's historic skyline after his Germany student visa was approved",
+                    badge: "🇩🇪 Visa Approved",
+                    quote: "Honestly, the German student visa felt like ten separate checklists — blocked account, APS, insurance, admission — and no idea what order to do them in. Rilono put it all in one place and even caught that my APS certificate spelled my name differently from my passport. I fixed it weeks early instead of at the embassy counter, and my Type D visa for BTU Cottbus came through without a single follow-up.",
+                    name: "Darshith Suresh",
+                    role: "Student · BTU Cottbus, Germany"
+                },
                 copilot: {
                     student: "Aarav", url: "videx-national.diplo.de",
                     kicker: "VIDEX · Auswärtiges Amt", kickerClass: "",
@@ -982,6 +1024,18 @@
                 document.getElementById("faqTitle").textContent = `${c.visa} questions, answered`;
                 document.getElementById("faqList").innerHTML = c.faq.map((f, i) =>
                     `<details class="rv" style="--d:${(0.05 * i).toFixed(2)}s"><summary>${esc(f.q)}<span class="chev">+</span></summary><p class="ans">${esc(f.a)}</p></details>`).join("");
+            }
+
+            // ============ Student testimonial (only when the country defines one) ============
+            const t = c.testimonial;
+            if (t) {
+                document.getElementById("testiSec").style.display = "";
+                const timg = document.getElementById("testiImg");
+                timg.src = t.img; timg.alt = t.alt || `${t.name} after their ${c.name} student visa was approved`;
+                document.getElementById("testiBadge").textContent = t.badge || `${c.flag} Visa Approved`;
+                document.getElementById("testiQuote").textContent = `“${t.quote}”`;
+                document.getElementById("testiName").textContent = t.name;
+                document.getElementById("testiRole").textContent = t.role || "";
             }
 
             // ============ Rilono Copilot showcase (animated 3-scene demo) ============
