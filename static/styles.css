@@ -12246,6 +12246,52 @@ body.chat-expanded-lock {
     animation: modalSlideIn 0.3s ease-out;
 }
 
+/* Delete-account modal — in-app (never a native prompt: the OTP arrives by email,
+   so the dialog must survive tab switches). Danger-red accents, light card. */
+.delete-account-modal-content {
+    position: relative;
+    width: min(480px, 94vw);
+    background: #fff;
+    color: #0f172a;
+    border: 1px solid rgba(220, 38, 38, 0.18);
+    border-radius: 18px;
+    padding: 26px 26px 22px;
+    box-shadow: 0 30px 70px rgba(15, 23, 42, 0.35);
+}
+.delete-account-close-btn {
+    position: absolute; top: 10px; right: 14px;
+    background: none; border: 0; cursor: pointer;
+    font-size: 1.5rem; line-height: 1; color: #64748b;
+}
+.delete-account-close-btn:hover { color: #0f172a; }
+.delete-account-badge {
+    display: inline-block; padding: 5px 11px; border-radius: 999px;
+    background: rgba(220, 38, 38, 0.08); border: 1px solid rgba(220, 38, 38, 0.25);
+    color: #b91c1c; font-size: 0.72rem; font-weight: 800;
+    letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 12px;
+}
+.delete-account-title { margin: 0 0 10px; font-size: 1.28rem; color: #0f172a; }
+.delete-account-text { margin: 0 0 16px; color: #475569; font-size: 0.92rem; line-height: 1.6; }
+.delete-account-label { display: block; margin-bottom: 6px; color: #334155; font-size: 0.85rem; font-weight: 700; }
+.delete-account-input {
+    width: 100%; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid rgba(15, 23, 42, 0.18); background: #fff; color: #0f172a;
+    font-size: 1rem; outline: none;
+}
+.delete-account-input:focus { border-color: #dc2626; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12); }
+.delete-account-otp { letter-spacing: 0.35em; font-weight: 700; text-align: center; font-size: 1.2rem; }
+.delete-account-error {
+    margin-top: 10px; padding: 8px 12px; border-radius: 8px;
+    background: rgba(220, 38, 38, 0.08); color: #b91c1c; font-size: 0.85rem; font-weight: 600;
+}
+.delete-account-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.delete-account-actions .btn { width: auto; }
+.delete-account-resend {
+    display: block; margin: 12px auto 0; background: none; border: 0; cursor: pointer;
+    color: #6366f1; font-size: 0.84rem; font-weight: 600; text-decoration: underline;
+}
+.delete-account-resend:disabled { color: #94a3b8; cursor: default; text-decoration: none; }
+
 .cookie-consent-banner {
     position: fixed;
     left: 1rem;

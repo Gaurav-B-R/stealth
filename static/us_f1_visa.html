@@ -5311,6 +5311,53 @@
             </div>
         </div>
 
+        <!-- Delete Account Modal (in-app, persists across tab switches — the emailed
+             OTP means users leave to check email; a native prompt() would be dismissed) -->
+        <div id="deleteAccountModal" class="modal-overlay" style="display: none;">
+            <div class="modal-content delete-account-modal-content" role="dialog" aria-modal="true"
+                aria-labelledby="deleteAccountTitle">
+                <button type="button" class="delete-account-close-btn" onclick="closeDeleteAccountModal()"
+                    aria-label="Close">×</button>
+
+                <div id="deleteAccountStep1">
+                    <div class="delete-account-badge">Danger zone</div>
+                    <h3 id="deleteAccountTitle" class="delete-account-title">Permanently delete your account?</h3>
+                    <p class="delete-account-text">This erases everything tied to your account — your profile, every
+                        uploaded document, your AI chats and your journey progress — from our systems, including from
+                        our encrypted cloud storage. None of your personal data is kept, and it <b>cannot be
+                        undone</b>.</p>
+                    <label class="delete-account-label" for="deleteAccountConfirmInput">Type <b>DELETE</b> to
+                        continue</label>
+                    <input type="text" id="deleteAccountConfirmInput" class="delete-account-input"
+                        autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="DELETE">
+                    <div class="delete-account-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeDeleteAccountModal()">Cancel</button>
+                        <button type="button" id="deleteAccountContinueBtn" class="btn btn-danger" disabled
+                            onclick="deleteAccountRequestCode()">Continue</button>
+                    </div>
+                </div>
+
+                <div id="deleteAccountStep2" style="display: none;">
+                    <div class="delete-account-badge">Check your email</div>
+                    <h3 class="delete-account-title">Enter the 6-digit code</h3>
+                    <p class="delete-account-text">For your security we emailed a one-time code to
+                        <b id="deleteAccountEmailLabel">your account email</b>. This window stays open — switch tabs,
+                        grab the code, and come back.</p>
+                    <label class="delete-account-label" for="deleteAccountOtpInput">Confirmation code</label>
+                    <input type="text" id="deleteAccountOtpInput" class="delete-account-input delete-account-otp"
+                        inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••">
+                    <div id="deleteAccountError" class="delete-account-error" style="display: none;"></div>
+                    <div class="delete-account-actions">
+                        <button type="button" class="btn btn-secondary" onclick="closeDeleteAccountModal()">Cancel</button>
+                        <button type="button" id="deleteAccountFinalBtn" class="btn btn-danger"
+                            onclick="deleteAccountFinalize()">Delete my account permanently</button>
+                    </div>
+                    <button type="button" id="deleteAccountResendBtn" class="delete-account-resend"
+                        onclick="deleteAccountRequestCode(true)">Didn't get it? Resend code</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Free Plan Limit Modal -->
         <div id="planLimitModal" class="modal-overlay plan-limit-overlay" style="display: none;"
             onclick="if(event.target===this){closePlanLimitModal();}">

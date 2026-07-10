@@ -11190,59 +11190,117 @@ async function cancelUniversityChange() {
 
 // ========== End Change University Functions ==========
 
-async function handleDeleteAccount() {
+// Account deletion runs in an IN-APP modal (never native prompt/confirm): the emailed
+// OTP forces users to switch tabs to their inbox, and Chrome dismisses native dialogs
+// on tab switch — killing the flow right before the code entry.
+function handleDeleteAccount() {
     if (!authToken) {
         showMessage('Please login to delete your account', 'error');
         return;
     }
+    const modal = document.getElementById('deleteAccountModal');
+    if (!modal) { showMessage('Something went wrong opening the deletion dialog.', 'error'); return; }
 
-    // Step 1: type-to-confirm
-    const confirmText = 'DELETE';
-    const userInput = prompt(`Permanently delete your Rilono account?\n\nThis erases everything tied to your account — your profile, every uploaded document, your AI chats and your journey progress — from our systems, including from our encrypted cloud storage. None of your personal data is kept, and it cannot be undone.\n\nType "${confirmText}" to continue:`);
+    // Reset to step 1 with clean inputs each time it opens.
+    const confirmInput = document.getElementById('deleteAccountConfirmInput');
+    const otpInput = document.getElementById('deleteAccountOtpInput');
+    const continueBtn = document.getElementById('deleteAccountContinueBtn');
+    document.getElementById('deleteAccountStep1').style.display = '';
+    document.getElementById('deleteAccountStep2').style.display = 'none';
+    deleteAccountShowError('');
+    confirmInput.value = '';
+    otpInput.value = '';
+    continueBtn.disabled = true;
+    continueBtn.textContent = 'Continue';
+    document.getElementById('deleteAccountFinalBtn').disabled = false;
+    document.getElementById('deleteAccountEmailLabel').textContent = currentUser?.email || 'your account email';
 
-    if (userInput !== confirmText) {
-        if (userInput !== null) {
-            showMessage('Account deletion cancelled. The confirmation text did not match.', 'error');
-        }
-        return;
-    }
+    // Enable Continue only when the exact confirmation text is typed.
+    confirmInput.oninput = () => { continueBtn.disabled = confirmInput.value.trim() !== 'DELETE'; };
+    confirmInput.onkeydown = (e) => { if (e.key === 'Enter' && !continueBtn.disabled) deleteAccountRequestCode(); };
+    otpInput.onkeydown = (e) => { if (e.key === 'Enter') deleteAccountFinalize(); };
 
-    const authHeaders = (authToken && authToken !== COOKIE_AUTH_SENTINEL)
+    modal.style.display = 'flex';
+    confirmInput.focus();
+}
+
+function closeDeleteAccountModal() {
+    const modal = document.getElementById('deleteAccountModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function deleteAccountShowError(message) {
+    const box = document.getElementById('deleteAccountError');
+    if (!box) return;
+    box.textContent = message || '';
+    box.style.display = message ? 'block' : 'none';
+}
+
+function deleteAccountAuthHeaders() {
+    return (authToken && authToken !== COOKIE_AUTH_SENTINEL)
         ? { 'Authorization': `Bearer ${authToken}` } : {};
+}
 
-    // Step 2: email a 6-digit confirmation code (second-factor security)
+// Email the 6-digit second-factor code, then reveal the OTP step (or, on resend,
+// stay there). The modal remains open the whole time — tab away freely.
+async function deleteAccountRequestCode(isResend = false) {
+    const continueBtn = document.getElementById('deleteAccountContinueBtn');
+    const resendBtn = document.getElementById('deleteAccountResendBtn');
+    deleteAccountShowError('');
+    if (isResend) { resendBtn.disabled = true; resendBtn.textContent = 'Sending…'; }
+    else { continueBtn.disabled = true; continueBtn.textContent = 'Sending code…'; }
+
     try {
         const reqRes = await fetch(`${API_BASE}/api/profile/delete/request-code`, {
             method: 'POST',
-            headers: authHeaders,
+            headers: deleteAccountAuthHeaders(),
             credentials: 'include',
         });
         if (!reqRes.ok) {
             const e = await reqRes.json().catch(() => ({}));
-            showMessage(e.detail || 'Could not send the confirmation code. Please try again.', 'error');
-            return;
+            throw new Error(e.detail || 'Could not send the confirmation code. Please try again.');
         }
+        document.getElementById('deleteAccountStep1').style.display = 'none';
+        document.getElementById('deleteAccountStep2').style.display = '';
+        document.getElementById('deleteAccountOtpInput').focus();
+        if (isResend) showMessage('A fresh code is on its way to your email.', 'success');
     } catch (error) {
-        showMessage('Could not send the confirmation code. Please check your connection and try again.', 'error');
+        const msg = error.message || 'Could not send the confirmation code. Please check your connection and try again.';
+        if (isResend) deleteAccountShowError(msg); else showMessage(msg, 'error');
+    } finally {
+        continueBtn.disabled = false;
+        continueBtn.textContent = 'Continue';
+        if (resendBtn) {
+            resendBtn.textContent = "Didn't get it? Resend code";
+            // Brief cooldown so the resend link can't be hammered.
+            setTimeout(() => { resendBtn.disabled = false; }, 15000);
+        }
+    }
+}
+
+async function deleteAccountFinalize() {
+    const otpInput = document.getElementById('deleteAccountOtpInput');
+    const finalBtn = document.getElementById('deleteAccountFinalBtn');
+    const code = String(otpInput.value || '').trim();
+    if (!/^\d{6}$/.test(code)) {
+        deleteAccountShowError('Please enter the 6-digit code from your email.');
+        otpInput.focus();
         return;
     }
 
-    // Step 3: enter the emailed code to finalize
-    const code = prompt('For your security, we emailed a 6-digit confirmation code to your account email.\n\nEnter the code to permanently delete your account:');
-    if (!code || !String(code).trim()) {
-        showMessage('Account deletion cancelled.', 'error');
-        return;
-    }
-
+    deleteAccountShowError('');
+    finalBtn.disabled = true;
+    finalBtn.textContent = 'Deleting…';
     try {
         const response = await fetch(`${API_BASE}/api/profile/`, {
             method: 'DELETE',
-            headers: { ...authHeaders, 'Content-Type': 'application/json' },
+            headers: { ...deleteAccountAuthHeaders(), 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ code: String(code).trim() }),
+            body: JSON.stringify({ code }),
         });
 
         if (response.ok || response.status === 204) {
+            closeDeleteAccountModal();
             showMessage('Your account and all your data have been permanently erased from our systems. Thank you for using Rilono.', 'success');
             // Clear auth state and logout
             authToken = null;
@@ -11256,11 +11314,15 @@ async function handleDeleteAccount() {
             }, 2000);
         } else {
             const error = await response.json().catch(() => ({}));
+            // Wrong/expired code etc. — keep the modal open so the user can retry or resend.
             throw new Error(error.detail || 'Failed to delete account');
         }
     } catch (error) {
         console.error('Delete account error:', error);
-        showMessage(error.message || 'An error occurred while deleting your account. Please try again.', 'error');
+        deleteAccountShowError(error.message || 'An error occurred while deleting your account. Please try again.');
+    } finally {
+        finalBtn.disabled = false;
+        finalBtn.textContent = 'Delete my account permanently';
     }
 }
 
