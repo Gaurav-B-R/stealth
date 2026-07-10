@@ -314,8 +314,9 @@
 
         /* ======================= DESTINATIONS ======================= */
         .hx-dest { padding: 96px 0; background: linear-gradient(180deg, transparent, rgba(99, 102, 241, .05) 30%, rgba(8, 145, 178, .04) 70%, transparent); }
-        .dest-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+        .dest-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; }
         .dest-card {
+            flex: 0 1 calc(25% - 15px); min-width: 0;
             display: block; border-radius: 22px; overflow: hidden; text-decoration: none; color: inherit;
             border: 1px solid var(--line); background: #fff; position: relative;
             transition: transform .3s cubic-bezier(.2, .7, .2, 1), box-shadow .3s ease, border-color .3s ease;
@@ -573,7 +574,7 @@
             .out-visual img { max-width: 260px; }
             .hx-hero { padding: 60px 0 80px; }
             .hx-stats .row { grid-template-columns: repeat(2, 1fr); }
-            .dest-grid { grid-template-columns: repeat(2, 1fr); }
+            .dest-card { flex-basis: calc(50% - 10px); }
             .hx-footer .cols { grid-template-columns: 1fr 1fr; }
             .ent-band { padding: 40px 30px; }
             .lockwrap { min-height: 260px; }
@@ -630,6 +631,7 @@
 
             /* single-column grids */
             .dest-grid, .bento, .out-grid { grid-template-columns: 1fr; }
+            .dest-card { flex-basis: 100%; }
             .dest-media { height: 168px; }
 
             /* outcomes */
@@ -709,6 +711,32 @@
             .hx-testi .testi-card { grid-template-columns: 1fr; gap: 22px; padding: 22px; text-align: center; }
             .hx-testi .testi-photo img { max-width: 300px; margin: 0 auto; }
             .hx-testi .testi-stars { text-align: center; }
+        }
+        /* Testimonial carousel (swipe / scroll left-to-right) */
+        .hx-testi .testi-carousel { position: relative; margin-top: 28px; }
+        .hx-testi .testi-track {
+            display: flex; gap: 22px; overflow-x: auto; scroll-snap-type: x proximity;
+            scroll-behavior: smooth; padding: 6px 2px 12px; scrollbar-width: none; -ms-overflow-style: none;
+        }
+        .hx-testi .testi-track::-webkit-scrollbar { display: none; }
+        .hx-testi .testi-track .testi-card { flex: 0 0 min(860px, 89%); max-width: none; margin: 0; scroll-snap-align: center; }
+        .hx-testi .testi-nav {
+            position: absolute; top: 50%; transform: translateY(-50%); z-index: 3;
+            width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: #fff;
+            color: var(--ink); display: grid; place-content: center; cursor: pointer;
+            box-shadow: 0 12px 30px rgba(23, 28, 74, .16); transition: transform .2s ease, background .2s ease, color .2s ease, opacity .2s ease;
+        }
+        .hx-testi .testi-nav svg { width: 22px; height: 22px; }
+        .hx-testi .testi-nav:hover { background: var(--grad); color: #fff; transform: translateY(-50%) scale(1.07); border-color: transparent; }
+        .hx-testi .testi-prev { left: -12px; }
+        .hx-testi .testi-next { right: -12px; }
+        .hx-testi .testi-nav[disabled] { opacity: 0; pointer-events: none; }
+        .hx-testi .testi-dots { display: flex; justify-content: center; gap: 8px; margin-top: 18px; }
+        .hx-testi .testi-dot { width: 8px; height: 8px; border-radius: 999px; background: #cbd5e1; border: 0; padding: 0; cursor: pointer; transition: width .25s ease, background .25s ease; }
+        .hx-testi .testi-dot.active { width: 24px; background: linear-gradient(90deg, #6366f1, #a855f7); }
+        @media (max-width: 760px) {
+            .hx-testi .testi-track .testi-card { flex-basis: 90%; }
+            .hx-testi .testi-nav { display: none; }
         }
     </style>
     <script src="/static/attribution.js"></script>
@@ -985,7 +1013,7 @@
                 <div class="sec-head rv">
                     <span class="eyebrow"><span class="pulse"></span> Destinations</span>
                     <h2 style="margin-top:16px">Where are you <span class="grad">flying?</span></h2>
-                    <p class="lead">Four of the world's top study destinations — each journey tailored to that country's
+                    <p class="lead">Five of the world's top study destinations — each journey tailored to that country's
                         documents, forms and interview.</p>
                 </div>
                 <div class="dest-grid">
@@ -1071,44 +1099,55 @@
                     <span class="eyebrow"><span class="pulse"></span> Success story</span>
                     <h2 style="margin-top:18px">Real students. <span class="grad">Real approvals.</span></h2>
                 </div>
-                <figure class="testi-card rv">
-                    <div class="testi-photo">
-                        <img src="/static/assets/testimonials/prathyaksh-paramashiva.webp"
-                            alt="Prathyaksh Paramashiva in front of the Statue of Liberty after his US F-1 student visa was approved"
-                            loading="lazy" width="900" height="900">
-                        <span class="testi-badge">🇺🇸 F-1 Approved</span>
+                <div class="testi-carousel rv">
+                    <button class="testi-nav testi-prev" type="button" aria-label="Previous testimonial">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+                    </button>
+                    <div class="testi-track" id="testiTrack">
+                        <figure class="testi-card">
+                            <div class="testi-photo">
+                                <img src="/static/assets/testimonials/prathyaksh-paramashiva.webp"
+                                    alt="Prathyaksh Paramashiva in front of the Statue of Liberty after his US F-1 student visa was approved"
+                                    loading="lazy" width="900" height="900">
+                                <span class="testi-badge">🇺🇸 F-1 Approved</span>
+                            </div>
+                            <div>
+                                <div class="testi-stars" aria-label="5 out of 5 stars">★★★★★</div>
+                                <blockquote>“Rilono checked every one of my documents before I submitted and drilled me with
+                                    mock interviews that felt exactly like the real thing. I walked into my F-1 interview calm and
+                                    confident — and got my visa for Clark University.”</blockquote>
+                                <figcaption>
+                                    <b>Prathyaksh Paramashiva</b>
+                                    <span>F-1 student · Clark University, USA</span>
+                                </figcaption>
+                            </div>
+                        </figure>
+                        <figure class="testi-card">
+                            <div class="testi-photo">
+                                <img src="/static/assets/testimonials/darshith-suresh.jpg"
+                                    alt="Darshith Suresh in front of Dresden's historic skyline after his Germany student visa was approved"
+                                    loading="lazy" width="900" height="900">
+                                <span class="testi-badge">🇩🇪 Visa Approved</span>
+                            </div>
+                            <div>
+                                <div class="testi-stars" aria-label="5 out of 5 stars">★★★★★</div>
+                                <blockquote>“Honestly, the German student visa felt like ten separate checklists — blocked
+                                    account, APS, insurance, admission — and no idea what order to do them in. Rilono put it all
+                                    in one place and even caught that my APS certificate spelled my name differently from my
+                                    passport. I fixed it weeks early instead of at the embassy counter, and my Type D visa for
+                                    BTU Cottbus came through without a single follow-up.”</blockquote>
+                                <figcaption>
+                                    <b>Darshith Suresh</b>
+                                    <span>Student · BTU Cottbus, Germany</span>
+                                </figcaption>
+                            </div>
+                        </figure>
                     </div>
-                    <div>
-                        <div class="testi-stars" aria-label="5 out of 5 stars">★★★★★</div>
-                        <blockquote>“Rilono checked every one of my documents before I submitted and drilled me with
-                            mock interviews that felt exactly like the real thing. I walked into my F-1 interview calm and
-                            confident — and got my visa for Clark University.”</blockquote>
-                        <figcaption>
-                            <b>Prathyaksh Paramashiva</b>
-                            <span>F-1 student · Clark University, USA</span>
-                        </figcaption>
-                    </div>
-                </figure>
-                <figure class="testi-card rv" style="margin-top:24px">
-                    <div class="testi-photo">
-                        <img src="/static/assets/testimonials/darshith-suresh.jpg"
-                            alt="Darshith Suresh in front of Dresden's historic skyline after his Germany student visa was approved"
-                            loading="lazy" width="900" height="900">
-                        <span class="testi-badge">🇩🇪 Visa Approved</span>
-                    </div>
-                    <div>
-                        <div class="testi-stars" aria-label="5 out of 5 stars">★★★★★</div>
-                        <blockquote>“Honestly, the German student visa felt like ten separate checklists — blocked
-                            account, APS, insurance, admission — and no idea what order to do them in. Rilono put it all
-                            in one place and even caught that my APS certificate spelled my name differently from my
-                            passport. I fixed it weeks early instead of at the embassy counter, and my Type D visa for
-                            BTU Cottbus came through without a single follow-up.”</blockquote>
-                        <figcaption>
-                            <b>Darshith Suresh</b>
-                            <span>Student · BTU Cottbus, Germany</span>
-                        </figcaption>
-                    </div>
-                </figure>
+                    <button class="testi-nav testi-next" type="button" aria-label="Next testimonial">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+                    </button>
+                </div>
+                <div class="testi-dots" id="testiDots"></div>
             </div>
         </section>
 
@@ -1622,6 +1661,60 @@
                 save(false); bar.classList.remove("show");
             });
             loadAnalytics(); // honor consent given on a previous visit
+        })();
+    </script>
+    <script>
+        // Testimonial carousel — arrows, dots, and swipe/scroll sync.
+        (function () {
+            var track = document.getElementById('testiTrack');
+            var dotsWrap = document.getElementById('testiDots');
+            if (!track || !dotsWrap) return;
+            var cards = Array.prototype.slice.call(track.querySelectorAll('.testi-card'));
+            var prev = document.querySelector('.testi-prev');
+            var next = document.querySelector('.testi-next');
+            if (cards.length < 2) {
+                if (prev) prev.style.display = 'none';
+                if (next) next.style.display = 'none';
+                return;
+            }
+            function centerOf(card) {
+                return track.scrollLeft + card.getBoundingClientRect().left - track.getBoundingClientRect().left + card.offsetWidth / 2;
+            }
+            function activeIndex() {
+                var mid = track.scrollLeft + track.clientWidth / 2, best = 0, bestD = Infinity;
+                cards.forEach(function (c, i) { var d = Math.abs(centerOf(c) - mid); if (d < bestD) { bestD = d; best = i; } });
+                return best;
+            }
+            function scrollToCard(i) {
+                i = Math.max(0, Math.min(cards.length - 1, i));
+                var c = cards[i];
+                var left = centerOf(c) - track.clientWidth / 2;
+                track.scrollTo({ left: Math.max(0, left), behavior: 'smooth' });
+            }
+            cards.forEach(function (_, i) {
+                var b = document.createElement('button');
+                b.className = 'testi-dot' + (i === 0 ? ' active' : '');
+                b.type = 'button';
+                b.setAttribute('aria-label', 'Go to testimonial ' + (i + 1));
+                b.addEventListener('click', function () { scrollToCard(i); });
+                dotsWrap.appendChild(b);
+            });
+            var dots = Array.prototype.slice.call(dotsWrap.children);
+            function update() {
+                var idx = activeIndex();
+                dots.forEach(function (d, i) { d.classList.toggle('active', i === idx); });
+                if (prev) prev.disabled = idx === 0;
+                if (next) next.disabled = idx === cards.length - 1;
+            }
+            if (prev) prev.addEventListener('click', function () { scrollToCard(activeIndex() - 1); });
+            if (next) next.addEventListener('click', function () { scrollToCard(activeIndex() + 1); });
+            var ticking = false;
+            track.addEventListener('scroll', function () {
+                if (ticking) return; ticking = true;
+                window.requestAnimationFrame(function () { update(); ticking = false; });
+            }, { passive: true });
+            window.addEventListener('resize', update);
+            update();
         })();
     </script>
 </body>

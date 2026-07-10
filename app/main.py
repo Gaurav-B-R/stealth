@@ -640,6 +640,16 @@ async def read_uk_blog():
     return HTMLResponse(page)
 
 
+@app.get("/blog/how-to-use-rilono-ai-germany-student-visa")
+@app.get("/blog/how-to-use-rilono-ai-germany-student-visa/")
+async def read_germany_blog():
+    """Serve the Germany student visa "how to use Rilono AI" guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-germany-student-visa-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
 @app.get("/blog/student-visa-crm-for-consultancies")
 @app.get("/blog/student-visa-crm-for-consultancies/")
 async def read_enterprise_blog():
