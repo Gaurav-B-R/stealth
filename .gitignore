@@ -48,3 +48,6 @@ build/
 *.egg-info/
 
 .claude/worktrees/
+
+# Local generated marketing previews
+/artifacts/rilono-homepage-video/

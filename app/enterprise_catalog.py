@@ -206,7 +206,7 @@ COUNTRIES = [
         "accent": "#fff5f5",
         "student_intakes": ["January", "May", "September"],
         "visa_types": {
-            VISA_CATEGORY_STUDENT: ["Study Permit", "Student Direct Stream (SDS)"],
+            VISA_CATEGORY_STUDENT: ["Study Permit"],
         },
     },
     {

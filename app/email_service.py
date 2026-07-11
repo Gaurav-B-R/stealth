@@ -1263,9 +1263,11 @@ def send_subscription_change_email(
     safe_payment_status = escape((payment_status or "N/A").strip().title())
     safe_payment_amount = escape(_format_amount_for_subscription_email(payment_amount_paise, payment_currency))
     safe_access_until = escape(_format_datetime_for_subscription_email(access_until))
-    safe_next_renewal = escape(_format_datetime_for_subscription_email(next_renewal_at))
-    auto_renew_text = "N/A" if auto_renew_enabled is None else ("Enabled" if auto_renew_enabled else "Disabled")
-    safe_auto_renew = escape(auto_renew_text)
+    # The Visa Success Pass is a one-time, 30-day purchase — there is no recurring billing or
+    # renewal. (auto_renew_enabled is False/None for all current passes; the branch only differs
+    # for retired recurring rows.) So we show billing as "One-time" and omit any "next renewal".
+    billing_text = "Auto-renew on" if auto_renew_enabled else "One-time"
+    safe_billing = escape(billing_text)
     manage_url = f"{base_url.rstrip('/')}/dashboard"
     safe_manage_url = escape(manage_url)
     safe_unsubscribe_url = escape((unsubscribe_url or "").strip())
@@ -1285,7 +1287,7 @@ def send_subscription_change_email(
                     <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
                         <tr>
                             <td style="padding:26px 28px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;">
-                                <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">Rilono Subscription</div>
+                                <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">Rilono Membership</div>
                                 <h1 style="margin:10px 0 0 0;font-size:28px;line-height:1.2;">{escape(event_content['title'])}</h1>
                             </td>
                         </tr>
@@ -1307,21 +1309,17 @@ def send_subscription_change_email(
                                         </td>
                                     </tr>
                                     <tr>
-                                        <td style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
-                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Auto-Renew</div>
-                                            <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_auto_renew}</div>
+                                        <td style="width:50%;padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Billing</div>
+                                            <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_billing}</div>
                                         </td>
-                                        <td style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                        <td style="width:50%;padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
                                             <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Access Until</div>
                                             <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_access_until}</div>
                                         </td>
                                     </tr>
                                     <tr>
-                                        <td style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
-                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Next Renewal</div>
-                                            <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_next_renewal}</div>
-                                        </td>
-                                        <td style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                        <td colspan="2" style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
                                             <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Latest Payment</div>
                                             <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_payment_amount} • {safe_payment_status}</div>
                                         </td>
@@ -1330,7 +1328,7 @@ def send_subscription_change_email(
 
                                 <div style="text-align:center;margin-top:20px;">
                                     <a href="{safe_manage_url}" style="display:inline-block;padding:12px 22px;border-radius:10px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;">
-                                        Manage Subscription
+                                        Go to Dashboard
                                     </a>
                                 </div>
 
@@ -1363,11 +1361,10 @@ def send_subscription_change_email(
         f"{event_content['summary']}\n\n"
         f"Plan: {plan_label}\n"
         f"Status: {(status or 'active').title()}\n"
-        f"Auto-Renew: {auto_renew_text}\n"
+        f"Billing: {billing_text}\n"
         f"Access Until: {_format_datetime_for_subscription_email(access_until)}\n"
-        f"Next Renewal: {_format_datetime_for_subscription_email(next_renewal_at)}\n"
         f"Latest Payment: {_format_amount_for_subscription_email(payment_amount_paise, payment_currency)} • {(payment_status or 'N/A').title()}\n\n"
-        f"Manage Subscription: {manage_url}\n\n"
+        f"Go to Dashboard: {manage_url}\n\n"
         f"{unsubscribe_text_line}"
         "If this change wasn't made by you, contact contact@rilono.com.\n\n"
         "Rilono · Bengaluru, Karnataka, India\n"

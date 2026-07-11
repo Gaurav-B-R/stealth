@@ -2679,6 +2679,23 @@
                                     <path d="M21 9v5"></path></svg></span>
                             <span class="nav-label">Universities</span>
                         </a>
+                        <div id="uniSubNav" class="visa-subnav" style="display: none;">
+                            <a href="#" class="visa-subnav-item active" data-uni-subtab="universities"
+                                onclick="switchDashboardTab('universities'); return false;">
+                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M4 6h16"></path>
+                                        <path d="M4 12h16"></path>
+                                        <path d="M4 18h10"></path></svg></span>
+                                <span class="subnav-label">Shortlist &amp; Recommendations</span>
+                            </a>
+                            <a href="#" class="visa-subnav-item" data-uni-subtab="sop"
+                                onclick="switchDashboardTab('sop'); return false;">
+                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M12 20h9"></path>
+                                        <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg></span>
+                                <span class="subnav-label" id="subnavLabelSop">SOP Studio</span>
+                            </a>
+                        </div>
                         <a href="#" class="nav-item" data-tab="records"
                             onclick="switchDashboardTab('records'); return false;">
                             <span class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2703,10 +2720,6 @@
                         <button id="dashboardUpgradeButton" type="button" class="btn btn-primary sidebar-upgrade-btn"
                             onclick="handleUpgradeToPro('dashboard')">
                             Get the Visa Success Pass
-                        </button>
-                        <button id="dashboardCancelButton" type="button" class="btn btn-secondary sidebar-upgrade-btn"
-                            onclick="handleCancelSubscription()" style="display: none;">
-                            Cancel Auto-Renew
                         </button>
                     </div>
 
@@ -3052,8 +3065,32 @@
                         <div class="tab-header">
                             <h2>🎓 Universities</h2>
                             <p class="tab-subtitle">Get Rilono AI university recommendations for your destination and track your shortlist.</p>
+                            <div class="visa-mobile-subnav" aria-label="University modules">
+                                <button type="button" class="visa-mobile-subnav-btn active"
+                                    onclick="switchDashboardTab('universities')">🎓 Shortlist</button>
+                                <button type="button" class="visa-mobile-subnav-btn"
+                                    onclick="switchDashboardTab('sop')">✍️ SOP Studio</button>
+                            </div>
                         </div>
                         <div id="universitiesContent" style="padding: 0 0 2rem;">
+                            <div style="padding:2rem;color:var(--text-secondary,#9a9cb0)">Loading…</div>
+                        </div>
+                    </div>
+
+                    <!-- SOP Studio Tab (Application Kit) -->
+                    <div id="dashboardTab-sop" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2 id="sopTabTitle">✍️ SOP Studio</h2>
+                            <p class="tab-subtitle" id="sopTabSubtitle">Rilono AI drafts your statement from your real
+                                profile and documents — then refines it with you, line by line.</p>
+                            <div class="visa-mobile-subnav" aria-label="University modules">
+                                <button type="button" class="visa-mobile-subnav-btn"
+                                    onclick="switchDashboardTab('universities')">🎓 Shortlist</button>
+                                <button type="button" class="visa-mobile-subnav-btn active"
+                                    onclick="switchDashboardTab('sop')">✍️ SOP Studio</button>
+                            </div>
+                        </div>
+                        <div id="sopContent" style="padding: 0 0 2rem;">
                             <div style="padding:2rem;color:var(--text-secondary,#9a9cb0)">Loading…</div>
                         </div>
                     </div>
@@ -3187,7 +3224,7 @@
                                                 style="background: var(--bg-color); cursor: not-allowed;">
                                             <small
                                                 style="color: var(--text-secondary); display: block; margin-top: 0.5rem;">
-                                                We are currently only serving the United States
+                                                This reflects the study destination saved to your account.
                                             </small>
                                         </div>
                                         <div class="form-row">
@@ -3262,14 +3299,14 @@
                                     </div>
                                     <div class="destination-settings"
                                         style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
-                                        <h4 style="margin-bottom: 0.35rem; font-size: 1rem;">Destination country</h4>
+                                        <h4 style="margin-bottom: 0.35rem; font-size: 1rem;">Destination &amp; visa type</h4>
                                         <p style="color: var(--text-secondary); font-size: 0.85rem; margin: 0 0 0.75rem;">
-                                            Your dashboard, checklist, and AI guidance are tailored to this destination.
+                                            Your dashboard, checklist, and AI guidance are tailored to this destination and visa.
                                             <span id="settingsCurrentCountry"
                                                 style="font-weight: 600; color: var(--text-primary);"></span>
                                         </p>
                                         <button type="button" onclick="openCountryChangeModal()" class="btn btn-secondary"
-                                            style="width: 100%; font-size: 0.875rem;">Change destination country</button>
+                                            style="width: 100%; font-size: 0.875rem;">Change destination or visa type</button>
                                     </div>
                                     <div class="danger-zone"
                                         style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border-color);">
@@ -3351,8 +3388,8 @@
                     <!-- Subscription Management Tab -->
                     <div id="dashboardTab-subscription" class="dashboard-tab">
                         <div class="tab-header">
-                            <h2>Subscription Management</h2>
-                            <p class="tab-subtitle">Track plan, usage, renewal, referral bonus, and billing status.</p>
+                            <h2>Plan &amp; Billing</h2>
+                            <p class="tab-subtitle">Track plan, usage, access period, referral bonus, and billing status.</p>
                         </div>
                         <div style="max-width: 980px; margin: 0 auto;">
                             <div class="profile-subscription-manager" style="margin-top: 0;">
@@ -3361,7 +3398,7 @@
                                         <span class="profile-subscription-kicker">Current Membership</span>
                                         <h3 id="profileSubscriptionPlan">Free Plan</h3>
                                         <p id="profileSubscriptionSwitchHint" class="profile-subscription-switch-hint">
-                                            Pick a plan to switch instantly at checkout.</p>
+                                            Get the one-time Visa Success Pass when you need premium access.</p>
                                     </div>
                                     <div class="profile-subscription-status-wrap">
                                         <div class="profile-subscription-pill">
@@ -3369,7 +3406,7 @@
                                             <strong id="profileSubscriptionStatus">Active</strong>
                                         </div>
                                         <div class="profile-subscription-pill">
-                                            <span>Auto-Renew</span>
+                                            <span>Billing</span>
                                             <strong id="profileSubscriptionAutoRenew">N/A</strong>
                                         </div>
                                     </div>
@@ -3377,11 +3414,11 @@
                                 <div class="profile-subscription-section-heading">Billing Details</div>
                                 <div class="profile-subscription-grid">
                                     <div class="profile-subscription-card">
-                                        <span id="profileSubscriptionRenewalLabel">Next Renewal</span>
+                                        <span id="profileSubscriptionRenewalLabel">Access Until</span>
                                         <strong id="profileSubscriptionRenewalValue">-</strong>
                                     </div>
                                     <div class="profile-subscription-card">
-                                        <span id="profileSubscriptionEndsLabel">Access Ends</span>
+                                        <span id="profileSubscriptionEndsLabel">Plan Type</span>
                                         <strong id="profileSubscriptionEndsAt">-</strong>
                                     </div>
                                     <div class="profile-subscription-card">
@@ -3415,10 +3452,11 @@
                                             class="btn btn-primary" style="grid-column: 1 / -1;"
                                             onclick="handleUpgradeToPro('profile')">Get the Visa Success
                                             Pass</button>
+                                        <button id="profileSubscriptionCancelBtn" type="button"
+                                            class="btn btn-secondary" style="display: none; grid-column: 1 / -1;"
+                                            onclick="cancelLegacyRecurringSubscription()">Cancel Legacy
+                                            Auto-Renew</button>
                                     </div>
-                                    <button id="profileSubscriptionCancelBtn" type="button" class="btn btn-secondary"
-                                        onclick="handleCancelSubscription()" style="display: none;">Cancel
-                                        Auto-Renew</button>
                                 </div>
                             </div>
                         </div>
@@ -4285,14 +4323,17 @@
                     <h2>2. Information We Collect</h2>
                     <h3>2.1 Information You Provide</h3>
                     <ul>
-                        <li><strong>Account Information:</strong> Email address, username, password, full name,
-                            university, and current country of residence</li>
+                        <li><strong>Account Information:</strong> Email address, username, full name, university,
+                            current country of residence, and authentication credentials. Passwords are stored only in
+                            hashed form; we do not store readable passwords.</li>
                         <li><strong>Profile Information:</strong> Profile picture and any additional information you
                             choose to provide</li>
                         <li><strong>Document Uploads:</strong> File names, types, metadata you provide, and extracted
                             text for processing</li>
-                        <li><strong>Documentation Preferences:</strong> Target country, intake, and year</li>
-                        <li><strong>AI Chat:</strong> Messages you send to the AI assistant</li>
+                        <li><strong>Journey Preferences:</strong> Destination country, visa type, intake, year, and
+                            related application details</li>
+                        <li><strong>AI and Support Content:</strong> Messages, files, feedback, and support requests you
+                            choose to submit</li>
                     </ul>
 
                     <h3>2.2 Automatically Collected Information</h3>
@@ -4306,21 +4347,34 @@
                     </ul>
 
                     <h3>2.3 Payment Information</h3>
-                    <p>We use third-party payment processors (such as Razorpay and Stripe) to handle payments. We do not
+                    <p>We use third-party payment processors, including Razorpay and applicable app-store payment
+                        providers, to handle payments. We do not
                         store or collect your payment card details. That information is provided directly to our
                         third-party payment processors whose use of your personal information is governed by their
-                        Privacy Policy. These payment processors adhere to the standards set by PCI-DSS as managed by
+                        privacy policies. These payment processors adhere to the standards set by PCI-DSS as managed by
                         the PCI Security Standards Council.</p>
 
                     <h3>2.4 Chrome Extension and Page Inspection Data</h3>
-                    <p>When you use the Rilono Copilot Chrome extension, we process additional data needed to provide
-                        in-browser application assistance.</p>
+                    <p>When you use the Rilono Copilot Chrome extension, the following data is handled only as needed to
+                        provide its student-visa application guidance:</p>
                     <ul>
-                        <li><strong>Extension Chat Data:</strong> Messages and files you submit in extension chat are
-                            sent to our backend to generate responses.</li>
+                        <li><strong>Authentication Session:</strong> The extension reuses your existing signed-in
+                            <code>rilono.com</code> session. It does not read, request, or store your password.</li>
+                        <li><strong>Local Extension Storage:</strong> A limited recent conversation history, attachment
+                            metadata, and interface preferences are stored in <code>chrome.storage.local</code>. Attached
+                            file contents, inspected-page snapshots, and decrypted vault text are not persisted there.</li>
+                        <li><strong>Extension Chat Requests:</strong> When you send a message, the message, limited recent
+                            conversation history, and files you have selected for that request are sent to our backend
+                            to generate a response.</li>
                         <li><strong>Inspect Page Data (User-Initiated):</strong> If you click "Inspect Page," the
-                            extension captures context from the active page (such as visible text, visible form field
-                            details, and visible action controls) and sends it to our backend as chat context.</li>
+                            extension requests access to the active site's origin, then captures the page URL, title,
+                            language, visible text, visible form-field labels and values, and visible action controls.
+                            Password-field values are masked. This snapshot is attached only to the chat session you
+                            initiated and is sent when you submit a message.</li>
+                        <li><strong>Optional Encrypted-Document Context:</strong> If your Rilono vault is unlocked, the
+                            extension displays a separate control that is off by default. Only after you enable it for
+                            the current Copilot session may decrypted document text be included with chat requests.
+                            Your encryption passphrase and vault key never leave the signed-in Rilono page.</li>
                         <li><strong>Sensitive Content in Submitted Context:</strong> Depending on what you choose to
                             inspect or attach, submitted context may include personally identifiable information,
                             personal communications, web-history context (for example page URL/title), health-related
@@ -4328,9 +4382,9 @@
                         <li><strong>No Continuous Background Monitoring:</strong> We do not continuously collect page
                             content in the background. Page context is captured only when you explicitly trigger
                             inspection.</li>
-                        <li><strong>Operational Metadata:</strong> We may process technical metadata such as timestamp,
-                            page URL/title, and request status for security, troubleshooting, and service reliability.
-                        </li>
+                        <li><strong>Operational Metadata:</strong> We may retain limited records such as timestamps,
+                            usage counts, attachment tracking identifiers, request status, and AI cost metadata for
+                            quotas, security, troubleshooting, and service reliability.</li>
                     </ul>
                 </section>
 
@@ -4346,16 +4400,15 @@
                         <li>Respond to your inquiries and provide customer support</li>
                         <li>Detect, prevent, and address technical issues and fraudulent activity</li>
                         <li>Comply with legal obligations and enforce our Terms of Service</li>
-                        <li>Analyze usage patterns to improve user experience</li>
+                        <li>Analyze usage patterns to improve user experience, where permitted and subject to your
+                            cookie choices</li>
                     </ul>
 
                     <h3>3.1 Personalization, Encryption, and AI Processing</h3>
-                    <p>To provide personalized guidance, we collect basic account and profile data (such as your name,
-                        university, intake preferences, and related context). Your uploaded original visa documents are
-                        stored using encryption controls designed to protect confidentiality, including encrypted
-                        storage of your uploaded files. We process your data (including document-derived information
-                        where applicable) with Gemini AI solely to generate customized responses based on your
-                        situation, documents, and visa stage.</p>
+                    <p>To provide personalized guidance, we process relevant account, profile, journey, chat, inspected
+                        page, and user-selected document context. Uploaded original visa documents are protected by the
+                        encryption mode selected in the product. Relevant request content may be processed by Google
+                        Gemini / Vertex AI solely to generate the requested validation, recommendation, or response.</p>
                     <p>Rilono does not use your personal data or document content to train Rilono-owned AI models, and
                         we do not use that data for unrelated commercial purposes. AI processing is limited to
                         delivering and improving your requested platform functionality.</p>
@@ -4370,13 +4423,22 @@
                             providers who assist us in operating our platform (e.g., hosting, analytics, storage, AI
                             processing)</li>
                         <li><strong>AI Processing Partners:</strong> We may send relevant request data (such as chat
-                            prompts, attachments, and inspected context that you submit) to AI model providers used to
-                            generate responses.</li>
+                            prompts, recent conversation context, attachments, inspected context, and consented
+                            decrypted-document text) to Google Gemini / Vertex AI to generate responses.</li>
                         <li><strong>Legal Requirements:</strong> We may disclose information if required by law or to
                             protect our rights and safety</li>
                         <li><strong>Business Transfers:</strong> In the event of a merger, acquisition, or sale of
                             assets, your information may be transferred</li>
                     </ul>
+                    <h3>4.1 Chrome Web Store Limited Use</h3>
+                    <p>Rilono Copilot's use and transfer of information received from Chrome APIs complies with the
+                        Chrome Web Store User Data Policy, including its Limited Use requirements. We do not sell
+                        extension user data, use it for personalized advertising, or use it to determine
+                        creditworthiness. We transfer it only as needed to provide or improve Copilot's single purpose,
+                        protect security, comply with law, or complete a permitted business transfer. Human access is
+                        restricted to cases where you give specific consent for support, access is necessary for
+                        security or legal compliance, or the data is aggregated and de-identified for internal
+                        operations.</p>
                 </section>
 
                 <section>
@@ -4386,12 +4448,20 @@
                         method of transmission over the internet or electronic storage is 100% secure, and we cannot
                         guarantee absolute security.</p>
                     <h3>5.1 Data Retention</h3>
-                    <p>We will retain your Personal Data and uploaded documents only for as long as is necessary for the
-                        purposes set out in this Privacy Policy. We will retain and use your Personal Data to the extent
-                        necessary to comply with our legal obligations, resolve disputes, and enforce our legal
-                        agreements and policies. Extension chat data and inspected page context you submit are retained
-                        under the same retention controls as your chat/session records. You may request the deletion of
-                        your data and documents at any time via your account dashboard.</p>
+                    <p>Account, profile, uploaded-document, billing, and enterprise records are retained only as long as
+                        needed to provide the service, meet security and legal obligations, resolve disputes, and
+                        enforce our agreements. You may request deletion through your account dashboard, subject to
+                        records we must retain by law.</p>
+                    <p>The Rilono application does not persist extension message bodies, inspected-page snapshots,
+                        attachment contents, or decrypted vault text as chat records in its application database. They
+                        are processed for the requested response. Limited operational metadata described above may be
+                        retained. Processing by our AI provider is governed by the applicable provider terms and data
+                        controls.</p>
+                    <p>Recent extension chat entries and attachment metadata remain in
+                        <code>chrome.storage.local</code> until you clear the conversation, clear the extension's local
+                        data, or uninstall it. Deleting your Rilono account initiates deletion of eligible server-side
+                        account data, subject to the legal, security, billing, and dispute records described above, but
+                        does not automatically erase data stored locally by Chrome.</p>
                 </section>
 
                 <section>
@@ -4401,13 +4471,13 @@
                         <li><strong>Access:</strong> Request access to your personal information</li>
                         <li><strong>Correction:</strong> Update or correct your personal information through your
                             account settings</li>
-                        <li><strong>Deletion:</strong> Delete your account and associated data by using the account
-                            deletion feature in your dashboard</li>
+                        <li><strong>Deletion:</strong> Delete your account and associated server-side data by using the
+                            account deletion feature in your dashboard, subject to legally required records</li>
                         <li><strong>Opt-Out:</strong> Unsubscribe from non-essential communications</li>
                         <li><strong>Data Portability:</strong> Request a copy of your data in a portable format</li>
                         <li><strong>Extension Control:</strong> You can stop extension-based data collection at any
-                            time by not using extension features, removing extension permissions, or uninstalling the
-                            extension.</li>
+                            time by disabling optional encrypted-document sharing, clearing local chat history, removing
+                            site permissions, clearing extension data, or uninstalling the extension.</li>
                     </ul>
                 </section>
 
@@ -4417,10 +4487,11 @@
                     <ul>
                         <li>Remember your preferences and settings</li>
                         <li>Analyze how you use our platform</li>
-                        <li>Provide personalized content and advertisements</li>
+                        <li>Provide personalized product content and communications you have requested or consented to</li>
                     </ul>
                     <h3>7.1 Analytics</h3>
-                    <p>We use Google Analytics to understand how our Service is used. Google Analytics collects
+                    <p>If you enable optional analytics cookies, we use Google Analytics to understand how our Service
+                        is used. Google Analytics collects
                         information such as how often users visit this site, what pages they visit when they do so, and
                         what other sites they used prior to coming to this site. We use the information we get from
                         Google Analytics only to improve this site. Google's ability to use and share information
@@ -4434,9 +4505,10 @@
 
                 <section>
                     <h2>8. Children's Privacy</h2>
-                    <p>Our platform is intended for students and users who are at least 13 years of age. We do not
-                        knowingly collect personal information from children under 13. If you believe we have collected
-                        information from a child under 13, please contact us immediately.</p>
+                    <p>Our platform is not intended for children under 13, and we do not knowingly collect their
+                        personal information. Users aged 13 through 17 may use Rilono only with the consent and
+                        supervision of a parent or legal guardian. If you believe a child under 13 has provided personal
+                        information, contact us immediately.</p>
                 </section>
 
                 <section>
@@ -4455,21 +4527,22 @@
                     <ul>
                         <li><strong>Cloudflare R2</strong> (document and file storage) — globally distributed object
                             storage. Documents you upload with end-to-end encryption are stored only as ciphertext.</li>
-                        <li><strong>Google (Gemini / Vertex AI)</strong> (AI document validation and the AI assistant) —
-                            processes content you submit for AI features. For end-to-end-encrypted documents this happens
-                            only with your explicit, per-document consent, and the content is not stored for these
-                            requests.</li>
+                        <li><strong>Google (Gemini / Vertex AI)</strong> (AI document validation and assistance) —
+                            processes the content needed for AI features under the applicable Google service terms and
+                            data controls. End-to-end-encrypted document content is shared only when you enable AI
+                            processing for that document or explicitly enable encrypted-document context in Copilot.</li>
                         <li><strong>Razorpay</strong> (payments) — payment processing, primarily in India.</li>
                         <li><strong>Resend</strong> (transactional email) — email delivery.</li>
                     </ul>
                     <p>Where required by law — including the EU GDPR and India's Digital Personal Data Protection Act,
                         2023 (DPDP Act) — these transfers are carried out under appropriate safeguards such as standard
-                        contractual clauses and data-processing agreements with each provider. By using our platform you
-                        consent to these transfers for the purposes described in this policy.</p>
+                        contractual clauses and data-processing agreements with each provider. We process and transfer
+                        data only as needed for the purposes described in this policy and as permitted by applicable
+                        law.</p>
                 </section>
 
                 <section>
-                    <h2>Grievance Officer &amp; Data Protection Contact</h2>
+                    <h2>11. Grievance Officer &amp; Data Protection Contact</h2>
                     <p>In accordance with India's Digital Personal Data Protection Act, 2023 and other applicable data
                         protection laws, you may contact our Grievance Officer with any question, request, or complaint
                         about your personal data or the exercise of your rights (access, correction, erasure, or
@@ -4482,7 +4555,7 @@
                 </section>
 
                 <section>
-                    <h2>11. Changes to This Privacy Policy</h2>
+                    <h2>12. Changes to This Privacy Policy</h2>
                     <p>We may update this Privacy Policy from time to time. We will notify you of any material changes
                         by posting the new Privacy Policy on this page and updating the "Last Updated" date. Your
                         continued use of our platform after such changes constitutes acceptance of the updated policy.
@@ -4490,7 +4563,7 @@
                 </section>
 
                 <section>
-                    <h2>12. AI Output Disclaimer and Responsibility</h2>
+                    <h2>13. AI Output Disclaimer and Responsibility</h2>
                     <p>Rilono and Rilono AI may generate information, recommendations, summaries, or validations that
                         are incomplete, inaccurate, or outdated. Such output is provided for general informational
                         purposes only and does not constitute legal, immigration, financial, or professional advice. You
@@ -4501,7 +4574,7 @@
                 </section>
 
                 <section>
-                    <h2>13. Rilono Enterprise (Business Customers)</h2>
+                    <h2>14. Rilono Enterprise (Business Customers)</h2>
                     <p>Rilono Enterprise lets visa consultancies, agencies, and similar organizations manage their own
                         applicants through our CRM, AI document review, and mock-interview tools. When an organization
                         uses Rilono Enterprise, that organization decides what end-client information to collect and
@@ -4532,7 +4605,7 @@
                 </section>
 
                 <section>
-                    <h2>14. Contact Us</h2>
+                    <h2>15. Contact Us</h2>
                     <p>If you have any questions, concerns, or requests regarding this Privacy Policy or our privacy
                         practices, please contact us at:</p>
                     <p>
@@ -4573,9 +4646,12 @@
                     <p>Rilono may provide browser-extension features (including a Chrome side-panel experience) to help
                         users complete application workflows.</p>
                     <ul>
-                        <li>Extension features rely on your signed-in Rilono session.</li>
-                        <li>Inspect Page runs only when you explicitly trigger it and is designed for read-only context
-                            capture.</li>
+                        <li>Extension features rely on your signed-in Rilono session; the extension does not request or
+                            store your password.</li>
+                        <li>Inspect Page runs only when you explicitly trigger it, requests access to the active site's
+                            origin, and is designed for read-only context capture.</li>
+                        <li>Encrypted-document context is optional and off by default. It is used only after you enable
+                            the session control while your Rilono vault is unlocked.</li>
                         <li>You remain solely responsible for all data entered, reviewed, or submitted in third-party
                             application forms and websites.</li>
                     </ul>
@@ -4585,7 +4661,8 @@
                     <h2>3. User Accounts</h2>
                     <h3>3.1 Registration</h3>
                     <ul>
-                        <li>You must be at least 13 years old to use our platform</li>
+                        <li>You must be at least 13 years old to use our platform. If you are under 18, a parent or legal
+                            guardian must consent to and supervise your use.</li>
                         <li>You must provide accurate, current, and complete information during registration</li>
                         <li>You are responsible for maintaining the confidentiality of your account credentials</li>
                         <li>You are responsible for all activities that occur under your account</li>
@@ -4638,20 +4715,19 @@
                 </section>
 
                 <section>
-                    <h2>6. Payments, Subscriptions, and Refunds</h2>
-                    <h3>6.1 Subscription Plans</h3>
-                    <p>Rilono offers free and paid "Pro" subscription plans. By selecting a paid plan, you agree to pay
-                        the fees indicated at the time of purchase. You authorize us (through our payment processors
-                        like Razorpay or Apple/Google In-App Purchase) to charge your payment method either as a
-                        one-time plan (fixed access period) or as a recurring plan until you cancel.</p>
+                    <h2>6. Payments, Paid Access, and Refunds</h2>
+                    <h3>6.1 Consumer Access</h3>
+                    <p>Rilono offers free consumer access and a paid, fixed-duration Visa Success Pass. New consumer
+                        purchases are one-time purchases, not recurring subscriptions. By purchasing a Pass, you
+                        authorize our payment processor to charge the amount displayed at checkout.</p>
 
                     <h3>6.2 Visa Success Pass (One-Time Access)</h3>
-                    <p>The Visa Success Pass is a one-time purchase that unlocks Pro features for a fixed period
+                    <p>The Visa Success Pass is a one-time purchase that unlocks premium features for a fixed period
                         (currently ₹999 for 30 days, as displayed at checkout). It is not a subscription and does not
                         auto-renew; access ends automatically when the validity period expires, after which you may
-                        purchase a new Pass. Prices and the validity period may change for future purchases, but such a
-                        change will not affect a Pass you have already bought. Pass fees are non-refundable except where
-                        required by applicable law.</p>
+                        purchase a new Pass. Feature allowances are shown at checkout and in your dashboard. Prices,
+                        validity, and allowances may change for future purchases, but a change will not affect a Pass
+                        already purchased. Pass fees are non-refundable except where required by applicable law.</p>
 
                     <h3>6.3 Rilono Credits (Enterprise)</h3>
                     <p>Rilono Enterprise organizations may prepay for "Rilono Credits," a stored-value balance used to
@@ -4664,24 +4740,28 @@
                         required by applicable law. We may change credit pricing or per-action credit costs prospectively;
                         such changes do not affect credits already purchased.</p>
 
-                    <h3>6.4 Cancellation Policy</h3>
-                    <p>You may cancel your subscription at any time through your account dashboard or App Store
-                        settings. During the current prelaunch billing phase, cancellation may take effect immediately
-                        in your account. Once recurring billing is fully enabled, cancellation will take effect at the
-                        end of your current billing cycle and you will not be charged for the following cycle.
-                        Cancellation does not apply to the one-time Visa Success Pass or to prepaid Rilono Credits, as
-                        these are not recurring charges.</p>
+                    <h3>6.4 Expiry, Legacy Subscriptions, and Enterprise Renewals</h3>
+                    <p>The consumer Visa Success Pass expires automatically and does not need to be canceled. You may
+                        purchase another Pass after expiry. Rilono no longer offers new recurring consumer plans. If
+                        your account still has a legacy recurring consumer subscription purchased under an earlier
+                        checkout model, it may renew under the terms shown when purchased until you cancel it. You can
+                        cancel its auto-renewal from Plan &amp; Billing or by contacting support; paid access normally
+                        continues through the current billing period. Rilono Credits are prepaid and do not auto-renew.
+                        If an enterprise organization purchases a separately identified recurring plan, its checkout
+                        and dashboard will state the billing cycle and cancellation process before purchase.</p>
 
                     <h3>6.5 Refund Policy</h3>
-                    <p>All fees are non-refundable. We do not offer refunds or credits for partial months of service,
-                        upgrade/downgrade refunds, refunds for unused time with an open account, refunds for an unused or
-                        partially used Visa Success Pass, or refunds for unused Rilono Credits. If you believe there
-                        has been an error in billing, please contact support within 7 days of the charge.</p>
+                    <p>Fees are generally non-refundable after digital access or credits are delivered. Exceptions apply
+                        where required by law or where Rilono confirms a duplicate, unauthorized, or incorrect charge.
+                        We do not otherwise offer refunds for unused or partially used Visa Success Pass time, unused
+                        Rilono Credits, or partial enterprise billing periods. If you believe there has been a billing
+                        error, contact support within 7 days after discovering it; this notice period does not limit
+                        rights that cannot be waived under applicable law.</p>
 
                     <h3>6.6 Delivery of Service</h3>
-                    <p>Rilono is a digital service. Access to Pro features, the Visa Success Pass, and Rilono Credits is
-                        delivered electronically to your account after successful payment verification and activation. No
-                        physical goods are shipped.</p>
+                    <p>Rilono is a digital service. Visa Success Pass access, enterprise paid features, and Rilono
+                        Credits are delivered electronically to your account after successful payment verification and
+                        activation. No physical goods are shipped.</p>
                 </section>
 
                 <section>
@@ -4711,11 +4791,11 @@
                         advice it gives you and for holding any licence its jurisdiction requires.</p>
 
                     <h3>7.4 Data Handling for AI Responses</h3>
-                    <p>To provide personalized results, Rilono may process your basic profile data and document-related
-                        data with third-party AI services (including Gemini AI) solely for generating responses tailored
-                        to your case. Uploaded original files are stored with encryption controls. Rilono does not use
-                        your personal data or document content to train Rilono-owned AI models and does not use that
-                        data for unrelated purposes outside providing the service.</p>
+                    <p>To provide personalized results, Rilono may process relevant profile, journey, chat,
+                        user-selected document, and user-triggered inspected-page context with third-party AI services,
+                        including Google Gemini / Vertex AI. End-to-end-encrypted document text is included only after
+                        the user enables the applicable document-processing or Copilot session control. Rilono does not
+                        use personal data or document content to train Rilono-owned AI models or for unrelated purposes.</p>
                 </section>
 
                 <section>
@@ -4843,37 +4923,44 @@
 
                 <section>
                     <h2>1. General</h2>
-                    <p>All fees are non-refundable. We do not offer refunds or credits for partial months of service,
-                        upgrade/downgrade refunds, or refunds for unused time with an open account. Refunds, where
-                        granted, are issued only as required by applicable law and are returned to the original payment
-                        method. If you believe there has been an error in billing, please contact support within 7 days
-                        of the charge.</p>
+                    <p>Digital access and prepaid credits are generally non-refundable after delivery, except where a
+                        refund is required by applicable law or Rilono confirms a duplicate, unauthorized, or incorrect
+                        charge. Approved monetary refunds are returned to the original payment method where possible.</p>
                 </section>
 
                 <section>
-                    <h2>2. Pro Subscriptions</h2>
-                    <p>Paid "Pro" plan fees are non-refundable. You may cancel at any time to stop future charges and
-                        will retain access until the end of the period already paid for. We do not refund the current or
-                        any past billing period.</p>
+                    <h2>2. Visa Success Pass</h2>
+                    <p>The Visa Success Pass is a one-time purchase that grants fixed-duration access (currently ₹999
+                        for 30 days, as displayed at checkout). Because access is delivered immediately and does not
+                        auto-renew, Pass fees are non-refundable for unused or partially used time except where required
+                        by law.</p>
                 </section>
 
                 <section>
-                    <h2>3. Visa Success Pass</h2>
-                    <p>The Visa Success Pass is a one-time purchase that grants a fixed period of access (currently ₹999
-                        for 30 days). Because access is delivered immediately upon payment, Pass fees are non-refundable —
-                        including for an unused or partially used Pass — except where a refund is required by applicable
-                        law.</p>
+                    <h2>3. Legacy Consumer Subscriptions</h2>
+                    <p>Rilono no longer sells new recurring consumer subscriptions. A legacy recurring subscription may
+                        continue until canceled under its original checkout terms. Canceling stops future renewals and
+                        normally leaves access active through the paid billing period. Charges already processed are
+                        generally non-refundable except where required by law or where Rilono confirms a duplicate,
+                        unauthorized, or incorrect charge.</p>
                 </section>
 
                 <section>
-                    <h2>4. Rilono Credits (Enterprise)</h2>
-                    <p>Prepaid Rilono Credits, including any promotional or bonus credits, are non-refundable and have no
-                        cash value. Unused credits cannot be exchanged for money or transferred between accounts, except
-                        where a refund is required by applicable law.</p>
+                    <h2>4. Enterprise Plans and Credits</h2>
+                    <p>Enterprise plan charges and prepaid Rilono Credits are non-refundable after activation or credit
+                        delivery except where required by law or expressly stated in an enterprise order form. Credits,
+                        including promotional credits, have no cash value and cannot be exchanged for cash.</p>
                 </section>
 
                 <section>
-                    <h2>5. Contact</h2>
+                    <h2>5. Billing Errors</h2>
+                    <p>Contact support within 7 days after discovering a billing error and include the payment reference.
+                        We will investigate and correct verified errors. This notice period does not limit rights that
+                        cannot be waived under applicable law.</p>
+                </section>
+
+                <section>
+                    <h2>6. Contact</h2>
                     <p>For billing questions, contact us at:</p>
                     <p>
                         <strong>Email:</strong> contact@rilono.com<br>
@@ -4907,8 +4994,9 @@
 
                 <section>
                     <h2>2. Delivery Timeline</h2>
-                    <p>For paid subscriptions, access to Pro features is delivered electronically to your account after
-                        successful payment authorization and verification. In most cases activation is immediate.</p>
+                    <p>The Visa Success Pass, enterprise plans, and Rilono Credits are delivered electronically after
+                        successful payment authorization and verification. Pass or plan access is normally activated
+                        immediately; purchased credits are normally added to the organization's wallet immediately.</p>
                 </section>
 
                 <section>

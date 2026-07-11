@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20260710">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -66,6 +66,9 @@
                     <button id="adminEnterpriseTabBtn" type="button" class="tab-btn" data-tab="enterprise" aria-selected="false">
                         Enterprise Accounts
                     </button>
+                    <button id="adminAnalyticsTabBtn" type="button" class="tab-btn" data-tab="analytics" aria-selected="false">
+                        Analytics &amp; Agent
+                    </button>
                     <button id="adminFinanceTabBtn" type="button" class="tab-btn" data-tab="finance" aria-selected="false">
                         Investment Analytics
                     </button>
@@ -89,55 +92,6 @@
                             <strong id="adminMetricFree">0</strong>
                         </article>
                     </div>
-
-                    <section id="adminAcquisitionCard" class="finance-chart-card" style="margin-bottom:16px;">
-                        <div class="finance-card-header">
-                            <div>
-                                <h3>Where signups come from</h3>
-                                <p>First-party traffic-source attribution (UTM tags + referrer) for new accounts.</p>
-                            </div>
-                            <span id="adminAcquisitionMeta" style="font-size:12.5px;color:#64748b;white-space:nowrap;"></span>
-                        </div>
-                        <div id="adminAcquisitionBreakdown" class="finance-breakdown-chart">
-                            <div class="table-empty">Loading traffic sources…</div>
-                        </div>
-                    </section>
-
-                    <section id="adminGrowthCard" class="finance-chart-card" style="margin-bottom:16px;">
-                        <div class="finance-card-header">
-                            <div>
-                                <h3>🎯 Conversion Agent
-                                    <span style="font-size:11px;font-weight:800;color:#6d28d9;background:rgba(124,58,237,.12);padding:2px 8px;border-radius:999px;vertical-align:middle;margin-left:6px;">INTERNAL · AI</span>
-                                </h3>
-                                <p>Which free accounts to promote the Visa Success Pass to, and how — scored on real usage, strategy by Rilono AI.</p>
-                            </div>
-                            <button id="adminGrowthRunBtn" type="button" class="primary-btn small-btn">Run analysis</button>
-                        </div>
-                        <div id="adminGrowthMeta" style="font-size:12.5px;color:#64748b;margin:2px 0 8px;"></div>
-                        <div id="adminGrowthResults">
-                            <div class="table-empty">Run the agent to see which accounts need a nudge and exactly what to send.</div>
-                        </div>
-                    </section>
-
-                    <section id="adminInsightsCard" class="finance-chart-card" style="margin-bottom:16px;">
-                        <div class="finance-card-header">
-                            <div>
-                                <h3>📊 Activation funnel &amp; approval rate</h3>
-                                <p>Where students drop off on the way to the Pass, and the visa-decision approval rate — segmented by red-flag-scan usage.</p>
-                            </div>
-                            <button id="adminInsightsRefreshBtn" type="button" class="ghost-btn small-btn">Refresh</button>
-                        </div>
-                        <div class="insights-grid">
-                            <div class="insights-col">
-                                <div class="insights-col-title">Activation funnel</div>
-                                <div id="adminFunnelBody"><div class="table-empty">Loading…</div></div>
-                            </div>
-                            <div class="insights-col">
-                                <div class="insights-col-title">Visa-decision approval rate</div>
-                                <div id="adminOutcomesBody"><div class="table-empty">Loading…</div></div>
-                            </div>
-                        </div>
-                    </section>
 
                     <form id="adminUsersFilterForm" class="filters-row">
                         <input type="text" id="adminUsersSearchInput" placeholder="Search email, username, name, university">
@@ -186,6 +140,57 @@
                         <span id="adminUsersPageInfo">Page 1 of 1</span>
                         <button id="adminUsersNextBtn" type="button" class="ghost-btn small-btn" disabled>Next</button>
                     </div>
+                </section>
+
+                <section id="adminAnalyticsTabPanel" class="tab-panel" hidden>
+                    <section id="adminAcquisitionCard" class="finance-chart-card">
+                        <div class="finance-card-header">
+                            <div>
+                                <h3>Where signups come from</h3>
+                                <p>First-party traffic-source attribution (UTM tags + referrer) for new accounts.</p>
+                            </div>
+                            <span id="adminAcquisitionMeta" style="font-size:12.5px;color:#64748b;white-space:nowrap;"></span>
+                        </div>
+                        <div id="adminAcquisitionBreakdown" class="finance-breakdown-chart">
+                            <div class="table-empty">Loading traffic sources…</div>
+                        </div>
+                    </section>
+
+                    <section id="adminInsightsCard" class="finance-chart-card">
+                        <div class="finance-card-header">
+                            <div>
+                                <h3>📊 Activation funnel &amp; approval rate</h3>
+                                <p>Where students drop off on the way to the Pass, and the visa-decision approval rate — segmented by red-flag-scan usage.</p>
+                            </div>
+                            <button id="adminInsightsRefreshBtn" type="button" class="ghost-btn small-btn">Refresh</button>
+                        </div>
+                        <div class="insights-grid">
+                            <div class="insights-col">
+                                <div class="insights-col-title">Activation funnel</div>
+                                <div id="adminFunnelBody"><div class="table-empty">Loading…</div></div>
+                            </div>
+                            <div class="insights-col">
+                                <div class="insights-col-title">Visa-decision approval rate</div>
+                                <div id="adminOutcomesBody"><div class="table-empty">Loading…</div></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="adminGrowthCard" class="finance-chart-card">
+                        <div class="finance-card-header">
+                            <div>
+                                <h3>🎯 Conversion Agent
+                                    <span style="font-size:11px;font-weight:800;color:#6d28d9;background:rgba(124,58,237,.12);padding:2px 8px;border-radius:999px;vertical-align:middle;margin-left:6px;">INTERNAL · AI</span>
+                                </h3>
+                                <p>Which free accounts to promote the Visa Success Pass to, and how — scored on real usage, strategy by Rilono AI.</p>
+                            </div>
+                            <button id="adminGrowthRunBtn" type="button" class="primary-btn small-btn">Run analysis</button>
+                        </div>
+                        <div id="adminGrowthMeta" style="font-size:12.5px;color:#64748b;margin:2px 0 8px;"></div>
+                        <div id="adminGrowthResults">
+                            <div class="table-empty">Run the agent to see which accounts need a nudge and exactly what to send.</div>
+                        </div>
+                    </section>
                 </section>
 
                 <section id="adminEnterpriseTabPanel" class="tab-panel" hidden>

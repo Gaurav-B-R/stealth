@@ -25,10 +25,10 @@ const PUBLIC_APP_ORIGIN = 'https://rilono.com';
 const RILONO_AI_PUBLIC_ERROR_MESSAGE = 'Sorry, I encountered an issue while responding. Please try again in a little while. This issue has been raised for review.';
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
-    privacy: 'June 20, 2026',
-    terms: 'July 5, 2026',
-    refund: 'June 20, 2026',
-    delivery: 'February 12, 2026',
+    privacy: 'July 10, 2026',
+    terms: 'July 10, 2026',
+    refund: 'July 10, 2026',
+    delivery: 'July 10, 2026',
     dpa: 'June 20, 2026'
 };
 const COOKIE_CONSENT_STORAGE_KEY = 'rilono_cookie_preferences_v1';
@@ -3072,6 +3072,260 @@ async function submitOnboarding() {
 }
 
 // ===========================================================================
+// ===================== SOP Studio (Application Kit) =====================
+// Personalized SOP / Motivation-letter generator: country + university + program
+// specific, grounded in the student's profile + documents, iteratively refinable.
+let _sopData = { entitlement: null, doc_name: 'Statement of Purpose', drafts: [], activeRoot: null, busy: false };
+
+const SOP_REFINE_CHIPS = [
+    'Make it more technical',
+    'Tie it more strongly to my work experience',
+    'Make the tone more formal',
+    'Shorten it toward the lower word limit',
+    'Strengthen the closing career goal',
+];
+
+function sopAuthHeaders(extra) {
+    const headers = Object.assign({}, extra || {});
+    if (authToken && authToken !== COOKIE_AUTH_SENTINEL) headers['Authorization'] = `Bearer ${authToken}`;
+    return headers;
+}
+
+function sopMarkdownToHtml(md) {
+    // Minimal, safe renderer: escape everything first, then re-introduce structure.
+    const esc = escapeHtml(String(md || ''));
+    return esc.split(/\n{2,}/).map((block) => {
+        const b = block.trim();
+        if (!b) return '';
+        if (b.startsWith('# ')) return `<h3 style="margin:0 0 4px;font-size:1.05rem">${b.slice(2)}</h3>`;
+        if (/^-{3,}$/.test(b)) return '<hr style="border:0;border-top:1px dashed var(--border-color,#e2e8f0);margin:14px 0">';
+        return `<p style="margin:0 0 12px;line-height:1.75">${b.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\n/g, '<br>')}</p>`;
+    }).join('');
+}
+
+function sopPlainText(md) {
+    return String(md || '').replace(/^# /gm, '').replace(/\*\*/g, '');
+}
+
+async function loadSopStudio() {
+    const el = document.getElementById('sopContent');
+    if (!el) return;
+    try {
+        const r = await fetch(`${API_BASE}/api/sop/status`, { headers: sopAuthHeaders(), credentials: 'include' });
+        if (!r.ok) throw new Error('status ' + r.status);
+        const data = await r.json();
+        _sopData.entitlement = data.entitlement;
+        _sopData.doc_name = data.doc_name || 'Statement of Purpose';
+        _sopData.drafts = data.drafts || [];
+        if (_sopData.activeRoot == null && _sopData.drafts.length) _sopData.activeRoot = _sopData.drafts[0].root_id;
+    } catch (e) {
+        el.innerHTML = '<div style="padding:2rem;color:var(--text-secondary,#9a9cb0)">Could not load SOP Studio. Please refresh.</div>';
+        return;
+    }
+    const title = document.getElementById('sopTabTitle');
+    if (title) title.textContent = `✍️ ${_sopData.doc_name === 'Motivationsschreiben (Letter of Motivation)' ? 'Motivation Letter Studio' : 'SOP Studio'}`;
+    const sub = document.getElementById('sopTabSubtitle');
+    if (sub) sub.textContent = `Rilono AI drafts your ${_sopData.doc_name} from your real profile and documents — then refines it with you, line by line.`;
+    renderSopStudio();
+}
+
+function sopQuotaChip() {
+    const ent = _sopData.entitlement || {};
+    if (ent.unlimited) return '<span style="font-size:12px;font-weight:700;color:#10b981">Visa Success Pass · unlimited</span>';
+    const left = Math.max(0, ent.remaining ?? 0);
+    return `<span style="font-size:12px;font-weight:700;color:${left > 0 ? '#10b981' : '#f59e0b'}">${left} free ${left === 1 ? 'action' : 'actions'} left</span>`;
+}
+
+function renderSopStudio() {
+    const el = document.getElementById('sopContent');
+    if (!el) return;
+    const docName = _sopData.doc_name;
+    const uniPrefill = escapeHtml(currentUser?.university || '');
+    const drafts = _sopData.drafts;
+    const active = drafts.find((d) => d.root_id === _sopData.activeRoot) || drafts[0] || null;
+
+    const formCard = `
+      <div class="dashboard-widget" style="margin-bottom:16px">
+        <div class="widget-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <h3>📝 New ${escapeHtml(docName)}</h3>${sopQuotaChip()}
+        </div>
+        <div class="widget-content">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div><label style="font-size:12px;font-weight:700">University *</label>
+              <input id="sopUniversity" type="text" value="${uniPrefill}" placeholder="e.g. TU Darmstadt" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px"></div>
+            <div><label style="font-size:12px;font-weight:700">Program *</label>
+              <input id="sopProgram" type="text" placeholder="e.g. M.Sc. Computer Science" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px"></div>
+            <div><label style="font-size:12px;font-weight:700">Study level</label>
+              <select id="sopLevel" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px">
+                <option value="">Select…</option><option>Bachelor's</option><option selected>Master's</option><option>PhD</option><option>Diploma / Other</option>
+              </select></div>
+            <div><label style="font-size:12px;font-weight:700">Intake</label>
+              <input id="sopIntake" type="text" placeholder="e.g. Fall 2026 / Winter Semester" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px"></div>
+          </div>
+          <div style="margin-top:12px"><label style="font-size:12px;font-weight:700">What should it emphasize? (optional)</label>
+            <textarea id="sopHighlights" rows="2" placeholder="e.g. my fintech internship, 8.4 CGPA, the ML project on fraud detection" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px"></textarea></div>
+          <div style="margin-top:12px;display:flex;align-items:center;gap:12px">
+            <button id="sopGenerateBtn" class="btn btn-primary" onclick="generateSop()">Draft my ${escapeHtml(docName.split(' (')[0])}</button>
+            <span id="sopFormMsg" style="font-size:12.5px;color:var(--text-secondary,#64748b)"></span>
+          </div>
+        </div>
+      </div>`;
+
+    let draftCard = '';
+    if (active) {
+        const versionNote = active.version > 1 ? ` · v${active.version}` : '';
+        const others = drafts.filter((d) => (d.root_id || d.id) !== (active.root_id || active.id));
+        const switcher = others.length ? `
+          <select onchange="_sopData.activeRoot=parseInt(this.value,10);renderSopStudio()" style="padding:6px 10px;border:1px solid var(--border-color,#e2e8f0);border-radius:8px;font-size:12.5px">
+            ${drafts.map((d) => `<option value="${d.root_id}" ${d.root_id === active.root_id ? 'selected' : ''}>${escapeHtml(d.university)} — ${escapeHtml(d.program)}</option>`).join('')}
+          </select>` : '';
+        draftCard = `
+          <div class="dashboard-widget">
+            <div class="widget-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <h3>📄 ${escapeHtml(active.university)} — ${escapeHtml(active.program)}${versionNote}</h3>
+              <div style="display:flex;align-items:center;gap:8px">${switcher}
+                <button class="btn btn-secondary" style="padding:6px 12px;font-size:12.5px" onclick="copySopDraft()">Copy</button>
+                <button class="btn btn-secondary" style="padding:6px 12px;font-size:12.5px" onclick="downloadSopDraft()">Download</button>
+                <button class="btn btn-secondary" style="padding:6px 12px;font-size:12.5px;color:#ef4444" onclick="deleteSopDraft()">Delete</button>
+              </div>
+            </div>
+            <div class="widget-content">
+              <div style="font-size:12px;color:var(--text-secondary,#64748b);margin-bottom:10px">${active.word_count} words · ${escapeHtml(active.doc_name)}${active.instruction ? ` · last edit: “${escapeHtml(active.instruction)}”` : ''}</div>
+              <div id="sopDraftBody" style="background:var(--card-bg,#fff);border:1px solid var(--border-color,#e2e8f0);border-radius:12px;padding:18px 20px;max-height:520px;overflow-y:auto">${sopMarkdownToHtml(active.content_md)}</div>
+              <div style="margin-top:14px">
+                <label style="font-size:12px;font-weight:700">Refine this draft</label>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+                  ${SOP_REFINE_CHIPS.map((c) => `<button class="btn btn-secondary" style="padding:5px 11px;font-size:12px;border-radius:999px" onclick="refineSop('${c.replace(/'/g, "\\'")}')">${c}</button>`).join('')}
+                </div>
+                <div style="display:flex;gap:8px">
+                  <input id="sopRefineInput" type="text" placeholder='Or type your own — e.g. "tie the second paragraph to my internship"' style="flex:1;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border-color,#e2e8f0);border-radius:10px"
+                    onkeydown="if(event.key==='Enter'){refineSop();}">
+                  <button class="btn btn-primary" onclick="refineSop()">Refine</button>
+                </div>
+                <div id="sopRefineMsg" style="font-size:12.5px;color:var(--text-secondary,#64748b);margin-top:6px"></div>
+              </div>
+            </div>
+          </div>`;
+    }
+
+    const ent = _sopData.entitlement || {};
+    const paywall = (!ent.unlimited && (ent.remaining ?? 0) <= 0) ? `
+      <div class="copilot-upgrade-prompt" style="display:block;margin-bottom:16px">
+        <p class="copilot-upgrade-title">You've used your free ${escapeHtml(docName)} actions</p>
+        <p class="copilot-upgrade-copy">Get the Visa Success Pass for unlimited drafts and refinements — polish it until it's perfect.</p>
+        <div class="visa-hub-actions copilot-upgrade-actions">
+          <button type="button" class="btn btn-primary" onclick="handleUpgradeToPro('sop_studio')">Get the Visa Success Pass</button>
+        </div>
+      </div>` : '';
+
+    el.innerHTML = paywall + formCard + draftCard;
+}
+
+async function generateSop() {
+    if (_sopData.busy) return;
+    const university = (document.getElementById('sopUniversity')?.value || '').trim();
+    const program = (document.getElementById('sopProgram')?.value || '').trim();
+    const msg = document.getElementById('sopFormMsg');
+    if (university.length < 2 || program.length < 2) {
+        if (msg) msg.textContent = 'Please fill in the university and program.';
+        return;
+    }
+    const btn = document.getElementById('sopGenerateBtn');
+    _sopData.busy = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Rilono AI is drafting… (~30s)'; }
+    try {
+        const r = await fetch(`${API_BASE}/api/sop/generate`, {
+            method: 'POST', credentials: 'include',
+            headers: sopAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({
+                university, program,
+                study_level: document.getElementById('sopLevel')?.value || null,
+                intake: (document.getElementById('sopIntake')?.value || '').trim() || null,
+                highlights: (document.getElementById('sopHighlights')?.value || '').trim() || null,
+            }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.status === 402) { _sopData.entitlement = { ...( _sopData.entitlement || {}), remaining: 0 }; renderSopStudio(); showMessage(data.detail || 'Free limit reached — unlock the Visa Success Pass.', 'error'); return; }
+        if (!r.ok) throw new Error(data.detail || 'Generation failed');
+        _sopData.entitlement = data.entitlement;
+        _sopData.drafts = [data.draft, ..._sopData.drafts.filter((d) => d.root_id !== data.draft.root_id)];
+        _sopData.activeRoot = data.draft.root_id;
+        renderSopStudio();
+        showMessage('Your draft is ready — read it, then refine it below.', 'success');
+    } catch (e) {
+        showMessage(e.message || 'Could not draft your statement. Please try again.', 'error');
+        renderSopStudio();
+    } finally {
+        _sopData.busy = false;
+    }
+}
+
+async function refineSop(preset) {
+    if (_sopData.busy) return;
+    const active = _sopData.drafts.find((d) => d.root_id === _sopData.activeRoot);
+    if (!active) return;
+    const instruction = (preset || document.getElementById('sopRefineInput')?.value || '').trim();
+    const msg = document.getElementById('sopRefineMsg');
+    if (instruction.length < 3) { if (msg) msg.textContent = 'Tell Rilono AI what to change.'; return; }
+    _sopData.busy = true;
+    if (msg) msg.textContent = `Applying: “${instruction}” … (~30s)`;
+    try {
+        const r = await fetch(`${API_BASE}/api/sop/refine`, {
+            method: 'POST', credentials: 'include',
+            headers: sopAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ root_id: active.root_id, instruction }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.status === 402) { _sopData.entitlement = { ...( _sopData.entitlement || {}), remaining: 0 }; renderSopStudio(); showMessage(data.detail || 'Free limit reached — unlock the Visa Success Pass.', 'error'); return; }
+        if (!r.ok) throw new Error(data.detail || 'Refinement failed');
+        _sopData.entitlement = data.entitlement;
+        _sopData.drafts = [data.draft, ..._sopData.drafts.filter((d) => d.root_id !== data.draft.root_id)];
+        renderSopStudio();
+        showMessage(`Updated to v${data.draft.version}.`, 'success');
+    } catch (e) {
+        showMessage(e.message || 'Could not revise the draft. Please try again.', 'error');
+        if (msg) msg.textContent = '';
+    } finally {
+        _sopData.busy = false;
+    }
+}
+
+function copySopDraft() {
+    const active = _sopData.drafts.find((d) => d.root_id === _sopData.activeRoot);
+    if (!active) return;
+    navigator.clipboard.writeText(sopPlainText(active.content_md)).then(
+        () => showMessage('Copied to clipboard.', 'success'),
+        () => showMessage('Could not copy — select the text manually.', 'error'));
+}
+
+function downloadSopDraft() {
+    const active = _sopData.drafts.find((d) => d.root_id === _sopData.activeRoot);
+    if (!active) return;
+    const blob = new Blob([sopPlainText(active.content_md)], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${active.university} - ${active.program} - ${active.doc_name}.txt`.replace(/[/\\:*?"<>|]/g, '-');
+    a.click();
+    URL.revokeObjectURL(a.href);
+}
+
+async function deleteSopDraft() {
+    const active = _sopData.drafts.find((d) => d.root_id === _sopData.activeRoot);
+    if (!active) return;
+    if (!confirm(`Delete the ${active.doc_name} for ${active.university} (all versions)?`)) return;
+    try {
+        const r = await fetch(`${API_BASE}/api/sop/drafts/${active.root_id}`, {
+            method: 'DELETE', credentials: 'include', headers: sopAuthHeaders(),
+        });
+        if (!r.ok) throw new Error('Delete failed');
+        _sopData.drafts = _sopData.drafts.filter((d) => d.root_id !== active.root_id);
+        _sopData.activeRoot = _sopData.drafts.length ? _sopData.drafts[0].root_id : null;
+        renderSopStudio();
+    } catch (e) {
+        showMessage('Could not delete the draft.', 'error');
+    }
+}
+
 // University shortlisting + AI recommendations (Phase 3)
 // ===========================================================================
 let _shortlistRecs = [];
@@ -3389,7 +3643,19 @@ function updateSettingsCountryLabel() {
     if (!el || !currentUser) return;
     const code = currentUser.destination_country_code || 'US';
     const d = COUNTRY_DISPLAY[code] || { flag: '', name: code };
+    // Country renders immediately; the visa-type label is appended once the
+    // onboarding catalog (which owns the human-readable labels) is available.
     el.textContent = ` Currently: ${d.flag} ${d.name}.`;
+    const visaKey = currentUser.visa_type_key || '';
+    if (!visaKey) return;
+    void ensureOnboardingCatalog().then((cat) => {
+        const country = ((cat && cat.countries) || []).find((c) => c.code === code);
+        const visa = country && (country.visa_types || []).find((v) => v.key === visaKey);
+        // Guard against a stale async update if the user/country changed meanwhile.
+        if (visa && currentUser && (currentUser.destination_country_code || 'US') === code) {
+            el.textContent = ` Currently: ${d.flag} ${d.name} · ${visa.label}.`;
+        }
+    });
 }
 
 async function ensureOnboardingCatalog() {
@@ -3856,11 +4122,10 @@ function updateSubscriptionUI() {
     const prepUsageEl = document.getElementById('dashboardPrepUsage');
     const mockUsageEl = document.getElementById('dashboardMockUsage');
     const sidebarUpgradeButton = document.getElementById('dashboardUpgradeButton');
-    const sidebarCancelButton = document.getElementById('dashboardCancelButton');
     const profileUpgradeButton = document.getElementById('profileSubscriptionUpgradeBtn');
-    const profileCancelButton = document.getElementById('profileSubscriptionCancelBtn');
     const profileSwitchMonthlyButton = document.getElementById('profileSubscriptionSwitchMonthlyBtn');
     const profileSwitchJourneyButton = document.getElementById('profileSubscriptionSwitchJourneyBtn');
+    const profileCancelButton = document.getElementById('profileSubscriptionCancelBtn');
     const profileSwitchHintEl = document.getElementById('profileSubscriptionSwitchHint');
     const profilePlanEl = document.getElementById('profileSubscriptionPlan');
     const profileStatusEl = document.getElementById('profileSubscriptionStatus');
@@ -3920,16 +4185,12 @@ function updateSubscriptionUI() {
             button.style.opacity = PRO_UPGRADE_ENABLED ? '1' : '0.75';
             button.style.cursor = PRO_UPGRADE_ENABLED ? 'pointer' : 'not-allowed';
         });
-        [sidebarCancelButton, profileCancelButton].filter(Boolean).forEach((button) => {
-            button.style.display = 'none';
-        });
-
         if (profilePlanEl) profilePlanEl.textContent = 'Free Plan';
         if (profileStatusEl) profileStatusEl.textContent = 'Active';
         if (profileAutoRenewEl) profileAutoRenewEl.textContent = 'N/A';
-        if (profileRenewalLabelEl) profileRenewalLabelEl.textContent = 'Next Renewal';
+        if (profileRenewalLabelEl) profileRenewalLabelEl.textContent = 'Access Until';
         if (profileRenewalValueEl) profileRenewalValueEl.textContent = '-';
-        if (profileEndsLabelEl) profileEndsLabelEl.textContent = 'Access Ends';
+        if (profileEndsLabelEl) profileEndsLabelEl.textContent = 'Plan Type';
         if (profileEndsAtEl) profileEndsAtEl.textContent = '-';
         if (profileStartedAtEl) profileStartedAtEl.textContent = '-';
         if (profileLatestPaymentEl) profileLatestPaymentEl.textContent = '-';
@@ -3951,10 +4212,11 @@ function updateSubscriptionUI() {
             // Single one-time pass now — hide the second (recurring) CTA.
             profileSwitchJourneyButton.style.display = 'none';
         }
+        if (profileCancelButton) profileCancelButton.style.display = 'none';
         if (profileSwitchHintEl) {
             profileSwitchHintEl.style.display = 'block';
             profileSwitchHintEl.textContent = PRO_UPGRADE_ENABLED
-                ? 'Pick a paid plan to unlock unlimited access.'
+                ? 'Get the one-time Visa Success Pass to unlock premium access.'
                 : 'Paid plans are currently unavailable.';
         }
         if (profileEnableEmailButton) profileEnableEmailButton.disabled = false;
@@ -3965,10 +4227,9 @@ function updateSubscriptionUI() {
     const accessSourceText = String(currentSubscription.access_source || '');
     const isJourneyPassActive = isPro && accessSourceText.toLowerCase().includes('journey pass');
     const subscriptionStatus = (currentSubscription.status || '').toLowerCase();
-    const isCancellationScheduled = subscriptionStatus === 'canceled';
-    const hasAutoRenewInfo = typeof currentSubscription.auto_renew_enabled === 'boolean';
-    const autoRenewEnabled = hasAutoRenewInfo ? Boolean(currentSubscription.auto_renew_enabled) : isPro;
-    const planLabel = isPro ? 'Visa Pass' : 'Free';
+    const isLegacyRecurring = Boolean(currentSubscription.recurring_subscription_id);
+    const autoRenewEnabled = isLegacyRecurring && currentSubscription.auto_renew_enabled === true;
+    const planLabel = isPro ? (isLegacyRecurring ? 'Legacy Pro' : 'Visa Pass') : 'Free';
     const chatUploadWindowHours = Number(currentSubscription.rilono_ai_chat_upload_window_hours) || 24;
 
     updatePricingFocusMode(isJourneyPassActive);
@@ -4014,37 +4275,35 @@ function updateSubscriptionUI() {
         );
     }
 
-    if (profilePlanEl) profilePlanEl.textContent = isPro ? 'Visa Pass' : 'Free Plan';
+    if (profilePlanEl) {
+        profilePlanEl.textContent = isPro
+            ? (isLegacyRecurring ? 'Legacy Recurring Plan' : 'Visa Success Pass')
+            : 'Free Plan';
+    }
     if (profileStatusEl) profileStatusEl.textContent = currentSubscription.status || 'active';
     if (profileAutoRenewEl) {
-        if (!isPro) {
-            profileAutoRenewEl.textContent = 'N/A';
-        } else if (hasAutoRenewInfo) {
-            profileAutoRenewEl.textContent = autoRenewEnabled ? 'Enabled' : 'Disabled';
-        } else {
-            profileAutoRenewEl.textContent = 'Unknown';
-        }
+        profileAutoRenewEl.textContent = isLegacyRecurring
+            ? (autoRenewEnabled ? 'Auto-renew on' : 'Auto-renew off')
+            : (isPro ? 'One-time' : 'N/A');
     }
     if (profileRenewalLabelEl) {
-        profileRenewalLabelEl.textContent = autoRenewEnabled ? 'Next Renewal' : 'Access Until';
+        profileRenewalLabelEl.textContent = isLegacyRecurring && autoRenewEnabled
+            ? 'Next Renewal'
+            : 'Access Until';
     }
     if (profileRenewalValueEl) {
-        const renewalDate = autoRenewEnabled
+        const relevantDate = isLegacyRecurring && autoRenewEnabled
             ? (currentSubscription.next_renewal_at || currentSubscription.ends_at)
             : currentSubscription.ends_at;
-        profileRenewalValueEl.textContent = formatSubscriptionDateTime(renewalDate);
+        profileRenewalValueEl.textContent = formatSubscriptionDateTime(relevantDate);
     }
     if (profileEndsLabelEl) {
-        profileEndsLabelEl.textContent = autoRenewEnabled ? 'Access Ends' : 'Renewal';
+        profileEndsLabelEl.textContent = 'Plan Type';
     }
     if (profileEndsAtEl) {
-        if (!isPro) {
-            profileEndsAtEl.textContent = '-';
-        } else if (autoRenewEnabled) {
-            profileEndsAtEl.textContent = 'Not scheduled (auto-renew on)';
-        } else {
-            profileEndsAtEl.textContent = isJourneyPassActive ? 'Not applicable (one-time pass)' : 'Disabled';
-        }
+        profileEndsAtEl.textContent = isLegacyRecurring
+            ? (autoRenewEnabled ? 'Legacy recurring subscription' : 'Legacy subscription (cancellation scheduled)')
+            : (isPro ? 'One-time pass (no renewal)' : '-');
     }
     let activatedAt = currentSubscription.started_at;
     if (isPro && currentSubscription.latest_payment_verified_at) {
@@ -4129,34 +4388,84 @@ function updateSubscriptionUI() {
             profileSwitchHintEl.textContent = 'The Visa Success Pass is currently unavailable.';
         } else if (!isPro) {
             profileSwitchHintEl.textContent = 'One-time ₹999 · 30 days of unlimited access. No subscription, no auto-renew.';
+        } else if (isLegacyRecurring) {
+            profileSwitchHintEl.textContent = autoRenewEnabled
+                ? 'This is a legacy recurring subscription. Cancel auto-renew below to stop future charges.'
+                : 'Legacy auto-renew is off. Access continues through the current paid period.';
         } else {
             profileSwitchHintEl.textContent = '';
             profileSwitchHintEl.style.display = 'none';
         }
     }
 
+    if (profileCancelButton) {
+        profileCancelButton.style.display = isLegacyRecurring && autoRenewEnabled ? 'inline-flex' : 'none';
+        profileCancelButton.disabled = false;
+        profileCancelButton.textContent = 'Cancel Legacy Auto-Renew';
+    }
+
     [sidebarUpgradeButton, profileUpgradeButton].filter(Boolean).forEach((button) => {
-        const canRenew = isPro
-            && !isJourneyPassActive
-            && ((hasAutoRenewInfo && !autoRenewEnabled) || isCancellationScheduled)
-            && PRO_UPGRADE_ENABLED;
-        const canUpgrade = (!isPro && PRO_UPGRADE_ENABLED) || canRenew;
+        const canUpgrade = !isPro && PRO_UPGRADE_ENABLED;
         button.disabled = !canUpgrade;
-        if (canRenew) {
-            button.textContent = 'Renew Subscription';
-        } else if (isPro) {
-            button.textContent = 'Visa Success Pass active';
+        if (isPro) {
+            button.textContent = isLegacyRecurring ? 'Legacy subscription active' : 'Visa Success Pass active';
         } else {
             button.textContent = canUpgrade ? 'Get the Visa Success Pass' : 'Coming Soon';
         }
         button.style.opacity = canUpgrade || isPro ? '0.8' : '0.75';
         button.style.cursor = canUpgrade ? 'pointer' : 'not-allowed';
     });
+}
 
-    [sidebarCancelButton, profileCancelButton].filter(Boolean).forEach((button) => {
-        const showCancel = isPro && subscriptionStatus === 'active' && autoRenewEnabled;
-        button.style.display = showCancel ? 'block' : 'none';
-    });
+async function cancelLegacyRecurringSubscription() {
+    const cancelButton = document.getElementById('profileSubscriptionCancelBtn');
+    const isCancelable = Boolean(
+        currentSubscription?.recurring_subscription_id
+        && currentSubscription?.auto_renew_enabled === true
+    );
+    if (!isCancelable) {
+        showMessage('No active recurring subscription was found.', 'error');
+        return;
+    }
+
+    const confirmed = window.confirm(
+        'Cancel legacy auto-renew? You will not be charged for another cycle, and access will continue through the current paid period.'
+    );
+    if (!confirmed) return;
+
+    if (cancelButton) {
+        cancelButton.disabled = true;
+        cancelButton.textContent = 'Canceling auto-renew...';
+    }
+
+    const headers = {};
+    if (authToken && authToken !== COOKIE_AUTH_SENTINEL) {
+        headers.Authorization = `Bearer ${authToken}`;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/subscription/cancel`, {
+            method: 'POST',
+            headers,
+            credentials: 'include'
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(data.detail || 'Could not cancel auto-renew.');
+        }
+
+        const previousSubscription = currentSubscription;
+        currentSubscription = data;
+        maybeAddSubscriptionChangeNotifications(previousSubscription, currentSubscription);
+        updateSubscriptionUI();
+        showMessage('Auto-renew canceled. Your access continues through the current paid period.', 'success');
+    } catch (error) {
+        showMessage(error instanceof Error ? error.message : 'Could not cancel auto-renew.', 'error');
+        if (cancelButton) {
+            cancelButton.disabled = false;
+            cancelButton.textContent = 'Cancel Legacy Auto-Renew';
+        }
+    }
 }
 
 function extractErrorDetailText(detail) {
@@ -4465,13 +4774,13 @@ async function handleUpgradeToPro(source = '', preferredPricingModel = PRICING_M
         }
 
         if (data.action === 'contact_support') {
-            showMessage(data.message || 'Pro billing is not available right now. Please contact support.', 'error');
+            showMessage(data.message || 'Visa Success Pass billing is not available right now. Please contact support.', 'error');
             showContact();
             return;
         }
 
         if (data.action !== 'razorpay_checkout') {
-            showMessage('Unable to start Pro checkout right now. Please try again.', 'error');
+            showMessage('Unable to start Visa Success Pass checkout right now. Please try again.', 'error');
             return;
         }
 
@@ -4482,7 +4791,7 @@ async function handleUpgradeToPro(source = '', preferredPricingModel = PRICING_M
 
         const options = {
             key: data.key_id,
-            description: data.description || 'Rilono Pro Subscription',
+            description: data.description || 'Rilono Visa Success Pass',
             handler: async function (paymentResponse) {
                 await verifyRazorpayPayment(paymentResponse, data.checkout_mode || 'order');
             },
@@ -4674,53 +4983,13 @@ async function verifyRazorpayPayment(paymentResponse, checkoutMode = 'order') {
         currentSubscription = data;
         maybeAddSubscriptionChangeNotifications(previousSubscription, currentSubscription);
         updateSubscriptionUI();
-        showMessage(isRecurringMode
-            ? 'Payment successful. Pro subscription activated with auto-renew.'
-            : 'Payment successful. Pro subscription activated.', 'success');
+        showMessage('Payment successful — your Visa Success Pass is now active.', 'success');
         if (document.getElementById('pricingSection')?.style.display === 'block') {
             showPricing(true);
         }
     } catch (error) {
         console.error('Razorpay payment verification failed:', error);
         showMessage('Payment was received but verification failed. Please contact support.', 'error');
-    }
-}
-
-async function handleCancelSubscription() {
-    if (!authToken) {
-        showLogin();
-        return;
-    }
-
-    if (!currentSubscription?.is_pro) {
-        showMessage('Your account is not on Pro.', 'error');
-        return;
-    }
-
-    if (!confirm('Do you want to cancel your Pro subscription?')) {
-        return;
-    }
-
-    try {
-        const response = await fetch(`${API_BASE}/api/subscription/cancel`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${authToken}`
-            }
-        });
-        const data = await response.json();
-        if (!response.ok) {
-            showMessage(data.detail || 'Failed to cancel subscription.', 'error');
-            return;
-        }
-        const previousSubscription = currentSubscription;
-        currentSubscription = data;
-        maybeAddSubscriptionChangeNotifications(previousSubscription, currentSubscription);
-        updateSubscriptionUI();
-        showMessage('Auto-renew cancel request submitted. Your Pro access remains active until current cycle end.', 'success');
-    } catch (error) {
-        console.error('Subscription cancellation failed:', error);
-        showMessage('Failed to cancel subscription. Please try again.', 'error');
     }
 }
 
@@ -6928,6 +7197,21 @@ function setVisaSubNavVisibility(isVisible) {
     }
 }
 
+// Universities sub-panel (Shortlist & Recommendations / SOP Studio) — mirrors the
+// visa interviews sub-nav so the main sidebar stays uncluttered.
+function setUniSubNavVisibility(isVisible) {
+    const subNav = document.getElementById('uniSubNav');
+    const isMobileDashboardNav = window.matchMedia(`(max-width: ${MOBILE_NAV_BREAKPOINT}px)`).matches;
+    const showInlineSubNav = isVisible && !isMobileDashboardNav;
+    if (subNav) {
+        subNav.style.display = showInlineSubNav ? 'grid' : 'none';
+    }
+    const uniNavItem = document.querySelector('.nav-item[data-tab="universities"]');
+    if (uniNavItem) {
+        uniNavItem.classList.toggle('expanded', showInlineSubNav);
+    }
+}
+
 function toggleVisaDashboardNav() {
     const visaTab = document.getElementById('dashboardTab-visa');
     const subNav = document.getElementById('visaSubNav');
@@ -7325,8 +7609,17 @@ function switchDashboardTab(tabName) {
     if (navItem) {
         navItem.classList.add('active');
     }
+    // SOP Studio lives under the Universities parent (no nav item of its own).
+    if (tabName === 'sop') {
+        const uniNav = document.querySelector('.nav-item[data-tab="universities"]');
+        if (uniNav) uniNav.classList.add('active');
+    }
 
     setVisaSubNavVisibility(tabName === 'visa');
+    setUniSubNavVisibility(tabName === 'universities' || tabName === 'sop');
+    document.querySelectorAll('#uniSubNav .visa-subnav-item').forEach((item) => {
+        item.classList.toggle('active', item.dataset.uniSubtab === tabName);
+    });
 
     // Load data for specific tabs
     if (tabName === 'documents') {
@@ -7349,6 +7642,8 @@ function switchDashboardTab(tabName) {
         initializeRilonoAiChat();
     } else if (tabName === 'universities') {
         loadUniversityShortlist();
+    } else if (tabName === 'sop') {
+        loadSopStudio();
     } else if (tabName === 'news') {
         loadF1VisaNews();
     } else if (tabName === 'admin') {
@@ -11540,6 +11835,15 @@ function initializeYearDropdown() {
 }
 
 function loadDocumentationPreferences() {
+    // The journey destination is authoritative; local preferences may be stale after
+    // the user changes countries during onboarding or from the profile dashboard.
+    const countryInput = document.getElementById('documentationCountry');
+    const destinationCode = (currentUser && currentUser.destination_country_code) || '';
+    const destinationName = (COUNTRY_DISPLAY[destinationCode] || {}).name || '';
+    if (countryInput && destinationName) {
+        countryInput.value = destinationName;
+    }
+
     // Load saved preferences from localStorage
     const savedPreferences = localStorage.getItem('documentationPreferences');
     if (savedPreferences) {

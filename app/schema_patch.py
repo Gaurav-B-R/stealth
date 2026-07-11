@@ -1356,6 +1356,46 @@ def ensure_university_shortlist_table():
             conn.execute(text(stmt))
 
 
+def ensure_sop_feature_schema():
+    """Application Kit — SOP/Motivation-letter generator: drafts table + freemium counter."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        sub_columns = _get_table_columns(conn, "subscriptions")
+        if "sop_generations_used" not in sub_columns:
+            conn.execute(text("ALTER TABLE subscriptions ADD COLUMN sop_generations_used INTEGER NOT NULL DEFAULT 0"))
+
+        if not _table_exists(conn, "sop_drafts"):
+            conn.execute(text(f"""
+                CREATE TABLE sop_drafts (
+                    id {pk},
+                    user_id INTEGER NOT NULL,
+                    root_id INTEGER,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    country_code VARCHAR,
+                    visa_type_key VARCHAR,
+                    university VARCHAR NOT NULL,
+                    program VARCHAR NOT NULL,
+                    study_level VARCHAR,
+                    intake VARCHAR,
+                    highlights TEXT,
+                    instruction TEXT,
+                    content_md TEXT NOT NULL,
+                    word_count INTEGER NOT NULL DEFAULT 0,
+                    model_used VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_sop_drafts_user_id ON sop_drafts(user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_sop_drafts_root_id ON sop_drafts(root_id)",
+            "CREATE INDEX IF NOT EXISTS ix_sop_drafts_user_root_version ON sop_drafts(user_id, root_id, version)",
+        ):
+            conn.execute(text(stmt))
+
+
 def ensure_ai_optimization_events_table():
     """Ensure the ai_optimization_events table exists (Part 3 cost-optimization metrics)."""
     is_sqlite = engine.dialect.name == "sqlite"

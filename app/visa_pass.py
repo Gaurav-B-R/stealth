@@ -48,6 +48,9 @@ PASS_PRICING_MODEL = "visa_pass"  # stored on SubscriptionPayment.pricing_model
 FREE_RED_FLAG_SCANS = int(os.getenv("VISA_PASS_FREE_RED_FLAG", "1") or "1")
 PASS_VOICE_INTERVIEWS = int(os.getenv("VISA_PASS_VOICE_INTERVIEWS", "3") or "3")
 FREE_UNIVERSITY_RECOMMENDATIONS = int(os.getenv("VISA_PASS_FREE_UNIVERSITY_RECS", "1") or "1")
+# SOP generator (Application Kit): generate + each refinement share one counter, so the
+# free tier tastes the iterative loop (1 draft + 2 edits) before hitting the paywall.
+FREE_SOP_GENERATIONS = int(os.getenv("VISA_PASS_FREE_SOP", "3") or "3")
 
 # Hard-paywall when the free quota is exhausted (the whole point of the model).
 ENFORCE = os.getenv("VISA_PASS_ENFORCE", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -79,6 +82,13 @@ FEATURES = {
         "label": "AI University Shortlist",
         "counter": "university_recommendations_used",
         "free_limit": FREE_UNIVERSITY_RECOMMENDATIONS,
+        "pass_limit": UNLIMITED,
+    },
+    "sop_generator": {
+        "key": "sop_generator",
+        "label": "AI SOP / Motivation-letter generator",
+        "counter": "sop_generations_used",
+        "free_limit": FREE_SOP_GENERATIONS,
         "pass_limit": UNLIMITED,
     },
 }

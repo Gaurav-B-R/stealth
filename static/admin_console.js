@@ -59,9 +59,11 @@ const refs = {
     verifyProtectionBtn: document.getElementById('adminVerifyProtectionBtn'),
     usersTabBtn: document.getElementById('adminUsersTabBtn'),
     enterpriseTabBtn: document.getElementById('adminEnterpriseTabBtn'),
+    analyticsTabBtn: document.getElementById('adminAnalyticsTabBtn'),
     financeTabBtn: document.getElementById('adminFinanceTabBtn'),
     usersTabPanel: document.getElementById('adminUsersTabPanel'),
     enterpriseTabPanel: document.getElementById('adminEnterpriseTabPanel'),
+    analyticsTabPanel: document.getElementById('adminAnalyticsTabPanel'),
     financeTabPanel: document.getElementById('adminFinanceTabPanel'),
     turnstileWrap: document.getElementById('adminTurnstileWrap'),
     turnstileHint: document.getElementById('adminTurnstileHint'),
@@ -196,6 +198,7 @@ function bindEvents() {
     refs.verifyProtectionBtn?.addEventListener('click', handleProtectionVerifyClick);
     refs.usersTabBtn?.addEventListener('click', () => handleTabSwitch('users'));
     refs.enterpriseTabBtn?.addEventListener('click', () => handleTabSwitch('enterprise'));
+    refs.analyticsTabBtn?.addEventListener('click', () => handleTabSwitch('analytics'));
     refs.financeTabBtn?.addEventListener('click', () => handleTabSwitch('finance'));
     refs.aiTabBtn?.addEventListener('click', () => handleTabSwitch('ai'));
     refs.usersForm?.addEventListener('submit', handleUserFiltersSubmit);
@@ -284,6 +287,7 @@ function showConsole() {
 function renderActiveTab() {
     const isUsersTab = state.activeTab === 'users';
     const isEnterpriseTab = state.activeTab === 'enterprise';
+    const isAnalyticsTab = state.activeTab === 'analytics';
     const isFinanceTab = state.activeTab === 'finance';
     const isAiTab = state.activeTab === 'ai';
 
@@ -295,6 +299,10 @@ function renderActiveTab() {
         refs.enterpriseTabBtn.classList.toggle('active', isEnterpriseTab);
         refs.enterpriseTabBtn.setAttribute('aria-selected', String(isEnterpriseTab));
     }
+    if (refs.analyticsTabBtn) {
+        refs.analyticsTabBtn.classList.toggle('active', isAnalyticsTab);
+        refs.analyticsTabBtn.setAttribute('aria-selected', String(isAnalyticsTab));
+    }
     if (refs.financeTabBtn) {
         refs.financeTabBtn.classList.toggle('active', isFinanceTab);
         refs.financeTabBtn.setAttribute('aria-selected', String(isFinanceTab));
@@ -304,6 +312,9 @@ function renderActiveTab() {
     }
     if (refs.enterpriseTabPanel) {
         refs.enterpriseTabPanel.hidden = !isEnterpriseTab;
+    }
+    if (refs.analyticsTabPanel) {
+        refs.analyticsTabPanel.hidden = !isAnalyticsTab;
     }
     if (refs.financeTabPanel) {
         refs.financeTabPanel.hidden = !isFinanceTab;
@@ -319,7 +330,7 @@ function renderActiveTab() {
 
 async function handleTabSwitch(tabName) {
     const normalized = String(tabName || '').trim().toLowerCase();
-    if (!['users', 'enterprise', 'finance', 'ai'].includes(normalized)) return;
+    if (!['users', 'enterprise', 'analytics', 'finance', 'ai'].includes(normalized)) return;
     if (state.activeTab === normalized) return;
 
     state.activeTab = normalized;
@@ -333,6 +344,10 @@ async function handleTabSwitch(tabName) {
 async function loadActiveTab({ resetPage = false } = {}) {
     if (state.activeTab === 'enterprise') {
         await loadEnterpriseAccounts({ resetPage });
+        return;
+    }
+    if (state.activeTab === 'analytics') {
+        await Promise.all([loadAcquisitionBreakdown(), loadGrowthInsights()]);
         return;
     }
     if (state.activeTab === 'finance') {
@@ -1345,8 +1360,6 @@ async function loadUsers({ resetPage = false } = {}) {
         renderUsersTable();
         renderUsersSummary();
         renderMetrics();
-        void loadAcquisitionBreakdown();
-        void loadGrowthInsights();
         clearFlash();
     } catch (error) {
         console.error('Failed to load users:', error);

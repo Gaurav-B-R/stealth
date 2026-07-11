@@ -206,7 +206,13 @@ SOURCE_LABELS = {
     "growth_agent_single": "Conversion Agent — single account (internal)",
     "news.f1_latest": "Visa news feed (grounded search)",
     "news.f1_interview_experiences": "Interview experiences feed (grounded search)",
-    "news.f1_ingestion": "Visa news ingestion (scheduled, grounded)",
+    "news.f1_ingestion": "Visa news ingestion (scheduled, grounded)",  # legacy (pre multi-destination)
+    "news.ingestion.us": "Visa news ingestion — US (scheduled)",
+    "news.ingestion.uk": "Visa news ingestion — UK (scheduled)",
+    "news.ingestion.ca": "Visa news ingestion — Canada (scheduled)",
+    "news.ingestion.au": "Visa news ingestion — Australia (scheduled)",
+    "news.ingestion.de": "Visa news ingestion — Germany (scheduled)",
+    "news.ingestion.ie": "Visa news ingestion — Ireland (scheduled)",
     "daily_ai_notifier": "Daily AI notifications",
 }
 

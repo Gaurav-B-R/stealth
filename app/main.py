@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e, outcomes
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e, outcomes, sop
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.services.daily_ai_notifications import (
@@ -53,6 +53,7 @@ from app.schema_patch import (
     ensure_subscription_usage_columns,
     ensure_student_journey_country_columns,
     ensure_university_shortlist_table,
+    ensure_sop_feature_schema,
     ensure_user_legal_consent_column,
     ensure_user_acquisition_columns,
     ensure_account_deletion_otp_columns,
@@ -223,6 +224,7 @@ app.include_router(enterprise.router)
 app.include_router(visa_pass.router)
 app.include_router(e2e.router)
 app.include_router(outcomes.router)
+app.include_router(sop.router)
 
 
 @app.on_event("startup")
@@ -242,6 +244,7 @@ def startup_backfill_subscriptions():
     ensure_document_catalog_columns()
     ensure_student_journey_country_columns()
     ensure_university_shortlist_table()
+    ensure_sop_feature_schema()
     ensure_enterprise_organization_columns()
     ensure_enterprise_students_table()
     ensure_enterprise_crm_tables()

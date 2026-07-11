@@ -1406,3 +1406,37 @@ body.admin-modal-open {
 .acct-empty { color: #94a3b8; font-size: 13px; padding: 6px 0; }
 .acct-reco-card { border: 1px solid rgba(124,58,237,.28); background: linear-gradient(160deg, rgba(124,58,237,.05), #fff); }
 .acct-reco-msg { margin-top: 10px; background: #f8fafc; border: 1px solid #e7e9f3; border-left: 3px solid #7c3aed; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #0f172a; }
+
+/* ============ Analytics & Agent tab ============ */
+/* Wide screens: acquisition and funnel side by side, Conversion Agent full width.
+   :not([hidden]) keeps the tab-switching `hidden` attribute working (an author
+   `display` would otherwise override it). */
+#adminAnalyticsTabPanel:not([hidden]) { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 16px; align-items: start; }
+#adminAnalyticsTabPanel #adminGrowthCard { grid-column: 1 / -1; }
+@media (max-width: 1100px) { #adminAnalyticsTabPanel:not([hidden]) { grid-template-columns: 1fr; } }
+
+/* Card headers: title/subtitle left, action (Refresh / Run analysis / meta) right. */
+#adminAnalyticsTabPanel .finance-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+#adminAnalyticsTabPanel .finance-card-header p { margin: 4px 0 0; }
+#adminAnalyticsTabPanel .finance-card-header .primary-btn,
+#adminAnalyticsTabPanel .finance-card-header .ghost-btn { flex: none; margin-top: 2px; }
+
+/* Give card bodies breathing room (insights + growth had zero padding). */
+#adminAnalyticsTabPanel .insights-grid { padding: 16px; }
+#adminAnalyticsTabPanel .insights-col { min-width: 0; }
+#adminAnalyticsTabPanel .insights-col + .insights-col { border-left: 1px solid #edf2fa; padding-left: 18px; }
+@media (max-width: 820px) {
+    #adminAnalyticsTabPanel .insights-col + .insights-col { border-left: 0; padding-left: 0; border-top: 1px solid #edf2fa; padding-top: 14px; }
+}
+#adminAnalyticsTabPanel #adminGrowthMeta { padding: 0 16px; }
+#adminAnalyticsTabPanel #adminGrowthResults { padding: 6px 16px 16px; }
+
+/* Funnel: roomier rows, clearer chips band, alert-styled drop-off note. */
+#adminAnalyticsTabPanel .funnel-row { margin-bottom: 14px; }
+#adminAnalyticsTabPanel .funnel-row-top { font-size: 13px; margin-bottom: 6px; }
+#adminAnalyticsTabPanel .funnel-bar { height: 10px; }
+#adminAnalyticsTabPanel .funnel-conv { margin-top: 14px; padding-top: 12px; border-top: 1px dashed #e2e8f0; gap: 8px; }
+#adminAnalyticsTabPanel .funnel-leak { margin-top: 12px; padding: 9px 12px; border: 1px solid rgba(245, 158, 11, .25); border-radius: 10px; }
+
+/* Center the "no data yet" states in their columns. */
+#adminAnalyticsTabPanel .insights-col .table-empty { padding: 2.2rem 1rem; font-size: 13px; line-height: 1.6; }

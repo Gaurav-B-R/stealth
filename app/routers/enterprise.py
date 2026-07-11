@@ -147,11 +147,9 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
         "iconic_place": "Niagara Falls",
         "visa_types": [
             "Study Permit",
-            "Student Direct Stream (SDS)",
         ],
         "intakes_by_visa": {
             "Study Permit": ["January", "May", "September"],
-            "Student Direct Stream (SDS)": ["January", "May", "September"],
         },
     },
     {

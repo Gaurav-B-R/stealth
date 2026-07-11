@@ -819,6 +819,7 @@ class Subscription(Base):
     red_flag_scans_used = Column(Integer, nullable=False, default=0)
     pass_voice_interviews_used = Column(Integer, nullable=False, default=0)
     university_recommendations_used = Column(Integer, nullable=False, default=0)
+    sop_generations_used = Column(Integer, nullable=False, default=0)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     ends_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -880,6 +881,38 @@ class UniversityShortlistEntry(Base):
 
     __table_args__ = (
         Index("ix_university_shortlist_user_created", "user_id", "created_at"),
+    )
+
+
+class SopDraft(Base):
+    """
+    Application Kit — AI-generated Statement of Purpose / Motivation-letter drafts.
+
+    Every generation AND refinement is stored as its own immutable row (a version);
+    versions of the same statement share root_id (= id of the first version), so the
+    UI lists the latest version per root and can show/restore full history.
+    """
+    __tablename__ = "sop_drafts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    root_id = Column(Integer, nullable=True, index=True)   # set to own id on the first version
+    version = Column(Integer, nullable=False, default=1)
+    country_code = Column(String, nullable=True)           # US | UK | CA | AU | DE (at generation time)
+    visa_type_key = Column(String, nullable=True)
+    university = Column(String, nullable=False)
+    program = Column(String, nullable=False)
+    study_level = Column(String, nullable=True)            # Bachelor's | Master's | PhD | ...
+    intake = Column(String, nullable=True)
+    highlights = Column(Text, nullable=True)               # user-provided angles to emphasize
+    instruction = Column(Text, nullable=True)              # None/"initial" or the refine instruction
+    content_md = Column(Text, nullable=False)
+    word_count = Column(Integer, nullable=False, default=0)
+    model_used = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_sop_drafts_user_root_version", "user_id", "root_id", "version"),
     )
 
 
