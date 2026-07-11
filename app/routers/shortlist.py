@@ -101,6 +101,49 @@ def list_shortlist(
     }
 
 
+@router.get("/universities")
+def search_universities(
+    q: str = "",
+    limit: int = 8,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Typeahead: universities in the student's destination country whose name matches `q`.
+
+    Backs the university autocomplete (SOP Studio, manual shortlist add). Deduplicates by
+    name (the registry keys by email domain, so one university can have several rows) and
+    surfaces prefix matches before substring matches.
+    """
+    term = (q or "").strip()
+    if len(term) < 2:
+        return {"results": []}
+    code, _ = _destination(current_user)
+    take = max(1, min(int(limit or 8), 15))
+    like = f"%{term}%"
+    rows = (
+        db.query(models.USUniversity.university_name, models.USUniversity.location)
+        .filter(
+            models.USUniversity.country_code == code,
+            models.USUniversity.university_name.ilike(like),
+        )
+        .order_by(models.USUniversity.university_name.asc())
+        .limit(take * 6)  # over-fetch so name-dedupe still fills the list
+        .all()
+    )
+    term_lc = term.lower()
+    seen: set[str] = set()
+    prefix: list[dict] = []
+    contains: list[dict] = []
+    for name, location in rows:
+        key = (name or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        bucket = prefix if key.startswith(term_lc) else contains
+        bucket.append({"name": name, "location": location})
+    return {"country_code": code, "results": (prefix + contains)[:take]}
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def add_shortlist_entry(

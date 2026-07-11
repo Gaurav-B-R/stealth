@@ -3219,6 +3219,89 @@ function renderSopStudio() {
       </div>` : '';
 
     el.innerHTML = paywall + formCard + draftCard;
+    attachUniversityAutocomplete(document.getElementById('sopUniversity'));
+}
+
+// Reusable university typeahead: as the student types, suggest universities from our
+// registry for THEIR destination country (GET /api/shortlist/universities). Used by the
+// SOP Studio form and the manual shortlist-add field.
+function _ensureUniAutocompleteStyles() {
+    if (document.getElementById('uniAcStyles')) return;
+    const s = document.createElement('style');
+    s.id = 'uniAcStyles';
+    s.textContent = `
+      .uni-ac-menu { position:absolute; left:0; right:0; top:calc(100% + 4px); z-index:60; background:var(--card-bg,#fff);
+        border:1px solid var(--border-color,#e2e8f0); border-radius:12px; box-shadow:0 18px 44px rgba(15,23,42,.16);
+        overflow:hidden; max-height:280px; overflow-y:auto; }
+      .uni-ac-item { display:flex; flex-direction:column; gap:1px; padding:9px 13px; cursor:pointer; border-bottom:1px solid rgba(148,163,184,.14); }
+      .uni-ac-item:last-child { border-bottom:0; }
+      .uni-ac-item.active, .uni-ac-item:hover { background:rgba(99,102,241,.09); }
+      .uni-ac-name { font-size:13.5px; font-weight:600; color:var(--text-primary,#0f172a); }
+      .uni-ac-loc { font-size:11.5px; color:var(--text-secondary,#64748b); }
+      .uni-ac-empty { padding:10px 13px; font-size:12.5px; color:var(--text-secondary,#94a3b8); }`;
+    document.head.appendChild(s);
+}
+
+function attachUniversityAutocomplete(input) {
+    if (!input || input._uniAcAttached) return;
+    input._uniAcAttached = true;
+    _ensureUniAutocompleteStyles();
+    const wrap = input.parentElement;
+    if (wrap && getComputedStyle(wrap).position === 'static') wrap.style.position = 'relative';
+    input.setAttribute('autocomplete', 'off');
+    let items = [], active = -1, box = null, timer = null, reqSeq = 0;
+
+    const close = () => { if (box) { box.remove(); box = null; } active = -1; };
+    const pick = (i) => {
+        if (i < 0 || i >= items.length) return;
+        input.value = items[i].name;
+        close();
+        input.dispatchEvent(new Event('change'));
+        const program = document.getElementById('sopProgram');
+        if (program && !program.value) program.focus();
+    };
+    const paint = () => {
+        if (!box) return;
+        box.innerHTML = items.map((it, i) =>
+            `<div class="uni-ac-item${i === active ? ' active' : ''}" data-i="${i}">
+               <span class="uni-ac-name">${escapeHtml(it.name)}</span>${it.location ? `<span class="uni-ac-loc">${escapeHtml(it.location)}</span>` : ''}
+             </div>`).join('');
+        box.querySelectorAll('.uni-ac-item').forEach((el) => {
+            el.addEventListener('mousedown', (e) => { e.preventDefault(); pick(parseInt(el.dataset.i, 10)); });
+        });
+    };
+    const open = () => {
+        if (!items.length) { close(); return; }
+        if (!box) { box = document.createElement('div'); box.className = 'uni-ac-menu'; (wrap || input.parentElement).appendChild(box); }
+        active = -1;
+        paint();
+    };
+    const search = async (q) => {
+        const mySeq = ++reqSeq;
+        try {
+            const r = await fetch(`${API_BASE}/api/shortlist/universities?q=${encodeURIComponent(q)}`,
+                { headers: sopAuthHeaders(), credentials: 'include' });
+            if (mySeq !== reqSeq || input.value.trim() !== q) return; // stale response
+            if (!r.ok) { close(); return; }
+            const data = await r.json();
+            items = (data && data.results) || [];
+            open();
+        } catch (e) { /* network hiccup — just don't show suggestions */ close(); }
+    };
+    input.addEventListener('input', () => {
+        const q = input.value.trim();
+        clearTimeout(timer);
+        if (q.length < 2) { close(); return; }
+        timer = setTimeout(() => search(q), 180);
+    });
+    input.addEventListener('keydown', (e) => {
+        if (!box || !items.length) return;
+        if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(items.length - 1, active + 1); paint(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(0, active - 1); paint(); }
+        else if (e.key === 'Enter') { if (active >= 0) { e.preventDefault(); pick(active); } }
+        else if (e.key === 'Escape') { close(); }
+    });
+    input.addEventListener('blur', () => setTimeout(close, 150));
 }
 
 async function generateSop() {
@@ -3437,6 +3520,7 @@ function renderUniversitiesUI() {
 
     c.innerHTML = formCard + '<div id="slRecsContainer" style="margin-top:18px"></div>' + savedCard;
     renderShortlistRecs();
+    attachUniversityAutocomplete(document.getElementById('slManualName'));
 }
 
 function renderShortlistRecs() {

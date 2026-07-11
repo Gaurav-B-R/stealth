@@ -66,6 +66,7 @@ from app.document_catalog import ensure_default_document_type_catalog
 from app.au_universities import seed_au_universities
 from app.ca_universities import seed_ca_universities
 from app.uk_universities import seed_uk_universities
+from app.de_universities import seed_de_universities
 from app.token_backfill import backfill_hashed_auth_tokens
 import os
 import re
@@ -274,6 +275,7 @@ def startup_backfill_subscriptions():
         seed_au_universities(db)
         seed_ca_universities(db)
         seed_uk_universities(db)
+        seed_de_universities(db)
         backfill_missing_subscriptions(db)
         backfill_missing_referral_codes(db)
         backfill_hashed_auth_tokens(db)
