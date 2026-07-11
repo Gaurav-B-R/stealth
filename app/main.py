@@ -721,6 +721,16 @@ async def read_enterprise_slash():
     return await read_enterprise()
 
 
+@app.get("/enterprise/{sub_path:path}")
+async def read_enterprise_spa(sub_path: str):
+    """Serve the enterprise SPA for any in-app route (e.g. /enterprise/settings,
+    /enterprise/clients, /enterprise/clients/42) so refresh, deep-links, bookmarks and
+    browser back/forward work. Marketing sub-paths (/enterprise/demo, /enterprise/contact)
+    have their own routes registered earlier and never reach here. Without this, these
+    paths fell through to the SPA catch-all and wrongly served the marketing index.html."""
+    return await read_enterprise()
+
+
 @app.get("/visa-pass")
 async def read_visa_pass():
     """Serve the standalone B2C Visa Success Pass page."""

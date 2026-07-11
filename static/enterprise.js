@@ -748,7 +748,9 @@
 
     try { state.catalog = await api("/catalog"); } catch (e) { state.catalog = { countries: [], categories: [], stages: [], priorities: [] }; }
 
-    navigate(state.view || "dashboard");
+    // Restore the view from the URL (deep-link / refresh / bookmark), replacing the
+    // history entry so we don't add a spurious one on first load.
+    applyRoute(location.pathname, { replace: true });
     refreshCalendarBadge();  // keep the overdue-reminder badge correct without needing to open Calendar
   }
 
@@ -785,13 +787,43 @@
   /* ============================================================
      NAV
      ============================================================ */
-  function navigate(view) {
+  // ---- URL routing: keep the address bar in sync with the active view so refresh,
+  // deep-links, bookmarks and browser back/forward all work inside the app. ----
+  const ROUTE_VIEWS = ["dashboard", "clients", "calendar", "ai", "team", "credits", "support", "billing", "settings"];
+  function viewToPath(view) {
+    return (view && view !== "dashboard" && ROUTE_VIEWS.includes(view)) ? ("/enterprise/" + view) : "/enterprise";
+  }
+  function parseRoute(pathname) {
+    const s = String(pathname || "");
+    const cm = /^\/enterprise\/clients\/(\d+)/i.exec(s);
+    if (cm) return { view: "clientPage", clientId: Number(cm[1]) };
+    const m = /^\/enterprise\/([a-z]+)/i.exec(s);
+    const seg = (m && m[1] || "").toLowerCase();
+    return { view: ROUTE_VIEWS.includes(seg) ? seg : "dashboard" };
+  }
+  function syncUrl(path, opts) {
+    opts = opts || {};
+    if (opts.fromPop) return; // navigation came FROM back/forward — don't push again
+    try {
+      if (opts.replace) history.replaceState({ ent: true }, "", path);
+      else if (location.pathname !== path) history.pushState({ ent: true }, "", path);
+    } catch (e) { /* history API unavailable — non-fatal */ }
+  }
+  // Route a URL into the app (used on first load and on browser back/forward).
+  function applyRoute(pathname, opts) {
+    const r = parseRoute(pathname);
+    if (r.view === "clientPage") openClient(r.clientId, opts);
+    else navigate(r.view, opts);
+  }
+
+  function navigate(view, opts) {
     state.view = view;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     $("#sidebar").classList.remove("open");
     const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
     $("#viewTitle").textContent = titles[view] || "";
     $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
+    syncUrl(viewToPath(view), opts);
     if (view === "dashboard") renderDashboard();
     else if (view === "clients") renderClients();
     else if (view === "calendar") renderCalendar();
@@ -803,6 +835,9 @@
     else if (view === "settings") renderSettings();
   }
   $$(".nav-item").forEach((b) => b.onclick = () => navigate(b.dataset.view));
+  // Browser back/forward: re-route to the URL's view without pushing a new entry.
+  // Guarded by state.me so it's inert on the auth/onboarding screens.
+  window.addEventListener("popstate", () => { if (state.me) applyRoute(location.pathname, { fromPop: true }); });
   $("#menuBtn").onclick = () => $("#sidebar").classList.toggle("open");
   $("#topAddClient").onclick = () => openClientForm(null);
   // Activate role="button" dashboard cards with keyboard (Enter / Space)
@@ -1185,7 +1220,7 @@
           <div class="field"><label>Application reference</label><input name="application_reference" value="${esc(c.application_reference || "")}"/></div>
         </details>
         ${isEdit ? "" : `<div class="field"><label>First note (optional)</label><textarea name="initial_note" placeholder="e.g. Walk-in enquiry, interested in Fall intake…"></textarea></div>`}
-        ${isEdit ? "" : `<div class="consent-field" style="display:flex;gap:8px;align-items:flex-start;margin-top:2px"><input type="checkbox" id="clientConsent" name="client_consent_confirmed" required style="width:auto;margin-top:3px"/><label for="clientConsent" style="font-size:13px;font-weight:500;line-height:1.4">This client has consented to their personal data being collected and processed through Rilono (see <a href="/dpa" target="_blank" rel="noopener">Data Processing Agreement</a>).</label></div>`}
+        ${isEdit ? "" : `<div class="consent-field" style="display:flex;gap:8px;align-items:flex-start;margin-top:2px"><input type="checkbox" id="clientConsent" name="client_consent_confirmed" style="width:auto;margin-top:3px"/><label for="clientConsent" style="font-size:13px;font-weight:500;line-height:1.4">This client has consented to their personal data being collected and processed through Rilono (see <a href="/dpa" target="_blank" rel="noopener">Data Processing Agreement</a>).</label></div>`}
         <div id="clientFormError" class="auth-error hidden"></div>
       </div>
       <div class="modal-foot">
@@ -1288,10 +1323,11 @@
     return "📄";
   }
 
-  async function openClient(id) {
+  async function openClient(id, opts) {
     state.activeClient = id;
     if (state.view !== "clientPage") state.clientReturnView = state.view || "clients";
     state.view = "clientPage";
+    syncUrl("/enterprise/clients/" + id, opts);
     $("#globalSearchBox").style.display = "none";
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === "clients"));
     const c = $("#content");
