@@ -439,6 +439,37 @@ _SPA_ROUTE_META = {
         "canonical": f"{SITE_ORIGIN}/dashboard",
         "noindex": True,
     },
+    # Transactional auth pages (reached from email links / login). Kept out of search.
+    "/forgot-password": {
+        "title": "Reset your password · Rilono",
+        "description": "Request a password reset for your Rilono account.",
+        "canonical": f"{SITE_ORIGIN}/forgot-password", "noindex": True,
+    },
+    "/reset-password": {
+        "title": "Reset your password · Rilono",
+        "description": "Set a new password for your Rilono account.",
+        "canonical": f"{SITE_ORIGIN}/reset-password", "noindex": True,
+    },
+    "/verify-email": {
+        "title": "Verify your email · Rilono",
+        "description": "Verify your email address to activate your Rilono account.",
+        "canonical": f"{SITE_ORIGIN}/verify-email", "noindex": True,
+    },
+    "/verify-university-change": {
+        "title": "Confirm your university change · Rilono",
+        "description": "Confirm the university change on your Rilono account.",
+        "canonical": f"{SITE_ORIGIN}/verify-university-change", "noindex": True,
+    },
+    "/unsubscribe-email": {
+        "title": "Email preferences · Rilono",
+        "description": "Manage your Rilono email notification preferences.",
+        "canonical": f"{SITE_ORIGIN}/unsubscribe-email", "noindex": True,
+    },
+    "/subscription": {
+        "title": "Your subscription · Rilono",
+        "description": "Manage your Rilono subscription.",
+        "canonical": f"{SITE_ORIGIN}/subscription", "noindex": True,
+    },
 }
 
 # Routes served by country-visa.html (has no canonical/OG tags of its own).
@@ -581,9 +612,18 @@ async def read_country_visa(request: Request):
 @app.get("/login")
 @app.get("/register")
 @app.get("/dashboard")
+@app.get("/forgot-password")
+@app.get("/reset-password")
+@app.get("/verify-email")
+@app.get("/verify-university-change")
+@app.get("/unsubscribe-email")
+@app.get("/subscription")
 async def read_preserved_public_spa_routes(request: Request):
-    # /dashboard is the OAuth landing + the authed home view; it must serve the SPA
-    # (us_f1_visa.html with app.js), not the marketing index.html the catch-all returns.
+    # These paths are all handled client-side by app.js (see handleRouting), so they MUST
+    # serve the SPA (us_f1_visa.html with app.js), NOT the marketing index.html the catch-all
+    # returns (index.html doesn't load app.js). /dashboard is the OAuth landing; the token
+    # flows (reset-password, verify-email, verify-university-change, unsubscribe-email) are
+    # reached via hard links in transactional emails, so a missing route silently broke them.
     return _serve_us_f1_spa(request)
 
 

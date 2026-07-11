@@ -714,8 +714,33 @@ DEEP_SCAN_MAX_DOCUMENTS = int(os.getenv("DEEP_SCAN_MAX_DOCUMENTS", "40") or "40"
 DEEP_SCAN_RECONCILE_MAX_CHARS = int(os.getenv("DEEP_SCAN_RECONCILE_MAX_CHARS", "160000") or "160000")
 
 
-def _deep_scan_model_name() -> str:
-    return _enterprise_model_candidates()[0]
+def _deep_scan_generate(system_instruction: str, prompt: str, usage_source: str, model_state: dict):
+    """Generate with enterprise model-candidate FALLBACK (mirrors the copilot loop).
+
+    Deep Scan previously pinned to `_enterprise_model_candidates()[0]` with no fallback, so a
+    single dead primary id (e.g. `gemini-3.1-pro` 404ing while only `-preview` is live) made the
+    whole feature 502. This tries each candidate in order and remembers the first that works in
+    `model_state['ok']`, so later calls in the same scan skip the dead ones. Raises RuntimeError
+    only if EVERY candidate fails (caller then 502s without charging credits).
+    """
+    genai = gemini_utils.genai
+    candidates = _enterprise_model_candidates()
+    ok = model_state.get("ok")
+    if ok:
+        candidates = [ok] + [c for c in candidates if c != ok]
+    last_error = None
+    for model_name in candidates:
+        try:
+            model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
+            response = model.generate_content(prompt)
+            model_state["ok"] = model_name
+            ai_usage.record_gemini_usage(usage_source, model_name, response)
+            return response
+        except Exception as exc:
+            last_error = exc
+            logger.warning("Deep Scan model attempt failed (%s): %s", model_name, exc)
+            continue
+    raise RuntimeError(f"Deep Scan: all model candidates failed ({last_error})")
 
 
 def _parse_json_object(text: Optional[str]):
@@ -776,22 +801,19 @@ _DEEP_SCAN_FACTS_SCHEMA = (
 )
 
 
-def _extract_document_facts(doc, model_name: str):
+def _extract_document_facts(doc, model_state: dict):
     """MAP step: extract one document's structured facts as JSON (or None on failure)."""
-    genai = gemini_utils.genai
     text = (getattr(doc, "extracted_text", None) or "").strip()[:DEEP_SCAN_EXTRACT_MAX_DOC_CHARS]
     prompt = (
         f"Return JSON with exactly these keys:\n{_DEEP_SCAN_FACTS_SCHEMA}\n\n"
         f"DOCUMENT TYPE (as labeled by the uploader): {getattr(doc, 'document_type', 'Document')}\n"
         f"DOCUMENT TEXT:\n{text}"
     )
-    model = genai.GenerativeModel(model_name, system_instruction=_DEEP_SCAN_EXTRACT_SYSTEM)
-    response = model.generate_content(prompt)
-    ai_usage.record_gemini_usage("deep_scan_extract", model_name, response)
+    response = _deep_scan_generate(_DEEP_SCAN_EXTRACT_SYSTEM, prompt, "deep_scan_extract", model_state)
     return _parse_json_object(getattr(response, "text", None))
 
 
-def _facts_for_document(doc, model_name: str) -> tuple[Optional[dict], str]:
+def _facts_for_document(doc, model_state: dict) -> tuple[Optional[dict], str]:
     """Return (facts, status). Reuses cached extraction when the source text is unchanged."""
     text = (getattr(doc, "extracted_text", None) or "").strip()
     if not text:
@@ -802,7 +824,7 @@ def _facts_for_document(doc, model_name: str) -> tuple[Optional[dict], str]:
             return json.loads(doc.deep_scan_facts), "cached"
         except Exception:
             pass
-    facts = _extract_document_facts(doc, model_name)
+    facts = _extract_document_facts(doc, model_state)
     if not isinstance(facts, dict):
         return None, "extract_failed"
     try:
@@ -844,16 +866,25 @@ def run_deep_scan_audit(
             "for text extraction before running a Deep Scan."
         )
 
-    model_name = _deep_scan_model_name()
+    # One resolved-model cache shared across every Gemini call in this scan (map + reduce),
+    # so a dead primary id (e.g. gemini-3.1-pro 404) is skipped after the first fallback.
+    model_state: dict = {}
     processed = readable[:DEEP_SCAN_MAX_DOCUMENTS]
     over_cap = max(0, len(readable) - len(processed))
     skipped_no_text = len(all_docs) - len(readable)
 
     # ---- MAP: per-document structured extraction (cached) ----
+    # A single document's extraction failing must NOT kill the whole scan — it's counted and
+    # the reconcile step still runs on the rest. Only a fully-broken model (every candidate
+    # failing, which raises in the reduce step below) 502s the request without charging credits.
     per_doc: list[dict] = []
     extraction_failures = 0
     for idx, doc in enumerate(processed, start=1):
-        facts, status = _facts_for_document(doc, model_name)
+        try:
+            facts, status = _facts_for_document(doc, model_state)
+        except Exception:
+            logger.warning("Deep Scan: extraction failed for doc idx=%s", idx, exc_info=True)
+            facts = None
         if not isinstance(facts, dict):
             extraction_failures += 1
             facts = {
@@ -876,7 +907,6 @@ def run_deep_scan_audit(
             db.rollback()
 
     # ---- REDUCE: reconcile the compact facts across ALL documents in one pass ----
-    genai = gemini_utils.genai
     eval_date = (current_date or "").strip() or datetime.utcnow().date().isoformat()
     system = (
         "You are a meticulous senior visa-documentation auditor for a study-abroad consultancy. "
@@ -908,9 +938,7 @@ Bullet list. If none, say "None".
 ## Recommended Actions
 A short prioritized checklist for the counselor."""
 
-    model = genai.GenerativeModel(model_name, system_instruction=system)
-    response = model.generate_content(f"{context_text}\n\n{question}")
-    ai_usage.record_gemini_usage("deep_scan", model_name, response)
+    response = _deep_scan_generate(system, f"{context_text}\n\n{question}", "deep_scan", model_state)
     report = (getattr(response, "text", None) or "").strip()
     if not report:
         raise RuntimeError("The Deep Scan did not return a report. Please try again.")

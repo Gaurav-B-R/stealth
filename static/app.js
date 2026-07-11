@@ -2958,6 +2958,13 @@ async function showOnboardingWizard() {
     overlay.setAttribute('aria-modal', 'true');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:11000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(5,6,15,.80);backdrop-filter:blur(6px);overflow-y:auto;';
     overlay.innerHTML = `
+      <style>
+        #onboardingOverlay summary { list-style:none; display:inline-flex; align-items:center; gap:7px; cursor:pointer; color:#4f46e5; font-size:13px; font-weight:700; padding:7px 9px; margin-left:-9px; border-radius:9px; user-select:none; transition:background .15s ease; }
+        #onboardingOverlay summary::-webkit-details-marker { display:none; }
+        #onboardingOverlay summary:hover { background:rgba(99,102,241,.09); }
+        #onboardingOverlay .onb-chev { width:13px; height:13px; flex:none; transition:transform .2s ease; }
+        #onboardingOverlay details[open] .onb-chev { transform:rotate(90deg); }
+      </style>
       <div style="width:min(560px,100%);background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.6);overflow:hidden;color:#0f172a">
         <div style="padding:26px 28px 8px">
           <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:700">Welcome to Rilono</div>
@@ -2969,7 +2976,7 @@ async function showOnboardingWizard() {
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 28px 24px">
           <span id="onbError" style="font-size:13px;color:#fb7185;min-height:18px"></span>
-          <button id="onbSubmit" disabled style="border:none;border-radius:12px;padding:12px 22px;font-size:15px;font-weight:700;color:#fff;background:linear-gradient(135deg,#6366f1,#a855f7);cursor:not-allowed;opacity:.5">Continue to dashboard</button>
+          <button id="onbSubmit" disabled style="border:none;border-radius:12px;padding:12px 24px;font-size:15px;font-weight:700;color:#94a3b8;background:#e2e8f0;cursor:not-allowed;box-shadow:none;transition:background .2s ease,box-shadow .2s ease,color .2s ease,transform .12s ease">Continue to dashboard</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -2998,7 +3005,7 @@ function renderOnboardingForm() {
         <select id="onbCountry" style="${inp}"><option value="">Select a country…</option>${countryOpts}</select></div>
       <div style="margin-bottom:14px">${lbl('Visa type <span style=\"color:#fb7185\">*</span>')}
         <select id="onbVisa" style="${inp}" disabled><option value="">Select a country first…</option></select></div>
-      <details style="margin:6px 0 4px"><summary style="cursor:pointer;color:#9aa0ff;font-size:13px;font-weight:600">+ Add more details (optional)</summary>
+      <details style="margin:6px 0 4px"><summary><svg class="onb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>Add more details <span style="color:#94a3b8;font-weight:600">(optional)</span></summary>
         <div style="margin-top:12px;display:grid;gap:12px">
           <div>${lbl('Home country')}<input id="onbHome" placeholder="e.g. India" style="${inp}"></div>
           <div>${lbl('Target university')}<input id="onbUni" placeholder="e.g. University of Toronto" style="${inp}"></div>
@@ -3012,8 +3019,13 @@ function renderOnboardingForm() {
     const updateSubmit = () => {
         const ok = Boolean(countrySel.value && visaSel.value);
         submit.disabled = !ok;
-        submit.style.opacity = ok ? '1' : '.5';
+        // Disabled → a clean solid grey (clearly "pick a country first"), not a faded
+        // gradient that reads as broken. Enabled → the vibrant gradient lights up.
         submit.style.cursor = ok ? 'pointer' : 'not-allowed';
+        submit.style.color = ok ? '#fff' : '#94a3b8';
+        submit.style.background = ok ? 'linear-gradient(135deg,#6366f1,#a855f7)' : '#e2e8f0';
+        submit.style.boxShadow = ok ? '0 10px 24px rgba(99,102,241,.35)' : 'none';
+        if (!ok) submit.style.transform = 'none';
     };
     countrySel.addEventListener('change', () => {
         const c = countries.find((x) => x.code === countrySel.value);
@@ -3030,6 +3042,8 @@ function renderOnboardingForm() {
     });
     visaSel.addEventListener('change', updateSubmit);
     submit.addEventListener('click', submitOnboarding);
+    submit.addEventListener('mouseenter', () => { if (!submit.disabled) submit.style.transform = 'translateY(-1px)'; });
+    submit.addEventListener('mouseleave', () => { submit.style.transform = 'none'; });
     updateSubmit();
 }
 
@@ -3072,6 +3086,51 @@ async function submitOnboarding() {
 }
 
 // ===========================================================================
+// ===================== AI request reliability =====================
+// AI calls (chat, prep/mock interview, SOP, university recs) can take 10-40s on the premium
+// model. Two safeguards so a slow network or backend hiccup never leaves the user staring at
+// a spinner forever, unsure whether it's working or has silently died:
+//   aiFetch()         — fetch with an abort timeout; a hang becomes a clear, catchable error
+//                       the existing per-handler catch/finally already recovers from.
+//   startAiProgress() — escalating "still working (Ns)…" text so long waits feel alive.
+const AI_FETCH_TIMEOUT_MS = 75000; // generous: only fires on a genuine hang, not a slow-but-working call
+
+async function aiFetch(url, options = {}, timeoutMs = AI_FETCH_TIMEOUT_MS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } catch (err) {
+        if (err && err.name === 'AbortError') {
+            const e = new Error('Rilono AI is taking longer than usual — please check your connection and try again.');
+            e.isTimeout = true;
+            throw e;
+        }
+        const e = new Error("Couldn't reach Rilono AI. Check your connection and try again.");
+        e.isNetwork = true;
+        throw e;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// Drives a text setter with an escalating, elapsed-time message. Returns { stop() }.
+function startAiProgress(setText, baseLabel) {
+    const started = Date.now();
+    const tick = () => {
+        const s = Math.round((Date.now() - started) / 1000);
+        let text;
+        if (s < 6) text = baseLabel;
+        else if (s < 18) text = `${baseLabel} · ${s}s`;
+        else if (s < 35) text = `Still working — almost there… ${s}s`;
+        else text = `Hang tight, Rilono AI is finishing up… ${s}s`;
+        try { setText(text); } catch (e) { /* element gone */ }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return { stop() { clearInterval(id); } };
+}
+
 // ===================== SOP Studio (Application Kit) =====================
 // Personalized SOP / Motivation-letter generator: country + university + program
 // specific, grounded in the student's profile + documents, iteratively refinable.
@@ -3315,9 +3374,10 @@ async function generateSop() {
     }
     const btn = document.getElementById('sopGenerateBtn');
     _sopData.busy = true;
-    if (btn) { btn.disabled = true; btn.textContent = 'Rilono AI is drafting… (~30s)'; }
+    if (btn) btn.disabled = true;
+    const progress = startAiProgress((t) => { if (btn) btn.textContent = t; }, 'Rilono AI is drafting your statement…');
     try {
-        const r = await fetch(`${API_BASE}/api/sop/generate`, {
+        const r = await aiFetch(`${API_BASE}/api/sop/generate`, {
             method: 'POST', credentials: 'include',
             headers: sopAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
@@ -3339,6 +3399,7 @@ async function generateSop() {
         showMessage(e.message || 'Could not draft your statement. Please try again.', 'error');
         renderSopStudio();
     } finally {
+        progress.stop();
         _sopData.busy = false;
     }
 }
@@ -3351,9 +3412,9 @@ async function refineSop(preset) {
     const msg = document.getElementById('sopRefineMsg');
     if (instruction.length < 3) { if (msg) msg.textContent = 'Tell Rilono AI what to change.'; return; }
     _sopData.busy = true;
-    if (msg) msg.textContent = `Applying: “${instruction}” … (~30s)`;
+    const progress = startAiProgress((t) => { if (msg) msg.textContent = t; }, `Applying “${instruction}”…`);
     try {
-        const r = await fetch(`${API_BASE}/api/sop/refine`, {
+        const r = await aiFetch(`${API_BASE}/api/sop/refine`, {
             method: 'POST', credentials: 'include',
             headers: sopAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ root_id: active.root_id, instruction }),
@@ -3369,6 +3430,7 @@ async function refineSop(preset) {
         showMessage(e.message || 'Could not revise the draft. Please try again.', 'error');
         if (msg) msg.textContent = '';
     } finally {
+        progress.stop();
         _sopData.busy = false;
     }
 }
@@ -3418,7 +3480,7 @@ async function shortlistFetch(path, opts) {
     opts = opts || {};
     const headers = opts.body ? { 'Content-Type': 'application/json' } : {};
     if (authToken && authToken !== COOKIE_AUTH_SENTINEL) headers['Authorization'] = `Bearer ${authToken}`;
-    const res = await fetch(`${API_BASE}/api/shortlist${path}`, {
+    const res = await aiFetch(`${API_BASE}/api/shortlist${path}`, {
         method: opts.method || 'GET',
         headers,
         credentials: 'include',
@@ -3566,7 +3628,8 @@ async function getUniversityRecommendations() {
         gpa: val('slGpa'), test_scores: val('slScores'), preferences: val('slPrefs'), max_results: 6,
     };
     if (msg) msg.textContent = '';
-    if (btn) { btn.disabled = true; btn.textContent = 'Finding universities…'; }
+    if (btn) btn.disabled = true;
+    const progress = startAiProgress((t) => { if (btn) btn.textContent = t; }, 'Finding universities…');
     try {
         const res = await shortlistFetch('/recommend', { method: 'POST', body });
         _shortlistRecs = res.universities || [];
@@ -3576,6 +3639,7 @@ async function getUniversityRecommendations() {
     } catch (e) {
         if (msg) msg.textContent = e.status === 402 ? 'Free limit reached — get the Visa Pass for unlimited.' : (e.message || 'Could not get recommendations.');
     } finally {
+        progress.stop();
         if (btn) { btn.disabled = false; btn.textContent = 'Get recommendations'; }
     }
 }
@@ -6224,7 +6288,7 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
     let shouldAutoListen = false;
 
     try {
-        const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
+        const response = await aiFetch(`${API_BASE}/api/ai-chat/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -6969,7 +7033,7 @@ async function finishVoiceMockInterview() {
     try {
         const transcript = buildVisaInterviewTranscript(state.history);
         const reportPrompt = `${visaMockReportInstruction()}\n\nInterview transcript:\n${transcript}`;
-        const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
+        const response = await aiFetch(`${API_BASE}/api/ai-chat/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -13720,7 +13784,7 @@ async function handleRilonoAiChatSubmit(e) {
         // Share decrypted E2E-document context if the vault is unlocked (metadata-only otherwise).
         await ensureE2EChatContext();
         // Call the AI chat API
-        const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
+        const response = await aiFetch(`${API_BASE}/api/ai-chat/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -14240,7 +14304,7 @@ async function handleFloatingChatSubmit(e) {
         // Share decrypted E2E-document context if the vault is unlocked (metadata-only otherwise).
         await ensureE2EChatContext();
         // Call the AI chat API
-        const response = await fetch(`${API_BASE}/api/ai-chat/chat`, {
+        const response = await aiFetch(`${API_BASE}/api/ai-chat/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

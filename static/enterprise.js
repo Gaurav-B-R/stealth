@@ -51,10 +51,23 @@
     let h = 0; for (const ch of String(seed || "x")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     return colors[h % colors.length];
   }
+  // Parse a stored date value into a Date. A DATE-ONLY string (YYYY-MM-DD) is read as
+  // LOCAL midnight, not UTC: `new Date("2026-09-15")` would otherwise be UTC midnight,
+  // and toLocaleDateString() then shifts it back a day for any viewer west of UTC (all
+  // US timezones) — the "Sep 14 vs 09/15" bug. Critical for visa dates (interview /
+  // travel / passport expiry). Full datetimes (containing "T") stay timezone-aware.
+  function parseDateValue(iso) {
+    if (!iso) return null;
+    const s = String(iso).trim();
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+    if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const d = new Date(s);
+    return isNaN(d) ? null : d;
+  }
   function fmtDate(iso) {
     if (!iso) return "—";
-    const d = new Date(iso);
-    if (isNaN(d)) return esc(iso);
+    const d = parseDateValue(iso);
+    if (!d) return esc(iso);
     return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   }
   function fmtDateTime(iso) {
@@ -66,7 +79,7 @@
   }
   function daysUntil(iso) {
     if (!iso) return null;
-    const d = new Date(iso); if (isNaN(d)) return null;
+    const d = parseDateValue(iso); if (!d) return null;
     return Math.ceil((d - new Date()) / 86400000);
   }
 
@@ -736,6 +749,7 @@
     try { state.catalog = await api("/catalog"); } catch (e) { state.catalog = { countries: [], categories: [], stages: [], priorities: [] }; }
 
     navigate(state.view || "dashboard");
+    refreshCalendarBadge();  // keep the overdue-reminder badge correct without needing to open Calendar
   }
 
   function updatePlanChip() {
@@ -749,6 +763,23 @@
     if (s && s.clients_used != null) $("#clientsBadge").textContent = s.clients_used;
     const cb = $("#creditsBadge");
     if (cb && cr && cr.balance_credits != null) cb.textContent = cr.balance_credits;
+  }
+
+  // Sidebar "Calendar" badge = count of overdue + upcoming reminders. Set here so it's correct
+  // on first dashboard load (previously it was only updated inside renderCalendar, so a fresh
+  // load showed a stale "0" until you opened the Calendar tab — hiding overdue follow-ups).
+  function setCalendarBadge(n) {
+    const cb = $("#calendarBadge");
+    if (!cb) return;
+    n = Number(n) || 0;
+    cb.textContent = n;
+    cb.style.display = n > 0 ? "" : "none";   // hide at 0 instead of showing a misleading "0"
+  }
+  async function refreshCalendarBadge() {
+    try {
+      const up = await api("/calendar/upcoming?days=21");
+      setCalendarBadge((up.overdue || []).length + (up.upcoming || []).length);
+    } catch (e) { /* best-effort; leave the badge unchanged on error */ }
   }
 
   /* ============================================================
@@ -1056,15 +1087,24 @@
     const ab = $("#addClientBtn"); if (ab) ab.onclick = () => openClientForm(null);
   }
 
+  let clientLoadSeq = 0; // guards against out-of-order client-list responses (see below)
   async function loadAndRenderClientList() {
     const wrap = $("#clientListWrap"); if (!wrap) return;
+    // Capture the query THIS request is for, so the empty-state text always matches the
+    // results shown — never a newer/older global state.filters.q.
+    const q = state.filters.q ? String(state.filters.q).trim() : "";
     const p = new URLSearchParams();
     if (state.filters.status) p.set("status_filter", state.filters.status);
     if (state.filters.category) p.set("category", state.filters.category);
     if (state.filters.country) p.set("country", state.filters.country);
-    if (state.filters.q) p.set("q", state.filters.q.trim());
+    if (q) p.set("q", q);
+    // Monotonic token: a slow fetch for a previous query must NOT repaint the list once a
+    // newer search/filter has been issued (the "shows the previous query" race).
+    const seq = ++clientLoadSeq;
     let data;
-    try { data = await api("/clients?" + p.toString()); } catch (ex) { wrap.innerHTML = errBox(ex); return; }
+    try { data = await api("/clients?" + p.toString()); }
+    catch (ex) { if (seq === clientLoadSeq) wrap.innerHTML = errBox(ex); return; }
+    if (seq !== clientLoadSeq) return; // superseded by a newer request — drop this response
     let clients = data.clients;
     const scope = state.dashScope;
     if (scope === "active") clients = clients.filter((c) => c.stage && c.stage.is_open);
@@ -1075,13 +1115,13 @@
     $("#clientsBadge").textContent = data.total_clients;
     renderClientToolbar();
 
-    const hasFilter = state.filters.q || state.filters.status || state.filters.country || state.dashScope;
+    const hasFilter = q || state.filters.status || state.filters.country || state.dashScope;
     if (!clients.length) {
-      const emptyTitle = state.filters.q ? `No clients found for “${esc(state.filters.q)}”` : (hasFilter ? "No matching clients" : "No clients yet");
-      const emptyHelp = state.filters.q ? "Try another name, email, phone, passport, visa type, country, intake, or counselor." : (hasFilter ? "Try clearing your filters." : "Add your first visa client to get started.");
+      const emptyTitle = q ? `No clients found for “${esc(q)}”` : (hasFilter ? "No matching clients" : "No clients yet");
+      const emptyHelp = q ? "Try another name, email, phone, passport, visa type, country, intake, or counselor." : (hasFilter ? "Try clearing your filters." : "Add your first visa client to get started.");
       wrap.innerHTML = `<div class="empty"><div class="emoji">🗂️</div><h3>${emptyTitle}</h3>
         <p>${emptyHelp}</p>
-        ${state.filters.q ? `<button class="btn btn-ghost" onclick="__ent.clearSearch()">Clear search</button>` : ""}
+        ${q ? `<button class="btn btn-ghost" onclick="__ent.clearSearch()">Clear search</button>` : ""}
         ${!hasFilter && state.perms.can_edit_data ? `<button class="btn btn-primary" onclick="__ent.openClientForm()">+ Add your first client</button>` : ""}</div>`;
       return;
     }
@@ -1339,7 +1379,8 @@
         ${canEdit ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
         <div class="cp-card">
           <div class="cp-card-head"><h3>Visa status</h3>${statusPill(cl.stage)}</div>
-          <div class="stage-flow">${stageStepsHtml(false)}</div>
+          <div class="stage-flow" id="ovStageFlow">${stageStepsHtml(canEdit, cl.status)}</div>
+          ${canEdit ? `<div class="cpe-hint" style="margin-top:10px">Click a stage to move ${esc(ovFirst)} instantly.</div>` : ""}
         </div>
         <div class="cp-card">
           <div class="cp-card-head"><h3>Client details</h3>${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEditInline">Edit details</button>` : ""}</div>
@@ -1362,6 +1403,16 @@
       if (ovIv) ovIv.onclick = () => { if (cl.email) openSendModal(); else { toast("Add an email to this client first.", "error"); editClient(cl.id); } };
       const editInline = $("#cpEditInline");
       if (editInline) editInline.onclick = () => { overviewEditing = true; renderOverview(); };
+      // Quick-select pipeline stage: clicking a stage on the Overview saves it immediately
+      // (setStatus PATCHes and re-renders). Only wired when the user can edit.
+      if (canEdit) {
+        $$("#ovStageFlow .stage-step[data-key]").forEach((b) => {
+          b.onclick = () => {
+            const key = b.dataset.key;
+            if (key && key !== cl.status) setStatus(cl.id, key);
+          };
+        });
+      }
     }
 
     // Inline edit of the client details, in-pane (no popup). Save writes via PATCH and
@@ -2929,8 +2980,7 @@
     (data.events || []).forEach((e) => { calEventsById[e.id] = e; (byDate[e.date] = byDate[e.date] || []).push(e); });
     (up.overdue || []).concat(up.upcoming || []).forEach((e) => { calEventsById[e.id] = e; });
 
-    const totalNext = (up.overdue || []).length + (up.upcoming || []).length;
-    const cb = $("#calendarBadge"); if (cb) cb.textContent = totalNext;
+    setCalendarBadge((up.overdue || []).length + (up.upcoming || []).length);
 
     // Build the month grid
     const dows = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

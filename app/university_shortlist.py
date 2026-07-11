@@ -35,19 +35,25 @@ def ai_available() -> bool:
 GROUNDING_ENABLED = os.getenv("UNIVERSITY_GROUNDING_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _model_name() -> str:
+def _model_candidates() -> list[str]:
+    """Full ordered list of models to try (primary first).
+
+    Recommendations must survive a single retired/unavailable model id (e.g. one that
+    now 404s) — same resilience the document-AI path already has — so we hand this whole
+    list to gemini_service._generate_content_with_fallback rather than betting on one model.
+    """
     try:
-        return gemini_service.get_model_candidates(
+        candidates = gemini_service.get_model_candidates(
             primary_env="UNIVERSITY_SHORTLIST_MODEL",
             candidates_env="UNIVERSITY_SHORTLIST_MODEL_CANDIDATES",
-        )[0]
+        )
     except Exception:
-        return os.getenv("GEMINI_MODEL", "gemini-3.1-pro")
+        candidates = []
+    return candidates or [os.getenv("GEMINI_MODEL", "gemini-3.1-pro")]
 
 
-def _model_and_name():
-    model_name = _model_name()
-    return gemini_service.build_generative_model(model_name), model_name
+def _model_name() -> str:
+    return _model_candidates()[0]
 
 
 def _grounded_generate(prompt: str, model_name: str):
@@ -213,25 +219,31 @@ def recommend_universities(
             preferences=preferences,
             max_results=max_results,
         )
-        model_name = _model_name()
+        candidates = _model_candidates()
+        model_name = candidates[0]
         grounded = False
         # Preferred path: Google-Search-grounded so QS / national rankings are current.
         grounded_result = _grounded_generate(prompt, model_name)
         if grounded_result is not None:
             text, response = grounded_result
             grounded = True
+            # The grounded path uses the google-genai SDK directly (not wrapped by
+            # build_generative_model), so its token usage must be logged manually.
+            try:
+                from app import ai_usage
+                ai_usage.record_gemini_usage("university_shortlist", model_name, response)
+            except Exception:
+                pass
         else:
-            model, model_name = _model_and_name()
-            if model is None:
-                return {"available": False, "universities": [], "message": "AI recommendation model is unavailable."}
-            response = model.generate_content(prompt)
-            text = response.text or ""
+            # Ungrounded fallback: try every configured model in order so a single
+            # retired/unavailable primary model id (a 404) doesn't kill recommendations —
+            # the same resilience the document-AI path uses. build_generative_model
+            # instruments token usage under "university_shortlist" automatically.
+            response = gemini_service._generate_content_with_fallback(
+                candidates, prompt, usage_source="university_shortlist"
+            )
+            text = (getattr(response, "text", "") or "")
 
-        try:
-            from app import ai_usage
-            ai_usage.record_gemini_usage("university_shortlist", model_name, response)
-        except Exception:
-            pass
         universities = _parse_universities(text, max_results)
         return {"available": True, "universities": universities, "model": model_name, "grounded": grounded}
     except Exception as exc:
