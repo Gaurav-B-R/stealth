@@ -33,6 +33,7 @@ from app.schema_patch import (
     ensure_enterprise_calendar_table,
     ensure_enterprise_calendar_reminder_runs_table,
     ensure_enterprise_support_requests_table,
+    ensure_enterprise_notifications_table,
     ensure_enterprise_demo_requests_table,
     ensure_enterprise_signup_otps_table,
     ensure_enterprise_coupons_table,
@@ -179,6 +180,23 @@ app.add_middleware(
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
 
+    # API responses may contain identity, notification, billing, document, or AI data.
+    # Make the safe default explicit for browsers, CDNs, and reverse proxies so a future
+    # cache rule can never reuse one account's response for another visitor.
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["CDN-Cache-Control"] = "no-store"
+        response.headers["Surrogate-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        existing_vary = {
+            item.strip()
+            for item in response.headers.get("Vary", "").split(",")
+            if item.strip()
+        }
+        existing_vary.update({"Cookie", "Authorization"})
+        response.headers["Vary"] = ", ".join(sorted(existing_vary, key=str.lower))
+
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -258,6 +276,7 @@ def startup_backfill_subscriptions():
     ensure_enterprise_calendar_table()
     ensure_enterprise_calendar_reminder_runs_table()
     ensure_enterprise_support_requests_table()
+    ensure_enterprise_notifications_table()
     ensure_enterprise_demo_requests_table()
     ensure_enterprise_signup_otps_table()
     ensure_coupon_percent_column()
@@ -692,6 +711,46 @@ async def read_uk_blog():
 async def read_germany_blog():
     """Serve the Germany student visa "how to use Rilono AI" guide (static blog; own SEO meta)."""
     page = _read_static_html("blog-germany-student-visa-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/us-f1-visa-interview-questions-and-answers")
+@app.get("/blog/us-f1-visa-interview-questions-and-answers/")
+async def read_us_f1_interview_blog():
+    """Serve the US F-1 interview questions & answers guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-us-f1-interview-questions.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/uk-student-visa-credibility-interview-questions")
+@app.get("/blog/uk-student-visa-credibility-interview-questions/")
+async def read_uk_interview_blog():
+    """Serve the UK credibility-interview questions & answers guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-uk-credibility-interview-questions.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/canada-study-permit-interview-questions")
+@app.get("/blog/canada-study-permit-interview-questions/")
+async def read_canada_interview_blog():
+    """Serve the Canada study-permit interview questions & answers guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-canada-study-permit-interview-questions.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/australia-genuine-student-interview-questions")
+@app.get("/blog/australia-genuine-student-interview-questions/")
+async def read_australia_gs_blog():
+    """Serve the Australia Genuine Student (GS) questions & answers guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-australia-gs-interview-questions.html")
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)

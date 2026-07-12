@@ -27,6 +27,7 @@ from app import enterprise_ai
 from app import enterprise_interview
 from app import ai_guardrails
 from app import enterprise_storage
+from app import enterprise_notifications as notif
 from app.utils import gemini_service
 from app.auth import (
     authenticate_user,
@@ -1395,6 +1396,88 @@ def enterprise_update_branding(
     }
 
 
+# ---------------------------------------------------------------------------
+# In-portal notifications (topbar bell)
+# ---------------------------------------------------------------------------
+
+class EnterpriseNotificationsReadRequest(BaseModel):
+    ids: Optional[list[int]] = None
+    all: bool = False
+
+
+@router.get("/notifications")
+def enterprise_notifications_list(
+    request: Request,
+    limit: int = 30,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """The signed-in member's notifications (newest first) + unread count."""
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    take = max(1, min(int(limit or 30), 50))
+    rows = (
+        db.query(models.EnterpriseNotification)
+        .filter(
+            models.EnterpriseNotification.organization_id == organization.id,
+            models.EnterpriseNotification.recipient_user_id == current_user.id,
+        )
+        .order_by(models.EnterpriseNotification.created_at.desc(), models.EnterpriseNotification.id.desc())
+        .limit(take)
+        .all()
+    )
+    unread = (
+        db.query(func.count(models.EnterpriseNotification.id))
+        .filter(
+            models.EnterpriseNotification.organization_id == organization.id,
+            models.EnterpriseNotification.recipient_user_id == current_user.id,
+            models.EnterpriseNotification.is_read.is_(False),
+        )
+        .scalar() or 0
+    )
+    member_names = _org_member_name_map(db, organization.id)
+    return {
+        "unread_count": int(unread),
+        "notifications": [
+            {
+                "id": n.id,
+                "type": n.type,
+                "title": n.title,
+                "body": n.body,
+                "actor_name": member_names.get(n.actor_user_id) if n.actor_user_id else None,
+                "reference_type": n.reference_type,
+                "reference_id": n.reference_id,
+                "is_read": bool(n.is_read),
+                "created_at": _iso(n.created_at),
+            }
+            for n in rows
+        ],
+    }
+
+
+@router.post("/notifications/read")
+def enterprise_notifications_mark_read(
+    payload: EnterpriseNotificationsReadRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Mark the given notifications (or all of them) as read for this member."""
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    q = db.query(models.EnterpriseNotification).filter(
+        models.EnterpriseNotification.organization_id == organization.id,
+        models.EnterpriseNotification.recipient_user_id == current_user.id,
+        models.EnterpriseNotification.is_read.is_(False),
+    )
+    if not payload.all:
+        ids = [int(i) for i in (payload.ids or []) if i]
+        if not ids:
+            return {"updated": 0}
+        q = q.filter(models.EnterpriseNotification.id.in_(ids))
+    updated = q.update({models.EnterpriseNotification.is_read: True}, synchronize_session=False)
+    db.commit()
+    return {"updated": int(updated)}
+
+
 @router.post("/team/users")
 def enterprise_team_add_user(
     payload: EnterpriseTeamAddUserRequest,
@@ -1485,6 +1568,13 @@ def enterprise_team_add_user(
     )
 
     db.commit()
+
+    notif.notify_org(
+        db, organization.id, type="member_added",
+        title=f"{current_user.full_name or current_user.email} added {user.full_name or target_email} to the team",
+        body=f"Role: {target_role}",
+        actor_user_id=current_user.id, reference_type="team", commit=True,
+    )
 
     portal_url = _build_enterprise_portal_url(organization.subdomain_slug, request)
     password_setup_url = (
@@ -1860,6 +1950,19 @@ def _iso(value) -> Optional[str]:
         return str(value)
 
 
+def _apply_status_change(client: models.EnterpriseClient, new_status: str) -> None:
+    """Set client.status while maintaining held_from_status: putting a case On Hold
+    remembers the stage it was held FROM (so the UI can show its real position and
+    offer one-click Resume); moving to any other stage clears the marker."""
+    old = client.status
+    if new_status == catalog.STAGE_ON_HOLD:
+        if old != catalog.STAGE_ON_HOLD:
+            client.held_from_status = old if (old in catalog.CLIENT_STAGE_KEYS and old != catalog.STAGE_ON_HOLD) else None
+    else:
+        client.held_from_status = None
+    client.status = new_status
+
+
 def _serialize_client(client: models.EnterpriseClient, member_names: dict[int, str] | None = None) -> dict:
     assigned_name = None
     if client.assigned_to_user_id and member_names is not None:
@@ -1883,6 +1986,8 @@ def _serialize_client(client: models.EnterpriseClient, member_names: dict[int, s
         "application_reference": client.application_reference,
         "status": client.status,
         "stage": _stage_brief(client.status),
+        "held_from_status": getattr(client, "held_from_status", None),
+        "held_from_stage": _stage_brief(client.held_from_status) if getattr(client, "held_from_status", None) else None,
         "priority": client.priority,
         "target_date": _iso(client.target_date),
         "assigned_to_user_id": client.assigned_to_user_id,
@@ -1938,7 +2043,7 @@ def enterprise_catalog(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _require_enterprise_membership(db=db, user=current_user, request=request)
-    return catalog.build_catalog_payload()
+    return catalog.build_catalog_payload(db=db)
 
 
 @router.get("/clients")
@@ -2149,6 +2254,13 @@ def enterprise_create_client(
     db.commit()
     db.refresh(client)
 
+    notif.notify_org(
+        db, organization.id, type="client_added",
+        title=f"{current_user.full_name or current_user.email} added client {client.full_name}",
+        body=f"{client.destination_country_name or client.destination_country_code or ''} · {client.visa_type or 'student visa'}".strip(" ·"),
+        actor_user_id=current_user.id, reference_type="client", reference_id=client.id, commit=True,
+    )
+
     member_names = _org_member_name_map(db, organization.id)
     return {
         "message": "Client added successfully.",
@@ -2210,6 +2322,7 @@ def enterprise_update_client(
     client = _get_org_client_or_404(db, organization.id, client_id)
 
     data = payload.model_dump(exclude_unset=True)
+    status_before_edit = client.status
 
     if "full_name" in data:
         full_name = (data["full_name"] or "").strip()
@@ -2247,7 +2360,7 @@ def enterprise_update_client(
     if "priority" in data:
         client.priority = catalog.normalize_priority(data["priority"])
     if "status" in data and data["status"]:
-        client.status = catalog.normalize_stage(data["status"])
+        _apply_status_change(client, catalog.normalize_stage(data["status"]))
     if "assigned_to_user_id" in data:
         new_assignee = data["assigned_to_user_id"]
         if new_assignee and not _is_active_org_member(db, organization.id, new_assignee):
@@ -2256,6 +2369,13 @@ def enterprise_update_client(
 
     db.commit()
     db.refresh(client)
+    if client.status != status_before_edit:
+        stage_label = (catalog.CLIENT_STAGE_MAP.get(client.status) or {}).get("label", client.status)
+        notif.notify_org(
+            db, organization.id, type="status_changed",
+            title=f"{current_user.full_name or current_user.email} moved {client.full_name} to {stage_label}",
+            actor_user_id=current_user.id, reference_type="client", reference_id=client.id, commit=True,
+        )
     member_names = _org_member_name_map(db, organization.id)
     return {
         "message": "Client updated.",
@@ -2279,9 +2399,17 @@ def enterprise_update_client_status(
     new_status = payload.status.strip().lower()
     if new_status not in catalog.CLIENT_STAGE_KEYS:
         raise HTTPException(status_code=400, detail="Invalid status.")
-    client.status = new_status
+    old_status = client.status
+    _apply_status_change(client, new_status)
     db.commit()
     db.refresh(client)
+    if new_status != old_status:
+        stage_label = (catalog.CLIENT_STAGE_MAP.get(new_status) or {}).get("label", new_status)
+        notif.notify_org(
+            db, organization.id, type="status_changed",
+            title=f"{current_user.full_name or current_user.email} moved {client.full_name} to {stage_label}",
+            actor_user_id=current_user.id, reference_type="client", reference_id=client.id, commit=True,
+        )
     member_names = _org_member_name_map(db, organization.id)
     return {
         "message": "Status updated.",
@@ -5091,6 +5219,14 @@ def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: 
     invite.last_completed_at = datetime.utcnow()
     db.commit()
 
+    # Tell the whole team (actor is the external student, so nobody is excluded).
+    notif.notify_org(
+        db, org.id, type="interview_completed",
+        title=f"🎤 {client.full_name} completed their mock interview",
+        body=(f"Verdict: {verdict}" if verdict else None),
+        reference_type="client", reference_id=client.id, commit=True,
+    )
+
     # Email the report to the applicant who took the interview (best-effort).
     emailed = False
     try:
@@ -5534,9 +5670,18 @@ async def public_document_request_upload(
     item.document_id = doc.id
     item.status = "received"
     item.received_at = datetime.utcnow()
+    was_completed = bool(req.completed_at)
     _recompute_docreq_status(req)
     db.commit()
     db.refresh(req)
+
+    # Notify the team when the request BECOMES complete (not on every file — limited comms).
+    if req.completed_at and not was_completed:
+        notif.notify_org(
+            db, org.id, type="docs_submitted",
+            title=f"📁 {client.full_name} submitted all requested documents",
+            reference_type="client", reference_id=client.id, commit=True,
+        )
 
     # Extract text in the background so the AI copilot can read the new document.
     _start_document_text_extraction(doc.id, data, original, file.content_type)

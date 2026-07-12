@@ -770,8 +770,8 @@
                     id="aboutUsLink">About Us</a>
                 <a href="/for-enterprise" id="enterpriseLink">Enterprise</a>
                 <a href="/login" onclick="event.preventDefault(); showLogin(); return false;" id="loginLink">Login</a>
-                <a href="/register" onclick="event.preventDefault(); showRegister(); return false;"
-                    id="registerLink">Register</a>
+                <a href="/register" class="nav-cta" onclick="event.preventDefault(); showRegister(); return false;"
+                    id="registerLink">Get started</a>
                 <!-- Notification Bell -->
                 <div class="notification-container" id="notificationContainer"
                     style="display: none; position: relative;">
@@ -3171,8 +3171,11 @@
                                             <label for="profileVisaCaseStatus">Visa Status</label>
                                             <select id="profileVisaCaseStatus">
                                                 <option value="">Select status</option>
-                                                <option value="new">New</option>
-                                                <option value="refused">Refused</option>
+                                                <option value="new">New — first-time applicant</option>
+                                                <option value="pending">Application submitted — awaiting decision</option>
+                                                <option value="approved">Previously approved / renewing</option>
+                                                <option value="refused">Previously refused</option>
+                                                <option value="expired">Visa expired</option>
                                             </select>
                                         </div>
                                         <div class="form-group">
@@ -3322,9 +3325,24 @@
                                             personal details removed — see our <a href="/privacy" target="_blank"
                                                 rel="noopener" style="color: var(--primary-color);">Privacy Policy</a>.)
                                         </p>
-                                        <button type="button" onclick="handleDeleteAccount()" class="btn"
-                                            style="background: var(--danger-color); color: white; width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete
-                                            my account &amp; all my data</button>
+                                        <!-- Two-step reveal: the destructive control is collapsed by default so an
+                                             accidental click during normal navigation can never reach the delete flow.
+                                             The first (harmless, reversible) click just expands this confirmation. -->
+                                        <button type="button" id="deleteAccountRevealBtn" onclick="revealDeleteAccount()"
+                                            class="btn btn-secondary"
+                                            style="width: 100%; font-size: 0.875rem; padding: 0.5rem;">Delete my account…</button>
+                                        <div id="deleteAccountReveal" style="display: none; margin-top: 0.85rem; padding: 0.9rem 0.9rem 1rem; border: 1px solid var(--danger-color); border-radius: 12px; background: rgba(239, 68, 68, 0.05);">
+                                            <p style="margin: 0 0 0.85rem; font-size: 0.85rem; line-height: 1.55; color: var(--text-secondary);">
+                                                This is <strong style="color: var(--danger-color);">permanent and cannot be undone</strong>.
+                                                We'll email a one-time code to confirm it's really you before anything is deleted.
+                                            </p>
+                                            <div style="display: flex; gap: 0.5rem;">
+                                                <button type="button" onclick="hideDeleteAccountReveal()" class="btn btn-secondary"
+                                                    style="flex: 1; font-size: 0.85rem; padding: 0.5rem;">Cancel</button>
+                                                <button type="button" onclick="handleDeleteAccount()" class="btn"
+                                                    style="flex: 1; background: var(--danger-color); color: white; font-size: 0.85rem; padding: 0.5rem;">Yes, delete my account</button>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

@@ -446,7 +446,8 @@ def charge_action(
     if ENFORCE and int(wallet.balance_credits) < cost:
         enforce_action_or_402(db, organization_id, action_key)
     action = get_action(action_key)
-    wallet.balance_credits = int(wallet.balance_credits) - cost
+    balance_before = int(wallet.balance_credits)
+    wallet.balance_credits = balance_before - cost
     wallet.lifetime_spent_credits = int(wallet.lifetime_spent_credits) + cost
     txn = _record_transaction(
         db, wallet=wallet, txn_type="debit", credits=-cost, action_key=action_key,
@@ -456,6 +457,15 @@ def charge_action(
     if commit:
         db.commit()
         db.refresh(txn)
+    # One-time in-portal heads-up to org admins when this debit crosses the low-credit line.
+    try:
+        from app import enterprise_notifications
+        enterprise_notifications.maybe_notify_credits_low(
+            db, organization_id, balance_before, int(wallet.balance_credits))
+        if commit:
+            db.commit()
+    except Exception:
+        pass
     return txn
 
 

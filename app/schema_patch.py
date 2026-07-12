@@ -594,6 +594,7 @@ def ensure_enterprise_crm_tables():
                     intake VARCHAR,
                     application_reference VARCHAR,
                     status VARCHAR NOT NULL DEFAULT 'new_lead',
+                    held_from_status VARCHAR,
                     priority VARCHAR NOT NULL DEFAULT 'normal',
                     target_date DATE,
                     assigned_to_user_id INTEGER,
@@ -631,6 +632,9 @@ def ensure_enterprise_crm_tables():
             conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN client_consent_confirmed_at TIMESTAMP"))
         if "client_consent_confirmed_by_user_id" not in client_cols:
             conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN client_consent_confirmed_by_user_id INTEGER"))
+        # Additive: remembers the stage a case was held FROM (for one-click Resume).
+        if "held_from_status" not in client_cols:
+            conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN held_from_status VARCHAR"))
 
         # --- enterprise_client_notes ------------------------------------------
         if not _table_exists(conn, "enterprise_client_notes"):
@@ -1352,6 +1356,39 @@ def ensure_university_shortlist_table():
         for stmt in (
             "CREATE INDEX IF NOT EXISTS ix_university_shortlist_entries_user_id ON university_shortlist_entries(user_id)",
             "CREATE INDEX IF NOT EXISTS ix_university_shortlist_user_created ON university_shortlist_entries(user_id, created_at)",
+        ):
+            conn.execute(text(stmt))
+
+
+def ensure_enterprise_notifications_table():
+    """In-portal notification bell for enterprise staff (one row per recipient)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_type = "BOOLEAN" if not is_sqlite else "BOOLEAN"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_notifications"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_notifications (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    recipient_user_id INTEGER NOT NULL,
+                    actor_user_id INTEGER,
+                    type VARCHAR NOT NULL,
+                    title VARCHAR NOT NULL,
+                    body TEXT,
+                    reference_type VARCHAR,
+                    reference_id INTEGER,
+                    is_read {bool_type} NOT NULL DEFAULT FALSE,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_notifications_organization_id ON enterprise_notifications(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_notifications_recipient_user_id ON enterprise_notifications(recipient_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_notif_recipient_read ON enterprise_notifications(recipient_user_id, is_read)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_notif_org_created ON enterprise_notifications(organization_id, created_at)",
         ):
             conn.execute(text(stmt))
 

@@ -7,7 +7,7 @@
   <meta name="description" content="The all-in-one platform for visa consultancies to manage clients, track visa status, and grow." />
   <meta name="robots" content="noindex" />
   <link rel="icon" href="/static/logo.png" />
-  <link rel="stylesheet" href="/static/enterprise.css" />
+  <link rel="stylesheet" href="/static/enterprise.css?v=20260711e" />
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 <body>
@@ -265,6 +265,16 @@
           <input type="search" id="globalSearch" placeholder="Search clients…" />
           <button type="button" class="search-clear hidden" id="globalSearchClear" aria-label="Clear client search">×</button>
         </div>
+        <div class="notif-wrap">
+          <button class="notif-btn" id="notifBtn" aria-label="Notifications" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span class="notif-badge" id="notifBadge" style="display:none">0</span>
+          </button>
+          <div class="notif-panel hidden" id="notifPanel" role="menu" aria-label="Notifications">
+            <div class="notif-head"><h4>Notifications</h4><button class="link" id="notifMarkAll" type="button">Mark all read</button></div>
+            <div class="notif-list" id="notifList"><div class="notif-empty">Loading…</div></div>
+          </div>
+        </div>
         <button class="btn btn-primary btn-sm" id="topAddClient">+ Add Client</button>
       </header>
       <div class="content" id="content"><div class="center-load"><div class="spinner dark"></div></div></div>
@@ -278,6 +288,6 @@
   <div class="toast-wrap" id="toastWrap"></div>
 
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-  <script src="/static/enterprise.js"></script>
+  <script src="/static/enterprise.js?v=20260711e"></script>
 </body>
 </html>

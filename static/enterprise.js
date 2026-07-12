@@ -51,6 +51,19 @@
     let h = 0; for (const ch of String(seed || "x")) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     return colors[h % colors.length];
   }
+  const CLIENT_HERO_THEMES = Object.freeze({
+    US: { key: "us", code: "US" },
+    CA: { key: "ca", code: "CA" },
+    UK: { key: "uk", code: "UK" },
+    AU: { key: "au", code: "AU" },
+    DE: { key: "de", code: "DE" },
+    IE: { key: "ie", code: "IE" },
+  });
+  function clientHeroTheme(client) {
+    let code = String(client.destination_country_code || client.country?.code || "").trim().toUpperCase();
+    if (code === "GB") code = "UK";
+    return CLIENT_HERO_THEMES[code] || { key: "intl", code: code || "INTL" };
+  }
   // Parse a stored date value into a Date. A DATE-ONLY string (YYYY-MM-DD) is read as
   // LOCAL midnight, not UTC: `new Date("2026-09-15")` would otherwise be UTC midnight,
   // and toLocaleDateString() then shifts it back a day for any viewer west of UTC (all
@@ -237,8 +250,17 @@
     return err;
   }
 
+  // Default request timeout. Regular CRM calls are quick; long AI actions (Deep Scan,
+  // AI assistant, mock interview) pass a longer `opts.timeout`. Without this a stalled
+  // request (slow network / backend hiccup) would spin forever with no recovery.
+  const DEFAULT_API_TIMEOUT_MS = 30000;
+  const AI_API_TIMEOUT_MS = 90000;
+
   async function api(path, opts) {
     opts = opts || {};
+    const controller = new AbortController();
+    const timeoutMs = opts.timeout || DEFAULT_API_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res;
     try {
       res = await fetch(API + path, {
@@ -246,9 +268,15 @@
         credentials: "include",
         headers: opts.body ? { "Content-Type": "application/json" } : {},
         body: opts.body ? JSON.stringify(opts.body) : undefined,
+        signal: controller.signal,
       });
     } catch (_error) {
+      if (_error && _error.name === "AbortError") {
+        throw publicClientError("This is taking longer than usual. Please check your connection and try again.");
+      }
       throw publicClientError("We couldn't reach Rilono. Check your connection and try again.");
+    } finally {
+      clearTimeout(timer);
     }
     let data = null;
     try { data = await res.json(); } catch (e) { /* no body */ }
@@ -752,6 +780,8 @@
     // history entry so we don't add a spurious one on first load.
     applyRoute(location.pathname, { replace: true });
     refreshCalendarBadge();  // keep the overdue-reminder badge correct without needing to open Calendar
+    wireNotifications();
+    refreshNotifications();  // bell badge correct from first paint
   }
 
   function updatePlanChip() {
@@ -782,6 +812,114 @@
       const up = await api("/calendar/upcoming?days=21");
       setCalendarBadge((up.overdue || []).length + (up.upcoming || []).length);
     } catch (e) { /* best-effort; leave the badge unchanged on error */ }
+  }
+
+  /* ============================================================
+     NOTIFICATIONS (topbar bell)
+     ============================================================ */
+  const notifState = { items: [], unread: 0, open: false, timer: null, wired: false };
+  const NOTIF_ICONS = {
+    client_added: "👤", status_changed: "🔀", interview_completed: "🎤",
+    docs_submitted: "📁", member_added: "👥", member_removed: "👥", credits_low: "💳",
+  };
+
+  function notifAgo(iso) {
+    if (!iso) return "";
+    const then = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z").getTime();
+    const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    if (s < 7 * 86400) return Math.floor(s / 86400) + "d ago";
+    return new Date(then).toLocaleDateString();
+  }
+
+  function setNotifBadge(n) {
+    const b = $("#notifBadge");
+    if (!b) return;
+    notifState.unread = Number(n) || 0;
+    b.textContent = notifState.unread > 99 ? "99+" : notifState.unread;
+    b.style.display = notifState.unread > 0 ? "flex" : "none";
+  }
+
+  async function refreshNotifications() {
+    try {
+      const data = await api("/notifications?limit=30");
+      notifState.items = data.notifications || [];
+      setNotifBadge(data.unread_count || 0);
+      if (notifState.open) renderNotifList();
+    } catch (e) { /* best-effort */ }
+  }
+
+  function renderNotifList() {
+    const list = $("#notifList");
+    if (!list) return;
+    if (!notifState.items.length) {
+      list.innerHTML = '<div class="notif-empty">Nothing yet — team activity, completed mock interviews and document submissions will show up here.</div>';
+      return;
+    }
+    list.innerHTML = notifState.items.map((n) => `
+      <div class="notif-item ${n.is_read ? "" : "unread"}" data-nid="${n.id}" data-rt="${esc(n.reference_type || "")}" data-rid="${n.reference_id || ""}">
+        <div class="notif-ic">${NOTIF_ICONS[n.type] || "🔔"}</div>
+        <div style="flex:1;min-width:0">
+          <div class="notif-title">${esc(n.title)}</div>
+          ${n.body ? `<div class="notif-body">${esc(n.body)}</div>` : ""}
+          <div class="notif-time">${esc(notifAgo(n.created_at))}</div>
+        </div>
+        ${n.is_read ? "" : '<span class="notif-dot"></span>'}
+      </div>`).join("");
+    $$(".notif-item", list).forEach((el) => {
+      el.onclick = () => {
+        const rt = el.dataset.rt, rid = parseInt(el.dataset.rid || "0", 10);
+        closeNotifPanel();
+        if (rt === "client" && rid) openClient(rid);
+        else if (rt === "credits") navigate("credits");
+        else if (rt === "team") navigate("team");
+      };
+    });
+  }
+
+  function closeNotifPanel() {
+    notifState.open = false;
+    const p = $("#notifPanel"); if (p) p.classList.add("hidden");
+    const btn = $("#notifBtn"); if (btn) btn.setAttribute("aria-expanded", "false");
+  }
+
+  async function toggleNotifPanel() {
+    const p = $("#notifPanel");
+    if (!p) return;
+    notifState.open = !notifState.open;
+    p.classList.toggle("hidden", !notifState.open);
+    const btn = $("#notifBtn"); if (btn) btn.setAttribute("aria-expanded", String(notifState.open));
+    if (notifState.open) {
+      renderNotifList();
+      refreshNotifications();
+      // Opening the panel counts as seeing them (like GitHub/Slack) — clear the badge.
+      if (notifState.unread > 0) {
+        try { await api("/notifications/read", { method: "POST", body: { all: true } }); } catch (e) {}
+        setNotifBadge(0);
+      }
+    }
+  }
+
+  function wireNotifications() {
+    if (notifState.wired) return;
+    notifState.wired = true;
+    const btn = $("#notifBtn");
+    if (btn) btn.onclick = (e) => { e.stopPropagation(); toggleNotifPanel(); };
+    const markAll = $("#notifMarkAll");
+    if (markAll) markAll.onclick = async (e) => {
+      e.stopPropagation();
+      try { await api("/notifications/read", { method: "POST", body: { all: true } }); } catch (ex) {}
+      notifState.items.forEach((n) => n.is_read = true);
+      setNotifBadge(0);
+      renderNotifList();
+    };
+    document.addEventListener("click", (e) => {
+      if (notifState.open && !e.target.closest(".notif-wrap")) closeNotifPanel();
+    });
+    // Poll every 60s — enough to feel live without hammering the API.
+    if (!notifState.timer) notifState.timer = setInterval(refreshNotifications, 60000);
   }
 
   /* ============================================================
@@ -1343,6 +1481,7 @@
     const canEdit = state.perms.can_edit_data;
     const members = teamMembersCache || [];
     const grad = `linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})`;
+    const hero = clientHeroTheme(cl);
     const docs = data.documents || [];
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
     const dr = { request: undefined };  // secure document-request state (lazy-loaded)
@@ -1359,11 +1498,16 @@
           ${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEdit">Edit details</button>
             <button class="btn btn-danger btn-sm" id="cpDelete">Delete</button>` : ""}
         </div>
-        <div class="cp-hero" style="background:${grad}">
-          <div class="cp-avatar">${esc(cl.country.flag_emoji || initials(cl.full_name).toUpperCase())}</div>
+        <div class="cp-hero cp-hero--${hero.key}" style="--cp-hero-fallback:${grad}"
+          aria-label="${esc(cl.destination_country_name)} visa case for ${esc(cl.full_name)}">
+          <div class="cp-destination-seal" aria-hidden="true">
+            <span>Destination</span>
+            <div class="cp-seal-code"><strong>${esc(hero.code)}</strong><small>${esc(cl.country.flag_emoji || "🌐")}</small></div>
+          </div>
           <div class="cp-hmeta">
+            <div class="cp-kicker">Student visa dossier</div>
             <h1>${esc(cl.full_name)}</h1>
-            <div class="cp-hsub">${esc(cl.country.flag_emoji)} ${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}${cl.intake ? " · " + esc(cl.intake) : ""}</div>
+            <div class="cp-hsub">${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}${cl.intake ? " · " + esc(cl.intake) : ""}</div>
           </div>
           <div class="cp-hstatus">${statusPill(cl.stage)}</div>
         </div>
@@ -1406,6 +1550,90 @@
       return stages.map(btn).join("") + (onHold ? btn(onHold) : "");
     }
 
+    // Visual journey tracker (mirrors the B2C stage stepper): the linear visa pipeline as
+    // connected nodes with done / current / upcoming states, off-path Rejected & On-Hold
+    // pills, and a document-readiness line built from the client's uploaded documents.
+    function journeyTrackHtml(interactive, current, docs) {
+      const stages = (state.catalog && state.catalog.stages) || [];
+      if (!stages.length) return "";
+      const ordered = stages
+        .map((s, i) => Object.assign({}, s, { _o: s.order != null ? s.order : i + 1 }))
+        .sort((a, b) => a._o - b._o);
+      const linear = ordered.filter((s) => s._o <= 6);          // New Lead → Approved
+      const rejected = ordered.find((s) => s._o === 7);
+      const onHold = ordered.find((s) => s._o === 8);
+      const curStage = ordered.find((s) => s.key === current) || {};
+      const curOrder = curStage._o || 0;
+      const isRejected = rejected && current === rejected.key;
+      const isOnHold = onHold && current === onHold.key;
+      // On Hold keeps the client's real position (held_from_status, remembered by the
+      // backend) so the tracker shows WHERE the case is paused — and Resume restores it.
+      const heldStage = isOnHold && cl.held_from_status
+        ? ordered.find((s) => s.key === cl.held_from_status) : null;
+      const heldOrder = heldStage ? heldStage._o : 0;
+
+      const nodes = linear.map((s) => {
+        let cls;
+        if (isRejected) cls = s._o <= 5 ? "done" : "upcoming";  // reached decision, then refused
+        else if (isOnHold) {
+          if (heldOrder > 0) {
+            cls = s._o < heldOrder ? "done" : (s._o === heldOrder ? "current paused" : "upcoming");
+          } else cls = "upcoming";                              // legacy hold — position unknown
+        }
+        else if (s._o < curOrder) cls = "done";
+        else if (s._o === curOrder) cls = "current";
+        else cls = "upcoming";
+        if (s._o === 6 && cls !== "upcoming" && !isOnHold) cls += " approved"; // success node
+        const inner = cls.indexOf("paused") >= 0 ? "⏸"
+          : cls.indexOf("done") >= 0 ? "✓"
+          : (cls.indexOf("current") >= 0 && s._o === 6 ? "✓" : String(s._o));
+        const jk = interactive ? ` data-jkey="${s.key}"` : "";
+        return `<div class="jtrack-step ${cls}"${jk} title="${esc(s.label)}">
+            <div class="jtrack-node">${inner}</div>
+            <div class="jtrack-label">${esc(s.label)}</div>
+          </div>`;
+      }).join("");
+
+      const altPill = (s, active) => {
+        if (!s) return "";
+        const jk = interactive ? ` data-jkey="${s.key}"` : "";
+        const tone = s._o === 7 ? "jtrack-alt-rej" : "jtrack-alt-hold";
+        return `<button type="button" class="jtrack-alt-pill ${tone}${active ? " active" : ""}"${jk}${interactive ? "" : " disabled"}>${esc(s.label)}</button>`;
+      };
+      // One-click way OUT of On Hold: resume to the remembered stage (or restart at the
+      // first stage if the hold predates position tracking).
+      const resumeKey = isOnHold ? (heldStage ? heldStage.key : (linear[0] && linear[0].key)) : null;
+      const resumeBtn = (interactive && resumeKey)
+        ? `<button type="button" class="jtrack-resume" data-jkey="${resumeKey}">▶ Resume${heldStage ? " · " + esc(heldStage.label) : ""}</button>`
+        : "";
+
+      // State-aware helper text, directly under the tracker.
+      let hint = "";
+      if (interactive) {
+        const first = esc((cl.full_name || "the client").split(" ")[0]);
+        if (isOnHold) hint = heldStage
+          ? `${first} is on hold at “${esc(heldStage.label)}”. Click Resume to continue, or click any stage.`
+          : `${first} is on hold. Click a stage to resume the case.`;
+        else if (isRejected) hint = `This case is closed as rejected. Click any stage to reopen it.`;
+        else hint = `Click a stage to move ${first} instantly — or put the case on hold.`;
+      }
+
+      const dArr = docs || [];
+      const dTypes = [];
+      dArr.forEach((d) => { const t = d && d.document_type; if (t && dTypes.indexOf(t) < 0) dTypes.push(t); });
+      const shown = dTypes.slice(0, 6);
+      const docHtml = `<div class="jtrack-docs">
+          <span class="jtrack-docs-count">📄 ${dArr.length} document${dArr.length === 1 ? "" : "s"} on file</span>
+          ${shown.map((t) => `<span class="jtrack-docchip">${esc(t)}</span>`).join("")}
+          ${dTypes.length > 6 ? `<span class="jtrack-docchip more">+${dTypes.length - 6}</span>` : ""}
+        </div>`;
+
+      return `<div class="jtrack${isOnHold ? " jtrack-held" : ""}">${nodes}</div>
+        <div class="jtrack-alt">${altPill(rejected, isRejected)}${altPill(onHold, isOnHold)}${resumeBtn}</div>
+        ${hint ? `<div class="cpe-hint jtrack-hint">${hint}</div>` : ""}
+        ${docHtml}`;
+    }
+
     function renderOverview() {
       if (overviewEditing && canEdit) { renderOverviewEdit(); return; }
 
@@ -1414,9 +1642,8 @@
       body.innerHTML = `
         ${canEdit ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
         <div class="cp-card">
-          <div class="cp-card-head"><h3>Visa status</h3>${statusPill(cl.stage)}</div>
-          <div class="stage-flow" id="ovStageFlow">${stageStepsHtml(canEdit, cl.status)}</div>
-          ${canEdit ? `<div class="cpe-hint" style="margin-top:10px">Click a stage to move ${esc(ovFirst)} instantly.</div>` : ""}
+          <div class="cp-card-head"><h3>Visa journey</h3>${statusPill(cl.stage)}</div>
+          <div id="ovStageFlow">${journeyTrackHtml(canEdit, cl.status, docs)}</div>
         </div>
         <div class="cp-card">
           <div class="cp-card-head"><h3>Client details</h3>${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEditInline">Edit details</button>` : ""}</div>
@@ -1442,9 +1669,9 @@
       // Quick-select pipeline stage: clicking a stage on the Overview saves it immediately
       // (setStatus PATCHes and re-renders). Only wired when the user can edit.
       if (canEdit) {
-        $$("#ovStageFlow .stage-step[data-key]").forEach((b) => {
+        $$("#ovStageFlow [data-jkey]").forEach((b) => {
           b.onclick = () => {
-            const key = b.dataset.key;
+            const key = b.dataset.jkey;
             if (key && key !== cl.status) setStatus(cl.id, key);
           };
         });
@@ -1551,17 +1778,33 @@
       };
     }
 
+    // Destination-personalized document list for THIS client (US/UK/CA/AU/DE/IE each
+    // get their own detailed catalog; unknown destinations fall back to the generic list).
+    function clientDocTypes() {
+      const map = state.catalog.document_types_by_country || {};
+      const list = map[cl.destination_country_code];
+      if (list && list.length) return list;
+      return (state.catalog.document_types || []).map((t) => ({ key: t, label: t, required: false, hint: "" }));
+    }
+
     function renderDocs() {
-      const types = state.catalog.document_types || [];
       const uploader = canEdit ? `
         <div class="cp-card doc-upload">
           <div class="cp-sub-label">Upload a document</div>
           <div class="doc-up-row">
-            <select class="select-mini" id="docType">${types.map((t) => `<option value="${esc(t)}">${esc(t)}</option>`).join("")}</select>
+            <div class="docsel" id="docSel">
+              <input type="text" id="docTypeInput" class="docsel-input" autocomplete="off"
+                placeholder="Search ${esc(cl.destination_country_name || "")} document types…" />
+              <div class="docsel-menu hidden" id="docTypeMenu"></div>
+            </div>
             <input type="file" id="docFile" class="doc-file" />
             <button class="btn btn-primary btn-sm" id="docUploadBtn">Upload document</button>
+            <div id="docOtherWrap" class="docsel-other-wrap" style="display:none">
+              <input type="text" id="docOtherDetail" class="docsel-input" maxlength="70" autocomplete="off"
+                placeholder="What is this document? e.g. Police clearance certificate, Name-change affidavit…" />
+            </div>
           </div>
-          <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB</div>
+          <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB · list tailored to ${esc(cl.destination_country_name || "the destination")}</div>
         </div>` : "";
       const list = docs.length ? `<div class="doc-list">${docs.map((d) => `
         <div class="doc-card">
@@ -1576,26 +1819,74 @@
         : `<div class="empty" style="padding:34px"><div class="emoji">📁</div><h3>No documents yet</h3><p>${canEdit ? "Upload this student's passport, offer letter, financials, test scores and more — securely." : "No documents have been uploaded for this client."}</p></div>`;
       const deepScanCost = ((state.credits && (state.credits.actions || []).find((a) => a.key === "deep_scan")) || {}).credits || 5;
       const deepScanBar = (canEdit && docs.length) ? `
-        <div class="cp-card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-          <div style="flex:1;min-width:220px">
-            <div style="font-weight:700">🔍 Deep Scan document audit</div>
-            <div style="font-size:12px;color:var(--text-2)">Rilono AI cross-references every uploaded document for mismatched dates, names & missing funds before the visa appointment. Costs <b>${deepScanCost} credits</b>.</div>
+        <div class="cp-card deep-scan-card" id="deepScanCard">
+          <div class="deep-scan-head">
+            <div class="deep-scan-copy">
+              <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">⌕</span> Deep Scan document audit</div>
+              <div class="deep-scan-description">Rilono AI cross-references every uploaded document for mismatched dates, names &amp; missing funds before the visa appointment. Costs <b>${deepScanCost} credits</b>.</div>
+            </div>
+            <button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn">Run Deep Scan · ${deepScanCost} cr</button>
           </div>
-          <button class="btn btn-primary btn-sm" id="deepScanBtn">Run Deep Scan · ${deepScanCost} cr</button>
+          <div class="deep-scan-visualizer hidden" id="deepScanVisualizer" aria-live="polite"></div>
         </div>` : "";
       const docReqHolder = canEdit ? `<div id="docReqCard" class="cp-card doc-req-card" style="margin-bottom:14px"></div>` : "";
       body.innerHTML = uploader + docReqHolder + deepScanBar + list;
       const dsb = $("#deepScanBtn");
-      if (dsb) dsb.onclick = () => runDeepScan(cl);
+      if (dsb) dsb.onclick = () => runDeepScan(cl, docs.slice());
       if (canEdit) { drawDocReq(); if (dr.request === undefined) loadDocReq(); }
 
       if (canEdit) {
+        // Searchable, destination-scoped document-type picker.
+        const dtInput = $("#docTypeInput");
+        const dtMenu = $("#docTypeMenu");
+        const dtItems = clientDocTypes();
+        const paintMenu = (q) => {
+          const term = (q || "").trim().toLowerCase();
+          const matches = term
+            ? dtItems.filter((t) => (t.label + " " + (t.hint || "")).toLowerCase().includes(term))
+            : dtItems;
+          dtMenu.innerHTML = matches.length ? matches.map((t) => `
+            <div class="docsel-item" data-label="${esc(t.label)}">
+              <div class="docsel-line"><span class="docsel-label">${esc(t.label)}</span>${t.required ? '<span class="docsel-req">Required</span>' : ""}</div>
+              ${t.hint ? `<div class="docsel-hint">${esc(t.hint)}</div>` : ""}
+            </div>`).join("")
+            : `<div class="docsel-empty">No match — press Upload to use "${esc(q)}" as a custom type.</div>`;
+          $$(".docsel-item", dtMenu).forEach((el) => {
+            el.onmousedown = (e) => {
+              e.preventDefault();
+              dtInput.value = el.dataset.label;
+              dtMenu.classList.add("hidden");
+              syncOtherDetail(true);
+            };
+          });
+        };
+        // "Other" gets a describe-it field so the stored type is meaningful
+        // (e.g. "Other — Police clearance certificate") instead of a bare "Other".
+        const syncOtherDetail = (focusWhenShown) => {
+          const wrap = $("#docOtherWrap");
+          if (!wrap || !dtInput) return;
+          const isOther = /^other$/i.test(dtInput.value.trim());
+          wrap.style.display = isOther ? "block" : "none";
+          if (isOther && focusWhenShown) setTimeout(() => $("#docOtherDetail")?.focus(), 30);
+        };
+        if (dtInput) {
+          dtInput.onfocus = () => { paintMenu(dtInput.value); dtMenu.classList.remove("hidden"); };
+          dtInput.oninput = () => { paintMenu(dtInput.value); dtMenu.classList.remove("hidden"); syncOtherDetail(false); };
+          dtInput.onblur = () => setTimeout(() => dtMenu.classList.add("hidden"), 140);
+          dtInput.onkeydown = (e) => { if (e.key === "Escape") dtMenu.classList.add("hidden"); };
+        }
+
         $("#docUploadBtn").onclick = async () => {
           const fileEl = $("#docFile");
           if (!fileEl.files || !fileEl.files[0]) { toast("Choose a file first", "error"); return; }
+          let chosenType = (dtInput && dtInput.value.trim()) || "Other";
+          if (/^other$/i.test(chosenType)) {
+            const detail = ($("#docOtherDetail")?.value || "").trim();
+            if (detail) chosenType = "Other — " + detail;   // stored & shown everywhere
+          }
           const fd = new FormData();
           fd.append("file", fileEl.files[0]);
-          fd.append("document_type", $("#docType").value || "Other");
+          fd.append("document_type", chosenType);
           const btn = $("#docUploadBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Uploading…';
           try {
             const res = await fetch(API + "/clients/" + cl.id + "/documents", { method: "POST", credentials: "include", body: fd });
@@ -1650,9 +1941,12 @@
     }
     function openDocReqModal() {
       const first = (cl.full_name || "the student").split(" ")[0];
-      const types = state.catalog.document_types || [];
-      const checks = types.map((t) =>
-        `<label class="docreq-check"><input type="checkbox" value="${esc(t)}"> <span>${esc(t)}</span></label>`).join("");
+      const types = clientDocTypes();
+      const checks = `<input type="search" id="docReqFilter" class="docreq-filter" placeholder="Filter ${esc(cl.destination_country_name || "")} document types…" autocomplete="off" />` +
+        types.map((t) =>
+          `<label class="docreq-check" data-search="${esc((t.label + " " + (t.hint || "")).toLowerCase())}" ${t.hint ? `title="${esc(t.hint)}"` : ""}>
+             <input type="checkbox" value="${esc(t.label)}"> <span>${esc(t.label)}${t.required ? ' <b class="docreq-req">Required</b>' : ""}</span>
+           </label>`).join("");
       openModal(`<div class="modal-head"><h3>Request documents from ${esc(first)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
         <form id="docReqForm"><div class="modal-body">
           <p style="margin:0 0 14px;color:var(--text-2);font-size:14px;line-height:1.6">We'll email a secure link to <b>${esc(cl.email)}</b>. ${esc(first)} verifies with a one-time code, then uploads exactly what you select — files appear here, encrypted.</p>
@@ -1664,6 +1958,15 @@
         </div>
         <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary" id="docReqSave">✉ Send request</button></div></form>`);
+      const reqFilter = $("#docReqFilter");
+      if (reqFilter) {
+        reqFilter.oninput = () => {
+          const term = reqFilter.value.trim().toLowerCase();
+          $$("#docReqForm .docreq-check").forEach((row) => {
+            row.style.display = (!term || (row.dataset.search || "").includes(term)) ? "" : "none";
+          });
+        };
+      }
       $("#docReqForm").onsubmit = async (e) => {
         e.preventDefault();
         const picked = $$("#docReqForm input[type=checkbox]:checked").map((c) => c.value);
@@ -1932,7 +2235,7 @@
       iv.started = true; iv.voiceOn = !!voice; iv.history = []; iv.finished = false; iv.feedback = null; iv.busy = true; iv.spoken = 0;
       renderInterview();
       try {
-        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { start: true } });
+        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { start: true }, timeout: AI_API_TIMEOUT_MS });
         iv.history.push({ role: "officer", content: r.reply });
         if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
         if (r.was_preview) toast(`Preview started · free${typeof r.previews_remaining === "number" ? ` · ${r.previews_remaining} preview${r.previews_remaining === 1 ? "" : "s"} left` : ""}`, "success");
@@ -1951,7 +2254,7 @@
       iv.history.push({ role: "user", content: v }); iv.busy = true; drawIv();
       let ended = false;
       try {
-        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { message: v, history: prior } });
+        const r = await api(`/clients/${cl.id}/interview/chat`, { method: "POST", body: { message: v, history: prior }, timeout: AI_API_TIMEOUT_MS });
         iv.history.push({ role: "officer", content: r.reply });
         ended = !!r.finished;  // backend signals when the AI officer has wrapped up
       } catch (ex) { toast(ex.message, "error"); }
@@ -2808,7 +3111,7 @@
     state.aiBusy = true;
     renderAiThread(); renderAiSuggestions();
     try {
-      const data = await api("/ai/chat", { method: "POST", body: { message: msg, history: priorHistory } });
+      const data = await api("/ai/chat", { method: "POST", body: { message: msg, history: priorHistory }, timeout: AI_API_TIMEOUT_MS });
       state.aiHistory = state.aiHistory.filter((m) => m.role !== "typing");
       state.aiHistory.push({ role: "model", content: data.answer || "(no answer)" });
       // Keep the credits chip in sync when a message debited the wallet.
@@ -2853,20 +3156,221 @@
       <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`);
   }
 
-  async function runDeepScan(cl) {
+  function deepScanPreviewType(doc) {
+    const mime = String((doc && doc.mime_type) || "").toLowerCase();
+    const filename = String((doc && doc.original_filename) || "").toLowerCase();
+    if (mime === "application/pdf" || filename.endsWith(".pdf")) return "pdf";
+    if (/^image\/(?:jpeg|png|webp|gif)$/.test(mime) || /\.(?:jpe?g|png|webp|gif)$/.test(filename)) return "image";
+    return "file";
+  }
+
+  function deepScanFallbackMarkup(doc) {
+    return `<div class="dsv-file-fallback">
+      <div class="dsv-file-icon" aria-hidden="true">${docIcon(doc.original_filename)}</div>
+      <div class="dsv-file-name">${esc(doc.original_filename || "Uploaded document")}</div>
+      <div class="dsv-file-note">Secure file preview is unavailable, but the uploaded file is included in this audit.</div>
+    </div>`;
+  }
+
+  function deepScanPreviewMarkup(doc) {
+    const type = deepScanPreviewType(doc);
+    const url = String(doc.download_url || "");
+    const title = esc(doc.original_filename || "Uploaded document");
+    if (type === "image") {
+      return `<img class="dsv-preview-image" src="${esc(url)}" alt="First-page preview of ${title}" />`;
+    }
+    if (type === "pdf") {
+      return `<div class="dsv-pdf-fallback">${deepScanFallbackMarkup(doc)}</div>
+        <iframe class="dsv-preview-pdf" title="First page of ${title}" tabindex="-1"></iframe>`;
+    }
+    return deepScanFallbackMarkup(doc);
+  }
+
+  function startDeepScanVisualizer(documents) {
+    const host = $("#deepScanVisualizer");
+    const list = (documents || []).filter((doc) => doc && doc.download_url);
+    const noop = { setPhase() {}, complete() {}, fail() {}, destroy() {} };
+    if (!host || !list.length) return noop;
+
+    let currentIndex = 0;
+    let currentPhase = 0;
+    let currentLabel = "Reading uploaded document";
+    let currentElapsed = 0;
+    let cycleTimer = null;
+    let previewObjectUrl = null;
+    let previewToken = 0;
+
+    const releasePreview = () => {
+      if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+      previewObjectUrl = null;
+      previewToken += 1;
+    };
+
+    const applyPhase = () => {
+      const phaseEl = $("[data-dsv-phase]", host);
+      const elapsedEl = $("[data-dsv-elapsed]", host);
+      if (phaseEl) phaseEl.textContent = currentLabel;
+      if (elapsedEl) elapsedEl.textContent = `${currentElapsed}s`;
+      $$("[data-dsv-step]", host).forEach((step) => {
+        const stepIndex = Number(step.dataset.dsvStep);
+        step.classList.toggle("active", currentPhase < 3 && stepIndex === currentPhase);
+        step.classList.toggle("done", currentPhase >= 3 || stepIndex < currentPhase);
+      });
+    };
+
+    const renderDocument = () => {
+      releasePreview();
+      const doc = list[currentIndex];
+      const visibleIndex = currentIndex + 1;
+      const fileType = deepScanPreviewType(doc) === "pdf" ? "PDF first page" : deepScanPreviewType(doc) === "image" ? "Image preview" : "Secure file";
+      host.innerHTML = `<div class="dsv-layout">
+        <div class="dsv-document-column">
+          <div class="dsv-document-topline">
+            <span class="dsv-live"><span class="dsv-live-dot"></span> Live document audit</span>
+            <span class="dsv-count">${visibleIndex} of ${list.length}</span>
+          </div>
+          <div class="dsv-document" aria-label="Scanning ${esc(doc.original_filename || "uploaded document")}">
+            <div class="dsv-preview">${deepScanPreviewMarkup(doc)}</div>
+            <div class="dsv-grid" aria-hidden="true"></div>
+            <div class="dsv-scan-beam" aria-hidden="true"><span></span></div>
+            <i class="dsv-corner top-left" aria-hidden="true"></i>
+            <i class="dsv-corner top-right" aria-hidden="true"></i>
+            <i class="dsv-corner bottom-left" aria-hidden="true"></i>
+            <i class="dsv-corner bottom-right" aria-hidden="true"></i>
+          </div>
+          <div class="dsv-file-meta">
+            <div class="dsv-file-meta-copy">
+              <strong title="${esc(doc.original_filename || "")}">${esc(doc.original_filename || "Uploaded document")}</strong>
+              <span>${esc(doc.document_type || "Document")} · ${fileType} · ${fmtSize(doc.file_size)}</span>
+            </div>
+            <span class="dsv-lock" title="Served through an authenticated connection">Secure</span>
+          </div>
+        </div>
+        <div class="dsv-analysis">
+          <div class="dsv-eyebrow">Rilono document intelligence</div>
+          <h3 data-dsv-phase>${esc(currentLabel)}</h3>
+          <p>The audit is reading the actual uploaded file and comparing details across this student's document set.</p>
+          <div class="dsv-steps">
+            <div class="dsv-step" data-dsv-step="0"><span>1</span><div><b>Read document content</b><small>Names, dates, amounts and identifiers</small></div></div>
+            <div class="dsv-step" data-dsv-step="1"><span>2</span><div><b>Cross-check records</b><small>Consistency across all uploaded files</small></div></div>
+            <div class="dsv-step" data-dsv-step="2"><span>3</span><div><b>Prepare audit findings</b><small>Risks, gaps and recommended actions</small></div></div>
+          </div>
+          <div class="dsv-progress-row">
+            <div class="dsv-progress-track"><span></span></div>
+            <span class="dsv-elapsed" data-dsv-elapsed>${currentElapsed}s</span>
+          </div>
+          <div class="dsv-trust-note"><span aria-hidden="true">✓</span> Preview loaded from the private file already attached to this student.</div>
+        </div>
+      </div>`;
+
+      const image = $(".dsv-preview-image", host);
+      if (image) {
+        image.onerror = () => {
+          const preview = image.closest(".dsv-preview");
+          if (preview) preview.innerHTML = deepScanFallbackMarkup(doc);
+        };
+      }
+      const pdfFrame = $(".dsv-preview-pdf", host);
+      if (pdfFrame) {
+        const token = previewToken;
+        fetch(doc.download_url, { credentials: "include" })
+          .then((response) => {
+            if (!response.ok) throw new Error("preview unavailable");
+            return response.blob();
+          })
+          .then((blob) => {
+            if (token !== previewToken || !pdfFrame.isConnected) return;
+            previewObjectUrl = URL.createObjectURL(new Blob([blob], { type: "application/pdf" }));
+            pdfFrame.src = `${previewObjectUrl}#page=1&view=FitH&toolbar=0&navpanes=0&scrollbar=0`;
+          })
+          .catch(() => {
+            if (token === previewToken && pdfFrame.isConnected) pdfFrame.remove();
+          });
+      }
+      applyPhase();
+    };
+
+    host.classList.remove("hidden", "is-complete", "is-error");
+    renderDocument();
+    if (list.length > 1) {
+      cycleTimer = window.setInterval(() => {
+        currentIndex = (currentIndex + 1) % list.length;
+        renderDocument();
+      }, 5200);
+    }
+
+    return {
+      setPhase(phase, label, elapsed) {
+        currentPhase = Math.max(0, Math.min(2, Number(phase) || 0));
+        currentLabel = label || currentLabel;
+        currentElapsed = Math.max(0, Number(elapsed) || 0);
+        applyPhase();
+      },
+      complete() {
+        currentPhase = 3;
+        currentLabel = "Document audit complete";
+        host.classList.add("is-complete");
+        applyPhase();
+      },
+      fail() {
+        currentLabel = "The audit could not be completed";
+        host.classList.add("is-error");
+        const phaseEl = $("[data-dsv-phase]", host);
+        if (phaseEl) phaseEl.textContent = currentLabel;
+      },
+      destroy(delay) {
+        if (cycleTimer) window.clearInterval(cycleTimer);
+        cycleTimer = null;
+        window.setTimeout(() => {
+          host.classList.add("hidden");
+          releasePreview();
+        }, Math.max(0, Number(delay) || 0));
+      },
+    };
+  }
+
+  async function runDeepScan(cl, scanDocuments) {
     const btn = $("#deepScanBtn");
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Scanning…'; }
+    const visualizer = startDeepScanVisualizer(scanDocuments);
+    // Deep Scan reads every document and cross-references them (map-reduce), so it's the
+    // slowest AI action — escalate the button so staff know it's still working, not stuck.
+    let ticks = 0, progressTimer = null;
+    if (btn) {
+      btn.disabled = true;
+      const paint = () => {
+        const s = ticks;
+        const label = s < 8 ? "Scanning documents…"
+          : s < 20 ? `Cross-checking the file… ${s}s`
+          : `Almost done — reconciling… ${s}s`;
+        const phase = s < 8 ? 0 : s < 20 ? 1 : 2;
+        const phaseLabel = phase === 0 ? "Reading uploaded document"
+          : phase === 1 ? "Cross-checking names, dates and funds"
+          : "Reconciling audit findings";
+        btn.innerHTML = `<span class="spinner"></span> ${label}`;
+        visualizer.setPhase(phase, phaseLabel, s);
+      };
+      paint();
+      progressTimer = setInterval(() => { ticks += 1; paint(); }, 1000);
+    }
+    const stopProgress = () => { if (progressTimer) { clearInterval(progressTimer); progressTimer = null; } };
     let res;
-    try { res = await api(`/clients/${cl.id}/deep-scan`, { method: "POST" }); }
+    try { res = await api(`/clients/${cl.id}/deep-scan`, { method: "POST", timeout: AI_API_TIMEOUT_MS }); }
     catch (ex) {
-      if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); return; }
+      stopProgress();
+      visualizer.fail();
+      visualizer.destroy(900);
+      if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); if (btn) { btn.disabled = false; btn.textContent = "Run Deep Scan"; } return; }
       toast(ex.message, "error");
       if (btn) { btn.disabled = false; btn.textContent = "Run Deep Scan"; }
       return;
     }
+    stopProgress();
     if (res.wallet) { state.credits = res.wallet; updatePlanChip(); }
     toast(`Deep Scan complete · ${res.credits_charged} credits used`, "success");
     if (btn) { btn.disabled = false; btn.innerHTML = "Run Deep Scan · " + (res.credits_charged || 5) + " cr"; }
+    visualizer.complete();
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    visualizer.destroy();
     showDeepScanReport(cl, res);
   }
 

@@ -602,6 +602,18 @@ body.dashboard-active {
     background: rgba(124, 138, 255, 0.08);
 }
 
+.nav-links a.nav-cta {
+    color: #fff;
+    background: var(--gradient-primary);
+    font-weight: 700;
+    box-shadow: 0 8px 22px rgba(99, 102, 241, 0.28);
+}
+
+.nav-links a.nav-cta:hover {
+    color: #fff;
+    filter: brightness(1.07);
+}
+
 /* User Menu */
 .user-menu {
     position: relative;
@@ -11571,7 +11583,10 @@ body.b2c-light .pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
 .floating-chat-popup.show {
     opacity: 1;
     transform: translateX(0) scale(1);
-    pointer-events: auto;
+    /* Click-THROUGH: the teaser is a passive hint and must never intercept a click meant for
+       a button beneath it (e.g. "Get recommendations" / "Submit"). The close X re-enables
+       pointer events for itself below, and the always-present round toggle opens the chat. */
+    pointer-events: none;
 }
 
 .floating-chat-popup:hover {
@@ -11591,10 +11606,12 @@ body.b2c-light .pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
     color: var(--text-muted);
     font-size: 1.25rem;
     line-height: 1;
-    padding: 0;
+    padding: 0 2px;
     cursor: pointer;
     transition: color 0.2s ease;
     margin-top: -2px;
+    /* Re-enable clicks for the dismiss control even though the bubble is click-through. */
+    pointer-events: auto;
 }
 
 .popup-close:hover {

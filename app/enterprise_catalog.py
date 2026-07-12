@@ -164,6 +164,156 @@ STUDENT_DOCUMENT_TYPES = [
 ]
 DEFAULT_DOCUMENT_TYPE = "Other"
 
+# ---------------------------------------------------------------------------
+# Per-country document catalogs (detailed, destination-specific)
+# ---------------------------------------------------------------------------
+# The generic STUDENT_DOCUMENT_TYPES above is the legacy/fallback list. Each entry:
+#   key       — stable identifier (also used when seeding the DB catalog)
+#   label     — what staff see & what is stored on EnterpriseClientDocument.document_type
+#   required  — part of the standard checklist for that destination
+#   hint      — one-line guidance shown in the picker
+# Ordering is the recommended collection order for that destination.
+
+ENTERPRISE_DOCUMENT_CATALOG: dict[str, list[dict]] = {
+    "US": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid at least 6 months beyond intended stay."},
+        {"key": "photo", "label": "Passport Photo (2×2 inch, US spec)", "required": True, "hint": "White background, taken within 6 months."},
+        {"key": "admission-letter", "label": "University Admission / Offer Letter", "required": True, "hint": "From the SEVP-certified school."},
+        {"key": "form-i20", "label": "Form I-20 (signed)", "required": True, "hint": "Signed by the DSO and the student."},
+        {"key": "ds160-confirmation", "label": "DS-160 Confirmation Page", "required": True, "hint": "Barcode page after submitting the DS-160 online."},
+        {"key": "sevis-receipt", "label": "SEVIS I-901 Fee Receipt", "required": True, "hint": "Paid on fmjfee.com against the I-20 SEVIS ID."},
+        {"key": "mrv-fee-receipt", "label": "Visa (MRV) Fee Receipt", "required": True, "hint": "Machine-readable visa application fee."},
+        {"key": "interview-appointment", "label": "Interview Appointment Confirmation", "required": True, "hint": "OFC/biometrics + consular interview slots."},
+        {"key": "bank-statements", "label": "Bank Statements / Balance Certificate", "required": True, "hint": "Liquid funds covering I-20 first-year cost."},
+        {"key": "loan-sanction", "label": "Education Loan Sanction Letter", "required": False, "hint": "If part of funding — sanctioned, not applied."},
+        {"key": "scholarship-letter", "label": "Scholarship / Assistantship Letter", "required": False, "hint": "University or external funding award."},
+        {"key": "sponsor-affidavit", "label": "Sponsor Affidavit of Support", "required": False, "hint": "With sponsor's bank proof & income evidence."},
+        {"key": "ca-statement", "label": "CA Statement / Asset Valuation", "required": False, "hint": "Chartered-accountant net-worth summary."},
+        {"key": "transcripts", "label": "Academic Transcripts & Marksheets", "required": True, "hint": "All semesters, university-attested."},
+        {"key": "degree-certificates", "label": "Degree / Provisional Certificates", "required": False, "hint": "Completed programs only."},
+        {"key": "english-test", "label": "English Test Score (TOEFL / IELTS / Duolingo)", "required": True, "hint": "As required by the admitting school."},
+        {"key": "aptitude-test", "label": "GRE / GMAT / SAT Score Report", "required": False, "hint": "If used in the admission."},
+        {"key": "resume", "label": "Resume / CV", "required": False, "hint": "Useful for interview & OPT-related questions."},
+        {"key": "work-experience", "label": "Work Experience Letters", "required": False, "hint": "For applicants with employment history."},
+        {"key": "gap-justification", "label": "Gap / Study-Break Justification", "required": False, "hint": "Explains gaps after prior education."},
+        {"key": "prior-visa-refusal", "label": "Previous US Visa / Refusal Documents (221g)", "required": False, "hint": "Any earlier US travel or refusals."},
+        {"key": "ds2019", "label": "Form DS-2019 (J-1 only)", "required": False, "hint": "Exchange-visitor program form."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "UK": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "With at least one blank page."},
+        {"key": "cas", "label": "CAS Statement", "required": True, "hint": "Confirmation of Acceptance for Studies with CAS number."},
+        {"key": "offer-letter", "label": "Unconditional Offer Letter", "required": True, "hint": "From the licensed student sponsor."},
+        {"key": "financial-evidence", "label": "28-Day Bank Statement / Financial Evidence", "required": True, "hint": "Funds held 28 consecutive days, ending ≤31 days before applying."},
+        {"key": "ihs-confirmation", "label": "IHS Payment Confirmation", "required": True, "hint": "Immigration Health Surcharge reference."},
+        {"key": "visa-application", "label": "Visa Application Confirmation (GOV.UK)", "required": True, "hint": "Submitted online application summary."},
+        {"key": "tb-certificate", "label": "TB Test Certificate", "required": True, "hint": "From an approved clinic (required for many countries incl. India)."},
+        {"key": "atas", "label": "ATAS Certificate", "required": False, "hint": "Only for certain sensitive subjects."},
+        {"key": "selt", "label": "SELT / IELTS-for-UKVI Result", "required": False, "hint": "Or degree-taught-in-English exemption evidence."},
+        {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "Documents used to obtain the CAS."},
+        {"key": "degree-certificates", "label": "Degree Certificates", "required": False, "hint": "As listed on the CAS."},
+        {"key": "sponsor-consent", "label": "Parental / Sponsor Consent + Relationship Proof", "required": False, "hint": "If funds are in a parent's or sponsor's name."},
+        {"key": "loan-letter", "label": "Education Loan Letter", "required": False, "hint": "Regulated financial institution letterhead."},
+        {"key": "scholarship-letter", "label": "Scholarship / Official Sponsorship Letter", "required": False, "hint": "Government or international scholarship agency."},
+        {"key": "photo", "label": "Passport-size Photograph", "required": False, "hint": "Only if a VAC requests physical photos."},
+        {"key": "prior-refusals", "label": "Previous UK Visa / Refusal Documents", "required": False, "hint": "Any earlier UK immigration history."},
+        {"key": "cv", "label": "CV / Resume", "required": False, "hint": "Occasionally requested for credibility interviews."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "CA": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid for the full study period."},
+        {"key": "loa", "label": "Letter of Acceptance (LOA)", "required": True, "hint": "From a Designated Learning Institution (DLI)."},
+        {"key": "pal", "label": "Provincial / Territorial Attestation Letter (PAL/TAL)", "required": True, "hint": "Required for most study-permit applications."},
+        {"key": "gic", "label": "GIC Certificate", "required": True, "hint": "Guaranteed Investment Certificate for living costs."},
+        {"key": "tuition-receipt", "label": "First-Year Tuition Payment Receipt", "required": True, "hint": "Proof of tuition paid to the DLI."},
+        {"key": "proof-of-funds", "label": "Proof of Funds / Bank Statements (4 months)", "required": True, "hint": "Beyond the GIC where applicable."},
+        {"key": "loan-sanction", "label": "Education Loan Sanction Letter", "required": False, "hint": "If loan-funded."},
+        {"key": "imm1294", "label": "Study Permit Application (IMM 1294)", "required": True, "hint": "Or the IRCC online equivalent summary."},
+        {"key": "sop-study-plan", "label": "Statement of Purpose / Study Plan", "required": True, "hint": "Why this program, why Canada, ties to home country."},
+        {"key": "language-test", "label": "Language Test (IELTS / PTE / CELPIP / TEF)", "required": True, "hint": "Per DLI and stream requirements."},
+        {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "All completed education."},
+        {"key": "degree-certificates", "label": "Degree / Diploma Certificates", "required": False, "hint": "Completed programs only."},
+        {"key": "medical-exam", "label": "Medical Exam (eMedical) Confirmation", "required": False, "hint": "Upfront medical from a panel physician."},
+        {"key": "biometrics", "label": "Biometrics Confirmation", "required": False, "hint": "Biometric Instruction Letter / completion slip."},
+        {"key": "custodianship", "label": "Custodianship Declaration (minors)", "required": False, "hint": "IMM 5646 for students under 17."},
+        {"key": "family-forms", "label": "Family Information Form (IMM 5645/5707)", "required": False, "hint": "As requested by IRCC."},
+        {"key": "caq", "label": "Quebec Acceptance Certificate (CAQ)", "required": False, "hint": "Only for study in Quebec."},
+        {"key": "prior-refusals", "label": "Previous Refusal Letter(s)", "required": False, "hint": "Any earlier Canadian refusals — address them in the SOP."},
+        {"key": "digital-photo", "label": "Digital Photo (IRCC spec)", "required": False, "hint": "Per IRCC photo specifications."},
+        {"key": "work-experience", "label": "Work Experience Letters", "required": False, "hint": "If employment history supports the study plan."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "AU": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid for the intended stay."},
+        {"key": "coe", "label": "Confirmation of Enrolment (CoE)", "required": True, "hint": "One per course being packaged."},
+        {"key": "offer-letter", "label": "Offer Letter", "required": True, "hint": "From the Australian provider."},
+        {"key": "gs-statement", "label": "Genuine Student (GS) Statement & Answers", "required": True, "hint": "Responses to the GS questions — decisive for 500s."},
+        {"key": "oshc", "label": "OSHC Policy Certificate", "required": True, "hint": "Health cover spanning the entire stay."},
+        {"key": "financial-capacity", "label": "Financial Capacity Evidence", "required": True, "hint": "Bank funds / loan / sponsor income per Home Affairs settings."},
+        {"key": "english-test", "label": "English Test (IELTS / PTE / TOEFL)", "required": True, "hint": "Unless exempt."},
+        {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "All prior study."},
+        {"key": "degree-certificates", "label": "Degree / Award Certificates", "required": False, "hint": "Completed qualifications."},
+        {"key": "health-exam", "label": "Health Examination (HAP ID / eMedical)", "required": False, "hint": "Panel clinic examination reference."},
+        {"key": "photo", "label": "Passport-size Photograph", "required": False, "hint": "Recent, per specifications."},
+        {"key": "form-956a", "label": "Form 956A (Agent Appointment)", "required": False, "hint": "If your agency lodges on the student's behalf."},
+        {"key": "guardian-forms", "label": "Guardianship / U-18 Welfare Forms (157N / CAAW)", "required": False, "hint": "For minors and subclass 590 guardians."},
+        {"key": "relationship-docs", "label": "Marriage / Relationship Certificates (dependents)", "required": False, "hint": "If including family members."},
+        {"key": "employment-evidence", "label": "Employment Evidence / CV", "required": False, "hint": "Supports GS circumstances."},
+        {"key": "prior-refusals", "label": "Previous Visa / Refusal Documents", "required": False, "hint": "Australian or other-country refusals."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "DE": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Issued within 10 years, 2 blank pages."},
+        {"key": "biometric-photos", "label": "Biometric Photos (35×45 mm)", "required": True, "hint": "German biometric specification."},
+        {"key": "admission", "label": "Admission Letter (Zulassungsbescheid) / Conditional Admission", "required": True, "hint": "Or uni-assist / applicant confirmation."},
+        {"key": "aps", "label": "APS Certificate", "required": True, "hint": "Mandatory for India, China, Vietnam applicants."},
+        {"key": "sperrkonto", "label": "Blocked Account (Sperrkonto) Confirmation", "required": True, "hint": "Funded to the current annual minimum."},
+        {"key": "scholarship-letter", "label": "Scholarship Award Letter", "required": False, "hint": "DAAD or equivalent — alternative to blocked account."},
+        {"key": "verpflichtung", "label": "Formal Obligation Letter (Verpflichtungserklärung)", "required": False, "hint": "Sponsor-based financing alternative."},
+        {"key": "videx", "label": "VIDEX National Visa Form", "required": True, "hint": "Completed and signed VIDEX printout."},
+        {"key": "declaration", "label": "Declaration of Accuracy of Information", "required": True, "hint": "Signed declarations required by the mission."},
+        {"key": "health-insurance", "label": "Health / Travel Insurance Proof", "required": True, "hint": "Coverage from entry until enrolment insurance starts."},
+        {"key": "language-cert", "label": "Language Certificate (TestDaF / DSH / Goethe or IELTS/TOEFL)", "required": True, "hint": "Per the program's language of instruction."},
+        {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "All prior study records."},
+        {"key": "degree-certificates", "label": "Degree Certificates", "required": False, "hint": "Bachelor's certificate for Master's applicants."},
+        {"key": "cv", "label": "CV (Tabular / Lebenslauf)", "required": True, "hint": "German-style tabular CV."},
+        {"key": "motivation-letter", "label": "Motivation Letter (Motivationsschreiben)", "required": True, "hint": "Program-specific reasoning."},
+        {"key": "appointment", "label": "Visa Appointment Confirmation", "required": False, "hint": "Embassy / consulate booking."},
+        {"key": "fee-receipt", "label": "Visa Fee Receipt", "required": False, "hint": "National visa fee payment."},
+        {"key": "accommodation", "label": "Accommodation Proof", "required": False, "hint": "If already arranged in Germany."},
+        {"key": "prior-refusals", "label": "Previous Refusal Documents", "required": False, "hint": "Any Schengen/German refusals."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "IE": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid 12+ months beyond arrival."},
+        {"key": "acceptance-letter", "label": "Letter of Acceptance", "required": True, "hint": "From the Irish college confirming the full-time course."},
+        {"key": "fee-receipt", "label": "Tuition Fee Payment Receipt", "required": True, "hint": "Proof fees are paid (or ILEP escrow evidence)."},
+        {"key": "proof-of-funds", "label": "Proof of Funds / 6-Month Bank Statements", "required": True, "hint": "Access to required maintenance funds."},
+        {"key": "education-bond", "label": "Education Bond / Official Sponsorship", "required": False, "hint": "If using a bond or sponsor arrangement."},
+        {"key": "medical-insurance", "label": "Medical / Travel Insurance", "required": True, "hint": "Private medical insurance covering the stay."},
+        {"key": "english-test", "label": "English Test (IELTS / TOEFL / Duolingo)", "required": True, "hint": "Meeting the course's English requirement."},
+        {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "Previous exam results & study history."},
+        {"key": "degree-certificates", "label": "Degree Certificates", "required": False, "hint": "Completed qualifications."},
+        {"key": "avats-summary", "label": "AVATS Application Summary", "required": True, "hint": "Online visa application summary sheet."},
+        {"key": "photos", "label": "Passport Photographs", "required": True, "hint": "Two recent colour photos."},
+        {"key": "application-letter", "label": "Letter of Application / SOP", "required": True, "hint": "Explains study plan and immigration history."},
+        {"key": "sponsor-docs", "label": "Sponsor Documents + Relationship Proof", "required": False, "hint": "If financially sponsored."},
+        {"key": "work-experience", "label": "Work Experience / Gap Evidence", "required": False, "hint": "Accounts for time since last study."},
+        {"key": "prior-refusals", "label": "Previous Visa Refusals (any country)", "required": False, "hint": "Must be declared with details."},
+        {"key": "accommodation", "label": "Accommodation Details", "required": False, "hint": "If already arranged in Ireland."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+}
+
+
+def document_types_for_country(country_code: str | None) -> list[dict]:
+    """Detailed picker list for one destination (falls back to the generic list)."""
+    items = ENTERPRISE_DOCUMENT_CATALOG.get(str(country_code or "").strip().upper())
+    if items:
+        return [dict(item) for item in items]
+    return [{"key": t.lower().replace(" ", "-")[:40], "label": t, "required": False, "hint": ""}
+            for t in STUDENT_DOCUMENT_TYPES]
+
 
 def normalize_document_type(raw: str | None) -> str:
     value = str(raw or "").strip()
@@ -318,7 +468,40 @@ def materialize_future_intakes(intake_labels: list[str]) -> list[str]:
 # Public payloads & validation
 # ---------------------------------------------------------------------------
 
-def build_catalog_payload() -> dict:
+def _document_types_by_country_from_db(db) -> dict[str, list[dict]]:
+    """Load the enterprise document catalog from the DB (scope visa_type_key='enterprise').
+
+    The DB is the runtime source of truth (seeded from ENTERPRISE_DOCUMENT_CATALOG at
+    startup, editable later without a deploy); any country with no rows falls back to
+    the in-code list so the picker never comes up empty."""
+    from app import models  # local import — this module is imported by models-adjacent code
+    out: dict[str, list[dict]] = {}
+    try:
+        rows = (
+            db.query(models.DocumentTypeCatalog)
+            .filter(
+                models.DocumentTypeCatalog.visa_type_key == "enterprise",
+                models.DocumentTypeCatalog.is_active.is_(True),
+            )
+            .order_by(models.DocumentTypeCatalog.country_code.asc(), models.DocumentTypeCatalog.sort_order.asc())
+            .all()
+        )
+        for row in rows:
+            out.setdefault(row.country_code, []).append({
+                "key": row.document_type,
+                "label": row.label,
+                "required": bool(row.is_required),
+                "hint": row.description or "",
+            })
+    except Exception:
+        out = {}
+    for code in ENTERPRISE_DOCUMENT_CATALOG:
+        if not out.get(code):
+            out[code] = document_types_for_country(code)
+    return out
+
+
+def build_catalog_payload(db=None) -> dict:
     """Full catalog the frontend uses to drive dropdowns and graphics."""
     countries_payload = []
     for country in COUNTRIES:
@@ -337,11 +520,18 @@ def build_catalog_payload() -> dict:
             "student_intakes": materialize_future_intakes(country.get("student_intakes", [])),
             "visa_types": visa_types_by_category,
         })
+    doc_types_by_country = (
+        _document_types_by_country_from_db(db) if db is not None
+        else {code: document_types_for_country(code) for code in ENTERPRISE_DOCUMENT_CATALOG}
+    )
     return {
         "categories": [dict(item) for item in VISA_CATEGORIES],
         "stages": [dict(item) for item in CLIENT_STAGES],
         "priorities": [dict(item) for item in CLIENT_PRIORITIES],
+        # Legacy flat list (kept for back-compat); the per-country map below is what
+        # the client-profile pickers use.
         "document_types": list(STUDENT_DOCUMENT_TYPES),
+        "document_types_by_country": doc_types_by_country,
         "countries": countries_payload,
     }
 

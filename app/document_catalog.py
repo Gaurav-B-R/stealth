@@ -37,6 +37,49 @@ def ensure_default_document_type_catalog(db: Session) -> None:
     """Seed/repair every (country, visa) document catalog scope."""
     _ensure_us_f1_catalog(db)
     _ensure_additional_scope_catalogs(db)
+    ensure_enterprise_document_catalog(db)
+
+
+def ensure_enterprise_document_catalog(db: Session) -> None:
+    """Seed/sync the per-country ENTERPRISE document catalogs (visa_type_key='enterprise').
+
+    The detailed destination-specific lists live in
+    enterprise_catalog.ENTERPRISE_DOCUMENT_CATALOG; this mirrors them into the
+    document_type_catalog table so the CRM pickers are DB-driven. Idempotent:
+    inserts missing rows and keeps label/hint/required/sort in step with the code
+    defaults, but never touches is_active (so rows can be disabled in the DB).
+    """
+    from app import enterprise_catalog
+
+    has_changes = False
+    for country_code, items in enterprise_catalog.ENTERPRISE_DOCUMENT_CATALOG.items():
+        existing_by_type = {
+            row.document_type: row
+            for row in _scoped_query(db, country_code, "enterprise", active_only=False).all()
+        }
+        for sort_order, item in enumerate(items, start=1):
+            existing = existing_by_type.get(item["key"])
+            if not existing:
+                db.add(models.DocumentTypeCatalog(
+                    document_type=item["key"],
+                    country_code=country_code,
+                    visa_type_key="enterprise",
+                    label=item["label"],
+                    description=item.get("hint") or None,
+                    sort_order=sort_order,
+                    is_required=bool(item.get("required")),
+                ))
+                has_changes = True
+                continue
+            if (existing.label != item["label"] or (existing.description or "") != (item.get("hint") or "")
+                    or existing.sort_order != sort_order or bool(existing.is_required) != bool(item.get("required"))):
+                existing.label = item["label"]
+                existing.description = item.get("hint") or None
+                existing.sort_order = sort_order
+                existing.is_required = bool(item.get("required"))
+                has_changes = True
+    if has_changes:
+        db.commit()
 
 
 def _ensure_us_f1_catalog(db: Session) -> None:

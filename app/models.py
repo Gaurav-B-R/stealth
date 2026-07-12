@@ -234,6 +234,9 @@ class EnterpriseClient(Base):
 
     # Pipeline
     status = Column(String, nullable=False, default="new_lead", index=True)
+    # When a case is put On Hold, the stage it was held FROM is kept here so the UI can
+    # show the client's real position and offer a one-click "Resume". Cleared on resume.
+    held_from_status = Column(String, nullable=True)
     priority = Column(String, nullable=False, default="normal")
     target_date = Column(Date, nullable=True)  # interview / travel / intake deadline
 
@@ -489,6 +492,34 @@ class EnterpriseCalendarReminderRun(Base):
     recipients_emailed = Column(Integer, nullable=False, default=0)
     events_considered = Column(Integer, nullable=False, default=0)
     error_message = Column(Text, nullable=True)
+
+
+class EnterpriseNotification(Base):
+    """In-portal notification for enterprise staff (the topbar bell).
+
+    One row per recipient (fan-out at write time), so read-state is per member.
+    Deliberately high-signal only — client added, pipeline stage moved, mock interview
+    completed, requested documents submitted, team changes, low credits — and the actor
+    never gets a notification about their own action (communications stay limited).
+    """
+    __tablename__ = "enterprise_notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    recipient_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)   # None = external event (student)
+    type = Column(String, nullable=False)          # client_added | status_changed | interview_completed | docs_submitted | member_added | member_removed | credits_low
+    title = Column(String, nullable=False)
+    body = Column(Text, nullable=True)
+    reference_type = Column(String, nullable=True)  # client | credits | team | ...
+    reference_id = Column(Integer, nullable=True)
+    is_read = Column(Boolean, nullable=False, default=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_ent_notif_recipient_read", "recipient_user_id", "is_read"),
+        Index("ix_ent_notif_org_created", "organization_id", "created_at"),
+    )
 
 
 class EnterpriseSupportRequest(Base):

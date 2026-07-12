@@ -57,6 +57,8 @@ const cookieConsentState = {
 
 // Notification System
 const NOTIFICATION_STORAGE_PREFIX = 'notifications_user_';
+// Old builds stored every account's notifications under one shared browser key.
+// Never read that unscoped data: on a shared browser it can belong to another user.
 const LEGACY_NOTIFICATION_STORAGE_KEY = 'notifications';
 let notifications = [];
 let notificationDropdownOpen = false;
@@ -1101,6 +1103,7 @@ async function initializeFooterVersion() {
 document.addEventListener('DOMContentLoaded', async () => {
     setupEventListeners();
     initializeCookieConsentManager();
+    discardLegacyNotificationStorage();
     syncMobileNavState();
     await initializeDocumentCatalog();
     initializeSearchableDropdowns();
@@ -1147,6 +1150,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Preserve full URL (including query params like unsubscribe token) on initial load.
     const initialPathWithQuery = `${window.location.pathname}${window.location.search || ''}`;
     updateURL(initialPathWithQuery || '/', true);
+});
+
+// A browser can restore a page from its back/forward cache with the previous DOM and
+// JavaScript heap intact. Reset personalized chrome immediately, then re-authenticate,
+// so an expired/logged-out session can never leave a name or notification badge visible.
+window.addEventListener('pageshow', async (event) => {
+    if (!event.persisted) return;
+    clearClientAuthState();
+    await checkAuth();
 });
 
 function isMobileViewport() {
@@ -1612,6 +1624,30 @@ function showOAuthErrorIfPresent() {
     } catch (e) { /* ignore */ }
 }
 
+function discardLegacyNotificationStorage() {
+    try {
+        localStorage.removeItem(LEGACY_NOTIFICATION_STORAGE_KEY);
+    } catch (error) {
+        // Storage may be unavailable in strict privacy mode; the key is never read below.
+    }
+}
+
+function clearClientAuthState({ render = true } = {}) {
+    authToken = null;
+    currentUser = null;
+    currentSubscription = null;
+    runtimeSubscriptionNotifyState = null;
+    subscriptionNotifyStateUserId = null;
+    notifications = [];
+    persistAuthToken(null);
+    if (render) {
+        updateUIForAuth();
+        if (['/dashboard', '/subscription'].includes(window.location.pathname)) {
+            showLogin();
+        }
+    }
+}
+
 async function checkAuth() {
     try {
         const headers = {};
@@ -1630,18 +1666,12 @@ async function checkAuth() {
             await loadSubscriptionStatus(true);
             return true;
         } else {
-            authToken = null;
-            persistAuthToken(null);
-            currentSubscription = null;
-            updateSubscriptionUI();
+            clearClientAuthState();
             return false;
         }
     } catch (error) {
         console.error('Auth check failed:', error);
-        authToken = null;
-        persistAuthToken(null);
-        currentSubscription = null;
-        updateSubscriptionUI();
+        clearClientAuthState();
         return false;
     }
 }
@@ -1732,6 +1762,17 @@ function updateUIForAuth() {
         document.getElementById('registerLink').style.display = 'block';
         document.getElementById('userMenu').style.display = 'none';
         document.getElementById('notificationContainer').style.display = 'none';
+        const userInfoEl = document.getElementById('userInfo');
+        const userDropdownEl = document.getElementById('userMenuDropdown');
+        const notificationDropdownEl = document.getElementById('notificationDropdown');
+        const dashUserNameEl = document.getElementById('dashUserName');
+        const dashUserAvatarEl = document.getElementById('dashUserAvatar');
+        if (userInfoEl) userInfoEl.replaceChildren();
+        if (userDropdownEl) userDropdownEl.style.display = 'none';
+        if (notificationDropdownEl) notificationDropdownEl.style.display = 'none';
+        if (dashUserNameEl) dashUserNameEl.textContent = '';
+        if (dashUserAvatarEl) dashUserAvatarEl.textContent = '';
+        notificationDropdownOpen = false;
         notifications = [];
         updateNotificationBadge();
         renderNotifications();
@@ -1831,11 +1872,12 @@ function getNotificationStorageKey() {
     if (currentUser?.id) {
         return `${NOTIFICATION_STORAGE_PREFIX}${currentUser.id}`;
     }
-    return LEGACY_NOTIFICATION_STORAGE_KEY;
+    return null;
 }
 
 function readLocalNotifications() {
     const userScopedKey = getNotificationStorageKey();
+    if (!userScopedKey) return [];
     const rawUserScoped = localStorage.getItem(userScopedKey);
     if (rawUserScoped) {
         try {
@@ -1851,27 +1893,12 @@ function readLocalNotifications() {
         }
     }
 
-    if (userScopedKey !== LEGACY_NOTIFICATION_STORAGE_KEY) {
-        const legacyRaw = localStorage.getItem(LEGACY_NOTIFICATION_STORAGE_KEY);
-        if (legacyRaw) {
-            try {
-                const parsedLegacy = JSON.parse(legacyRaw);
-                if (Array.isArray(parsedLegacy)) {
-                    return parsedLegacy.map((notif) => ({
-                        ...notif,
-                        origin: 'local'
-                    }));
-                }
-            } catch (error) {
-                console.warn('Failed to parse legacy notifications:', error);
-            }
-        }
-    }
-
     return [];
 }
 
 function saveNotifications() {
+    const userScopedKey = getNotificationStorageKey();
+    if (!userScopedKey) return;
     const localOnlyNotifications = notifications
         .filter((notif) => notif.origin !== 'server')
         .slice(0, 50)
@@ -1885,7 +1912,7 @@ function saveNotifications() {
             read: Boolean(notif.read),
             origin: 'local'
         }));
-    localStorage.setItem(getNotificationStorageKey(), JSON.stringify(localOnlyNotifications));
+    localStorage.setItem(userScopedKey, JSON.stringify(localOnlyNotifications));
 }
 
 function normalizeServerNotification(rawNotification) {
@@ -1914,7 +1941,7 @@ function mergeNotificationLists(serverNotifications, localNotifications) {
 }
 
 async function loadNotifications() {
-    const localNotifications = readLocalNotifications();
+    const localNotifications = currentUser ? readLocalNotifications() : [];
     let serverNotifications = [];
 
     if (currentUser && authToken) {
@@ -7778,6 +7805,7 @@ function switchDashboardTab(tabName) {
         loadProfile();
     } else if (tabName === 'settings') {
         loadProfile();
+        hideDeleteAccountReveal();  // always start collapsed when entering Settings
     } else if (tabName === 'referral') {
         loadReferralSummary();
         renderReferralPromotions();
@@ -8516,9 +8544,13 @@ async function handleLogin(e) {
             }
             showDashboard();
             renderReferralPromotions();
-            setTimeout(() => {
-                openReferralPromoModal(true);
-            }, 260);
+            // Auto-show the referral promo ONCE per browser, then never again (no login nagging).
+            if (!referralPromoSeen()) {
+                markReferralPromoSeen();
+                setTimeout(() => {
+                    openReferralPromoModal(true);
+                }, 260);
+            }
             if (data.referral_bonus_awarded && data.referral_bonus_message) {
                 setTimeout(() => {
                     showMessage(data.referral_bonus_message, 'success');
@@ -8827,6 +8859,7 @@ async function logout() {
     }
     authToken = null;
     persistAuthToken(null);
+    discardLegacyNotificationStorage();
     // Drop the in-memory E2E master key so the next user must re-enter their passphrase.
     try { if (typeof RilonoE2E !== 'undefined') RilonoE2E.lock(); } catch (_) {}
     currentUser = null;
@@ -10487,6 +10520,16 @@ function renderReferralPromotions(summary = null) {
     }
 }
 
+// The referral promo modal is a one-time nudge — auto-shown once (per browser), then never
+// again, so it stops being repetitive nagging on every login. The referral details always
+// remain available in the Referral tab.
+function referralPromoSeen() {
+    try { return localStorage.getItem('rilono_referral_promo_seen') === '1'; } catch (e) { return false; }
+}
+function markReferralPromoSeen() {
+    try { localStorage.setItem('rilono_referral_promo_seen', '1'); } catch (e) { /* private mode */ }
+}
+
 function openReferralPromoModal(force = false) {
     if (!currentUser && !force) return;
     renderReferralPromotions();
@@ -11714,6 +11757,22 @@ async function cancelUniversityChange() {
 // Account deletion runs in an IN-APP modal (never native prompt/confirm): the emailed
 // OTP forces users to switch tabs to their inbox, and Chrome dismisses native dialogs
 // on tab switch — killing the flow right before the code entry.
+// Danger-zone two-step reveal: the destructive delete control stays collapsed until the
+// user deliberately expands it, so an accidental click during navigation can't reach the
+// delete flow. Both functions are harmless/reversible on their own.
+function revealDeleteAccount() {
+    const reveal = document.getElementById('deleteAccountReveal');
+    const trigger = document.getElementById('deleteAccountRevealBtn');
+    if (reveal) reveal.style.display = 'block';
+    if (trigger) trigger.style.display = 'none';
+}
+function hideDeleteAccountReveal() {
+    const reveal = document.getElementById('deleteAccountReveal');
+    const trigger = document.getElementById('deleteAccountRevealBtn');
+    if (reveal) reveal.style.display = 'none';
+    if (trigger) trigger.style.display = '';
+}
+
 function handleDeleteAccount() {
     if (!authToken) {
         showMessage('Please login to delete your account', 'error');
@@ -14414,6 +14473,18 @@ const floatingChatMessages = [
 let popupMessageInterval;
 let currentPopupIndex = 0;
 let isPopupDismissed = false;
+// The teaser is a gentle discovery hint, NOT a recurring interruption: show it at most a
+// couple of times per session, well spaced, never over a form the user is filling, and never
+// again once dismissed (persisted across reloads).
+const MAX_TEASERS_PER_SESSION = 2;
+let teaserShowCount = 0;
+
+function teaserPermanentlyOff() {
+    try { return localStorage.getItem('rilono_chat_teaser_off') === '1'; } catch (e) { return false; }
+}
+function persistTeaserOff() {
+    try { localStorage.setItem('rilono_chat_teaser_off', '1'); } catch (e) { /* private mode */ }
+}
 
 function isVisaInterviewInProgress() {
     return Boolean(
@@ -14439,17 +14510,30 @@ function initializeFloatingChatPopup() {
     const popup = document.getElementById('floatingChatPopup');
     const toggle = document.getElementById('floatingChatToggle');
     if (!popup || !toggle) return;
+    if (teaserPermanentlyOff()) return;   // dismissed before — never nag again
 
-    // Start interval for cycling messages
-    popupMessageInterval = setInterval(rotatePopupMessage, 15000);
-
-    // Show first message slightly after load
-    setTimeout(rotatePopupMessage, 3000);
+    // Nudge at most a couple of times, well apart (45s), first after a calmer 12s delay.
+    popupMessageInterval = setInterval(rotatePopupMessage, 45000);
+    setTimeout(rotatePopupMessage, 12000);
 }
 
 function rotatePopupMessage() {
     if (isPopupDismissed || isVisaInterviewInProgress()) {
         hideFloatingChatPopupImmediate();
+        return;
+    }
+
+    // Stop after a couple of gentle nudges — never an endless loop.
+    if (teaserShowCount >= MAX_TEASERS_PER_SESSION) {
+        if (popupMessageInterval) { clearInterval(popupMessageInterval); popupMessageInterval = null; }
+        return;
+    }
+
+    // Never pop over a form the user is actively filling (e.g. the "Get recommendations" or
+    // "Submit" inputs) — that's the intrusive click-blocking case. Retry on the next cycle.
+    const active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA'
+                   || active.tagName === 'SELECT' || active.isContentEditable)) {
         return;
     }
 
@@ -14480,6 +14564,7 @@ function rotatePopupMessage() {
         void popup.offsetWidth;
 
         popup.classList.add('show');
+        teaserShowCount += 1;
 
         currentPopupIndex = (currentPopupIndex + 1) % floatingChatMessages.length;
 
@@ -14503,8 +14588,10 @@ window.closeFloatingChatPopup = function (e) {
         e.stopPropagation();
     }
     isPopupDismissed = true;
+    persistTeaserOff();   // remember across reloads — don't nag on the next page load
     if (popupMessageInterval) {
         clearInterval(popupMessageInterval);
+        popupMessageInterval = null;
     }
     const popup = document.getElementById('floatingChatPopup');
     if (popup) {
