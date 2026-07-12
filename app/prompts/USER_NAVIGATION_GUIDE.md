@@ -64,6 +64,16 @@ This guide helps users navigate the Rilono web app UI quickly.
 - Validation:
   - Each uploaded document can be marked valid/needs review with reason.
 
+## Rilono Copilot (Chrome Extension)
+- What it is: a Chrome side-panel assistant that brings Rilono AI beside whatever page the student is filling (visa forms, university portals), personalized to their Rilono account and destination country (US, UK, Canada, Australia).
+- Install: Chrome Web Store → search "Rilono Copilot" → `Add to Chrome` → pin it → click the icon to open the side panel.
+- Sign-in: there is NO separate login. The extension reuses the student's signed-in `rilono.com` session. A `rilono.com` tab must be open and logged in. Flow: click `Open Rilono Login` → sign in on rilono.com → return to the panel → click `I am logged in`.
+- Access: Copilot chat requires an active **Visa Success Pass**. Signed-in users without the pass get an unlock message instead of answers.
+- `Inspect Page`: read-only; reads the visible page/form ONLY when the student clicks the Inspect button, then Copilot explains what to enter field by field. It never auto-fills or submits anything. Non-Rilono sites ask a one-time per-site permission.
+- Encrypted documents: off by default. If the student's vault is unlocked on rilono.com, an "Include my unlocked encrypted documents" toggle appears; only after enabling it is decrypted text included. The extension never sees the passphrase. If the vault is locked, they must unlock it on rilono.com first.
+- If onboarding is incomplete (no destination chosen), Copilot shows neutral copy and asks them to choose a destination on rilono.com.
+- Troubleshooting: "Copilot not responding" → check (1) a rilono.com tab is open and signed in, (2) the account has an active Visa Success Pass, (3) onboarding/destination is completed.
+
 ## Journey Stage Guidance
 - Stage progress is shown in Overview.
 - Clicking a stage shows required docs and progress.
@@ -71,6 +81,7 @@ This guide helps users navigate the Rilono web app UI quickly.
 
 ## Common User Questions
 - "Why can’t I upload more?" → Check plan limits and usage in subscription card.
-- "Why can’t I use this feature?" → Free tier quota may be exhausted; suggest Pro.
+- "Why can’t I use this feature?" → Free tier quota may be exhausted; suggest the Visa Success Pass.
 - "How do I change my subscription?" → Open `/subscription`.
 - "Where do I see document issues?" → Documents tab + Overview > Document Health.
+- "How do I use Rilono Copilot?" → It is the Chrome extension (see the Rilono Copilot section above): install from the Chrome Web Store, keep a signed-in rilono.com tab open, and hold an active Visa Success Pass. Do NOT confuse it with the in-app Rilono AI chat.
