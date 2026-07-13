@@ -134,7 +134,7 @@
       ]
     }
     </script>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=20260712c">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -2884,7 +2884,7 @@
                                                                 Stage 1: Getting Started</div>
                                                             <div id="currentStageDesc"
                                                                 style="font-size: 0.875rem; color: var(--text-secondary);">
-                                                                Welcome! Start your F1 visa journey.</div>
+                                                                Welcome! Start your visa journey.</div>
                                                         </div>
                                                     </div>
                                                     <div id="nextStepHint"
@@ -3721,8 +3721,8 @@
                                                 <div class="visa-mock-log-item system" id="prepCoachingPlaceholder">Start Prep Session to begin a
                                                     guided F-1 interview coaching flow.</div>
                                             </div>
-                                            <div id="visaPrepChatComposer" class="visa-mock-chat-composer"
-                                                style="display: none;">
+                                            <form id="visaPrepChatComposer" class="visa-mock-chat-composer"
+                                                style="display: none;" aria-label="Send prep answer">
                                                 <button type="button" class="btn visa-speak-answer-cta"
                                                     id="visaPrepSpeakBottomBtn" onclick="listenPrepInterviewAnswer()"
                                                     disabled>Speak Answer</button>
@@ -3732,11 +3732,10 @@
                                                     <span id="visaPrepMicStatusText">Mic status checking...</span>
                                                 </div>
                                                 <input id="visaPrepChatInput" type="text"
-                                                    placeholder="Type your prep answer..."
-                                                    onkeydown="handlePrepChatInputKeydown(event)">
-                                                <button type="button" class="btn btn-primary" id="visaPrepChatSendBtn"
-                                                    onclick="sendPrepInterviewChatAnswer()" disabled>Send</button>
-                                            </div>
+                                                    placeholder="Type your prep answer...">
+                                                <button type="submit" class="btn btn-primary" id="visaPrepChatSendBtn"
+                                                    disabled>Send</button>
+                                            </form>
                                         </div>
                                     </div>
                                 </div>
@@ -3772,6 +3771,12 @@
                                                         style="display: none;">Full Screen</button>
                                                     <span id="visaMockInterviewTimer"
                                                         class="visa-hub-tag visa-hub-tag-timer">Time: 00:00</span>
+                                                    <span id="visaMockReportProgress"
+                                                        class="visa-hub-tag visa-hub-tag-report-progress" role="status"
+                                                        aria-live="polite" style="display: none;">
+                                                        <span class="report-generating-spinner" aria-hidden="true"></span>
+                                                        <span id="visaMockReportProgressText">Report: 00:00</span>
+                                                    </span>
                                                 </div>
                                             </div>
                                             <div class="visa-mock-toolbar">
@@ -3812,8 +3817,8 @@
                                                     Voice or Chat to begin your visa-officer simulation. The Rilono AI officer
                                                     will close it automatically.</div>
                                             </div>
-                                            <div id="visaMockChatComposer" class="visa-mock-chat-composer"
-                                                style="display: none;">
+                                            <form id="visaMockChatComposer" class="visa-mock-chat-composer"
+                                                style="display: none;" aria-label="Send mock interview answer">
                                                 <button type="button" class="btn visa-speak-answer-cta"
                                                     id="visaMockSpeakBottomBtn" onclick="listenMockInterviewAnswer()"
                                                     disabled>Speak Answer</button>
@@ -3823,11 +3828,10 @@
                                                     <span id="visaMockMicStatusText">Mic status checking...</span>
                                                 </div>
                                                 <input id="visaMockChatInput" type="text"
-                                                    placeholder="Type your interview answer..."
-                                                    onkeydown="handleMockChatInputKeydown(event)">
-                                                <button type="button" class="btn btn-primary" id="visaMockChatSendBtn"
-                                                    onclick="sendMockInterviewChatAnswer()" disabled>Send</button>
-                                            </div>
+                                                    placeholder="Type your interview answer...">
+                                                <button type="submit" class="btn btn-primary" id="visaMockChatSendBtn"
+                                                    disabled>Send</button>
+                                            </form>
                                             <div id="visaMockInterviewReport" class="visa-mock-report"
                                                 style="display: none;"></div>
                                         </div>
@@ -5698,7 +5702,8 @@
         </script>
         <script src="/static/attribution.js"></script>
         <script src="/static/e2e_crypto.js"></script>
-        <script src="/static/app.js"></script>
+        <script src="/static/uk-maintenance-calc.js?v=20260712b"></script>
+        <script src="/static/app.js?v=20260712e"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');

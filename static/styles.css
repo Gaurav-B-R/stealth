@@ -272,6 +272,145 @@ body.b2c-light .visa-hub-tag-muted {
     color: var(--text-secondary);
 }
 
+/* ============================================================
+   Interview / Prep console — refreshed UI (shared visa-mock-*)
+   ============================================================ */
+body.b2c-light .visa-mock-panel {
+    padding: 1.55rem 1.6rem 1.7rem;
+    border-radius: 1.4rem;
+    gap: 1.05rem;
+}
+body.b2c-light .visa-mock-console-title { font-size: 1.35rem; letter-spacing: -0.01em; }
+
+/* Status pills — clean, aligned, light-friendly */
+body.b2c-light .visa-mock-state-pills { gap: 0.4rem; }
+body.b2c-light .visa-hub-tag {
+    margin-left: 0;
+    padding: 0.34rem 0.72rem;
+    font-size: 0.73rem;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.05);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+body.b2c-light #visaMockInterviewStatus::before,
+body.b2c-light #visaPrepInterviewStatus::before {
+    content: "";
+    width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor; opacity: 0.75; flex: none;
+}
+body.b2c-light .visa-hub-tag-timer {
+    background: rgba(245, 158, 11, 0.12);
+    border-color: rgba(245, 158, 11, 0.35);
+    color: #b45309;
+    box-shadow: none;
+}
+body.b2c-light .visa-hub-tag-muted {
+    background: rgba(15, 23, 42, 0.05);
+    border-color: var(--border-color);
+    color: var(--text-secondary);
+}
+
+/* Info note */
+body.b2c-light .visa-mock-note {
+    background: linear-gradient(90deg, rgba(124, 58, 237, 0.08), rgba(124, 58, 237, 0.015));
+    border-left: 3px solid #7c3aed;
+    border-radius: 0.65rem;
+    padding: 0.85rem 1.05rem;
+    font-size: 0.86rem;
+}
+
+/* Mode picker → two equal, elegant selectable cards (fixes the lopsided gradient/plain pair) */
+body.b2c-light .visa-mock-mode-picker {
+    background: var(--bg-tertiary);
+    border-radius: 1.05rem;
+    padding: 1rem 1.05rem 1.15rem;
+}
+body.b2c-light .visa-mock-mode-title {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    font-weight: 800;
+    margin-bottom: 0.35rem;
+}
+body.b2c-light .visa-mock-mode-actions {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+}
+body.b2c-light .visa-mock-mode-actions .btn {
+    width: 100%; min-width: 0;
+    display: grid;
+    grid-template-columns: 46px 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 0.9rem;
+    align-items: center;
+    text-align: left;
+    padding: 0.95rem 1.1rem;
+    border-radius: 0.95rem;
+    background: var(--card-bg);
+    border: 1.5px solid var(--border-color);
+    color: var(--text-primary);
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
+    transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+body.b2c-light .visa-mock-mode-actions .btn::before {
+    grid-column: 1; grid-row: 1 / span 2;
+    width: 46px; height: 46px;
+    display: grid; place-items: center;
+    border-radius: 13px;
+    font-size: 1.3rem;
+}
+body.b2c-light .visa-mock-mode-actions .btn:first-child::before { content: "🎤"; background: rgba(124, 58, 237, 0.12); }
+body.b2c-light .visa-mock-mode-actions .btn:last-child::before { content: "💬"; background: rgba(37, 99, 235, 0.12); }
+body.b2c-light .visa-mock-mode-actions .btn span {
+    grid-column: 2; grid-row: 1;
+    font-size: 0.98rem; font-weight: 800; letter-spacing: 0;
+    color: var(--text-primary);
+}
+body.b2c-light .visa-mock-mode-actions .btn small {
+    grid-column: 2; grid-row: 2;
+    color: var(--text-secondary); font-size: 0.76rem; font-weight: 500;
+}
+body.b2c-light .visa-mock-mode-actions .btn:hover {
+    transform: translateY(-3px);
+    border-color: rgba(124, 58, 237, 0.5);
+    box-shadow: 0 14px 30px rgba(124, 58, 237, 0.15);
+}
+body.b2c-light .visa-mock-mode-actions .btn:last-child:hover {
+    border-color: rgba(37, 99, 235, 0.5);
+    box-shadow: 0 14px 30px rgba(37, 99, 235, 0.15);
+}
+body.b2c-light .visa-mock-mode-actions .btn:active { transform: translateY(-1px); }
+
+/* Transcript */
+body.b2c-light .visa-mock-transcript-label {
+    font-size: 0.72rem; letter-spacing: 0.08em; font-weight: 800;
+    color: var(--text-muted);
+}
+body.b2c-light .visa-mock-log {
+    height: clamp(280px, 44vh, 460px);
+    border-radius: 1.1rem;
+    padding: 1.35rem;
+}
+/* First-load placeholder reads like a friendly empty state */
+body.b2c-light #visaMockInterviewLog > .visa-mock-log-item.system:only-child,
+body.b2c-light #visaPrepInterviewLog > .visa-mock-log-item.system:only-child {
+    margin: auto;
+    max-width: 460px;
+    text-align: center;
+    line-height: 1.55;
+    background: var(--card-bg);
+    border: 1px dashed var(--border-color);
+    box-shadow: none;
+}
+@media (max-width: 640px) {
+    body.b2c-light .visa-mock-mode-actions { grid-template-columns: 1fr; }
+}
+
 /* Floating Rilono AI chat popup — light theme. Its message area + input container
    use hardcoded dark rgba() (not theme variables), so override them explicitly. */
 body.b2c-light .floating-chat-messages { background: var(--bg-color); }
@@ -356,6 +495,32 @@ body.b2c-light .cookie-consent-text p { color: var(--text-secondary); }
 body.b2c-light .cookie-consent-text a { color: var(--primary-color); }
 body.b2c-light .cookie-consent-actions .btn-secondary { background: rgba(15, 23, 42, 0.04); color: var(--text-primary); border-color: rgba(15, 23, 42, 0.14); box-shadow: none; }
 body.b2c-light .cookie-consent-actions .btn-secondary:hover { background: rgba(15, 23, 42, 0.08); border-color: rgba(15, 23, 42, 0.22); color: var(--text-primary); }
+
+/* .btn-secondary was built for the dark app (near-transparent white bg + white border),
+   so on the light B2C page (body.b2c-light) it rendered as plain dark text with no visible
+   button chrome. Repaint it as a proper light bordered button. */
+body.b2c-light .btn-secondary {
+    background: #ffffff;
+    color: var(--text-primary);
+    border: 1px solid rgba(15, 23, 42, 0.16);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+body.b2c-light .btn-secondary:hover {
+    background: #f8fafc;
+    border-color: rgba(99, 102, 241, 0.45);
+    color: var(--text-primary);
+}
+/* The "Delete my account…" reveal is a destructive action — give it a danger tint so it
+   reads as one (the section heading is already red), while staying low-emphasis. */
+body.b2c-light #deleteAccountRevealBtn {
+    color: #dc2626;
+    border-color: rgba(220, 38, 38, 0.32);
+}
+body.b2c-light #deleteAccountRevealBtn:hover {
+    background: rgba(220, 38, 38, 0.06);
+    border-color: rgba(220, 38, 38, 0.55);
+    color: #dc2626;
+}
 
 html {
     margin: 0;
@@ -2286,7 +2451,10 @@ body.dashboard-active {
 #dashboardSection .dashboard-content {
     flex: 1;
     min-width: 0;
-    padding: 1.5rem 2rem 2rem;
+    /* Bottom safe-area (~96px) so the fixed "Rilono AI Assistant" chat bubble
+       (position:fixed; bottom:20px; right:20px; 56px) never overlaps bottom-anchored
+       controls like the interview-prep composer's Send button. */
+    padding: 1.5rem 2rem 6rem;
     overflow-y: auto;
     height: 100vh;
     height: 100dvh;
@@ -2899,6 +3067,21 @@ body.dashboard-active {
     animation: timerPulse 2s infinite;
 }
 
+.visa-hub-tag-report-progress {
+    align-items: center;
+    gap: 0.4rem;
+    color: #e0d4fc;
+    border-color: rgba(139, 92, 246, 0.65);
+    background: linear-gradient(135deg, rgba(88, 28, 135, 0.45), rgba(67, 56, 202, 0.35));
+    font-variant-numeric: tabular-nums;
+    box-shadow: 0 0 12px rgba(139, 92, 246, 0.22);
+}
+
+.visa-hub-tag-report-progress .report-generating-spinner {
+    width: 0.65rem;
+    height: 0.65rem;
+}
+
 @keyframes timerPulse {
 
     0%,
@@ -3392,6 +3575,21 @@ body.dashboard-active {
     border-top-color: #a78bfa;
     animation: reportGenSpin 0.8s linear infinite;
     flex-shrink: 0;
+}
+
+.report-generating-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.12rem;
+    text-align: left;
+}
+
+.report-generating-copy small {
+    color: #c4b5fd;
+    font-size: 0.72rem;
+    font-weight: 500;
 }
 
 @keyframes reportGenGlow {
@@ -4282,6 +4480,65 @@ body.dashboard-active {
     color: var(--text-muted);
     text-align: center;
     padding: 1rem 0;
+}
+
+/* Document Health — clickable stat tiles + per-category detail (both widget instances) */
+#dashboardTab-overview .overview-health-stat-clickable,
+#dashboardTab-documents .overview-health-stat-clickable {
+    cursor: pointer;
+}
+
+#dashboardTab-overview .overview-health-stat-clickable:hover,
+#dashboardTab-documents .overview-health-stat-clickable:hover {
+    border-color: rgba(124, 138, 255, 0.35);
+    box-shadow: 0 6px 16px rgba(124, 138, 255, 0.14);
+    transform: translateY(-1px);
+}
+
+#dashboardTab-overview .overview-health-stat-clickable:focus-visible,
+#dashboardTab-documents .overview-health-stat-clickable:focus-visible {
+    outline: 2px solid rgba(124, 138, 255, 0.6);
+    outline-offset: 2px;
+}
+
+#dashboardTab-overview .overview-health-stat.is-active,
+#dashboardTab-documents .overview-health-stat.is-active {
+    border-color: rgba(124, 138, 255, 0.55);
+    background: rgba(124, 138, 255, 0.10);
+    box-shadow: inset 0 0 0 1px rgba(124, 138, 255, 0.30);
+}
+
+#dashboardTab-overview .overview-health-list-title,
+#dashboardTab-documents .overview-health-list-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+#dashboardTab-overview .overview-health-reset,
+#dashboardTab-documents .overview-health-reset {
+    border: none;
+    background: none;
+    color: var(--primary-color, #7c8aff);
+    font-size: 0.74rem;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.4rem;
+    white-space: nowrap;
+}
+
+#dashboardTab-overview .overview-health-reset:hover,
+#dashboardTab-documents .overview-health-reset:hover {
+    background: rgba(124, 138, 255, 0.12);
+}
+
+#dashboardTab-overview .overview-health-item-status.overview-health-count,
+#dashboardTab-documents .overview-health-item-status.overview-health-count {
+    background: rgba(124, 138, 255, 0.15);
+    color: #7c8aff;
+    border: 1px solid rgba(124, 138, 255, 0.30);
 }
 
 #dashboardTab-documents .documents-layout {
@@ -10633,6 +10890,7 @@ body.b2c-light .pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
     #dashboardSection .dashboard-content {
         padding: 1.25rem;
         padding-top: 4rem;
+        padding-bottom: 6rem; /* keep the chat-bubble safe-area on tablet */
     }
 
     #dashboardSection .dashboard-grid {
@@ -10644,6 +10902,7 @@ body.b2c-light .pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
     #dashboardSection .dashboard-content {
         padding: 1rem 0.75rem;
         padding-top: 4rem;
+        padding-bottom: 6rem; /* keep the chat-bubble safe-area on mobile */
     }
 
     #dashboardSection .news-toolbar {

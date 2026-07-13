@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
+from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
 from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e, outcomes, sop
@@ -307,6 +307,8 @@ def startup_backfill_subscriptions():
     start_document_retention_scheduler()
     from app import fx
     fx.prime()  # warm the live USD→INR rate in the background
+    from app import uk_maintenance
+    uk_maintenance.prime()  # warm the live UK maintenance figures in the background
 
 
 @app.on_event("shutdown")
@@ -386,8 +388,8 @@ async def read_enterprise_demo():
 # those URLs shipped the same hard-coded <title>/<meta>, so crawlers, link
 # previews and social scrapers (which read the raw HTML, not the JS-rendered
 # title) saw the wrong page metadata. We inject the correct title/description/
-# canonical per route at serve time. app.js never touches document.title, so the
-# server-set title is authoritative for the initial load.
+# canonical per route at serve time. app.js mirrors these titles during client-side
+# navigation, while the server remains authoritative for the initial load.
 SITE_ORIGIN = "https://rilono.com"
 
 _F1_TITLE = "F1 Student Visa Guidance | DS-160, I-20, Documents & Interview | Rilono AI"
@@ -458,6 +460,46 @@ _SPA_ROUTE_META = {
         "canonical": f"{SITE_ORIGIN}/dashboard",
         "noindex": True,
     },
+    "/documents": {
+        "title": "Your Documents · Rilono", "description": "Manage your Rilono documents.",
+        "canonical": f"{SITE_ORIGIN}/documents", "noindex": True,
+    },
+    "/interviews": {
+        "title": "Visa Interview Prep · Rilono", "description": "Practice and review your visa interviews.",
+        "canonical": f"{SITE_ORIGIN}/interviews", "noindex": True,
+    },
+    "/universities": {
+        "title": "University Shortlist · Rilono", "description": "Manage your university shortlist.",
+        "canonical": f"{SITE_ORIGIN}/universities", "noindex": True,
+    },
+    "/news": {
+        "title": "Visa News · Rilono", "description": "Review visa news relevant to your journey.",
+        "canonical": f"{SITE_ORIGIN}/news", "noindex": True,
+    },
+    "/copilot": {
+        "title": "AI Copilot · Rilono", "description": "Use Rilono Copilot for your visa journey.",
+        "canonical": f"{SITE_ORIGIN}/copilot", "noindex": True,
+    },
+    "/sop": {
+        "title": "SOP Studio · Rilono", "description": "Build and review your statement of purpose.",
+        "canonical": f"{SITE_ORIGIN}/sop", "noindex": True,
+    },
+    "/rilono-ai": {
+        "title": "Rilono AI Assistant · Rilono", "description": "Chat with your Rilono AI assistant.",
+        "canonical": f"{SITE_ORIGIN}/rilono-ai", "noindex": True,
+    },
+    "/profile": {
+        "title": "Your Profile · Rilono", "description": "Manage your Rilono profile.",
+        "canonical": f"{SITE_ORIGIN}/profile", "noindex": True,
+    },
+    "/settings": {
+        "title": "Settings · Rilono", "description": "Manage your Rilono account settings.",
+        "canonical": f"{SITE_ORIGIN}/settings", "noindex": True,
+    },
+    "/referral": {
+        "title": "Referral Program · Rilono", "description": "Manage your Rilono referrals.",
+        "canonical": f"{SITE_ORIGIN}/referral", "noindex": True,
+    },
     # Transactional auth pages (reached from email links / login). Kept out of search.
     "/forgot-password": {
         "title": "Reset your password · Rilono",
@@ -485,7 +527,7 @@ _SPA_ROUTE_META = {
         "canonical": f"{SITE_ORIGIN}/unsubscribe-email", "noindex": True,
     },
     "/subscription": {
-        "title": "Your subscription · Rilono",
+        "title": "Your Subscription · Rilono",
         "description": "Manage your Rilono subscription.",
         "canonical": f"{SITE_ORIGIN}/subscription", "noindex": True,
     },
@@ -637,6 +679,16 @@ async def read_country_visa(request: Request):
 @app.get("/verify-university-change")
 @app.get("/unsubscribe-email")
 @app.get("/subscription")
+@app.get("/documents")
+@app.get("/interviews")
+@app.get("/universities")
+@app.get("/news")
+@app.get("/copilot")
+@app.get("/sop")
+@app.get("/rilono-ai")
+@app.get("/profile")
+@app.get("/settings")
+@app.get("/referral")
 async def read_preserved_public_spa_routes(request: Request):
     # These paths are all handled client-side by app.js (see handleRouting), so they MUST
     # serve the SPA (us_f1_visa.html with app.js), NOT the marketing index.html the catch-all
@@ -674,6 +726,26 @@ async def read_us_f1_blog():
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)
+
+
+@app.get("/tools/uk-maintenance-calculator")
+@app.get("/tools/uk-maintenance-calculator/")
+async def read_uk_maintenance_calculator():
+    """Serve the free public UK maintenance-funds calculator (own SEO meta; shared engine
+    reused by the student app + enterprise CRM). Consultancies share this link with students."""
+    page = _read_static_html("uk-maintenance-calculator.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/api/tools/uk-maintenance-figures")
+async def uk_maintenance_figures():
+    """Server-side source of truth for the UK maintenance amounts consumed by the shared
+    calculator engine (public page + B2C modal + enterprise CRM). Env-overridable baseline
+    with a best-effort live GOV.UK check; always returns a usable figure set."""
+    from app import uk_maintenance
+    return JSONResponse(uk_maintenance.get_figures())
 
 
 @app.get("/blog/how-to-use-rilono-ai-canada-study-permit")
@@ -751,6 +823,66 @@ async def read_canada_interview_blog():
 async def read_australia_gs_blog():
     """Serve the Australia Genuine Student (GS) questions & answers guide (static blog; own SEO meta)."""
     page = _read_static_html("blog-australia-gs-interview-questions.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/uk-student-visa-maintenance-funds")
+@app.get("/blog/uk-student-visa-maintenance-funds/")
+async def read_uk_maintenance_funds_blog():
+    """Serve the UK maintenance-funds calculator guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-uk-maintenance-funds-calculator.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/how-to-write-sop-for-student-visa")
+@app.get("/blog/how-to-write-sop-for-student-visa/")
+async def read_sop_flagship_blog():
+    """Serve the flagship "how to write an SOP for a student visa" guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-sop-student-visa-guide.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/sop-for-us-f1-visa")
+@app.get("/blog/sop-for-us-f1-visa/")
+async def read_sop_us_blog():
+    """Serve the US F-1 SOP guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-sop-us-f1-visa.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/sop-for-uk-student-visa")
+@app.get("/blog/sop-for-uk-student-visa/")
+async def read_sop_uk_blog():
+    """Serve the UK personal statement / SOP guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-sop-uk-student-visa.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/sop-for-canada-study-permit")
+@app.get("/blog/sop-for-canada-study-permit/")
+async def read_sop_canada_blog():
+    """Serve the Canada study plan / SOP guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-sop-canada-study-permit.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
+
+
+@app.get("/blog/sop-for-australia-student-visa")
+@app.get("/blog/sop-for-australia-student-visa/")
+async def read_sop_australia_blog():
+    """Serve the Australia GS statement / SOP guide (static blog; own SEO meta)."""
+    page = _read_static_html("blog-sop-australia-student-visa.html")
     if page is None:
         raise HTTPException(status_code=404, detail="Not found")
     return HTMLResponse(page)

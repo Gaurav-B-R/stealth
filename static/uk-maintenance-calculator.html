@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UK Student Visa Maintenance Funds Calculator (2026) · Rilono</title>
+    <meta name="description" content="Free UK Student visa maintenance funds calculator: work out the exact amount to show (London vs outside London), living costs + tuition, and your 28-day bank-balance window. Then check your documents with Rilono AI.">
+    <link rel="canonical" href="https://rilono.com/tools/uk-maintenance-calculator">
+    <meta property="og:site_name" content="Rilono">
+    <meta property="og:title" content="UK Student Visa Maintenance Funds Calculator">
+    <meta property="og:description" content="Work out the exact UK Student visa maintenance amount and the 28-day window your bank balance must cover — free.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://rilono.com/tools/uk-maintenance-calculator">
+    <meta property="og:image" content="https://rilono.com/static/logo.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="UK Student Visa Maintenance Funds Calculator">
+    <meta name="twitter:description" content="Exact UK maintenance amount + 28-day rule window, free.">
+    <link rel="icon" href="/static/logo.png">
+    <style>
+        :root {
+            --ink: #0f172a; --ink-2: #475569; --muted: #64748b; --line: rgba(15, 23, 42, .10);
+            --bg: #f6f8fc; --card: #ffffff; --brand: #4f46e5;
+            --grad: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.7; }
+        a { color: var(--brand); }
+        .navbar { position: sticky; top: 0; z-index: 50; background: rgba(255, 255, 255, .85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+        .nav-in { max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-weight: 800; font-size: 1.3rem; }
+        .brand img { height: 34px; }
+        .nav-links { display: flex; align-items: center; gap: 22px; }
+        .nav-links a { text-decoration: none; color: var(--ink-2); font-weight: 600; font-size: .95rem; }
+        .nav-links a:hover { color: var(--ink); }
+        .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
+        @media (max-width: 640px) { .nav-links a:not(.nav-cta) { display: none; } }
+
+        .wrap { max-width: 760px; margin: 0 auto; padding: 44px 24px 20px; }
+        .eyebrow { display: inline-flex; align-items: center; gap: 8px; font-size: .76rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); background: rgba(99, 102, 241, .1); border: 1px solid rgba(99, 102, 241, .25); padding: 6px 14px; border-radius: 999px; }
+        h1 { font-size: clamp(1.9rem, 4vw, 2.6rem); line-height: 1.14; letter-spacing: -.02em; font-weight: 850; margin: 18px 0 10px; }
+        .lead { font-size: 1.1rem; color: var(--ink-2); margin: 0 0 8px; }
+        .calc-card { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 26px; box-shadow: 0 18px 44px rgba(15, 23, 42, .08); margin: 26px 0; }
+        .how { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px 24px; margin: 22px 0; }
+        .how h2 { font-size: 1.25rem; font-weight: 800; margin: 0 0 10px; }
+        .how ul { margin: 0; padding-left: 20px; color: #334155; }
+        .how li { margin-bottom: 8px; }
+        .how code { background: #eef0f8; border-radius: 6px; padding: 1px 7px; font-size: .9em; color: #4338ca; }
+        .cta-band { text-align: center; border-radius: 20px; padding: 34px 24px; border: 1px solid rgba(99, 102, 241, .3); background: linear-gradient(160deg, #f0effc, #eef2fb); margin: 30px 0 8px; }
+        .cta-band h2 { margin: 0 0 8px; font-size: 1.35rem; }
+        .cta-band p { margin: 0 auto 18px; max-width: 500px; color: var(--ink-2); }
+        .btn { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1rem; padding: 12px 22px; border-radius: 12px; text-decoration: none; }
+        .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 14px 34px rgba(99, 102, 241, .3); }
+        .btn-ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); margin-left: 8px; }
+        .disclaimer { font-size: .85rem; color: var(--muted); text-align: center; margin: 8px 0 0; }
+        .foot { border-top: 1px solid var(--line); margin-top: 34px; }
+        .foot-in { max-width: 760px; margin: 0 auto; padding: 22px 24px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: .85rem; }
+        .foot-in a { color: var(--ink-2); text-decoration: none; }
+    </style>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "WebApplication",
+                "name": "UK Student Visa Maintenance Funds Calculator",
+                "url": "https://rilono.com/tools/uk-maintenance-calculator",
+                "applicationCategory": "FinanceApplication",
+                "operatingSystem": "Web",
+                "offers": { "@type": "Offer", "price": "0", "priceCurrency": "GBP" },
+                "publisher": { "@type": "Organization", "name": "Rilono", "url": "https://rilono.com/" }
+            },
+            {
+                "@type": "FAQPage",
+                "mainEntity": [
+                    { "@type": "Question", "name": "How much money do I need for a UK Student visa?", "acceptedAnswer": { "@type": "Answer", "text": "You must show your unpaid first-year tuition plus living costs of currently £1,529/month if studying in London or £1,171/month outside London, for up to 9 months. You can offset up to £1,334 of accommodation already paid to your university. Always confirm the current amounts on GOV.UK." } },
+                    { "@type": "Question", "name": "What is the 28-day rule for UK maintenance funds?", "acceptedAnswer": { "@type": "Answer", "text": "The required amount must be held in your account for 28 consecutive days without dropping below it, and your bank statement's closing date must be no more than 31 days before you submit your visa application." } },
+                    { "@type": "Question", "name": "Does this calculator submit anything to UKVI?", "acceptedAnswer": { "@type": "Answer", "text": "No. It is a free planning tool that runs entirely in your browser. It does not store or submit your figures. Always confirm requirements on GOV.UK." } }
+                ]
+            }
+        ]
+    }
+    </script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-in">
+            <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
+            <div class="nav-links">
+                <a href="/uk-student-visa">UK Student Visa</a>
+                <a href="/blog/how-to-use-rilono-ai-uk-student-visa">Guide</a>
+                <a href="/register" class="nav-cta">Get started</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="wrap">
+        <span class="eyebrow">🇬🇧 Free tool · UK Student Visa</span>
+        <h1>UK Student visa maintenance funds calculator</h1>
+        <p class="lead">The maintenance amount is the single most confusing part of a UK Student visa — London vs outside London, months of living costs, unpaid tuition and the 28-day rule. Enter your details below to get the exact figure and the dates your bank balance must cover.</p>
+
+        <div class="calc-card">
+            <div id="ukCalcMount"></div>
+        </div>
+
+        <div class="how">
+            <h2>How UK maintenance funds work</h2>
+            <ul>
+                <li><b>Living costs.</b> Currently <code data-ukm="london">£1,529</code>/month in London and <code data-ukm="outside">£1,171</code>/month outside London, for up to <b><span data-ukm="maxMonths">9</span> months</b>.</li>
+                <li><b>Tuition.</b> Add your first-year (or full course, if under a year) tuition, minus anything you've already paid.</li>
+                <li><b>Accommodation offset.</b> Up to <code data-ukm="accomCap">£1,334</code> of accommodation paid to your university reduces the amount you must show.</li>
+                <li><b>The 28-day rule.</b> The total must sit in your account for <b>28 consecutive days</b> without dipping below it, and your statement's closing date must be within <b>31 days</b> of your application.</li>
+            </ul>
+        </div>
+
+        <div class="cta-band">
+            <h2>Check your documents, not just the number</h2>
+            <p>Rilono AI reads your bank statement against the 28-day rule, catches the mistakes that cause refusals, and drills you for the credibility interview — free to start.</p>
+            <a class="btn btn-primary" href="/register">Start free</a>
+            <a class="btn btn-ghost" href="/blog/how-to-use-rilono-ai-uk-student-visa">Read the UK guide</a>
+            <p class="disclaimer">This tool is for planning only and is not immigration advice. UK rules and amounts change — always confirm the current figures on GOV.UK.</p>
+        </div>
+    </main>
+
+    <footer class="foot">
+        <div class="foot-in">
+            <span>© <span id="yr"></span> Rilono</span>
+            <span><a href="/uk-student-visa">UK Student Visa</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></span>
+        </div>
+    </footer>
+
+    <script src="/static/uk-maintenance-calc.js?v=20260712b"></script>
+    <script>
+        document.getElementById("yr").textContent = new Date().getFullYear();
+        if (window.RilonoUkMaintenanceCalc) {
+            window.RilonoUkMaintenanceCalc.mount(document.getElementById("ukCalcMount"));
+        }
+    </script>
+</body>
+</html>

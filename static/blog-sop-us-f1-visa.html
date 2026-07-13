@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Every hyperlink on this article opens in a new tab (default target for the page).
+         Only `target` is set — no href — so relative URL resolution is unchanged. -->
+    <base target="_blank">
+    <title>SOP for US F-1 Students: How to Write It — With Examples (2026) · Rilono</title>
+    <meta name="description" content="How to write an SOP for a US university in 2026 — structure, strong vs weak examples, and keeping your story consistent through the DS-160 and F-1 interview.">
+    <meta name="author" content="Rilono">
+    <link rel="canonical" href="https://rilono.com/blog/sop-for-us-f1-visa">
+    <meta property="og:site_name" content="Rilono">
+    <meta property="og:title" content="SOP for the US (F-1 Visa): How to Write It — With Examples (2026)">
+    <meta property="og:description" content="The US has no SOP at the visa stage — but your admissions SOP sets the story your DS-160 and F-1 interview must match. Structure, examples and the consistency test.">
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://rilono.com/blog/sop-for-us-f1-visa">
+    <meta property="og:image" content="https://rilono.com/static/logo.png">
+    <meta property="article:published_time" content="2026-07-12">
+    <meta property="article:modified_time" content="2026-07-12">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="SOP for the US (F-1 Visa): How to Write It — With Examples (2026)">
+    <meta name="twitter:description" content="Write the SOP once, defend it twice: the US SOP structure, strong vs weak examples, and the SOP ↔ I-20 ↔ DS-160 ↔ interview consistency test.">
+    <meta name="twitter:image" content="https://rilono.com/static/logo.png">
+    <link rel="icon" href="/static/logo.png">
+    <style>
+        :root {
+            --ink: #0f172a; --ink-2: #475569; --muted: #64748b; --line: rgba(15, 23, 42, .10);
+            --bg: #f6f8fc; --card: #ffffff; --brand: #4f46e5; --brand-2: #7c3aed; --accent: #db2777;
+            --grad: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--ink); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.7; }
+        a { color: var(--brand); }
+        .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+        .navbar { position: sticky; top: 0; z-index: 50; background: rgba(255, 255, 255, .85); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+        .nav-in { max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+        .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); font-weight: 800; font-size: 1.3rem; }
+        .brand img { height: 34px; }
+        .nav-links { display: flex; align-items: center; gap: 26px; }
+        .nav-links a { text-decoration: none; color: var(--ink-2); font-weight: 600; font-size: .95rem; }
+        .nav-links a:hover { color: var(--ink); }
+        .nav-cta { background: var(--grad); color: #fff !important; padding: 9px 18px; border-radius: 11px; font-weight: 700; }
+        .nav-toggle { display: none; background: transparent; border: 0; color: var(--ink); cursor: pointer; padding: 6px; margin: -6px -6px -6px 0; border-radius: 8px; }
+        .nav-toggle svg { width: 26px; height: 26px; display: block; }
+
+        /* "Products" dropdown — same header as the homepage so it's uniform across product pages. */
+        .products-nav { position: relative; display: inline-flex; align-items: center; }
+        .products-nav::after { content: ""; position: absolute; left: -.75rem; right: -.75rem; top: 100%; height: 1rem; }
+        .products-nav-trigger { display: inline-flex; align-items: center; gap: .35rem; color: var(--ink-2); font-weight: 600; font-size: .95rem; padding: 0; background: transparent; border: 0; font-family: inherit; cursor: pointer; transition: color .2s ease; }
+        .products-nav-trigger:hover, .products-nav:focus-within .products-nav-trigger, .products-nav:hover .products-nav-trigger, .products-nav.is-open .products-nav-trigger { color: var(--ink); }
+        .products-nav-trigger svg { width: 14px; height: 14px; transition: transform .2s ease; }
+        .products-nav:hover .products-nav-trigger svg, .products-nav:focus-within .products-nav-trigger svg, .products-nav.is-open .products-nav-trigger svg { transform: rotate(180deg); }
+        .products-menu { position: absolute; top: calc(100% + .85rem); left: 50%; transform: translateX(-50%) translateY(8px); min-width: 270px; padding: .55rem; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 24px 60px rgba(15, 23, 42, .16); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .18s ease, transform .18s ease, visibility .18s ease; z-index: 60; }
+        .products-nav:hover .products-menu, .products-nav:focus-within .products-menu, .products-nav.is-open .products-menu { opacity: 1; visibility: visible; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+        .products-menu a { display: block; padding: .8rem .85rem; border-radius: 10px; color: var(--ink); text-decoration: none; font-weight: 800; font-size: .95rem; }
+        .products-menu a span { display: block; margin-top: .18rem; color: var(--muted); font-size: .78rem; font-weight: 600; line-height: 1.35; }
+        .products-menu a:hover { background: rgba(99, 92, 255, .09); color: var(--ink); }
+        .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); font-weight: 800; padding: .35rem .85rem .15rem; }
+        .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
+        @media (max-width: 720px) {
+            .nav-toggle { display: inline-flex; }
+            .nav-links { position: absolute; top: 100%; left: 0; right: 0; flex-direction: column; align-items: stretch; gap: 2px; background: #fff; border-bottom: 1px solid var(--line); box-shadow: 0 24px 48px rgba(15, 23, 42, .14); padding: 10px 16px 16px; display: none; }
+            .nav-links.open { display: flex; }
+            .nav-links > a { display: block; padding: 12px 10px; border-radius: 10px; font-size: 1rem; }
+            .nav-links > a:hover { background: rgba(99, 102, 241, .06); }
+            .nav-cta { text-align: center; margin-top: 8px; padding: 12px; }
+            .products-nav { display: block; position: static; }
+            .products-nav-trigger { display: none; }
+            .products-menu { position: static; opacity: 1; visibility: visible; pointer-events: auto; transform: none; box-shadow: none; border: 0; padding: 0; min-width: 0; background: transparent; }
+            .products-menu a { padding: 10px 10px; }
+            .products-menu .pm-label { padding: 8px 10px 2px; }
+        }
+
+        /* article shell */
+        .post { max-width: 760px; margin: 0 auto; padding: 48px 24px 40px; }
+        .post-eyebrow { display: inline-flex; align-items: center; gap: 9px; font-size: .78rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); background: rgba(99, 102, 241, .1); border: 1px solid rgba(99, 102, 241, .25); padding: 6px 14px; border-radius: 999px; }
+        .post h1 { font-size: clamp(1.9rem, 4vw, 2.7rem); line-height: 1.15; letter-spacing: -.02em; font-weight: 850; margin: 18px 0 10px; }
+        .post .standfirst { font-size: 1.12rem; color: var(--ink-2); margin: 0 0 14px; }
+        .post-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: .85rem; font-weight: 600; padding-bottom: 22px; border-bottom: 1px solid var(--line); margin-bottom: 30px; }
+        .post h2 { font-size: 1.45rem; font-weight: 800; letter-spacing: -.01em; margin: 42px 0 12px; }
+        .post h3 { font-size: 1.08rem; font-weight: 800; margin: 26px 0 8px; }
+        .post p, .post li { color: #334155; font-size: 1rem; }
+        .post ul, .post ol { padding-left: 22px; }
+        .post li { margin-bottom: 7px; }
+        .post code { background: #eef0f8; border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; font-size: .88em; color: #4338ca; }
+        .post .toc { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 22px; margin: 8px 0 30px; box-shadow: 0 8px 24px rgba(15, 23, 42, .05); }
+        .post .toc h4 { margin: 0 0 8px; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+        .post .toc ol { margin: 0; padding-left: 20px; }
+        .post .toc li { margin-bottom: 4px; font-weight: 600; }
+
+        /* callouts */
+        .callout { border-radius: 14px; padding: 14px 18px; margin: 18px 0; font-size: .95rem; border: 1px solid; }
+        .callout p { margin: 0; font-size: .95rem; }
+        .callout.safe { background: #ecfdf5; border-color: rgba(16, 185, 129, .35); }
+        .callout.safe p { color: #065f46; }
+        .callout.note { background: #eff6ff; border-color: rgba(59, 130, 246, .35); }
+        .callout.note p { color: #1e3a8a; }
+        .callout.warn { background: #fffbeb; border-color: rgba(245, 158, 11, .4); }
+        .callout.warn p { color: #92400e; }
+
+        /* tables */
+        .country-table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: .92rem; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 8px 24px rgba(15, 23, 42, .05); }
+        .country-table th, .country-table td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+        .country-table th { background: #f1f4fb; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+        .country-table td:first-child { font-weight: 700; }
+        .country-table tr:last-child td { border-bottom: none; }
+
+        /* question blocks */
+        .qa { background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--brand); border-radius: 12px; padding: 14px 18px; margin: 14px 0; }
+        .qa .q { font-weight: 800; margin: 0 0 6px; color: var(--ink); }
+        .qa .a { margin: 0; font-size: .95rem; color: var(--ink-2); }
+        .qa .a b { color: var(--ink); }
+
+        /* sample answer blocks */
+        .prompt-box { background: linear-gradient(160deg, #f6f7ff, #fbf7ff); border: 1px solid rgba(99, 102, 241, .25); border-radius: 14px; padding: 16px 18px; margin: 12px 0; }
+        .prompt-box p { margin: 0 0 10px; font-size: .93rem; color: #3730a3; font-style: italic; }
+        .prompt-box p:last-child { margin-bottom: 0; }
+
+        /* FAQ */
+        .faq details { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 0 18px; margin-bottom: 10px; }
+        .faq details[open] { border-color: rgba(99, 102, 241, .4); }
+        .faq summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 14px 0; font-weight: 700; font-size: .96rem; }
+        .faq summary::-webkit-details-marker { display: none; }
+        .faq summary .chev { flex: none; width: 26px; height: 26px; border-radius: 8px; display: grid; place-content: center; background: rgba(99, 102, 241, .1); color: var(--brand); font-weight: 900; transition: transform .3s ease; }
+        .faq details[open] summary .chev { transform: rotate(45deg); }
+        .faq .ans { color: var(--ink-2); font-size: .92rem; padding: 0 0 15px; margin: 0; }
+
+        /* value strip + comparison (conversion) */
+        .value-strip { margin: 30px 0; border-radius: 18px; padding: 22px 24px; border: 1px solid rgba(99, 102, 241, .25); background: linear-gradient(160deg, #f5f4ff, #fdf5ff); }
+        .value-strip h3 { margin: 0 0 4px; font-size: 1.12rem; font-weight: 800; }
+        .value-strip > p { margin: 0 0 16px; color: var(--ink-2); font-size: .95rem; }
+        .value-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+        .value-item { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; }
+        .value-item .ic { font-size: 1.25rem; }
+        .value-item b { display: block; font-size: .9rem; margin: 5px 0 2px; }
+        .value-item span { color: var(--muted); font-size: .8rem; line-height: 1.4; }
+        .value-cta { margin-top: 16px; }
+        .value-cta a { display: inline-flex; align-items: center; gap: 6px; font-weight: 800; color: var(--brand); text-decoration: none; font-size: .95rem; }
+        .value-cta a:hover { text-decoration: underline; }
+        .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+        .cmp-col { border-radius: 16px; padding: 22px; border: 1px solid var(--line); }
+        .cmp-col.old { background: #fff; }
+        .cmp-col.new { background: linear-gradient(165deg, #f5f4ff, #fdf5ff); border-color: rgba(99, 102, 241, .35); box-shadow: 0 14px 34px rgba(99, 102, 241, .1); }
+        .cmp-col h4 { margin: 0 0 14px; font-size: .82rem; text-transform: uppercase; letter-spacing: .08em; font-weight: 800; color: var(--muted); }
+        .cmp-col.new h4 { color: var(--brand); }
+        .cmp-col ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+        .cmp-col li { display: flex; gap: 10px; align-items: flex-start; font-size: .92rem; font-weight: 600; }
+        .cmp-col .x { color: #f43f5e; font-weight: 900; flex: none; }
+        .cmp-col .v { color: #059669; font-weight: 900; flex: none; }
+        .cmp-col.old li { color: var(--ink-2); }
+        @media (max-width: 640px) { .value-grid { grid-template-columns: 1fr 1fr; } .cmp { grid-template-columns: 1fr; } }
+
+        /* CTA band */
+        .cta-band { text-align: center; border-radius: 20px; padding: 40px 26px; border: 1px solid rgba(99, 102, 241, .3); background: radial-gradient(600px 280px at 50% -10%, rgba(99, 102, 241, .14), transparent 60%), linear-gradient(160deg, #f0effc, #eef2fb); margin: 44px 0 10px; }
+        .cta-band h2 { margin: 0 0 8px; }
+        .cta-band p { margin: 0 auto 20px; max-width: 480px; }
+        .btn { display: inline-flex; align-items: center; gap: 9px; font-weight: 700; font-size: 1rem; padding: 13px 24px; border-radius: 12px; text-decoration: none; }
+        .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 14px 34px rgba(99, 102, 241, .3); }
+        .btn-ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); margin-left: 10px; }
+        .cta-fineprint { font-size: .8rem; color: var(--muted); margin-top: 12px !important; }
+
+        /* related guides */
+        .related-guides{margin:40px 0 4px}
+        .related-guides h2{font-size:1.4rem;margin:0 0 6px}
+        .related-guides .rg-sub{color:var(--muted);font-size:.94rem;margin:0 0 18px;max-width:60ch}
+        .rg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(238px,1fr));gap:12px}
+        .rg-card{display:block;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:15px 16px;text-decoration:none;color:var(--ink);box-shadow:0 8px 24px rgba(15,23,42,.05);transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+        .rg-card:hover{transform:translateY(-2px);border-color:rgba(99,102,241,.4);box-shadow:0 14px 32px rgba(15,23,42,.09)}
+        .rg-card .rg-tag{display:block;font-size:.67rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+        .rg-card .rg-title{display:block;font-weight:800;font-size:.97rem;line-height:1.35}
+        .rg-card .rg-flag{margin-right:.45rem}
+        .related-guides .rg-all{display:inline-block;margin-top:16px;font-weight:800;text-decoration:none;color:var(--brand)}
+        .related-guides .rg-all:hover{text-decoration:underline}
+
+        /* footer (matches homepage) */
+        .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); margin-top: 56px; }
+        .hx-footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); }
+        .hx-footer .cols { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 32px; padding: 52px 0 34px; }
+        .hx-footer .brand-col img { height: 34px; margin-bottom: 14px; }
+        .hx-footer .brand-col p { color: #8f96bd; font-size: .9rem; line-height: 1.65; max-width: 290px; }
+        .hx-footer h5 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: #7b82ad; margin: 0 0 16px; font-weight: 800; }
+        .hx-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
+        .hx-footer a { color: #c6cbe8; text-decoration: none; font-size: .92rem; }
+        .hx-footer a:hover { color: #d9c9ff; }
+        .hx-footer .foot-bottom { border-top: 1px solid rgba(255, 255, 255, .09); padding: 22px 0; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #7b82ad; font-size: .85rem; }
+        @media (max-width: 860px) { .hx-footer .cols { grid-template-columns: 1fr 1fr; } }
+    </style>
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "BlogPosting",
+                "headline": "SOP for the US: how to write a statement of purpose that carries your F-1 visa (2026)",
+                "description": "How to write an SOP for a US university in 2026 — structure, strong vs weak examples, and keeping your story consistent through the DS-160 and F-1 interview.",
+                "url": "https://rilono.com/blog/sop-for-us-f1-visa",
+                "mainEntityOfPage": { "@type": "WebPage", "@id": "https://rilono.com/blog/sop-for-us-f1-visa" },
+                "image": "https://rilono.com/static/logo.png",
+                "author": { "@type": "Organization", "name": "Rilono", "url": "https://rilono.com/" },
+                "publisher": { "@type": "Organization", "name": "Rilono", "logo": { "@type": "ImageObject", "url": "https://rilono.com/static/logo.png" } },
+                "datePublished": "2026-07-12",
+                "dateModified": "2026-07-12",
+                "about": "Statement of purpose for US universities and the F-1 student visa"
+            },
+            {
+                "@type": "FAQPage",
+                "mainEntity": [
+                    { "@type": "Question", "name": "Do I submit an SOP with my F-1 visa application?", "acceptedAnswer": { "@type": "Answer", "text": "No. There is no SOP field in the F-1 process — not on the DS-160, and consular officers don't collect essays at the interview. The SOP is an admissions document. It still matters at the visa stage because the officer probes the same ground it covered — why this program, who is paying, what comes after — and your answers need to match the story your SOP told. Keep a copy in your interview folder and re-read it before your appointment." } },
+                    { "@type": "Question", "name": "Should my SOP mention OPT or staying in the US?", "acceptedAnswer": { "@type": "Answer", "text": "Mentioning Optional Practical Training (OPT) is fine — it's a lawful part of the F-1 program, and admissions committees expect ambitious training plans. What you should never write is an intention to settle in the US: F-1 is a nonimmigrant visa, and under Section 214(b) the officer must be satisfied you intend to return home. The safe pattern: OPT as a possible short chapter, a career plan whose destination is your home country." } },
+                    { "@type": "Question", "name": "How is a US SOP different from a UK personal statement?", "acceptedAnswer": { "@type": "Answer", "text": "Emphasis. A UK personal statement is about course fit and motivation, written within a strict character limit and probed later at credibility interviews. A US SOP — especially for graduate programs — leans harder on research and professional fit: named courses, labs and faculty, and a clear account of what you'll do with the degree. US programs also set their own prompts and word limits, so there is no single national format the way UCAS provides one." } },
+                    { "@type": "Question", "name": "Can one SOP work for multiple universities?", "acceptedAnswer": { "@type": "Answer", "text": "The core of it can — your hook, background, career plan and funding story shouldn't change between applications. But the 'why this program' and 'why this university' sections must be genuinely rewritten for each school, naming courses, labs and faculty that actually exist there. Committees read thousands of statements and spot a swapped-name template instantly — a mismatched program name pasted from another application is one of the most common and most damaging errors." } },
+                    { "@type": "Question", "name": "Will the visa officer read my SOP?", "acceptedAnswer": { "@type": "Answer", "text": "Usually not. Consular officers work from your DS-160, your SEVIS record and a short conversation — they generally don't have your admissions essays in front of them. But they independently probe the exact questions your SOP answered: why this program, why this university, who is paying, what you'll do after. If your interview answers contradict the story your university admitted you on, that inconsistency is the problem — which is why writing the SOP well and remembering what it says are both part of visa prep." } }
+                ]
+            }
+        ]
+    }
+    </script>
+    <script src="/static/public_auth_nav.js?v=1" defer></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-in">
+            <a class="brand" href="/"><img src="/static/logo.png" alt="Rilono" onerror="this.style.display='none'">Rilono</a>
+            <button class="nav-toggle" id="navToggle" type="button" aria-label="Toggle menu" aria-expanded="false" aria-controls="navLinks">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+            </button>
+            <div class="nav-links" id="navLinks">
+                <a href="/">Home</a>
+                <div class="products-nav" id="productsNav">
+                    <button type="button" class="products-nav-trigger" id="productsNavTrigger" aria-haspopup="true"
+                        aria-expanded="false" aria-controls="productsMenu">
+                        Products
+                        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd"
+                                d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                                clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                    <div class="products-menu" id="productsMenu">
+                        <div class="pm-label">Student visas</div>
+                        <a href="/us-f1-visa"><span class="pm-flag">🇺🇸</span>United States<span>F-1 · J-1 · M-1 student
+                                visas, DS-160, I-20 &amp; interview prep.</span></a>
+                        <a href="/uk-student-visa"><span class="pm-flag">🇬🇧</span>United Kingdom<span>Student visa (Tier
+                                4) — CAS, financial proof &amp; interview.</span></a>
+                        <a href="/canada-study-permit"><span class="pm-flag">🇨🇦</span>Canada<span>Study Permit
+                                — LOA, proof of funds &amp; biometrics.</span></a>
+                        <a href="/australia-student-visa"><span class="pm-flag">🇦🇺</span>Australia<span>Subclass 500 —
+                                CoE, OSHC &amp; Genuine Student.</span></a>
+                        <a href="/germany-student-visa"><span class="pm-flag">🇩🇪</span>Germany<span>National Type D visa —
+                                blocked account, APS &amp; VIDEX.</span></a>
+                    </div>
+                </div>
+                <a href="/blog">Blog</a>
+                <a href="/pricing">Pricing</a>
+                <a href="/about-us">About Us</a>
+                <a href="/for-enterprise">Enterprise</a>
+                <a href="/login">Login</a>
+                <a href="/register" class="nav-cta">Get started</a>
+            </div>
+        </div>
+    </nav>
+
+    <article class="post">
+        <span class="post-eyebrow">Application Kit · US F-1 SOP</span>
+        <h1>SOP for the US: how to write a statement of purpose that carries your F-1 visa (2026)</h1>
+        <p class="standfirst">Here's the truth most guides skip: <strong>the US has no SOP at the visa stage.</strong> Your statement of purpose is an admissions document, read by university committees — the consular officer never asks for it. But it matters twice: first it wins your admission (and with it your I-20), and then your DS-160 and F-1 interview answers must tell the same story your SOP told. Write it once, defend it twice. This guide covers the structure, strong-vs-weak examples, and the consistency test that holds it all together.</p>
+        <div class="post-meta">
+            <span>The Rilono Team</span>
+            <span>·</span>
+            <span>Updated July 2026</span>
+            <span>·</span>
+            <span>13 min read</span>
+        </div>
+
+        <div class="toc">
+            <h4>What's inside</h4>
+            <ol>
+                <li>Where the SOP fits in your US journey</li>
+                <li>The two readers: admissions committee vs visa officer</li>
+                <li>The 6-part structure, adapted for the US</li>
+                <li>Strong vs weak: the two paragraphs that decide it</li>
+                <li>A condensed example SOP, annotated</li>
+                <li>The 10 mistakes that sink US SOPs</li>
+                <li>Length and format: follow the prompt</li>
+                <li>The consistency test: SOP ↔ I-20 ↔ DS-160 ↔ interview</li>
+                <li>How to draft yours with SOP Studio</li>
+            </ol>
+        </div>
+
+        <h2>Where the SOP fits in your US journey</h2>
+        <p>The US route runs <strong>admission → I-20 → DS-160 → F-1 interview</strong>, and the SOP sits at the very start of that chain. Unlike Canada's study plan or Australia's Genuine Student answers, it is never submitted to a visa officer — yet it quietly shapes every later stage, because it's the first full version of your story on paper:</p>
+        <table class="country-table">
+            <tr><th>Stage</th><th>What happens</th><th>Where your SOP matters</th></tr>
+            <tr><td>1 · Admissions</td><td>The university committee reviews transcripts, scores, recommendations — and your SOP</td><td>Directly: it's the one document that argues your case in your own words</td></tr>
+            <tr><td>2 · Form I-20</td><td>Your school issues the I-20 with your program, dates and documented funding</td><td>Your SOP's funding paragraph should describe the same sources the I-20 will certify</td></tr>
+            <tr><td>3 · DS-160</td><td>You complete the online nonimmigrant visa application</td><td>Education, work history and purpose of travel must match the story your SOP told</td></tr>
+            <tr><td>4 · F-1 interview</td><td>A consular officer probes your plans in a conversation that is often only a few minutes long</td><td>The questions echo the SOP: why this program, why this school, who pays, what after</td></tr>
+        </table>
+        <div class="callout note">
+            <p><strong>One story, four checkpoints.</strong> Nobody at the consulate reads your essay — but your university admitted you on it, your I-20 documents the funding it described, and your interview answers will be compared against both. Treat the SOP as the master version of your story, and every later stage becomes an edit, not an improvisation. (New to SOPs generally? Start with our <a href="/blog/how-to-write-sop-for-student-visa">all-destinations SOP guide</a>.)</p>
+        </div>
+
+        <h2>The two readers: admissions committee vs visa officer</h2>
+        <p>Your SOP has one direct reader and one indirect one — and they're looking for different things. The admissions committee reads the document itself; the visa officer, months later, probes the same territory without ever seeing it:</p>
+        <table class="country-table">
+            <tr><th>What's assessed</th><th>Admissions committee asks</th><th>The visa officer later asks</th></tr>
+            <tr><td>Academic fit</td><td>"Can this applicant handle our coursework — and add something to the cohort?"</td><td>"Does this program logically follow from this profile?"</td></tr>
+            <tr><td>Program &amp; research fit</td><td>"Do their interests genuinely match our courses, labs and faculty?" (decisive for grad programs)</td><td>"Can they explain why this school, beyond rankings?"</td></tr>
+            <tr><td>Funding</td><td>"Is the plan realistic?" (funding proof mostly matters at I-20 stage)</td><td>"Who is paying — and does the answer match the I-20 and the documents?"</td></tr>
+            <tr><td>Intent</td><td>"Is there a credible goal this degree serves?"</td><td>"Does the plan point home?" Under <strong>Section 214(b)</strong>, applicants are presumed intending immigrants until they show otherwise</td></tr>
+        </table>
+        <p>This double readership is the central craft problem of a US SOP: it must be ambitious enough to impress a committee and grounded enough that nothing in it undermines the nonimmigrant-intent case you'll make at a consulate window. Every section below is written with both readers in mind.</p>
+
+        <h2>The 6-part structure, adapted for the US</h2>
+        <p>The universal 6-part SOP skeleton works for the US — with American-specific jobs for parts 3, 5 and 6:</p>
+        <table class="country-table">
+            <tr><th>Part</th><th>Job in a US SOP</th><th>Rough share</th></tr>
+            <tr><td>1 · The hook</td><td>A concrete moment or problem that started your interest — not a famous quote, not "since childhood"</td><td>~10%</td></tr>
+            <tr><td>2 · Background with outcomes</td><td>The 2–3 experiences that qualified you — with results and honest gaps, not a CV in paragraphs</td><td>~20%</td></tr>
+            <tr><td>3 · Why this program</td><td>Named courses, labs, projects, concentrations. For graduate programs, naming 1–2 professors whose work genuinely matches yours is powerful — but only if you can discuss that work</td><td>~20%</td></tr>
+            <tr><td>4 · Why this university</td><td>Informed choice beyond rankings: research centers, industry ties, cohort, program format</td><td>~15%</td></tr>
+            <tr><td>5 · Career plan pointing home</td><td>Research ambition is welcome for admissions — but write nothing that contradicts the ties-to-home story you'll tell at the interview. OPT may appear as lawful training; the destination stays your home country</td><td>~20%</td></tr>
+            <tr><td>6 · Funding &amp; close</td><td>One clean paragraph on who pays — the same sources your I-20 will document — then a short, confident close</td><td>~15%</td></tr>
+        </table>
+        <h3>Undergraduate vs graduate: same skeleton, different weight</h3>
+        <p>Undergraduate essays (Common App-style prompts and supplements) lean personal: character, curiosity, how you'll use the breadth of a US degree. Graduate SOPs are professional documents: research fit, technical depth, and evidence you've read what the department actually does. If you're applying to a research-based master's or PhD, parts 3 and 4 carry the application — spend your revision time there.</p>
+        <div class="callout warn">
+            <p><strong>The faculty-name rule:</strong> naming a professor you'd want to work with signals serious homework — <em>if</em> you can talk about their recent work for two minutes. Naming three professors whose papers you've never opened signals the opposite. One genuine match beats three decorative ones, and follow-up emails and admissions interviews do happen.</p>
+        </div>
+
+        <h2>Strong vs weak: the two paragraphs that decide it</h2>
+
+        <h3>Part 3 — Why this program (faculty fit vs name-dropping)</h3>
+        <div class="cmp">
+            <div class="cmp-col old">
+                <h4>Weak</h4>
+                <ul>
+                    <li><span class="x">✕</span> "Your esteemed university has world-renowned faculty like Prof. A, Prof. B and Prof. C, and studying under such distinguished professors would be a dream come true."</li>
+                    <li><span class="x">✕</span> Three names, zero engagement — reads as a list copied from the department page</li>
+                </ul>
+            </div>
+            <div class="cmp-col new">
+                <h4>Strong</h4>
+                <ul>
+                    <li><span class="v">✓</span> "Professor [name]'s recent work on federated learning for medical imaging is the closest published research to the data-privacy problem I hit at [company] — and the reason this program is my first choice. Alongside it, the distributed-systems core and the trustworthy-ML seminar target exactly the gaps my last role exposed."</li>
+                    <li><span class="v">✓</span> One faculty match you can actually discuss, mapped to named courses and a personal gap</li>
+                </ul>
+            </div>
+        </div>
+
+        <h3>Part 5 — Career plan (visa-safe ambition vs immigration-intent slip)</h3>
+        <div class="cmp">
+            <div class="cmp-col old">
+                <h4>Weak</h4>
+                <ul>
+                    <li><span class="x">✕</span> "My ultimate goal is to build my career and settle in the US, where the technology industry offers the best opportunities in the world."</li>
+                    <li><span class="x">✕</span> A written declaration of immigrant intent — the exact thing 214(b) refusals are made of, and it adds nothing for the committee</li>
+                </ul>
+            </div>
+            <div class="cmp-col new">
+                <h4>Strong</h4>
+                <ul>
+                    <li><span class="v">✓</span> "After the degree — and possibly a period of Optional Practical Training to apply what I've learned — I intend to return to [home country], where firms like [example] are building exactly these systems and hiring for exactly this training."</li>
+                    <li><span class="v">✓</span> Ambitious enough for admissions, and the same answer you can give, word for word, at the visa window</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="value-strip">
+            <h3>Draft your US SOP in SOP Studio — from your real documents</h3>
+            <p>Rilono's SOP Studio doesn't hand you a template. It reads your profile, transcripts and financial documents, asks what they don't cover, and drafts a US-format SOP that matches the file your I-20 and DS-160 will be built on — then iterates with you line by line.</p>
+            <div class="value-grid">
+                <div class="value-item"><span class="ic">🌍</span><b>Country-aware</b><span>Built for the US format: an admissions SOP now, an interview-consistent story later.</span></div>
+                <div class="value-item"><span class="ic">📄</span><b>Document-grounded</b><span>Drafts from your uploaded documents, so nothing contradicts your funding file.</span></div>
+                <div class="value-item"><span class="ic">🔁</span><b>Iterative</b><span>Refine tone, tailor the program-fit sections per school, fix flagged inconsistencies.</span></div>
+                <div class="value-item"><span class="ic">🎓</span><b>Free to start</b><span>Your first drafts are free — upgrade only if you need more.</span></div>
+            </div>
+            <div class="value-cta"><a href="/register">Draft your SOP free in SOP Studio →</a></div>
+        </div>
+
+        <h2>A condensed example SOP, annotated</h2>
+        <p>A condensed graduate-program example (≈320 words — expand each part to your program's stated length). The bracketed notes show the job each paragraph is doing:</p>
+        <div class="prompt-box">
+            <p>"The recommendation engine I built at [company] served two million users — and failed the day our data had to cross borders. Untangling that privacy problem, imperfectly, on live systems is what convinced me I need formal training in distributed machine learning. <strong>[Hook: concrete, professional, only this applicant could write it]</strong></p>
+            <p>My bachelor's in computer science at [university] gave me the fundamentals — I graduated near the top of my class — and three years as a machine-learning engineer at [company] taught me how models behave outside the lab: drifting data, privacy constraints, systems that scale until they don't. I know precisely where my self-taught knowledge stops. <strong>[Background: outcomes plus an honest gap]</strong></p>
+            <p>The MS in Computer Science at [university] fills that gap deliberately: the distributed-systems core, the graduate seminar on trustworthy machine learning, and Professor [name]'s work on federated learning — the closest published research to the problem I failed to solve at [company]. Among the programs I evaluated, only [university] combines that systems depth with a privacy-focused ML group and an industry practicum. <strong>[Why this program &amp; university: named courses, one genuine faculty match, a real comparison]</strong></p>
+            <p>My studies are funded by my family's savings of [amount] and an education loan of [amount], which together cover tuition and living costs for both years — the same sources documented for my I-20. <strong>[Funding: one clean paragraph, matching the I-20]</strong></p>
+            <p>After the degree — and possibly a period of Optional Practical Training to apply the research in production settings — I will return to [home country], where [industry] teams at firms like [example] are building these systems now, and where my family and professional network remain. <strong>[Career plan: ambition for the committee, ties intact for the officer]</strong>"</p>
+        </div>
+        <div class="callout safe">
+            <p><strong>Notice what's absent:</strong> no Einstein quote, no "prestigious university", no promise to settle in the US. Every sentence survives both readers — the committee that decides your admission and the officer who will probe the same story at the window.</p>
+        </div>
+
+        <h2>The 10 mistakes that sink US SOPs</h2>
+        <ol>
+            <li><strong>Recycling one SOP across ten programs with only the name swapped.</strong> Committees notice: courses that don't exist there, a specialization the department doesn't offer — or worse, another university's name left in paragraph four. Parts 3 and 4 must be rewritten per school.</li>
+            <li><strong>Writing "I want to settle in the US."</strong> It adds nothing for admissions and directly contradicts the nonimmigrant intent you must later demonstrate under 214(b). Never put immigrant intent in writing.</li>
+            <li><strong>Contradicting the funding plan your I-20 will document.</strong> SOP says assistantship, I-20 shows family funds, interview mentions a loan — three versions of one question is how strong files become refusals.</li>
+            <li><strong>A graduate SOP with zero research specificity.</strong> No named courses, no labs, no faculty — a research-program committee reads that as "hasn't looked at what we do".</li>
+            <li><strong>Name-dropping professors you can't discuss.</strong> Cite work you've actually read; one genuine match beats three decorative ones.</li>
+            <li><strong>Ignoring the stated prompt and word limit.</strong> Many US programs ask specific questions. Answering a different one — or blowing past the limit — signals you can't follow instructions.</li>
+            <li><strong>Opening with a famous quote.</strong> Committees have seen every inspirational line; borrowed words displace the specific ones only you can write.</li>
+            <li><strong>Praising rankings and the "American dream" instead of the program.</strong> Every "why here" sentence should be about the course, the lab, the faculty — not the country's greatness.</li>
+            <li><strong>A CV in paragraphs.</strong> Two experiences with outcomes and lessons beat eight bullet-point brags stitched into prose.</li>
+            <li><strong>Zero-edit AI or template output.</strong> Generic prose fails the specificity check no matter what produced it. Use AI on <em>your</em> material — never instead of it.</li>
+        </ol>
+
+        <h2>Length and format: follow the prompt</h2>
+        <p>There is no universal US SOP format — each program sets its own prompt and limit, and following it is the first test you're graded on:</p>
+        <ul>
+            <li><strong>Check your program's requirement first.</strong> Some ask for roughly a page, some allow two, some set word counts, and some pose specific questions (research interests, faculty you'd work with, a diversity statement as a separate essay). The stated prompt always wins.</li>
+            <li><strong>When no limit is given,</strong> most applicants land between <strong>500 and 1,000 words</strong>. Concise beats complete — a committee reading hundreds of files rewards the writer who respects their time.</li>
+            <li><strong>Answer the actual question.</strong> If the prompt asks about research interests and preparation, an all-purpose life story — however polished — is a non-answer.</li>
+            <li><strong>Keep formatting invisible:</strong> a readable standard font, your name and target program in the header if the portal allows one, PDF unless told otherwise. No photos, no decorative design.</li>
+        </ul>
+        <div class="callout note">
+            <p><strong>Undergraduate applicants:</strong> your "SOP" is usually the Common App personal essay plus each university's supplemental essays, with their own strict word limits. The principles in this guide hold; the containers differ.</p>
+        </div>
+
+        <h2>The consistency test: SOP ↔ I-20 ↔ DS-160 ↔ interview</h2>
+        <p>Your SOP opens a paper trail that runs all the way to the visa window. Before you submit it — and again before your interview — audit the chain the way an officer would:</p>
+        <ul>
+            <li>Every <strong>funding source and amount</strong> in the SOP matches the financial documents your school certifies on the <strong>Form I-20</strong></li>
+            <li>The <strong>program, degree level and school</strong> match your I-20 and SEVIS record</li>
+            <li>Your <strong>education and employment history</strong> match what you enter on the <strong>DS-160</strong> — same institutions, same dates, same roles</li>
+            <li>The <strong>career plan</strong> you wrote is the career plan you'll describe at the <strong>interview</strong> — same field, same home market, no new ambitions invented at the window</li>
+            <li>Nothing in the SOP would embarrass you if an officer's question quoted it back to you</li>
+        </ul>
+        <p>The F-1 interview is short and pointed — the officer's questions map almost one-to-one onto the SOP's six parts. Our <a href="/blog/us-f1-visa-interview-questions-and-answers">F-1 interview questions guide</a> shows exactly how the same story gets probed out loud.</p>
+        <div class="callout warn">
+            <p><strong>This is the step almost everyone skips</strong> — and the one that decides borderline cases. Uploading your documents to <a href="/register">Rilono</a> automates it: the AI cross-checks your SOP draft against your financial documents, I-20 details and DS-160 answers, and flags every mismatch before an officer finds one.</p>
+        </div>
+
+        <h2>How to draft yours with SOP Studio</h2>
+        <p>The efficient drafting loop for US applications, whether you use Rilono or not:</p>
+        <ol>
+            <li><strong>Collect the prompts first.</strong> Every program's stated question and limit, side by side — plus your transcripts, offer or target list, and financial documents.</li>
+            <li><strong>Bullet the six parts in plain points.</strong> Hook, background, program fit, university fit, career plan, funding. No prose yet.</li>
+            <li><strong>Draft — from your material only.</strong> In <a href="/register">SOP Studio</a>, this is where the AI takes your profile and uploaded documents and produces a first draft in the US format.</li>
+            <li><strong>Tailor parts 3 and 4 per school.</strong> Named courses, labs and faculty that exist at <em>that</em> university — this is the section that must never be copy-pasted.</li>
+            <li><strong>Run the consistency test</strong> against your funding documents and forms (SOP Studio flags mismatches automatically).</li>
+            <li><strong>Read it aloud once.</strong> You may be asked to say these words at a consulate window in under three minutes. If a sentence embarrasses you out loud, rewrite it.</li>
+        </ol>
+        <p>Your first drafts in SOP Studio are <strong>free</strong>; the <a href="/pricing">Visa Success Pass</a> unlocks unlimited drafting and the deep document cross-checks for the final push.</p>
+
+        <h2>Frequently asked questions</h2>
+        <div class="faq">
+            <details>
+                <summary>Do I submit an SOP with my F-1 visa application?<span class="chev">+</span></summary>
+                <p class="ans">No. There is no SOP field in the F-1 process — not on the DS-160, and consular officers don't collect essays at the interview. The SOP is an admissions document. It still matters at the visa stage because the officer probes the same ground it covered — why this program, who is paying, what comes after — and your answers need to match the story your SOP told. Keep a copy in your interview folder and re-read it before your appointment.</p>
+            </details>
+            <details>
+                <summary>Should my SOP mention OPT or staying in the US?<span class="chev">+</span></summary>
+                <p class="ans">Mentioning Optional Practical Training (OPT) is fine — it's a lawful part of the F-1 program, and admissions committees expect ambitious training plans. What you should never write is an intention to settle in the US: F-1 is a nonimmigrant visa, and under Section 214(b) the officer must be satisfied you intend to return home. The safe pattern: OPT as a possible short chapter, a career plan whose destination is your home country.</p>
+            </details>
+            <details>
+                <summary>How is a US SOP different from a UK personal statement?<span class="chev">+</span></summary>
+                <p class="ans">Emphasis. A UK personal statement is about course fit and motivation, written within a strict character limit and probed later at credibility interviews. A US SOP — especially for graduate programs — leans harder on research and professional fit: named courses, labs and faculty, and a clear account of what you'll do with the degree. US programs also set their own prompts and word limits, so there is no single national format the way UCAS provides one.</p>
+            </details>
+            <details>
+                <summary>Can one SOP work for multiple universities?<span class="chev">+</span></summary>
+                <p class="ans">The core of it can — your hook, background, career plan and funding story shouldn't change between applications. But the 'why this program' and 'why this university' sections must be genuinely rewritten for each school, naming courses, labs and faculty that actually exist there. Committees read thousands of statements and spot a swapped-name template instantly — a mismatched program name pasted from another application is one of the most common and most damaging errors.</p>
+            </details>
+            <details>
+                <summary>Will the visa officer read my SOP?<span class="chev">+</span></summary>
+                <p class="ans">Usually not. Consular officers work from your DS-160, your SEVIS record and a short conversation — they generally don't have your admissions essays in front of them. But they independently probe the exact questions your SOP answered: why this program, why this university, who is paying, what you'll do after. If your interview answers contradict the story your university admitted you on, that inconsistency is the problem — which is why writing the SOP well and remembering what it says are both part of visa prep.</p>
+            </details>
+        </div>
+
+        <div class="cta-band">
+            <h2>Write an SOP both readers will believe</h2>
+            <p>SOP Studio drafts from your real profile and documents, tailors the program-fit sections for each school, and cross-checks the story you'll defend at the F-1 window.</p>
+            <a class="btn btn-primary" href="/register">Draft your SOP free</a>
+            <a class="btn btn-ghost" href="/us-f1-visa">Explore the F-1 product</a>
+            <p class="cta-fineprint">Free to start · Visa Success Pass unlocks unlimited drafting, Red-Flag scans &amp; voice mock interviews</p>
+        </div>
+
+        <section class="related-guides" aria-label="More Rilono visa guides">
+            <h2>More SOP &amp; US F-1 guides</h2>
+            <p class="rg-sub">Go deeper on the SOP fundamentals — or start preparing for the interview that will test your story:</p>
+            <div class="rg-grid">
+                <a class="rg-card" href="/blog/how-to-write-sop-for-student-visa"><span class="rg-tag">SOP Writing · All destinations</span><span class="rg-title"><span class="rg-flag">📝</span>How to write an SOP for a student visa</span></a>
+                <a class="rg-card" href="/blog/us-f1-visa-interview-questions-and-answers"><span class="rg-tag">Interview Prep · US F-1</span><span class="rg-title"><span class="rg-flag">🎙️</span>US F1 visa interview questions &amp; answers</span></a>
+                <a class="rg-card" href="/blog/how-to-use-rilono-ai-us-f1-visa"><span class="rg-tag">United States · F-1</span><span class="rg-title"><span class="rg-flag">🇺🇸</span>How to use Rilono AI for your F-1 visa</span></a>
+                <a class="rg-card" href="/blog/sop-for-uk-student-visa"><span class="rg-tag">United Kingdom · Personal statement</span><span class="rg-title"><span class="rg-flag">🇬🇧</span>UK personal statement &amp; credibility</span></a>
+                <a class="rg-card" href="/blog/sop-for-canada-study-permit"><span class="rg-tag">Canada · Study plan / LOE</span><span class="rg-title"><span class="rg-flag">🇨🇦</span>SOP for your Canada study permit</span></a>
+            </div>
+            <a class="rg-all" href="/blog">See all Rilono guides →</a>
+        </section>
+    </article>
+
+    <footer class="hx-footer">
+        <div class="wrap">
+            <div class="cols">
+                <div class="brand-col">
+                    <img src="/static/logo.png" alt="Rilono">
+                    <p>The AI-powered platform for student visas to the US, UK, Canada, Australia &amp; Germany — helping students and consultancies prepare confident, complete applications.</p>
+                </div>
+                <div>
+                    <h5>Product</h5>
+                    <ul>
+                        <li><a href="/us-f1-visa">US F-1 Visa</a></li>
+                        <li><a href="/uk-student-visa">UK Student Visa</a></li>
+                        <li><a href="/canada-study-permit">Canada Study Permit</a></li>
+                        <li><a href="/australia-student-visa">Australia Subclass 500</a></li>
+                        <li><a href="/germany-student-visa">Germany Student Visa</a></li>
+                        <li><a href="/pricing">Pricing</a></li>
+                    </ul>
+                </div>
+                <div>
+                    <h5>Legal</h5>
+                    <ul>
+                        <li><a href="/privacy">Privacy Policy</a></li>
+                        <li><a href="/terms">Terms of Service</a></li>
+                        <li><a href="/refund-policy">Refund Policy</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="foot-bottom">
+                <span>© <span id="yr"></span> Rilono. All rights reserved.</span>
+                <span>Made for international students 🌍</span>
+            </div>
+        </div>
+    </footer>
+    <script>
+        document.getElementById("yr").textContent = new Date().getFullYear();
+
+        // Navbar "Products" dropdown — hover opens on desktop (CSS); click/tap toggle + close.
+        (function () {
+            const pNav = document.getElementById("productsNav");
+            const pTrig = document.getElementById("productsNavTrigger");
+            const pMenu = document.getElementById("productsMenu");
+            if (pNav && pTrig && pMenu) {
+                const setOpen = (open) => { pNav.classList.toggle("is-open", open); pTrig.setAttribute("aria-expanded", open ? "true" : "false"); };
+                pTrig.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); setOpen(!pNav.classList.contains("is-open")); });
+                pMenu.addEventListener("click", (e) => { if (e.target.closest("a")) setOpen(false); });
+                document.addEventListener("click", (e) => { if (!pNav.contains(e.target)) setOpen(false); });
+                document.addEventListener("keydown", (e) => { if (e.key === "Escape") setOpen(false); });
+            }
+        })();
+    </script>
+    <script>
+    (function () {
+        var t = document.getElementById('navToggle'), n = document.getElementById('navLinks');
+        if (!t || !n) return;
+        var setOpen = function (o) { n.classList.toggle('open', o); t.setAttribute('aria-expanded', o ? 'true' : 'false'); };
+        t.addEventListener('click', function (e) { e.stopPropagation(); setOpen(!n.classList.contains('open')); });
+        n.addEventListener('click', function (e) { if (e.target.closest('a')) setOpen(false); });
+        document.addEventListener('click', function (e) { if (!n.contains(e.target) && !t.contains(e.target)) setOpen(false); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+    })();
+    </script>
+</body>
+</html>

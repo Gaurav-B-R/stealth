@@ -602,6 +602,9 @@ const FALLBACK_DOCUMENT_TYPES = [
 let documentTypeCatalog = [];
 let requiredDocumentTypeValues = [];
 let journeyStageCatalog = [];
+// Which (country|visa) scope the catalog above was loaded for — lets checkAuth() detect
+// a stale anonymous/US catalog after login and re-personalize BEFORE the journey renders.
+let loadedCatalogScopeKey = null;
 let documentTypeLabelByValue = {};
 let journeyStageSelectionByWidget = {};
 
@@ -698,6 +701,8 @@ let visaMockInterviewState = {
     active: false,
     listening: false,
     pending: false,
+    finishRequested: false,
+    reportGenerating: false,
     history: [],
     recognition: null,
     channel: null,
@@ -705,6 +710,9 @@ let visaMockInterviewState = {
     timerIntervalId: null,
     timerStartedAt: null,
     elapsedMs: 0,
+    reportProgressIntervalId: null,
+    reportGenerationStartedAt: null,
+    reportGenerationElapsedMs: 0,
     micPermission: 'unknown',
     micPermissionStatus: null,
     micPermissionCheckPromise: null
@@ -724,6 +732,12 @@ let visaPrepInterviewState = {
 };
 
 const MOCK_INTERVIEW_TIMER_INTERVAL_MS = 1000;
+const MOCK_REPORT_PROGRESS_STAGES = [
+    { afterSeconds: 0, label: 'Preparing transcript' },
+    { afterSeconds: 5, label: 'Reviewing your responses' },
+    { afterSeconds: 10, label: 'Analyzing decision factors' },
+    { afterSeconds: 15, label: 'Finalizing your report' }
+];
 
 const PRICING_FALLBACK_RATES = {
     USD: 1.0,
@@ -746,7 +760,59 @@ let pricingRatesRequestPromise = null;
 // URL Routing System
 let isNavigating = false; // Flag to prevent recursive navigation
 
+const APP_ROUTE_TITLES = Object.freeze({
+    '/': 'Rilono — AI-Powered Student Visa Platform · US, UK, Canada, Australia & Germany',
+    '/us-f1-visa': 'F1 Student Visa Guidance | DS-160, I-20, Documents & Interview | Rilono AI',
+    '/products/us-f1-visa': 'F1 Student Visa Guidance | DS-160, I-20, Documents & Interview | Rilono AI',
+    '/login': 'Log in · Rilono',
+    '/register': 'Create your account · Rilono',
+    '/forgot-password': 'Reset your password · Rilono',
+    '/reset-password': 'Reset your password · Rilono',
+    '/verify-email': 'Verify your email · Rilono',
+    '/verify-university-change': 'Confirm your university change · Rilono',
+    '/unsubscribe-email': 'Email preferences · Rilono',
+    '/dashboard': 'Your Dashboard · Rilono',
+    '/documents': 'Your Documents · Rilono',
+    '/interviews': 'Visa Interview Prep · Rilono',
+    '/universities': 'University Shortlist · Rilono',
+    '/news': 'Visa News · Rilono',
+    '/copilot': 'AI Copilot · Rilono',
+    '/sop': 'SOP Studio · Rilono',
+    '/rilono-ai': 'Rilono AI Assistant · Rilono',
+    '/profile': 'Your Profile · Rilono',
+    '/settings': 'Settings · Rilono',
+    '/referral': 'Referral Program · Rilono',
+    '/subscription': 'Your Subscription · Rilono',
+    '/pricing': 'Pricing — Student Visa Plans & Visa Success Pass · Rilono',
+    '/about-us': 'About Rilono — AI Student Visa Guidance for US, UK, Canada & Australia',
+    '/contact': 'Contact Rilono — Support for Students & Visa Consultancies',
+    '/privacy': 'Privacy Policy · Rilono',
+    '/terms': 'Terms & Conditions · Rilono',
+    '/refund-policy': 'Refund Policy · Rilono',
+    '/delivery-policy': 'Service Delivery Policy · Rilono',
+    '/dpa': 'Data Processing Agreement · Rilono'
+});
+
+function normalizeAppRoutePath(path) {
+    const rawPath = String(path || '/');
+    try {
+        const pathname = new URL(rawPath, window.location.origin).pathname;
+        return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+    } catch (error) {
+        const pathname = rawPath.split(/[?#]/, 1)[0] || '/';
+        return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+    }
+}
+
+function syncDocumentTitle(path = window.location.pathname) {
+    const title = APP_ROUTE_TITLES[normalizeAppRoutePath(path)];
+    if (title && document.title !== title) {
+        document.title = title;
+    }
+}
+
 function updateURL(path, replace = false) {
+    syncDocumentTitle(path);
     if (isNavigating) return; // Prevent recursive calls
     const newURL = window.location.origin + path;
     if (replace) {
@@ -869,9 +935,11 @@ async function initializeDocumentCatalog(scope = null) {
         }
         const payload = await response.json();
         applyDocumentCatalogPayload(payload);
+        loadedCatalogScopeKey = (scope && scope.country) ? `${scope.country}|${scope.visa || ''}` : 'default';
     } catch (error) {
         console.warn('Unable to load document catalog from backend; using fallback catalog.', error);
         applyDocumentCatalogPayload(null);
+        // Leave loadedCatalogScopeKey unchanged so a later checkAuth() can retry personalization.
     }
     renderDocumentTypeDropdownItems();
 }
@@ -902,11 +970,32 @@ function buildSearchURL(search, category, minPrice, maxPrice) {
     return queryString ? `?${queryString}` : '';
 }
 
+// Dashboard sections are deep-linkable: each tab owns a real path (bookmarkable,
+// refresh- and back/forward-safe). The server serves the SPA for every path here
+// (read_preserved_public_spa_routes) — without that, these URLs fell through to the
+// catch-all and rendered the marketing homepage even for logged-in users.
+const DASHBOARD_PATH_TO_TAB = {
+    '/documents': 'documents',
+    '/interviews': 'visa',
+    '/universities': 'universities',
+    '/news': 'news',
+    '/copilot': 'copilot',
+    '/sop': 'sop',
+    '/rilono-ai': 'records',
+    '/profile': 'profile',
+    '/settings': 'settings',
+    '/referral': 'referral',
+};
+const DASHBOARD_TAB_TO_PATH = Object.fromEntries(
+    Object.entries(DASHBOARD_PATH_TO_TAB).map(([p, t]) => [t, p]));
+DASHBOARD_TAB_TO_PATH.overview = '/dashboard';
+
 function handleRoute(skipURLUpdate = false) {
     isNavigating = true; // Set flag to prevent URL updates during route handling
     const rawPath = getPathFromURL();
     const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath;
     const queryParams = getQueryParams();
+    syncDocumentTitle(path);
 
     // Handle routes
     if (path === '/' || path === '') {
@@ -926,6 +1015,11 @@ function handleRoute(skipURLUpdate = false) {
         handleResetPasswordPage(skipURLUpdate);
     } else if (path === '/dashboard') {
         showDashboard(skipURLUpdate);
+    } else if (DASHBOARD_PATH_TO_TAB[path]) {
+        // Deep link straight to a dashboard section (/documents, /interviews, …):
+        // open the dashboard WITHOUT rewriting the URL, then switch to that tab.
+        showDashboard(true);
+        switchDashboardTab(DASHBOARD_PATH_TO_TAB[path]);
     } else if (path === '/subscription') {
         showSubscription(skipURLUpdate);
     } else if (path === '/pricing') {
@@ -1220,6 +1314,12 @@ function initializeRegisterCountrySelector() {
 }
 
 function setupEventListeners() {
+    bindVisaInterviewChatComposer('mock');
+    bindVisaInterviewChatComposer('prep');
+    // Main chat forms can be shown before their tab-specific initializer runs. A delegated
+    // submit listener guarantees the first message is handled even in that empty state.
+    document.addEventListener('submit', handleDelegatedRilonoAiChatSubmit);
+
     const loginForm = document.getElementById('loginForm');
     if (loginForm) loginForm.addEventListener('submit', handleLogin);
     const registerForm = document.getElementById('registerForm');
@@ -1318,6 +1418,18 @@ function setupEventListeners() {
     const documentUploadForm = document.getElementById('documentUploadForm');
     if (documentUploadForm) {
         documentUploadForm.addEventListener('submit', handleDocumentUpload);
+    }
+    // Reject unsupported file types the moment they're picked (the `accept` attribute is
+    // only a soft hint — "All Files" bypasses it), instead of at the passphrase step.
+    const documentFileInput = document.getElementById('documentFile');
+    if (documentFileInput) {
+        documentFileInput.addEventListener('change', () => {
+            const f = documentFileInput.files && documentFileInput.files[0];
+            if (f && !isAllowedDocumentFile(f.name)) {
+                showMessage('That file type isn\'t supported. Please upload PDF, DOC, DOCX, TXT or an image (JPG, PNG, GIF, WEBP).', 'error');
+                documentFileInput.value = '';
+            }
+        });
     }
 
     const adminUsersFilterForm = document.getElementById('adminUsersFilterForm');
@@ -1642,7 +1754,8 @@ function clearClientAuthState({ render = true } = {}) {
     persistAuthToken(null);
     if (render) {
         updateUIForAuth();
-        if (['/dashboard', '/subscription'].includes(window.location.pathname)) {
+        const authedPaths = ['/dashboard', '/subscription', ...Object.keys(DASHBOARD_PATH_TO_TAB)];
+        if (authedPaths.includes(window.location.pathname)) {
             showLogin();
         }
     }
@@ -1663,6 +1776,22 @@ async function checkAuth() {
                 authToken = COOKIE_AUTH_SENTINEL;
             }
             updateUIForAuth();
+            // Re-personalize the document/journey catalog whenever the signed-in student's
+            // destination differs from what's loaded (e.g. the anonymous boot loaded the US
+            // catalog, then a UK student logs in WITHOUT a page reload). Awaited here so the
+            // journey widget can never render US stages ("I-20", "DS-160") for a UK account.
+            const catalogScope = currentUserVisaScope();
+            const catalogScopeKey = catalogScope ? `${catalogScope.country}|${catalogScope.visa || ''}` : null;
+            if (catalogScopeKey && catalogScopeKey !== loadedCatalogScopeKey) {
+                try { await initializeDocumentCatalog(catalogScope); } catch (e) { /* keep current catalog */ }
+                updateVisaSectionLabels();
+                updateVisaJourneyHeading();
+                // If the dashboard already painted with the stale catalog, repaint it.
+                const dashEl = document.getElementById('dashboardSection');
+                if (dashEl && getComputedStyle(dashEl).display !== 'none') {
+                    try { loadDashboardStats(); } catch (e) { /* next tab switch repaints */ }
+                }
+            }
             await loadSubscriptionStatus(true);
             return true;
         } else {
@@ -3171,6 +3300,24 @@ const SOP_REFINE_CHIPS = [
     'Strengthen the closing career goal',
 ];
 
+// Human-readable error for SOP API failures. The app itself accepts any characters
+// (verified: script tags / SQL-looking text generate fine and are stored safely), but the
+// CDN's security filter (WAF) can block request BODIES that look like code injection —
+// returning an HTML error page with no JSON detail. Without this, that surfaced as a
+// bare "Generation failed" with no hint that the INPUT was the problem.
+function sopErrorMessage(r, data, fallback) {
+    const detail = data && data.detail;
+    if (typeof detail === 'string' && detail) return detail;
+    if (Array.isArray(detail) && detail.length) {
+        const first = detail[0];
+        if (first && first.msg) return `${first.msg}${first.loc ? ` (${first.loc[first.loc.length - 1]})` : ''}`;
+    }
+    if (!detail && (r.status === 403 || r.status === 400)) {
+        return 'Our security layer blocked this request — that can happen when a field contains code-like text (e.g. "<script>" tags or quotes with semicolons). Please rewrite those characters and try again.';
+    }
+    return fallback;
+}
+
 function sopAuthHeaders(extra) {
     const headers = Object.assign({}, extra || {});
     if (authToken && authToken !== COOKIE_AUTH_SENTINEL) headers['Authorization'] = `Bearer ${authToken}`;
@@ -3337,14 +3484,26 @@ function attachUniversityAutocomplete(input) {
     input.setAttribute('autocomplete', 'off');
     let items = [], active = -1, box = null, timer = null, reqSeq = 0;
 
+    // Select an untouched pre-filled value on first focus, so the user types OVER it cleanly
+    // instead of appending after it (e.g. avoids "The University of WarwickMSc Business Analytics").
+    const initialValue = input.value;
+    let firstFocusHandled = false;
+    input.addEventListener('focus', () => {
+        if (!firstFocusHandled && input.value && input.value === initialValue) input.select();
+        firstFocusHandled = true;
+    });
+
     const close = () => { if (box) { box.remove(); box = null; } active = -1; };
     const pick = (i) => {
         if (i < 0 || i >= items.length) return;
         input.value = items[i].name;
+        firstFocusHandled = true;
         close();
         input.dispatchEvent(new Event('change'));
+        // Advance to the program field reliably — a synchronous focus() inside the menu's
+        // mousedown handler is flaky, which let subsequent typing land back in this field.
         const program = document.getElementById('sopProgram');
-        if (program && !program.value) program.focus();
+        if (program && !program.value) setTimeout(() => program.focus(), 0);
     };
     const paint = () => {
         if (!box) return;
@@ -3399,6 +3558,7 @@ async function generateSop() {
         if (msg) msg.textContent = 'Please fill in the university and program.';
         return;
     }
+    if (msg) msg.textContent = '';   // validation passed — clear any lingering "please fill in…" hint
     const btn = document.getElementById('sopGenerateBtn');
     _sopData.busy = true;
     if (btn) btn.disabled = true;
@@ -3416,7 +3576,7 @@ async function generateSop() {
         });
         const data = await r.json().catch(() => ({}));
         if (r.status === 402) { _sopData.entitlement = { ...( _sopData.entitlement || {}), remaining: 0 }; renderSopStudio(); showMessage(data.detail || 'Free limit reached — unlock the Visa Success Pass.', 'error'); return; }
-        if (!r.ok) throw new Error(data.detail || 'Generation failed');
+        if (!r.ok) throw new Error(sopErrorMessage(r, data, 'Generation failed'));
         _sopData.entitlement = data.entitlement;
         _sopData.drafts = [data.draft, ..._sopData.drafts.filter((d) => d.root_id !== data.draft.root_id)];
         _sopData.activeRoot = data.draft.root_id;
@@ -3448,7 +3608,7 @@ async function refineSop(preset) {
         });
         const data = await r.json().catch(() => ({}));
         if (r.status === 402) { _sopData.entitlement = { ...( _sopData.entitlement || {}), remaining: 0 }; renderSopStudio(); showMessage(data.detail || 'Free limit reached — unlock the Visa Success Pass.', 'error'); return; }
-        if (!r.ok) throw new Error(data.detail || 'Refinement failed');
+        if (!r.ok) throw new Error(sopErrorMessage(r, data, 'Refinement failed'));
         _sopData.entitlement = data.entitlement;
         _sopData.drafts = [data.draft, ..._sopData.drafts.filter((d) => d.root_id !== data.draft.root_id)];
         renderSopStudio();
@@ -3558,6 +3718,13 @@ function renderUniversitiesUI() {
     const lbl = (t) => `<div style="font-size:12px;font-weight:700;color:#64748b;margin:0 0 6px">${t}</div>`;
     const card = (inner, extra) => `<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:18px 20px;${extra || ''}">${inner}</div>`;
 
+    // Country-aware placeholder hints — the shortlist form must not assume US conventions
+    // (USD budget, GRE, 4.0 GPA) on a UK/CA/AU/DE journey. Codes match visa_catalog.
+    const slCode = d.destination_country_code || (currentUser && currentUser.destination_country_code) || 'US';
+    const slBudgetHint = ({ US: 'e.g. $30,000', UK: 'e.g. £22,000', CA: 'e.g. C$25,000', AU: 'e.g. A$35,000', DE: 'e.g. €12,000' })[slCode] || 'e.g. your annual budget (local currency)';
+    const slScoresHint = ({ US: 'e.g. IELTS 7.5, GRE 320', UK: 'e.g. IELTS 7.0', CA: 'e.g. IELTS 7.0', AU: 'e.g. IELTS 7.0, PTE 65', DE: 'e.g. IELTS 6.5, TestDaF 4' })[slCode] || 'e.g. IELTS 7.0';
+    const slGpaHint = ({ US: 'e.g. 3.6/4.0', UK: 'e.g. 2:1 or AAB', CA: 'e.g. 3.6/4.0 or 85%', AU: 'e.g. 75% or GPA 5.5/7', DE: 'e.g. 1.7 (German scale)' })[slCode] || 'e.g. your GPA or grade average';
+
     const formCard = card(`
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
           <div><div style="font-weight:800;font-size:16px;color:#0f172a">Rilono AI University Recommendations</div>
@@ -3568,9 +3735,9 @@ function renderUniversitiesUI() {
         <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
           <div style="grid-column:1/-1">${lbl('Field of study <span style="color:#fb7185">*</span>')}<input id="slField" placeholder="e.g. Computer Science" style="${inp}"></div>
           <div>${lbl('Study level')}<select id="slLevel" style="${inp}"><option value="">Any</option><option>Bachelors</option><option>Masters</option><option>PhD</option><option>Diploma</option></select></div>
-          <div>${lbl('Annual budget')}<input id="slBudget" placeholder="e.g. $30,000" style="${inp}"></div>
-          <div>${lbl('GPA / grades')}<input id="slGpa" placeholder="e.g. 3.6/4.0" style="${inp}"></div>
-          <div>${lbl('Test scores')}<input id="slScores" placeholder="e.g. IELTS 7.5, GRE 320" style="${inp}"></div>
+          <div>${lbl('Annual budget')}<input id="slBudget" placeholder="${slBudgetHint}" style="${inp}"></div>
+          <div>${lbl('GPA / grades')}<input id="slGpa" placeholder="${slGpaHint}" style="${inp}"></div>
+          <div>${lbl('Test scores')}<input id="slScores" placeholder="${slScoresHint}" style="${inp}"></div>
           <div style="grid-column:1/-1">${lbl('Other preferences')}<input id="slPrefs" placeholder="e.g. scholarships, near a major city" style="${inp}"></div>
         </div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap">
@@ -3956,6 +4123,7 @@ function showDashboard(skipURLUpdate = false) {
         showLogin();
         return;
     }
+    syncDocumentTitle('/dashboard');
     if (needsOnboarding()) {
         showOnboardingWizard();
         return;
@@ -5660,7 +5828,67 @@ function formatInterviewElapsedTime(elapsedMs) {
 function renderMockInterviewTimer() {
     const timerEl = document.getElementById('visaMockInterviewTimer');
     if (!timerEl) return;
-    timerEl.textContent = `Time: ${formatInterviewElapsedTime(visaMockInterviewState.elapsedMs)}`;
+    const label = visaMockInterviewState.reportGenerationStartedAt !== null ? 'Interview' : 'Time';
+    timerEl.textContent = `${label}: ${formatInterviewElapsedTime(visaMockInterviewState.elapsedMs)}`;
+}
+
+function getMockReportProgressStage(elapsedMs) {
+    const elapsedSeconds = Math.max(0, Math.floor((elapsedMs || 0) / 1000));
+    return MOCK_REPORT_PROGRESS_STAGES.reduce((currentStage, stage) => (
+        elapsedSeconds >= stage.afterSeconds ? stage : currentStage
+    ), MOCK_REPORT_PROGRESS_STAGES[0]);
+}
+
+function updateMockReportGenerationProgress() {
+    const state = visaMockInterviewState;
+    if (state.reportGenerationStartedAt === null) return;
+
+    state.reportGenerationElapsedMs = Math.max(0, Date.now() - state.reportGenerationStartedAt);
+    const stage = getMockReportProgressStage(state.reportGenerationElapsedMs);
+    const elapsedLabel = formatInterviewElapsedTime(state.reportGenerationElapsedMs);
+    const progressEl = document.getElementById('visaMockReportProgress');
+    const progressTextEl = document.getElementById('visaMockReportProgressText');
+    if (progressEl) progressEl.style.display = 'inline-flex';
+    if (progressTextEl) progressTextEl.textContent = `Report: ${elapsedLabel}`;
+
+    setVisaInterviewStatus('mock', `Generating report · ${stage.label}`);
+    const logEl = document.getElementById('visaMockInterviewLog');
+    const generatingItem = logEl ? logEl.querySelector('.visa-mock-log-item.report-generating') : null;
+    if (generatingItem) {
+        const stageEl = generatingItem.querySelector('[data-report-progress-stage]');
+        const elapsedEl = generatingItem.querySelector('[data-report-progress-elapsed]');
+        if (stageEl) stageEl.textContent = `${stage.label}…`;
+        if (elapsedEl) elapsedEl.textContent = `${elapsedLabel} elapsed · This usually takes 15–30 seconds.`;
+    }
+}
+
+function startMockReportGenerationProgress() {
+    stopMockReportGenerationProgress();
+    const state = visaMockInterviewState;
+    state.reportGenerationElapsedMs = 0;
+    state.reportGenerationStartedAt = Date.now();
+    renderMockInterviewTimer();
+    updateMockReportGenerationProgress();
+    state.reportProgressIntervalId = window.setInterval(
+        updateMockReportGenerationProgress,
+        MOCK_INTERVIEW_TIMER_INTERVAL_MS
+    );
+}
+
+function stopMockReportGenerationProgress() {
+    const state = visaMockInterviewState;
+    if (state.reportGenerationStartedAt !== null) {
+        state.reportGenerationElapsedMs = Math.max(0, Date.now() - state.reportGenerationStartedAt);
+    }
+    if (state.reportProgressIntervalId) {
+        window.clearInterval(state.reportProgressIntervalId);
+        state.reportProgressIntervalId = null;
+    }
+    state.reportGenerationStartedAt = null;
+    const progressEl = document.getElementById('visaMockReportProgress');
+    if (progressEl) progressEl.style.display = 'none';
+    renderMockInterviewTimer();
+    return state.reportGenerationElapsedMs;
 }
 
 function updateMockInterviewElapsed() {
@@ -5707,7 +5935,7 @@ function setVisaInterviewStatus(mode, statusText) {
     const statusEl = document.getElementById(cfg.statusId);
     if (statusEl) {
         statusEl.textContent = statusText;
-        const isGenerating = /generating final/i.test(statusText);
+        const isGenerating = /generating (?:final )?report/i.test(statusText);
         statusEl.classList.toggle('report-generating-badge', isGenerating);
     }
 }
@@ -5736,7 +5964,13 @@ function appendVisaInterviewLog(mode, role, text) {
     if (mode === 'prep' && role === 'assistant') {
         item.innerHTML = formatPrepInterviewLogHtml(text);
     } else if (isReportGenerating) {
-        item.innerHTML = `<span class="report-generating-spinner"></span><span>${escapeHtml(text)}</span>`;
+        item.innerHTML = `
+            <span class="report-generating-spinner" aria-hidden="true"></span>
+            <span class="report-generating-copy">
+                <span data-report-progress-stage>${escapeHtml(text)}</span>
+                <small data-report-progress-elapsed>00:00 elapsed · This usually takes 15–30 seconds.</small>
+            </span>
+        `;
     } else {
         item.textContent = text;
     }
@@ -5894,6 +6128,35 @@ async function refreshVisaInterviewMicPermission(mode) {
     return state.micPermissionCheckPromise;
 }
 
+function bindVisaInterviewChatComposer(mode) {
+    const isPrep = mode === 'prep';
+    const form = document.getElementById(isPrep ? 'visaPrepChatComposer' : 'visaMockChatComposer');
+    const input = document.getElementById(isPrep ? 'visaPrepChatInput' : 'visaMockChatInput');
+
+    if (form && form.dataset.interviewSubmitBound !== '1') {
+        form.dataset.interviewSubmitBound = '1';
+        form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            if (isPrep) {
+                void sendPrepInterviewChatAnswer();
+            } else {
+                void sendMockInterviewChatAnswer();
+            }
+        });
+    }
+
+    if (input && input.dataset.interviewInputBound !== '1') {
+        input.dataset.interviewInputBound = '1';
+        input.addEventListener('input', () => {
+            if (isPrep) {
+                renderPrepInterviewModeUI();
+            } else {
+                renderMockInterviewModeUI();
+            }
+        });
+    }
+}
+
 function updateVisaInterviewControls(mode) {
     const cfg = getVisaInterviewSessionConfig(mode);
     const state = getVisaInterviewState(mode);
@@ -5920,7 +6183,24 @@ function updateVisaInterviewControls(mode) {
         stopBtn.disabled = !state.active && !state.pending;
     }
     if (finishBtn) {
-        finishBtn.disabled = state.pending || (!state.active && state.history.length === 0);
+        if (state.finishRequested) {
+            // The user asked to finish while the officer was still replying — the finish is
+            // queued and will run once the reply completes.
+            finishBtn.disabled = true;
+            finishBtn.textContent = 'Finishing…';
+            finishBtn.title = 'Your report will generate as soon as the officer finishes replying.';
+        } else if (state.reportGenerating) {
+            finishBtn.disabled = true;
+            finishBtn.textContent = 'Finish & Report';
+            finishBtn.title = '';
+        } else {
+            // Keep it clickable while the officer is replying (state.pending) so the click
+            // queues the finish instead of being silently swallowed; only truly disable it
+            // when there is nothing to finish yet.
+            finishBtn.disabled = (!state.active && state.history.length === 0);
+            finishBtn.textContent = 'Finish & Report';
+            finishBtn.title = state.pending ? 'The officer is replying — click to end after this reply.' : '';
+        }
     }
     if (mode === 'mock') {
         renderMockInterviewModeUI();
@@ -5930,6 +6210,7 @@ function updateVisaInterviewControls(mode) {
 }
 
 function renderMockInterviewModeUI() {
+    bindVisaInterviewChatComposer('mock');
     const modePicker = document.getElementById('visaMockModePicker');
     const chatComposer = document.getElementById('visaMockChatComposer');
     const chatInput = document.getElementById('visaMockChatInput');
@@ -5942,22 +6223,19 @@ function renderMockInterviewModeUI() {
     const modeBadge = document.getElementById('visaMockModeBadge');
     const guide = document.getElementById('visaMockInterviewGuide');
     const state = visaMockInterviewState;
-    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !bottomSpeakBtn || !micStatusEl || !micStatusTextEl || !modeBadge || !guide) {
+    if (!chatComposer || !chatInput || !chatSendBtn) {
         return;
     }
 
-    if (!chatInput.dataset.boundMockInput) {
-        chatInput.addEventListener('input', () => renderMockInterviewModeUI());
-        chatInput.dataset.boundMockInput = '1';
-    }
-
     const showPicker = !state.active && !state.pending && state.showModePicker;
-    modePicker.style.display = showPicker ? 'grid' : 'none';
+    if (modePicker) modePicker.style.display = showPicker ? 'grid' : 'none';
     const showSecondaryControls = state.active || state.pending || state.history.length > 0;
-    secondaryControls.style.display = showSecondaryControls ? 'flex' : 'none';
-    startBtn.textContent = state.active
-        ? 'Interview Running'
-        : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Interview' : 'Start Interview'));
+    if (secondaryControls) secondaryControls.style.display = showSecondaryControls ? 'flex' : 'none';
+    if (startBtn) {
+        startBtn.textContent = state.active
+            ? 'Interview Running'
+            : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Interview' : 'Start Interview'));
+    }
 
     const chatModeActive = state.active && state.channel === 'chat';
     const voiceModeActive = state.active && state.channel === 'voice';
@@ -5969,32 +6247,44 @@ function renderMockInterviewModeUI() {
         : 'Type your interview answer...';
     chatSendBtn.style.display = chatModeActive ? 'inline-flex' : 'none';
     chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
-    bottomSpeakBtn.style.display = voiceModeActive ? 'inline-flex' : 'none';
-    bottomSpeakBtn.classList.toggle('is-listening', state.listening);
-    bottomSpeakBtn.textContent = voiceModeActive
-        ? (state.listening ? 'Mic Listening...' : 'Mic Auto-On')
-        : 'Speak Answer';
+    if (bottomSpeakBtn) {
+        bottomSpeakBtn.style.display = voiceModeActive ? 'inline-flex' : 'none';
+        bottomSpeakBtn.classList.toggle('is-listening', state.listening);
+        bottomSpeakBtn.textContent = voiceModeActive
+            ? (state.listening ? 'Mic Listening...' : 'Mic Auto-On')
+            : 'Speak Answer';
+    }
     renderVisaInterviewMicStatus('mock', micStatusEl, micStatusTextEl);
     renderVisaInterviewFullscreenCta('mock');
 
     if (state.channel === 'voice') {
-        modeBadge.textContent = 'Mode: Voice';
-        modeBadge.classList.remove('visa-hub-tag-mode-chat');
-        modeBadge.classList.add('visa-hub-tag-mode-voice');
-        guide.textContent = state.active
-            ? 'Mic is always on for responses. Just speak when the officer finishes asking.'
-            : 'Click Start Interview and choose Voice to run a microphone-based simulation.';
+        if (modeBadge) {
+            modeBadge.textContent = 'Mode: Voice';
+            modeBadge.classList.remove('visa-hub-tag-mode-chat');
+            modeBadge.classList.add('visa-hub-tag-mode-voice');
+        }
+        if (guide) {
+            guide.textContent = state.active
+                ? 'Mic is always on for responses. Just speak when the officer finishes asking.'
+                : 'Click Start Interview and choose Voice to run a microphone-based simulation.';
+        }
     } else if (state.channel === 'chat') {
-        modeBadge.textContent = 'Mode: Chat';
-        modeBadge.classList.remove('visa-hub-tag-mode-voice');
-        modeBadge.classList.add('visa-hub-tag-mode-chat');
-        guide.textContent = state.active
-            ? 'Type and send each answer below.'
-            : 'Click Start Interview and choose Chat to run a typed interview simulation.';
+        if (modeBadge) {
+            modeBadge.textContent = 'Mode: Chat';
+            modeBadge.classList.remove('visa-hub-tag-mode-voice');
+            modeBadge.classList.add('visa-hub-tag-mode-chat');
+        }
+        if (guide) {
+            guide.textContent = state.active
+                ? 'Type and send each answer below.'
+                : 'Click Start Interview and choose Chat to run a typed interview simulation.';
+        }
     } else {
-        modeBadge.textContent = 'Mode: not selected';
-        modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
-        guide.textContent = 'Click Start Interview, choose Voice or Chat, then proceed question by question. The Rilono AI officer closes the interview when complete.';
+        if (modeBadge) {
+            modeBadge.textContent = 'Mode: not selected';
+            modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
+        }
+        if (guide) guide.textContent = 'Click Start Interview, choose Voice or Chat, then proceed question by question. The Rilono AI officer closes the interview when complete.';
     }
 
     if (state.active && state.channel === 'voice' && state.micPermission === 'unknown' && !state.micPermissionStatus && !state.micPermissionCheckPromise) {
@@ -6007,6 +6297,7 @@ function renderMockInterviewModeUI() {
 }
 
 function renderPrepInterviewModeUI() {
+    bindVisaInterviewChatComposer('prep');
     const modePicker = document.getElementById('visaPrepModePicker');
     const chatComposer = document.getElementById('visaPrepChatComposer');
     const chatInput = document.getElementById('visaPrepChatInput');
@@ -6019,22 +6310,19 @@ function renderPrepInterviewModeUI() {
     const modeBadge = document.getElementById('visaPrepModeBadge');
     const guide = document.getElementById('visaPrepInterviewGuide');
     const state = visaPrepInterviewState;
-    if (!modePicker || !chatComposer || !chatInput || !chatSendBtn || !startBtn || !secondaryControls || !bottomSpeakBtn || !micStatusEl || !micStatusTextEl || !modeBadge || !guide) {
+    if (!chatComposer || !chatInput || !chatSendBtn) {
         return;
     }
 
-    if (!chatInput.dataset.boundPrepInput) {
-        chatInput.addEventListener('input', () => renderPrepInterviewModeUI());
-        chatInput.dataset.boundPrepInput = '1';
-    }
-
     const showPicker = !state.active && !state.pending && state.showModePicker;
-    modePicker.style.display = showPicker ? 'grid' : 'none';
+    if (modePicker) modePicker.style.display = showPicker ? 'grid' : 'none';
     const showSecondaryControls = state.active || state.pending || state.history.length > 0;
-    secondaryControls.style.display = showSecondaryControls ? 'flex' : 'none';
-    startBtn.textContent = state.active
-        ? 'Prep Running'
-        : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Prep Session' : 'Start Prep Session'));
+    if (secondaryControls) secondaryControls.style.display = showSecondaryControls ? 'flex' : 'none';
+    if (startBtn) {
+        startBtn.textContent = state.active
+            ? 'Prep Running'
+            : (showPicker ? 'Cancel Mode Selection' : (state.history.length > 0 ? 'Start New Prep Session' : 'Start Prep Session'));
+    }
 
     const chatModeActive = state.active && state.channel === 'chat';
     const voiceModeActive = state.active && state.channel === 'voice';
@@ -6046,32 +6334,44 @@ function renderPrepInterviewModeUI() {
         : 'Type your prep answer...';
     chatSendBtn.style.display = chatModeActive ? 'inline-flex' : 'none';
     chatSendBtn.disabled = !chatModeActive || state.pending || !chatInput.value.trim();
-    bottomSpeakBtn.style.display = voiceModeActive ? 'inline-flex' : 'none';
-    bottomSpeakBtn.classList.toggle('is-listening', state.listening);
-    bottomSpeakBtn.textContent = voiceModeActive
-        ? (state.listening ? 'Mic Listening...' : 'Mic Auto-On')
-        : 'Speak Answer';
+    if (bottomSpeakBtn) {
+        bottomSpeakBtn.style.display = voiceModeActive ? 'inline-flex' : 'none';
+        bottomSpeakBtn.classList.toggle('is-listening', state.listening);
+        bottomSpeakBtn.textContent = voiceModeActive
+            ? (state.listening ? 'Mic Listening...' : 'Mic Auto-On')
+            : 'Speak Answer';
+    }
     renderVisaInterviewMicStatus('prep', micStatusEl, micStatusTextEl);
     renderVisaInterviewFullscreenCta('prep');
 
     if (state.channel === 'voice') {
-        modeBadge.textContent = 'Mode: Voice';
-        modeBadge.classList.remove('visa-hub-tag-mode-chat');
-        modeBadge.classList.add('visa-hub-tag-mode-voice');
-        guide.textContent = state.active
-            ? 'Mic is always on for responses. Speak naturally after each question; Rilono AI will coach and continue.'
-            : 'Click Start Prep Session and choose Voice to practice with microphone input.';
+        if (modeBadge) {
+            modeBadge.textContent = 'Mode: Voice';
+            modeBadge.classList.remove('visa-hub-tag-mode-chat');
+            modeBadge.classList.add('visa-hub-tag-mode-voice');
+        }
+        if (guide) {
+            guide.textContent = state.active
+                ? 'Mic is always on for responses. Speak naturally after each question; Rilono AI will coach and continue.'
+                : 'Click Start Prep Session and choose Voice to practice with microphone input.';
+        }
     } else if (state.channel === 'chat') {
-        modeBadge.textContent = 'Mode: Chat';
-        modeBadge.classList.remove('visa-hub-tag-mode-voice');
-        modeBadge.classList.add('visa-hub-tag-mode-chat');
-        guide.textContent = state.active
-            ? 'Type and send each answer below. Rilono AI gives feedback on every turn.'
-            : 'Click Start Prep Session and choose Chat to practice in typed mode.';
+        if (modeBadge) {
+            modeBadge.textContent = 'Mode: Chat';
+            modeBadge.classList.remove('visa-hub-tag-mode-voice');
+            modeBadge.classList.add('visa-hub-tag-mode-chat');
+        }
+        if (guide) {
+            guide.textContent = state.active
+                ? 'Type and send each answer below. Rilono AI gives feedback on every turn.'
+                : 'Click Start Prep Session and choose Chat to practice in typed mode.';
+        }
     } else {
-        modeBadge.textContent = 'Mode: not selected';
-        modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
-        guide.textContent = 'Choose Voice or Chat mode to start your prep session. You will get feedback after each answer.';
+        if (modeBadge) {
+            modeBadge.textContent = 'Mode: not selected';
+            modeBadge.classList.remove('visa-hub-tag-mode-voice', 'visa-hub-tag-mode-chat');
+        }
+        if (guide) guide.textContent = 'Choose Voice or Chat mode to start your prep session. You will get feedback after each answer.';
     }
 
     if (state.active && state.channel === 'voice' && state.micPermission === 'unknown' && !state.micPermissionStatus && !state.micPermissionCheckPromise) {
@@ -6084,6 +6384,7 @@ function renderPrepInterviewModeUI() {
 }
 
 function initializeVisaInterviewUI(mode) {
+    bindVisaInterviewChatComposer(mode);
     const cfg = getVisaInterviewSessionConfig(mode);
     const state = getVisaInterviewState(mode);
     const logEl = document.getElementById(cfg.logId);
@@ -6385,11 +6686,15 @@ async function sendVisaInterviewTurn(mode, studentMessage, isInitialTurn) {
         clearVisaInterviewPendingBubble(mode);
         state.pending = false;
         updateVisaInterviewControls(mode);
-        if (shouldAutoListen && state.active && state.channel === 'voice') {
+        // Honor a Finish requested while the officer was replying: run it now that the reply
+        // is done, and don't kick off voice auto-listen for a turn we're about to end.
+        const finishQueued = mode === 'mock' && state.finishRequested;
+        if (shouldAutoListen && state.active && state.channel === 'voice' && !finishQueued) {
             setVisaInterviewStatus(mode, 'Listening...');
             listenVisaInterviewAnswer(mode);
         }
-        if (mode === 'mock' && shouldAutoFinish) {
+        if (mode === 'mock' && (shouldAutoFinish || finishQueued)) {
+            state.finishRequested = false;
             await finishVoiceMockInterview();
         }
     }
@@ -7041,7 +7346,24 @@ function downloadMockInterviewReportPdf() {
 
 async function finishVoiceMockInterview() {
     const state = visaMockInterviewState;
+    if (state.reportGenerating) {
+        // A report is already being generated — ignore repeat clicks.
+        return;
+    }
     if (state.pending) {
+        // The officer is still replying. Queue the finish and reflect it in the UI rather than
+        // silently swallowing the click (which made the button feel broken). The queued finish
+        // runs automatically once the reply completes (see sendVisaInterviewTurn's finally).
+        if (state.history.length === 0) {
+            showMessage('No mock interview history found. Start the interview first.', 'error');
+            return;
+        }
+        if (!state.finishRequested) {
+            state.finishRequested = true;
+            appendVisaInterviewLog('mock', 'system', "Got it — I'll generate your final report as soon as the officer finishes the current reply.");
+        }
+        setVisaInterviewStatus('mock', 'Ending after the officer replies…');
+        updateVisaInterviewControls('mock');
         return;
     }
     if (state.history.length === 0) {
@@ -7052,11 +7374,14 @@ async function finishVoiceMockInterview() {
     stopVisaInterviewRecognition('mock');
     state.active = false;
     stopMockInterviewTimer();
+    state.finishRequested = false;
+    state.reportGenerating = true;
     state.pending = true;
-    setVisaInterviewStatus('mock', 'Generating final report...');
     updateVisaInterviewControls('mock');
-    appendVisaInterviewLog('mock', 'system', 'Interview completed. Generating final approval/rejection report...');
+    appendVisaInterviewLog('mock', 'system', 'Generating final report…');
+    startMockReportGenerationProgress();
 
+    let reportSucceeded = false;
     try {
         const transcript = buildVisaInterviewTranscript(state.history);
         const reportPrompt = `${visaMockReportInstruction()}\n\nInterview transcript:\n${transcript}`;
@@ -7084,6 +7409,9 @@ async function finishVoiceMockInterview() {
         const data = await response.json();
         const report = data.response || 'Could not generate a report right now.';
         renderVisaMockInterviewReport(report);
+        reportSucceeded = true;
+        const reportElapsedMs = stopMockReportGenerationProgress();
+        const reportElapsedLabel = formatInterviewElapsedTime(reportElapsedMs);
 
         /* Convert the "generating" log item into a "done" state */
         const logEl = document.getElementById('visaMockInterviewLog');
@@ -7092,7 +7420,7 @@ async function finishVoiceMockInterview() {
             if (genItem) {
                 genItem.classList.remove('report-generating');
                 genItem.classList.add('report-done');
-                genItem.innerHTML = `<span class="report-done-icon">✓</span><span>Report generated successfully.</span>`;
+                genItem.innerHTML = `<span class="report-done-icon">✓</span><span>Report generated successfully in ${escapeHtml(reportElapsedLabel)}.</span>`;
             }
         }
 
@@ -7100,14 +7428,21 @@ async function finishVoiceMockInterview() {
         void loadSubscriptionStatus(true);
     } catch (error) {
         console.error('Mock report generation error:', error);
+        stopMockReportGenerationProgress();
+        const logEl = document.getElementById('visaMockInterviewLog');
+        const genItem = logEl ? logEl.querySelector('.visa-mock-log-item.report-generating') : null;
+        if (genItem) genItem.remove();
         appendVisaInterviewLog('mock', 'system', RILONO_AI_PUBLIC_ERROR_MESSAGE);
         setVisaInterviewStatus('mock', 'Report error');
     } finally {
+        stopMockReportGenerationProgress();
         state.pending = false;
+        state.reportGenerating = false;
+        state.finishRequested = false;
         if (window.speechSynthesis) {
             window.speechSynthesis.cancel();
         }
-        if (state.history.length > 0) {
+        if (reportSucceeded) {
             setVisaInterviewStatus('mock', 'Completed');
         }
         updateVisaInterviewControls('mock');
@@ -7273,6 +7608,8 @@ async function startVoiceInterviewSession(mode, options = {}) {
 
     state.active = true;
     state.pending = false;
+    state.finishRequested = false;
+    state.reportGenerating = false;
     state.history = [];
     hideFloatingChatPopupImmediate();
     if (mode === 'mock') {
@@ -7317,6 +7654,8 @@ function stopVoiceMockInterview(silent = false, shouldExitFullscreen = true) {
     stopMockInterviewTimer();
     visaMockInterviewState.active = false;
     visaMockInterviewState.pending = false;
+    visaMockInterviewState.finishRequested = false;
+    visaMockInterviewState.reportGenerating = false;
     visaMockInterviewState.channel = null;
     visaMockInterviewState.showModePicker = false;
     if (window.speechSynthesis) {
@@ -7824,6 +8163,16 @@ function switchDashboardTab(tabName) {
         loadF1VisaNews();
     } else if (tabName === 'admin') {
         loadAdminUsers();
+    }
+
+    // Keep the address bar on the tab's own deep link (bookmark/refresh/back-safe).
+    // Skipped while handleRoute drives the switch (isNavigating) to avoid double writes.
+    const deepPath = DASHBOARD_TAB_TO_PATH[tabName];
+    if (deepPath) {
+        syncDocumentTitle(deepPath);
+    }
+    if (deepPath && !isNavigating && window.location.pathname !== deepPath) {
+        updateURL(deepPath, false);
     }
 
     // Scroll to top of dashboard content
@@ -10779,41 +11128,192 @@ function updateDocumentHealthUI(documents, config) {
         }
     }
 
-    const listContainer = document.getElementById(config.validationListId);
-    if (listContainer) {
-        if (totalUploaded === 0) {
+    // Persist per-widget state, wire the clickable stat tiles, and render the detail view
+    // (recent notes by default, or the selected category's documents when a tile is clicked).
+    const listId = config.validationListId;
+    const previous = documentHealthWidgetState[listId];
+    documentHealthWidgetState[listId] = {
+        documents,
+        config,
+        selected: (totalUploaded > 0 && previous) ? previous.selected : null,
+    };
+    wireDocumentHealthStatTiles(config);
+    renderDocumentHealthDetail(listId);
+}
+
+// --- Document Health: clickable stat tiles + per-category detail view ---
+// Each stat tile (Uploaded, Validated, Needs Review, …) is a filter: clicking it reveals the
+// documents in that bucket in the list area below. Document names come from the country-aware
+// catalog (formatDocumentType), so the detail is personalised per destination automatically.
+const documentHealthWidgetState = {};
+
+function documentHealthCategories(config) {
+    return [
+        { key: 'uploaded', valueId: config.totalUploadedId, label: 'Uploaded', filter: (docs) => docs },
+        { key: 'unique-types', valueId: config.uniqueTypesId, label: 'Unique Types', kind: 'types' },
+        { key: 'validated', valueId: config.validatedCountId, label: 'Validated', filter: (docs) => docs.filter((d) => d.is_valid === true) },
+        { key: 'needs-review', valueId: config.needsReviewCountId, label: 'Needs Review', filter: (docs) => docs.filter((d) => d.is_valid === false) },
+        { key: 'pending', valueId: config.pendingValidationCountId, label: 'Pending Validation', filter: (docs) => docs.filter((d) => d.is_valid === null || d.is_valid === undefined) },
+        { key: 'processed', valueId: config.processedCountId, label: 'Processed', filter: (docs) => docs.filter((d) => d.is_processed === true) },
+    ];
+}
+
+function healthStatusBadge(doc) {
+    if (doc.is_valid === true) {
+        return { label: 'Valid', style: 'background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);' };
+    }
+    if (doc.is_valid === false) {
+        return { label: 'Needs Review', style: 'background: rgba(239, 68, 68, 0.18); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);' };
+    }
+    return { label: 'Pending', style: 'background: rgba(148, 163, 184, 0.18); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3);' };
+}
+
+function healthDocumentRowHtml(doc, config) {
+    const badge = healthStatusBadge(doc);
+    const name = doc.document_type ? formatDocumentType(doc.document_type) : (doc.original_filename || 'Document');
+    const encodedDocumentType = encodeURIComponent(doc.document_type || '');
+    const documentId = Number.isFinite(doc.id) ? doc.id : 0;
+    return `
+        <div class="overview-health-item overview-health-item-clickable" onclick="jumpToDocumentInDocumentsTab(${documentId}, '${encodedDocumentType}')" title="${escapeHtml(config.listItemTitle || 'Open document')}">
+            <div class="overview-health-item-name">${escapeHtml(name)}</div>
+            <div class="overview-health-item-status" style="${badge.style}">${badge.label}</div>
+        </div>`;
+}
+
+function healthTypeRowHtml(type, docs, config) {
+    const name = formatDocumentType(type);
+    const count = docs.length;
+    const first = docs[0];
+    const encodedDocumentType = encodeURIComponent(type || '');
+    const documentId = first && Number.isFinite(first.id) ? first.id : 0;
+    return `
+        <div class="overview-health-item overview-health-item-clickable" onclick="jumpToDocumentInDocumentsTab(${documentId}, '${encodedDocumentType}')" title="${escapeHtml(config.listItemTitle || 'Open document')}">
+            <div class="overview-health-item-name">${escapeHtml(name)}</div>
+            <div class="overview-health-item-status overview-health-count">${count} file${count === 1 ? '' : 's'}</div>
+        </div>`;
+}
+
+function healthCategoryEmptyHtml(categoryKey) {
+    const journey = (typeof currentVisaJourneyPhrase === 'function') ? currentVisaJourneyPhrase() : 'student visa';
+    const messages = {
+        'validated': `No ${journey} documents have passed validation yet.`,
+        'needs-review': `Nothing needs review — no ${journey} documents failed validation.`,
+        'pending': 'No documents are waiting on validation right now.',
+        'processed': 'No documents have finished processing yet.',
+        'unique-types': 'No document types uploaded yet.',
+    };
+    const message = messages[categoryKey] || 'No documents in this category yet.';
+    return `<div class="overview-health-empty">${escapeHtml(message)}</div>`;
+}
+
+function healthResetControlHtml(listId) {
+    return `<button type="button" class="overview-health-reset" onclick="clearDocumentHealthCategory('${listId}')">Show recent</button>`;
+}
+
+function wireDocumentHealthStatTiles(config) {
+    const state = documentHealthWidgetState[config.validationListId];
+    const interactive = Boolean(state && state.documents.length > 0);
+    documentHealthCategories(config).forEach((cat) => {
+        const valueEl = document.getElementById(cat.valueId);
+        const tile = valueEl ? valueEl.closest('.overview-health-stat') : null;
+        if (!tile) return;
+        if (interactive) {
+            tile.classList.add('overview-health-stat-clickable');
+            tile.setAttribute('role', 'button');
+            tile.setAttribute('tabindex', '0');
+            tile.dataset.healthCategory = cat.key;
+            tile.setAttribute('title', `View ${cat.label.toLowerCase()} documents`);
+            tile.onclick = () => selectDocumentHealthCategory(config.validationListId, cat.key);
+            tile.onkeydown = (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    selectDocumentHealthCategory(config.validationListId, cat.key);
+                }
+            };
+        } else {
+            tile.classList.remove('overview-health-stat-clickable', 'is-active');
+            tile.removeAttribute('role');
+            tile.removeAttribute('tabindex');
+            tile.removeAttribute('title');
+            tile.onclick = null;
+            tile.onkeydown = null;
+        }
+    });
+}
+
+function selectDocumentHealthCategory(listId, category) {
+    const state = documentHealthWidgetState[listId];
+    if (!state) return;
+    state.selected = state.selected === category ? null : category;
+    renderDocumentHealthDetail(listId);
+}
+
+function clearDocumentHealthCategory(listId) {
+    const state = documentHealthWidgetState[listId];
+    if (!state) return;
+    state.selected = null;
+    renderDocumentHealthDetail(listId);
+}
+
+function renderDocumentHealthDetail(listId) {
+    const state = documentHealthWidgetState[listId];
+    if (!state) return;
+    const { documents, config } = state;
+    const listContainer = document.getElementById(listId);
+    if (!listContainer) return;
+    const wrap = listContainer.closest('.overview-health-list-wrap');
+    const titleEl = wrap ? wrap.querySelector('.overview-health-list-title') : null;
+    const categories = documentHealthCategories(config);
+
+    // Reflect the active tile.
+    categories.forEach((cat) => {
+        const valueEl = document.getElementById(cat.valueId);
+        const tile = valueEl ? valueEl.closest('.overview-health-stat') : null;
+        if (tile) tile.classList.toggle('is-active', state.selected === cat.key);
+    });
+
+    // Default view: recent validation notes.
+    if (!state.selected) {
+        if (titleEl) titleEl.textContent = 'Recent Validation Notes';
+        if (documents.length === 0) {
             listContainer.innerHTML = '<div class="overview-health-empty">No documents uploaded yet.</div>';
             return;
         }
-
-        const recentDocuments = [...documents]
+        const recent = [...documents]
             .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
             .slice(0, 5);
-
-        listContainer.innerHTML = recentDocuments.map((doc) => {
-            let statusLabel = 'Pending';
-            let statusStyle = 'background: rgba(148, 163, 184, 0.18); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3);';
-
-            if (doc.is_valid === true) {
-                statusLabel = 'Valid';
-                statusStyle = 'background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);';
-            } else if (doc.is_valid === false) {
-                statusLabel = 'Needs Review';
-                statusStyle = 'background: rgba(239, 68, 68, 0.18); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);';
-            }
-
-            const name = doc.document_type ? formatDocumentType(doc.document_type) : (doc.original_filename || 'Document');
-            const encodedDocumentType = encodeURIComponent(doc.document_type || '');
-            const documentId = Number.isFinite(doc.id) ? doc.id : 0;
-
-            return `
-                <div class="overview-health-item overview-health-item-clickable" onclick="jumpToDocumentInDocumentsTab(${documentId}, '${encodedDocumentType}')" title="${escapeHtml(config.listItemTitle || 'Open document')}">
-                    <div class="overview-health-item-name">${escapeHtml(name)}</div>
-                    <div class="overview-health-item-status" style="${statusStyle}">${statusLabel}</div>
-                </div>
-            `;
-        }).join('');
+        listContainer.innerHTML = recent.map((doc) => healthDocumentRowHtml(doc, config)).join('');
+        return;
     }
+
+    const category = categories.find((cat) => cat.key === state.selected);
+    if (!category) {
+        state.selected = null;
+        renderDocumentHealthDetail(listId);
+        return;
+    }
+
+    if (category.kind === 'types') {
+        const groups = new Map();
+        documents.forEach((doc) => {
+            const type = doc.document_type || '';
+            if (!type) return;
+            if (!groups.has(type)) groups.set(type, []);
+            groups.get(type).push(doc);
+        });
+        const entries = [...groups.entries()];
+        if (titleEl) titleEl.innerHTML = `<span>${escapeHtml(category.label)} · ${entries.length}</span>${healthResetControlHtml(listId)}`;
+        listContainer.innerHTML = entries.length
+            ? entries.map(([type, docs]) => healthTypeRowHtml(type, docs, config)).join('')
+            : healthCategoryEmptyHtml(category.key);
+        return;
+    }
+
+    const filtered = category.filter(documents);
+    if (titleEl) titleEl.innerHTML = `<span>${escapeHtml(category.label)} · ${filtered.length}</span>${healthResetControlHtml(listId)}`;
+    listContainer.innerHTML = filtered.length
+        ? filtered.map((doc) => healthDocumentRowHtml(doc, config)).join('')
+        : healthCategoryEmptyHtml(category.key);
 }
 
 function setTextContent(id, value) {
@@ -11173,6 +11673,17 @@ function calculateVisaJourneyStage(documents) {
     };
 }
 
+// UK maintenance-funds calculator (Stage 4) — delegates to the SHARED engine
+// (static/uk-maintenance-calc.js) so the figures + math live in ONE place, reused by the
+// public tool page and the enterprise CRM. See window.RilonoUkMaintenanceCalc.
+function openUkFundsCalculator() {
+    if (window.RilonoUkMaintenanceCalc) {
+        window.RilonoUkMaintenanceCalc.openModal({ eyebrow: 'UK Student visa \u00b7 Stage 4' });
+    } else {
+        showMessage('The maintenance calculator could not load. Please refresh and try again.', 'error');
+    }
+}
+
 function updateVisaJourneyUI(documents) {
     const journeyData = calculateVisaJourneyStage(documents);
 
@@ -11369,6 +11880,28 @@ function updateVisaJourneyWidget(config, journeyData) {
         } else {
             stageActionHint.style.display = 'none';
             stageActionHint.textContent = '';
+        }
+    }
+
+    // UK maintenance-funds calculator — the trickiest part of a UK application (London vs
+    // outside, months of living costs, the 28-day rule). Surface it right inside Stage 4
+    // (Finances & Healthcare) for UK students only, on whichever journey widget is showing.
+    if (stageInfoCard) {
+        const isUK = (currentUser && currentUser.destination_country_code) === 'UK';
+        let cta = stageInfoCard.querySelector('.uk-funds-cta');
+        if (isUK && selectedStage === 4) {
+            if (!cta) {
+                cta = document.createElement('button');
+                cta.type = 'button';
+                cta.className = 'uk-funds-cta';
+                cta.style.cssText = 'width:100%;margin-top:12px;padding:11px 14px;border:none;border-radius:11px;font-size:13.5px;font-weight:700;color:#fff;background:linear-gradient(135deg,#6366f1,#a855f7);cursor:pointer;box-shadow:0 6px 18px rgba(99,102,241,.28)';
+                cta.textContent = '💷 Calculate your exact maintenance funds & 28-day window';
+                cta.addEventListener('click', (e) => { e.stopPropagation(); openUkFundsCalculator(); });
+                stageInfoCard.appendChild(cta);
+            }
+            cta.style.display = '';
+        } else if (cta) {
+            cta.style.display = 'none';
         }
     }
 }
@@ -12127,6 +12660,17 @@ async function handleDocumentationForm(e) {
     }
 }
 
+// Mirrors the backend's ALLOWED_DOCUMENT_EXTENSIONS (app/routers/documents.py) so users
+// get an immediate, friendly rejection instead of discovering it after the passphrase
+// prompt + client-side encryption + a failed upload round-trip.
+const ALLOWED_DOCUMENT_FILE_EXTENSIONS = ['.pdf', '.doc', '.docx', '.txt', '.jpg', '.jpeg', '.png', '.gif', '.webp'];
+function isAllowedDocumentFile(filename) {
+    const name = String(filename || '').toLowerCase();
+    const dot = name.lastIndexOf('.');
+    if (dot < 0) return false;
+    return ALLOWED_DOCUMENT_FILE_EXTENSIONS.includes(name.slice(dot));
+}
+
 async function handleDocumentUpload(e) {
     e.preventDefault();
     if (documentUploadInProgress) {
@@ -12158,6 +12702,14 @@ async function handleDocumentUpload(e) {
     }
 
     const file = fileInput.files[0];
+
+    // Validate the file type EARLY — before the passphrase prompt, encryption and upload.
+    // (The picker's `accept` is only a soft hint; "All Files" bypasses it. The backend
+    // enforces the same allowlist and would 400, but the user deserves the answer now.)
+    if (!isAllowedDocumentFile(file.name)) {
+        showMessage('That file type isn\'t supported. Please upload PDF, DOC, DOCX, TXT or an image (JPG, PNG, GIF, WEBP).', 'error');
+        return;
+    }
 
     // Validate file size (5MB)
     const maxSize = 5 * 1024 * 1024;
@@ -12659,7 +13211,7 @@ function displayDocuments(documents) {
 
     const summaryLine = `
         <div style="margin-bottom: 0.9rem; color: var(--text-secondary); font-size: 0.86rem;">
-            Showing all document types from your database catalog. Uploaded documents are listed first.
+            Your full document checklist for the visa journey — items you've uploaded appear first.
         </div>
     `;
 
@@ -13179,6 +13731,25 @@ function getMainChatForms() {
     }
     const fallback = document.getElementById('rilonoAiChatForm');
     return fallback ? [fallback] : [];
+}
+
+function getRilonoAiChatFormFromEvent(event) {
+    const target = event && event.target;
+    if (target && typeof target.closest === 'function') {
+        const form = target.closest('.rilono-ai-form[data-main-chat-form="true"]');
+        if (form) return form;
+    }
+    const currentTarget = event && event.currentTarget;
+    if (currentTarget && typeof currentTarget.matches === 'function'
+        && currentTarget.matches('.rilono-ai-form[data-main-chat-form="true"]')) {
+        return currentTarget;
+    }
+    return null;
+}
+
+function handleDelegatedRilonoAiChatSubmit(event) {
+    if (event.defaultPrevented || !getRilonoAiChatFormFromEvent(event)) return;
+    void handleRilonoAiChatSubmit(event);
 }
 
 function getMainChatWelcomeMarkup() {
@@ -13806,8 +14377,9 @@ function getRilonoAiChatRequestPayload(message, attachmentsOverride = null) {
 }
 
 async function handleRilonoAiChatSubmit(e) {
+    const form = getRilonoAiChatFormFromEvent(e);
+    if (!form) return;
     e.preventDefault();
-    const form = e.currentTarget;
     const input = form ? form.querySelector('.rilono-ai-input') : null;
     if (!input) return;
     const message = input.value.trim();

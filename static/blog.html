@@ -5,18 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <base target="_blank">
     <title>Rilono Blog — Guides for Student Visa Applicants · Rilono</title>
-    <meta name="description" content="Practical, up-to-date guides on using Rilono AI for your student visa — the US F-1, UK Student visa, Canada study permit, Australia Subclass 500, and Rilono Copilot for Chrome.">
+    <meta name="description" content="Practical, up-to-date guides on student visas — interview questions, SOP writing, maintenance funds, and using Rilono AI for the US, UK, Canada, Australia and Germany.">
     <meta name="author" content="Rilono">
     <link rel="canonical" href="https://rilono.com/blog">
     <meta property="og:site_name" content="Rilono">
     <meta property="og:title" content="Rilono Blog — Guides for Student Visa Applicants">
-    <meta property="og:description" content="Practical guides on using Rilono AI for the US, UK, Canada and Australia student visas, plus Rilono Copilot for Chrome.">
+    <meta property="og:description" content="Interview questions, SOP writing, maintenance funds and how-to guides for the US, UK, Canada and Australia student visas.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://rilono.com/blog">
     <meta property="og:image" content="https://rilono.com/static/logo.png">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Rilono Blog — Guides for Student Visa Applicants">
-    <meta name="twitter:description" content="Practical guides on using Rilono AI for the US, UK, Canada and Australia student visas, plus Rilono Copilot for Chrome.">
+    <meta name="twitter:description" content="Interview questions, SOP writing, maintenance funds and how-to guides for the US, UK, Canada and Australia student visas.">
     <meta name="twitter:image" content="https://rilono.com/static/logo.png">
     <link rel="icon" href="/static/logo.png">
     <style>
@@ -70,28 +70,75 @@
         }
 
         /* blog index */
-        .blog-hero { max-width: 900px; margin: 0 auto; padding: 52px 24px 6px; text-align: center; }
+        .blog-hero { max-width: 760px; margin: 0 auto; padding: 52px 24px 6px; text-align: center; }
         .blog-hero .eyebrow { display: inline-flex; align-items: center; gap: 9px; font-size: .78rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--brand); background: rgba(99, 102, 241, .1); border: 1px solid rgba(99, 102, 241, .25); padding: 6px 14px; border-radius: 999px; }
         .blog-hero h1 { font-size: clamp(2rem, 4vw, 2.8rem); line-height: 1.12; letter-spacing: -.02em; font-weight: 850; margin: 18px 0 10px; }
         .blog-hero p { font-size: 1.1rem; color: var(--ink-2); max-width: 620px; margin: 0 auto; }
-        .blog-grid { max-width: 900px; margin: 0 auto; padding: 30px 24px 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-        .blog-card { display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px; box-shadow: 0 10px 28px rgba(15, 23, 42, .06); text-decoration: none; color: inherit; transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
+
+        /* search */
+        .blog-search { position: relative; max-width: 640px; margin: 26px auto 0; text-align: left; }
+        .search-box { display: flex; align-items: center; gap: 10px; background: #fff; border: 1.5px solid var(--line); border-radius: 15px; padding: 4px 8px 4px 16px; box-shadow: 0 10px 30px rgba(15, 23, 42, .07); transition: border-color .18s ease, box-shadow .18s ease; }
+        .blog-search.is-open .search-box, .search-box:focus-within { border-color: rgba(99, 102, 241, .55); box-shadow: 0 12px 34px rgba(99, 102, 241, .16); }
+        .search-box .ic { width: 20px; height: 20px; color: var(--muted); flex: none; }
+        .search-box input { flex: 1; border: 0; outline: 0; background: transparent; font-family: inherit; font-size: 1rem; color: var(--ink); padding: 13px 0; }
+        .search-box input::placeholder { color: #9aa4b6; }
+        .search-clear { flex: none; background: #f1f4fb; border: 0; color: var(--muted); width: 30px; height: 30px; border-radius: 9px; cursor: pointer; font-size: 15px; line-height: 1; display: none; }
+        .search-clear:hover { background: #e6ebf5; color: var(--ink); }
+        .search-kbd { flex: none; font-size: .7rem; font-weight: 700; color: var(--muted); background: #f1f4fb; border: 1px solid var(--line); border-radius: 7px; padding: 3px 7px; margin-right: 4px; }
+        @media (max-width: 560px) { .search-kbd { display: none; } }
+
+        .search-drop { position: absolute; top: calc(100% + 8px); left: 0; right: 0; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 24px 60px rgba(15, 23, 42, .18); padding: 6px; z-index: 40; max-height: 60vh; overflow-y: auto; display: none; }
+        .blog-search.is-open .search-drop { display: block; }
+        .sd-head { font-size: .66rem; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); padding: 8px 10px 6px; }
+        .sd-item { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-radius: 10px; text-decoration: none; color: var(--ink); cursor: pointer; }
+        .sd-item:hover, .sd-item.active { background: rgba(99, 102, 241, .09); }
+        .sd-ic { flex: none; width: 34px; height: 34px; border-radius: 9px; display: grid; place-content: center; font-size: 1.05rem; background: rgba(99, 102, 241, .08); border: 1px solid var(--line); }
+        .sd-tx { min-width: 0; }
+        .sd-title { display: block; font-size: .92rem; font-weight: 700; line-height: 1.3; }
+        .sd-title mark { background: rgba(99, 102, 241, .2); color: inherit; border-radius: 3px; padding: 0 1px; }
+        .sd-tag { display: block; margin-top: 2px; font-size: .72rem; color: var(--muted); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sd-empty { padding: 16px 12px; color: var(--muted); font-size: .9rem; text-align: center; }
+
+        /* filter chips */
+        .blog-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; max-width: 900px; margin: 20px auto 0; padding: 0 24px; }
+        .chip { font-family: inherit; font-size: .85rem; font-weight: 700; color: var(--ink-2); background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 8px 15px; cursor: pointer; transition: all .15s ease; }
+        .chip:hover { border-color: rgba(99, 102, 241, .4); color: var(--ink); }
+        .chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+        /* sections */
+        .blog-main { max-width: 900px; margin: 0 auto; padding: 8px 24px 20px; }
+        .blog-cat { margin-top: 34px; }
+        .featured-wrap { margin-top: 30px; }
+        .cat-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; }
+        .cat-head h2 { font-size: 1.25rem; font-weight: 850; letter-spacing: -.01em; margin: 0; }
+        .cat-count { font-size: .8rem; font-weight: 700; color: var(--muted); }
+
+        .blog-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+        .blog-card { position: relative; display: flex; flex-direction: column; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px; box-shadow: 0 10px 28px rgba(15, 23, 42, .06); text-decoration: none; color: inherit; transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
         .blog-card:hover { transform: translateY(-5px); border-color: rgba(99, 102, 241, .4); box-shadow: 0 22px 48px rgba(99, 102, 241, .14); }
-        .blog-card.featured { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 22px; }
-        .blog-card .flag { font-size: 2rem; line-height: 1; flex: none; width: 54px; height: 54px; border-radius: 14px; display: grid; place-content: center; background: rgba(99, 102, 241, .08); border: 1px solid var(--line); }
-        .blog-card .tag { font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-        .blog-card h3 { margin: 8px 0 6px; font-size: 1.12rem; font-weight: 800; line-height: 1.25; letter-spacing: -.01em; }
-        .blog-card p { margin: 0; color: var(--ink-2); font-size: .92rem; }
-        .blog-card .more { margin-top: 14px; color: var(--brand); font-weight: 800; font-size: .9rem; }
-        .blog-card.featured .body { display: flex; flex-direction: column; }
-        .blog-card.featured .more { margin-top: 10px; }
-        @media (max-width: 720px) {
-            .blog-grid { grid-template-columns: 1fr; }
-            .blog-card.featured { flex-direction: column; align-items: flex-start; gap: 14px; }
+        .blog-card .flag { font-size: 1.7rem; line-height: 1; flex: none; width: 50px; height: 50px; border-radius: 13px; display: grid; place-content: center; background: rgba(99, 102, 241, .08); border: 1px solid var(--line); margin-bottom: 12px; }
+        .blog-card .tag { font-size: .69rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+        .blog-card h3 { margin: 7px 0 6px; font-size: 1.06rem; font-weight: 800; line-height: 1.25; letter-spacing: -.01em; }
+        .blog-card p { margin: 0; color: var(--ink-2); font-size: .9rem; }
+        .blog-card .more { margin-top: 13px; color: var(--brand); font-weight: 800; font-size: .88rem; }
+
+        /* featured cards — highlighted treatment */
+        .feat-card { overflow: hidden; }
+        .feat-card::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 4px; background: var(--grad); }
+        .feat-card { border-color: rgba(99, 102, 241, .28); box-shadow: 0 14px 34px rgba(99, 102, 241, .12); }
+        .feat-card .badge { position: absolute; top: 16px; right: 16px; font-size: .6rem; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--brand); background: rgba(99, 102, 241, .1); border: 1px solid rgba(99, 102, 241, .28); padding: 3px 9px; border-radius: 999px; }
+
+        .blog-empty { display: none; text-align: center; padding: 46px 20px; color: var(--muted); }
+        .blog-empty b { color: var(--ink); }
+        .blog-empty button { margin-top: 12px; font-family: inherit; font-weight: 700; font-size: .9rem; color: #fff; background: var(--grad); border: 0; border-radius: 11px; padding: 10px 20px; cursor: pointer; }
+
+        @media (max-width: 760px) {
+            .blog-grid, .feat-grid { grid-template-columns: 1fr; }
         }
 
         /* footer (matches homepage) */
-        .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); margin-top: 40px; }
+        .hx-footer { position: relative; color: #c9cdea; background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%), linear-gradient(180deg, #191545 0%, #120e33 100%); margin-top: 46px; }
         .hx-footer::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899); }
         .hx-footer .cols { display: grid; grid-template-columns: 1.6fr 1fr 1fr; gap: 32px; padding: 52px 0 34px; }
         .hx-footer .brand-col img { height: 34px; margin-bottom: 14px; }
@@ -109,14 +156,25 @@
         "@type": "Blog",
         "name": "Rilono Blog",
         "url": "https://rilono.com/blog",
-        "description": "Guides on using Rilono AI for student visas — US, UK, Canada, Australia, and Rilono Copilot for Chrome.",
+        "description": "Student-visa guides — interview questions, SOP writing, maintenance funds, and how to use Rilono AI for the US, UK, Canada, Australia and Germany.",
         "publisher": { "@type": "Organization", "name": "Rilono", "logo": { "@type": "ImageObject", "url": "https://rilono.com/static/logo.png" } },
         "blogPost": [
-            { "@type": "BlogPosting", "headline": "How to use Rilono AI Copilot", "url": "https://rilono.com/blog/how-to-use-rilono-ai-copilot" },
+            { "@type": "BlogPosting", "headline": "UK student visa maintenance funds (2026): how much to show + free calculator", "url": "https://rilono.com/blog/uk-student-visa-maintenance-funds" },
+            { "@type": "BlogPosting", "headline": "How to write an SOP for a student visa — with examples (2026)", "url": "https://rilono.com/blog/how-to-write-sop-for-student-visa" },
+            { "@type": "BlogPosting", "headline": "US F1 visa interview questions & answers (2026)", "url": "https://rilono.com/blog/us-f1-visa-interview-questions-and-answers" },
+            { "@type": "BlogPosting", "headline": "UK student visa credibility interview questions & answers", "url": "https://rilono.com/blog/uk-student-visa-credibility-interview-questions" },
+            { "@type": "BlogPosting", "headline": "Canada study permit interview questions & answers", "url": "https://rilono.com/blog/canada-study-permit-interview-questions" },
+            { "@type": "BlogPosting", "headline": "Australia Genuine Student (GS) questions & answers", "url": "https://rilono.com/blog/australia-genuine-student-interview-questions" },
+            { "@type": "BlogPosting", "headline": "SOP for the US: admissions & your F-1 story", "url": "https://rilono.com/blog/sop-for-us-f1-visa" },
+            { "@type": "BlogPosting", "headline": "UK personal statement your credibility interview can defend", "url": "https://rilono.com/blog/sop-for-uk-student-visa" },
+            { "@type": "BlogPosting", "headline": "SOP for your Canada study permit (study plan / LOE)", "url": "https://rilono.com/blog/sop-for-canada-study-permit" },
+            { "@type": "BlogPosting", "headline": "Australia GS statement & answers (Subclass 500)", "url": "https://rilono.com/blog/sop-for-australia-student-visa" },
             { "@type": "BlogPosting", "headline": "How to use Rilono AI for your US student visa (F-1)", "url": "https://rilono.com/blog/how-to-use-rilono-ai-us-f1-visa" },
             { "@type": "BlogPosting", "headline": "How to use Rilono AI for your UK Student visa", "url": "https://rilono.com/blog/how-to-use-rilono-ai-uk-student-visa" },
             { "@type": "BlogPosting", "headline": "How to use Rilono AI for your Canada study permit", "url": "https://rilono.com/blog/how-to-use-rilono-ai-canada-study-permit" },
             { "@type": "BlogPosting", "headline": "How to use Rilono AI for your Australia student visa (Subclass 500)", "url": "https://rilono.com/blog/how-to-use-rilono-ai-australia-student-visa" },
+            { "@type": "BlogPosting", "headline": "How to use Rilono AI for your Germany student visa", "url": "https://rilono.com/blog/how-to-use-rilono-ai-germany-student-visa" },
+            { "@type": "BlogPosting", "headline": "How to use Rilono AI Copilot", "url": "https://rilono.com/blog/how-to-use-rilono-ai-copilot" },
             { "@type": "BlogPosting", "headline": "Manage every student visa in one platform (for consultancies)", "url": "https://rilono.com/blog/student-visa-crm-for-consultancies" }
         ]
     }
@@ -169,103 +227,218 @@
     <header class="blog-hero">
         <span class="eyebrow">Rilono Guides</span>
         <h1>Guides for your student-visa journey</h1>
-        <p>Practical, up-to-date walkthroughs on getting the most out of Rilono AI — for every destination we support, and for Rilono Copilot in your browser.</p>
+        <p>Interview questions, SOP writing, maintenance funds and step-by-step walkthroughs — for every destination we support.</p>
+
+        <div class="blog-search" id="blogSearch">
+            <div class="search-box">
+                <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                <input id="searchInput" type="text" autocomplete="off" spellcheck="false" placeholder="Search guides — try “interview”, “SOP”, “UK funds”…" role="combobox" aria-expanded="false" aria-controls="searchDrop" aria-autocomplete="list" aria-label="Search the blog">
+                <button class="search-clear" id="searchClear" type="button" aria-label="Clear search">✕</button>
+                <span class="search-kbd">↵ to open</span>
+            </div>
+            <div class="search-drop" id="searchDrop" role="listbox" aria-label="Suggested guides"></div>
+        </div>
     </header>
 
-    <main class="blog-grid">
-        <a class="blog-card featured" href="/blog/us-f1-visa-interview-questions-and-answers">
-            <span class="flag">🎙️</span>
-            <span class="body">
-                <span class="tag">Interview Prep · United States F-1</span>
-                <h3>US F1 visa interview questions &amp; answers (2026)</h3>
-                <p>The 40+ questions consular officers actually ask — with answer strategies for study plans, finances, ties to home and 214(b), plus how to practice with AI mock interviews.</p>
-                <span class="more">Read the guide →</span>
-            </span>
-        </a>
+    <div class="blog-chips" id="blogChips" role="tablist" aria-label="Filter guides by category">
+        <button class="chip on" type="button" data-cat="all" aria-pressed="true">All guides</button>
+        <button class="chip" type="button" data-cat="interview" aria-pressed="false">🎙️ Interview prep</button>
+        <button class="chip" type="button" data-cat="sop" aria-pressed="false">📝 SOP &amp; application</button>
+        <button class="chip" type="button" data-cat="tools" aria-pressed="false">🧮 Tools</button>
+        <button class="chip" type="button" data-cat="country" aria-pressed="false">🌍 Country guides</button>
+        <button class="chip" type="button" data-cat="enterprise" aria-pressed="false">🏢 For consultancies</button>
+    </div>
 
-        <a class="blog-card" href="/blog/uk-student-visa-credibility-interview-questions">
-            <span class="flag">🇬🇧</span>
-            <span class="tag">Interview Prep · United Kingdom</span>
-            <h3>UK student visa credibility interview questions &amp; answers</h3>
-            <p>Pre-CAS and UKVI credibility interviews: the questions, the genuine-student test, and how to answer without sounding scripted.</p>
-            <span class="more">Read the guide →</span>
-        </a>
+    <main class="blog-main">
+        <!-- Featured -->
+        <section class="featured-wrap" id="featuredSection" aria-label="Featured guides">
+            <div class="cat-head"><h2>✨ Featured</h2></div>
+            <div class="feat-grid">
+                <a class="blog-card feat-card" href="/blog/uk-student-visa-maintenance-funds">
+                    <span class="badge">New tool</span>
+                    <span class="flag">💷</span>
+                    <span class="tag">UK · Maintenance Funds</span>
+                    <h3>UK maintenance funds calculator &amp; the 28-day rule</h3>
+                    <p>Work out the exact funds to show and the window your balance must survive — free calculator inside.</p>
+                    <span class="more">Open the calculator →</span>
+                </a>
+                <a class="blog-card feat-card" href="/blog/how-to-write-sop-for-student-visa">
+                    <span class="badge">Most read</span>
+                    <span class="flag">📝</span>
+                    <span class="tag">SOP Writing · All destinations</span>
+                    <h3>How to write an SOP for a student visa (with examples)</h3>
+                    <p>The 6-part structure, strong vs weak examples, and the 10 mistakes that sink statements.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card feat-card" href="/blog/us-f1-visa-interview-questions-and-answers">
+                    <span class="badge">Popular</span>
+                    <span class="flag">🎙️</span>
+                    <span class="tag">Interview Prep · US F-1</span>
+                    <h3>US F1 visa interview questions &amp; answers (2026)</h3>
+                    <p>The 40+ questions officers actually ask, with answer strategies and how to practice.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+            </div>
+        </section>
 
-        <a class="blog-card" href="/blog/canada-study-permit-interview-questions">
-            <span class="flag">🇨🇦</span>
-            <span class="tag">Interview Prep · Canada</span>
-            <h3>Canada study permit interview questions &amp; answers</h3>
-            <p>The questions officers assess — in your written file, in interviews when called, and at the border when you land.</p>
-            <span class="more">Read the guide →</span>
-        </a>
+        <div class="blog-empty" id="blogEmpty">
+            <p>No guides match <b id="emptyTerm"></b>.</p>
+            <button type="button" id="emptyReset">Clear search</button>
+        </div>
 
-        <a class="blog-card" href="/blog/australia-genuine-student-interview-questions">
-            <span class="flag">🇦🇺</span>
-            <span class="tag">Interview Prep · Australia GS</span>
-            <h3>Australia Genuine Student (GS) questions &amp; answers</h3>
-            <p>How to write strong GS responses and handle provider or Home Affairs interviews for your Subclass 500.</p>
-            <span class="more">Read the guide →</span>
-        </a>
+        <!-- Interview preparation -->
+        <section class="blog-cat" data-cat="interview">
+            <div class="cat-head"><h2>🎙️ Interview preparation</h2><span class="cat-count"></span></div>
+            <div class="blog-grid">
+                <a class="blog-card" href="/blog/us-f1-visa-interview-questions-and-answers" data-search="us f1 united states interview questions answers 214b consular officer mock interview study plan finances">
+                    <span class="flag">🇺🇸</span>
+                    <span class="tag">Interview Prep · United States F-1</span>
+                    <h3>US F1 visa interview questions &amp; answers (2026)</h3>
+                    <p>The 40+ questions consular officers actually ask — study plans, finances, ties to home and 214(b) — plus how to practice with AI mock interviews.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/uk-student-visa-credibility-interview-questions" data-search="uk united kingdom credibility interview pre-cas ukvi genuine student questions answers">
+                    <span class="flag">🇬🇧</span>
+                    <span class="tag">Interview Prep · United Kingdom</span>
+                    <h3>UK student visa credibility interview questions &amp; answers</h3>
+                    <p>Pre-CAS and UKVI credibility interviews: the questions, the genuine-student test, and how to answer without sounding scripted.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/canada-study-permit-interview-questions" data-search="canada study permit interview questions ircc border officer port of entry letter of explanation">
+                    <span class="flag">🇨🇦</span>
+                    <span class="tag">Interview Prep · Canada</span>
+                    <h3>Canada study permit interview questions &amp; answers</h3>
+                    <p>The questions officers assess — in your written file, in interviews when called, and at the border when you land.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/australia-genuine-student-interview-questions" data-search="australia subclass 500 genuine student gs interview questions answers home affairs provider">
+                    <span class="flag">🇦🇺</span>
+                    <span class="tag">Interview Prep · Australia GS</span>
+                    <h3>Australia Genuine Student (GS) questions &amp; answers</h3>
+                    <p>How to write strong GS responses and handle provider or Home Affairs interviews for your Subclass 500.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+            </div>
+        </section>
 
-        <a class="blog-card featured" href="/blog/how-to-use-rilono-ai-copilot">
-            <span class="flag">🧭</span>
-            <span class="body">
-                <span class="tag">Rilono Copilot · Chrome extension</span>
-                <h3>How to use Rilono AI Copilot</h3>
-                <p>Your AI side panel for visa application pages — install it, connect your account, and get field-by-field guidance personalized to your Rilono profile.</p>
-                <span class="more">Read the guide →</span>
-            </span>
-        </a>
+        <!-- SOP & application kit -->
+        <section class="blog-cat" data-cat="sop">
+            <div class="cat-head"><h2>📝 SOP &amp; application kit</h2><span class="cat-count"></span></div>
+            <div class="blog-grid">
+                <a class="blog-card" href="/blog/how-to-write-sop-for-student-visa" data-search="sop statement of purpose how to write examples application kit all destinations structure mistakes">
+                    <span class="flag">📝</span>
+                    <span class="tag">SOP Writing · All destinations</span>
+                    <h3>How to write an SOP for a student visa — with examples (2026)</h3>
+                    <p>The 6-part structure that works, strong vs weak paragraph examples, the 10 mistakes that sink SOPs, and what each country expects.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/sop-for-us-f1-visa" data-search="sop statement of purpose united states us f1 admissions committee visa story">
+                    <span class="flag">🇺🇸</span>
+                    <span class="tag">SOP Writing · United States</span>
+                    <h3>SOP for the US: admissions &amp; your F-1 story</h3>
+                    <p>Write the statement once, defend it twice — admissions committee first, visa interview later.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/sop-for-uk-student-visa" data-search="sop personal statement uk united kingdom ucas postgraduate credibility modules">
+                    <span class="flag">🇬🇧</span>
+                    <span class="tag">SOP Writing · United Kingdom</span>
+                    <h3>UK personal statement your credibility interview can defend</h3>
+                    <p>UCAS and postgraduate statements, module-level specificity, and staying consistent through pre-CAS checks.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/sop-for-canada-study-permit" data-search="sop study plan letter of explanation loe canada study permit ircc officer">
+                    <span class="flag">🇨🇦</span>
+                    <span class="tag">SOP Writing · Canada</span>
+                    <h3>SOP for your Canada study permit (study plan / LOE)</h3>
+                    <p>The one destination where your SOP is a real visa document — how to write the study plan officers approve.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/sop-for-australia-student-visa" data-search="sop gs statement genuine student australia subclass 500 gte responses word limit">
+                    <span class="flag">🇦🇺</span>
+                    <span class="tag">SOP Writing · Australia</span>
+                    <h3>Australia GS statement &amp; answers (Subclass 500)</h3>
+                    <p>From long-form SOP to targeted Genuine Student responses — build the narrative, then compress it with evidence.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+            </div>
+        </section>
 
-        <a class="blog-card" href="/blog/how-to-use-rilono-ai-us-f1-visa">
-            <span class="flag">🇺🇸</span>
-            <span class="tag">United States · F-1</span>
-            <h3>How to use Rilono AI for your US student visa (F-1)</h3>
-            <p>Build your profile, AI-validate documents, track all 7 stages, cross-check, and prep your visa interview.</p>
-            <span class="more">Read the guide →</span>
-        </a>
+        <!-- Tools & calculators -->
+        <section class="blog-cat" data-cat="tools">
+            <div class="cat-head"><h2>🧮 Tools &amp; calculators</h2><span class="cat-count"></span></div>
+            <div class="blog-grid">
+                <a class="blog-card" href="/blog/uk-student-visa-maintenance-funds" data-search="uk maintenance funds calculator money financial proof of funds 28 day rule how much money tuition living costs london">
+                    <span class="flag">💷</span>
+                    <span class="tag">Tool · UK Maintenance Funds</span>
+                    <h3>UK student visa maintenance funds (2026): how much to show + free calculator</h3>
+                    <p>Work out the exact funds to show and the 28-day window your bank balance must survive — with a free calculator built into Rilono.</p>
+                    <span class="more">Open the calculator →</span>
+                </a>
+            </div>
+        </section>
 
-        <a class="blog-card" href="/blog/how-to-use-rilono-ai-uk-student-visa">
-            <span class="flag">🇬🇧</span>
-            <span class="tag">United Kingdom · Student visa</span>
-            <h3>How to use Rilono AI for your UK Student visa</h3>
-            <p>Master the 28-day financial rule, track all 7 stages, and rehearse your credibility interview.</p>
-            <span class="more">Read the guide →</span>
-        </a>
+        <!-- Country how-to guides -->
+        <section class="blog-cat" data-cat="country">
+            <div class="cat-head"><h2>🌍 Using Rilono by country</h2><span class="cat-count"></span></div>
+            <div class="blog-grid">
+                <a class="blog-card" href="/blog/how-to-use-rilono-ai-us-f1-visa" data-search="united states us f1 visa ds-160 i-20 sevis rilono guide how to use stages">
+                    <span class="flag">🇺🇸</span>
+                    <span class="tag">United States · F-1</span>
+                    <h3>How to use Rilono AI for your US student visa (F-1)</h3>
+                    <p>Build your profile, AI-validate documents, track all 7 stages, cross-check, and prep your visa interview.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/how-to-use-rilono-ai-uk-student-visa" data-search="united kingdom uk student visa cas ihs 28 day financial rule rilono guide how to use">
+                    <span class="flag">🇬🇧</span>
+                    <span class="tag">United Kingdom · Student visa</span>
+                    <h3>How to use Rilono AI for your UK Student visa</h3>
+                    <p>Master the 28-day financial rule, track all 7 stages, and rehearse your credibility interview.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/how-to-use-rilono-ai-canada-study-permit" data-search="canada study permit loa pal gic proof of funds rilono guide how to use">
+                    <span class="flag">🇨🇦</span>
+                    <span class="tag">Canada · Study Permit</span>
+                    <h3>How to use Rilono AI for your Canada study permit</h3>
+                    <p>Cross-check your LOA, PAL, GIC and proof of funds, and build a complete, consistent file.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/how-to-use-rilono-ai-australia-student-visa" data-search="australia subclass 500 coe oshc genuine student finances rilono guide how to use">
+                    <span class="flag">🇦🇺</span>
+                    <span class="tag">Australia · Subclass 500</span>
+                    <h3>How to use Rilono AI for your Australia student visa</h3>
+                    <p>Track all 7 Subclass 500 stages, get your OSHC and finances right, and strengthen your Genuine Student answers.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/how-to-use-rilono-ai-germany-student-visa" data-search="germany type d study blocked account aps videx rilono guide how to use">
+                    <span class="flag">🇩🇪</span>
+                    <span class="tag">Germany · Type D (Study)</span>
+                    <h3>How to use Rilono AI for your Germany student visa</h3>
+                    <p>Get your blocked account, APS and VIDEX right, and track all 7 stages to your Type D visa.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+                <a class="blog-card" href="/blog/how-to-use-rilono-ai-copilot" data-search="rilono copilot chrome extension side panel ds-160 form field guidance browser">
+                    <span class="flag">🧭</span>
+                    <span class="tag">Rilono Copilot · Chrome extension</span>
+                    <h3>How to use Rilono AI Copilot</h3>
+                    <p>Your AI side panel for visa application pages — install it, connect your account, and get field-by-field guidance.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+            </div>
+        </section>
 
-        <a class="blog-card" href="/blog/how-to-use-rilono-ai-canada-study-permit">
-            <span class="flag">🇨🇦</span>
-            <span class="tag">Canada · Study Permit</span>
-            <h3>How to use Rilono AI for your Canada study permit</h3>
-            <p>Cross-check your LOA, PAL, GIC and proof of funds, and build a complete, consistent file.</p>
-            <span class="more">Read the guide →</span>
-        </a>
-
-        <a class="blog-card" href="/blog/how-to-use-rilono-ai-australia-student-visa">
-            <span class="flag">🇦🇺</span>
-            <span class="tag">Australia · Subclass 500</span>
-            <h3>How to use Rilono AI for your Australia student visa</h3>
-            <p>Track all 7 Subclass 500 stages, get your OSHC and finances right, and strengthen your Genuine Student answers.</p>
-            <span class="more">Read the guide →</span>
-        </a>
-
-        <a class="blog-card" href="/blog/how-to-use-rilono-ai-germany-student-visa">
-            <span class="flag">🇩🇪</span>
-            <span class="tag">Germany · Type D (Study)</span>
-            <h3>How to use Rilono AI for your Germany student visa</h3>
-            <p>Get your blocked account, APS and VIDEX right, and track all 7 stages to your Type D visa.</p>
-            <span class="more">Read the guide →</span>
-        </a>
-
-        <a class="blog-card featured" href="/blog/student-visa-crm-for-consultancies">
-            <span class="flag">🏢</span>
-            <span class="body">
-                <span class="tag">For consultancies · Rilono Enterprise</span>
-                <h3>Manage every student visa in one platform</h3>
-                <p>How consultancies and small firms run their whole practice — clients, documents, AI checks, mock interviews and team workflow — on one AI-checked platform.</p>
-                <span class="more">Read the guide →</span>
-            </span>
-        </a>
+        <!-- For consultancies -->
+        <section class="blog-cat" data-cat="enterprise">
+            <div class="cat-head"><h2>🏢 For consultancies</h2><span class="cat-count"></span></div>
+            <div class="blog-grid">
+                <a class="blog-card" href="/blog/student-visa-crm-for-consultancies" data-search="enterprise consultancy crm agents team clients b2b manage students visa platform rilono">
+                    <span class="flag">🏢</span>
+                    <span class="tag">For consultancies · Rilono Enterprise</span>
+                    <h3>Manage every student visa in one platform</h3>
+                    <p>How consultancies and small firms run their whole practice — clients, documents, AI checks, mock interviews and team workflow — on one platform.</p>
+                    <span class="more">Read the guide →</span>
+                </a>
+            </div>
+        </section>
     </main>
 
     <footer class="hx-footer">
@@ -327,6 +500,168 @@
         n.addEventListener('click', function (e) { if (e.target.closest('a')) setOpen(false); });
         document.addEventListener('click', function (e) { if (!n.contains(e.target) && !t.contains(e.target)) setOpen(false); });
         document.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+    })();
+    </script>
+    <script>
+    /* Advanced blog search + category filter. Progressive enhancement:
+       all cards are real, crawlable <a> links; this only reorganizes what's shown. */
+    (function () {
+        var search = document.getElementById('blogSearch');
+        var input = document.getElementById('searchInput');
+        var drop = document.getElementById('searchDrop');
+        var clearBtn = document.getElementById('searchClear');
+        var chipsWrap = document.getElementById('blogChips');
+        var featured = document.getElementById('featuredSection');
+        var empty = document.getElementById('blogEmpty');
+        var emptyTerm = document.getElementById('emptyTerm');
+        var emptyReset = document.getElementById('emptyReset');
+        var sections = Array.prototype.slice.call(document.querySelectorAll('.blog-cat'));
+        if (!input) return;
+
+        // Build a search index from the category cards (the complete, de-duplicated set).
+        var posts = [];
+        sections.forEach(function (sec) {
+            var cat = sec.getAttribute('data-cat');
+            sec.querySelectorAll('.blog-card').forEach(function (card) {
+                var title = (card.querySelector('h3') || {}).textContent || '';
+                var tag = (card.querySelector('.tag') || {}).textContent || '';
+                var desc = (card.querySelector('p') || {}).textContent || '';
+                var emoji = (card.querySelector('.flag') || {}).textContent || '';
+                var extra = card.getAttribute('data-search') || '';
+                card._hay = (title + ' ' + tag + ' ' + desc + ' ' + extra).toLowerCase();
+                posts.push({ card: card, cat: cat, title: title.trim(), tag: tag.trim(), emoji: emoji.trim(), url: card.getAttribute('href'), hay: card._hay });
+            });
+        });
+
+        var state = { q: '', cat: 'all' };
+        var activeIdx = -1;
+        var current = []; // dropdown results
+
+        function tokens(q) { return q.toLowerCase().split(/\s+/).filter(Boolean); }
+        function matchHay(hay, toks) { return toks.every(function (t) { return hay.indexOf(t) !== -1; }); }
+        function scoreOf(p, q) {
+            var t = p.title.toLowerCase();
+            if (t.indexOf(q) === 0) return 4;
+            if (t.indexOf(q) !== -1) return 3;
+            if (p.tag.toLowerCase().indexOf(q) !== -1) return 2;
+            return 1;
+        }
+        function escapeHtml(s) { return s.replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+        function highlight(title, q) {
+            var safe = escapeHtml(title);
+            if (!q) return safe;
+            var i = title.toLowerCase().indexOf(q);
+            if (i === -1) return safe;
+            return escapeHtml(title.slice(0, i)) + '<mark>' + escapeHtml(title.slice(i, i + q.length)) + '</mark>' + escapeHtml(title.slice(i + q.length));
+        }
+
+        function buildDropdown() {
+            var q = state.q.trim().toLowerCase();
+            if (!q) { current = []; drop.innerHTML = ''; setOpen(false); return; }
+            var toks = tokens(q);
+            var pool = posts.filter(function (p) {
+                var okCat = state.cat === 'all' || p.cat === state.cat;
+                return okCat && matchHay(p.hay, toks);
+            });
+            pool.sort(function (a, b) { return scoreOf(b, q) - scoreOf(a, q) || a.title.localeCompare(b.title); });
+            current = pool.slice(0, 6);
+            activeIdx = -1;
+            if (!current.length) {
+                drop.innerHTML = '<div class="sd-empty">No matching guides. Press Enter to see all results.</div>';
+            } else {
+                var html = '<div class="sd-head">Suggested guides</div>';
+                current.forEach(function (p, idx) {
+                    html += '<a class="sd-item" role="option" data-idx="' + idx + '" href="' + p.url + '">' +
+                        '<span class="sd-ic">' + p.emoji + '</span>' +
+                        '<span class="sd-tx"><span class="sd-title">' + highlight(p.title, q) + '</span>' +
+                        '<span class="sd-tag">' + escapeHtml(p.tag) + '</span></span></a>';
+                });
+                drop.innerHTML = html;
+            }
+            setOpen(true);
+        }
+
+        function setOpen(open) {
+            search.classList.toggle('is-open', open);
+            input.setAttribute('aria-expanded', open ? 'true' : 'false');
+        }
+        function setActive(i) {
+            var items = drop.querySelectorAll('.sd-item');
+            if (!items.length) return;
+            activeIdx = (i + items.length) % items.length;
+            items.forEach(function (el, idx) { el.classList.toggle('active', idx === activeIdx); });
+            items[activeIdx].scrollIntoView({ block: 'nearest' });
+        }
+
+        // Filter the page (sections + cards) by current query + category chip.
+        function applyFilter() {
+            var q = state.q.trim().toLowerCase();
+            var toks = tokens(q);
+            var searching = q.length > 0;
+            var filtering = searching || state.cat !== 'all';
+            featured.style.display = filtering ? 'none' : '';
+            clearBtn.style.display = searching ? 'block' : 'none';
+            var totalVisible = 0;
+
+            sections.forEach(function (sec) {
+                if (state.cat !== 'all' && sec.getAttribute('data-cat') !== state.cat) { sec.style.display = 'none'; return; }
+                var vis = 0;
+                sec.querySelectorAll('.blog-card').forEach(function (card) {
+                    var show = !searching || matchHay(card._hay, toks);
+                    card.style.display = show ? '' : 'none';
+                    if (show) vis++;
+                });
+                sec.style.display = vis ? '' : 'none';
+                var count = sec.querySelector('.cat-count');
+                if (count) count.textContent = vis ? vis + (vis === 1 ? ' guide' : ' guides') : '';
+                totalVisible += vis;
+            });
+
+            if (totalVisible === 0) { empty.style.display = 'block'; emptyTerm.textContent = q ? '“' + q + '”' : 'this filter'; }
+            else empty.style.display = 'none';
+        }
+
+        // Events
+        input.addEventListener('input', function () {
+            state.q = input.value;
+            buildDropdown();
+            applyFilter();
+        });
+        input.addEventListener('focus', function () { if (state.q.trim()) buildDropdown(); });
+        input.addEventListener('keydown', function (e) {
+            var open = search.classList.contains('is-open');
+            if (e.key === 'ArrowDown') { e.preventDefault(); if (!open && state.q.trim()) buildDropdown(); setActive(activeIdx + 1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(activeIdx - 1); }
+            else if (e.key === 'Enter') {
+                var items = drop.querySelectorAll('.sd-item');
+                if (open && activeIdx >= 0 && items[activeIdx]) items[activeIdx].click();
+                else if (open && items.length) items[0].click();
+                else setOpen(false);
+            } else if (e.key === 'Escape') { setOpen(false); }
+        });
+        clearBtn.addEventListener('click', function () {
+            input.value = ''; state.q = ''; setOpen(false); applyFilter(); input.focus();
+        });
+        emptyReset.addEventListener('click', function () {
+            input.value = ''; state.q = '';
+            state.cat = 'all';
+            chipsWrap.querySelectorAll('.chip').forEach(function (c) { var on = c.getAttribute('data-cat') === 'all'; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on ? 'true' : 'false'); });
+            setOpen(false); applyFilter();
+        });
+        document.addEventListener('click', function (e) { if (!search.contains(e.target)) setOpen(false); });
+
+        chipsWrap.addEventListener('click', function (e) {
+            var chip = e.target.closest('.chip');
+            if (!chip) return;
+            state.cat = chip.getAttribute('data-cat');
+            chipsWrap.querySelectorAll('.chip').forEach(function (c) {
+                var on = c === chip; c.classList.toggle('on', on); c.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
+            buildDropdown();
+            applyFilter();
+        });
+
+        applyFilter(); // initialise counts
     })();
     </script>
 </body>

@@ -1639,12 +1639,22 @@
 
       const assignField = `<div class="detail-item"><label>Assigned counselor</label><div>${cl.assigned_to_name ? esc(cl.assigned_to_name) : "—"}</div></div>`;
       const ovFirst = (cl.full_name || "the student").split(" ")[0];
+      const isUKClient = String(cl.destination_country_code || "").toUpperCase() === "UK";
       body.innerHTML = `
         ${canEdit ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
         <div class="cp-card">
           <div class="cp-card-head"><h3>Visa journey</h3>${statusPill(cl.stage)}</div>
           <div id="ovStageFlow">${journeyTrackHtml(canEdit, cl.status, docs)}</div>
         </div>
+        ${isUKClient ? `
+        <div class="cp-card">
+          <div class="cp-card-head"><h3>💷 Maintenance funds</h3></div>
+          <p style="margin:0 0 12px;font-size:13px;color:var(--text-2);line-height:1.5">The trickiest part of a UK application. Work out ${esc(ovFirst)}'s exact figure &amp; 28-day window here, or send them the calculator to plan themselves.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:10px">
+            <button type="button" class="btn btn-primary btn-sm" id="ukCalcOpen" style="width:auto">🧮 Open calculator</button>
+            <button type="button" class="btn btn-soft btn-sm" id="ukCalcCopy" style="width:auto">🔗 Copy student link</button>
+          </div>
+        </div>` : ""}
         <div class="cp-card">
           <div class="cp-card-head"><h3>Client details</h3>${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEditInline">Edit details</button>` : ""}</div>
           <div class="detail-grid">
@@ -1666,6 +1676,19 @@
       if (ovIv) ovIv.onclick = () => { if (cl.email) openSendModal(); else { toast("Add an email to this client first.", "error"); editClient(cl.id); } };
       const editInline = $("#cpEditInline");
       if (editInline) editInline.onclick = () => { overviewEditing = true; renderOverview(); };
+      // UK maintenance-funds tools (shared calculator engine, reused from the B2C app + public page).
+      const ukOpen = $("#ukCalcOpen");
+      if (ukOpen) ukOpen.onclick = () => {
+        if (window.RilonoUkMaintenanceCalc) window.RilonoUkMaintenanceCalc.openModal({ eyebrow: "UK Student visa · " + (cl.full_name || "Client") });
+        else toast("Calculator failed to load — refresh and try again.", "error");
+      };
+      const ukCopy = $("#ukCalcCopy");
+      if (ukCopy) ukCopy.onclick = async () => {
+        const path = (window.RilonoUkMaintenanceCalc && window.RilonoUkMaintenanceCalc.FIGURES.publicPath) || "/tools/uk-maintenance-calculator";
+        const url = location.origin + path;
+        try { await navigator.clipboard.writeText(url); toast("Calculator link copied — paste it to your student.", "success"); }
+        catch (e) { toast(url, "info"); }
+      };
       // Quick-select pipeline stage: clicking a stage on the Overview saves it immediately
       // (setStatus PATCHes and re-renders). Only wired when the user can edit.
       if (canEdit) {
@@ -1804,7 +1827,7 @@
                 placeholder="What is this document? e.g. Police clearance certificate, Name-change affidavit…" />
             </div>
           </div>
-          <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB · list tailored to ${esc(cl.destination_country_name || "the destination")}</div>
+          <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB</div>
         </div>` : "";
       const list = docs.length ? `<div class="doc-list">${docs.map((d) => `
         <div class="doc-card">
@@ -2134,12 +2157,14 @@
         ${canEdit ? staffPreviewCard() : ""}
         <div class="cp-card">
           <div class="cp-sub-label">Past mock interviews</div>
-          <div class="iv-slist">${sessions.length ? sessions.map(ivSessionRow).join("") : `<div class="muted" style="padding:6px 0">No mock interviews yet.</div>`}</div>
+          <div class="iv-slist">${sessions.length ? sessions.map(ivSessionRow).join("") : `<div class="iv-empty">No mock interviews yet — sessions ${esc((cl.full_name || "the student").split(" ")[0])} completes will show up here.</div>`}</div>
         </div>`;
       const sb = $("#ivSendBtn"); if (sb) sb.onclick = openSendModal;
       const rs = $("#ivResend"); if (rs) rs.onclick = openSendModal;
       const rv = $("#ivRevoke"); if (rv) rv.onclick = revokeInvite;
-      const pb = $("#ivStartBtn"); if (pb) pb.onclick = () => startIv($("#ivVoicePref") && $("#ivVoicePref").checked);
+      const seg = w.querySelectorAll(".iv-seg");
+      seg.forEach((s) => (s.onclick = () => { seg.forEach((x) => x.classList.remove("active")); s.classList.add("active"); }));
+      const pb = $("#ivStartBtn"); if (pb) pb.onclick = () => { const a = w.querySelector(".iv-seg.active"); startIv(!!a && a.dataset.mode === "voice"); };
     }
     // PRIMARY action: send the mock interview to the student (the real product).
     function sendHeroCard() {
@@ -2186,8 +2211,11 @@
           <div><div class="cp-sub-label" style="margin:0">Try it yourself</div>
             <p class="muted" style="margin:4px 0 0;font-size:13px">Run a quick preview in your browser to test it or interview a student sitting with you.</p></div>
           <div class="iv-preview-actions">
-            <label class="iv-voice-pref"><input type="checkbox" id="ivVoicePref"> 🎙 Voice${micSupported ? "" : " (read aloud)"}</label>
-            <button class="btn btn-soft btn-sm" id="ivStartBtn">▶ Preview it yourself</button>
+            <div class="iv-mode-seg" role="group" aria-label="Interview mode">
+              <button type="button" class="iv-seg active" data-mode="chat">💬 Chat</button>
+              <button type="button" class="iv-seg" data-mode="voice">🎙 Voice${micSupported ? "" : " (read aloud)"}</button>
+            </div>
+            <button class="btn btn-soft btn-sm" id="ivStartBtn">▶ Start preview</button>
             <div class="iv-prev-note">${costNote}</div>
           </div>
         </div>
