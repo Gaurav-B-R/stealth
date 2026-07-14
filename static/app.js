@@ -1775,23 +1775,22 @@ async function checkAuth() {
             if (!authToken) {
                 authToken = COOKIE_AUTH_SENTINEL;
             }
-            updateUIForAuth();
-            // Re-personalize the document/journey catalog whenever the signed-in student's
-            // destination differs from what's loaded (e.g. the anonymous boot loaded the US
-            // catalog, then a UK student logs in WITHOUT a page reload). Awaited here so the
-            // journey widget can never render US stages ("I-20", "DS-160") for a UK account.
+            // Personalize the document/journey catalog to the signed-in student's destination
+            // BEFORE any dashboard paint. updateUIForAuth() below — and showDashboard() later —
+            // kick off loadProfile() → the visa-journey widget, which reads journeyStageCatalog.
+            // If that still holds the anonymous US fallback, the widget paints US stages
+            // ("I-20", "DS-160", "Fees Paid") under the correct UK heading. Awaiting the scoped
+            // load HERE, before the render is triggered, closes the profile-fetch-vs-catalog-fetch
+            // race the tester saw intermittently. (A prior attempt loaded it AFTER updateUIForAuth,
+            // which is why the wrong US template still showed up on some loads.)
             const catalogScope = currentUserVisaScope();
             const catalogScopeKey = catalogScope ? `${catalogScope.country}|${catalogScope.visa || ''}` : null;
             if (catalogScopeKey && catalogScopeKey !== loadedCatalogScopeKey) {
                 try { await initializeDocumentCatalog(catalogScope); } catch (e) { /* keep current catalog */ }
-                updateVisaSectionLabels();
-                updateVisaJourneyHeading();
-                // If the dashboard already painted with the stale catalog, repaint it.
-                const dashEl = document.getElementById('dashboardSection');
-                if (dashEl && getComputedStyle(dashEl).display !== 'none') {
-                    try { loadDashboardStats(); } catch (e) { /* next tab switch repaints */ }
-                }
             }
+            updateUIForAuth();
+            updateVisaSectionLabels();
+            updateVisaJourneyHeading();
             await loadSubscriptionStatus(true);
             return true;
         } else {
@@ -3312,8 +3311,15 @@ function sopErrorMessage(r, data, fallback) {
         const first = detail[0];
         if (first && first.msg) return `${first.msg}${first.loc ? ` (${first.loc[first.loc.length - 1]})` : ''}`;
     }
-    if (!detail && (r.status === 403 || r.status === 400)) {
-        return 'Our security layer blocked this request — that can happen when a field contains code-like text (e.g. "<script>" tags or quotes with semicolons). Please rewrite those characters and try again.';
+    if (!detail) {
+        // Rate-limited at the edge — distinct, actionable message (not a "bad input" one).
+        if (r.status === 429) return 'Too many requests right now — please wait a moment and try again.';
+        // WAF/security filter blocked the request body (verified in prod: 403; some filters use
+        // 400/406). It returns an HTML page with no JSON detail, so tell the user their INPUT was
+        // the problem instead of surfacing a bare "Generation failed".
+        if (r.status === 403 || r.status === 400 || r.status === 406) {
+            return 'Our security layer blocked this request — that can happen when a field contains code-like text (e.g. "<script>" tags or quotes with semicolons). Please rewrite those characters and try again.';
+        }
     }
     return fallback;
 }
@@ -3484,20 +3490,34 @@ function attachUniversityAutocomplete(input) {
     input.setAttribute('autocomplete', 'off');
     let items = [], active = -1, box = null, timer = null, reqSeq = 0;
 
-    // Select an untouched pre-filled value on first focus, so the user types OVER it cleanly
-    // instead of appending after it (e.g. avoids "The University of WarwickMSc Business Analytics").
+    // A pre-filled value (the student's saved university) must be REPLACED — not appended to —
+    // the moment the user edits, or the field becomes "The University of WarwickThe University of
+    // Warwick" and that garbage gets sent to ?q=. select()-on-focus alone is unreliable for mouse
+    // users: the click fires focus (select-all) and then mouseup collapses the selection back to a
+    // caret at the end, so typing appends. So we ALSO clear the still-untouched pre-fill on the
+    // first keystroke/paste — which needs no selection to survive mouseup.
     const initialValue = input.value;
-    let firstFocusHandled = false;
+    let prefillConsumed = !initialValue;
     input.addEventListener('focus', () => {
-        if (!firstFocusHandled && input.value && input.value === initialValue) input.select();
-        firstFocusHandled = true;
+        if (!prefillConsumed && input.value === initialValue) input.select(); // keyboard/Tab focus
     });
+    const consumePrefillOnEdit = () => {
+        if (prefillConsumed) return;
+        prefillConsumed = true;
+        if (input.value !== initialValue) return;            // already diverged from the pre-fill
+        const fullySelected = input.selectionStart === 0 && input.selectionEnd === input.value.length;
+        if (!fullySelected) input.value = '';                // caret mid/end → clear so the edit replaces
+    };
+    input.addEventListener('keydown', (e) => {
+        if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) consumePrefillOnEdit();
+    });
+    input.addEventListener('paste', consumePrefillOnEdit);
 
     const close = () => { if (box) { box.remove(); box = null; } active = -1; };
     const pick = (i) => {
         if (i < 0 || i >= items.length) return;
         input.value = items[i].name;
-        firstFocusHandled = true;
+        prefillConsumed = true;
         close();
         input.dispatchEvent(new Event('change'));
         // Advance to the program field reliably — a synchronous focus() inside the menu's

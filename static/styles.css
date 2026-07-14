@@ -2681,7 +2681,7 @@ body.dashboard-active {
     display: block;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 900px) {
     .dash-sidebar-toggle {
         display: flex;
     }
@@ -10861,7 +10861,7 @@ body.b2c-light .pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
     .contact-info { grid-template-columns: 1fr; }
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 900px) {
     #dashboardSection .dashboard-container {
         grid-template-columns: 1fr;
         padding: 0;
