@@ -24,11 +24,13 @@ from app import enterprise_billing as billing
 from app import enterprise_credits as credits
 from app import enterprise_coupons
 from app import enterprise_ai
+from app import enterprise_copilot
 from app import enterprise_interview
 from app import ai_guardrails
 from app import enterprise_storage
 from app import enterprise_notifications as notif
 from app.utils import gemini_service
+from app.routers.ai_chat import ChatSessionAttachment
 from app.auth import (
     authenticate_user,
     create_access_token,
@@ -4309,6 +4311,204 @@ def enterprise_ai_chat(
     }
     if meter.get("credits_charged"):
         response["wallet"] = credits.wallet_state(db, organization.id)
+    return response
+
+
+# ===========================================================================
+# Rilono Copilot (Chrome extension) — enterprise staff mode
+#
+# Staff authenticate as themselves and pick a CLIENT (EnterpriseClient CRM row)
+# to work on behalf of; the client only shapes the AI context, so every message
+# stays attributable to the staff user. Metered on the same org copilot meter
+# as the dashboard assistant (free daily allowance, then credits).
+# ===========================================================================
+
+ENTERPRISE_COPILOT_CLIENT_LIMIT = 300
+ENTERPRISE_COPILOT_MAX_ATTACHMENTS = 8
+
+
+class EnterpriseCopilotChatRequest(BaseModel):
+    client_id: int = Field(..., ge=1)
+    message: str = Field(..., min_length=1, max_length=8000)
+    conversation_history: Optional[list[dict]] = None
+    session_attachments: Optional[list[ChatSessionAttachment]] = None
+
+
+@router.get("/copilot/context")
+def enterprise_copilot_extension_context(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Session probe for the Chrome extension: is this signed-in user enterprise
+    staff? Returns 200 with enterprise=False for regular students (no error), so
+    the extension can fall back to the B2C copilot silently."""
+    membership, organization = _get_active_enterprise_membership(db, current_user.id)
+    if not membership or not organization or not (organization.subdomain_slug or "").strip():
+        return {"enterprise": False}
+    _enforce_request_subdomain_matches_org(request, organization)
+    role = _normalize_enterprise_role(membership.role)
+    client_count = (
+        db.query(func.count(models.EnterpriseClient.id))
+        .filter(models.EnterpriseClient.organization_id == organization.id)
+        .scalar()
+    )
+    return {
+        "enterprise": True,
+        "organization": {
+            "id": organization.id,
+            "company_name": organization.company_name,
+            "subdomain_slug": (organization.subdomain_slug or "").strip().lower() or None,
+            "logo_url": _resolve_enterprise_logo_url(organization),
+        },
+        "role": role,
+        "permissions": _enterprise_permissions_for_role(role),
+        "copilot_enabled": enterprise_copilot.is_provider_available(),
+        "client_count": int(client_count or 0),
+    }
+
+
+@router.get("/copilot/clients")
+def enterprise_copilot_extension_clients(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Compact client list for the extension's on-behalf-of picker (view-level).
+    Deliberately excludes sensitive fields like passport numbers — the chat
+    context is assembled server-side, so the extension never needs them."""
+    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request)
+    base = db.query(models.EnterpriseClient).filter(
+        models.EnterpriseClient.organization_id == organization.id
+    )
+    total = base.count()
+    rows = (
+        base.order_by(models.EnterpriseClient.updated_at.desc())
+        .limit(ENTERPRISE_COPILOT_CLIENT_LIMIT)
+        .all()
+    )
+    member_names = _org_member_name_map(db, organization.id)
+    clients = []
+    for client in rows:
+        assigned_name = None
+        if client.assigned_to_user_id:
+            assigned_name = member_names.get(int(client.assigned_to_user_id))
+        clients.append({
+            "id": client.id,
+            "full_name": client.full_name,
+            "email": client.email,
+            "visa_category": client.visa_category,
+            "visa_category_label": _category_label(client.visa_category),
+            "destination_country_code": client.destination_country_code,
+            "destination_country_name": client.destination_country_name,
+            "visa_type": client.visa_type,
+            "intake": client.intake,
+            "status": client.status,
+            "stage": _stage_brief(client.status),
+            "priority": client.priority,
+            "assigned_to_name": assigned_name,
+            "updated_at": _iso(client.updated_at),
+        })
+    return {
+        "clients": clients,
+        "total": int(total or 0),
+        "capped": bool(total and total > ENTERPRISE_COPILOT_CLIENT_LIMIT),
+    }
+
+
+@router.post("/copilot/chat")
+def enterprise_copilot_extension_chat(
+    payload: EnterpriseCopilotChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """One staff-mode Copilot turn about a specific client. Mirrors /ai/chat's
+    guardrail → precheck → generate → meter flow; the response field is named
+    `response` to match the extension's B2C chat contract."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="enterprise.copilot",
+        limit=ENTERPRISE_AI_RATE_LIMIT,
+        window_seconds=ENTERPRISE_AI_RATE_WINDOW_SECONDS,
+        extra_key=str(current_user.id),
+    )
+
+    if not enterprise_copilot.is_provider_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Rilono Copilot isn't available right now. Please try again later.",
+        )
+
+    client = _get_org_client_or_404(db, organization.id, payload.client_id)
+
+    if len(payload.session_attachments or []) > ENTERPRISE_COPILOT_MAX_ATTACHMENTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"At most {ENTERPRISE_COPILOT_MAX_ATTACHMENTS} attachments are allowed per message.",
+        )
+
+    # Cost guardrail: refuse obviously off-topic prompts before spending tokens.
+    # Also screen the newest user turn in the supplied history — otherwise a
+    # short "continue" message with the real (off-topic) request smuggled into
+    # conversation_history bypasses this free pre-model check entirely.
+    latest_history_turn = ""
+    for turn in reversed(payload.conversation_history or []):
+        if isinstance(turn, dict) and (turn.get("role") or "user") != "assistant":
+            latest_history_turn = str(turn.get("content") or "")
+            break
+    if ai_guardrails.is_off_topic(payload.message) or (
+        len(payload.message) < 200
+        and latest_history_turn
+        and ai_guardrails.is_off_topic(latest_history_turn)
+    ):
+        ai_guardrails.record_block(source=enterprise_copilot.USAGE_SOURCE, detail="enterprise_extension")
+        return {"response": ai_guardrails.OFF_TOPIC_REFUSAL}
+
+    # Meter: free daily allowance, then credits — block unaffordable paid
+    # messages BEFORE any Gemini tokens are spent.
+    credits.copilot_precheck_or_402(db, organization.id)
+
+    try:
+        answer = enterprise_copilot.run_enterprise_copilot_chat(
+            db,
+            organization=organization,
+            staff_user=current_user,
+            role=role,
+            client=client,
+            message=payload.message,
+            conversation_history=payload.conversation_history,
+            session_attachments=payload.session_attachments,
+        )
+    except Exception:
+        logger.exception(
+            "Enterprise extension copilot failed (org_id=%s client_id=%s)",
+            organization.id, client.id,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Rilono Copilot ran into a problem answering that. Please try again.",
+        )
+
+    # Answered successfully → record the message against the meter (may debit a
+    # credit). Metering failures must never destroy the already-generated (and
+    # already-paid-for) answer: deliver it unmetered and log loudly instead —
+    # a 500 here would just make the org re-spend the full Gemini cost on retry.
+    response = {
+        "response": answer,
+        "client": {"id": client.id, "full_name": client.full_name},
+    }
+    try:
+        meter = credits.record_copilot_message(db, organization.id, user=current_user)
+        response["credits_meter"] = meter
+        if meter.get("credits_charged"):
+            response["wallet"] = credits.wallet_state(db, organization.id)
+    except Exception:
+        logger.exception(
+            "Copilot metering failed after successful generation (org_id=%s) — answer delivered unmetered",
+            organization.id,
+        )
     return response
 
 

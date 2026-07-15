@@ -1605,27 +1605,52 @@ def ensure_company_finance_entries_table():
             "ON company_finance_entries(paid_by)"
         ))
 
+        # Founder-investment attribution. Each seeded expense that Gaurav originally paid is
+        # split into a Gaurav share + a Kushal share, sized so that exactly $267.00 of the
+        # $295.02 Gaurav-seeded spend is re-attributed to Kushal (proportionally, ~90.5% of
+        # each line). Per-line halves sum back to the original amount, so every vendor total
+        # and the grand total invested are unchanged — only the paid_by split shifts.
+        # Resulting seeded split: Kushal $329.00, Gaurav $28.02.
         seed_entries = [
-            ("rilono-seed-001", "2026-02-17", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.57", "Gaurav"),
-            ("rilono-seed-002", "2026-02-22", "AI Model Tools", "Claude", "Claude workspace subscription", "-21.25", "Gaurav"),
-            ("rilono-seed-003", "2026-02-28", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.25", "Gaurav"),
-            ("rilono-seed-004", "2026-03-04", "AI Coding Tools", "Cursor", "Cursor usage and tooling", "-31.56", "Gaurav"),
-            ("rilono-seed-005", "2026-03-09", "Cloud Infrastructure", "Render", "Render hosting usage", "-4.33", "Gaurav"),
-            ("rilono-seed-006", "2026-03-15", "AI Platform", "OpenAI", "OpenAI API and product usage", "-26.63", "Gaurav"),
-            ("rilono-seed-007", "2026-03-19", "Email & Domain", "Name Cheap Email", "Namecheap email service", "-2.81", "Gaurav"),
-            ("rilono-seed-008", "2026-03-24", "Product Distribution", "Chrome Extension", "Chrome extension registration", "-5.00", "Gaurav"),
-            ("rilono-seed-009", "2026-03-30", "Cloud Infrastructure", "Render Pro", "Render Pro plan", "-7.00", "Gaurav"),
-            ("rilono-seed-010", "2026-04-04", "Email & Domain", "Domain", "Domain purchase/renewal", "-11.00", "Gaurav"),
-            ("rilono-seed-011", "2026-04-10", "Cloud Infrastructure", "Render", "Render hosting usage", "-11.39", "Gaurav"),
-            ("rilono-seed-012", "2026-04-17", "Cloud Infrastructure", "Render", "Render hosting usage", "-10.39", "Gaurav"),
-            ("rilono-seed-013", "2026-04-25", "AI Model Tools", "Claude", "Claude workspace subscription", "-21.25", "Gaurav"),
-            ("rilono-seed-014", "2026-05-02", "AI Coding Tools", "Cursor", "Cursor editor subscription", "-21.25", "Gaurav"),
-            ("rilono-seed-015", "2026-05-10", "Cloud Infrastructure", "Render", "Render hosting usage", "-14.11", "Gaurav"),
-            ("rilono-seed-016", "2026-05-18", "AI Coding Tools", "Cursor", "Cursor usage adjustment", "-1.06", "Gaurav"),
-            ("rilono-seed-017", "2026-05-24", "Email & Domain", "Namecheap", "Namecheap domain/email services", "-32.64", "Gaurav"),
-            ("rilono-seed-018", "2026-06-02", "Cloud Infrastructure", "Render", "Render hosting usage", "-14.30", "Gaurav"),
+            ("rilono-seed-001", "2026-02-17", "AI Coding Tools", "Cursor", "Cursor editor subscription (Gaurav share)", "-2.05", "Gaurav"),
+            ("rilono-seed-001-k", "2026-02-17", "AI Coding Tools", "Cursor", "Cursor editor subscription (Kushal share)", "-19.52", "Kushal"),
+            ("rilono-seed-002", "2026-02-22", "AI Model Tools", "Claude", "Claude workspace subscription (Gaurav share)", "-2.02", "Gaurav"),
+            ("rilono-seed-002-k", "2026-02-22", "AI Model Tools", "Claude", "Claude workspace subscription (Kushal share)", "-19.23", "Kushal"),
+            ("rilono-seed-003", "2026-02-28", "AI Coding Tools", "Cursor", "Cursor editor subscription (Gaurav share)", "-2.02", "Gaurav"),
+            ("rilono-seed-003-k", "2026-02-28", "AI Coding Tools", "Cursor", "Cursor editor subscription (Kushal share)", "-19.23", "Kushal"),
+            ("rilono-seed-004", "2026-03-04", "AI Coding Tools", "Cursor", "Cursor usage and tooling (Gaurav share)", "-3.00", "Gaurav"),
+            ("rilono-seed-004-k", "2026-03-04", "AI Coding Tools", "Cursor", "Cursor usage and tooling (Kushal share)", "-28.56", "Kushal"),
+            ("rilono-seed-005", "2026-03-09", "Cloud Infrastructure", "Render", "Render hosting usage (Gaurav share)", "-0.41", "Gaurav"),
+            ("rilono-seed-005-k", "2026-03-09", "Cloud Infrastructure", "Render", "Render hosting usage (Kushal share)", "-3.92", "Kushal"),
+            ("rilono-seed-006", "2026-03-15", "AI Platform", "OpenAI", "OpenAI API and product usage (Gaurav share)", "-2.53", "Gaurav"),
+            ("rilono-seed-006-k", "2026-03-15", "AI Platform", "OpenAI", "OpenAI API and product usage (Kushal share)", "-24.10", "Kushal"),
+            ("rilono-seed-007", "2026-03-19", "Email & Domain", "Name Cheap Email", "Namecheap email service (Gaurav share)", "-0.27", "Gaurav"),
+            ("rilono-seed-007-k", "2026-03-19", "Email & Domain", "Name Cheap Email", "Namecheap email service (Kushal share)", "-2.54", "Kushal"),
+            ("rilono-seed-008", "2026-03-24", "Product Distribution", "Chrome Extension", "Chrome extension registration (Gaurav share)", "-0.47", "Gaurav"),
+            ("rilono-seed-008-k", "2026-03-24", "Product Distribution", "Chrome Extension", "Chrome extension registration (Kushal share)", "-4.53", "Kushal"),
+            ("rilono-seed-009", "2026-03-30", "Cloud Infrastructure", "Render Pro", "Render Pro plan (Gaurav share)", "-0.66", "Gaurav"),
+            ("rilono-seed-009-k", "2026-03-30", "Cloud Infrastructure", "Render Pro", "Render Pro plan (Kushal share)", "-6.34", "Kushal"),
+            ("rilono-seed-010", "2026-04-04", "Email & Domain", "Domain", "Domain purchase/renewal (Gaurav share)", "-1.04", "Gaurav"),
+            ("rilono-seed-010-k", "2026-04-04", "Email & Domain", "Domain", "Domain purchase/renewal (Kushal share)", "-9.96", "Kushal"),
+            ("rilono-seed-011", "2026-04-10", "Cloud Infrastructure", "Render", "Render hosting usage (Gaurav share)", "-1.08", "Gaurav"),
+            ("rilono-seed-011-k", "2026-04-10", "Cloud Infrastructure", "Render", "Render hosting usage (Kushal share)", "-10.31", "Kushal"),
+            ("rilono-seed-012", "2026-04-17", "Cloud Infrastructure", "Render", "Render hosting usage (Gaurav share)", "-0.99", "Gaurav"),
+            ("rilono-seed-012-k", "2026-04-17", "Cloud Infrastructure", "Render", "Render hosting usage (Kushal share)", "-9.40", "Kushal"),
+            ("rilono-seed-013", "2026-04-25", "AI Model Tools", "Claude", "Claude workspace subscription (Gaurav share)", "-2.02", "Gaurav"),
+            ("rilono-seed-013-k", "2026-04-25", "AI Model Tools", "Claude", "Claude workspace subscription (Kushal share)", "-19.23", "Kushal"),
+            ("rilono-seed-014", "2026-05-02", "AI Coding Tools", "Cursor", "Cursor editor subscription (Gaurav share)", "-2.02", "Gaurav"),
+            ("rilono-seed-014-k", "2026-05-02", "AI Coding Tools", "Cursor", "Cursor editor subscription (Kushal share)", "-19.23", "Kushal"),
+            ("rilono-seed-015", "2026-05-10", "Cloud Infrastructure", "Render", "Render hosting usage (Gaurav share)", "-1.34", "Gaurav"),
+            ("rilono-seed-015-k", "2026-05-10", "Cloud Infrastructure", "Render", "Render hosting usage (Kushal share)", "-12.77", "Kushal"),
+            ("rilono-seed-016", "2026-05-18", "AI Coding Tools", "Cursor", "Cursor usage adjustment (Gaurav share)", "-0.10", "Gaurav"),
+            ("rilono-seed-016-k", "2026-05-18", "AI Coding Tools", "Cursor", "Cursor usage adjustment (Kushal share)", "-0.96", "Kushal"),
+            ("rilono-seed-017", "2026-05-24", "Email & Domain", "Namecheap", "Namecheap domain/email services (Gaurav share)", "-3.10", "Gaurav"),
+            ("rilono-seed-017-k", "2026-05-24", "Email & Domain", "Namecheap", "Namecheap domain/email services (Kushal share)", "-29.54", "Kushal"),
+            ("rilono-seed-018", "2026-06-02", "Cloud Infrastructure", "Render", "Render hosting usage (Gaurav share)", "-1.36", "Gaurav"),
+            ("rilono-seed-018-k", "2026-06-02", "Cloud Infrastructure", "Render", "Render hosting usage (Kushal share)", "-12.94", "Kushal"),
             ("rilono-seed-019", "2026-06-08", "Security", "CyberSecurity", "Cybersecurity tools and review", "-62.00", "Kushal"),
-            ("rilono-seed-020", "2026-06-13", "Cloud Infrastructure", "Render", "Render hosting usage", "-16.23", "Gaurav"),
+            ("rilono-seed-020", "2026-06-13", "Cloud Infrastructure", "Render", "Render hosting usage (Gaurav share)", "-1.54", "Gaurav"),
+            ("rilono-seed-020-k", "2026-06-13", "Cloud Infrastructure", "Render", "Render hosting usage (Kushal share)", "-14.69", "Kushal"),
         ]
 
         for seed_key, occurred_on, category, vendor, description, amount_usd, paid_by in seed_entries:
@@ -1634,13 +1659,28 @@ def ensure_company_finance_entries_table():
                 {"seed_key": seed_key},
             ).fetchone()
             if existing:
+                # Seeds are the authoritative source for these rows, so keep amount/category/
+                # vendor/description in sync too (not just paid_by). This lets the founder-split
+                # above re-attribute AND resize existing prod rows on deploy without a manual DB
+                # write — e.g. reducing a Gaurav line and inserting its paired Kushal share.
                 conn.execute(
                     text("""
                         UPDATE company_finance_entries
-                        SET paid_by = :paid_by
+                        SET paid_by = :paid_by,
+                            amount_usd = :amount_usd,
+                            category = :category,
+                            vendor = :vendor,
+                            description = :description
                         WHERE seed_key = :seed_key
                     """),
-                    {"seed_key": seed_key, "paid_by": paid_by},
+                    {
+                        "seed_key": seed_key,
+                        "paid_by": paid_by,
+                        "amount_usd": amount_usd,
+                        "category": category,
+                        "vendor": vendor,
+                        "description": description,
+                    },
                 )
                 continue
 

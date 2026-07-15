@@ -177,11 +177,14 @@ INTERVIEW_FREE_STAFF_PREVIEWS = _int_env("ENTERPRISE_INTERVIEW_FREE_STAFF_PREVIE
 ACTION_SOURCE_MAP = {
     "deep_scan": ["deep_scan"],
     "mock_interview": ["mock_interview", "interview_feedback"],
-    "ai_copilot": ["enterprise_copilot"],
+    "ai_copilot": ["enterprise_copilot", "enterprise_copilot_extension"],
 }
 
 # Every Gemini source the enterprise platform incurs cost on (billed or not).
-ENTERPRISE_COST_SOURCES = ["deep_scan", "document_ai", "mock_interview", "interview_feedback", "enterprise_copilot"]
+ENTERPRISE_COST_SOURCES = [
+    "deep_scan", "document_ai", "mock_interview", "interview_feedback",
+    "enterprise_copilot", "enterprise_copilot_extension",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +261,22 @@ def get_or_create_wallet(
     else:
         db.flush()
     return wallet
+
+
+def get_wallet_for_update(db: Session, organization_id: int) -> models.EnterpriseCreditWallet:
+    """Row-locked wallet fetch for read-modify-write paths (debits, copilot
+    counters). Concurrent requests — e.g. the dashboard copilot and the Chrome
+    extension hitting the same org wallet at once — would otherwise lose
+    updates (both read balance N, both write N-1). FOR UPDATE serializes them
+    on PostgreSQL; on SQLite it is a harmless no-op."""
+    get_or_create_wallet(db, organization_id, commit=False)  # ensure the row exists
+    locked = (
+        db.query(models.EnterpriseCreditWallet)
+        .filter(models.EnterpriseCreditWallet.organization_id == int(organization_id))
+        .with_for_update()
+        .first()
+    )
+    return locked or get_or_create_wallet(db, organization_id, commit=False)
 
 
 def active_client_count(db: Session, organization_id: int) -> int:
@@ -442,7 +461,7 @@ def charge_action(
     cost = action_cost(action_key)
     if cost <= 0:
         return None
-    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    wallet = get_wallet_for_update(db, organization_id)
     if ENFORCE and int(wallet.balance_credits) < cost:
         enforce_action_or_402(db, organization_id, action_key)
     action = get_action(action_key)
@@ -534,7 +553,7 @@ def record_copilot_message(
     """Record one copilot message: advance the daily counter, and (once past the free
     allowance) accrue toward a bundle, debiting 1 credit each time a bundle completes.
     Call AFTER the model answered successfully. Returns a compact meter for the UI."""
-    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    wallet = get_wallet_for_update(db, organization_id)
 
     # Roll the daily window if the date changed.
     today = _today_str()
@@ -547,6 +566,7 @@ def record_copilot_message(
 
     charged = 0
     txn = None
+    balance_before = int(wallet.balance_credits)
     if not is_free:
         # A billable message: accrue toward the next credit debit.
         wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs or 0) + 1
@@ -567,6 +587,19 @@ def record_copilot_message(
         db.commit()
         if txn is not None:
             db.refresh(txn)
+
+    # Same one-time low-credit heads-up charge_action gives: an org whose
+    # balance drains purely through copilot bundles must not hit a hard 402
+    # without ever being warned.
+    if charged:
+        try:
+            from app import enterprise_notifications
+            enterprise_notifications.maybe_notify_credits_low(
+                db, organization_id, balance_before, int(wallet.balance_credits))
+            if commit:
+                db.commit()
+        except Exception:
+            pass
 
     used_today = int(wallet.copilot_msgs_today)
     return {
