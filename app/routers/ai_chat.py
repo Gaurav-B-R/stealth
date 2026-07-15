@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
@@ -90,12 +91,20 @@ def sanitize_ai_response_for_public_display(text: str) -> str:
     return INTERNAL_PROVIDER_DISCLOSURE_PATTERN.sub("Rilono AI", value)
 
 
-def _build_ai_chat_model(provider: str, model_name: str):
+def _build_ai_chat_model(provider: str, model_name: str, generation_config: Optional[dict] = None):
+    """Build the chat model, optionally with a generation config (e.g. a short output cap
+    for fast, clipped interview turns). generation_config is a plain dict so it works across
+    both providers; it's translated to each SDK's shape here."""
     if provider == "vertex":
-        from vertexai.generative_models import GenerativeModel
+        from vertexai.generative_models import GenerativeModel, GenerationConfig
 
+        if generation_config:
+            return GenerativeModel(model_name, generation_config=GenerationConfig(**generation_config))
         return GenerativeModel(model_name)
     if provider == "genai":
+        if generation_config:
+            # google.generativeai accepts a plain dict generation_config.
+            return gemini_utils.genai.GenerativeModel(model_name, generation_config=generation_config)
         return gemini_utils.genai.GenerativeModel(model_name)
     raise RuntimeError("Rilono AI model provider is not configured")
 
@@ -747,10 +756,36 @@ def generate_ai_response(
     """
     try:
         provider = "none"
-        model_candidates = gemini_utils.get_model_candidates(
-            primary_env="RILONO_AI_CHAT_MODEL",
-            candidates_env="RILONO_AI_CHAT_MODEL_CANDIDATES",
-        )
+        # Live interview TURNS (mock officer / prep coach) must feel fast — real officers reply
+        # in seconds — WITHOUT losing the sharp, subtle cross-examination that makes the mock
+        # valuable. The 25-40s latency came from the general-chat default (3.1-pro), a heavy
+        # *thinking* model that deliberates before every reply. We default turns to 2.5-pro: a
+        # strong reasoner (keeps the intelligent probing) but far lighter latency than 3.1-pro's
+        # extended thinking. Tune via env: RILONO_INTERVIEW_MODEL=gemini-2.5-flash for max speed,
+        # or =gemini-3.1-pro to fully restore the heaviest model. The one-time final REPORT
+        # (source "mock_interview_report") is NOT matched here, so its deep analysis stays on the
+        # smart default model, with latency hidden behind the report progress bar.
+        normalized_chat_source = (source or "").strip().lower()
+        is_interview_turn = normalized_chat_source in ("mock_interview", "visa_prep")
+        interview_generation_config = None
+        if is_interview_turn:
+            model_candidates = gemini_utils.get_model_candidates(
+                primary_env="RILONO_INTERVIEW_MODEL",
+                candidates_env="RILONO_INTERVIEW_MODEL_CANDIDATES",
+                defaults=["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-pro"],
+            )
+            # Officer questions are short; prep coaching needs a little more room. Capping output
+            # both speeds up the turn and keeps responses clipped and interview-like.
+            _default_cap = "300" if normalized_chat_source == "mock_interview" else "520"
+            interview_generation_config = {
+                "max_output_tokens": int(os.getenv("RILONO_INTERVIEW_MAX_TOKENS", _default_cap) or _default_cap),
+                "temperature": 0.85,
+            }
+        else:
+            model_candidates = gemini_utils.get_model_candidates(
+                primary_env="RILONO_AI_CHAT_MODEL",
+                candidates_env="RILONO_AI_CHAT_MODEL_CANDIDATES",
+            )
         # Select provider based on available service.
         if hasattr(gemini_utils, 'USE_VERTEX_AI') and gemini_utils.USE_VERTEX_AI and hasattr(gemini_utils, 'VERTEX_AI_AVAILABLE') and gemini_utils.VERTEX_AI_AVAILABLE:
             provider = "vertex"
@@ -816,7 +851,7 @@ Please provide a helpful response to the user's question:"""
         last_model_error = None
         for model_name in model_candidates:
             try:
-                model = _build_ai_chat_model(provider, model_name)
+                model = _build_ai_chat_model(provider, model_name, generation_config=interview_generation_config)
                 response = _generate_with_ai_chat_model(
                     model=model,
                     provider=provider,
@@ -1057,3 +1092,77 @@ def chat_with_ai(
             status_code=500,
             detail=PUBLIC_AI_RESPONSE_ERROR_DETAIL
         )
+
+
+# ---------------------------------------------------------------------------
+# Consulate Window: neural officer voice (US launch) — Visa Success Pass perk
+# ---------------------------------------------------------------------------
+
+class OfficerTtsRequest(BaseModel):
+    text: str
+    country: Optional[str] = None  # defaults to the student's journey destination
+
+
+@router.post("/tts/officer")
+def synthesize_officer_voice(
+    payload: OfficerTtsRequest,
+    request: Request,
+    current_user: models.User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """Accent-matched neural officer voice for the mock interview (Consulate Window).
+
+    Pass-gated: free users get 403 with fallback=true and the client keeps the basic
+    browser voice. Any infrastructure problem returns 503 with fallback=true — the
+    interview itself must never break because of voice synthesis. Every successful
+    synthesis is metered under `mock_interview_tts` in the AI cost tracker.
+    """
+    from app import officer_tts
+
+    text = (payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Nothing to speak.")
+
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="ai_chat.tts.user",
+        limit=30,
+        window_seconds=60,
+        extra_key=str(current_user.id),
+    )
+
+    # The immersive officer voice is a Visa Success Pass perk (basic voice stays free).
+    subscription = get_or_create_user_subscription(db, current_user.id)
+    if not visa_pass.has_active_pass(subscription):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "fallback": True,
+                "detail": "The realistic officer voice is a Visa Success Pass perk. "
+                          "Your interview continues with the standard voice.",
+            },
+        )
+
+    country = (payload.country or getattr(current_user, "destination_country_code", None) or "US")
+    if not officer_tts.voice_config(country):
+        # Not launched for this destination yet — client falls back silently.
+        return JSONResponse(status_code=200, content={"fallback": True})
+
+    try:
+        result = officer_tts.synthesize_officer_line(text, country)
+    except officer_tts.TtsUnavailable:
+        return JSONResponse(status_code=503, content={"fallback": True})
+
+    ai_usage.record_tts_usage(
+        "mock_interview_tts",
+        result["voice"],
+        result["characters"],
+        cost_usd=officer_tts.estimate_tts_cost_usd(result["characters"]),
+        user_id=current_user.id,
+    )
+    return {
+        "fallback": False,
+        "audio": result["audio_b64"],
+        "voice": result["voice"],
+        "characters": result["characters"],
+    }

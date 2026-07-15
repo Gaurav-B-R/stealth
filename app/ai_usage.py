@@ -187,11 +187,39 @@ def record_gemini_usage(source: str, model_name: str, response, *,
         logger.debug("Failed to record Gemini usage (source=%s)", source, exc_info=True)
 
 
+def record_tts_usage(source: str, voice_name: str, characters: int, *,
+                     cost_usd: float, user_id: int | None = None) -> None:
+    """Best-effort: log one neural-TTS synthesis in the same usage ledger as Gemini
+    calls, so voice spend shows up in the admin cost tracker per source/user.
+    Characters are stored in the token columns (TTS bills per character). Never raises."""
+    try:
+        chars = max(0, int(characters or 0))
+        if chars <= 0:
+            return
+        db = SessionLocal()
+        try:
+            uid, oid = _resolve_account(db, user_id=user_id, organization_id=None)
+            db.add(models.GeminiUsageEvent(
+                source=str(source or "unknown")[:64],
+                model=f"gcp-tts/{str(voice_name or 'unknown')[:60]}",
+                user_id=uid, organization_id=oid,
+                prompt_tokens=chars, output_tokens=0, total_tokens=chars, cached_tokens=0,
+                estimated_cost_usd=Decimal(str(cost_usd or 0)).quantize(
+                    Decimal("0.000001"), rounding=ROUND_HALF_UP),
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.debug("Failed to record TTS usage (source=%s)", source, exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Analytics for the admin console
 # ---------------------------------------------------------------------------
 
 SOURCE_LABELS = {
+    "mock_interview_tts": "Mock interview — officer neural voice (TTS)",
     "document_ai": "Document AI (validation & extraction)",
     "student_ai_chat": "Student AI chat (website)",
     "student_ai_chat_copilot": "Student AI chat — Rilono Copilot (Chrome extension)",

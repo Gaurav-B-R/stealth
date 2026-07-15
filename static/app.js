@@ -666,7 +666,12 @@ Rules:
 
 function visaMockInterviewInstruction() {
     const ctx = currentInterviewContext();
-    return `You are ${ctx.officer}. This is a demanding, high-pressure mock interview meant to expose this specific candidate's weak spots before the real one, so they walk in confident.
+    // Consulate Window (US voice mock): per-session temperament + grounded stage cues so
+    // no two sessions feel identical and the booth feels physical, not chat-like.
+    const consulateExtras = visaMockInterviewState.consulate ? `
+- Officer temperament this session: ${visaMockInterviewState.strictness || 'brisk and procedural'}. Officers are efficient, not warm — keep every reply to 1-3 clipped sentences.
+- Occasionally (at most once every third turn) you may open with one short bracketed stage cue grounded in a document the candidate actually uploaded, e.g. "[The officer glances at your bank statement]". Never invent documents they don't have, and never use a cue two turns in a row.` : '';
+    return `You are ${ctx.officer}. This is a demanding, high-pressure mock interview meant to expose this specific candidate's weak spots before the real one, so they walk in confident.${consulateExtras}
 Rules:
 - Stay strictly in the visa officer role — skeptical, professional, and tough. Never break character.
 - Use the candidate's attached profile and uploaded documents to ask the hardest, most personalized questions possible — never generic textbook questions.
@@ -707,6 +712,13 @@ let visaMockInterviewState = {
     recognition: null,
     channel: null,
     showModePicker: false,
+    // Consulate Window (US voice mock) — immersive embassy-booth experience
+    consulate: false,
+    officerSpeaking: false,
+    strictness: null,
+    windowNumber: null,
+    nudgeTimerId: null,
+    orbIntervalId: null,
     timerIntervalId: null,
     timerStartedAt: null,
     elapsedMs: 0,
@@ -1567,10 +1579,10 @@ function updateRegisterPasswordHint() {
 
     const errors = getPasswordValidationErrors(password, emailInput?.value || '');
     if (!errors.length) {
-        hintEl.style.color = '#34d399';
+        hintEl.style.color = '#065f46';
         hintEl.textContent = 'Strong password';
     } else {
-        hintEl.style.color = '#f59e0b';
+        hintEl.style.color = '#b45309';
         hintEl.textContent = `Needs: ${errors.join(', ')}`;
     }
 }
@@ -1589,10 +1601,10 @@ function updateResetPasswordHint() {
 
     const errors = getPasswordValidationErrors(password);
     if (!errors.length) {
-        hintEl.style.color = '#34d399';
+        hintEl.style.color = '#065f46';
         hintEl.textContent = 'Strong password';
     } else {
-        hintEl.style.color = '#f59e0b';
+        hintEl.style.color = '#b45309';
         hintEl.textContent = `Needs: ${errors.join(', ')}`;
     }
 }
@@ -1612,10 +1624,10 @@ function updateProfilePasswordHint() {
     const userEmail = currentUser?.email || document.getElementById('profileEmail')?.value || '';
     const errors = getPasswordValidationErrors(password, userEmail);
     if (!errors.length) {
-        hintEl.style.color = '#34d399';
+        hintEl.style.color = '#065f46';
         hintEl.textContent = 'Strong password';
     } else {
-        hintEl.style.color = '#f59e0b';
+        hintEl.style.color = '#b45309';
         hintEl.textContent = `Needs: ${errors.join(', ')}`;
     }
 }
@@ -3130,7 +3142,7 @@ async function showOnboardingWizard() {
           <div style="text-align:center;color:#64748b;padding:30px 0">Loading options…</div>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 28px 24px">
-          <span id="onbError" style="font-size:13px;color:#fb7185;min-height:18px"></span>
+          <span id="onbError" style="font-size:13px;color:#be123c;min-height:18px"></span>
           <button id="onbSubmit" disabled style="border:none;border-radius:12px;padding:12px 24px;font-size:15px;font-weight:700;color:#94a3b8;background:#e2e8f0;cursor:not-allowed;box-shadow:none;transition:background .2s ease,box-shadow .2s ease,color .2s ease,transform .12s ease">Continue to dashboard</button>
         </div>
       </div>`;
@@ -3144,7 +3156,7 @@ async function showOnboardingWizard() {
         renderOnboardingForm();
     } catch (e) {
         const b = document.getElementById('onbBody');
-        if (b) b.innerHTML = '<div style="color:#fb7185;padding:20px 0">Could not load options. Please refresh and try again.</div>';
+        if (b) b.innerHTML = '<div style="color:#be123c;padding:20px 0">Could not load options. Please refresh and try again.</div>';
     }
 }
 
@@ -3156,9 +3168,9 @@ function renderOnboardingForm() {
     const inp = 'width:100%;box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:11px;color:#0f172a;font-size:14px;padding:11px 12px';
     const countryOpts = countries.map((c) => `<option value="${escapeHtml(c.code)}">${(c.flag_emoji || '')} ${escapeHtml(c.name)}</option>`).join('');
     body.innerHTML = `
-      <div style="margin-bottom:14px">${lbl('Destination country <span style=\"color:#fb7185\">*</span>')}
+      <div style="margin-bottom:14px">${lbl('Destination country <span style=\"color:#be123c\">*</span>')}
         <select id="onbCountry" style="${inp}"><option value="">Select a country…</option>${countryOpts}</select></div>
-      <div style="margin-bottom:14px">${lbl('Visa type <span style=\"color:#fb7185\">*</span>')}
+      <div style="margin-bottom:14px">${lbl('Visa type <span style=\"color:#be123c\">*</span>')}
         <select id="onbVisa" style="${inp}" disabled><option value="">Select a country first…</option></select></div>
       <details style="margin:6px 0 4px"><summary><svg class="onb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>Add more details <span style="color:#94a3b8;font-weight:600">(optional)</span></summary>
         <div style="margin-top:12px;display:grid;gap:12px">
@@ -3370,9 +3382,9 @@ async function loadSopStudio() {
 
 function sopQuotaChip() {
     const ent = _sopData.entitlement || {};
-    if (ent.unlimited) return '<span style="font-size:12px;font-weight:700;color:#10b981">Visa Success Pass · unlimited</span>';
+    if (ent.unlimited) return '<span style="font-size:12px;font-weight:700;color:#065f46">Visa Success Pass · unlimited</span>';
     const left = Math.max(0, ent.remaining ?? 0);
-    return `<span style="font-size:12px;font-weight:700;color:${left > 0 ? '#10b981' : '#f59e0b'}">${left} free ${left === 1 ? 'action' : 'actions'} left</span>`;
+    return `<span style="font-size:12px;font-weight:700;color:${left > 0 ? '#065f46' : '#b45309'}">${left} free ${left === 1 ? 'action' : 'actions'} left</span>`;
 }
 
 function renderSopStudio() {
@@ -3718,7 +3730,7 @@ async function loadUniversityShortlist() {
     try {
         _shortlistData = await shortlistFetch('');
     } catch (e) {
-        c.innerHTML = `<div style="padding:2rem;color:#fb7185">Could not load universities: ${escapeHtml(e.message)}</div>`;
+        c.innerHTML = `<div style="padding:2rem;color:#be123c">Could not load universities: ${escapeHtml(e.message)}</div>`;
         return;
     }
     renderUniversitiesUI();
@@ -3749,11 +3761,11 @@ function renderUniversitiesUI() {
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
           <div><div style="font-weight:800;font-size:16px;color:#0f172a">Rilono AI University Recommendations</div>
           <div style="font-size:12.5px;color:#64748b">Tailored to ${escapeHtml(dest)} based on your profile.</div></div>
-          <span style="font-size:12px;font-weight:700;color:${locked ? '#fbbf24' : '#34d399'}">${escapeHtml(remainingTxt)}</span>
+          <span style="font-size:12px;font-weight:700;color:${locked ? '#b45309' : '#065f46'}">${escapeHtml(remainingTxt)}</span>
         </div>
-        ${!recAvailable ? '<div style="color:#fbbf24;font-size:13px">Rilono AI recommendations are not available right now.</div>' : `
+        ${!recAvailable ? '<div style="color:#b45309;font-size:13px">Rilono AI recommendations are not available right now.</div>' : `
         <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
-          <div style="grid-column:1/-1">${lbl('Field of study <span style="color:#fb7185">*</span>')}<input id="slField" placeholder="e.g. Computer Science" style="${inp}"></div>
+          <div style="grid-column:1/-1">${lbl('Field of study <span style="color:#be123c">*</span>')}<input id="slField" placeholder="e.g. Computer Science" style="${inp}"></div>
           <div>${lbl('Study level')}<select id="slLevel" style="${inp}"><option value="">Any</option><option>Bachelors</option><option>Masters</option><option>PhD</option><option>Diploma</option></select></div>
           <div>${lbl('Annual budget')}<input id="slBudget" placeholder="${slBudgetHint}" style="${inp}"></div>
           <div>${lbl('GPA / grades')}<input id="slGpa" placeholder="${slGpaHint}" style="${inp}"></div>
@@ -3762,13 +3774,13 @@ function renderUniversitiesUI() {
         </div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap">
           <button id="slRecBtn" onclick="getUniversityRecommendations()" style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;border:none;border-radius:10px;padding:10px 18px;font-weight:700;cursor:pointer">Get recommendations</button>
-          <span id="slRecMsg" style="font-size:13px;color:#fb7185"></span>
+          <span id="slRecMsg" style="font-size:13px;color:#be123c"></span>
         </div>
         ${locked && ent.tier !== 'pass' ? '<div style="margin-top:10px;font-size:12.5px;color:#64748b">You have used your free recommendation. <a href="/visa-pass" style="color:#9aa0ff;font-weight:600">Get the Visa Pass</a> for unlimited.</div>' : ''}
         `}
     `);
 
-    const statusColors = { considering: '#64748b', applied: '#60a5fa', admitted: '#34d399', rejected: '#fb7185' };
+    const statusColors = { considering: '#64748b', applied: '#1d4ed8', admitted: '#065f46', rejected: '#be123c' };
     const statusOpts = ['considering', 'applied', 'admitted', 'rejected'];
     const savedRows = (d.entries || []).map((e) => {
         const sel = statusOpts.map((s) => `<option value="${s}"${e.status === s ? ' selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('');
@@ -3779,7 +3791,7 @@ function renderUniversitiesUI() {
               <div style="font-size:12.5px;color:#64748b">${escapeHtml(meta) || '—'}${e.est_tuition ? ' · ' + escapeHtml(e.est_tuition) : ''}</div>
             </div>
             <select onchange="setShortlistStatus(${e.id}, this.value)" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;color:${statusColors[e.status] || '#0f172a'};font-size:12.5px;padding:6px 8px">${sel}</select>
-            <button onclick="deleteShortlistUniversity(${e.id})" title="Remove" style="background:none;border:none;color:#fb7185;cursor:pointer;font-size:18px;line-height:1">&times;</button>
+            <button onclick="deleteShortlistUniversity(${e.id})" title="Remove" style="background:none;border:none;color:#be123c;cursor:pointer;font-size:18px;line-height:1">&times;</button>
           </div>`;
     }).join('');
     const savedCard = card(`
@@ -3803,7 +3815,7 @@ function renderShortlistRecs() {
     const cont = document.getElementById('slRecsContainer');
     if (!cont) return;
     if (!_shortlistRecs.length) { cont.innerHTML = ''; return; }
-    const diffColor = { reach: '#fb7185', match: '#60a5fa', safety: '#34d399' };
+    const diffColor = { reach: '#be123c', match: '#1d4ed8', safety: '#065f46' };
     const RANK_COUNTRY_NAMES = { US: 'the US', UK: 'the UK', CA: 'Canada', AU: 'Australia', DE: 'Germany' };
     const rankCountryLabel = RANK_COUNTRY_NAMES[(currentUser && currentUser.destination_country_code) || 'US'] || 'country';
     const rankRow = (u) => {
@@ -4064,7 +4076,7 @@ async function openCountryChangeModal() {
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 26px 22px">
           <button id="ccCancel" style="border:none;background:transparent;color:#64748b;font-size:14px;font-weight:600;cursor:pointer">Cancel</button>
           <div style="display:flex;align-items:center;gap:10px">
-            <span id="ccMsg" style="font-size:12.5px;color:#fb7185;max-width:170px"></span>
+            <span id="ccMsg" style="font-size:12.5px;color:#be123c;max-width:170px"></span>
             <button id="ccAction" style="border:none;border-radius:11px;padding:11px 20px;font-size:14px;font-weight:700;color:#fff;background:linear-gradient(135deg,#6366f1,#a855f7);cursor:pointer">Send code</button>
           </div>
         </div>
@@ -6452,7 +6464,32 @@ function stopVisaInterviewRecognition(mode) {
 
 async function speakVisaInterviewResponse(text) {
     const utteranceText = stripMarkdownForSpeech(text);
-    if (!utteranceText || !window.speechSynthesis) {
+    if (!utteranceText) {
+        return;
+    }
+
+    const consulate = visaMockInterviewState.consulate && visaMockInterviewState.active;
+
+    // Consulate Window + Visa Success Pass: accent-matched neural officer voice.
+    // ANY failure (no Pass, no creds, timeout) falls through to browser TTS below.
+    if (consulate) {
+        visaMockInterviewState.officerSpeaking = true;
+        updateConsulateOrb();
+        try {
+            const spoke = await playOfficerNeuralAudio(utteranceText);
+            if (spoke) {
+                return;
+            }
+        } finally {
+            if (!window.speechSynthesis || !window.speechSynthesis.speaking) {
+                visaMockInterviewState.officerSpeaking = false;
+            }
+            updateConsulateOrb();
+            armConsulateNudge();
+        }
+    }
+
+    if (!window.speechSynthesis) {
         return;
     }
 
@@ -6461,19 +6498,27 @@ async function speakVisaInterviewResponse(text) {
             window.speechSynthesis.cancel();
             const utterance = new SpeechSynthesisUtterance(utteranceText);
             utterance.lang = 'en-US';
-            utterance.rate = 1;
-            utterance.pitch = 1;
-
+            utterance.rate = consulate ? 1.05 : 1;   // officers are brisk
+            utterance.pitch = consulate ? 0.9 : 1;   // slightly lower register
             const voices = window.speechSynthesis.getVoices();
             const preferredVoice = voices.find((voice) => voice.lang && voice.lang.toLowerCase().startsWith('en-us'));
             if (preferredVoice) {
                 utterance.voice = preferredVoice;
             }
-
-            utterance.onend = () => resolve();
-            utterance.onerror = () => resolve();
+            const done = () => {
+                if (consulate) {
+                    visaMockInterviewState.officerSpeaking = false;
+                    updateConsulateOrb();
+                    armConsulateNudge();
+                }
+                resolve();
+            };
+            if (consulate) { visaMockInterviewState.officerSpeaking = true; updateConsulateOrb(); }
+            utterance.onend = done;
+            utterance.onerror = done;
             window.speechSynthesis.speak(utterance);
         } catch (error) {
+            if (consulate) { visaMockInterviewState.officerSpeaking = false; }
             resolve();
         }
     });
@@ -7002,6 +7047,9 @@ function renderVisaMockInterviewReport(reportText) {
         </div>
         <div class="visa-mock-report-body">${buildMockInterviewReportHtml(reportText)}</div>
     `;
+    // Consulate Window: the decision-slip moment — colored slip slides across the
+    // window before the student reads the full report below it.
+    showConsulateVerdictSlip(reportText);
 }
 
 function downloadMockInterviewReportPdf() {
@@ -7507,8 +7555,101 @@ async function sendMockInterviewChatAnswer() {
     await sendVisaInterviewTurn('mock', answer, false);
 }
 
+// The mock interview is grounded in the student's uploaded documents, so its realism is
+// only as good as those documents. These are the core documents an officer's questions
+// hinge on — if none is present-and-valid, we warn before grounding a stressful interview
+// in missing/placeholder data (e.g. a "passport" that failed validation).
+function interviewCoreDocRequirements() {
+    const code = (currentUser && currentUser.destination_country_code) || 'US';
+    const reqs = [{ type: 'passport', label: 'Passport' }];
+    if (code === 'US') {
+        reqs.push({ type: 'form-i20-signed', label: 'Form I-20' });
+    } else if (Array.isArray(requiredDocumentTypeValues) && requiredDocumentTypeValues.includes('university-admission-letter')) {
+        reqs.push({ type: 'university-admission-letter', label: 'University admission letter' });
+    }
+    return reqs;
+}
+
+// For each core requirement, flag it when there's no VALID (is_valid === true) document of
+// that type: 'missing' (none uploaded) vs 'invalid' (uploaded but failed/awaiting validation).
+function findInterviewDocGaps(documents, requirements) {
+    const gaps = [];
+    for (const req of requirements) {
+        const matching = (documents || []).filter((d) => (d.document_type || '') === req.type);
+        if (!matching.length) {
+            gaps.push({ label: req.label, status: 'missing' });
+        } else if (!matching.some((d) => d.is_valid === true)) {
+            gaps.push({ label: req.label, status: 'invalid' });
+        }
+    }
+    return gaps;
+}
+
+function showInterviewDocWarningModal(gaps) {
+    return new Promise((resolve) => {
+        const existing = document.getElementById('interviewDocWarnOverlay');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'interviewDocWarnOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit;';
+        const rows = gaps.map((g) => `<li style="margin:5px 0;"><strong style="color:#0f172a;">${escapeHtml(g.label)}</strong> <span style="color:#64748b;">— ${g.status === 'missing' ? 'not uploaded' : 'didn’t pass validation'}</span></li>`).join('');
+        overlay.innerHTML = `
+          <div role="dialog" aria-modal="true" style="max-width:460px;width:100%;background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(2,6,23,0.4);overflow:hidden;">
+            <div style="padding:20px 24px;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;">
+              <div style="font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;opacity:.9;">Before you begin</div>
+              <div style="font-size:19px;font-weight:800;margin-top:4px;">Start without valid documents?</div>
+            </div>
+            <div style="padding:22px 24px;color:#334155;font-size:14.5px;line-height:1.6;">
+              <p style="margin:0 0 12px;">This mock interview is grounded in the documents in your account, so the officer's questions are only as realistic as what you've uploaded. We couldn't find a valid:</p>
+              <ul style="margin:0 0 14px;padding-left:20px;">${rows}</ul>
+              <p style="margin:0;color:#64748b;">Realism will be reduced and the officer may question missing or placeholder details. You can add valid documents first, or continue anyway.</p>
+            </div>
+            <div style="display:flex;gap:10px;justify-content:flex-end;padding:16px 24px;border-top:1px solid #eef2f7;">
+              <button id="ivDocAddBtn" style="padding:10px 16px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;font-weight:600;cursor:pointer;">Add documents</button>
+              <button id="ivDocContinueBtn" style="padding:10px 16px;border-radius:10px;border:none;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;font-weight:700;cursor:pointer;">Continue anyway</button>
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        const done = (val) => { overlay.remove(); resolve(val); };
+        overlay.querySelector('#ivDocContinueBtn').onclick = () => done(true);
+        overlay.querySelector('#ivDocAddBtn').onclick = () => {
+            done(false);
+            try { switchDashboardTab('documents'); } catch (e) { /* stay put */ }
+        };
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+    });
+}
+
+// Returns true if the interview may proceed. Fail-open: a fetch/parse problem never blocks
+// the student (they've paid/queued a session) — the warning is a courtesy, not a hard gate.
+async function ensureInterviewDocumentsOrConfirm() {
+    let docs = null;
+    try {
+        const r = await fetch(`${API_BASE}/api/documents/my-documents`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+        });
+        if (r.ok) {
+            const parsed = await r.json();
+            if (Array.isArray(parsed)) docs = parsed;
+        }
+    } catch (e) { /* fail-open */ }
+    if (!docs) return true;
+    const gaps = findInterviewDocGaps(docs, interviewCoreDocRequirements());
+    if (!gaps.length) return true;
+    return showInterviewDocWarningModal(gaps);
+}
+
 async function beginMockInterview(channel) {
     if (channel !== 'voice' && channel !== 'chat') {
+        return;
+    }
+    // Pre-interview document check — warn (don't hard-block) before grounding a realistic,
+    // stressful mock interview in missing/invalid core documents. Runs BEFORE fullscreen and
+    // BEFORE any session/credit is consumed, so cancelling costs the student nothing.
+    const mayProceed = await ensureInterviewDocumentsOrConfirm();
+    if (!mayProceed) {
+        visaMockInterviewState.showModePicker = false;
+        renderMockInterviewModeUI();
         return;
     }
     visaMockInterviewState.channel = channel;
@@ -7585,6 +7726,231 @@ async function beginPrepInterview(channel) {
     await startVoiceInterviewSession('prep', { channel });
 }
 
+// ===================== The Consulate Window (US voice mock interview) =====================
+// Presents the voice mock interview as stepping up to an embassy window: dark booth, a
+// speaking orb instead of chat bubbles, an accent-matched neural officer voice (Pass perk),
+// pressure mechanics, and a decision-slip verdict reveal. US-only launch; stylized motifs
+// only (deliberately NOT a real government seal) + persistent "simulation" disclaimer.
+
+const CONSULATE_STRICTNESS_POOL = [
+    'brisk and procedural — moves fast, cuts off rambling',
+    'skeptical and probing — questions every claim twice',
+    'stern and unimpressed — gives nothing away, zero small talk'
+];
+
+function isConsulateEligible(channel) {
+    const dest = (currentUser && currentUser.destination_country_code) || 'US';
+    return channel === 'voice' && dest === 'US';
+}
+
+function clientHasVisaPass() {
+    return String((currentSubscription && currentSubscription.plan) || '').toLowerCase() === 'pro';
+}
+
+function enterConsulateMode() {
+    const st = visaMockInterviewState;
+    const panel = document.getElementById('visaMockPanel');
+    if (!panel) return;
+    st.consulate = true;
+    st.windowNumber = 1 + Math.floor(Math.random() * 9);
+    st.strictness = CONSULATE_STRICTNESS_POOL[Math.floor(Math.random() * CONSULATE_STRICTNESS_POOL.length)];
+    panel.classList.add('consulate-active');
+    panel.classList.remove('transcript-expanded');
+
+    let booth = document.getElementById('consulateBooth');
+    if (booth) booth.remove();
+    booth = document.createElement('div');
+    booth.id = 'consulateBooth';
+    booth.className = 'consulate-booth';
+    const voiceChip = clientHasVisaPass()
+        ? '<span class="consulate-voice-chip pass">🔊 Immersive officer voice</span>'
+        : '<span class="consulate-voice-chip">🔈 Standard voice · <a href="/visa-pass" target="_blank" rel="noopener">Pass unlocks the real officer voice</a></span>';
+    booth.innerHTML = `
+        <div class="consulate-stripes" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div class="consulate-plate-row">
+            <div class="consulate-crest" aria-hidden="true">★</div>
+            <div class="consulate-plate">
+                <div class="consulate-plate-title">U.S. Consular Officer</div>
+                <div class="consulate-plate-sub">Window ${st.windowNumber} · Nonimmigrant Visa Unit</div>
+            </div>
+            ${voiceChip}
+        </div>
+        <div class="consulate-orb-zone">
+            <div id="consulateOrb" class="consulate-orb idle" aria-hidden="true"><span class="consulate-orb-core"></span></div>
+            <div id="consulateOrbStatus" class="consulate-orb-status" role="status" aria-live="polite">Waiting room…</div>
+            <div id="consulateNudge" class="consulate-nudge" style="display:none">The officer is waiting for your answer.</div>
+        </div>
+        <div class="consulate-footer-row">
+            <span class="consulate-disclaimer">Simulation · Practice only · Not affiliated with any government agency</span>
+            <button type="button" class="consulate-transcript-toggle" onclick="toggleConsulateTranscript()">Transcript ▾</button>
+        </div>`;
+    const headerline = panel.querySelector('.visa-mock-headerline');
+    if (headerline && headerline.nextSibling) {
+        panel.insertBefore(booth, headerline.nextSibling);
+    } else {
+        panel.prepend(booth);
+    }
+    if (st.orbIntervalId) clearInterval(st.orbIntervalId);
+    st.orbIntervalId = setInterval(updateConsulateOrb, 500);
+    updateConsulateOrb();
+}
+
+function exitConsulateMode() {
+    const st = visaMockInterviewState;
+    if (st.orbIntervalId) { clearInterval(st.orbIntervalId); st.orbIntervalId = null; }
+    clearConsulateNudge();
+    st.consulate = false;
+    st.officerSpeaking = false;
+    const panel = document.getElementById('visaMockPanel');
+    if (panel) panel.classList.remove('consulate-active', 'transcript-expanded');
+    const booth = document.getElementById('consulateBooth');
+    if (booth) booth.remove();
+    const intro = document.getElementById('consulateIntro');
+    if (intro) intro.remove();
+    const slip = document.getElementById('consulateSlip');
+    if (slip) slip.remove();
+}
+
+function toggleConsulateTranscript() {
+    const panel = document.getElementById('visaMockPanel');
+    if (!panel) return;
+    const expanded = panel.classList.toggle('transcript-expanded');
+    const btn = panel.querySelector('.consulate-transcript-toggle');
+    if (btn) btn.textContent = expanded ? 'Transcript ▴' : 'Transcript ▾';
+}
+
+// The 5-second waiting-room beat before the first question — manufactures the real
+// step-up-to-the-window tension. Resolves when the overlay finishes.
+function runConsulateIntro() {
+    const panel = document.getElementById('visaMockPanel');
+    const st = visaMockInterviewState;
+    if (!panel || !st.consulate) return Promise.resolve();
+    const old = document.getElementById('consulateIntro');
+    if (old) old.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'consulateIntro';
+    overlay.className = 'consulate-intro';
+    overlay.innerHTML = `
+        <div class="consulate-intro-inner">
+            <div class="consulate-intro-crest" aria-hidden="true">★</div>
+            <div class="consulate-intro-title">U.S. Consulate — Nonimmigrant Visas</div>
+            <div class="consulate-intro-line" id="consulateIntroLine">Now serving: Window ${st.windowNumber}</div>
+            <div class="consulate-intro-disclaimer">Simulation · Practice only</div>
+        </div>`;
+    panel.appendChild(overlay);
+    const lineEl = () => document.getElementById('consulateIntroLine');
+    return new Promise((resolve) => {
+        setTimeout(() => { const el = lineEl(); if (el) el.textContent = 'Have your passport and I-20 ready.'; }, 1500);
+        setTimeout(() => { const el = lineEl(); if (el) el.textContent = 'Please step forward.'; }, 3000);
+        setTimeout(() => {
+            overlay.classList.add('fade-out');
+            setTimeout(() => { overlay.remove(); resolve(); }, 450);
+        }, 4200);
+    });
+}
+
+function updateConsulateOrb() {
+    const st = visaMockInterviewState;
+    const orb = document.getElementById('consulateOrb');
+    const status = document.getElementById('consulateOrbStatus');
+    if (!orb || !status || !st.consulate) return;
+    let mode = 'idle';
+    let label = 'Awaiting the officer…';
+    const browserSpeaking = !!(window.speechSynthesis && window.speechSynthesis.speaking);
+    if (st.officerSpeaking || browserSpeaking) {
+        mode = 'speaking'; label = 'The officer is speaking…';
+    } else if (st.pending) {
+        mode = 'thinking'; label = 'The officer is reviewing your file…';
+    } else if (st.listening) {
+        mode = 'listening'; label = 'Listening — answer now';
+    } else if (!st.active) {
+        mode = 'idle'; label = 'Session ended';
+    }
+    // Speaking/thinking/listening all cancel the "officer is waiting" nudge.
+    if (mode !== 'idle') clearConsulateNudge(false);
+    orb.className = `consulate-orb ${mode}${document.getElementById('consulateNudge')?.style.display !== 'none' ? ' nudged' : ''}`;
+    status.textContent = label;
+}
+
+// Pressure mechanic: officers judge hesitation. If the student freezes after the officer
+// finishes speaking, surface a calm-but-firm nudge (visual only — no extra AI cost).
+function armConsulateNudge() {
+    const st = visaMockInterviewState;
+    if (!st.consulate || st.channel !== 'voice') return;
+    clearConsulateNudge();
+    st.nudgeTimerId = setTimeout(() => {
+        if (!st.consulate || !st.active || st.pending || st.officerSpeaking) return;
+        const nudge = document.getElementById('consulateNudge');
+        const orb = document.getElementById('consulateOrb');
+        if (nudge) nudge.style.display = 'block';
+        if (orb) orb.classList.add('nudged');
+    }, 12000);
+}
+
+function clearConsulateNudge(cancelTimer = true) {
+    const st = visaMockInterviewState;
+    if (cancelTimer && st.nudgeTimerId) { clearTimeout(st.nudgeTimerId); st.nudgeTimerId = null; }
+    const nudge = document.getElementById('consulateNudge');
+    if (nudge && nudge.style.display !== 'none') nudge.style.display = 'none';
+    const orb = document.getElementById('consulateOrb');
+    if (orb) orb.classList.remove('nudged');
+}
+
+// Neural officer voice (Visa Success Pass perk). Any failure falls back to browser TTS —
+// the interview must never break because of voice infrastructure.
+async function playOfficerNeuralAudio(text) {
+    if (!clientHasVisaPass()) return false;
+    try {
+        const r = await aiFetch(`${API_BASE}/api/ai-chat/tts/officer`, {
+            method: 'POST',
+            headers: sopAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'include',
+            body: JSON.stringify({ text, country: 'US' })
+        }, 22000);
+        if (!r.ok) return false;
+        const data = await r.json().catch(() => ({}));
+        if (data.fallback || !data.audio) return false;
+        await new Promise((resolve) => {
+            const audio = new Audio(`data:audio/mp3;base64,${data.audio}`);
+            audio.onended = resolve;
+            audio.onerror = resolve;
+            audio.play().catch(() => resolve());
+        });
+        return true;
+    } catch (e) {
+        return false; // timeout / network — browser TTS takes over
+    }
+}
+
+// Decision-slip verdict reveal: the dramatic, screenshot-worthy end beat.
+function showConsulateVerdictSlip(reportText) {
+    const st = visaMockInterviewState;
+    const panel = document.getElementById('visaMockPanel');
+    if (!st.consulate || !panel) return;
+    const match = /Approval\s+Probability[:\s]*([0-9]{1,3})/i.exec(reportText || '');
+    if (!match) return;
+    const approval = Math.max(0, Math.min(100, parseInt(match[1], 10)));
+    const approved = approval >= 50;
+    const old = document.getElementById('consulateSlip');
+    if (old) old.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'consulateSlip';
+    overlay.className = 'consulate-slip-overlay';
+    overlay.innerHTML = `
+        <div class="consulate-slip ${approved ? 'approved' : 'refused'}">
+            <div class="consulate-slip-header">U.S. Consulate · Window ${st.windowNumber || ''}</div>
+            <div class="consulate-slip-verdict">${approved ? 'LIKELY APPROVED' : 'LIKELY REFUSED'}</div>
+            <div class="consulate-slip-pct">${approval}% approval probability</div>
+            <div class="consulate-slip-note">Practice simulation — not an official decision</div>
+        </div>`;
+    overlay.addEventListener('click', () => overlay.remove());
+    panel.appendChild(overlay);
+    setTimeout(() => {
+        overlay.classList.add('fade-out');
+        setTimeout(() => overlay.remove(), 600);
+    }, 3600);
+}
+
 async function startVoiceInterviewSession(mode, options = {}) {
     const state = getVisaInterviewState(mode);
     const cfg = getVisaInterviewSessionConfig(mode);
@@ -7654,6 +8020,15 @@ async function startVoiceInterviewSession(mode, options = {}) {
 
     setVisaInterviewStatus(mode, 'Starting interview...');
     updateVisaInterviewControls(mode);
+
+    // The Consulate Window: US voice mock becomes the embassy-booth experience —
+    // booth chrome + a short waiting-room beat before the officer's first question.
+    if (mode === 'mock' && isConsulateEligible(state.channel)) {
+        enterConsulateMode();
+        await runConsulateIntro();
+        if (!state.active) return; // user bailed during the intro
+    }
+
     const readyMessage = mode === 'prep'
         ? 'I am ready for my visa interview prep session.'
         : 'I am ready for my visa mock interview.';
@@ -7669,6 +8044,7 @@ async function startVoiceMockInterview() {
 }
 
 function stopVoiceMockInterview(silent = false, shouldExitFullscreen = true) {
+    exitConsulateMode();
     clearVisaInterviewPendingBubble('mock');
     stopVisaInterviewRecognition('mock');
     stopMockInterviewTimer();
@@ -11129,22 +11505,22 @@ function updateDocumentHealthUI(documents, config) {
             healthBadge.textContent = 'Excellent';
             healthBadge.style.background = 'rgba(16, 185, 129, 0.15)';
             healthBadge.style.borderColor = 'rgba(16, 185, 129, 0.35)';
-            healthBadge.style.color = '#34d399';
+            healthBadge.style.color = '#065f46';
         } else if (healthScore >= 70) {
             healthBadge.textContent = 'Good';
             healthBadge.style.background = 'rgba(99, 102, 241, 0.15)';
             healthBadge.style.borderColor = 'rgba(99, 102, 241, 0.35)';
-            healthBadge.style.color = '#818cf8';
+            healthBadge.style.color = '#4338ca';
         } else if (healthScore >= 50) {
             healthBadge.textContent = 'Fair';
             healthBadge.style.background = 'rgba(245, 158, 11, 0.15)';
             healthBadge.style.borderColor = 'rgba(245, 158, 11, 0.35)';
-            healthBadge.style.color = '#fbbf24';
+            healthBadge.style.color = '#92400e';
         } else {
             healthBadge.textContent = 'Needs Attention';
             healthBadge.style.background = 'rgba(239, 68, 68, 0.15)';
             healthBadge.style.borderColor = 'rgba(239, 68, 68, 0.35)';
-            healthBadge.style.color = '#f87171';
+            healthBadge.style.color = '#b91c1c';
         }
     }
 
@@ -11180,12 +11556,12 @@ function documentHealthCategories(config) {
 
 function healthStatusBadge(doc) {
     if (doc.is_valid === true) {
-        return { label: 'Valid', style: 'background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);' };
+        return { label: 'Valid', style: 'background: rgba(16, 185, 129, 0.18); color: #065f46; border: 1px solid rgba(16, 185, 129, 0.45);' };
     }
     if (doc.is_valid === false) {
-        return { label: 'Needs Review', style: 'background: rgba(239, 68, 68, 0.18); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);' };
+        return { label: 'Needs Review', style: 'background: rgba(239, 68, 68, 0.18); color: #b91c1c; border: 1px solid rgba(239, 68, 68, 0.45);' };
     }
-    return { label: 'Pending', style: 'background: rgba(148, 163, 184, 0.18); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3);' };
+    return { label: 'Pending', style: 'background: rgba(148, 163, 184, 0.18); color: #475569; border: 1px solid rgba(148, 163, 184, 0.45);' };
 }
 
 function healthDocumentRowHtml(doc, config) {
@@ -11844,7 +12220,7 @@ function updateVisaJourneyWidget(config, journeyData) {
 
     if (nextStepHint) {
         if (allStagesComplete && selectedStage === currentStage) {
-            nextStepHint.innerHTML = '<span style="color: #34d399; font-weight: 600;">🎉 Congratulations! You\'re all set for your journey!</span>';
+            nextStepHint.innerHTML = '<span style="color: #065f46; font-weight: 600;">🎉 Congratulations! You\'re all set for your journey!</span>';
         } else {
             nextStepHint.innerHTML = `<strong>Next step:</strong> <span id="${config.nextStepTextId}">${escapeHtml(selectedStageInfo?.nextStep || '')}</span>`;
         }
@@ -13154,10 +13530,10 @@ function getDocumentValidationMeta(doc) {
     if (doc.is_valid === true) {
         return {
             statusLabel: 'Valid',
-            statusStyle: 'background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);',
+            statusStyle: 'background: rgba(16, 185, 129, 0.15); color: #065f46; border: 1px solid rgba(16, 185, 129, 0.45);',
             cardStyle: 'border: 1px solid rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.08);',
             indicatorIcon: '✓',
-            indicatorColor: '#34d399',
+            indicatorColor: '#065f46',
             reason: '',
             reasonStyle: ''
         };
@@ -13166,22 +13542,22 @@ function getDocumentValidationMeta(doc) {
     if (doc.is_valid === false) {
         return {
             statusLabel: 'Needs Review',
-            statusStyle: 'background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35);',
+            statusStyle: 'background: rgba(245, 158, 11, 0.15); color: #92400e; border: 1px solid rgba(245, 158, 11, 0.45);',
             cardStyle: 'border: 1px solid rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.09);',
             indicatorIcon: '!',
-            indicatorColor: '#f59e0b',
+            indicatorColor: '#b45309',
             reason: doc.validation_message || 'Validation failed. Please upload the correct document.',
-            reasonStyle: 'color: #fcd34d; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 0.6rem; padding: 0.55rem 0.65rem;'
+            reasonStyle: 'color: #92400e; background: rgba(245, 158, 11, 0.14); border: 1px solid rgba(245, 158, 11, 0.45); border-radius: 0.6rem; padding: 0.55rem 0.65rem;'
         };
     }
 
     const isProcessing = doc.is_processed === false;
     return {
         statusLabel: isProcessing ? 'Processing' : 'Pending Validation',
-        statusStyle: 'background: rgba(99, 102, 241, 0.15); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.35);',
+        statusStyle: 'background: rgba(99, 102, 241, 0.15); color: #4338ca; border: 1px solid rgba(99, 102, 241, 0.45);',
         cardStyle: 'border: 1px solid rgba(99, 102, 241, 0.35); background: rgba(99, 102, 241, 0.08);',
         indicatorIcon: '•',
-        indicatorColor: '#818cf8',
+        indicatorColor: '#4338ca',
         reason: '',
         reasonStyle: ''
     };
@@ -13244,16 +13620,16 @@ function displayDocuments(documents) {
         const requirementText = meta ? (isMandatory ? 'Mandatory' : 'Optional') : 'Not In Catalog';
         const requirementStyle = meta
             ? (isMandatory
-                ? 'background: rgba(239, 68, 68, 0.14); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.35);'
-                : 'background: rgba(59, 130, 246, 0.14); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.35);')
-            : 'background: rgba(148, 163, 184, 0.14); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.35);';
+                ? 'background: rgba(239, 68, 68, 0.14); color: #b91c1c; border: 1px solid rgba(239, 68, 68, 0.45);'
+                : 'background: rgba(59, 130, 246, 0.14); color: #1d4ed8; border: 1px solid rgba(59, 130, 246, 0.45);')
+            : 'background: rgba(148, 163, 184, 0.14); color: #475569; border: 1px solid rgba(148, 163, 184, 0.5);';
 
         return `
             <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.45rem;">
                 <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${requirementStyle}">
                     ${escapeHtml(requirementText)}
                 </span>
-                <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; background: rgba(99, 102, 241, 0.14); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.35);">
+                <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; background: rgba(99, 102, 241, 0.14); color: #4338ca; border: 1px solid rgba(99, 102, 241, 0.45);">
                     ${escapeHtml(stageNo ? `Stage ${stageNo}: ${stageLabel}` : stageLabel)}
                 </span>
             </div>
@@ -13286,7 +13662,7 @@ function displayDocuments(documents) {
                         </div>
                         <div style="font-size: 0.875rem; color: var(--text-secondary);">
                             ${escapeHtml(doc.original_filename || 'Uploaded file')} • ${fileSizeMB} MB • ${uploadDate}
-                            ${isE2E ? ' • <span style="color: #34d399;">🔒 End-to-end encrypted</span>' : (isEncrypted ? ' • <span style="color: #f59e0b;">🔒 Encrypted (legacy) — re-upload for end-to-end encryption</span>' : '')}
+                            ${isE2E ? ' • <span style="color: #065f46;">🔒 End-to-end encrypted</span>' : (isEncrypted ? ' • <span style="color: #92400e;">🔒 Encrypted (legacy) — re-upload for end-to-end encryption</span>' : '')}
                         </div>
                         ${renderMetaBadges(doc.document_type)}
                         <div style="margin-top: 0.5rem; display: flex; align-items: center; gap: 0.5rem;">
@@ -13310,7 +13686,7 @@ function displayDocuments(documents) {
                                 <a href="${doc.file_url}" target="_blank" class="btn btn-primary" style="font-size: 0.875rem; padding: 0.5rem 1rem; text-decoration: none; display: inline-block;">View</a>
                                 <a href="${API_BASE}/api/documents/${doc.id}/download" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: var(--bg-color); border: 1px solid var(--border-color); text-decoration: none; display: inline-block;">Download</a>
                             `}
-                            <button onclick="deleteDocumentFromButton(this)" data-document-id="${doc.id}" data-document-name="${escapeHtml(doc.original_filename || 'document')}" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.35);">Delete</button>
+                            <button onclick="deleteDocumentFromButton(this)" data-document-id="${doc.id}" data-document-name="${escapeHtml(doc.original_filename || 'document')}" class="btn" style="font-size: 0.875rem; padding: 0.5rem 1rem; background: rgba(239, 68, 68, 0.14); color: #b91c1c; border: 1px solid rgba(239, 68, 68, 0.45);">Delete</button>
                         </div>
                     </div>
                 </div>
@@ -13323,26 +13699,26 @@ function displayDocuments(documents) {
         const stageNo = pendingType.journey_stage;
         const stageLabel = stageNo && stageLabelByNumber[stageNo] ? stageLabelByNumber[stageNo] : (stageNo ? `Stage ${stageNo}` : 'Unassigned');
         const requirementStyle = isMandatory
-            ? 'background: rgba(239, 68, 68, 0.14); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.35);'
-            : 'background: rgba(59, 130, 246, 0.14); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.35);';
+            ? 'background: rgba(239, 68, 68, 0.14); color: #b91c1c; border: 1px solid rgba(239, 68, 68, 0.45);'
+            : 'background: rgba(59, 130, 246, 0.14); color: #1d4ed8; border: 1px solid rgba(59, 130, 246, 0.45);';
 
         cardsHtml += `
             <div data-document-type="${escapeHtml(pendingType.value)}" style="border: 1px solid var(--border-color); border-radius: 0.75rem; padding: 0.95rem 1rem; margin-bottom: 0.75rem; background: var(--bg-secondary);">
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                    <div style="color: #94a3b8; font-size: 1.15rem; font-weight: bold; flex-shrink: 0;">○</div>
+                    <div style="color: #64748b; font-size: 1.15rem; font-weight: bold; flex-shrink: 0;">○</div>
                     <div style="flex: 1;">
                         <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem;">
                             ${escapeHtml(pendingType.label)}
                         </div>
                         <div style="font-size: 0.84rem; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 0.35rem;">
-                            <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #fbbf24;"></span>
+                            <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #d97706;"></span>
                             Not uploaded yet
                         </div>
                         <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.45rem;">
                             <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; ${requirementStyle}">
                                 ${isMandatory ? 'Mandatory' : 'Optional'}
                             </span>
-                            <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; background: rgba(99, 102, 241, 0.14); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.35);">
+                            <span style="font-size: 0.75rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; background: rgba(99, 102, 241, 0.14); color: #4338ca; border: 1px solid rgba(99, 102, 241, 0.45);">
                                 ${escapeHtml(stageNo ? `Stage ${stageNo}: ${stageLabel}` : stageLabel)}
                             </span>
                         </div>

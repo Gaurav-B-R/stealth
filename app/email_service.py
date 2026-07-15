@@ -1404,6 +1404,155 @@ def send_subscription_change_email(
         return False
 
 
+def send_feature_request_confirmation(
+    *,
+    to_email: str,
+    full_name: str = "",
+    request_summary: str = "",
+    product: str = "Rilono",
+    base_url: str = DEFAULT_PUBLIC_BASE_URL,
+) -> bool:
+    """Warm 'we received your feature request' confirmation to the requester.
+
+    Used by both the B2C student app and Rilono Enterprise when a user submits a feature
+    request. Non-security notification → sent from the no-reply notification address.
+    Best-effort: returns False (never raises) so a failed confirmation can never break
+    the submit flow. `product` is "Rilono" (B2C) or "Rilono Enterprise" (B2B).
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send feature-request confirmation - Resend not configured")
+        return False
+
+    recipient = (to_email or "").strip()
+    if not recipient or "@" not in recipient:
+        print(f"Skip feature-request confirmation - invalid recipient: {recipient!r}")
+        return False
+
+    # Sanitize: CRLF-strip anything that reaches the subject/header; HTML-escape everything
+    # user-supplied that lands in the body (prevents header injection + HTML injection).
+    clean_product = re.sub(r"[\r\n]+", " ", (product or "Rilono").strip()) or "Rilono"
+    safe_product = escape(clean_product)
+    clean_first = (full_name or "").strip().split(" ")[0]
+    if not clean_first or "@" in clean_first:  # empty, or an email slipped in as the name
+        clean_first = "there"
+    safe_name = escape(clean_first)
+
+    summary = re.sub(r"\s+", " ", (request_summary or "").strip())
+    if len(summary) > 300:
+        summary = summary[:300].rstrip() + "…"
+    request_card = ""
+    if summary:
+        request_card = f"""
+                                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:separate;border-spacing:0 10px;margin-top:4px;">
+                                    <tr>
+                                        <td style="padding:14px 16px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
+                                            <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Your request</div>
+                                            <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:6px;line-height:1.5;">{escape(summary)}</div>
+                                        </td>
+                                    </tr>
+                                </table>"""
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>We received your feature request - {safe_product}</title>
+    </head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+            <tr>
+                <td align="center">
+                    <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="max-width:620px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+                        <tr>
+                            <td style="padding:26px 28px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#ffffff;">
+                                <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">{safe_product} &middot; Product feedback</div>
+                                <h1 style="margin:10px 0 0 0;font-size:26px;line-height:1.25;">Your feature request is in &#128161;</h1>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding:26px 28px;">
+                                <p style="margin:0 0 14px 0;font-size:15px;color:#0f172a;">Hi {safe_name},</p>
+                                <div style="background:#f5f3ff;color:#5b21b6;padding:12px 14px;border-radius:10px;font-size:14px;line-height:1.5;margin-bottom:6px;">
+                                    Thanks for helping shape {safe_product} &mdash; we&rsquo;ve received your feature request and it&rsquo;s now with our product team.
+                                </div>
+                                {request_card}
+                                <p style="margin:18px 0 0 0;font-size:15px;color:#334155;line-height:1.6;">
+                                    Great products are built on feedback like yours. We&rsquo;re moving fast and will be
+                                    <strong style="color:#0f172a;">rapidly working to bring it to your table</strong>. If we need any
+                                    detail to build it right, we&rsquo;ll reach out.
+                                </p>
+                                <div style="margin-top:20px;padding:12px 14px;background:#f8fafc;border:1px solid #eef2f7;border-radius:10px;font-size:13px;color:#64748b;">
+                                    &#9989;&nbsp; Received &mdash; you don&rsquo;t need to do anything. This note just confirms we&rsquo;ve got it.
+                                </div>
+                                <p style="margin:22px 0 0 0;font-size:14px;color:#334155;">
+                                    Warmly,<br><strong style="color:#0f172a;">The {safe_product} Team</strong>
+                                </p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td style="padding:18px 28px 26px 28px;border-top:1px solid #eef2f7;">
+                                <p style="margin:0;font-size:12px;color:#94a3b8;line-height:1.6;">
+                                    This is an automated confirmation from a no-reply address. Questions? Email
+                                    <a href="mailto:contact@rilono.com" style="color:#4f46e5;text-decoration:none;">contact@rilono.com</a>.<br>
+                                    Rilono &middot; Bengaluru, Karnataka, India &middot; &copy; 2026 Rilono. All rights reserved.
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    text_lines = [
+        f"Your feature request is in - {clean_product}",
+        "",
+        f"Hi {clean_first},",
+        "",
+        f"Thanks for helping shape {clean_product} - we've received your feature request "
+        "and it's now with our product team.",
+    ]
+    if summary:
+        text_lines += ["", f"Your request: {summary}"]
+    text_lines += [
+        "",
+        "We're moving fast and will be rapidly working to bring it to your table. "
+        "If we need any detail to build it right, we'll reach out.",
+        "",
+        "Received - you don't need to do anything; this note just confirms we've got it.",
+        "",
+        f"Warmly,\nThe {clean_product} Team",
+        "",
+        "This is an automated confirmation from a no-reply address.",
+        "Rilono - Bengaluru, Karnataka, India",
+        "(c) 2026 Rilono. All rights reserved.",
+    ]
+    text_content = "\n".join(text_lines)
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
+            "to": [recipient],
+            "subject": f"We got your feature request \U0001f4a1 — {clean_product}",
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            print(f"Feature-request confirmation sent to {recipient} (ID: {email_id})")
+            return True
+        print(f"Failed to send feature-request confirmation to {recipient}. Response: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending feature-request confirmation to {recipient}: {str(e)}")
+        return False
+
+
 def _pricing_model_label_for_founder_email(pricing_model: Optional[str]) -> str:
     normalized = str(pricing_model or "").strip().lower()
     paid_models = {

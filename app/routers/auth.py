@@ -22,6 +22,7 @@ from app.email_service import (
     send_email_otp,
     send_password_reset_email,
     send_contact_form_email,
+    send_feature_request_confirmation,
     send_founder_new_verified_user_alert,
     send_student_welcome_email,
     verify_email_notifications_unsubscribe_token,
@@ -1641,6 +1642,20 @@ async def submit_contact_form(
     )
     
     if success:
+        # The in-app "Feature Request" modal posts here with subject "Feature Request: <title>".
+        # Send the requester a warm confirmation (best-effort — never fail the submit on it).
+        subject_clean = subject.strip()
+        if subject_clean.lower().startswith("feature request:"):
+            try:
+                feature_title = subject_clean.split(":", 1)[1].strip() or subject_clean
+                send_feature_request_confirmation(
+                    to_email=email.strip(),
+                    full_name=name.strip(),
+                    request_summary=feature_title,
+                    product="Rilono",
+                )
+            except Exception:
+                logging.getLogger(__name__).exception("Feature-request confirmation email failed")
         return {"message": "Thank you for contacting us! We'll get back to you soon."}
     else:
         raise HTTPException(

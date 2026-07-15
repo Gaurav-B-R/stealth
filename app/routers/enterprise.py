@@ -52,6 +52,7 @@ from app.email_service import send_enterprise_interview_report_email
 from app.email_service import send_enterprise_document_request_email, send_enterprise_document_request_code_email
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
 from app.email_service import send_enterprise_support_request_email, send_enterprise_demo_request_email
+from app.email_service import send_feature_request_confirmation
 from app.email_service import send_enterprise_welcome_email
 from app.email_service import send_email_otp
 from app.utils.token_security import hash_token, token_matches
@@ -3243,6 +3244,19 @@ def enterprise_support_create(
         )
     except Exception:
         logger.exception("Failed to email enterprise support request (org_id=%s)", organization.id)
+
+    # Feature requests get a warm confirmation back to the requester (best-effort — a
+    # confirmation-email failure must never fail the request, mirroring the block above).
+    if request_type == "feature_request" and (current_user.email or "").strip():
+        try:
+            send_feature_request_confirmation(
+                to_email=current_user.email,
+                full_name=requester_name,
+                request_summary=subject,
+                product="Rilono Enterprise",
+            )
+        except Exception:
+            logger.exception("Failed to send enterprise feature-request confirmation (org_id=%s)", organization.id)
 
     friendly = "Thanks! Your feature request is in — we read every one." if request_type == "feature_request" \
         else "Thanks! Our team has your message and will get back to you by email."
