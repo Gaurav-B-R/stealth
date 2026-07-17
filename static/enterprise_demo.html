@@ -62,6 +62,9 @@
         .chip { font-size: .84rem; font-weight: 700; color: var(--ink-2); background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; box-shadow: 0 1px 3px rgba(15, 23, 42, .05); }
         .hero { padding-bottom: 54px; }
         .sched-card { position: static; max-width: none; margin: 0; padding: 12px; }
+        .sched-note { text-align: center; color: var(--muted); font-size: .9rem; font-weight: 600; max-width: 640px; margin: 18px auto 0; }
+        .sched-note a { color: var(--brand); font-weight: 700; }
+        .sched-note a:hover { text-decoration: underline; }
 
         /* Form card */
         .form-card { background: var(--card); border: 1px solid var(--line); border-radius: 22px; padding: 26px 26px 22px; box-shadow: 0 30px 70px rgba(15, 23, 42, .10); position: sticky; top: 84px; }
@@ -106,10 +109,10 @@
         .card h3 { margin: 0 0 6px; font-size: 1.06rem; }
         .card p { margin: 0; color: var(--muted); font-size: .92rem; }
 
-        .value { background: #fff; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+        .value { background: var(--bg); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
         .value-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-        .value-item { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; background: var(--bg); border: 1px solid var(--line); border-radius: 16px; padding: 24px 22px; transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease; }
-        .value-item:hover { transform: translateY(-4px); background: #fff; border-color: rgba(99, 102, 241, .35); box-shadow: 0 18px 38px rgba(15, 23, 42, .10); }
+        .value-item { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 26px 24px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 8px 22px rgba(15, 23, 42, .05); transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
+        .value-item:hover { transform: translateY(-4px); border-color: rgba(99, 102, 241, .30); box-shadow: 0 8px 18px rgba(15, 23, 42, .07), 0 24px 48px rgba(15, 23, 42, .12); }
         .value-item .vic { flex: none; width: 46px; height: 46px; border-radius: 13px; background: linear-gradient(135deg, rgba(99, 102, 241, .16), rgba(168, 85, 247, .14)); box-shadow: inset 0 0 0 1px rgba(99, 102, 241, .12); color: var(--brand); display: grid; place-items: center; font-size: 22px; line-height: 1; }
         .value-item h4 { margin: 0 0 6px; font-size: 1.06rem; letter-spacing: -.01em; color: var(--ink); }
         .value-item p { margin: 0; color: var(--muted); font-size: .92rem; line-height: 1.6; }
@@ -206,6 +209,11 @@
                     </div>
                 </div>
             </div>
+            <!-- Our own note under the widget (the footer INSIDE the calendar is Google's fixed
+                 legal attribution and cannot be customized — this strip is fully ours). -->
+            <p class="sched-note">Booked? You'll get a calendar invite with your Google Meet link instantly —
+                see you there. Can't find a time that works? Email
+                <a href="mailto:contact@rilono.com">contact@rilono.com</a> and we'll fit you in.</p>
         </div>
     </header>
 

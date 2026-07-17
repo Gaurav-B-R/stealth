@@ -14139,6 +14139,18 @@ svg {
         display: flex;
     }
 
+    /* The student marketing site is always light (body.b2c-light); the mobile menu was built
+       for the old dark theme, so give it a light surface + readable link colors here. */
+    body.b2c-light .nav-links {
+        background: rgba(255, 255, 255, 0.98);
+        border-color: rgba(15, 23, 42, 0.10);
+        box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+    }
+
+    body.b2c-light .nav-links a { color: var(--text-secondary); }
+    body.b2c-light .nav-links a:hover { color: var(--text-primary); background: rgba(99, 102, 241, 0.08); }
+    body.b2c-light .nav-links a.nav-cta { color: #fff; }
+
     .nav-links>a,
     .nav-links>div {
         width: 100%;
