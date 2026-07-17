@@ -129,6 +129,10 @@ const refs = {
     financeBreakdownChart: document.getElementById('adminFinanceBreakdownChart'),
     financeContributorChart: document.getElementById('adminFinanceContributorChart'),
     financeTableBody: document.getElementById('adminFinanceTableBody'),
+    financeAddBtn: document.getElementById('adminFinanceAddBtn'),
+    financeEntryForm: document.getElementById('adminFinanceEntryForm'),
+    financeEntryCancel: document.getElementById('adminFinanceEntryCancel'),
+    financeEntryError: document.getElementById('adminFinanceEntryError'),
     aiTabBtn: document.getElementById('adminAiTabBtn'),
     aiTabPanel: document.getElementById('adminAiTabPanel'),
     aiMonthHero: document.getElementById('adminAiMonthHero'),
@@ -219,6 +223,9 @@ function bindEvents() {
     });
     refs.couponForm?.addEventListener('submit', handleCouponCreateSubmit);
     refs.couponTableBody?.addEventListener('click', handleCouponTableActionClick);
+    refs.financeAddBtn?.addEventListener('click', () => openFinanceEntryForm(null));
+    refs.financeEntryForm?.addEventListener('submit', submitFinanceEntry);
+    refs.financeEntryCancel?.addEventListener('click', () => { if (refs.financeEntryForm) refs.financeEntryForm.hidden = true; });
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && refs.couponModal && !refs.couponModal.hidden) closeCouponModal();
     });
@@ -261,6 +268,94 @@ function clearFlash() {
     refs.flash.hidden = true;
     refs.flash.textContent = '';
     refs.flash.className = 'flash';
+}
+
+// In-app styled confirm/prompt dialogs — replace the native window.confirm/prompt
+// browser popups with on-brand modals. confirmDialog -> Promise<boolean>; promptDialog -> Promise<string|null>.
+function confirmDialog(message, opts) {
+    opts = opts || {};
+    const title = opts.title || 'Please confirm';
+    const okText = opts.okText || 'Confirm';
+    const cancelText = opts.cancelText || 'Cancel';
+    const danger = opts.danger !== false; // default to destructive styling
+    const okBg = danger ? 'linear-gradient(135deg,#ef4444,#dc2626)' : 'linear-gradient(135deg,#4f46e5,#7c3aed)';
+    return new Promise((resolve) => {
+        const existing = document.getElementById('adminConfirmOverlay');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'adminConfirmOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:100010;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit;';
+        overlay.innerHTML =
+            '<div role="dialog" aria-modal="true" style="max-width:440px;width:100%;background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(2,6,23,0.4);overflow:hidden;">' +
+                '<div style="padding:22px 24px 16px;">' +
+                    '<div style="font-size:18px;font-weight:800;color:#0f172a;">' + escapeHtml(title) + '</div>' +
+                    '<p style="margin:10px 0 0;color:#475569;font-size:14.5px;line-height:1.6;">' + escapeHtml(message).replace(/\n/g, '<br>') + '</p>' +
+                '</div>' +
+                '<div style="display:flex;gap:10px;justify-content:flex-end;padding:14px 24px 20px;">' +
+                    '<button id="adminCfmCancel" style="padding:10px 18px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;font-weight:600;cursor:pointer;">' + escapeHtml(cancelText) + '</button>' +
+                    '<button id="adminCfmOk" style="padding:10px 18px;border-radius:10px;border:none;background:' + okBg + ';color:#fff;font-weight:700;cursor:pointer;">' + escapeHtml(okText) + '</button>' +
+                '</div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        let settled = false;
+        const done = (val) => {
+            if (settled) return; settled = true;
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+            resolve(val);
+        };
+        function onKey(e) {
+            if (e.key === 'Escape') { e.stopPropagation(); done(false); }
+            else if (e.key === 'Enter') { e.preventDefault(); done(true); }
+        }
+        overlay.querySelector('#adminCfmOk').onclick = () => done(true);
+        overlay.querySelector('#adminCfmCancel').onclick = () => done(false);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+        document.addEventListener('keydown', onKey, true);
+        const ok = overlay.querySelector('#adminCfmOk'); if (ok) ok.focus();
+    });
+}
+
+function promptDialog(message, opts) {
+    opts = opts || {};
+    const title = opts.title || 'Enter a value';
+    const okText = opts.okText || 'OK';
+    const placeholder = opts.placeholder || '';
+    const value = opts.value || '';
+    const inputType = opts.type || 'text';
+    return new Promise((resolve) => {
+        const existing = document.getElementById('adminPromptOverlay');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'adminPromptOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:100010;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit;';
+        overlay.innerHTML =
+            '<div role="dialog" aria-modal="true" style="max-width:440px;width:100%;background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(2,6,23,0.4);overflow:hidden;">' +
+                '<form id="adminPromptForm"><div style="padding:22px 24px 8px;">' +
+                    '<div style="font-size:18px;font-weight:800;color:#0f172a;">' + escapeHtml(title) + '</div>' +
+                    '<p style="margin:10px 0 12px;color:#475569;font-size:14.5px;line-height:1.6;">' + escapeHtml(message).replace(/\n/g, '<br>') + '</p>' +
+                    '<input id="adminPromptInput" type="' + escapeHtml(inputType) + '" placeholder="' + escapeHtml(placeholder) + '" value="' + escapeHtml(value) + '" style="width:100%;box-sizing:border-box;padding:11px 13px;border:1px solid #e2e8f0;border-radius:10px;font-size:14.5px;color:#0f172a;outline:none;">' +
+                '</div>' +
+                '<div style="display:flex;gap:10px;justify-content:flex-end;padding:14px 24px 20px;">' +
+                    '<button type="button" id="adminPromptCancel" style="padding:10px 18px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;font-weight:600;cursor:pointer;">Cancel</button>' +
+                    '<button type="submit" id="adminPromptOk" style="padding:10px 18px;border-radius:10px;border:none;background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-weight:700;cursor:pointer;">' + escapeHtml(okText) + '</button>' +
+                '</div></form>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        let settled = false;
+        const done = (val) => {
+            if (settled) return; settled = true;
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+            resolve(val);
+        };
+        function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); done(null); } }
+        overlay.querySelector('#adminPromptForm').onsubmit = (e) => { e.preventDefault(); done(overlay.querySelector('#adminPromptInput').value); };
+        overlay.querySelector('#adminPromptCancel').onclick = () => done(null);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+        document.addEventListener('keydown', onKey, true);
+        const inp = overlay.querySelector('#adminPromptInput'); if (inp) inp.focus();
+    });
 }
 
 function showAuth() {
@@ -962,13 +1057,25 @@ function renderFinanceContributorBreakdown(breakdown) {
     }).join('');
 }
 
+function financeLedgerEntryId(item) {
+    // Only company_finance_entries rows are editable; they carry an id of "finance-<n>".
+    // Subscription-revenue returns carry "payment-<n>" and are read-only here.
+    const id = String((item && item.id) || '');
+    return id.startsWith('finance-') ? id.slice('finance-'.length) : null;
+}
+
+function financeLedgerItemByEntryId(fid) {
+    const ledger = (state.financeAnalytics && state.financeAnalytics.ledger) || [];
+    return ledger.find((it) => financeLedgerEntryId(it) === String(fid)) || null;
+}
+
 function renderFinanceLedger(ledger) {
     if (!refs.financeTableBody) return;
     const rows = Array.isArray(ledger) ? ledger : [];
     if (!rows.length) {
         refs.financeTableBody.innerHTML = `
             <tr>
-                <td colspan="8" class="table-empty">No finance ledger rows found.</td>
+                <td colspan="9" class="table-empty">No finance ledger rows found.</td>
             </tr>
         `;
         return;
@@ -977,6 +1084,11 @@ function renderFinanceLedger(ledger) {
     refs.financeTableBody.innerHTML = rows.map((item) => {
         const amount = Number(item.amount_usd) || 0;
         const isReturn = amount >= 0;
+        const fid = financeLedgerEntryId(item);
+        const actions = fid
+            ? `<button type="button" class="table-btn" data-finance-edit="${escapeHtml(fid)}">Edit</button>
+               <button type="button" class="table-btn danger" data-finance-delete="${escapeHtml(fid)}">Delete</button>`
+            : '<span class="finance-source">Auto</span>';
         return `
             <tr>
                 <td>${escapeHtml(item.occurred_on || '-')}</td>
@@ -987,9 +1099,124 @@ function renderFinanceLedger(ledger) {
                 <td>${escapeHtml(item.description || '-')}</td>
                 <td class="finance-amount ${isReturn ? 'positive' : 'negative'}">${escapeHtml(formatUsd(amount))}</td>
                 <td><span class="finance-source">${escapeHtml(item.source || '-')}</span></td>
+                <td class="finance-actions">${actions}</td>
             </tr>
         `;
     }).join('');
+
+    refs.financeTableBody.querySelectorAll('[data-finance-edit]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const fid = btn.getAttribute('data-finance-edit');
+            openFinanceEntryForm(financeLedgerItemByEntryId(fid), fid);
+        });
+    });
+    refs.financeTableBody.querySelectorAll('[data-finance-delete]').forEach((btn) => {
+        btn.addEventListener('click', () => deleteFinanceEntry(btn.getAttribute('data-finance-delete')));
+    });
+}
+
+function setFinanceFormError(message) {
+    if (!refs.financeEntryError) return;
+    if (message) {
+        refs.financeEntryError.textContent = message;
+        refs.financeEntryError.hidden = false;
+    } else {
+        refs.financeEntryError.textContent = '';
+        refs.financeEntryError.hidden = true;
+    }
+}
+
+function openFinanceEntryForm(item, fid) {
+    const form = refs.financeEntryForm;
+    if (!form) return;
+    form.hidden = false;
+    setFinanceFormError('');
+    const amount = item ? Number(item.amount_usd) || 0 : 0;
+    const g = (id) => document.getElementById(id);
+    g('adminFinanceEntryId').value = fid || '';
+    g('adminFinanceEntryDate').value = item ? String(item.occurred_on || '').slice(0, 10) : new Date().toISOString().slice(0, 10);
+    g('adminFinanceEntryType').value = item ? (amount >= 0 ? 'return' : 'expense') : 'expense';
+    g('adminFinanceEntryVendor').value = item ? (item.vendor || '') : '';
+    g('adminFinanceEntryCategory').value = item ? (item.category || '') : '';
+    g('adminFinanceEntryPaidBy').value = item ? (item.paid_by || 'Gaurav') : 'Gaurav';
+    g('adminFinanceEntryAmount').value = item ? Math.abs(amount).toFixed(2) : '';
+    g('adminFinanceEntryDesc').value = item ? (item.description || '') : '';
+    g('adminFinanceEntrySave').textContent = fid ? 'Save changes' : 'Add entry';
+    form.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    g('adminFinanceEntryVendor').focus();
+}
+
+async function submitFinanceEntry(event) {
+    if (event) event.preventDefault();
+    if (!await ensureAdminProtection({ silent: false })) return;
+    const g = (id) => document.getElementById(id);
+    const fid = String(g('adminFinanceEntryId').value || '').trim();
+    const occurred_on = g('adminFinanceEntryDate').value;
+    const entry_type = g('adminFinanceEntryType').value;
+    const vendor = String(g('adminFinanceEntryVendor').value || '').trim();
+    const category = String(g('adminFinanceEntryCategory').value || '').trim();
+    const paid_by = String(g('adminFinanceEntryPaidBy').value || '').trim() || 'Gaurav';
+    const amount_usd = Number(g('adminFinanceEntryAmount').value);
+    const description = String(g('adminFinanceEntryDesc').value || '').trim();
+
+    if (!occurred_on) { setFinanceFormError('Pick a date.'); return; }
+    if (!vendor || !category) { setFinanceFormError('Vendor and category are required.'); return; }
+    if (!Number.isFinite(amount_usd) || amount_usd <= 0) { setFinanceFormError('Enter an amount greater than 0.'); return; }
+    setFinanceFormError('');
+
+    const isEdit = !!fid;
+    const saveBtn = g('adminFinanceEntrySave');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = isEdit ? 'Saving…' : 'Adding…'; }
+    try {
+        const url = isEdit
+            ? `${API_BASE}/api/admin/company-finance/entries/${encodeURIComponent(fid)}`
+            : `${API_BASE}/api/admin/company-finance/entries`;
+        const response = await fetch(url, {
+            method: isEdit ? 'PATCH' : 'POST',
+            headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
+            credentials: 'same-origin',
+            body: JSON.stringify({ occurred_on, entry_type, vendor, category, paid_by, amount_usd, description }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            setFinanceFormError(normalizeErrorMessage(payload, 'Could not save the entry.'));
+            return;
+        }
+        if (refs.financeEntryForm) refs.financeEntryForm.hidden = true;
+        showFlash(isEdit ? 'Entry updated.' : 'Entry added.', 'success');
+        await loadFinanceAnalytics();
+    } catch (error) {
+        console.error('Save finance entry failed:', error);
+        setFinanceFormError('Could not save the entry.');
+    } finally {
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = isEdit ? 'Save changes' : 'Add entry'; }
+    }
+}
+
+async function deleteFinanceEntry(fid) {
+    if (!await ensureAdminProtection({ silent: false })) return;
+    const item = financeLedgerItemByEntryId(fid);
+    const label = item ? `${item.vendor} · ${formatUsd(Number(item.amount_usd) || 0)}` : `entry #${fid}`;
+    if (!(await confirmDialog(`This finance entry (${label}) will be permanently removed from the ledger and analytics.`, { title: 'Delete finance entry?', okText: 'Delete' }))) return;
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/company-finance/entries/${encodeURIComponent(fid)}`, {
+            method: 'DELETE',
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin',
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(normalizeErrorMessage(payload, 'Could not delete the entry.'), 'error');
+            return;
+        }
+        showFlash('Entry deleted.', 'success');
+        await loadFinanceAnalytics();
+    } catch (error) {
+        console.error('Delete finance entry failed:', error);
+        showFlash('Could not delete the entry.', 'error');
+    }
 }
 
 function renderFinanceAnalytics() {
@@ -2034,7 +2261,7 @@ async function createAccountCoupon(userId) {
 
 async function deleteAccountCoupon(userId, code) {
     if (!await ensureAdminProtection({ silent: false })) return;
-    if (!window.confirm(`Delete coupon "${code}"?\n\nStudents will no longer be able to apply it. Past payments keep their discount.`)) return;
+    if (!(await confirmDialog(`Students will no longer be able to apply "${code}". Past payments keep their discount.`, { title: 'Delete coupon?', okText: 'Delete' }))) return;
     try {
         const response = await fetch(`${API_BASE}/api/admin/coupons/${encodeURIComponent(code)}`, {
             method: 'DELETE',
@@ -2659,7 +2886,7 @@ function wireRefundForm(data) {
         if (!paymentId) { setRefundError('Select a payment to refund.'); return; }
         if (!Number.isFinite(amount) || amount <= 0) { setRefundError('Enter the amount to refund.'); return; }
         const company = (state.couponOrg && state.couponOrg.company) || 'this account';
-        if (!window.confirm(`Refund ₹${amount.toLocaleString()} to ${company} via Razorpay and claw back ${clawback} credits?\n\nThis moves real money and cannot be undone.`)) return;
+        if (!(await confirmDialog(`Refund ₹${amount.toLocaleString()} to ${company} via Razorpay and claw back ${clawback} credits. This moves real money and cannot be undone.`, { title: 'Issue refund?', okText: `Refund ₹${amount.toLocaleString()}` }))) return;
         await issueRefund(moneyBtn, { kind: 'money', payment_id: paymentId, amount_rupees: amount, clawback_credits: clawback, reason });
     });
 }
@@ -2836,7 +3063,7 @@ async function handleCouponTableActionClick(event) {
         await updateCoupon(couponId, { is_active: nextActive });
     } else if (button.dataset.couponAction === 'delete') {
         const code = String(button.dataset.couponCode || 'this code');
-        if (!window.confirm(`Delete discount code "${code}"? This cannot be undone.`)) return;
+        if (!(await confirmDialog(`Discount code "${code}" will be permanently deleted. This cannot be undone.`, { title: 'Delete discount code?', okText: 'Delete' }))) return;
         await deleteCoupon(couponId, code);
     } else if (button.dataset.couponAction === 'email') {
         const code = String(button.dataset.couponCode || 'this code');
@@ -2847,7 +3074,7 @@ async function handleCouponTableActionClick(event) {
 async function sendCouponEmail(couponId, code, button) {
     if (!state.couponOrg) return;
     const company = state.couponOrg.company || 'this account';
-    if (!window.confirm(`Email the "${code}" discount to ${company}'s team?`)) return;
+    if (!(await confirmDialog(`The "${code}" discount will be emailed to ${company}'s team.`, { title: 'Send discount email?', okText: 'Send email', danger: false }))) return;
     if (!await ensureAdminProtection({ silent: false })) return;
     const original = button ? button.textContent : '';
     if (button) { button.disabled = true; button.textContent = 'Sending...'; }
@@ -2952,10 +3179,13 @@ async function updateUserStatus(userId, nextIsActive, userLabel = '') {
     // Secondary confirmation — activating/deactivating is an account state change
     // that must never fire from an accidental single click (mirrors delete).
     const who = (userLabel || '').trim() || 'this account';
-    const confirmed = window.confirm(
+    const confirmed = await confirmDialog(
         nextIsActive
-            ? `Reactivate ${who}?\n\nThey will be able to sign in again.`
-            : `Deactivate ${who}?\n\nThey will be signed out and blocked from signing in until you reactivate the account.`
+            ? `${who} will be able to sign in again.`
+            : `${who} will be signed out and blocked from signing in until you reactivate the account.`,
+        nextIsActive
+            ? { title: `Reactivate ${who}?`, okText: 'Reactivate', danger: false }
+            : { title: `Deactivate ${who}?`, okText: 'Deactivate' }
     );
     if (!confirmed) return false;
 
@@ -2992,8 +3222,9 @@ async function deleteUser(userId, userEmail, userName) {
 
     const expectedName = (userName || '').trim();
     if (expectedName) {
-        const typedName = window.prompt(
-            `Type this user's name to confirm deletion:\n${expectedName}`
+        const typedName = await promptDialog(
+            `Type this user's name to confirm deletion: ${expectedName}`,
+            { title: 'Confirm user deletion', placeholder: expectedName, okText: 'Continue' }
         );
         if (typedName === null) return;
         if (typedName.trim().toLowerCase() !== expectedName.toLowerCase()) {
@@ -3002,7 +3233,7 @@ async function deleteUser(userId, userEmail, userName) {
         }
     }
 
-    const confirmed = window.confirm(`Delete ${userEmail} permanently? This cannot be undone.`);
+    const confirmed = await confirmDialog(`${userEmail} will be permanently deleted. This cannot be undone.`, { title: 'Delete user?', okText: 'Delete' });
     if (!confirmed) return;
 
     setRowActionsDisabled(true);

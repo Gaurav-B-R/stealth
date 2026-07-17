@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Secure payment</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="/static/logo.png" />
+  <style>
+    :root {
+      --bg: #f1f5f9; --surface: #ffffff; --text: #0f172a; --text-2: #475569;
+      --muted: #64748b; --border: #e2e8f0; --primary: #0f766e; --primary-2: #0e7490;
+      --danger: #b91c1c; --ok: #047857;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text); min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .card {
+      width: 100%; max-width: 460px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: 18px; overflow: hidden; box-shadow: 0 10px 40px rgba(15, 23, 42, .08);
+    }
+    .head {
+      padding: 24px 26px; color: #fff;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
+    }
+    .head img { height: 42px; width: 42px; border-radius: 10px; object-fit: cover; margin-bottom: 10px; display: block; }
+    .head .org { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; opacity: .92; font-weight: 700; }
+    .head h1 { font-size: 21px; margin-top: 6px; font-weight: 800; }
+    .body { padding: 24px 26px 26px; }
+    .desc { font-size: 13.5px; color: var(--muted); }
+    .amount { font-size: 34px; font-weight: 800; margin: 6px 0 2px; letter-spacing: -0.02em; }
+    .inv { font-size: 12px; color: var(--muted); }
+    .due { margin-top: 12px; font-size: 13px; background: #fffbeb; color: #92400e; padding: 9px 12px; border-radius: 10px; }
+    .btn {
+      display: block; width: 100%; margin-top: 20px; padding: 14px; border: none; border-radius: 12px;
+      background: linear-gradient(135deg, var(--primary) 0%, var(--primary-2) 100%);
+      color: #fff; font-size: 15.5px; font-weight: 800; cursor: pointer; transition: filter .15s;
+    }
+    .btn:hover { filter: brightness(1.06); }
+    .btn:disabled { opacity: .6; cursor: default; }
+    .note { margin-top: 16px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
+    .state { text-align: center; padding: 10px 0 4px; }
+    .state .icon { font-size: 44px; margin-bottom: 10px; }
+    .state h2 { font-size: 19px; margin-bottom: 6px; }
+    .state p { font-size: 14px; color: var(--text-2); line-height: 1.6; }
+    .state.ok h2 { color: var(--ok); }
+    .state.err h2 { color: var(--danger); }
+    .spin {
+      width: 34px; height: 34px; margin: 26px auto; border-radius: 50%;
+      border: 3px solid var(--border); border-top-color: var(--primary); animation: r 0.8s linear infinite;
+    }
+    @keyframes r { to { transform: rotate(360deg); } }
+    .foot { padding: 14px; text-align: center; font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--border); background: #f8fafc; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="head" id="payHead">
+      <div class="org" id="orgName">&nbsp;</div>
+      <h1>Payment request</h1>
+    </div>
+    <div class="body">
+      <div id="loading"><div class="spin"></div></div>
+
+      <div id="payView" class="hidden">
+        <div class="desc" id="payDesc"></div>
+        <div class="amount" id="payAmount"></div>
+        <div class="inv" id="payInv"></div>
+        <div class="due hidden" id="payDue"></div>
+        <button class="btn" id="payBtn">Pay securely</button>
+        <div class="note" id="payNote"></div>
+      </div>
+
+      <div id="stateView" class="state hidden">
+        <div class="icon" id="stateIcon"></div>
+        <h2 id="stateTitle"></h2>
+        <p id="stateText"></p>
+      </div>
+    </div>
+    <div class="foot">
+      Processed securely by Razorpay · Powered by Rilono<br>
+      <span style="display:inline-block;margin-top:4px">
+        <a href="/terms" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline">Terms</a> ·
+        <a href="/privacy" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline">Privacy</a> ·
+        <a href="/refund-policy" target="_blank" rel="noopener" style="color:var(--muted);text-decoration:underline">Refund Policy</a>
+      </span>
+    </div>
+  </div>
+
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script>
+    (function () {
+      var token = (location.pathname.split("/pay/")[1] || "").split(/[/?#]/)[0];
+      var $ = function (id) { return document.getElementById(id); };
+      var info = null;
+
+      function esc(s) {
+        return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+      }
+      function inr(paise) {
+        return "₹" + (Number(paise || 0) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      }
+      function showState(kind, icon, title, text) {
+        $("loading").classList.add("hidden");
+        $("payView").classList.add("hidden");
+        var v = $("stateView");
+        v.classList.remove("hidden"); v.className = "state " + kind;
+        $("stateIcon").textContent = icon;
+        $("stateTitle").textContent = title;
+        $("stateText").textContent = text;
+      }
+
+      function render() {
+        $("orgName").textContent = info.organization_name || "Your consultancy";
+        document.title = "Pay " + (info.organization_name || "") + " · Secure payment";
+        if (info.organization_logo_url) {
+          var img = document.createElement("img");
+          img.src = info.organization_logo_url; img.alt = "";
+          $("payHead").insertBefore(img, $("payHead").firstChild);
+        }
+        if (info.status === "cancelled") {
+          showState("err", "🚫", "Request cancelled",
+            "This payment request was cancelled by " + (info.organization_name || "the consultancy") + ". No payment is due.");
+          return;
+        }
+        if (["paid", "transferred", "settled", "refunded", "partially_refunded"].indexOf(info.status) !== -1) {
+          var extra = info.status.indexOf("refunded") !== -1 ? " A refund has been issued for this payment." : "";
+          showState("ok", "✅", "Already paid",
+            "This request of " + inr(info.amount_paise) + " has been paid." + extra + " You can close this page.");
+          return;
+        }
+        if (!info.payable) {
+          showState("err", "⏳", "Payments not available right now",
+            "This payment can't be collected online at the moment. Please contact " +
+            (info.organization_name || "your consultancy") + " directly.");
+          return;
+        }
+        $("payDesc").textContent = info.description || "Visa service payment";
+        $("payAmount").textContent = inr(info.amount_paise);
+        $("payInv").textContent = info.invoice_number || "";
+        if (info.due_date) {
+          $("payDue").textContent = "Due by " + new Date(info.due_date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+          $("payDue").classList.remove("hidden");
+        }
+        $("payNote").innerHTML =
+          "You are paying <b>" + esc(info.organization_name) + "</b> for their services. The full amount shown is what you'll be charged — " +
+          "it settles directly to " + esc(info.organization_name) + "'s bank account via Razorpay.";
+        $("loading").classList.add("hidden");
+        $("payView").classList.remove("hidden");
+      }
+
+      function openCheckout() {
+        if (!window.Razorpay) {
+          showState("err", "⚠️", "Couldn't load payment window",
+            "Your network may be blocking Razorpay. Please retry, or contact the consultancy.");
+          return;
+        }
+        var btn = $("payBtn");
+        btn.disabled = true; btn.textContent = "Opening secure checkout…";
+        var rzp = new Razorpay({
+          key: info.razorpay_key_id,
+          order_id: info.razorpay_order_id,
+          name: info.organization_name || "Payment",
+          description: info.description || "Visa service payment",
+          prefill: { email: info.payer_email || "", name: info.client_name || "" },
+          theme: { color: "#0f766e" },
+          modal: { ondismiss: function () { btn.disabled = false; btn.textContent = "Pay securely"; } },
+          handler: function (resp) {
+            btn.textContent = "Confirming payment…";
+            fetch("/api/enterprise/pay/" + encodeURIComponent(token) + "/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                razorpay_order_id: resp.razorpay_order_id,
+                razorpay_payment_id: resp.razorpay_payment_id,
+                razorpay_signature: resp.razorpay_signature,
+              }),
+            }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+              .then(function (out) {
+                if (out.ok) {
+                  showState("ok", "🎉", "Payment successful",
+                    "Thank you! " + inr(info.amount_paise) + " has been paid to " + (info.organization_name || "your consultancy") +
+                    ". A receipt will be available from your consultancy.");
+                } else {
+                  // Signature/capture pending — the webhook will still reconcile a captured payment.
+                  showState("ok", "🕐", "Payment received — confirming",
+                    (out.d && out.d.detail) || "Your payment is being confirmed. It will reflect automatically — you can close this page.");
+                }
+              })
+              .catch(function () {
+                showState("ok", "🕐", "Payment received — confirming",
+                  "Your payment is being confirmed. It will reflect automatically — you can close this page.");
+              });
+          },
+        });
+        rzp.on("payment.failed", function () {
+          btn.disabled = false; btn.textContent = "Pay securely";
+        });
+        rzp.open();
+        btn.disabled = false; btn.textContent = "Pay securely";
+      }
+
+      if (!token) {
+        showState("err", "🔗", "Invalid link", "This payment link is incomplete. Please use the exact link from your email.");
+        return;
+      }
+      fetch("/api/enterprise/pay/" + encodeURIComponent(token))
+        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (out) {
+          if (!out.ok) {
+            showState("err", "🔗", "Link not found",
+              (out.d && out.d.detail) || "This payment link is invalid or has been replaced by a newer one. Check your latest email.");
+            return;
+          }
+          info = out.d;
+          render();
+          var btn = $("payBtn");
+          if (btn) btn.onclick = openCheckout;
+        })
+        .catch(function () {
+          showState("err", "⚠️", "Something went wrong", "We couldn't load this payment request. Please retry in a moment.");
+        });
+    })();
+  </script>
+</body>
+</html>

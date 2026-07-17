@@ -134,7 +134,7 @@
       ]
     }
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20260712d">
+    <link rel="stylesheet" href="/static/styles.css?v=20260715a">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&display=swap" rel="stylesheet">
@@ -2353,8 +2353,9 @@
                         </div>
                     </div>
                     <h3>End-to-End Encryption</h3>
-                    <p>Your documents are encrypted on your device with a passphrase only you hold, so we only ever
-                        store ciphertext we can't read. AI reviews a document only when you ask.</p>
+                    <p>Your documents are encrypted on your device with a passphrase only you hold, so at rest we only
+                        ever store ciphertext we can't read. Each document is read once in memory for AI validation as
+                        you upload it, then discarded — never stored unencrypted.</p>
                 </div>
                 <div class="feature-card reveal reveal-delay-4">
                     <div class="feature-icon-wrapper">
@@ -3616,21 +3617,16 @@
                                                 </small>
                                             </div>
                                             <div class="form-group">
-                                                <label
-                                                    style="display: flex; width: 100%; box-sizing: border-box; align-items: flex-start; gap: 0.5rem; cursor: pointer; font-weight: 500;">
-                                                    <input type="checkbox" id="documentAiConsent"
-                                                        style="margin-top: 0.25rem; flex: 0 0 auto;">
-                                                    <span style="flex: 1 1 auto; min-width: 0;">
-                                                        Let Rilono AI validate this document
-                                                        <small
-                                                            style="color: var(--text-secondary); display: block; margin-top: 0.25rem; font-weight: 400;">
-                                                            Optional. If enabled, the document is read once in memory to
-                                                            check its type and extract details, then discarded — it's
-                                                            never stored unencrypted. Leave unchecked to store it
-                                                            end-to-end encrypted with no AI processing.
-                                                        </small>
+                                                <div
+                                                    style="display: flex; width: 100%; box-sizing: border-box; align-items: flex-start; gap: 0.55rem; padding: 0.7rem 0.85rem; background: rgba(99, 102, 241, 0.06); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 0.6rem;">
+                                                    <span style="flex: 0 0 auto; font-size: 1.05rem; line-height: 1.3;">🔎</span>
+                                                    <span style="flex: 1 1 auto; min-width: 0; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5;">
+                                                        <strong style="color: var(--text-primary);">Rilono AI validates every document.</strong>
+                                                        Your file is read once in memory to check its type and extract key
+                                                        details, then discarded — it's never stored unencrypted. The document
+                                                        itself is kept end-to-end encrypted.
                                                     </span>
-                                                </label>
+                                                </div>
                                             </div>
                                             <button type="submit" class="btn btn-primary" style="width: 100%;">Upload
                                                 Document</button>
@@ -4408,6 +4404,29 @@
                             usage counts, attachment tracking identifiers, request status, and AI cost metadata for
                             quotas, security, troubleshooting, and service reliability.</li>
                     </ul>
+
+                    <h3>2.5 Business Verification (KYC) and Payment Collection Data</h3>
+                    <p>When an enterprise organization enables Rilono Finance to collect payments from its clients, we
+                        process additional data:</p>
+                    <ul>
+                        <li><strong>Business KYC Details:</strong> Legal business name, business type, contact details,
+                            PAN, GSTIN (optional), IFSC code, and beneficiary name, which are shared with our payment
+                            processor (Razorpay) to verify the business and enable settlement. Tax identifiers are
+                            stored with encryption at rest.</li>
+                        <li><strong>Bank Account Number:</strong> The full account number is passed to Razorpay for
+                            settlement setup and is <em>not</em> stored by Rilono — we retain only the last 4 digits
+                            for display.</li>
+                        <li><strong>Payer (Client) Data:</strong> For each payment request we process the client's
+                            name, email address, amount, description, invoice reference, payment status, and the
+                            processor's payment and settlement references, in order to complete the payment on the
+                            organization's behalf and maintain financial records. Card, UPI, and banking credentials
+                            are collected by Razorpay directly — Rilono never sees them. Processor notifications may
+                            include limited contact details and masked payment-instrument metadata, retained for
+                            reconciliation, security, and audit purposes.</li>
+                        <li><strong>Attestation Records:</strong> We record the organization's eligibility attestations
+                            (with timestamp and IP address) as proof of the declarations made when connecting a bank
+                            account.</li>
+                    </ul>
                 </section>
 
                 <section>
@@ -4551,8 +4570,9 @@
                             storage. Documents you upload with end-to-end encryption are stored only as ciphertext.</li>
                         <li><strong>Google (Gemini / Vertex AI)</strong> (AI document validation and assistance) —
                             processes the content needed for AI features under the applicable Google service terms and
-                            data controls. End-to-end-encrypted document content is shared only when you enable AI
-                            processing for that document or explicitly enable encrypted-document context in Copilot.</li>
+                            data controls. When you upload a document it is read once, in memory, for AI validation and
+                            is not stored unencrypted; separately, your stored end-to-end-encrypted document content is
+                            shared with AI only when you enable encrypted-document context in Copilot.</li>
                         <li><strong>Razorpay</strong> (payments) — payment processing, primarily in India.</li>
                         <li><strong>Resend</strong> (transactional email) — email delivery.</li>
                     </ul>
@@ -4784,6 +4804,38 @@
                     <p>Rilono is a digital service. Visa Success Pass access, enterprise paid features, and Rilono
                         Credits are delivered electronically to your account after successful payment verification and
                         activation. No physical goods are shipped.</p>
+
+                    <h3>6.7 Payment Collection for Consultancies (Rilono Finance)</h3>
+                    <p>Rilono Finance lets enterprise organizations (consultancies and agencies) collect payments from
+                        their own clients through secure payment links. These payments are transactions between the
+                        paying client and the organization for the organization's services — Rilono is not a party to
+                        that underlying contract. Payments are processed by Razorpay, an RBI-authorised payment
+                        aggregator; funds are collected and settled by Razorpay directly to the organization's verified
+                        bank account. Rilono never holds or takes custody of these funds.</p>
+                    <ul>
+                        <li><strong>Platform Fee:</strong> Rilono deducts a platform fee from each collected payment —
+                            a percentage with a minimum amount, as displayed in the Finance dashboard at the time the
+                            payment request is created. The paying client is charged only the face amount of the
+                            request. The fee is exclusive of the payment processor's own charges and applicable
+                            taxes.</li>
+                        <li><strong>Onboarding &amp; KYC:</strong> To activate collection, the organization must
+                            provide accurate business and settlement details, which are shared with Razorpay for
+                            verification (KYC). By connecting a bank account, the organization confirms that its
+                            details are accurate, that it directly provides the services being paid for, and
+                            authorises Rilono to accept Razorpay's linked-account terms on its behalf.</li>
+                        <li><strong>Organization Responsibilities:</strong> The organization is solely responsible for
+                            delivering the underlying services, for the accuracy and lawfulness of its payment
+                            requests, for its own taxes, GST, and invoicing to the payer, for honouring its refund
+                            commitments, and for any chargebacks or disputes raised on payments collected on its
+                            behalf. Amounts refunded, reversed, or charged back may be recovered from the
+                            organization's settlements or linked account through the payment processor.</li>
+                        <li><strong>Refunds of Collected Payments:</strong> Refunds are decided and initiated by the
+                            organization and are returned to the payer's original payment method. Where a full refund
+                            is processed, the payer receives back the entire amount paid.</li>
+                        <li><strong>Suspension:</strong> Rilono may suspend or disable payment collection for an
+                            organization at any time in cases of suspected fraud, misuse, ineligibility, payment
+                            processor requirements, or breach of these Terms.</li>
+                    </ul>
                 </section>
 
                 <section>
@@ -4815,8 +4867,9 @@
                     <h3>7.4 Data Handling for AI Responses</h3>
                     <p>To provide personalized results, Rilono may process relevant profile, journey, chat,
                         user-selected document, and user-triggered inspected-page context with third-party AI services,
-                        including Google Gemini / Vertex AI. End-to-end-encrypted document text is included only after
-                        the user enables the applicable document-processing or Copilot session control. Rilono does not
+                        including Google Gemini / Vertex AI. Documents are read once, in memory, for AI validation when
+                        you upload them; stored end-to-end-encrypted document text is additionally included only after
+                        the user enables the applicable Copilot session control. Rilono does not
                         use personal data or document content to train Rilono-owned AI models or for unrelated purposes.</p>
                 </section>
 
@@ -4975,14 +5028,24 @@
                 </section>
 
                 <section>
-                    <h2>5. Billing Errors</h2>
+                    <h2>5. Payments Made to Consultancies (Rilono Finance)</h2>
+                    <p>Payments made through a Rilono payment link are payments to the consultancy or agency named on
+                        the payment page for its services — not to Rilono. Refunds for such payments are decided and
+                        initiated by that organization under its own refund policy; when a full refund is processed,
+                        the entire amount is returned to your original payment method. Please contact the organization
+                        first with any refund request. If you cannot reach them, contact us at contact@rilono.com and
+                        we will help route your request to the right place.</p>
+                </section>
+
+                <section>
+                    <h2>6. Billing Errors</h2>
                     <p>Contact support within 7 days after discovering a billing error and include the payment reference.
                         We will investigate and correct verified errors. This notice period does not limit rights that
                         cannot be waived under applicable law.</p>
                 </section>
 
                 <section>
-                    <h2>6. Contact</h2>
+                    <h2>7. Contact</h2>
                     <p>For billing questions, contact us at:</p>
                     <p>
                         <strong>Email:</strong> contact@rilono.com<br>
@@ -5567,6 +5630,7 @@
                     </div>
                 </div>
                 <p id="documentUploadProgressText" class="document-upload-progress-text">Encrypting document...</p>
+                <div class="doc-upload-trust">🔒 Encrypted on your device · read once by AI, never stored</div>
             </div>
         </div>
 
@@ -5703,7 +5767,7 @@
         <script src="/static/attribution.js"></script>
         <script src="/static/e2e_crypto.js"></script>
         <script src="/static/uk-maintenance-calc.js?v=20260712b"></script>
-        <script src="/static/app.js?v=20260714a"></script>
+        <script src="/static/app.js?v=20260715a"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');

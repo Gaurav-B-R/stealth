@@ -25,9 +25,9 @@ const PUBLIC_APP_ORIGIN = 'https://rilono.com';
 const RILONO_AI_PUBLIC_ERROR_MESSAGE = 'Sorry, I encountered an issue while responding. Please try again in a little while. This issue has been raised for review.';
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
-    privacy: 'July 10, 2026',
-    terms: 'July 10, 2026',
-    refund: 'July 10, 2026',
+    privacy: 'July 16, 2026',
+    terms: 'July 16, 2026',
+    refund: 'July 16, 2026',
     delivery: 'July 10, 2026',
     dpa: 'June 20, 2026'
 };
@@ -2120,7 +2120,13 @@ function updateNotificationBadge() {
         }
     }
     if (dashDot) {
-        dashDot.style.display = unreadCount > 0 ? 'block' : 'none';
+        if (unreadCount > 0) {
+            dashDot.textContent = unreadCount > 99 ? '99+' : unreadCount;
+            dashDot.style.display = 'flex';
+        } else {
+            dashDot.textContent = '';
+            dashDot.style.display = 'none';
+        }
     }
 }
 
@@ -2290,7 +2296,7 @@ async function markNotificationRead(id) {
 }
 
 async function clearAllNotifications() {
-    if (confirm('Clear all notifications?')) {
+    if (await confirmDialog('This will clear all your notifications.', { title: 'Clear all notifications?', okText: 'Clear all' })) {
         const previousNotifications = [...notifications];
         notifications = [];
         saveNotifications();
@@ -3060,7 +3066,7 @@ async function handleUniversityChangeVerification(skipURLUpdate = false) {
 
 async function resendVerificationEmail(email = null) {
     if (!email) {
-        email = prompt('Please enter your email address:');
+        email = await promptDialog('Please enter your email address:', { title: 'Your email address', type: 'email', placeholder: 'you@example.com', okText: 'Continue' });
         if (!email) return;
     }
 
@@ -3676,7 +3682,7 @@ function downloadSopDraft() {
 async function deleteSopDraft() {
     const active = _sopData.drafts.find((d) => d.root_id === _sopData.activeRoot);
     if (!active) return;
-    if (!confirm(`Delete the ${active.doc_name} for ${active.university} (all versions)?`)) return;
+    if (!(await confirmDialog(`Delete the ${active.doc_name} for ${active.university} — all versions? This cannot be undone.`, { title: 'Delete SOP draft?', okText: 'Delete' }))) return;
     try {
         const r = await fetch(`${API_BASE}/api/sop/drafts/${active.root_id}`, {
             method: 'DELETE', credentials: 'include', headers: sopAuthHeaders(),
@@ -3902,7 +3908,7 @@ async function setShortlistStatus(id, statusVal) {
 }
 
 async function deleteShortlistUniversity(id) {
-    if (!confirm('Remove this university from your shortlist?')) return;
+    if (!(await confirmDialog('This university will be removed from your shortlist.', { title: 'Remove university?', okText: 'Remove' }))) return;
     try {
         await shortlistFetch(`/${id}`, { method: 'DELETE' });
         await loadUniversityShortlist();
@@ -4803,8 +4809,9 @@ async function cancelLegacyRecurringSubscription() {
         return;
     }
 
-    const confirmed = window.confirm(
-        'Cancel legacy auto-renew? You will not be charged for another cycle, and access will continue through the current paid period.'
+    const confirmed = await confirmDialog(
+        'You will not be charged for another cycle, and access will continue through the current paid period.',
+        { title: 'Cancel legacy auto-renew?', okText: 'Yes, cancel auto-renew', cancelText: 'Keep it', danger: false }
     );
     if (!confirmed) return;
 
@@ -7620,6 +7627,95 @@ function showInterviewDocWarningModal(gaps) {
     });
 }
 
+// In-app styled confirm/prompt dialogs — replace the native window.confirm/alert/prompt
+// browser popups (which show an ugly "<host> says" chrome) with on-brand modals.
+// confirmDialog(message, opts) -> Promise<boolean>;  promptDialog(message, opts) -> Promise<string|null>.
+function confirmDialog(message, opts) {
+    opts = opts || {};
+    const title = opts.title || 'Please confirm';
+    const okText = opts.okText || 'Confirm';
+    const cancelText = opts.cancelText || 'Cancel';
+    const danger = opts.danger !== false; // default to destructive styling (most uses are deletes)
+    const okBg = danger ? 'linear-gradient(135deg,#ef4444,#dc2626)' : 'linear-gradient(135deg,#6366f1,#a855f7)';
+    return new Promise((resolve) => {
+        const existing = document.getElementById('appConfirmOverlay');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'appConfirmOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:100010;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit;';
+        overlay.innerHTML =
+            '<div role="dialog" aria-modal="true" style="max-width:440px;width:100%;background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(2,6,23,0.4);overflow:hidden;">' +
+                '<div style="padding:22px 24px 16px;">' +
+                    '<div style="font-size:18px;font-weight:800;color:#0f172a;">' + escapeHtml(title) + '</div>' +
+                    '<p style="margin:10px 0 0;color:#475569;font-size:14.5px;line-height:1.6;">' + escapeHtml(message).replace(/\n/g, '<br>') + '</p>' +
+                '</div>' +
+                '<div style="display:flex;gap:10px;justify-content:flex-end;padding:14px 24px 20px;">' +
+                    '<button id="appCfmCancel" style="padding:10px 18px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;font-weight:600;cursor:pointer;">' + escapeHtml(cancelText) + '</button>' +
+                    '<button id="appCfmOk" style="padding:10px 18px;border-radius:10px;border:none;background:' + okBg + ';color:#fff;font-weight:700;cursor:pointer;">' + escapeHtml(okText) + '</button>' +
+                '</div>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        let settled = false;
+        const done = (val) => {
+            if (settled) return; settled = true;
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+            resolve(val);
+        };
+        function onKey(e) {
+            if (e.key === 'Escape') { e.stopPropagation(); done(false); }
+            else if (e.key === 'Enter') { e.preventDefault(); done(true); }
+        }
+        overlay.querySelector('#appCfmOk').onclick = () => done(true);
+        overlay.querySelector('#appCfmCancel').onclick = () => done(false);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+        document.addEventListener('keydown', onKey, true);
+        const ok = overlay.querySelector('#appCfmOk'); if (ok) ok.focus();
+    });
+}
+
+function promptDialog(message, opts) {
+    opts = opts || {};
+    const title = opts.title || 'Enter a value';
+    const okText = opts.okText || 'OK';
+    const placeholder = opts.placeholder || '';
+    const value = opts.value || '';
+    const inputType = opts.type || 'text';
+    return new Promise((resolve) => {
+        const existing = document.getElementById('appPromptOverlay');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'appPromptOverlay';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:100010;background:rgba(15,23,42,0.55);display:flex;align-items:center;justify-content:center;padding:20px;font-family:inherit;';
+        overlay.innerHTML =
+            '<div role="dialog" aria-modal="true" style="max-width:440px;width:100%;background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(2,6,23,0.4);overflow:hidden;">' +
+                '<form id="appPromptForm"><div style="padding:22px 24px 8px;">' +
+                    '<div style="font-size:18px;font-weight:800;color:#0f172a;">' + escapeHtml(title) + '</div>' +
+                    '<p style="margin:10px 0 12px;color:#475569;font-size:14.5px;line-height:1.6;">' + escapeHtml(message) + '</p>' +
+                    '<input id="appPromptInput" type="' + escapeHtml(inputType) + '" placeholder="' + escapeHtml(placeholder) + '" value="' + escapeHtml(value) + '" style="width:100%;box-sizing:border-box;padding:11px 13px;border:1px solid #e2e8f0;border-radius:10px;font-size:14.5px;color:#0f172a;outline:none;">' +
+                '</div>' +
+                '<div style="display:flex;gap:10px;justify-content:flex-end;padding:14px 24px 20px;">' +
+                    '<button type="button" id="appPromptCancel" style="padding:10px 18px;border-radius:10px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;font-weight:600;cursor:pointer;">Cancel</button>' +
+                    '<button type="submit" id="appPromptOk" style="padding:10px 18px;border-radius:10px;border:none;background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;font-weight:700;cursor:pointer;">' + escapeHtml(okText) + '</button>' +
+                '</div></form>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        let settled = false;
+        const done = (val) => {
+            if (settled) return; settled = true;
+            document.removeEventListener('keydown', onKey, true);
+            overlay.remove();
+            resolve(val);
+        };
+        function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); done(null); } }
+        overlay.querySelector('#appPromptForm').onsubmit = (e) => { e.preventDefault(); done(overlay.querySelector('#appPromptInput').value); };
+        overlay.querySelector('#appPromptCancel').onclick = () => done(null);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) done(null); });
+        document.addEventListener('keydown', onKey, true);
+        const inp = overlay.querySelector('#appPromptInput'); if (inp) inp.focus();
+    });
+}
+
 // Returns true if the interview may proceed. Fail-open: a fetch/parse problem never blocks
 // the student (they've paid/queued a session) — the warning is a courtesy, not a hard gate.
 async function ensureInterviewDocumentsOrConfirm() {
@@ -8453,7 +8549,7 @@ async function updateAdminUserStatus(userId, nextIsActive) {
 
 async function deleteAdminUser(userId, userEmail = 'this user') {
     if (!authToken || !hasAdminConsoleAccess()) return;
-    if (!confirm(`Delete ${userEmail} permanently? This cannot be undone.`)) {
+    if (!(await confirmDialog(`${userEmail} will be permanently deleted. This cannot be undone.`, { title: 'Delete user?', okText: 'Delete' }))) {
         return;
     }
 
@@ -10577,7 +10673,7 @@ async function markAsSold(itemId) {
 
 async function deleteItem(itemId) {
     if (!authToken) return;
-    if (!confirm('Are you sure you want to delete this item?')) return;
+    if (!(await confirmDialog('This item will be permanently deleted.', { title: 'Delete item?', okText: 'Delete' }))) return;
 
     try {
         const response = await fetch(`${API_BASE}/api/items/${itemId}`, {
@@ -10765,13 +10861,7 @@ async function handleDeleteConversation() {
         return;
     }
 
-    // First confirmation
-    if (!confirm('Are you sure you want to delete this conversation? This action cannot be undone.')) {
-        return;
-    }
-
-    // Second confirmation
-    if (!confirm('This will permanently delete all messages in this conversation. Are you absolutely sure?')) {
+    if (!(await confirmDialog('This will permanently delete all messages in this conversation. This cannot be undone.', { title: 'Delete conversation?', okText: 'Delete' }))) {
         return;
     }
 
@@ -12656,7 +12746,7 @@ async function checkPendingUniversityChange() {
 async function cancelUniversityChange() {
     if (!authToken) return;
 
-    if (!confirm('Are you sure you want to cancel the university change request?')) {
+    if (!(await confirmDialog('Your pending university change request will be cancelled.', { title: 'Cancel university change?', okText: 'Cancel request', cancelText: 'Keep it' }))) {
         return;
     }
 
@@ -13084,8 +13174,6 @@ async function handleDocumentUpload(e) {
     const country = document.getElementById('documentationCountry').value;
     const intake = document.getElementById('documentationIntake').value;
     const year = document.getElementById('documentationYear').value ? parseInt(document.getElementById('documentationYear').value) : null;
-    const aiConsentEl = document.getElementById('documentAiConsent');
-    const aiConsent = !!(aiConsentEl && aiConsentEl.checked);
 
     if (!fileInput.files || fileInput.files.length === 0) {
         showMessage('Please select a file to upload', 'error');
@@ -13131,29 +13219,30 @@ async function handleDocumentUpload(e) {
     }
     if (!master) return; // user cancelled the passphrase prompt
 
-    // Optional, consent-based AI validation. The plaintext is sent ONCE, in memory, only when
-    // the user opted in; the server runs Gemini and returns the result WITHOUT storing it.
+    // Rilono AI validation runs on EVERY upload — scanning the document is the core of the
+    // product, so it is not optional. The plaintext is sent ONCE, in memory; the server runs
+    // Gemini and returns the result WITHOUT storing it, then the file is stored end-to-end
+    // encrypted. If validation can't complete (e.g. the AI service is briefly unavailable) the
+    // document is still stored encrypted and left pending review rather than blocking the upload.
     let aiValidation = null;
-    if (aiConsent) {
-        try {
-            setDocumentUploadLoading(true, 'Rilono AI is validating (read once, never stored)...', file);
-            const vfd = new FormData();
-            vfd.append('file', file);
-            vfd.append('document_type', documentType);
-            vfd.append('consent', 'true');
-            const vres = await fetch(`${API_BASE}/api/documents/ai-validate`, {
-                method: 'POST', headers: { 'Authorization': `Bearer ${authToken}` }, body: vfd
-            });
-            if (vres.ok) {
-                aiValidation = await vres.json();
-            } else {
-                const ev = await vres.json().catch(() => ({}));
-                showMessage((ev.detail || 'AI validation could not be completed') + ' — storing encrypted without it.', 'error');
-            }
-        } catch (err) {
-            console.error('AI validate error:', err);
-            showMessage('AI validation failed — storing the document encrypted without it.', 'error');
+    try {
+        setDocumentUploadLoading(true, 'Rilono AI is validating (read once, never stored)...', file);
+        const vfd = new FormData();
+        vfd.append('file', file);
+        vfd.append('document_type', documentType);
+        vfd.append('consent', 'true');
+        const vres = await fetch(`${API_BASE}/api/documents/ai-validate`, {
+            method: 'POST', headers: { 'Authorization': `Bearer ${authToken}` }, body: vfd
+        });
+        if (vres.ok) {
+            aiValidation = await vres.json();
+        } else {
+            const ev = await vres.json().catch(() => ({}));
+            showMessage((ev.detail || 'AI validation could not be completed') + ' — storing encrypted, review will be pending.', 'error');
         }
+    } catch (err) {
+        console.error('AI validate error:', err);
+        showMessage('AI validation didn\'t complete — storing the document encrypted, review pending.', 'error');
     }
 
     try {
@@ -13209,12 +13298,12 @@ async function handleDocumentUpload(e) {
                 showMessage(aiValidation.is_valid ? 'Validated and stored end-to-end encrypted.' : 'Stored encrypted — AI flagged the document, see notifications.', aiValidation.is_valid ? 'success' : 'error');
             } else {
                 addNotification(
-                    'Document encrypted & stored',
-                    `File: ${documentName}${docTypeText}\n\nEncrypted on your device — our servers only ever hold ciphertext. Tick "Let Rilono AI validate" next time if you'd like AI to check it.`,
+                    'Document stored — validation pending',
+                    `File: ${documentName}${docTypeText}\n\nEncrypted on your device — our servers only ever hold ciphertext. Rilono AI couldn't validate it just now; re-upload if it stays pending.`,
                     'success',
                     null
                 );
-                showMessage('Document encrypted on your device and stored securely.', 'success');
+                showMessage('Document stored encrypted. AI validation didn\'t complete — please try again.', 'success');
             }
 
             markE2EChatContextDirty();
@@ -13752,7 +13841,7 @@ async function downloadEncryptedDocument(documentId) {
         return;
     }
 
-    const password = prompt('Enter your password to decrypt and download this document:');
+    const password = await promptDialog('Enter your password to decrypt and download this document.', { title: 'Decrypt document', type: 'password', placeholder: 'Your account password', okText: 'Decrypt & download' });
     if (!password) {
         return; // User cancelled
     }
@@ -14069,7 +14158,7 @@ async function deleteDocument(documentId, filename) {
     }
 
     // Confirm deletion
-    const confirmed = confirm(`Are you sure you want to delete "${filename}"?\n\nThis action cannot be undone. The file will be permanently deleted from R2 storage.`);
+    const confirmed = await confirmDialog(`"${filename}" will be permanently deleted from storage. This cannot be undone.`, { title: 'Delete document?', okText: 'Delete' });
     if (!confirmed) {
         return; // User cancelled
     }

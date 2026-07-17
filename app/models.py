@@ -160,6 +160,10 @@ class EnterpriseOrganization(Base):
     company_name = Column(String, nullable=False, index=True)
     subdomain_slug = Column(String, unique=True, index=True, nullable=True)
     logo_url = Column(String, nullable=True)
+    # Company location (the org's own records) — also drives the portal's DISPLAY currency
+    # (billing itself stays in INR; see _org_display_currency in routers/enterprise.py).
+    country_code = Column(String, nullable=True)   # ISO-3166 alpha-2, e.g. "US"
+    state_region = Column(String, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     # Proof the organization accepted the Data Processing Agreement (controller↔processor
     # terms for handling its clients' personal data). Captured at signup.
@@ -282,6 +286,13 @@ class EnterpriseClient(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    # Money records are RETAINED (not deleted) when a client is removed: default cascade
+    # only, no delete-orphan and no passive_deletes, so SQLAlchemy nulls client_id via
+    # UPDATE rather than deleting the financial rows (see EnterpriseStudentPayment).
+    student_payments = relationship(
+        "EnterpriseStudentPayment",
+        back_populates="client",
+    )
 
     __table_args__ = (
         Index("ix_ent_clients_org_status", "organization_id", "status"),
@@ -342,6 +353,14 @@ class EnterpriseClientDocument(Base):
     # and only re-run when the document's text actually changes.
     deep_scan_facts = Column(Text, nullable=True)
     deep_scan_facts_hash = Column(String, nullable=True)
+    # Per-document AI validation, populated by the background worker right after upload.
+    # validation_status: "valid" | "invalid" (AI red-flagged: bad/expired doc OR a material
+    # conflict with the client profile/other docs — never auto-filled) | "error" | NULL (= still scanning).
+    # extracted_fields: JSON — {fields, autofill:{filled,conflicts}, cross_validation_flags}.
+    validation_status = Column(String, nullable=True, index=True)
+    validation_message = Column(Text, nullable=True)
+    extracted_fields = Column(Text, nullable=True)
+    validated_at = Column(DateTime(timezone=True), nullable=True)
     uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     uploaded_by_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
@@ -753,6 +772,207 @@ class EnterpriseCoupon(Base):
     __table_args__ = (
         Index("uq_enterprise_coupon_org_code", "organization_id", "code", unique=True),
     )
+
+
+class EnterpriseLinkedAccount(Base):
+    """A consultancy's Razorpay Route "Linked Account" (sub-merchant).
+
+    This is the compliant marketplace primitive: student payments are collected into
+    *Razorpay's* PA escrow (never a Rilono bank account) and settled by Razorpay directly
+    to this linked account's own verified bank. Rilono only issues split instructions and
+    keeps a commission — it never takes custody of the consultancy's funds. One linked
+    account per organization. We store only the Razorpay ids + display-safe fields; full
+    bank numbers and stakeholder KYC live with Razorpay, not here.
+    """
+    __tablename__ = "enterprise_linked_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, unique=True, index=True)
+
+    # Razorpay Route ids (v2 Accounts API).
+    razorpay_account_id = Column(String, nullable=True, unique=True, index=True)      # acc_...
+    razorpay_product_id = Column(String, nullable=True)                              # acc_prd_... (route config)
+    razorpay_stakeholder_id = Column(String, nullable=True)                          # sth_...
+
+    # Business identity (sent to Razorpay for KYC; PAN encrypted at rest).
+    legal_business_name = Column(String, nullable=True)
+    business_type = Column(String, nullable=True)   # proprietorship|partnership|llp|private_limited|...
+    contact_name = Column(String, nullable=True)
+    contact_email = Column(String, nullable=True)
+    contact_phone = Column(String, nullable=True)
+    business_pan = Column(EncryptedString, nullable=True)
+    # GSTIN embeds the PAN (chars 3-12), so it gets the same at-rest encryption.
+    gst_number = Column(EncryptedString, nullable=True)
+
+    # Settlement bank — display only. The full account number is NOT stored (Razorpay is
+    # the record); we keep last4 + IFSC + beneficiary for the UI and reconciliation.
+    bank_account_last4 = Column(String, nullable=True)
+    bank_ifsc = Column(String, nullable=True)
+    beneficiary_name = Column(String, nullable=True)
+
+    # Route onboarding/activation state machine (mirrors Razorpay account/product status).
+    activation_status = Column(String, nullable=False, default="not_started", index=True)
+    # not_started|created|stakeholder_added|product_requested|settlement_submitted|
+    # under_review|needs_clarification|activated|suspended
+    requirements_json = Column(Text, nullable=True)   # last requirements[] for remediation UI
+    is_payable = Column(Boolean, nullable=False, default=False)  # derived: activated + bank verified
+
+    # Eligibility attestation (RBI/Route: split payee must itself deliver the service to the
+    # student and meet the turnover threshold). Captured with timestamp + IP as proof.
+    attested_service_delivery = Column(Boolean, nullable=False, default=False)
+    attested_turnover_ok = Column(Boolean, nullable=False, default=False)
+    attested_at = Column(DateTime(timezone=True), nullable=True)
+    attested_ip = Column(String, nullable=True)
+    # Which version of the attestation wording was agreed to (FINANCE_ATTESTATION_VERSION
+    # in app/legal.py) — proof survives future copy changes.
+    attested_version = Column(String, nullable=True)
+
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterpriseStudentPayment(Base):
+    """A payment request / invoice a consultancy raises against one of its students.
+
+    Collected via Razorpay Route: an order is created on Rilono's platform account with an
+    inline transfer that splits the money — the consultancy's `payout_paise` goes to their
+    linked account, and Rilono's `commission_paise` is retained. Reconciliation is driven by
+    webhooks (see EnterprisePaymentEvent), not the browser callback. Money is stored in
+    integer paise (INR only for now).
+
+    `client_id` is nullable and nulls out on client delete (NOT cascade) so the financial
+    record is retained even if the student is removed — `client_name_snapshot` preserves who
+    it was for (mirrors SubscriptionPayment retention).
+    """
+    __tablename__ = "enterprise_student_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="SET NULL"), nullable=True, index=True)
+    client_name_snapshot = Column(String, nullable=True)   # denormalized for retention
+    linked_account_id = Column(Integer, ForeignKey("enterprise_linked_accounts.id"), nullable=True, index=True)
+
+    invoice_number = Column(String, nullable=True, index=True)
+    description = Column(String, nullable=True)
+
+    amount_paise = Column(Integer, nullable=False)          # total the student pays
+    commission_paise = Column(Integer, nullable=False, default=0)  # Rilono's gross take (retained)
+    payout_paise = Column(Integer, nullable=False, default=0)      # to consultancy = amount - commission
+    currency = Column(String, nullable=False, default="INR")
+    provider = Column(String, nullable=False, default="razorpay")
+
+    razorpay_order_id = Column(String, nullable=True, unique=True, index=True)
+    razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
+    razorpay_transfer_id = Column(String, nullable=True, unique=True, index=True)  # trf_...
+
+    status = Column(String, nullable=False, default="created", index=True)
+    # created|paid|transferred|on_hold|settled|failed|refunded|partially_refunded|cancelled
+    settlement_status = Column(String, nullable=True)       # pending|on_hold|settled (from Route)
+    on_hold = Column(Boolean, nullable=False, default=False)
+    on_hold_until = Column(DateTime(timezone=True), nullable=True)
+    utr = Column(String, nullable=True)                     # bank UTR for reconciliation
+    refunded_amount_paise = Column(Integer, nullable=False, default=0)
+
+    due_date = Column(Date, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    settled_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Secure pay-link sent to the student by email (raw token never stored — only its
+    # hash, mirroring EnterpriseInterviewInvite.token_hash). The public /pay/<token>
+    # page resolves the request through this hash.
+    pay_token_hash = Column(String, nullable=True, unique=True, index=True)
+    payer_email_snapshot = Column(String, nullable=True)   # where the link was sent
+    email_sent_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    # Chargeback/dispute state from payment.dispute.* webhooks:
+    # None|open|under_review|action_required|won|lost|closed
+    dispute_status = Column(String, nullable=True, index=True)
+    disputed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Retention: null the FK on client delete (no cascade, no passive_deletes) so SQLAlchemy
+    # issues UPDATE ... SET client_id=NULL rather than deleting these money rows.
+    client = relationship("EnterpriseClient", back_populates="student_payments")
+
+    __table_args__ = (
+        Index("ix_ent_student_pay_org_created", "organization_id", "created_at"),
+        Index("ix_ent_student_pay_org_status", "organization_id", "status"),
+    )
+
+
+class EnterprisePaymentEvent(Base):
+    """Append-only reconciliation ledger for Route webhook events.
+
+    Doubles as the idempotency guard: a real UNIQUE constraint on `razorpay_event_id`
+    (the `x-razorpay-event-id` header) makes at-least-once webhook delivery safe, and
+    upserts keyed on the entity id tolerate out-of-order events.
+    """
+    __tablename__ = "enterprise_payment_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=True, index=True)
+    student_payment_id = Column(Integer, ForeignKey("enterprise_student_payments.id"), nullable=True, index=True)
+    razorpay_event_id = Column(String, nullable=True, unique=True, index=True)  # dedupe key
+    event_type = Column(String, nullable=True, index=True)   # payment.captured|transfer.processed|...
+    entity_type = Column(String, nullable=True)              # payment|transfer|settlement|refund
+    entity_id = Column(String, nullable=True, index=True)    # pay_/trf_/setl_/rfnd_
+    amount_paise = Column(Integer, nullable=True)
+    payload_json = Column(Text, nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_ent_pay_evt_org_created", "organization_id", "created_at"),
+    )
+
+
+class EnterprisePaymentDispute(Base):
+    """Audit ledger for chargebacks/disputes raised against a student payment
+    (payment.dispute.* webhooks). Liability for disputed amounts rests with the
+    organization (Terms §6.7 Payment Collection); this table tracks the lifecycle so
+    staff can respond before the evidence deadline."""
+    __tablename__ = "enterprise_payment_disputes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=True, index=True)
+    student_payment_id = Column(Integer, ForeignKey("enterprise_student_payments.id"), nullable=True, index=True)
+    razorpay_dispute_id = Column(String, nullable=True, unique=True, index=True)
+    razorpay_payment_id = Column(String, nullable=True, index=True)
+    amount_paise = Column(Integer, nullable=False, default=0)
+    currency = Column(String, nullable=False, default="INR")
+    phase = Column(String, nullable=True)          # e.g. chargeback|retrieval|fraud|pre_arbitration
+    status = Column(String, nullable=False, default="open")  # open|under_review|action_required|won|lost|closed
+    reason_code = Column(String, nullable=True)
+    respond_by = Column(DateTime(timezone=True), nullable=True)   # evidence deadline from Razorpay
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterprisePaymentRefund(Base):
+    """Audit record of a refund/reversal issued against a student payment (mirrors
+    EnterpriseRefund). Refunds always return to the student's original instrument; a
+    transfer reversal claws back the consultancy's share where still possible."""
+    __tablename__ = "enterprise_payment_refunds"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    student_payment_id = Column(Integer, ForeignKey("enterprise_student_payments.id"), nullable=True, index=True)
+    kind = Column(String, nullable=False, default="money")
+    amount_paise = Column(Integer, nullable=False, default=0)
+    currency = Column(String, nullable=False, default="INR")
+    provider = Column(String, nullable=False, default="razorpay")
+    razorpay_refund_id = Column(String, nullable=True, unique=True, index=True)
+    razorpay_reversal_id = Column(String, nullable=True, index=True)
+    reverse_all = Column(Boolean, nullable=False, default=False)
+    status = Column(String, nullable=False, default="created")
+    reason = Column(Text, nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
 
 class CompanyFinanceEntry(Base):

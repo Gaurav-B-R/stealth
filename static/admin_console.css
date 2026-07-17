@@ -1298,6 +1298,107 @@ body.admin-modal-open {
     font-weight: 600;
 }
 
+/* --- Investment Analytics: ledger CRUD --- */
+.table-btn.primary {
+    background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+    border-color: transparent;
+    color: #ffffff;
+}
+
+.table-btn.primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 8px 20px rgba(99, 102, 241, 0.28);
+}
+
+.finance-ledger-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin: 1.6rem 0 0.4rem;
+}
+
+.finance-ledger-head h3 {
+    margin: 0;
+    font-size: 1.05rem;
+}
+
+.finance-ledger-head p {
+    margin: 0.15rem 0 0;
+    font-size: 0.82rem;
+    color: var(--muted, #64748b);
+}
+
+.finance-entry-form {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 1.1rem 1.2rem;
+    background: #f8fafc;
+    margin-bottom: 1rem;
+}
+
+.finance-form-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.8rem;
+}
+
+.finance-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.finance-field > span {
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--ink);
+}
+
+.finance-field-wide {
+    grid-column: 1 / -1;
+}
+
+.finance-field input,
+.finance-field select {
+    min-height: 2.4rem;
+    padding: 0 0.7rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    color: var(--ink);
+    font-size: 0.9rem;
+}
+
+.finance-field input:focus,
+.finance-field select:focus {
+    outline: none;
+    border-color: var(--brand-a);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.finance-form-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin-top: 1rem;
+}
+
+.finance-actions {
+    white-space: nowrap;
+}
+
+.finance-actions .table-btn {
+    margin-right: 0.3rem;
+}
+
+@media (max-width: 720px) {
+    .finance-form-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
 .coupon-list-wrap {
     border: 1px solid var(--line);
     border-radius: 12px;

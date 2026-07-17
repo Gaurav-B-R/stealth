@@ -705,6 +705,158 @@ def company_finance_analytics_admin(
     }
 
 
+# --- Company finance entries: admin CRUD (the DB is the source of truth) ---
+# Entries live in company_finance_entries; the code seed only bootstraps a fresh DB once
+# (see schema_patch), so anything created/edited/deleted here persists across deploys.
+
+def _finance_parse_date(value) -> date:
+    if isinstance(value, date):
+        return value
+    try:
+        return datetime.strptime(str(value).strip()[:10], "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Enter a valid date (YYYY-MM-DD).")
+
+
+def _finance_signed_amount(entry_type: str | None, amount) -> tuple[str, Decimal]:
+    """Return (normalized entry_type, signed amount). Expense = negative, return = positive."""
+    try:
+        magnitude = Decimal(str(amount)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Enter a valid amount.")
+    if magnitude <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0.")
+    if magnitude > Decimal("100000000"):
+        raise HTTPException(status_code=400, detail="Amount is too large.")
+    kind = (entry_type or "expense").strip().lower()
+    if kind not in {"expense", "return"}:
+        raise HTTPException(status_code=400, detail="Type must be 'expense' or 'return'.")
+    return kind, (magnitude if kind == "return" else -magnitude)
+
+
+def _serialize_finance_entry(entry: models.CompanyFinanceEntry) -> dict:
+    amount = _money_decimal(entry.amount_usd)
+    return {
+        "id": entry.id,
+        "ledger_id": f"finance-{entry.id}",
+        "entry_type": entry.entry_type,
+        "kind": "Return" if amount >= 0 else "Investment",
+        "category": entry.category,
+        "vendor": entry.vendor,
+        "paid_by": entry.paid_by,
+        "description": entry.description,
+        "amount_usd": _money_float(amount),
+        "occurred_on": _coerce_date(entry.occurred_on).isoformat(),
+        "source": entry.source or "manual",
+    }
+
+
+@router.post("/company-finance/entries")
+def create_company_finance_entry_admin(
+    request: Request,
+    payload: schemas.AdminCompanyFinanceEntryCreateRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Add a company investment/return entry (stored in the DB with source='manual')."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.company_finance.create",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    category = (payload.category or "").strip()
+    vendor = (payload.vendor or "").strip()
+    if not vendor or not category:
+        raise HTTPException(status_code=400, detail="Vendor and category are required.")
+    paid_by = (payload.paid_by or "Gaurav").strip() or "Gaurav"
+    occurred_on = _finance_parse_date(payload.occurred_on)
+    entry_type, signed_amount = _finance_signed_amount(payload.entry_type, payload.amount_usd)
+
+    row = models.CompanyFinanceEntry(
+        seed_key=None,
+        entry_type=entry_type,
+        category=category,
+        vendor=vendor,
+        description=((payload.description or "").strip() or None),
+        amount_usd=signed_amount,
+        occurred_on=occurred_on,
+        paid_by=paid_by,
+        source="manual",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"entry": _serialize_finance_entry(row)}
+
+
+@router.patch("/company-finance/entries/{entry_id}")
+def update_company_finance_entry_admin(
+    entry_id: int,
+    request: Request,
+    payload: schemas.AdminCompanyFinanceEntryUpdateRequest,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Edit any finance entry (including a re-attribution of paid_by / amount split)."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.company_finance.update",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    row = db.query(models.CompanyFinanceEntry).filter(models.CompanyFinanceEntry.id == entry_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Finance entry not found.")
+
+    if payload.category is not None:
+        category = payload.category.strip()
+        if not category:
+            raise HTTPException(status_code=400, detail="Category cannot be empty.")
+        row.category = category
+    if payload.vendor is not None:
+        vendor = payload.vendor.strip()
+        if not vendor:
+            raise HTTPException(status_code=400, detail="Vendor cannot be empty.")
+        row.vendor = vendor
+    if payload.paid_by is not None:
+        row.paid_by = payload.paid_by.strip() or row.paid_by
+    if payload.description is not None:
+        row.description = payload.description.strip() or None
+    if payload.occurred_on is not None:
+        row.occurred_on = _finance_parse_date(payload.occurred_on)
+    if payload.amount_usd is not None or payload.entry_type is not None:
+        entry_type = payload.entry_type if payload.entry_type is not None else row.entry_type
+        magnitude = payload.amount_usd if payload.amount_usd is not None else abs(_money_float(_money_decimal(row.amount_usd)))
+        row.entry_type, row.amount_usd = _finance_signed_amount(entry_type, magnitude)
+
+    db.commit()
+    db.refresh(row)
+    return {"entry": _serialize_finance_entry(row)}
+
+
+@router.delete("/company-finance/entries/{entry_id}")
+def delete_company_finance_entry_admin(
+    entry_id: int,
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Delete a finance entry. Subscription-revenue returns aren't in this table, so they're safe."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="admin.company_finance.delete",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT, window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    row = db.query(models.CompanyFinanceEntry).filter(models.CompanyFinanceEntry.id == entry_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Finance entry not found.")
+    db.delete(row)
+    db.commit()
+    return {"deleted": True, "id": entry_id}
+
+
 @router.get("/ai-usage/analytics")
 def ai_usage_analytics_admin(
     request: Request,

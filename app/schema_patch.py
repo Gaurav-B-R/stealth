@@ -356,6 +356,11 @@ def ensure_enterprise_organization_columns():
             conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN dpa_accepted_version VARCHAR"))
         if "dpa_accepted_by_user_id" not in columns:
             conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN dpa_accepted_by_user_id INTEGER"))
+        # Company location (records) + portal display-currency driver.
+        if "country_code" not in columns:
+            conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN country_code VARCHAR"))
+        if "state_region" not in columns:
+            conn.execute(text("ALTER TABLE enterprise_organizations ADD COLUMN state_region VARCHAR"))
 
         conn.execute(
             text(
@@ -696,6 +701,10 @@ def ensure_enterprise_crm_tables():
                     extracted_text TEXT,
                     deep_scan_facts TEXT,
                     deep_scan_facts_hash VARCHAR,
+                    validation_status VARCHAR,
+                    validation_message TEXT,
+                    extracted_fields TEXT,
+                    validated_at {ts},
                     uploaded_by_user_id INTEGER,
                     uploaded_by_name VARCHAR,
                     created_at {ts} DEFAULT {now_default} NOT NULL
@@ -715,6 +724,14 @@ def ensure_enterprise_crm_tables():
                 conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN deep_scan_facts TEXT"))
             if "deep_scan_facts_hash" not in doc_cols:
                 conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN deep_scan_facts_hash VARCHAR"))
+            if "validation_status" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN validation_status VARCHAR"))
+            if "validation_message" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN validation_message TEXT"))
+            if "extracted_fields" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN extracted_fields TEXT"))
+            if "validated_at" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN validated_at TIMESTAMP"))
 
         # --- enterprise_interview_sessions ------------------------------------
         if not _table_exists(conn, "enterprise_interview_sessions"):
@@ -1029,6 +1046,207 @@ def ensure_enterprise_refunds_table():
                 "CREATE INDEX IF NOT EXISTS ix_enterprise_refunds_payment_id ON enterprise_refunds(payment_id)",
                 "CREATE INDEX IF NOT EXISTS ix_enterprise_refunds_created_at ON enterprise_refunds(created_at)",
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_refunds_razorpay_refund ON enterprise_refunds(razorpay_refund_id)",
+            ):
+                conn.execute(text(stmt))
+
+
+def ensure_enterprise_payments_tables():
+    """Create the marketplace-payments tables (Razorpay Route): linked accounts,
+    student payment requests, the webhook reconciliation ledger, and the refund audit.
+
+    Idempotent and additive — safe on every startup. Tables are created in dependency
+    order (linked_accounts -> student_payments -> events/refunds). Money is integer paise.
+    Requires enterprise_clients to exist (run after ensure_enterprise_crm_tables)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bfalse = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_linked_accounts"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_linked_accounts (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    razorpay_account_id VARCHAR,
+                    razorpay_product_id VARCHAR,
+                    razorpay_stakeholder_id VARCHAR,
+                    legal_business_name VARCHAR,
+                    business_type VARCHAR,
+                    contact_name VARCHAR,
+                    contact_email VARCHAR,
+                    contact_phone VARCHAR,
+                    business_pan VARCHAR,
+                    gst_number VARCHAR,
+                    bank_account_last4 VARCHAR,
+                    bank_ifsc VARCHAR,
+                    beneficiary_name VARCHAR,
+                    activation_status VARCHAR NOT NULL DEFAULT 'not_started',
+                    requirements_json TEXT,
+                    is_payable BOOLEAN NOT NULL DEFAULT {bfalse},
+                    attested_service_delivery BOOLEAN NOT NULL DEFAULT {bfalse},
+                    attested_turnover_ok BOOLEAN NOT NULL DEFAULT {bfalse},
+                    attested_at {ts},
+                    attested_ip VARCHAR,
+                    attested_version VARCHAR,
+                    created_by_user_id INTEGER,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_linked_acct_org ON enterprise_linked_accounts(organization_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_linked_acct_rzp ON enterprise_linked_accounts(razorpay_account_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_linked_acct_status ON enterprise_linked_accounts(activation_status)",
+            ):
+                conn.execute(text(stmt))
+        else:
+            # Additive: attestation wording version (proof survives copy changes).
+            la_cols = _get_table_columns(conn, "enterprise_linked_accounts")
+            if "attested_version" not in la_cols:
+                conn.execute(text("ALTER TABLE enterprise_linked_accounts ADD COLUMN attested_version VARCHAR"))
+
+        if not _table_exists(conn, "enterprise_student_payments"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_student_payments (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER,
+                    client_name_snapshot VARCHAR,
+                    linked_account_id INTEGER,
+                    invoice_number VARCHAR,
+                    description VARCHAR,
+                    amount_paise INTEGER NOT NULL,
+                    commission_paise INTEGER NOT NULL DEFAULT 0,
+                    payout_paise INTEGER NOT NULL DEFAULT 0,
+                    currency VARCHAR NOT NULL DEFAULT 'INR',
+                    provider VARCHAR NOT NULL DEFAULT 'razorpay',
+                    razorpay_order_id VARCHAR,
+                    razorpay_payment_id VARCHAR,
+                    razorpay_transfer_id VARCHAR,
+                    status VARCHAR NOT NULL DEFAULT 'created',
+                    settlement_status VARCHAR,
+                    on_hold BOOLEAN NOT NULL DEFAULT {bfalse},
+                    on_hold_until {ts},
+                    utr VARCHAR,
+                    refunded_amount_paise INTEGER NOT NULL DEFAULT 0,
+                    due_date DATE,
+                    created_by_user_id INTEGER,
+                    paid_at {ts},
+                    settled_at {ts},
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts},
+                    pay_token_hash VARCHAR,
+                    payer_email_snapshot VARCHAR,
+                    email_sent_at {ts},
+                    cancelled_at {ts},
+                    dispute_status VARCHAR,
+                    disputed_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_ent_student_pay_org ON enterprise_student_payments(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_student_pay_client ON enterprise_student_payments(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_student_pay_org_created ON enterprise_student_payments(organization_id, created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_student_pay_org_status ON enterprise_student_payments(organization_id, status)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_student_pay_order ON enterprise_student_payments(razorpay_order_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_student_pay_payment ON enterprise_student_payments(razorpay_payment_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_student_pay_transfer ON enterprise_student_payments(razorpay_transfer_id)",
+            ):
+                conn.execute(text(stmt))
+        else:
+            # Phase 2 (emailed secure pay-link) — additive columns for DBs created by Phase 0.
+            cols = _get_table_columns(conn, "enterprise_student_payments")
+            for col, ddl in (
+                ("pay_token_hash", "VARCHAR"),
+                ("payer_email_snapshot", "VARCHAR"),
+                ("email_sent_at", ts),
+                ("cancelled_at", ts),
+                ("dispute_status", "VARCHAR"),
+                ("disputed_at", ts),
+            ):
+                if col not in cols:
+                    conn.execute(text(f"ALTER TABLE enterprise_student_payments ADD COLUMN {col} {ddl}"))
+        # Self-healing on both paths (fresh create and augmented).
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_student_pay_token ON enterprise_student_payments(pay_token_hash)"
+        ))
+
+        if not _table_exists(conn, "enterprise_payment_events"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_payment_events (
+                    id {pk},
+                    organization_id INTEGER,
+                    student_payment_id INTEGER,
+                    razorpay_event_id VARCHAR,
+                    event_type VARCHAR,
+                    entity_type VARCHAR,
+                    entity_id VARCHAR,
+                    amount_paise INTEGER,
+                    payload_json TEXT,
+                    processed_at {ts},
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_pay_evt_event_id ON enterprise_payment_events(razorpay_event_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_pay_evt_org ON enterprise_payment_events(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_pay_evt_entity ON enterprise_payment_events(entity_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_pay_evt_org_created ON enterprise_payment_events(organization_id, created_at)",
+            ):
+                conn.execute(text(stmt))
+
+        if not _table_exists(conn, "enterprise_payment_refunds"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_payment_refunds (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    student_payment_id INTEGER,
+                    kind VARCHAR NOT NULL DEFAULT 'money',
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    currency VARCHAR NOT NULL DEFAULT 'INR',
+                    provider VARCHAR NOT NULL DEFAULT 'razorpay',
+                    razorpay_refund_id VARCHAR,
+                    razorpay_reversal_id VARCHAR,
+                    reverse_all BOOLEAN NOT NULL DEFAULT {bfalse},
+                    status VARCHAR NOT NULL DEFAULT 'created',
+                    reason TEXT,
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_ent_pay_refund_org ON enterprise_payment_refunds(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_pay_refund_payment ON enterprise_payment_refunds(student_payment_id)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_pay_refund_rzp ON enterprise_payment_refunds(razorpay_refund_id)",
+            ):
+                conn.execute(text(stmt))
+
+        # Chargeback/dispute audit ledger (payment.dispute.* webhooks).
+        if not _table_exists(conn, "enterprise_payment_disputes"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_payment_disputes (
+                    id {pk},
+                    organization_id INTEGER,
+                    student_payment_id INTEGER,
+                    razorpay_dispute_id VARCHAR,
+                    razorpay_payment_id VARCHAR,
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    currency VARCHAR NOT NULL DEFAULT 'INR',
+                    phase VARCHAR,
+                    status VARCHAR NOT NULL DEFAULT 'open',
+                    reason_code VARCHAR,
+                    respond_by {ts},
+                    resolved_at {ts},
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_pay_dispute_rzp ON enterprise_payment_disputes(razorpay_dispute_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_pay_dispute_org ON enterprise_payment_disputes(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_pay_dispute_payment ON enterprise_payment_disputes(student_payment_id)",
             ):
                 conn.execute(text(stmt))
 
@@ -1605,6 +1823,24 @@ def ensure_company_finance_entries_table():
             "ON company_finance_entries(paid_by)"
         ))
 
+        # One-time bootstrap/reconcile guard. The DATABASE is the source of truth for finance
+        # entries (the admin console reads AND now edits them). We populate the baseline dataset
+        # and apply the founder split EXACTLY ONCE per database, then never touch these rows on a
+        # later deploy — so edits made in the console persist and are never clobbered. A brand-new/
+        # empty DB is bootstrapped once; an already-populated prod DB gets the split applied once.
+        # Only bump SEED_MARKER if a deliberate future one-time data change is intended.
+        conn.execute(text(
+            "CREATE TABLE IF NOT EXISTS app_data_migrations ("
+            "migration_key VARCHAR PRIMARY KEY, "
+            "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
+        ))
+        SEED_MARKER = "company_finance_seed_v2_founder_split"
+        if conn.execute(
+            text("SELECT 1 FROM app_data_migrations WHERE migration_key = :k"),
+            {"k": SEED_MARKER},
+        ).fetchone():
+            return  # Already seeded/reconciled — the DB is authoritative; never overwrite edits.
+
         # Founder-investment attribution. Each seeded expense that Gaurav originally paid is
         # split into a Gaurav share + a Kushal share, sized so that exactly $267.00 of the
         # $295.02 Gaurav-seeded spend is re-attributed to Kushal (proportionally, ~90.5% of
@@ -1701,3 +1937,9 @@ def ensure_company_finance_entries_table():
                     "paid_by": paid_by,
                 },
             )
+
+        # Record that this DB has been seeded/reconciled so we never re-run and overwrite edits.
+        conn.execute(
+            text("INSERT INTO app_data_migrations (migration_key) VALUES (:k)"),
+            {"k": SEED_MARKER},
+        )

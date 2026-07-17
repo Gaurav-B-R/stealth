@@ -164,6 +164,10 @@ body.b2c-light #dashboardSection .dashboard-sidebar {
     border-right-color: var(--border-color);
 }
 body.b2c-light #dashboardSection .sidebar-header { border-bottom-color: var(--border-color); }
+/* The notification count-badge border is a "cutout" ring that must match the sidebar
+   background. The base rule uses the dark-sidebar color (#181b2e); on the light B2C
+   dashboard the sidebar is var(--bg-secondary), so match that or the pill gets a dark ring. */
+body.b2c-light .sidebar-notif-dot { border-color: var(--bg-secondary); }
 body.b2c-light #dashboardSection .sidebar-footer { border-top-color: var(--border-color); }
 body.b2c-light #dashboardSection .dashboard-content { background: var(--bg-color); }
 body.b2c-light #dashboardSection .sidebar-brand-name { color: var(--text-primary); }
@@ -2471,13 +2475,22 @@ body.dashboard-active {
 
 .sidebar-notif-dot {
     position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
+    top: -3px;
+    right: -3px;
+    min-width: 17px;
+    height: 17px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border-radius: 999px;
     background: #f472b6;
     border: 2px solid #181b2e;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    /* display is toggled to flex by updateNotificationBadge() when unread > 0 */
+    align-items: center;
+    justify-content: center;
 }
 
 .sidebar-notif-wrap {
@@ -13443,16 +13456,16 @@ body.b2c-light .plan-limit-badge {
 
 .document-upload-progress-overlay {
     z-index: 12050;
-    background: rgba(2, 6, 23, 0.78);
+    background: rgba(15, 23, 42, 0.55);
     backdrop-filter: blur(8px);
 }
 
 .document-upload-progress-card {
     width: min(640px, 94vw);
     border-radius: 20px;
-    border: 1px solid rgba(124, 138, 255, 0.4);
-    background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(17, 24, 39, 0.98));
-    box-shadow: 0 30px 80px rgba(37, 99, 235, 0.18);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    background: #ffffff;
+    box-shadow: 0 30px 80px rgba(15, 23, 42, 0.22);
     padding: 1.8rem 1.7rem;
     text-align: center;
     display: grid;
@@ -13470,8 +13483,8 @@ body.b2c-light .plan-limit-badge {
     width: min(340px, 82vw);
     height: min(430px, 55vh);
     border-radius: 14px;
-    border: 1.5px dashed rgba(124, 138, 255, 0.4);
-    background: rgba(15, 23, 42, 0.6);
+    border: 1.5px dashed rgba(99, 102, 241, 0.35);
+    background: #f8fafc;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -13484,7 +13497,7 @@ body.b2c-light .plan-limit-badge {
     width: 100%;
     height: 100%;
     object-fit: contain;
-    background: rgba(2, 6, 23, 0.8);
+    background: #ffffff;
     border-radius: 12px;
     z-index: 2;
 }
@@ -13495,7 +13508,7 @@ body.b2c-light .plan-limit-badge {
     height: 100%;
     border: none;
     border-radius: 12px;
-    background: rgba(2, 6, 23, 0.9);
+    background: #ffffff;
     z-index: 2;
 }
 
@@ -13506,8 +13519,8 @@ body.b2c-light .plan-limit-badge {
     margin: 0;
     padding: 1rem 1.1rem;
     border-radius: 12px;
-    background: rgba(2, 6, 23, 0.86);
-    color: #c7d2fe;
+    background: #f8fafc;
+    color: #334155;
     font-family: 'JetBrains Mono', 'SFMono-Regular', Menlo, Monaco, Consolas, monospace;
     font-size: 0.73rem;
     line-height: 1.5;
@@ -13531,7 +13544,7 @@ body.b2c-light .plan-limit-badge {
 .doc-upload-placeholder-bar {
     height: 9px;
     border-radius: 4px;
-    background: linear-gradient(90deg, rgba(124, 138, 255, 0.24), rgba(129, 140, 248, 0.13));
+    background: linear-gradient(90deg, rgba(99, 102, 241, 0.22), rgba(168, 85, 247, 0.12));
     animation: docBarShimmer 1.8s ease-in-out infinite;
 }
 
@@ -13592,7 +13605,7 @@ body.b2c-light .plan-limit-badge {
     left: 0;
     width: 100%;
     height: 4px;
-    background: linear-gradient(90deg, transparent, #a5b4fc, #a78bfa, #a5b4fc, transparent);
+    background: linear-gradient(90deg, transparent, #6366f1, #a855f7, #6366f1, transparent);
     box-shadow: 0 0 14px rgba(129, 140, 248, 0.7), 0 0 35px rgba(129, 140, 248, 0.35);
     opacity: 0;
     z-index: 5;
@@ -13650,14 +13663,14 @@ body.b2c-light .plan-limit-badge {
 .doc-upload-scan-area.scanning {
     border-color: rgba(129, 140, 248, 0.6);
     border-style: solid;
-    background: rgba(49, 46, 129, 0.12);
+    background: rgba(99, 102, 241, 0.06);
 }
 
 /* Complete state */
 .doc-upload-scan-area.complete {
-    border-color: rgba(16, 185, 129, 0.55);
+    border-color: rgba(16, 185, 129, 0.5);
     border-style: solid;
-    background: rgba(6, 78, 59, 0.12);
+    background: rgba(16, 185, 129, 0.08);
 }
 
 .doc-upload-scan-area.complete .doc-upload-scan-line,
@@ -13681,10 +13694,10 @@ body.b2c-light .plan-limit-badge {
     left: 10%;
     right: 10%;
     height: 2px;
-    background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.95), transparent);
+    background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.85), transparent);
     top: calc(11% + (var(--line) * 10%));
     opacity: 0;
-    filter: drop-shadow(0 0 8px rgba(34, 211, 238, 0.55));
+    filter: drop-shadow(0 0 6px rgba(99, 102, 241, 0.5));
 }
 
 .doc-upload-scan-area.scanning .doc-upload-ai-lines {
@@ -13726,7 +13739,7 @@ body.b2c-light .plan-limit-badge {
 .doc-upload-file-name {
     font-size: 1.03rem;
     font-weight: 700;
-    color: #eef2ff;
+    color: #0f172a;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -13735,7 +13748,7 @@ body.b2c-light .plan-limit-badge {
 
 .doc-upload-file-meta {
     font-size: 0.83rem;
-    color: #94a3b8;
+    color: #64748b;
     letter-spacing: 0.02em;
 }
 
@@ -13763,30 +13776,39 @@ body.b2c-light .plan-limit-badge {
     transform: scale(1.05);
 }
 
+.doc-upload-step.active .doc-upload-step-label {
+    color: #4338ca;
+}
+
 .doc-upload-step.completed {
     opacity: 0.65;
 }
 
 .doc-upload-step-icon {
     font-size: 1.15rem;
+    line-height: 1;
+}
+
+.doc-upload-step-icon .ai-sparkle {
+    color: #6366f1;
 }
 
 .doc-upload-step-label {
     font-size: 0.65rem;
     font-weight: 600;
-    color: #c7d2fe;
+    color: #475569;
     letter-spacing: 0.01em;
     white-space: nowrap;
 }
 
 .doc-upload-step.completed .doc-upload-step-label {
-    color: #86efac;
+    color: #059669;
 }
 
 .doc-upload-step-connector {
     width: 22px;
     height: 2px;
-    background: rgba(124, 138, 255, 0.25);
+    background: rgba(99, 102, 241, 0.2);
     border-radius: 2px;
     position: relative;
     overflow: hidden;
@@ -13804,7 +13826,7 @@ body.b2c-light .plan-limit-badge {
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(90deg, #a5b4fc, transparent);
+    background: linear-gradient(90deg, #6366f1, transparent);
     animation: docConnectorPulse 1.2s ease-in-out infinite;
 }
 
@@ -13823,9 +13845,24 @@ body.b2c-light .plan-limit-badge {
 /* ── Status Text ── */
 .document-upload-progress-text {
     margin: 0;
-    color: #c7d2fe;
+    color: #4338ca;
     font-size: 0.92rem;
     font-weight: 500;
+}
+
+.doc-upload-trust {
+    margin: 0;
+    justify-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: #475569;
+    background: rgba(99, 102, 241, 0.07);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 999px;
+    padding: 0.32rem 0.72rem;
 }
 
 @keyframes documentUploadSpin {

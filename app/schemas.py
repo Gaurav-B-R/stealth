@@ -254,6 +254,28 @@ class AdminCompanyFinanceAnalyticsResponse(BaseModel):
     notes: List[str] = []
 
 
+class AdminCompanyFinanceEntryCreateRequest(BaseModel):
+    """Create a company finance entry. `amount_usd` is a positive magnitude; the sign is
+    derived from `entry_type` (expense = negative/investment, return = positive)."""
+    occurred_on: str                       # YYYY-MM-DD
+    entry_type: str = "expense"            # expense | return
+    category: str
+    vendor: str
+    amount_usd: float
+    paid_by: str = "Gaurav"
+    description: Optional[str] = None
+
+
+class AdminCompanyFinanceEntryUpdateRequest(BaseModel):
+    occurred_on: Optional[str] = None
+    entry_type: Optional[str] = None
+    category: Optional[str] = None
+    vendor: Optional[str] = None
+    amount_usd: Optional[float] = None     # positive magnitude
+    paid_by: Optional[str] = None
+    description: Optional[str] = None
+
+
 class SubscriptionResponse(BaseModel):
     plan: str
     status: str

@@ -1,6 +1,7 @@
 import os
 import re
 import hmac
+import json
 import uuid
 import secrets
 import logging
@@ -14,7 +15,7 @@ from jose import jwt as jose_jwt, JWTError
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
-from datetime import timedelta, datetime, date
+from datetime import timedelta, datetime, date, timezone as dt_timezone
 from pydantic import BaseModel, EmailStr, Field
 
 from app.database import get_db, SessionLocal
@@ -23,6 +24,7 @@ from app import enterprise_catalog as catalog
 from app import enterprise_billing as billing
 from app import enterprise_credits as credits
 from app import enterprise_coupons
+from app import enterprise_payments
 from app import enterprise_ai
 from app import enterprise_copilot
 from app import enterprise_interview
@@ -52,6 +54,8 @@ from app.email_service import send_enterprise_team_invite_email, send_enterprise
 from app.email_service import send_enterprise_interview_invite_email, send_enterprise_interview_code_email
 from app.email_service import send_enterprise_interview_report_email
 from app.email_service import send_enterprise_document_request_email, send_enterprise_document_request_code_email
+from app.email_service import send_enterprise_payment_request_email
+from app.email_service import send_enterprise_payment_dispute_alert_email
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
 from app.email_service import send_enterprise_support_request_email, send_enterprise_demo_request_email
 from app.email_service import send_feature_request_confirmation
@@ -289,6 +293,9 @@ class EnterpriseBrandingUpdateRequest(BaseModel):
     company_name: Optional[str] = Field(default=None, min_length=2, max_length=120)
     logo_url: Optional[str] = Field(default=None, max_length=ENTERPRISE_LOGO_URL_MAX_LENGTH)
     generate_random_logo: bool = False
+    # Company location (org records). country_code also drives the portal display currency.
+    country_code: Optional[str] = Field(default=None, max_length=8)
+    state_region: Optional[str] = Field(default=None, max_length=80)
 
 
 class EnterpriseStudentCreateRequest(BaseModel):
@@ -426,6 +433,10 @@ def _normalize_enterprise_logo_url_or_400(raw_logo_url: str | None) -> str | Non
 def _resolve_enterprise_logo_url(organization: models.EnterpriseOrganization) -> str:
     raw_logo = str(getattr(organization, "logo_url", "") or "").strip()
     if raw_logo:
+        # Uploaded logos are stored privately and served via our own public streaming
+        # route — a same-origin relative URL that works on every portal subdomain.
+        if raw_logo.startswith("/api/enterprise/public/org-logo/"):
+            return raw_logo
         parsed = urlparse(raw_logo)
         if parsed.scheme in {"http", "https"} and parsed.netloc:
             return raw_logo
@@ -692,6 +703,50 @@ def _enforce_enterprise_access_or_403(db: Session, user: models.User) -> None:
     )
 
 
+_CURRENCY_SYMBOLS = {
+    "INR": "₹", "USD": "$", "GBP": "£", "EUR": "€", "CAD": "CA$",
+    "AUD": "A$", "AED": "AED ", "SGD": "S$", "JPY": "¥",
+}
+
+
+def _org_display_currency(organization) -> dict:
+    """The portal's DISPLAY currency, derived from the company's country in Settings.
+    Billing stays in INR — this only converts what the UI shows, at the live exchange
+    rate (Frankfurter via /api/pricing/exchange-rates, 24h-cached, safe fallbacks).
+    India (or unset) → INR; unlisted countries → USD like the B2C pricing page."""
+    from app.routers import pricing as pricing_fx
+
+    country_code = (getattr(organization, "country_code", None) or "").strip().upper()
+    code = pricing_fx._COUNTRY_TO_CURRENCY.get(country_code, "USD") if country_code else "INR"
+    if code == "INR":
+        return {"code": "INR", "symbol": "₹", "rate_from_inr": 1.0, "source": "native", "provider_date": None}
+
+    rate = None
+    source = "fallback"
+    provider_date = None
+    try:
+        payload = pricing_fx.get_exchange_rates(refresh=False)
+        rates = payload.get("rates") or {}
+        inr = float(rates.get("INR") or 0.0)
+        target = float(rates.get(code) or 0.0)
+        if inr > 0 and target > 0:
+            rate = target / inr
+            source = payload.get("source") or "live"
+            provider_date = payload.get("provider_date")
+    except Exception:
+        logger.exception("Display-currency rate lookup failed (org_id=%s)", getattr(organization, "id", None))
+    if not rate:
+        fallback = pricing_fx.FALLBACK_RATES
+        rate = float(fallback.get(code, 1.0)) / float(fallback.get("INR", 83.2))
+    return {
+        "code": code,
+        "symbol": _CURRENCY_SYMBOLS.get(code, code + " "),
+        "rate_from_inr": round(rate, 6),
+        "source": source,
+        "provider_date": provider_date,
+    }
+
+
 def _build_enterprise_context(
     db: Session,
     user: models.User,
@@ -735,6 +790,9 @@ def _build_enterprise_context(
             "logo_url": logo_url,
             "portal_url": _build_enterprise_portal_url(subdomain_slug, request),
             "created_at": organization.created_at,
+            "country_code": organization.country_code,
+            "state_region": organization.state_region,
+            "display_currency": _org_display_currency(organization),
         },
         "membership": {
             "role": normalized_role,
@@ -1387,6 +1445,16 @@ def enterprise_update_branding(
     if new_company_name is not None:
         organization.company_name = new_company_name
 
+    if payload.country_code is not None:
+        country_code = (payload.country_code or "").strip().upper()
+        if country_code and (len(country_code) != 2 or not country_code.isalpha()):
+            raise HTTPException(status_code=400, detail="Enter a valid 2-letter country code.")
+        organization.country_code = country_code or None
+        has_update = True
+    if payload.state_region is not None:
+        organization.state_region = (payload.state_region or "").strip()[:80] or None
+        has_update = True
+
     if not has_update:
         raise HTTPException(status_code=400, detail="Nothing to update.")
 
@@ -1397,6 +1465,95 @@ def enterprise_update_branding(
         "message": "Organization branding updated successfully.",
         "organization": context.get("organization"),
     }
+
+
+ENTERPRISE_LOGO_MAX_BYTES = 2 * 1024 * 1024  # 2 MB upload cap
+_ENTERPRISE_LOGO_FILENAME_RE = re.compile(r"^logo-[0-9a-f]{32}\.png$")
+
+
+def _normalize_logo_image_or_400(data: bytes) -> bytes:
+    """Validate an uploaded logo and re-encode it. Only a real PNG/JPEG/WebP raster is
+    accepted; it is downscaled to ≤512px and re-encoded to a fresh PNG, so nothing but a
+    clean, metadata-free raster we produced ourselves is ever stored or served."""
+    import io
+    try:
+        from PIL import Image
+        probe = Image.open(io.BytesIO(data))
+        probe.verify()  # detects truncated/corrupt files (invalidates the handle)
+        img = Image.open(io.BytesIO(data))
+        if (img.format or "").upper() not in {"PNG", "JPEG", "WEBP"}:
+            raise ValueError("unsupported format")
+        img = img.convert("RGBA")
+        img.thumbnail((512, 512))
+        out = io.BytesIO()
+        img.save(out, format="PNG", optimize=True)
+        return out.getvalue()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Please upload a valid PNG, JPG, or WebP image.")
+
+
+@router.post("/organization/logo")
+async def enterprise_upload_org_logo(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Upload a custom organization logo. Stored encrypted like other enterprise assets and
+    served back through the unguessable public logo route below."""
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    if not enterprise_storage.is_configured():
+        raise HTTPException(status_code=503, detail="Logo storage is not configured.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="The file is empty.")
+    if len(data) > ENTERPRISE_LOGO_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="Logo is too large. Maximum size is 2 MB.")
+    png_bytes = _normalize_logo_image_or_400(data)
+
+    filename = f"logo-{uuid.uuid4().hex}.png"
+    try:
+        enterprise_storage.store_document(
+            f"enterprise/{organization.id}/branding/{filename}", png_bytes, content_type="image/png"
+        )
+    except Exception:
+        logger.exception("Failed to store org logo (org_id=%s)", organization.id)
+        raise HTTPException(status_code=502, detail="Could not store the logo right now. Please try again.")
+
+    # Best-effort cleanup of the previously uploaded logo (generated/external URLs untouched).
+    old_match = re.match(
+        r"^/api/enterprise/public/org-logo/(\d+)/(logo-[0-9a-f]{32}\.png)$",
+        str(organization.logo_url or ""),
+    )
+    if old_match and int(old_match.group(1)) == organization.id:
+        enterprise_storage.delete_document(f"enterprise/{organization.id}/branding/{old_match.group(2)}")
+
+    organization.logo_url = f"/api/enterprise/public/org-logo/{organization.id}/{filename}"
+    db.commit()
+
+    context = _build_enterprise_context(db, current_user, request)
+    return {"message": "Logo updated.", "organization": context.get("organization")}
+
+
+@router.get("/public/org-logo/{org_id}/{filename}")
+def enterprise_public_org_logo(org_id: int, filename: str):
+    """Serve an uploaded organization logo. Unauthenticated by design: the filename embeds an
+    unguessable 128-bit token, and a logo is public branding (never client data). Only files
+    matching our own generated pattern under the org's branding prefix can be addressed."""
+    if not _ENTERPRISE_LOGO_FILENAME_RE.fullmatch(str(filename or "")):
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        data = enterprise_storage.fetch_document(f"enterprise/{int(org_id)}/branding/{filename}")
+    except Exception:
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1736,7 +1893,7 @@ ENTERPRISE_BULK_EMAIL_MAX_RECIPIENTS = int(os.getenv("ENTERPRISE_BULK_EMAIL_MAX_
 # accepts at signup. Defined centrally in app.legal so B2C, OAuth, and enterprise
 # signups all record the same value. Keep app.legal in sync with
 # LEGAL_LAST_UPDATED.terms / .privacy in static/app.js.
-from app.legal import LEGAL_TERMS_PRIVACY_VERSION, LEGAL_DPA_VERSION
+from app.legal import LEGAL_TERMS_PRIVACY_VERSION, LEGAL_DPA_VERSION, FINANCE_ATTESTATION_VERSION
 
 
 class EnterpriseSignupRequest(BaseModel):
@@ -2471,6 +2628,41 @@ def enterprise_add_client_note(
         "permissions": _enterprise_permissions_for_role(role),
         "note": _serialize_note(note),
     }
+
+
+@router.delete("/clients/{client_id}/notes/{note_id}")
+def enterprise_delete_client_note(
+    client_id: int,
+    note_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Delete a client note. Admins can delete any note (including AI-generated ones);
+    editors can only delete notes they authored."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    note = (
+        db.query(models.EnterpriseClientNote)
+        .filter(
+            models.EnterpriseClientNote.id == int(note_id),
+            models.EnterpriseClientNote.organization_id == organization.id,
+            models.EnterpriseClientNote.client_id == client.id,
+        )
+        .first()
+    )
+    if not note:
+        raise HTTPException(status_code=404, detail="Note not found.")
+    if role != ENTERPRISE_ROLE_ADMIN and note.author_user_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only delete your own notes. Ask an organization admin to remove this one.",
+        )
+    db.delete(note)
+    db.commit()
+    return {"message": "Note deleted.", "permissions": _enterprise_permissions_for_role(role)}
 
 
 def _send_and_log_client_email(
@@ -3298,6 +3490,596 @@ def _razorpay_request(method: str, path: str, json_payload: dict | None = None) 
     if not isinstance(data, dict):
         raise HTTPException(status_code=502, detail="Unexpected response from the payment gateway.")
     return data
+
+
+# ---------------------------------------------------------------------------
+# Finance / marketplace payments (Razorpay Route) — Phase 1: onboarding
+#
+# The "Finance" portal section: collect payments from students, and (later)
+# revenue analytics + usage billing as nested sub-views. Rilono is a technology
+# platform, NOT a payment aggregator — student money is collected into Razorpay's
+# PA escrow and settled by Razorpay directly to the consultancy's own linked-account
+# bank; Rilono never takes custody of it. This phase lets a consultancy connect its
+# company bank account (a Route Linked Account). Collection/checkout, webhooks and
+# refunds are later phases.
+# ---------------------------------------------------------------------------
+
+class EnterpriseLinkedAccountRequest(BaseModel):
+    legal_business_name: str | None = Field(None, max_length=200)
+    business_type: str | None = Field(None, max_length=60)
+    contact_name: str | None = Field(None, max_length=120)
+    contact_email: str | None = Field(None, max_length=200)
+    contact_phone: str | None = Field(None, max_length=20)
+    business_pan: str | None = Field(None, max_length=20)
+    gst_number: str | None = Field(None, max_length=20)
+    bank_account_number: str | None = Field(None, max_length=40)
+    bank_ifsc: str | None = Field(None, max_length=20)
+    beneficiary_name: str | None = Field(None, max_length=200)
+    attested_service_delivery: bool = False
+    attested_turnover_ok: bool = False
+
+
+@router.get("/finance/summary")
+def enterprise_finance_summary(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    la = enterprise_payments.get_linked_account(db, organization.id)
+    return {
+        "payments_enabled": enterprise_payments.razorpay_enabled(),
+        "linked_account": enterprise_payments.serialize_linked_account(la),
+        "fee": enterprise_payments.fee_config_public(),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.post("/finance/linked-account")
+def enterprise_finance_connect_bank(
+    payload: EnterpriseLinkedAccountRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Connect (or update) the consultancy's Razorpay Route linked account.
+
+    Admin-only. Requires the eligibility attestation (the consultancy itself delivers the
+    service to the student and meets the turnover threshold) — RBI/Route only permits a
+    split payee that interfaces with the payer for the goods/services. When Razorpay Route
+    is enabled, this runs the v2 Accounts onboarding sequence and stores the returned ids +
+    activation status; otherwise it saves the local record so activation can begin later.
+    """
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    if not (payload.attested_service_delivery and payload.attested_turnover_ok):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "To collect payments, please confirm that your organization directly delivers the "
+                "service to the student and meets the eligibility criteria."
+            ),
+        )
+
+    la = enterprise_payments.get_linked_account(db, organization.id)
+    if la is None:
+        la = models.EnterpriseLinkedAccount(
+            organization_id=organization.id,
+            created_by_user_id=current_user.id,
+        )
+        db.add(la)
+
+    # Record the business + settlement details (display-safe only) and the attestation.
+    la.legal_business_name = (payload.legal_business_name or "").strip() or la.legal_business_name
+    la.business_type = (payload.business_type or "").strip() or la.business_type
+    la.contact_name = (payload.contact_name or "").strip() or la.contact_name
+    la.contact_email = (payload.contact_email or "").strip() or la.contact_email
+    la.contact_phone = (payload.contact_phone or "").strip() or la.contact_phone
+    la.business_pan = (payload.business_pan or "").strip().upper() or la.business_pan
+    la.gst_number = (payload.gst_number or "").strip().upper() or la.gst_number
+    la.beneficiary_name = (payload.beneficiary_name or "").strip() or la.beneficiary_name
+    if payload.bank_ifsc:
+        la.bank_ifsc = payload.bank_ifsc.strip().upper()
+    if payload.bank_account_number:
+        digits = re.sub(r"\D", "", payload.bank_account_number)
+        la.bank_account_last4 = digits[-4:] if digits else la.bank_account_last4
+    la.attested_service_delivery = True
+    la.attested_turnover_ok = True
+    la.attested_at = datetime.utcnow()
+    la.attested_ip = extract_client_ip(request) if request else None
+    la.attested_version = FINANCE_ATTESTATION_VERSION
+
+    if not enterprise_payments.razorpay_enabled():
+        # Route not switched on yet — keep the details, don't attempt live KYC.
+        if la.activation_status in (None, "", "not_started"):
+            la.activation_status = "not_started"
+        db.commit()
+        db.refresh(la)
+        return {
+            "payments_enabled": False,
+            "linked_account": enterprise_payments.serialize_linked_account(la),
+            "message": (
+                "Your details are saved. Online collection will activate once Rilono enables "
+                "Razorpay Route for your account."
+            ),
+        }
+
+    # Razorpay Route is live: run the v2 onboarding sequence server-side (order enforced).
+    la = enterprise_payments.onboard_linked_account(
+        db=db,
+        linked_account=la,
+        payload=payload,
+        request_ip=(extract_client_ip(request) if request else None),
+    )
+    db.commit()
+    db.refresh(la)
+    return {
+        "payments_enabled": True,
+        "linked_account": enterprise_payments.serialize_linked_account(la),
+        "message": "Bank account submitted to Razorpay for verification.",
+    }
+
+
+@router.post("/finance/linked-account/refresh")
+def enterprise_finance_refresh(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Re-sync the linked account's activation status + requirements from Razorpay."""
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    la = enterprise_payments.get_linked_account(db, organization.id)
+    if la is None or not la.razorpay_account_id:
+        raise HTTPException(status_code=404, detail="No connected bank account to refresh.")
+    la = enterprise_payments.refresh_linked_account_status(db=db, linked_account=la)
+    db.commit()
+    db.refresh(la)
+    return {"linked_account": enterprise_payments.serialize_linked_account(la)}
+
+
+# ---------------------------------------------------------------------------
+# Finance Phase 2 — collect payments from a client (secure emailed pay-link),
+# webhook reconciliation, refunds. Money-moving writes are admin-only.
+# ---------------------------------------------------------------------------
+
+class EnterprisePaymentRequestCreate(BaseModel):
+    amount_paise: int = Field(gt=0)
+    description: str = Field(min_length=3, max_length=300)
+    due_date: Optional[date] = None
+
+
+class EnterprisePublicPayVerifyRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+class EnterprisePaymentRefundRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+def _build_pay_link_url(subdomain_slug, token: str, request: Request | None) -> str:
+    """Public pay-page URL for the emailed secure link (mirrors the interview invite URL)."""
+    subdomain = str(subdomain_slug or "").strip().lower()
+    base = None
+    if subdomain:
+        host = f"{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+        port = _request_port_for_local_enterprise_url(request)
+        if port:
+            host = f"{host}:{port}"
+        base = f"{ENTERPRISE_PORTAL_SCHEME}://{host}"
+    if not base:
+        base = ENTERPRISE_PASSWORD_SETUP_BASE_URL
+    return f"{base.rstrip('/')}/pay/{token}"
+
+
+def _get_org_payment_or_404(db: Session, organization_id: int, payment_id: int) -> models.EnterpriseStudentPayment:
+    row = (
+        db.query(models.EnterpriseStudentPayment)
+        .filter(
+            models.EnterpriseStudentPayment.id == int(payment_id),
+            models.EnterpriseStudentPayment.organization_id == int(organization_id),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Payment not found.")
+    return row
+
+
+def _send_payment_request_email_safe(payment, organization, client_email, pay_url):
+    due = payment.due_date.strftime("%d %b %Y") if payment.due_date else None
+    return send_enterprise_payment_request_email(
+        to_email=client_email,
+        client_name=payment.client_name_snapshot or "there",
+        organization_name=organization.company_name,
+        amount_rupees=f"{payment.amount_paise / 100:,.2f}",
+        description=payment.description or "Visa service payment",
+        pay_url=pay_url,
+        invoice_number=payment.invoice_number or "",
+        due_date_text=due,
+        logo_url=_resolve_enterprise_logo_url(organization),
+    )
+
+
+@router.get("/clients/{client_id}/payments")
+def enterprise_client_payments(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """The client dossier's Payments tab: totals + the request ledger for this client."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    rows = (
+        db.query(models.EnterpriseStudentPayment)
+        .filter(
+            models.EnterpriseStudentPayment.organization_id == organization.id,
+            models.EnterpriseStudentPayment.client_id == client.id,
+        )
+        .order_by(models.EnterpriseStudentPayment.created_at.desc(), models.EnterpriseStudentPayment.id.desc())
+        .all()
+    )
+    la = enterprise_payments.get_linked_account(db, organization.id)
+    return {
+        "payments": [enterprise_payments.serialize_payment(p) for p in rows],
+        "totals": enterprise_payments.client_payment_totals(db, organization.id, client.id),
+        "collect_enabled": bool(
+            enterprise_payments.razorpay_enabled() and la is not None and la.is_payable
+        ),
+        "linked_account_status": (la.activation_status if la else "not_started"),
+        "fee": enterprise_payments.fee_config_public(),
+        "client_email": (client.email or "").strip().lower() or None,
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.post("/clients/{client_id}/payments")
+def enterprise_create_client_payment(
+    client_id: int,
+    payload: EnterprisePaymentRequestCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Raise a payment request for this client and email them a secure pay-link.
+
+    Hard compliance gates: Razorpay live + the org's linked account activated
+    (a marketplace must never collect for a non-onboarded payee)."""
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.payment_request",
+        limit=30, window_seconds=3600, extra_key=str(organization.id),
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    client_email = (client.email or "").strip().lower()
+    if not client_email:
+        raise HTTPException(status_code=400, detail="Add an email to this client before requesting a payment.")
+    if not enterprise_payments.razorpay_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail="Online collection isn't live yet — you can connect your bank account in Finance meanwhile.",
+        )
+    la = enterprise_payments.get_linked_account(db, organization.id)
+
+    raw_token = generate_verification_token()
+    payment = enterprise_payments.create_payment_request(
+        db=db,
+        organization=organization,
+        linked_account=la,
+        client=client,
+        amount_paise=int(payload.amount_paise),
+        description=payload.description,
+        due_date=payload.due_date,
+        created_by=current_user,
+        pay_token_hash=hash_token(raw_token),
+        payer_email=client_email,
+    )
+    pay_url = _build_pay_link_url(organization.subdomain_slug, raw_token, request)
+    sent, _mid, err = _send_payment_request_email_safe(payment, organization, client_email, pay_url)
+    if sent:
+        payment.email_sent_at = datetime.utcnow()
+    db.commit()
+    db.refresh(payment)
+    message = (
+        f"Payment request for ₹{payment.amount_paise / 100:,.2f} sent to {client_email}."
+        if sent else
+        f"Payment request created, but the email could not be sent right now. {err or ''}".strip()
+    )
+    return {
+        "message": message,
+        "email_sent": sent,
+        "pay_url": pay_url,  # returned once — only the hash is stored
+        "payment": enterprise_payments.serialize_payment(payment),
+        "totals": enterprise_payments.client_payment_totals(db, organization.id, client.id),
+    }
+
+
+@router.post("/finance/payments/{payment_id}/resend-email")
+def enterprise_resend_payment_email(
+    payment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Rotate the secure token and re-send the pay-link (also returns it for copying)."""
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.payment_resend",
+        limit=10, window_seconds=3600, extra_key=str(payment_id),
+    )
+    payment = _get_org_payment_or_404(db, organization.id, payment_id)
+    if payment.status != "created":
+        raise HTTPException(status_code=409, detail="Only an unpaid request's link can be re-sent.")
+    to_email = payment.payer_email_snapshot
+    if not to_email:
+        raise HTTPException(status_code=400, detail="This request has no email on file.")
+
+    raw_token = generate_verification_token()
+    payment.pay_token_hash = hash_token(raw_token)  # rotates: the old link stops working
+    pay_url = _build_pay_link_url(organization.subdomain_slug, raw_token, request)
+    sent, _mid, err = _send_payment_request_email_safe(payment, organization, to_email, pay_url)
+    if sent:
+        payment.email_sent_at = datetime.utcnow()
+    db.commit()
+    return {
+        "message": f"Pay link re-sent to {to_email}." if sent
+                   else f"Link rotated, but the email could not be sent. {err or ''}".strip(),
+        "email_sent": sent,
+        "pay_url": pay_url,
+        "payment": enterprise_payments.serialize_payment(payment),
+    }
+
+
+@router.post("/finance/payments/{payment_id}/cancel")
+def enterprise_cancel_payment_request(
+    payment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    payment = _get_org_payment_or_404(db, organization.id, payment_id)
+    if payment.status not in ("created", "failed"):
+        raise HTTPException(status_code=409, detail="Only an unpaid request can be cancelled.")
+    payment.status = "cancelled"
+    payment.cancelled_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Payment request cancelled.", "payment": enterprise_payments.serialize_payment(payment)}
+
+
+@router.post("/finance/payments/{payment_id}/refund")
+def enterprise_refund_payment(
+    payment_id: int,
+    payload: EnterprisePaymentRefundRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Refund the student in full (original instrument). Gateway-first: if Razorpay rejects
+    it (e.g. the payout already settled), nothing is persisted and the reason is surfaced."""
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    payment = _get_org_payment_or_404(db, organization.id, payment_id)
+    audit = enterprise_payments.issue_full_refund(
+        db=db, payment=payment, by_user=current_user, reason=(payload.reason or None),
+    )
+    db.commit()
+    return {
+        "message": f"Refund of ₹{audit.amount_paise / 100:,.2f} initiated to the student's original payment method.",
+        "payment": enterprise_payments.serialize_payment(payment),
+    }
+
+
+# ---- Public pay page (no auth; token = capability) -------------------------
+
+def _public_payment_or_404(db: Session, token: str) -> models.EnterpriseStudentPayment:
+    token_hash = hash_token((token or "").strip())
+    row = (
+        db.query(models.EnterpriseStudentPayment)
+        .filter(models.EnterpriseStudentPayment.pay_token_hash == token_hash)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="This payment link is invalid or has been replaced.")
+    return row
+
+
+@router.get("/pay/{token}")
+def enterprise_public_pay_info(
+    token: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Everything the public pay page needs. The full amount charged is disclosed to the
+    student up-front; the consultancy (not Rilono) is named as the payee."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.pay_public",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
+        extra_key=hash_token(token)[:16],
+    )
+    payment = _public_payment_or_404(db, token)
+    organization = db.query(models.EnterpriseOrganization).filter(
+        models.EnterpriseOrganization.id == payment.organization_id
+    ).first()
+    la = enterprise_payments.get_linked_account(db, payment.organization_id)
+    payable = (
+        payment.status == "created"
+        and enterprise_payments.razorpay_enabled()
+        and la is not None and bool(la.is_payable)
+    )
+    info = {
+        "organization_name": organization.company_name if organization else "Your consultancy",
+        "organization_logo_url": _resolve_enterprise_logo_url(organization) if organization else None,
+        "client_name": payment.client_name_snapshot,
+        "invoice_number": payment.invoice_number,
+        "description": payment.description,
+        "amount_paise": payment.amount_paise,
+        "currency": payment.currency,
+        "status": payment.status,
+        "due_date": payment.due_date.isoformat() if payment.due_date else None,
+        "paid_at": payment.paid_at.isoformat() if payment.paid_at else None,
+        "payable": payable,
+    }
+    if payable:
+        info["razorpay_key_id"] = os.getenv("RAZORPAY_KEY_ID", "").strip()
+        info["razorpay_order_id"] = payment.razorpay_order_id
+        info["payer_email"] = payment.payer_email_snapshot
+    return info
+
+
+@router.post("/pay/{token}/verify")
+def enterprise_public_pay_verify(
+    token: str,
+    payload: EnterprisePublicPayVerifyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Checkout callback: verify the Razorpay signature AND confirm capture with the API
+    before marking paid (a signature alone proves authenticity, not capture). Webhooks
+    remain the reconciliation source of truth for transfer/settlement states."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.pay_verify",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
+        extra_key=hash_token(token)[:16],
+    )
+    payment = _public_payment_or_404(db, token)
+    if payment.status == "cancelled":
+        raise HTTPException(status_code=409, detail="This payment request was cancelled.")
+    if (payload.razorpay_order_id or "").strip() != (payment.razorpay_order_id or ""):
+        raise HTTPException(status_code=400, detail="Payment does not match this request.")
+    if not enterprise_payments.verify_checkout_signature(
+        payload.razorpay_order_id, payload.razorpay_payment_id, payload.razorpay_signature
+    ):
+        raise HTTPException(status_code=400, detail="Payment verification failed.")
+    enterprise_payments.confirm_captured_and_mark_paid(
+        db=db, payment=payment, razorpay_payment_id=payload.razorpay_payment_id.strip()
+    )
+    db.commit()
+    return {"status": "paid", "message": "Payment received. You can close this page."}
+
+
+# ---- Razorpay Route webhook (reconciliation source of truth) ---------------
+
+@router.post("/webhook/razorpay-route")
+async def enterprise_route_webhook(request: Request, db: Session = Depends(get_db)):
+    """Idempotent, out-of-order-tolerant reconciliation of Route events. Signature is
+    HMAC-SHA256 of the RAW body with a dedicated secret (distinct from the API keys and
+    the B2C subscription webhook secret); events dedupe on the unique event id."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.route_webhook", limit=300, window_seconds=60,
+    )
+    secret = os.getenv("RAZORPAY_ROUTE_WEBHOOK_SECRET", "").strip()
+    if not secret:
+        raise HTTPException(status_code=503, detail="Webhook not configured.")
+    body = await request.body()
+    signature = (request.headers.get("X-Razorpay-Signature") or "").strip()
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not signature or not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature.")
+
+    try:
+        event = json.loads(body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    event_type = str(event.get("event") or "").strip()
+    event_id = (request.headers.get("x-razorpay-event-id") or "").strip() or None
+
+    container = (event.get("payload") or {})
+    entity = {}
+    for kind in ("payment", "transfer", "refund", "order", "dispute"):
+        maybe = (container.get(kind) or {}).get("entity") if isinstance(container.get(kind), dict) else None
+        if maybe:
+            entity = maybe
+            break
+
+    # Peek at the target row so the ledger row carries org/payment links, then dedupe-insert.
+    target = enterprise_payments._find_payment_for_event(db, entity) if entity else None
+    fresh = enterprise_payments.record_webhook_event(
+        db,
+        event_id=event_id,
+        event_type=event_type,
+        entity_type=str(entity.get("entity") or "") or None,
+        entity_id=str(entity.get("id") or "") or None,
+        amount_paise=int(entity.get("amount") or 0) or None,
+        payload_json=body.decode("utf-8", errors="replace"),
+        organization_id=target.organization_id if target else None,
+        student_payment_id=target.id if target else None,
+    )
+    if not fresh:
+        return {"status": "duplicate"}
+    applied = enterprise_payments.apply_webhook_event(db, event_type, event)
+    db.commit()
+
+    # Chargebacks demand staff action before the evidence deadline — alert org admins.
+    # Best-effort: an email failure must never make the webhook 5xx (Razorpay retries).
+    if event_type.startswith("payment.dispute.") and applied is not None:
+        try:
+            _send_dispute_alert_to_org_admins(db, payment=applied, event_type=event_type, entity=entity)
+        except Exception:
+            logger.exception("route-webhook: dispute alert email failed (payment_id=%s)", applied.id)
+
+    return {"status": "ok"}
+
+
+def _send_dispute_alert_to_org_admins(
+    db: Session, *, payment: "models.EnterpriseStudentPayment", event_type: str, entity: dict
+) -> None:
+    """Email every active org admin when a dispute opens or needs action. Won/lost/closed
+    updates are also sent so staff see the outcome without polling the dashboard."""
+    admins = (
+        db.query(models.User)
+        .join(
+            models.EnterpriseOrganizationMember,
+            models.EnterpriseOrganizationMember.user_id == models.User.id,
+        )
+        .filter(
+            models.EnterpriseOrganizationMember.organization_id == payment.organization_id,
+            models.EnterpriseOrganizationMember.is_active.is_(True),
+            models.EnterpriseOrganizationMember.role == ENTERPRISE_ROLE_ADMIN,
+            models.User.is_active.is_(True),
+        )
+        .all()
+    )
+    organization = db.query(models.EnterpriseOrganization).filter(
+        models.EnterpriseOrganization.id == payment.organization_id
+    ).first()
+    if not admins or organization is None:
+        return
+
+    suffix = event_type.rsplit(".", 1)[-1].replace("_", " ")
+    respond_by_text = None
+    try:
+        raw = entity.get("respond_by")
+        if raw:
+            respond_by_text = datetime.utcfromtimestamp(int(raw)).strftime("%d %b %Y, %H:%M UTC")
+    except (TypeError, ValueError, OSError, OverflowError):
+        respond_by_text = None
+
+    for admin in admins:
+        if getattr(admin, "email_notifications_enabled", True) is False:
+            continue
+        send_enterprise_payment_dispute_alert_email(
+            to_email=admin.email,
+            organization_name=organization.company_name,
+            client_name=payment.client_name_snapshot or "a client",
+            amount_rupees=f"{(int(entity.get('amount') or payment.amount_paise or 0)) / 100:,.2f}",
+            invoice_number=payment.invoice_number or "",
+            dispute_state=suffix,
+            reason_code=str(entity.get("reason_code") or "") or None,
+            respond_by_text=respond_by_text,
+        )
 
 
 @router.get("/billing/plans")
@@ -4525,6 +5307,13 @@ ENTERPRISE_DOC_INLINE_EXT = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
 def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
+    extracted = None
+    if doc.extracted_fields:
+        try:
+            import json
+            extracted = json.loads(doc.extracted_fields)
+        except Exception:
+            extracted = None
     return {
         "id": doc.id,
         "client_id": doc.client_id,
@@ -4535,6 +5324,11 @@ def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
         "uploaded_by_name": doc.uploaded_by_name,
         "created_at": _iso(doc.created_at),
         "download_url": f"/api/enterprise/clients/{doc.client_id}/documents/{doc.id}/download",
+        # AI validation (null status = still scanning in the background).
+        "validation_status": doc.validation_status,
+        "validation_message": doc.validation_message,
+        "validated_at": _iso(doc.validated_at),
+        "extracted": extracted,
     }
 
 
@@ -4633,26 +5427,314 @@ async def enterprise_upload_client_document(
     }
 
 
-def _start_document_text_extraction(document_id: int, data: bytes, filename: str, mime_type: str | None) -> None:
-    def _worker():
+def _ent_flexible_parse_date(value):
+    """Best-effort parse of a human-readable date (passport/ID dates come in many formats)
+    into a date. Prefers day-first (most passports). Returns None if unparseable."""
+    s = str(value or "").strip()
+    if not s or s.lower() in {"null", "none", "n/a", "na", "not available", "unknown"}:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%m/%d/%Y",
+                "%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d %b, %Y", "%b %d, %Y", "%B %d, %Y", "%Y/%m/%d"):
         try:
-            extracted = gemini_service.extract_text_from_document(data, filename, mime_type or "application/octet-stream")
-            if not extracted:
-                return
-            db2 = SessionLocal()
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    try:
+        from dateutil import parser as _dateparser
+        return _dateparser.parse(s, dayfirst=True, fuzzy=True).date()
+    except Exception:
+        return None
+
+
+def _ent_clean_extracted(validation: dict) -> dict:
+    """Pull identity fields out of validate_and_extract_document()'s response, dropping
+    empty/placeholder values."""
+    def val(key):
+        raw = validation.get(key)
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        if not s or s.lower() in {"null", "none", "n/a", "na", "not available", "unknown", "-"}:
+            return None
+        return s
+    return {
+        "name": val("Name"),
+        "date_of_birth": val("Date of Birth"),
+        "document_number": val("Document Number"),
+        "expiration_date": val("Expiration Date"),
+        "issue_date": val("Issue Date"),
+        "country": val("Country"),
+        "other": val("Other Information"),
+    }
+
+
+def _ent_profile_field_plan(document_type: str, fields: dict):
+    """Which extracted fields map onto the client profile, per document type. Only identity
+    documents (passport) populate the profile today; extend this for more types later."""
+    dt = (document_type or "").lower()
+    is_passport = ("passport" in dt) and ("photo" not in dt)
+    if not is_passport:
+        return []
+    return [  # (client attribute, human label, extracted value, kind)
+        ("full_name", "Name", fields.get("name"), "text"),
+        ("date_of_birth", "Date of birth", fields.get("date_of_birth"), "date"),
+        ("nationality", "Nationality", fields.get("country"), "text"),
+        ("passport_number", "Passport number", fields.get("document_number"), "text"),
+        ("passport_expiry", "Passport expiry", fields.get("expiration_date"), "date"),
+    ]
+
+
+# Upload-time AI cross-validation context. No hardcoded identity/consistency rules live
+# in this codebase: we hand the AI the client's profile and their other documents, and the
+# AI decides — per document type and destination — what to check (identity, dates, funds,
+# study plan, …). A material conflict makes the AI fail the validation itself.
+_ENT_VALIDATION_PROFILE_CHARS = 4000
+_ENT_VALIDATION_DOCS_CHARS = 12000
+_ENT_VALIDATION_MAX_RELATED_DOCS = 6
+_ENT_VALIDATION_TEXT_PER_DOC_CHARS = 1800
+
+
+def _ent_client_profile_context(client) -> str:
+    """Compact snapshot of the client profile for AI cross-validation at upload time."""
+    if client is None:
+        return ""
+
+    def _d(v):
+        return v.isoformat() if hasattr(v, "isoformat") else ("" if v is None else str(v).strip())
+
+    dest_name = (getattr(client, "destination_country_name", "") or "").strip()
+    dest_code = (getattr(client, "destination_country_code", "") or "").strip()
+    destination = f"{dest_name} ({dest_code})" if dest_name and dest_code else (dest_name or dest_code)
+    rows = [
+        ("Full name", getattr(client, "full_name", None)),
+        ("Date of birth", _d(getattr(client, "date_of_birth", None))),
+        ("Nationality", getattr(client, "nationality", None)),
+        ("Passport number", getattr(client, "passport_number", None)),
+        ("Passport expiry", _d(getattr(client, "passport_expiry", None))),
+        ("Destination", destination),
+        ("Visa type", getattr(client, "visa_type", None)),
+        ("Intake", getattr(client, "intake", None)),
+        ("Key date / deadline", _d(getattr(client, "target_date", None))),
+        ("Email", getattr(client, "email", None)),
+    ]
+    lines = [f"{label}: {str(value).strip()}" for label, value in rows if value and str(value).strip()]
+    if not lines:
+        return ""
+    text = (
+        "This is the visa applicant (client) this document was uploaded for. Cross-check the "
+        "document against this profile — including that the document actually belongs to this "
+        "person:\n" + "\n".join(lines)
+    )
+    return text[:_ENT_VALIDATION_PROFILE_CHARS]
+
+
+def _ent_related_documents_context(db: Session, client, exclude_document_id) -> str:
+    """Bounded snapshots of the client's OTHER documents so the AI can cross-validate names,
+    dates, numbers, universities and timelines across everything on file."""
+    if client is None:
+        return ""
+    try:
+        rows = (
+            db.query(models.EnterpriseClientDocument)
+            .filter(
+                models.EnterpriseClientDocument.client_id == client.id,
+                models.EnterpriseClientDocument.id != int(exclude_document_id or 0),
+            )
+            .order_by(models.EnterpriseClientDocument.created_at.desc())
+            .limit(_ENT_VALIDATION_MAX_RELATED_DOCS)
+            .all()
+        )
+    except Exception:
+        logger.exception("Failed to load related documents for validation context (client_id=%s)", client.id)
+        return ""
+    blocks, used = [], 0
+    for index, doc in enumerate(rows, start=1):
+        header = (
+            f"\n--- PRIOR DOCUMENT {index}: {(doc.document_type or 'document').upper()} "
+            f"({doc.original_filename}) [{(doc.validation_status or 'not scanned').upper()}] ---\n"
+        )
+        body = ""
+        if doc.extracted_fields:
             try:
-                row = (
-                    db2.query(models.EnterpriseClientDocument)
-                    .filter(models.EnterpriseClientDocument.id == int(document_id))
-                    .first()
-                )
-                if row is not None:
-                    row.extracted_text = extracted[:200000]
-                    db2.commit()
-            finally:
-                db2.close()
+                fields = (json.loads(doc.extracted_fields) or {}).get("fields") or {}
+                if fields:
+                    body += "Extracted fields: " + json.dumps(fields, default=str) + "\n"
+            except Exception:
+                pass
+        if doc.extracted_text:
+            body += str(doc.extracted_text)[:_ENT_VALIDATION_TEXT_PER_DOC_CHARS] + "\n"
+        remaining = _ENT_VALIDATION_DOCS_CHARS - used - len(header)
+        if remaining <= 0:
+            break
+        block = header + body[: max(0, remaining)]
+        blocks.append(block)
+        used += len(block)
+    if not blocks:
+        return ""
+    return "Previously uploaded documents for this client (for cross-validation):" + "".join(blocks)
+
+
+def _ent_autofill_profile(db: Session, client: models.EnterpriseClient, document_type: str, fields: dict) -> dict:
+    """Fill EMPTY client profile fields from a validated document's details. Never overwrites an
+    existing value — a differing value is returned as a 'conflict' for staff to review. Adds an
+    audit note. Returns {'filled': [...], 'conflicts': [...]}."""
+    filled, conflicts = [], []
+
+    def _disp(v):
+        return v.isoformat() if hasattr(v, "isoformat") else str(v)
+
+    for attr, label, raw_value, kind in _ent_profile_field_plan(document_type, fields):
+        if not raw_value:
+            continue
+        if kind == "date":
+            new_value = _ent_flexible_parse_date(raw_value)
+            if new_value is None:
+                continue
+        else:
+            new_value = str(raw_value).strip()
+        current = getattr(client, attr, None)
+        current_empty = current is None or (isinstance(current, str) and not current.strip())
+        if current_empty:
+            setattr(client, attr, new_value)
+            filled.append({"field": label, "value": _disp(new_value)})
+        else:
+            if kind == "date":
+                same = (current == new_value)
+            else:
+                same = (str(current).strip().lower() == new_value.strip().lower())
+            if not same:
+                conflicts.append({"field": label, "existing": _disp(current), "document": _disp(new_value)})
+
+    if filled or conflicts:
+        lines = []
+        if filled:
+            lines.append("Auto-filled from validated " + str(document_type) + ": "
+                         + ", ".join(f["field"] for f in filled) + ".")
+        if conflicts:
+            lines.append("Needs review — document differs from existing profile: "
+                         + "; ".join(f'{c["field"]} (profile "{c["existing"]}" vs document "{c["document"]}")'
+                                     for c in conflicts) + ".")
+        try:
+            db.add(models.EnterpriseClientNote(
+                organization_id=client.organization_id,
+                client_id=client.id,
+                author_user_id=None,
+                author_name="Rilono AI",
+                body=" ".join(lines),
+            ))
         except Exception:
-            logger.exception("Background document text extraction failed (document_id=%s)", document_id)
+            logger.exception("Failed to add autofill audit note (client_id=%s)", client.id)
+    return {"filled": filled, "conflicts": conflicts}
+
+
+def _start_document_text_extraction(document_id: int, data: bytes, filename: str, mime_type: str | None) -> None:
+    """Background: extract the document's text (for the AI copilot) AND run Rilono AI validation
+    + structured extraction. When a validated identity document (passport) comes in, empty client
+    profile fields are auto-filled — differences are flagged, never overwritten. Used by both the
+    staff upload and the client secure-link upload."""
+    def _worker():
+        import json
+        from datetime import timezone
+        db2 = SessionLocal()
+        try:
+            row = (
+                db2.query(models.EnterpriseClientDocument)
+                .filter(models.EnterpriseClientDocument.id == int(document_id))
+                .first()
+            )
+            if row is None:
+                return
+            client = (
+                db2.query(models.EnterpriseClient)
+                .filter(models.EnterpriseClient.id == row.client_id)
+                .first()
+            )
+
+            # 1) Full-text extraction for the copilot (best-effort).
+            try:
+                extracted = gemini_service.extract_text_from_document(
+                    data, filename, mime_type or "application/octet-stream"
+                )
+                if extracted:
+                    row.extracted_text = extracted[:200000]
+            except Exception:
+                logger.exception("Enterprise doc text extraction failed (document_id=%s)", document_id)
+
+            # 2) Validate the document + extract structured identity fields.
+            destination_code = client.destination_country_code if client is not None else None
+            destination_summary = (
+                f"{client.destination_country_name} — {client.visa_type}" if client is not None else None
+            )
+            validation = None
+            try:
+                # Hand the AI the client's profile + their other documents: the AI decides,
+                # per document type and destination, what to cross-check (identity, dates,
+                # funds, study plan, …) and FAILS the validation itself on any material
+                # conflict — e.g. a passport that belongs to a different person.
+                validation = gemini_service.validate_and_extract_document(
+                    data, filename, mime_type or "application/octet-stream",
+                    document_type=row.document_type,
+                    current_date_for_evaluation=datetime.now(timezone.utc).isoformat(),
+                    student_profile_context=_ent_client_profile_context(client),
+                    related_documents_context=_ent_related_documents_context(db2, client, row.id),
+                    destination_country_code=destination_code,
+                    destination_summary=destination_summary,
+                )
+            except Exception:
+                logger.exception("Enterprise doc validation failed (document_id=%s)", document_id)
+
+            row.validated_at = datetime.now(timezone.utc)
+            payload: dict = {}
+            if isinstance(validation, dict):
+                verdict = str(validation.get("Document Validation", "")).strip().lower()
+                row.validation_status = "valid" if verdict == "yes" else ("invalid" if verdict == "no" else "error")
+                row.validation_message = (str(validation.get("Message") or "").strip() or None)
+                fields = _ent_clean_extracted(validation)
+                payload["fields"] = fields
+                cvf = validation.get("Cross Validation Flags")
+                if cvf:
+                    payload["cross_validation_flags"] = cvf
+                # Auto-fill ONLY runs when the AI passed the document — a red-flagged
+                # document (wrong person, expired, inconsistent) never touches the profile.
+                if row.validation_status == "valid" and client is not None:
+                    autofill = _ent_autofill_profile(db2, client, row.document_type, fields)
+                    payload["autofill"] = autofill
+                    filled, conflicts = autofill.get("filled") or [], autofill.get("conflicts") or []
+                    if filled or conflicts:
+                        bits = []
+                        if filled:
+                            bits.append("auto-filled " + ", ".join(f["field"] for f in filled))
+                        if conflicts:
+                            bits.append(f"{len(conflicts)} field(s) to review")
+                        try:
+                            notif.notify_org(
+                                db2, row.organization_id, type="document_validated",
+                                title=f"Rilono AI validated {row.document_type} for {client.full_name} — " + "; ".join(bits),
+                                reference_type="client", reference_id=client.id, commit=False,
+                            )
+                        except Exception:
+                            pass
+                elif row.validation_status == "invalid" and client is not None:
+                    # Surface the AI's red flag to the whole org, not just the uploader.
+                    try:
+                        notif.notify_org(
+                            db2, row.organization_id, type="document_flagged",
+                            title=f"⚠ Rilono AI flagged the {row.document_type} for {client.full_name} — needs review",
+                            reference_type="client", reference_id=client.id, commit=False,
+                        )
+                    except Exception:
+                        pass
+            else:
+                row.validation_status = "error"
+                row.validation_message = "Rilono AI could not validate this document automatically."
+
+            if payload:
+                row.extracted_fields = json.dumps(payload)[:100000]
+            db2.commit()
+        except Exception:
+            logger.exception("Background document processing failed (document_id=%s)", document_id)
+        finally:
+            db2.close()
 
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -4720,6 +5802,80 @@ def enterprise_delete_client_document(
     db.delete(doc)
     db.commit()
     return {"message": "Document deleted.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+@router.post("/clients/{client_id}/documents/{document_id}/accept")
+def enterprise_accept_client_document(
+    client_id: int,
+    document_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Human-in-the-loop override: staff accepts a document that Rilono AI red-flagged
+    (after checking it themselves). Flips it to valid — with an audit trail — and runs
+    the normal profile auto-fill. The AI stays the default gatekeeper; this is the escape
+    hatch for its false alarms."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    doc = (
+        db.query(models.EnterpriseClientDocument)
+        .filter(
+            models.EnterpriseClientDocument.id == int(document_id),
+            models.EnterpriseClientDocument.client_id == int(client_id),
+            models.EnterpriseClientDocument.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if doc.validation_status not in ("invalid", "error"):
+        raise HTTPException(status_code=400, detail="Only documents Rilono AI flagged can be accepted manually.")
+    client = (
+        db.query(models.EnterpriseClient)
+        .filter(models.EnterpriseClient.id == int(client_id))
+        .first()
+    )
+
+    staff_name = (current_user.full_name or current_user.email or "staff").strip()
+    prior_message = (doc.validation_message or "").strip()
+    try:
+        payload = json.loads(doc.extracted_fields) if doc.extracted_fields else {}
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+
+    doc.validation_status = "valid"
+    doc.validation_message = (
+        f"Accepted by {staff_name} after manual review."
+        + (f" Rilono AI had flagged: {prior_message}" if prior_message else "")
+    )[:2000]
+    payload["accepted_by"] = staff_name
+    payload["accepted_at"] = datetime.now(dt_timezone.utc).isoformat()
+
+    fields = payload.get("fields") or {}
+    if client is not None and isinstance(fields, dict) and fields:
+        payload["autofill"] = _ent_autofill_profile(db, client, doc.document_type, fields)
+    doc.extracted_fields = json.dumps(payload)[:100000]
+
+    try:
+        db.add(models.EnterpriseClientNote(
+            organization_id=organization.id,
+            client_id=int(client_id),
+            author_user_id=current_user.id,
+            author_name=staff_name,
+            body=(f"Manually accepted the {doc.document_type} ({doc.original_filename}) that "
+                  f"Rilono AI had flagged" + (f': "{prior_message[:300]}"' if prior_message else ".")),
+        ))
+    except Exception:
+        logger.exception("Failed to add accept audit note (document_id=%s)", document_id)
+    db.commit()
+    return {
+        "document": _serialize_client_document(doc),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
 
 
 @router.post("/clients/{client_id}/deep-scan")

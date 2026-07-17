@@ -2022,6 +2022,215 @@ def send_enterprise_interview_invite_email(
         return False, None, str(e)[:500]
 
 
+def send_enterprise_payment_request_email(
+    *,
+    to_email: str,
+    client_name: Optional[str],
+    organization_name: str,
+    amount_rupees: str,
+    description: str,
+    pay_url: str,
+    invoice_number: str = "",
+    due_date_text: Optional[str] = None,
+    logo_url: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email a client a secure link to pay their consultancy online (Razorpay checkout).
+
+    Honest framing: the CONSULTANCY is the payee — Rilono is the technology platform and
+    Razorpay processes the payment; funds settle to the consultancy's own bank account."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = (organization_name or "Your consultancy").strip()
+    name = (client_name or "").strip() or "there"
+    safe_org = escape(org_label)
+    safe_name = escape(name)
+    safe_url = escape(pay_url)
+    safe_desc = escape((description or "Visa service payment").strip())
+    safe_amount = escape(str(amount_rupees))
+    safe_invoice = escape((invoice_number or "").strip())
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
+                      'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
+    due_block = ""
+    if (due_date_text or "").strip():
+        due_block = (f'<div style="font-size:13px;color:#92400e;background:#fffbeb;padding:10px 12px;'
+                     f'border-radius:10px;margin-bottom:18px;">Due by <strong>{escape(due_date_text)}</strong></div>')
+
+    subject = f"Payment request from {org_label} — ₹{amount_rupees}"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:26px 28px;background:linear-gradient(135deg,#0f766e 0%,#0e7490 100%);color:#fff;">
+              {logo_block}
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
+              <h1 style="margin:8px 0 0 0;font-size:23px;">Payment request</h1>
+            </td></tr>
+            <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
+              <p style="margin:0 0 14px;">Hi {safe_name},</p>
+              <p style="margin:0 0 18px;">{safe_org} has requested a payment from you:</p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;margin-bottom:18px;">
+                <tr><td style="padding:16px 18px;">
+                  <div style="font-size:13px;color:#64748b;">{safe_desc}{f" · {safe_invoice}" if safe_invoice else ""}</div>
+                  <div style="font-size:30px;font-weight:800;color:#0f172a;margin-top:6px;">₹{safe_amount}</div>
+                </td></tr>
+              </table>
+              {due_block}
+              <div style="text-align:center;margin:8px 0 18px;">
+                <a href="{safe_url}" style="display:inline-block;padding:13px 28px;border-radius:10px;background:linear-gradient(135deg,#0f766e 0%,#0e7490 100%);color:#fff;font-size:15px;font-weight:700;text-decoration:none;">Pay securely →</a>
+              </div>
+              <p style="margin:14px 0 0;font-size:13px;color:#64748b;">
+                Payments are processed securely by <strong>Razorpay</strong> and settle directly to {safe_org}'s bank account.
+                {safe_org} uses Rilono as its technology platform. This link is personal to you — please don't share it.
+                If you weren't expecting this request, contact {safe_org} directly.
+              </p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        f"Hi {name},\n\n{org_label} has requested a payment from you.\n\n"
+        f"{(description or 'Visa service payment').strip()}"
+        f"{f' ({invoice_number})' if (invoice_number or '').strip() else ''}\n"
+        f"Amount: ₹{amount_rupees}\n"
+        f"{f'Due by: {due_date_text}' if (due_date_text or '').strip() else ''}\n\n"
+        f"Pay securely: {pay_url}\n\n"
+        f"Payments are processed by Razorpay and settle directly to {org_label}'s bank account. "
+        "This link is personal to you. If you weren't expecting this request, contact the consultancy directly.\n"
+    )
+    try:
+        params = {
+            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def send_enterprise_payment_dispute_alert_email(
+    *,
+    to_email: str,
+    organization_name: str,
+    client_name: str,
+    amount_rupees: str,
+    invoice_number: str = "",
+    dispute_state: str = "opened",
+    reason_code: Optional[str] = None,
+    respond_by_text: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Alert an org admin that a payment collected via Rilono Finance was disputed
+    (chargeback) or that the dispute state changed. Disputes are the organization's
+    responsibility (Terms — Payment Collection for Consultancies); evidence must be
+    submitted in the Razorpay dashboard before the deadline."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = (organization_name or "Your organization").strip()
+    state_label = (dispute_state or "updated").strip()
+    safe_org = escape(org_label)
+    safe_client = escape((client_name or "a client").strip())
+    safe_amount = escape(str(amount_rupees))
+    safe_state = escape(state_label)
+    safe_invoice = escape((invoice_number or "").strip())
+    reason_block = ""
+    if (reason_code or "").strip():
+        reason_block = (f'<div style="font-size:13px;color:#64748b;margin-top:6px;">'
+                        f'Reason code: <strong>{escape(reason_code.strip())}</strong></div>')
+    deadline_block = ""
+    if (respond_by_text or "").strip():
+        deadline_block = (f'<div style="font-size:13px;color:#92400e;background:#fffbeb;padding:10px 12px;'
+                          f'border-radius:10px;margin:14px 0 0;">Respond with evidence by '
+                          f'<strong>{escape(respond_by_text)}</strong></div>')
+
+    subject = f"⚠️ Payment dispute {state_label} — {client_name or 'client'} · ₹{amount_rupees}"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:26px 28px;background:linear-gradient(135deg,#b91c1c 0%,#991b1b 100%);color:#fff;">
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">RILONO FINANCE</div>
+              <h1 style="margin:8px 0 0 0;font-size:22px;">Payment dispute {safe_state}</h1>
+            </td></tr>
+            <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
+              <p style="margin:0 0 14px;">A payment collected by <strong>{safe_org}</strong> has a dispute update:</p>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;margin-bottom:4px;">
+                <tr><td style="padding:16px 18px;">
+                  <div style="font-size:13px;color:#64748b;">{safe_client}{f" · {safe_invoice}" if safe_invoice else ""}</div>
+                  <div style="font-size:28px;font-weight:800;color:#0f172a;margin-top:6px;">₹{safe_amount}</div>
+                  <div style="font-size:13px;color:#64748b;margin-top:6px;">Status: <strong>{safe_state}</strong></div>
+                  {reason_block}
+                </td></tr>
+              </table>
+              {deadline_block}
+              <p style="margin:18px 0 0;font-size:14px;color:#334155;">
+                Disputed payments are your organization's responsibility under the Rilono Terms
+                (&ldquo;Payment Collection for Consultancies&rdquo;). Please review the dispute and submit
+                evidence in your Razorpay dashboard before the deadline — missed deadlines are
+                usually decided in the payer's favour, and lost amounts are recovered from your
+                settlements.
+              </p>
+            </td></tr>
+            <tr><td style="padding:18px 28px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;">
+              Sent by Rilono Finance · Rilono · Bengaluru, Karnataka, India
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        f"Payment dispute {state_label}\n\n"
+        f"Organization: {org_label}\n"
+        f"Client: {client_name or 'a client'}{f' · {invoice_number}' if invoice_number else ''}\n"
+        f"Amount: ₹{amount_rupees}\n"
+        f"Status: {state_label}\n"
+        + (f"Reason code: {reason_code}\n" if (reason_code or '').strip() else "")
+        + (f"Respond with evidence by: {respond_by_text}\n" if (respond_by_text or '').strip() else "")
+        + "\nDisputed payments are your organization's responsibility under the Rilono Terms "
+          "(\"Payment Collection for Consultancies\"). Review the dispute and submit evidence in "
+          "your Razorpay dashboard before the deadline.\n\n"
+          "Rilono · Bengaluru, Karnataka, India\n"
+    )
+    try:
+        params = {
+            "from": f"Rilono Finance <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
 def send_enterprise_interview_code_email(
     *,
     to_email: str,

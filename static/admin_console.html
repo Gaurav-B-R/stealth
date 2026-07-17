@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css?v=20260710">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20260715a">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -331,6 +331,53 @@
                         </section>
                     </div>
 
+                    <div class="finance-ledger-head">
+                        <div>
+                            <h3>Ledger</h3>
+                            <p>Entries live in the database. Add, edit, or remove them here — subscription-revenue returns are read-only.</p>
+                        </div>
+                        <button type="button" id="adminFinanceAddBtn" class="table-btn primary">+ Add entry</button>
+                    </div>
+
+                    <form id="adminFinanceEntryForm" class="finance-entry-form" hidden>
+                        <input type="hidden" id="adminFinanceEntryId">
+                        <div class="finance-form-grid">
+                            <label class="finance-field"><span>Date</span>
+                                <input type="date" id="adminFinanceEntryDate" required>
+                            </label>
+                            <label class="finance-field"><span>Type</span>
+                                <select id="adminFinanceEntryType">
+                                    <option value="expense">Investment / Expense</option>
+                                    <option value="return">Return</option>
+                                </select>
+                            </label>
+                            <label class="finance-field"><span>Vendor</span>
+                                <input type="text" id="adminFinanceEntryVendor" placeholder="e.g. Claude" autocomplete="off">
+                            </label>
+                            <label class="finance-field"><span>Category</span>
+                                <input type="text" id="adminFinanceEntryCategory" placeholder="e.g. AI Model Tools" autocomplete="off">
+                            </label>
+                            <label class="finance-field"><span>Paid by</span>
+                                <input type="text" id="adminFinanceEntryPaidBy" placeholder="Gaurav / Kushal" list="adminFinancePaidByList" autocomplete="off">
+                                <datalist id="adminFinancePaidByList">
+                                    <option value="Gaurav"></option>
+                                    <option value="Kushal"></option>
+                                </datalist>
+                            </label>
+                            <label class="finance-field"><span>Amount (USD)</span>
+                                <input type="number" id="adminFinanceEntryAmount" min="0" step="0.01" placeholder="e.g. 21.25">
+                            </label>
+                            <label class="finance-field finance-field-wide"><span>Description</span>
+                                <input type="text" id="adminFinanceEntryDesc" placeholder="Optional" autocomplete="off">
+                            </label>
+                        </div>
+                        <div class="finance-form-actions">
+                            <button type="submit" id="adminFinanceEntrySave" class="table-btn primary">Add entry</button>
+                            <button type="button" id="adminFinanceEntryCancel" class="table-btn">Cancel</button>
+                            <span id="adminFinanceEntryError" class="coupon-form-error" hidden></span>
+                        </div>
+                    </form>
+
                     <div class="table-wrap finance-table-wrap">
                         <table class="users-table finance-table">
                             <thead>
@@ -343,11 +390,12 @@
                                     <th>Description</th>
                                     <th>Amount (USD)</th>
                                     <th>Source</th>
+                                    <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody id="adminFinanceTableBody">
                                 <tr>
-                                    <td colspan="8" class="table-empty">No finance data loaded yet.</td>
+                                    <td colspan="9" class="table-empty">No finance data loaded yet.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -672,7 +720,7 @@
         </div>
     </div>
 
-    <script src="/static/admin_console.js"></script>
+    <script src="/static/admin_console.js?v=20260715a"></script>
 </body>
 
 </html>

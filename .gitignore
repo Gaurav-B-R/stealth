@@ -51,3 +51,6 @@ build/
 
 # Local generated marketing previews
 /artifacts/rilono-homepage-video/
+
+# Local sandbox document storage (rilono-local preview / e2e sandbox)
+_docs_local/

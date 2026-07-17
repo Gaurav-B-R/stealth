@@ -149,6 +149,17 @@
             .fgrid { grid-template-columns: 1fr; }
             .cards { grid-template-columns: 1fr; }
         }
+        /* Book-a-demo tabs + Google scheduler embed */
+        .bk-tabs { display: flex; gap: 6px; background: #f1f5f9; border-radius: 12px; padding: 5px; margin-bottom: 18px; }
+        .bk-tab { flex: 1; border: none; background: transparent; font: inherit; font-weight: 700; font-size: 14px; color: #64748b; padding: 9px 10px; border-radius: 9px; cursor: pointer; transition: background .15s, color .15s, box-shadow .15s; }
+        .bk-tab.active { background: #fff; color: #4f46e5; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+        .bk-panel.hidden { display: none; }
+        .gcal-mount { position: relative; width: 100%; border-radius: 12px; overflow: hidden; }
+        .gcal-iframe { width: 100%; height: 620px; border: 0; display: block; background: #fff; }
+        .gcal-fallback { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 40px 22px; border: 1px dashed #cbd5e1; border-radius: 12px; background: #f8fafc; color: #64748b; font-size: 14px; line-height: 1.6; }
+        .gcal-fallback-ic { font-size: 30px; }
+        .linklike { border: none; background: none; color: #4f46e5; font: inherit; font-weight: 700; cursor: pointer; padding: 0; text-decoration: underline; }
+        @media (max-width: 560px) { .gcal-iframe { height: 560px; } }
     </style>
     <script src="/static/attribution.js"></script>
 </head>
@@ -181,7 +192,26 @@
             </div>
 
             <div class="form-card" id="demo-form">
-                <h2>Book your demo</h2>
+                <div class="bk-tabs" role="tablist" aria-label="How to book your demo">
+                    <button type="button" class="bk-tab active" id="bkTabSchedule" role="tab" aria-selected="true" onclick="showBookTab('schedule')">📅 Pick a time</button>
+                    <button type="button" class="bk-tab" id="bkTabCallback" role="tab" aria-selected="false" onclick="showBookTab('callback')">✉️ Request a callback</button>
+                </div>
+
+                <div id="bkPanelSchedule" class="bk-panel">
+                    <h2>Pick a time that works</h2>
+                    <p class="fc-sub">Choose a slot below — you'll get instant confirmation with a Google Meet link. No back-and-forth.</p>
+                    <div id="gcalMount" class="gcal-mount">
+                        <div class="gcal-fallback" id="gcalFallback">
+                            <div class="gcal-fallback-ic">📅</div>
+                            <p>Live self-scheduling is being switched on. In the meantime, pop over to
+                                <button type="button" class="linklike" onclick="showBookTab('callback')">Request a callback</button>
+                                and we'll email you a time within one business day.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="bkPanelCallback" class="bk-panel hidden">
+                <h2>Request a callback</h2>
                 <p class="fc-sub">Tell us a little about your consultancy and we'll email you to lock a time.</p>
                 <form id="demoForm" novalidate>
                     <div id="demoErr" class="form-err hidden"></div>
@@ -213,6 +243,7 @@
                     <div class="tick">✓</div>
                     <h3>Request received!</h3>
                     <p>Our team will email you shortly to schedule your personalized Rilono Enterprise demo.</p>
+                </div>
                 </div>
             </div>
         </div>
@@ -352,6 +383,56 @@
 
     <script>
         document.getElementById("yr").textContent = new Date().getFullYear();
+
+        /* =====================================================================
+           GOOGLE APPOINTMENT SCHEDULING — paste your booking link here.
+           Setup (one time, ~5 min, no email migration needed):
+             1. Sign in to Google Calendar with a Google account (you can create a
+                free one using contact@rilono.com as the login — "Use my existing
+                email instead" during signup; your Namecheap email is unchanged).
+             2. Create → "Appointment schedule". Set your availability + duration.
+             3. Under "Booked appointment settings", turn ON
+                "Add Google Meet video conferencing".
+             4. Click Share → copy the "Booking page" link. It looks like:
+                https://calendar.google.com/calendar/appointments/schedules/AcZ...
+             5. Paste that URL between the quotes below and redeploy.
+           Leave it empty to keep the page on the callback form only.
+           ===================================================================== */
+        var GOOGLE_BOOKING_URL = "";
+
+        function showBookTab(which) {
+            var isSched = which === "schedule";
+            var ps = document.getElementById("bkPanelSchedule");
+            var pc = document.getElementById("bkPanelCallback");
+            var ts = document.getElementById("bkTabSchedule");
+            var tc = document.getElementById("bkTabCallback");
+            if (!ps || !pc) return;
+            ps.classList.toggle("hidden", !isSched);
+            pc.classList.toggle("hidden", isSched);
+            ts.classList.toggle("active", isSched); ts.setAttribute("aria-selected", isSched ? "true" : "false");
+            tc.classList.toggle("active", !isSched); tc.setAttribute("aria-selected", !isSched ? "true" : "false");
+        }
+
+        (function initScheduler() {
+            var mount = document.getElementById("gcalMount");
+            if (!mount) return;
+            var url = (GOOGLE_BOOKING_URL || "").trim();
+            if (url && /^https:\/\/calendar\.google\.com\//.test(url)) {
+                var src = url + (url.indexOf("?") === -1 ? "?" : "&") + "gv=true"; // embeddable booking view
+                var ifr = document.createElement("iframe");
+                ifr.src = src;
+                ifr.title = "Book a Rilono Enterprise demo";
+                ifr.className = "gcal-iframe";
+                ifr.setAttribute("frameborder", "0");
+                ifr.loading = "lazy";
+                var fb = document.getElementById("gcalFallback");
+                if (fb) fb.remove();
+                mount.appendChild(ifr);
+            } else {
+                // No booking link configured yet → keep the page fully usable via callback.
+                showBookTab("callback");
+            }
+        })();
 
         (function () {
             var form = document.getElementById("demoForm");

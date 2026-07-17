@@ -43,6 +43,7 @@ from app.schema_patch import (
     ensure_enterprise_interview_invite_columns,
     ensure_enterprise_document_request_tables,
     ensure_enterprise_refunds_table,
+    ensure_enterprise_payments_tables,
     ensure_enterprise_organization_columns,
     ensure_enterprise_students_table,
     ensure_f1_visa_news_table,
@@ -121,7 +122,7 @@ DEFAULT_CONTENT_SECURITY_POLICY = (
     "img-src 'self' data: https: blob:; "
     "font-src 'self' data: https:; "
     "connect-src 'self' https://api.razorpay.com https://checkout.razorpay.com https://www.google-analytics.com https://region1.google-analytics.com https://stats.g.doubleclick.net https://challenges.cloudflare.com; "
-    "frame-src 'self' blob: https://checkout.razorpay.com https://api.razorpay.com https://challenges.cloudflare.com; "
+    "frame-src 'self' blob: https://checkout.razorpay.com https://api.razorpay.com https://challenges.cloudflare.com https://calendar.google.com; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "frame-ancestors 'none'; "
@@ -183,7 +184,9 @@ async def add_security_headers(request: Request, call_next):
     # API responses may contain identity, notification, billing, document, or AI data.
     # Make the safe default explicit for browsers, CDNs, and reverse proxies so a future
     # cache rule can never reuse one account's response for another visitor.
-    if request.url.path.startswith("/api/"):
+    # Sole exception: uploaded org logos — public branding assets served under an
+    # unguessable token URL, rendered on every portal page, and safe to cache hard.
+    if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/enterprise/public/org-logo/"):
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
         response.headers["CDN-Cache-Control"] = "no-store"
         response.headers["Surrogate-Control"] = "no-store"
@@ -271,6 +274,7 @@ def startup_backfill_subscriptions():
     ensure_enterprise_document_request_tables()
     ensure_enterprise_credit_tables()
     ensure_enterprise_refunds_table()
+    ensure_enterprise_payments_tables()
     ensure_enterprise_coupons_table()
     ensure_enterprise_payment_coupon_columns()
     ensure_enterprise_calendar_table()
@@ -949,6 +953,16 @@ async def read_interview_invite(token: str):
 async def read_document_upload(token: str):
     """Serve the public client-facing secure document upload page (token validated client-side via API)."""
     html_path = os.path.join(os.path.dirname(__file__), "..", "static", "upload.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/pay/{token}")
+async def read_public_pay_page(token: str):
+    """Serve the public student pay page for an enterprise payment request
+    (token validated client-side via /api/enterprise/pay/{token})."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "pay.html")
     if os.path.exists(html_path):
         return FileResponse(html_path)
     raise HTTPException(status_code=404, detail="Not found")

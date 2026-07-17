@@ -193,8 +193,26 @@
     if (parts.length <= 2) return h;
     return parts.slice(-2).join(".");
   }
+  // ---- Display currency (from Settings → company country; live FX, billing stays INR) ----
+  function orgCur() {
+    const c = state.me && state.me.organization && state.me.organization.display_currency;
+    return (c && c.code && c.code !== "INR" && Number(c.rate_from_inr) > 0) ? c : null;
+  }
+  function fmtInr(amountInr) {
+    const n = Number(amountInr || 0);
+    const cur = orgCur();
+    if (!cur) return "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+    const v = n * Number(cur.rate_from_inr);
+    return cur.symbol + v.toLocaleString("en-US", { maximumFractionDigits: v >= 1000 ? 0 : 2 });
+  }
   function fmtPaise(p) {
-    return "₹" + (Number(p || 0) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+    return fmtInr(Number(p || 0) / 100);
+  }
+  // Razorpay charges in INR — show the real billed amount wherever a payment starts.
+  function inrBilledNote(paise) {
+    if (!orgCur()) return "";
+    const inr = "₹" + (Number(paise || 0) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+    return `<div style="font-size:11.5px;color:var(--muted);margin-top:2px">Billed in INR: ${inr} · shown in ${orgCur().code} at today's rate</div>`;
   }
   // Shared discount-code bar used on the credits top-up and billing pages.
   // `coupon` is null (show input) or { code, percent, percent_display } (show applied state).
@@ -415,6 +433,75 @@
   }
   $("#overlay").addEventListener("click", () => { closeModal(); closeDrawer(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") { closeModal(); closeDrawer(); } });
+
+  /* ---------------- in-app confirm / prompt (replace native window.confirm/prompt) ----------------
+     Promise-based styled dialogs so we never show the ugly "acme.lvh.me says" browser popup.
+     confirmModal(msg, opts) -> Promise<boolean>;  promptModal(msg, opts) -> Promise<string|null>. */
+  function confirmModal(message, opts) {
+    opts = opts || {};
+    var title = opts.title || "Please confirm";
+    var okText = opts.okText || "Confirm";
+    var cancelText = opts.cancelText || "Cancel";
+    var danger = opts.danger !== false; // default to destructive styling (most uses are deletes)
+    return new Promise(function (resolve) {
+      var settled = false;
+      function finish(val) {
+        if (settled) return; settled = true;
+        document.removeEventListener("keydown", onKey, true);
+        $("#overlay").removeEventListener("click", onOverlay);
+        closeModal();
+        resolve(val);
+      }
+      function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); finish(false); } }
+      function onOverlay(e) { if (e.target === $("#overlay")) finish(false); }
+      openModal(
+        '<div class="modal-head"><h3>' + esc(title) + '</h3><button class="x" id="cfmClose" aria-label="Close">×</button></div>' +
+        '<div class="modal-body"><p style="margin:0;color:var(--text-2);font-size:14px;line-height:1.65">' + esc(message).replace(/\n/g, "<br>") + '</p></div>' +
+        '<div class="modal-foot"><button type="button" class="btn btn-ghost" id="cfmCancel">' + esc(cancelText) + '</button>' +
+        '<button type="button" class="btn ' + (danger ? "btn-danger" : "btn-primary") + '" id="cfmOk">' + esc(okText) + '</button></div>'
+      );
+      $("#cfmClose").onclick = function () { finish(false); };
+      $("#cfmCancel").onclick = function () { finish(false); };
+      $("#cfmOk").onclick = function () { finish(true); };
+      document.addEventListener("keydown", onKey, true);
+      $("#overlay").addEventListener("click", onOverlay);
+      var ok = $("#cfmOk"); if (ok) ok.focus();
+    });
+  }
+  function promptModal(message, opts) {
+    opts = opts || {};
+    var title = opts.title || "Enter a value";
+    var okText = opts.okText || "OK";
+    var placeholder = opts.placeholder || "";
+    var value = opts.value || "";
+    var inputType = opts.type || "text";
+    return new Promise(function (resolve) {
+      var settled = false;
+      function finish(val) {
+        if (settled) return; settled = true;
+        document.removeEventListener("keydown", onKey, true);
+        $("#overlay").removeEventListener("click", onOverlay);
+        closeModal();
+        resolve(val);
+      }
+      function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); finish(null); } }
+      function onOverlay(e) { if (e.target === $("#overlay")) finish(null); }
+      openModal(
+        '<div class="modal-head"><h3>' + esc(title) + '</h3><button class="x" id="pmClose" aria-label="Close">×</button></div>' +
+        '<form id="pmForm"><div class="modal-body">' +
+        '<p style="margin:0 0 12px;color:var(--text-2);font-size:14px;line-height:1.6">' + esc(message) + '</p>' +
+        '<input id="pmInput" type="' + esc(inputType) + '" class="select-mini" style="width:100%" placeholder="' + esc(placeholder) + '" value="' + esc(value) + '"></div>' +
+        '<div class="modal-foot"><button type="button" class="btn btn-ghost" id="pmCancel">Cancel</button>' +
+        '<button type="submit" class="btn btn-primary" id="pmOk">' + esc(okText) + '</button></div></form>'
+      );
+      $("#pmClose").onclick = function () { finish(null); };
+      $("#pmCancel").onclick = function () { finish(null); };
+      $("#pmForm").onsubmit = function (e) { e.preventDefault(); finish($("#pmInput").value); };
+      document.addEventListener("keydown", onKey, true);
+      $("#overlay").addEventListener("click", onOverlay);
+      var inp = $("#pmInput"); if (inp) inp.focus();
+    });
+  }
 
   /* ---------------- landmark photo ---------------- */
   // Real bundled landmark photo per country. The parent .country-art carries a
@@ -790,7 +877,8 @@
     if (cr && cr.balance_credits != null) {
       $("#brandPlan").textContent = cr.balance_credits + " credits";
     } else {
-      $("#brandPlan").textContent = "Free plan";
+      // No plan tiers exist — the platform is free CRM + pay-as-you-go credits.
+      $("#brandPlan").textContent = "Rilono Credits";
     }
     if (s && s.clients_used != null) $("#clientsBadge").textContent = s.clients_used;
     const cb = $("#creditsBadge");
@@ -927,7 +1015,9 @@
      ============================================================ */
   // ---- URL routing: keep the address bar in sync with the active view so refresh,
   // deep-links, bookmarks and browser back/forward all work inside the app. ----
-  const ROUTE_VIEWS = ["dashboard", "clients", "calendar", "ai", "team", "credits", "support", "billing", "settings"];
+  // "billing" removed: the plan-tier system is dormant (free CRM + credits is the model),
+  // so the dead Plans page must not be reachable even by deep link. Code kept for reversibility.
+  const ROUTE_VIEWS = ["dashboard", "clients", "calendar", "ai", "team", "credits", "finance", "support", "settings"];
   function viewToPath(view) {
     return (view && view !== "dashboard" && ROUTE_VIEWS.includes(view)) ? ("/enterprise/" + view) : "/enterprise";
   }
@@ -958,7 +1048,7 @@
     state.view = view;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     $("#sidebar").classList.remove("open");
-    const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
+    const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", finance: "Finance", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
     $("#viewTitle").textContent = titles[view] || "";
     $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
     syncUrl(viewToPath(view), opts);
@@ -968,6 +1058,7 @@
     else if (view === "ai") renderAIAssistant();
     else if (view === "team") renderTeam();
     else if (view === "credits") renderCredits();
+    else if (view === "finance") renderFinance();
     else if (view === "support") renderSupport();
     else if (view === "billing") renderBilling();
     else if (view === "settings") renderSettings();
@@ -1170,7 +1261,7 @@
     const perInr = cr.credit_value_inr || 10;
     const isInr = (cr.currency || "INR") === "INR";
     const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
-    const money = (credits) => isInr ? ` (≈ ₹${Math.round(credits * perInr).toLocaleString()})` : "";
+    const money = (credits) => isInr ? ` (≈ ${fmtInr(Math.round(credits * perInr))})` : "";
     const opts = clients.map((c) => `<option value="${c.id}" ${preselectId === c.id ? "selected" : ""}>${esc(c.full_name)} — ${esc(c.email)}</option>`).join("");
 
     openModal(`<div class="modal-head"><h3>🎤 Send a mock interview</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
@@ -1483,6 +1574,7 @@
     const grad = `linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})`;
     const hero = clientHeroTheme(cl);
     const docs = data.documents || [];
+    const pendingDocIds = new Set();  // docs uploaded this session, awaiting AI validation (for the "scanning…" badge)
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
     const dr = { request: undefined };  // secure document-request state (lazy-loaded)
     let overviewEditing = false;  // inline "Edit details" mode on the Overview tab
@@ -1516,6 +1608,7 @@
           <button class="cp-tab" data-tab="documents">Documents${docs.length ? ` (${docs.length})` : ""}</button>
           <button class="cp-tab" data-tab="notes">Notes${data.notes.length ? ` (${data.notes.length})` : ""}</button>
           <button class="cp-tab" data-tab="emails">Emails${data.emails.length ? ` (${data.emails.length})` : ""}</button>
+          <button class="cp-tab" data-tab="payments">💳 Payments</button>
           <button class="cp-tab" data-tab="interview">🎤 Mock Interview</button>
         </div>
         <div class="cp-body" id="cpBody"></div>
@@ -1615,7 +1708,7 @@
           ? `${first} is on hold at “${esc(heldStage.label)}”. Click Resume to continue, or click any stage.`
           : `${first} is on hold. Click a stage to resume the case.`;
         else if (isRejected) hint = `This case is closed as rejected. Click any stage to reopen it.`;
-        else hint = `Click a stage to move ${first} instantly — or put the case on hold.`;
+        else hint = `Click a stage to move ${first} — we'll ask you to confirm before anything changes.`;
       }
 
       const dArr = docs || [];
@@ -1689,13 +1782,33 @@
         try { await navigator.clipboard.writeText(url); toast("Calculator link copied — paste it to your student.", "success"); }
         catch (e) { toast(url, "info"); }
       };
-      // Quick-select pipeline stage: clicking a stage on the Overview saves it immediately
-      // (setStatus PATCHes and re-renders). Only wired when the user can edit.
+      // Quick-select pipeline stage: clicking a stage asks for a confirmation first
+      // (a stray click must never silently move the case), then setStatus PATCHes
+      // and re-renders. Only wired when the user can edit.
       if (canEdit) {
         $$("#ovStageFlow [data-jkey]").forEach((b) => {
-          b.onclick = () => {
+          b.onclick = async () => {
             const key = b.dataset.jkey;
-            if (key && key !== cl.status) setStatus(cl.id, key);
+            if (!key || key === cl.status) return;
+            const stages = (state.catalog && state.catalog.stages) || [];
+            const labelOf = (k) => { const s = stages.find((x) => x.key === k); return s ? s.label : (k || "").replace(/_/g, " "); };
+            const first = (cl.full_name || "the client").split(" ")[0];
+            const toLabel = labelOf(key);
+            const fromLabel = labelOf(cl.status);
+            const isReject = /reject/i.test(key);
+            const isHold = /hold/i.test(key);
+            const title = isReject ? "Mark case as rejected?" : isHold ? "Put case on hold?" : `Move to “${toLabel}”?`;
+            const message = isReject
+              ? `${first}'s case will be closed as “${toLabel}”. You can reopen it later by clicking any stage.`
+              : isHold
+                ? `${first}'s case will be paused at “${fromLabel}”. You can resume it anytime.`
+                : `${first} will move from “${fromLabel}” to “${toLabel}”.`;
+            const ok = await confirmModal(message, {
+              title,
+              okText: isReject ? "Mark rejected" : isHold ? "Put on hold" : "Move stage",
+              danger: isReject,
+            });
+            if (ok) setStatus(cl.id, key);
           };
         });
       }
@@ -1810,6 +1923,38 @@
       return (state.catalog.document_types || []).map((t) => ({ key: t, label: t, required: false, hint: "" }));
     }
 
+    // After an upload, Rilono AI validates the document in the background. Poll for the verdict,
+    // update the badge in place, and — when a validated passport auto-filled empty profile
+    // fields — refresh the client so the Overview reflects the new details.
+    async function pollDocValidation(docId) {
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, i === 0 ? 2500 : 3500));
+        if (state.activeClient !== cl.id) return;   // user navigated away
+        let fresh;
+        try { fresh = await api("/clients/" + cl.id + "/documents"); } catch (e) { return; }
+        const arr = fresh.documents || [];
+        docs.splice(0, docs.length, ...arr);
+        const found = arr.find((x) => x.id === docId);
+        const done = found && found.validation_status;
+        if (done) pendingDocIds.delete(docId);
+        renderDocs();
+        if (done) {
+          const af = (found.extracted && found.extracted.autofill) || {};
+          const filled = af.filled || [];
+          if (filled.length) {
+            try { const c = await api("/clients/" + cl.id); Object.assign(cl, c.client); } catch (e) {}
+            toast("✅ " + found.document_type + " validated — auto-filled " + filled.map((f) => f.field).join(", ") + ". Open Overview to review.", "success");
+          } else if (found.validation_status === "valid") {
+            toast("✅ " + found.document_type + " validated by Rilono AI", "success");
+          } else if (found.validation_status === "invalid") {
+            toast("⚠ Rilono AI flagged the " + found.document_type + " — see the document card", "error");
+          }
+          return;
+        }
+      }
+      pendingDocIds.delete(docId); renderDocs();   // stop showing "validating…" after the timeout
+    }
+
     function renderDocs() {
       const uploader = canEdit ? `
         <div class="cp-card doc-upload">
@@ -1829,16 +1974,44 @@
           </div>
           <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB</div>
         </div>` : "";
-      const list = docs.length ? `<div class="doc-list">${docs.map((d) => `
+      const docValInfo = (d) => {
+        const s = d.validation_status;
+        if (s === "valid") return { cls: "ok", txt: "✓ Validated by Rilono AI", msg: "" };
+        if (s === "invalid") return { cls: "warn", txt: "⚠ Needs review", msg: d.validation_message || "" };
+        if (s === "error") return { cls: "muted", txt: "Not auto-scanned", msg: "" };
+        if (!s && pendingDocIds.has(d.id)) return { cls: "pending", txt: "◌ Rilono AI is validating…", msg: "" };
+        return null;  // pre-existing document with no validation record
+      };
+      const list = docs.length ? `<div class="doc-list">${docs.map((d) => {
+        const v = docValInfo(d);
+        const af = (d.extracted && d.extracted.autofill) || {};
+        const filled = af.filled || [];
+        const conflicts = af.conflicts || [];
+        const valRow = v ? `<div class="doc-val ${v.cls}"><span class="doc-val-badge">${v.txt}</span>${v.msg ? `<span class="doc-val-msg">${esc(v.msg)}</span>` : ""}</div>` : "";
+        const afRow = filled.length ? `<div class="doc-af">✓ Auto-filled profile: <b>${filled.map((f) => esc(f.field)).join(", ")}</b></div>` : "";
+        const cfRow = conflicts.length ? `<div class="doc-cf"><b>⚠ Review — document differs from the saved profile:</b>${conflicts.map((c) => `<div class="doc-cf-item">${esc(c.field)}: profile “${esc(c.existing)}” vs document “${esc(c.document)}”</div>`).join("")}</div>` : "";
+        // The AI's own structured red flags (shape is AI-determined — render generically).
+        const cvfItems = (x) => {
+          if (Array.isArray(x)) return x.map((it) => `<div class="doc-cf-item">${esc(typeof it === "string" ? it : JSON.stringify(it))}</div>`).join("");
+          if (x && typeof x === "object") return Object.entries(x).map(([k, it]) => `<div class="doc-cf-item">${esc(k)}: ${esc(typeof it === "string" ? it : JSON.stringify(it))}</div>`).join("");
+          return `<div class="doc-cf-item">${esc(String(x))}</div>`;
+        };
+        const cvf = d.validation_status === "invalid" ? ((d.extracted && d.extracted.cross_validation_flags) || null) : null;
+        const cvfRow = cvf ? `<div class="doc-cf"><b>⚠ Rilono AI flagged:</b>${cvfItems(cvf)}</div>` : "";
+        const acceptRow = (canEdit && (d.validation_status === "invalid" || d.validation_status === "error"))
+          ? `<div class="doc-accept-row"><button class="btn btn-soft btn-sm doc-accept" data-id="${d.id}">✓ Checked it myself — accept anyway</button></div>` : "";
+        return `
         <div class="doc-card">
           <div class="doc-ic">${docIcon(d.original_filename)}</div>
           <div class="doc-meta">
             <a href="${d.download_url}" target="_blank" rel="noopener" class="doc-name">${esc(d.original_filename)}</a>
             <div class="doc-sub">${esc(d.document_type)} · ${fmtSize(d.file_size)} · ${esc(d.uploaded_by_name || "")} · ${fmtDate(d.created_at)}</div>
+            ${valRow}${afRow}${cfRow}${cvfRow}${acceptRow}
           </div>
           <a class="doc-act" href="${d.download_url}" target="_blank" rel="noopener" title="View / download">⬇</a>
           ${canEdit ? `<button class="doc-act doc-del" data-id="${d.id}" title="Delete">✕</button>` : ""}
-        </div>`).join("")}</div>`
+        </div>`;
+      }).join("")}</div>`
         : `<div class="empty" style="padding:34px"><div class="emoji">📁</div><h3>No documents yet</h3><p>${canEdit ? "Upload this student's passport, offer letter, financials, test scores and more — securely." : "No documents have been uploaded for this client."}</p></div>`;
       const deepScanCost = ((state.credits && (state.credits.actions || []).find((a) => a.key === "deep_scan")) || {}).credits || 5;
       const deepScanBar = (canEdit && docs.length) ? `
@@ -1915,17 +2088,40 @@
             const res = await fetch(API + "/clients/" + cl.id + "/documents", { method: "POST", credentials: "include", body: fd });
             const out = await res.json().catch(() => null);
             if (!res.ok) throw makePublicApiError(res, out, "We couldn't upload this document. Please try again.");
-            docs.unshift(out.document); tabCount("documents", docs.length); toast("Document uploaded", "success"); renderDocs();
+            docs.unshift(out.document);
+            if (out.document && out.document.id) pendingDocIds.add(out.document.id);
+            tabCount("documents", docs.length);
+            toast("Document uploaded — Rilono AI is validating…", "success");
+            renderDocs();
+            if (out.document && out.document.id) pollDocValidation(out.document.id);
           } catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Upload document"; }
         };
         $$(".doc-del", body).forEach((b) => b.onclick = async () => {
           const id = parseInt(b.dataset.id, 10);
-          if (!confirm("Delete this document? This cannot be undone.")) return;
+          if (!(await confirmModal("This document will be permanently deleted. This cannot be undone.", { title: "Delete document?", okText: "Delete" }))) return;
           try {
             await api("/clients/" + cl.id + "/documents/" + id, { method: "DELETE" });
             const i = docs.findIndex((x) => x.id === id); if (i >= 0) docs.splice(i, 1);
             tabCount("documents", docs.length); toast("Document deleted", "success"); renderDocs();
           } catch (ex) { toast(ex.message, "error"); }
+        });
+        // Human override for AI red flags: staff checked the document themselves.
+        $$(".doc-accept", body).forEach((b) => b.onclick = async () => {
+          const id = parseInt(b.dataset.id, 10);
+          const ok = await confirmModal(
+            "Rilono AI flagged this document. Accept it only if you've reviewed it yourself — it will show as validated (with an audit note) and empty profile fields will be auto-filled from it.",
+            { title: "Accept this document?", okText: "Accept & apply", danger: false }
+          );
+          if (!ok) return;
+          b.disabled = true;
+          try {
+            const r = await api("/clients/" + cl.id + "/documents/" + id + "/accept", { method: "POST" });
+            const i = docs.findIndex((x) => x.id === id);
+            if (i >= 0 && r.document) docs.splice(i, 1, r.document);
+            try { const c = await api("/clients/" + cl.id); Object.assign(cl, c.client); } catch (e) {}
+            toast("Document accepted — profile updated where empty", "success");
+            renderDocs();
+          } catch (ex) { b.disabled = false; toast(ex.message, "error"); }
         });
       }
     }
@@ -2003,7 +2199,7 @@
       };
     }
     async function revokeDocReq() {
-      if (!confirm("Revoke this document request? The student's upload link will stop working.")) return;
+      if (!(await confirmModal("The student's upload link will stop working.", { title: "Revoke document request?", okText: "Revoke" }))) return;
       try { await api(`/clients/${cl.id}/document-requests/revoke`, { method: "POST" }); dr.request = null; toast("Request revoked", "success"); drawDocReq(); }
       catch (ex) { toast(ex.message, "error"); }
     }
@@ -2013,8 +2209,12 @@
         <div class="cp-sub-label">Add a note</div>
         <textarea id="noteInput" placeholder="Log a call, a follow-up or a decision about ${esc(cl.full_name)}…"></textarea>
         <button class="btn btn-primary btn-sm" id="noteSaveBtn">Add note</button></div>` : "";
+      // Admins can delete any note (incl. AI-generated); editors only their own.
+      const myId = state.me && state.me.user ? state.me.user.id : null;
+      const isAdmin = !!(state.perms && state.perms.can_manage_users);
+      const canDeleteNote = (n) => canEdit && (isAdmin || (myId != null && n.author_user_id === myId));
       const list = data.notes.length ? `<div class="timeline">${data.notes.map((n) =>
-        `<div class="tl-item"><div class="tl-meta">${esc(n.author_name || "Team")} · ${fmtDateTime(n.created_at)}</div><div class="tl-body">${esc(n.body)}</div></div>`).join("")}</div>`
+        `<div class="tl-item"><div class="tl-meta">${esc(n.author_name || "Team")} · ${fmtDateTime(n.created_at)}${canDeleteNote(n) ? `<button class="tl-del" data-note-id="${n.id}" title="Delete note" aria-label="Delete note">✕</button>` : ""}</div><div class="tl-body">${esc(n.body)}</div></div>`).join("")}</div>`
         : `<div class="empty" style="padding:30px"><div class="emoji">📝</div><h3>No notes yet</h3><p>Keep a running record of calls, follow-ups and decisions.</p></div>`;
       body.innerHTML = add + list;
       if (canEdit) $("#noteSaveBtn").onclick = async () => {
@@ -2023,6 +2223,16 @@
         try { const r = await api(`/clients/${cl.id}/notes`, { method: "POST", body: { body: v } }); data.notes.unshift(r.note); tabCount("notes", data.notes.length); renderNotes(); toast("Note added", "success"); }
         catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Add note"; }
       };
+      $$(".tl-del", body).forEach((b) => b.onclick = async () => {
+        const id = parseInt(b.dataset.noteId, 10);
+        if (!(await confirmModal("This note will be permanently deleted.", { title: "Delete note?", okText: "Delete" }))) return;
+        b.disabled = true;
+        try {
+          await api(`/clients/${cl.id}/notes/${id}`, { method: "DELETE" });
+          const i = data.notes.findIndex((x) => x.id === id); if (i >= 0) data.notes.splice(i, 1);
+          tabCount("notes", data.notes.length); renderNotes(); toast("Note deleted", "success");
+        } catch (ex) { toast(ex.message, "error"); b.disabled = false; }
+      });
     }
 
     function renderEmails() {
@@ -2084,7 +2294,7 @@
       const perInr = cr.credit_value_inr || 10;
       const isInr = (cr.currency || "INR") === "INR";
       const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
-      const money = (credits) => isInr ? ` (≈ ₹${Math.round(credits * perInr).toLocaleString()})` : "";
+      const money = (credits) => isInr ? ` (≈ ${fmtInr(Math.round(credits * perInr))})` : "";
       openModal(`<div class="modal-head"><h3>Send mock interview to ${esc(first)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
         <form id="ivSendForm"><div class="modal-body">
           <p style="margin:0 0 16px;color:var(--text-2);font-size:14px;line-height:1.6">We'll email a secure link to <b>${esc(cl.email)}</b>. ${esc(first)} verifies with a one-time code, then can take the interview(s) on their own — and you'll see the results here.</p>
@@ -2136,7 +2346,7 @@
       };
     }
     async function revokeInvite() {
-      if (!confirm("Revoke this interview link? The student won't be able to use it anymore.")) return;
+      if (!(await confirmModal("The student won't be able to use it anymore.", { title: "Revoke interview link?", okText: "Revoke" }))) return;
       try { await api(`/clients/${cl.id}/interview/invite/revoke`, { method: "POST" }); iv.invite = null; toast("Link revoked", "success"); drawIv(); }
       catch (ex) { toast(ex.message, "error"); }
     }
@@ -2325,6 +2535,182 @@
       try { ivRecog.start(); } catch (e) { ivRecog = null; btn.classList.remove("rec"); }
     }
 
+    /* ---- Payments tab: collected-from-this-client ledger + secure pay-link requests.
+       Reads are member-visible; money actions (request / cancel / refund) are admin-only,
+       enforced server-side and mirrored in the UI. ---- */
+    async function renderPayments() {
+      const body = $("#cpBody");
+      body.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+      let d;
+      try { d = await api(`/clients/${cl.id}/payments`); }
+      catch (ex) { body.innerHTML = errBox(ex); return; }
+      const canManage = !!(d.permissions && d.permissions.can_manage_users);
+      const t = d.totals || {};
+      const fee = d.fee || { percent: 2, min_fee_rupees: 49 };
+
+      const chipRow = `
+        <div class="pay-chips">
+          <div class="pay-chip"><div class="k">Collected</div><div class="v ok">${fmtPaise(t.collected_paise || 0)}</div></div>
+          <div class="pay-chip"><div class="k">Pending</div><div class="v">${fmtPaise(t.pending_paise || 0)}</div></div>
+          <div class="pay-chip"><div class="k">Refunded</div><div class="v warn">${fmtPaise(t.refunded_paise || 0)}</div></div>
+        </div>`;
+
+      let gateNote = "";
+      if (!d.collect_enabled) {
+        gateNote = `<div class="pay-gate-note">Online collection isn't live yet — connect your company bank account in
+          <a href="#" id="payGoFinance">Finance</a> first. You can still browse this ledger.</div>`;
+      } else if (!d.client_email) {
+        gateNote = `<div class="pay-gate-note">Add an email address to this client to send them a payment request.</div>`;
+      }
+
+      const canRequest = canManage && d.collect_enabled && !!d.client_email;
+      const reqBtn = canManage
+        ? `<button class="btn btn-primary btn-sm" id="payReqToggle" ${canRequest ? "" : "disabled"}>+ Request payment</button>`
+        : "";
+
+      const reqForm = `
+        <div class="card hidden" id="payReqForm"><div class="card-body">
+          <div style="font-weight:800;font-size:14.5px;margin-bottom:12px">Request a payment from ${esc(cl.full_name)}</div>
+          <div class="field-row">
+            <div class="field"><label>Amount (₹) *</label>
+              <input id="payAmt" type="number" min="1" step="1" placeholder="e.g. 25000" autocomplete="off"></div>
+            <div class="field"><label>Due date <span style="color:var(--muted);font-weight:500">(optional)</span></label>
+              <input id="payDue" type="date"></div>
+          </div>
+          <div class="field"><label>What is this payment for? *</label>
+            <input id="payDesc" type="text" maxlength="300" placeholder="e.g. University application service fee" autocomplete="off"></div>
+          <div class="pay-split-preview" id="paySplit">Rilono fee: ${Number(fee.percent)}% (min ₹${Number(fee.min_fee_rupees)}) — enter an amount to preview your payout.</div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn btn-primary" id="payCreateBtn">Create &amp; email secure link</button>
+            <span style="font-size:12px;color:var(--muted)">Sent to ${esc(d.client_email || "")} · paid via Razorpay · settles to your bank</span>
+          </div>
+        </div></div>`;
+
+      const chip = (s) => {
+        const map = {
+          created: ["Awaiting payment", "pend"], failed: ["Failed", "err"], cancelled: ["Cancelled", "mut"],
+          paid: ["Paid", "ok"], transferred: ["Paid · payout on the way", "ok"], settled: ["Paid · settled to bank", "ok"],
+          refunded: ["Refunded", "warn"], partially_refunded: ["Partially refunded", "warn"],
+        };
+        const [label, cls] = map[s] || [s, "mut"];
+        return `<span class="pay-status ${cls}">${esc(label)}</span>`;
+      };
+      const dateStr = (iso) => iso ? new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : "—";
+
+      const rows = (d.payments || []).map((p) => {
+        const acts = [];
+        if (canManage && (p.status === "created" || p.status === "failed")) {
+          acts.push(`<button class="btn btn-ghost btn-xs" data-act="resend" data-id="${p.id}">Copy / resend link</button>`);
+          acts.push(`<button class="btn btn-ghost btn-xs" data-act="cancel" data-id="${p.id}">Cancel</button>`);
+        }
+        if (canManage && ["paid", "transferred", "settled", "partially_refunded"].includes(p.status)) {
+          acts.push(`<button class="btn btn-ghost btn-xs danger" data-act="refund" data-id="${p.id}" data-amt="${fmtPaise(p.amount_paise - (p.refunded_amount_paise || 0))}">Refund</button>`);
+        }
+        return `<tr>
+          <td>${dateStr(p.created_at)}</td>
+          <td>${esc(p.description || "Payment")}<div class="pay-sub">${esc(p.invoice_number || "")}${p.utr ? " · UTR " + esc(p.utr) : ""}</div></td>
+          <td style="font-weight:700;white-space:nowrap">${fmtPaise(p.amount_paise)}</td>
+          <td>${chip(p.status)}</td>
+          <td class="pay-acts">${acts.join("")}</td>
+        </tr>`;
+      }).join("");
+
+      body.innerHTML = `
+        ${gateNote}
+        <div class="card"><div class="card-body">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+            <div style="font-weight:800;font-size:15px">Payments from ${esc(cl.full_name)}</div>
+            ${reqBtn}
+          </div>
+          ${chipRow}
+        </div></div>
+        ${reqForm}
+        <div class="card"><div class="card-body" style="overflow-x:auto">
+          ${rows ? `<table class="client-table pay-table">
+              <thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th><th></th></tr></thead>
+              <tbody>${rows}</tbody></table>`
+            : `<div style="color:var(--muted);font-size:13.5px;padding:6px 0">No payment requests yet${canRequest ? " — raise the first one above." : "."}</div>`}
+        </div></div>`;
+
+      const goFin = $("#payGoFinance");
+      if (goFin) goFin.onclick = (e) => { e.preventDefault(); navigate("finance"); };
+      const tgl = $("#payReqToggle");
+      if (tgl) tgl.onclick = () => $("#payReqForm").classList.toggle("hidden");
+
+      const previewEl = $("#paySplit");
+      const amtEl = $("#payAmt");
+      if (amtEl && previewEl) {
+        amtEl.oninput = () => {
+          const rupees = parseFloat(amtEl.value || "0");
+          if (!rupees || rupees <= 0) {
+            previewEl.textContent = `Rilono fee: ${Number(fee.percent)}% (min ₹${Number(fee.min_fee_rupees)}) — enter an amount to preview your payout.`;
+            return;
+          }
+          const paise = Math.round(rupees * 100);
+          const commission = Math.max(Math.round(paise * (Number(fee.percent) / 100)), Math.round(Number(fee.min_fee_rupees) * 100));
+          const payout = paise - commission;
+          previewEl.innerHTML = payout > 0
+            ? `Student pays <b>${fmtPaise(paise)}</b> · Rilono fee <b>${fmtPaise(commission)}</b> · You receive <b>${fmtPaise(payout)}</b> (settled to your bank by Razorpay)`
+            : `Amount is too small — after the minimum fee of ₹${Number(fee.min_fee_rupees)} there would be nothing left to pay out.`;
+        };
+      }
+
+      const createBtn = $("#payCreateBtn");
+      if (createBtn) createBtn.onclick = async () => {
+        const rupees = parseFloat(($("#payAmt").value || "0"));
+        const desc = ($("#payDesc").value || "").trim();
+        const due = ($("#payDue").value || "").trim() || null;
+        if (!rupees || rupees <= 0) { toast("Enter the amount to collect.", "error"); return; }
+        if (desc.length < 3) { toast("Describe what this payment is for.", "error"); return; }
+        createBtn.disabled = true; createBtn.textContent = "Creating…";
+        try {
+          const res = await api(`/clients/${cl.id}/payments`, {
+            method: "POST",
+            body: { amount_paise: Math.round(rupees * 100), description: desc, due_date: due },
+          });
+          try { if (res.pay_url && navigator.clipboard) await navigator.clipboard.writeText(res.pay_url); } catch (e) { /* ignore */ }
+          toast(res.message + (res.pay_url ? " Link copied to your clipboard." : ""), "success");
+          renderPayments();
+        } catch (ex) {
+          toast(ex.message || "Could not create the payment request.", "error");
+          createBtn.disabled = false; createBtn.textContent = "Create & email secure link";
+        }
+      };
+
+      body.querySelectorAll("[data-act]").forEach((btn) => {
+        btn.onclick = async () => {
+          const pid = btn.dataset.id;
+          const act = btn.dataset.act;
+          try {
+            if (act === "resend") {
+              const res = await api(`/finance/payments/${pid}/resend-email`, { method: "POST" });
+              try { if (res.pay_url && navigator.clipboard) await navigator.clipboard.writeText(res.pay_url); } catch (e) { /* ignore */ }
+              toast(res.message + (res.pay_url ? " Link copied to your clipboard." : ""), "success");
+              renderPayments();
+            } else if (act === "cancel") {
+              const ok = await confirmModal("Cancel this payment request? The emailed pay-link will stop working.", { title: "Cancel payment request", okText: "Cancel request" });
+              if (!ok) return;
+              const res = await api(`/finance/payments/${pid}/cancel`, { method: "POST" });
+              toast(res.message, "success");
+              renderPayments();
+            } else if (act === "refund") {
+              const amt = btn.dataset.amt || "";
+              const ok = await confirmModal(
+                `Refund ${amt} to the student's original payment method? This also reverses the payout from your account and cannot be undone.`,
+                { title: "Refund payment", okText: "Refund" }
+              );
+              if (!ok) return;
+              const res = await api(`/finance/payments/${pid}/refund`, { method: "POST", body: { reason: "" } });
+              toast(res.message, "success");
+              renderPayments();
+            }
+          } catch (ex) {
+            toast(ex.message || "Action failed.", "error");
+          }
+        };
+      });
+    }
+
     function showTab(tab) {
       $$(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
       if (tab !== "interview") ivStopSpeak();
@@ -2332,6 +2718,7 @@
       else if (tab === "documents") renderDocs();
       else if (tab === "notes") renderNotes();
       else if (tab === "emails") renderEmails();
+      else if (tab === "payments") renderPayments();
       else if (tab === "interview") renderInterview();
     }
     $$(".cp-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
@@ -2428,7 +2815,7 @@
     catch (ex) { toast(ex.message, "error"); renderTeam(); }
   }
   async function removeMember(uid) {
-    if (!confirm("Remove this member from your workspace?")) return;
+    if (!(await confirmModal("They'll lose access to this workspace immediately.", { title: "Remove member?", okText: "Remove" }))) return;
     try { await api(`/team/users/${uid}`, { method: "DELETE" }); toast("Member removed", "success"); renderTeam(); }
     catch (ex) { toast(ex.message, "error"); }
   }
@@ -2610,11 +2997,11 @@
                 You have ${infra.clients_used} clients (free up to ${infra.free_student_limit}).
                 ${infra.is_current
                   ? `Active until ${infra.paid_until ? fmtDate(infra.paid_until) : "—"}.`
-                  : `Activate the ${infra.fee_display}/month fee to keep adding clients.`}
+                  : `Activate the ${fmtPaise(infra.fee_paise)}/month fee to keep adding clients.`}
               </div>
             </div>
             ${!infra.is_current && canManage
-              ? `<button class="btn btn-primary" id="infraPayBtn">Activate ${esc(infra.fee_display)}/mo</button>`
+              ? `<button class="btn btn-primary" id="infraPayBtn">Activate ${esc(fmtPaise(infra.fee_paise))}/mo</button>`
               : (infra.is_current ? `<span class="plan-current-tag" style="color:var(--success,#10b981)">✓ Active</span>` : "")}
           </div>
         </div>`
@@ -2622,9 +3009,9 @@
 
     const coupon = state.creditCoupon;
     const priceBlock = (p) => {
-      if (!coupon) return `<div class="price">${esc(p.amount_display)}</div>`;
+      if (!coupon) return `<div class="price">${esc(fmtPaise(p.amount_paise))}</div>`;
       const discounted = Math.max(0, Math.round(p.amount_paise * (100 - coupon.percent) / 100));
-      return `<div class="price">${fmtPaise(discounted)}<span class="price-was">${esc(p.amount_display)}</span></div>
+      return `<div class="price">${fmtPaise(discounted)}<span class="price-was">${esc(fmtPaise(p.amount_paise))}</span></div>
         <div class="price-off">${esc(coupon.percent_display)} off applied</div>`;
     };
     const pkgCard = (p) => `<div class="plan-card ${p.is_popular ? "popular" : ""}">
@@ -2633,7 +3020,7 @@
         ${priceBlock(p)}
         <ul>
           <li><b>${p.total_credits} credits</b>${p.bonus_credits ? ` <span style="color:var(--success,#10b981)">(+${p.bonus_credits} bonus)</span>` : ""}</li>
-          <li>Worth ₹${p.value_inr.toLocaleString()} of AI actions</li>
+          <li>Worth ${fmtInr(p.value_inr)} of AI actions</li>
           <li>≈ ${Math.floor(p.total_credits / 5)} Deep Scans or ${Math.floor(p.total_credits / 20)} interviews</li>
         </ul>
         ${canManage
@@ -2644,7 +3031,7 @@
     const actionRows = actions.map((a) =>
       `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border,#eee)">
         <div><b>${esc(a.label)}</b><div style="font-size:12px;color:var(--text-2)">${esc(a.description || "")}</div></div>
-        <div style="text-align:right;white-space:nowrap"><b>${a.credits} cr</b><div style="font-size:12px;color:var(--text-2)">${esc(a.price_display)}</div></div>
+        <div style="text-align:right;white-space:nowrap"><b>${a.credits} cr</b><div style="font-size:12px;color:var(--text-2)">${esc(fmtInr(a.price_inr != null ? a.price_inr : (a.credits || 0) * 10))}</div></div>
       </div>`).join("");
 
     // --- Usage breakdown: where credits go, and who on the team spent them ---
@@ -2719,7 +3106,7 @@
         <div style="flex:1;min-width:220px">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Rilono Credits balance</div>
           <div style="font-size:38px;font-weight:800;margin:4px 0;line-height:1.1">${w.balance_credits} <span style="font-size:16px;font-weight:600;color:var(--text-2)">credits</span></div>
-          <div style="font-size:13px;color:var(--text-2)">Worth ${esc(w.balance_display || "")} · 1 credit = ${esc("₹" + (w.credit_value_inr || 10))}</div>
+          <div style="font-size:13px;color:var(--text-2)">Worth ${esc(fmtInr(w.balance_value_inr != null ? w.balance_value_inr : (w.balance_credits || 0) * (w.credit_value_inr || 10)))} · 1 credit = ${esc(fmtInr(w.credit_value_inr || 10))}</div>
           ${w.low_balance ? `<div style="margin-top:8px;font-size:12px;color:var(--warning,#f59e0b);font-weight:600">⚠ Low balance — top up to keep using premium AI.</div>` : ""}
         </div>
         <div style="display:flex;gap:28px;flex-wrap:wrap">
@@ -2784,6 +3171,219 @@
     return { base, discount, total, free: total < 100 };
   }
 
+  /* ============================================================
+     FINANCE — collect student payments (Razorpay Route linked
+     account). Phase 1: onboarding. Analytics + usage billing will
+     nest here as sub-views later.
+     ============================================================ */
+  const ACCT_BUSINESS_TYPES = [
+    ["proprietorship", "Sole proprietorship"],
+    ["partnership", "Partnership"],
+    ["llp", "LLP"],
+    ["private_limited", "Private limited"],
+    ["public_limited", "Public limited"],
+    ["trust", "Trust"],
+    ["society", "Society"],
+    ["ngo", "NGO"],
+    ["individual", "Individual"],
+  ];
+
+  function acctStatusChip(status) {
+    const map = {
+      activated: ["Active", "var(--success,#10b981)"],
+      under_review: ["Under review", "var(--warning,#f59e0b)"],
+      needs_clarification: ["Action needed", "var(--danger,#ef4444)"],
+      settlement_submitted: ["Submitted", "var(--warning,#f59e0b)"],
+      product_requested: ["In progress", "var(--warning,#f59e0b)"],
+      stakeholder_added: ["In progress", "var(--warning,#f59e0b)"],
+      created: ["In progress", "var(--warning,#f59e0b)"],
+      suspended: ["Suspended", "var(--danger,#ef4444)"],
+      not_started: ["Not connected", "var(--muted,#94a3b8)"],
+    };
+    const [label, color] = map[status] || ["Not connected", "var(--muted,#94a3b8)"];
+    return `<span class="plan-current-tag" style="color:${color}">${esc(label)}</span>`;
+  }
+
+  function acctOnboardingForm(la) {
+    la = la || {};
+    const opt = (v, l) => `<option value="${v}"${la.business_type === v ? " selected" : ""}>${esc(l)}</option>`;
+    return `<div class="card"><div class="card-body" style="max-width:860px">
+      <div style="font-weight:800;font-size:16px;margin-bottom:4px">Connect your company bank account</div>
+      <div style="font-size:13px;color:var(--text-2);margin-bottom:20px;line-height:1.55">
+        Razorpay verifies your business (KYC) and settles collected payments directly to this account.
+        We store only the last 4 digits — your full details stay with Razorpay.
+      </div>
+
+      <div class="cp-sub-label">Business details</div>
+      <div class="field">
+        <label>Legal business name *</label>
+        <input id="acctLegalName" type="text" autocomplete="off" value="${esc(la.legal_business_name || "")}" placeholder="As registered — matches your PAN &amp; bank account">
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Business type *</label>
+          <select id="acctBizType">${ACCT_BUSINESS_TYPES.map(([v, l]) => opt(v, l)).join("")}</select></div>
+        <div class="field"><label>Business PAN *</label>
+          <input id="acctPan" type="text" maxlength="10" autocomplete="off" value="${esc(la.business_pan_placeholder || "")}" placeholder="ABCDE1234F" style="text-transform:uppercase"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Contact name *</label>
+          <input id="acctContactName" type="text" autocomplete="off" value="${esc(la.contact_name || "")}" placeholder="Owner / authorised signatory"></div>
+        <div class="field"><label>Contact email *</label>
+          <input id="acctContactEmail" type="email" autocomplete="off" value="${esc(la.contact_email || "")}" placeholder="finance@yourcompany.com"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Contact phone</label>
+          <input id="acctContactPhone" type="text" autocomplete="off" value="${esc(la.contact_phone || "")}" placeholder="10-digit mobile"></div>
+        <div class="field"><label>GST number <span style="color:var(--muted);font-weight:500">(optional)</span></label>
+          <input id="acctGst" type="text" autocomplete="off" value="${esc(la.gst_number || "")}" placeholder="22ABCDE1234F1Z5" style="text-transform:uppercase"></div>
+      </div>
+
+      <div class="cp-sub-label" style="margin-top:6px">Settlement bank account</div>
+      <div class="field-row">
+        <div class="field"><label>Bank account number *</label>
+          <input id="acctBankNum" type="text" inputmode="numeric" autocomplete="off" placeholder="Where payouts are settled"></div>
+        <div class="field"><label>IFSC code *</label>
+          <input id="acctIfsc" type="text" autocomplete="off" value="${esc(la.bank_ifsc || "")}" placeholder="HDFC0001234" style="text-transform:uppercase"></div>
+      </div>
+      <div class="field">
+        <label>Account holder / beneficiary name *</label>
+        <input id="acctBeneficiary" type="text" autocomplete="off" value="${esc(la.beneficiary_name || "")}" placeholder="Must match the bank account &amp; legal name">
+      </div>
+
+      <div class="consent-field" style="margin-bottom:10px">
+        <input id="acctAttestService" type="checkbox">
+        <label for="acctAttestService">My organization directly provides the visa/education service the student is paying for.</label>
+      </div>
+      <div class="consent-field">
+        <input id="acctAttestTurnover" type="checkbox">
+        <label for="acctAttestTurnover">The details above are accurate and my business is eligible to receive these payments.</label>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:6px">
+        <button class="btn btn-primary" onclick="__ent.saveBank()">Connect bank account</button>
+        <span style="font-size:12px;color:var(--muted)">🔒 Secured by Razorpay · funds are never held by Rilono</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:10px;line-height:1.6">
+        By connecting, you agree to the <a href="/terms" target="_blank" rel="noopener">Rilono Terms</a>
+        (&ldquo;Payment Collection for Consultancies&rdquo;), the
+        <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a> and
+        <a href="/dpa" target="_blank" rel="noopener">DPA</a>, and you authorise Rilono to accept
+        <a href="https://razorpay.com/terms/" target="_blank" rel="noopener">Razorpay's terms</a> for linked
+        accounts on your organization's behalf to activate collection.
+      </div>
+    </div></div>`;
+  }
+
+  async function renderFinance() {
+    const c = $("#content");
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    let d;
+    try { d = await api("/finance/summary"); }
+    catch (ex) { c.innerHTML = errBox(ex); return; }
+    const canManage = state.perms.can_manage_users;
+    const la = d.linked_account;
+    const fee = d.fee || {};
+    const enabled = !!d.payments_enabled;
+    const connected = !!(la && la.activation_status && la.activation_status !== "not_started");
+
+    const intro = `<div class="card" style="margin-bottom:18px"><div class="card-body">
+      <div style="font-weight:800;font-size:16px;margin-bottom:6px">Collect payments from your students</div>
+      <div style="font-size:13.5px;color:var(--text-2);line-height:1.6">
+        Connect your company bank account, then raise a payment request for any student and collect it online.
+        Payments are processed securely by <b>Razorpay</b> and settled straight to <b>your</b> bank —
+        Rilono connects you and keeps a small fee (<b>${esc(String(fee.percent))}%</b>, min ${esc(fmtInr(fee.min_fee_rupees))}) and
+        <b>never holds your money</b>. See the <a href="/terms" target="_blank" rel="noopener">Terms</a> &mdash;
+        &ldquo;Payment Collection for Consultancies&rdquo;.
+      </div>
+    </div></div>`;
+
+    const notEnabledBanner = !enabled ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--warning,#f59e0b)"><div class="card-body">
+        <b>Online collection is being activated.</b> You can connect your bank details now; you'll be able to
+        collect student payments as soon as it goes live.</div></div>` : "";
+
+    if (!canManage) {
+      c.innerHTML = intro + `<div class="card"><div class="card-body" style="color:var(--text-2)">
+        ${connected ? `Your organization's payout account is ${acctStatusChip(la.activation_status)}.` : "No payout account is connected yet."}
+        <br>Only an organization admin can manage the payout bank account.</div></div>`;
+      return;
+    }
+
+    if (connected) {
+      const reqs = (la.requirements || []).filter(Boolean);
+      const reqList = reqs.length
+        ? `<ul style="margin:8px 0 0;padding-left:18px;font-size:13px;color:var(--text-2)">${reqs.map((r) => `<li>${esc(typeof r === "string" ? r : (r.reason_code || r.field_reference || JSON.stringify(r)))}</li>`).join("")}</ul>`
+        : "";
+      const ready = la.is_payable;
+      const statusCard = `<div class="card" style="margin-bottom:18px"><div class="card-body">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-weight:800;font-size:15px;margin-bottom:2px">Payout account ${acctStatusChip(la.activation_status)}</div>
+            <div style="font-size:13px;color:var(--text-2)">
+              ${esc(la.legal_business_name || "Your business")}${la.bank_account_last4 ? ` · A/C ••••${esc(la.bank_account_last4)}` : ""}${la.bank_ifsc ? ` · ${esc(la.bank_ifsc)}` : ""}
+            </div>
+            ${reqList}
+          </div>
+          <button class="btn btn-ghost" onclick="__ent.refreshBank()">Refresh status</button>
+        </div></div></div>`;
+      const next = ready
+        ? `<div class="card"><div class="card-body" style="color:var(--text-2)">
+            <b style="color:var(--success,#10b981)">✓ You're connected and ready to receive payouts.</b>
+            <br>Raising payment requests for your students will be available here shortly.</div></div>`
+        : `<div class="card"><div class="card-body" style="color:var(--text-2)">
+            Razorpay is verifying your account. This usually takes a short while — use <b>Refresh status</b> to check.
+            ${reqs.length ? " Please resolve the items above to continue." : ""}</div></div>`;
+      c.innerHTML = intro + statusCard + next;
+      return;
+    }
+
+    c.innerHTML = intro + notEnabledBanner + acctOnboardingForm(la);
+  }
+
+  async function saveLinkedAccount() {
+    const val = (id) => (($("#" + id) || {}).value || "").trim();
+    const chk = (id) => !!(($("#" + id) || {}).checked);
+    const body = {
+      legal_business_name: val("acctLegalName"),
+      business_type: (($("#acctBizType") || {}).value || ""),
+      contact_name: val("acctContactName"),
+      contact_email: val("acctContactEmail"),
+      contact_phone: val("acctContactPhone"),
+      business_pan: val("acctPan"),
+      gst_number: val("acctGst"),
+      bank_account_number: val("acctBankNum"),
+      bank_ifsc: val("acctIfsc"),
+      beneficiary_name: val("acctBeneficiary"),
+      attested_service_delivery: chk("acctAttestService"),
+      attested_turnover_ok: chk("acctAttestTurnover"),
+    };
+    if (!body.legal_business_name || !body.contact_name || !body.contact_email || !body.bank_account_number || !body.bank_ifsc || !body.beneficiary_name) {
+      toast("Please fill in the required (*) fields.", "error"); return;
+    }
+    if (!body.attested_service_delivery || !body.attested_turnover_ok) {
+      toast("Please confirm the two eligibility checkboxes.", "error"); return;
+    }
+    const btn = document.querySelector('[onclick="__ent.saveBank()"]');
+    if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
+    try {
+      const r = await api("/finance/linked-account", { method: "POST", body });
+      toast(r.message || "Bank account saved.", "success");
+      renderFinance();
+    } catch (ex) {
+      toast((ex && ex.message) || "Could not connect the bank account.", "error");
+      if (btn) { btn.disabled = false; btn.textContent = "Connect bank account"; }
+    }
+  }
+
+  async function refreshLinkedAccount() {
+    try {
+      await api("/finance/linked-account/refresh", { method: "POST" });
+      toast("Status refreshed.", "success");
+      renderFinance();
+    } catch (ex) {
+      toast((ex && ex.message) || "Could not refresh status.", "error");
+    }
+  }
+
   function renderCheckout() {
     const pkg = checkoutCtx.pkg;
     const c = checkoutCtx.coupon;
@@ -2807,9 +3407,9 @@
           <div class="co-item-ic">⚡</div>
           <div class="co-item-main">
             <div class="co-item-title">${esc(pkg.label)}</div>
-            <div class="co-item-sub">${pkg.total_credits} credits${pkg.bonus_credits ? ` <span class="co-bonus">incl. +${pkg.bonus_credits} bonus</span>` : ""} · worth ₹${Number(pkg.value_inr || 0).toLocaleString("en-IN")} of AI actions</div>
+            <div class="co-item-sub">${pkg.total_credits} credits${pkg.bonus_credits ? ` <span class="co-bonus">incl. +${pkg.bonus_credits} bonus</span>` : ""} · worth ${fmtInr(pkg.value_inr)} of AI actions</div>
           </div>
-          <div class="co-item-price">${esc(pkg.amount_display)}</div>
+          <div class="co-item-price">${esc(fmtPaise(pkg.amount_paise))}</div>
         </div>
         ${couponBlock}
         <div id="coCouponErr" class="co-coupon-err hidden"></div>
@@ -2821,6 +3421,7 @@
         <div class="co-note">${b.free
           ? "✓ This order is fully covered by your discount — no payment needed."
           : "🔒 Secure payment via Razorpay · UPI, cards &amp; NetBanking"} · Credits never expire.</div>
+        ${b.free ? "" : inrBilledNote(b.total)}
       </div>
       <div class="modal-foot">
         <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
@@ -2945,6 +3546,25 @@
     const c = $("#content");
     const org = state.me.organization || {};
     const canManage = state.perms.can_manage_users;
+    // Company location — for records; the country also drives the portal display currency.
+    const ORG_COUNTRIES = [
+      ["", "— Select country —"],
+      ["IN", "🇮🇳 India (INR ₹)"], ["US", "🇺🇸 United States (USD $)"], ["GB", "🇬🇧 United Kingdom (GBP £)"],
+      ["CA", "🇨🇦 Canada (CAD)"], ["AU", "🇦🇺 Australia (AUD)"], ["AE", "🇦🇪 United Arab Emirates (AED)"],
+      ["SG", "🇸🇬 Singapore (SGD)"], ["JP", "🇯🇵 Japan (JPY ¥)"],
+      ["DE", "🇩🇪 Germany (EUR €)"], ["FR", "🇫🇷 France (EUR €)"], ["IE", "🇮🇪 Ireland (EUR €)"],
+      ["NL", "🇳🇱 Netherlands (EUR €)"], ["IT", "🇮🇹 Italy (EUR €)"], ["ES", "🇪🇸 Spain (EUR €)"],
+      ["NP", "🇳🇵 Nepal (shows USD)"], ["BD", "🇧🇩 Bangladesh (shows USD)"], ["LK", "🇱🇰 Sri Lanka (shows USD)"],
+      ["PK", "🇵🇰 Pakistan (shows USD)"], ["NG", "🇳🇬 Nigeria (shows USD)"], ["XX", "🌐 Other (shows USD)"],
+    ];
+    const orgCC = (org.country_code || "").toUpperCase();
+    const countryOpts = ORG_COUNTRIES.map(([v, l]) => `<option value="${v}" ${v === orgCC ? "selected" : ""}>${l}</option>`)
+      .join("") + (orgCC && !ORG_COUNTRIES.some(([v]) => v === orgCC) ? `<option value="${esc(orgCC)}" selected>${esc(orgCC)}</option>` : "");
+    const countryLabel = (ORG_COUNTRIES.find(([v]) => v === orgCC) || [])[1] || orgCC || "—";
+    const dc = org.display_currency || { code: "INR", symbol: "₹", rate_from_inr: 1 };
+    const curDesc = dc.code === "INR"
+      ? "INR (₹)"
+      : `${dc.code} · ₹1 ≈ ${dc.symbol}${Number(dc.rate_from_inr || 0).toFixed(4)} (live rate, refreshed daily)`;
     c.innerHTML = `
       <div class="settings-section">
         <div class="card"><div class="card-head"><h3>Organization branding</h3></div>
@@ -2958,15 +3578,37 @@
             <div class="field"><label>Company name</label><input id="setCompany" value="${esc(org.company_name || "")}"/></div>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
               <button class="btn btn-primary btn-sm" id="saveBranding">Save name</button>
+              <button class="btn btn-ghost btn-sm" id="uploadLogoBtn">🖼 Upload logo</button>
               <button class="btn btn-ghost btn-sm" id="regenLogo">🎲 Generate new logo</button>
-            </div>` : `<p style="color:var(--muted);font-size:13px">Only admins can change branding.</p>`}
+              <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" style="display:none"/>
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-top:8px">PNG, JPG or WebP · up to 2 MB · shown at up to 512×512.</div>` : `<p style="color:var(--muted);font-size:13px">Only admins can change branding.</p>`}
+          </div></div>
+
+        <div class="card" style="margin-top:20px"><div class="card-head"><h3>Company location</h3></div>
+          <div class="card-body">
+            <p style="color:var(--muted);font-size:13px;margin:0 0 14px">For your organization's records. The country also sets your portal's <b>display currency</b> — every amount converts from INR at the live exchange rate. Payments themselves are still billed in INR.</p>
+            ${canManage ? `
+            <div class="detail-grid">
+              <div class="field"><label>Country</label><select id="setCountry">${countryOpts}</select></div>
+              <div class="field"><label>State / Region</label><input id="setState" value="${esc(org.state_region || "")}" placeholder="e.g. Karnataka, California" maxlength="80"/></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:8px">
+              <button class="btn btn-primary btn-sm" id="saveLocation">Save location</button>
+              <span style="font-size:12.5px;color:var(--muted)">Current display currency: <b>${esc(curDesc)}</b></span>
+            </div>` : `
+            <div class="detail-grid">
+              <div class="detail-item"><label>Country</label><div>${esc(countryLabel)}</div></div>
+              <div class="detail-item"><label>State / Region</label><div>${esc(org.state_region || "—")}</div></div>
+            </div>`}
           </div></div>
 
         <div class="card" style="margin-top:20px"><div class="card-head"><h3>Workspace</h3></div>
           <div class="card-body">
             <div class="detail-grid">
               <div class="detail-item"><label>Portal URL</label><div>${esc((org.subdomain_slug || "") + "." + rootDomain())}</div></div>
-              <div class="detail-item"><label>Plan</label><div>${esc(state.subscription ? state.subscription.plan_label : "—")}</div></div>
+              <div class="detail-item"><label>Billing</label><div>Pay-as-you-go credits${state.credits && state.credits.balance_credits != null ? ` · ${state.credits.balance_credits} cr` : ""}</div></div>
+              <div class="detail-item"><label>Display currency</label><div>${esc(curDesc)}</div></div>
               <div class="detail-item"><label>Your role</label><div style="text-transform:capitalize">${esc((state.me.membership && state.me.membership.role) || "")}</div></div>
               <div class="detail-item"><label>Signed in as</label><div>${esc(state.me.user.email)}</div></div>
             </div>
@@ -2991,6 +3633,40 @@
           toast("New logo generated", "success"); }
         catch (ex) { toast(ex.message, "error"); }
         finally { btn.disabled = false; btn.innerHTML = "🎲 Generate new logo"; }
+      };
+      $("#uploadLogoBtn").onclick = () => $("#logoFile").click();
+      $("#logoFile").onchange = async () => {
+        const f = $("#logoFile").files && $("#logoFile").files[0];
+        if (!f) return;
+        if (f.size > 2 * 1024 * 1024) { toast("Logo must be under 2 MB", "error"); $("#logoFile").value = ""; return; }
+        const btn = $("#uploadLogoBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Uploading…';
+        try {
+          const fd = new FormData();
+          fd.append("file", f);
+          const res = await fetch(API + "/organization/logo", { method: "POST", credentials: "include", body: fd });
+          const out = await res.json().catch(() => null);
+          if (!res.ok) throw makePublicApiError(res, out, "We couldn't upload this logo. Please try again.");
+          state.me.organization = Object.assign(state.me.organization, out.organization || {});
+          const url = state.me.organization.logo_url;
+          if (url) {
+            $("#settingsLogo").src = url; $("#settingsLogo").style.visibility = "visible";
+            const bl = $("#brandLogo"); if (bl) { bl.src = url; bl.style.display = ""; }
+          }
+          toast("Logo updated", "success");
+        } catch (ex) { toast(ex.message, "error"); }
+        finally { btn.disabled = false; btn.innerHTML = "🖼 Upload logo"; $("#logoFile").value = ""; }
+      };
+      $("#saveLocation").onclick = async () => {
+        const cc = $("#setCountry").value;
+        const st = $("#setState").value.trim();
+        const btn = $("#saveLocation"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        try {
+          const r = await api("/organization/branding", { method: "PATCH", body: { country_code: cc, state_region: st } });
+          state.me.organization = Object.assign(state.me.organization, r.organization || {});
+          const cur = (state.me.organization.display_currency || {});
+          toast("Location saved — amounts now show in " + (cur.code || "INR"), "success");
+          renderSettings();   // re-render with the new currency line
+        } catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Save location"; }
       };
     }
   }
@@ -3798,7 +4474,7 @@
     catch (ex) { toast(ex.message, "error"); }
   }
   async function calDelete(eventId) {
-    if (!confirm("Delete this event?")) return;
+    if (!(await confirmModal("This reminder will be permanently deleted.", { title: "Delete event?", okText: "Delete" }))) return;
     try { await api(`/calendar/events/${eventId}`, { method: "DELETE" }); closeModal(); toast("Event deleted", "success"); renderCalendar(); }
     catch (ex) { toast(ex.message, "error"); }
   }
@@ -3881,6 +4557,7 @@
     closeModal, closeDrawer, changeRole, removeMember, checkout, setCycle,
     applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
     topup: openCreditCheckout, activateInfra: activateInfraFee, deepScan: runDeepScan,
+    saveBank: saveLinkedAccount, refreshBank: refreshLinkedAccount,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
     viewInterview: viewInterviewSession, sendInterview: openSendInterviewPicker,
     calPrev, calNext, calToday, calSetMonth, calSetYear, calEvent, calAdd, calDelete, calToggleDone,
