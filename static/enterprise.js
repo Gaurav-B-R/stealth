@@ -1927,9 +1927,16 @@
     // update the badge in place, and — when a validated passport auto-filled empty profile
     // fields — refresh the client so the Overview reflects the new details.
     async function pollDocValidation(docId) {
+      // Only repaint when the user is actually LOOKING at the Documents tab of THIS
+      // client page — #cpBody is shared by every tab, so a blind renderDocs() here
+      // would clobber a half-typed note or a selected file on another tab.
+      const onDocsTab = () => {
+        const t = $(".cp-tab.active");
+        return !!(t && t.dataset.tab === "documents");
+      };
       for (let i = 0; i < 8; i++) {
         await new Promise((r) => setTimeout(r, i === 0 ? 2500 : 3500));
-        if (state.activeClient !== cl.id) return;   // user navigated away
+        if (state.activeClient !== cl.id || !body.isConnected) return;   // navigated away / page rebuilt
         let fresh;
         try { fresh = await api("/clients/" + cl.id + "/documents"); } catch (e) { return; }
         const arr = fresh.documents || [];
@@ -1937,7 +1944,8 @@
         const found = arr.find((x) => x.id === docId);
         const done = found && found.validation_status;
         if (done) pendingDocIds.delete(docId);
-        renderDocs();
+        // Repaint only when the verdict just landed (nothing changes between ticks).
+        if (done && onDocsTab()) renderDocs();
         if (done) {
           const af = (found.extracted && found.extracted.autofill) || {};
           const filled = af.filled || [];
@@ -1952,7 +1960,8 @@
           return;
         }
       }
-      pendingDocIds.delete(docId); renderDocs();   // stop showing "validating…" after the timeout
+      pendingDocIds.delete(docId);                     // stop showing "validating…" after the timeout
+      if (state.activeClient === cl.id && body.isConnected && onDocsTab()) renderDocs();
     }
 
     function renderDocs() {
@@ -1978,7 +1987,7 @@
         const s = d.validation_status;
         if (s === "valid") return { cls: "ok", txt: "✓ Validated by Rilono AI", msg: "" };
         if (s === "invalid") return { cls: "warn", txt: "⚠ Needs review", msg: d.validation_message || "" };
-        if (s === "error") return { cls: "muted", txt: "Not auto-scanned", msg: "" };
+        if (s === "error") return { cls: "muted", txt: "Not auto-scanned", msg: d.validation_message || "" };
         if (!s && pendingDocIds.has(d.id)) return { cls: "pending", txt: "◌ Rilono AI is validating…", msg: "" };
         return null;  // pre-existing document with no validation record
       };
@@ -1990,14 +1999,28 @@
         const valRow = v ? `<div class="doc-val ${v.cls}"><span class="doc-val-badge">${v.txt}</span>${v.msg ? `<span class="doc-val-msg">${esc(v.msg)}</span>` : ""}</div>` : "";
         const afRow = filled.length ? `<div class="doc-af">✓ Auto-filled profile: <b>${filled.map((f) => esc(f.field)).join(", ")}</b></div>` : "";
         const cfRow = conflicts.length ? `<div class="doc-cf"><b>⚠ Review — document differs from the saved profile:</b>${conflicts.map((c) => `<div class="doc-cf-item">${esc(c.field)}: profile “${esc(c.existing)}” vs document “${esc(c.document)}”</div>`).join("")}</div>` : "";
-        // The AI's own structured red flags (shape is AI-determined — render generically).
+        // The AI's own structured red flags. Known shape is
+        // {field, status: match|conflict|unknown, current_document_value, reference_value, note}
+        // — pretty-print those (skipping "match" rows: they're confirmations, not flags) and
+        // fall back to generic rendering for anything else the AI returns.
+        const cvfItem = (it) => {
+          if (it && typeof it === "object" && (it.field || it.status || it.note)) {
+            if (String(it.status || "").toLowerCase() === "match") return "";  // not a red flag
+            const label = String(it.field || "check").replace(/_/g, " ");
+            const vals = (it.current_document_value || it.reference_value)
+              ? ` (document: ${esc(String(it.current_document_value ?? "—"))} · on file: ${esc(String(it.reference_value ?? "—"))})` : "";
+            return `<div class="doc-cf-item"><b>${esc(label)}</b>: ${esc(String(it.note || it.status || ""))}${vals}</div>`;
+          }
+          return `<div class="doc-cf-item">${esc(typeof it === "string" ? it : JSON.stringify(it))}</div>`;
+        };
         const cvfItems = (x) => {
-          if (Array.isArray(x)) return x.map((it) => `<div class="doc-cf-item">${esc(typeof it === "string" ? it : JSON.stringify(it))}</div>`).join("");
-          if (x && typeof x === "object") return Object.entries(x).map(([k, it]) => `<div class="doc-cf-item">${esc(k)}: ${esc(typeof it === "string" ? it : JSON.stringify(it))}</div>`).join("");
+          if (Array.isArray(x)) return x.map(cvfItem).join("");
+          if (x && typeof x === "object") return cvfItem(x) || Object.entries(x).map(([k, it]) => `<div class="doc-cf-item">${esc(k)}: ${esc(typeof it === "string" ? it : JSON.stringify(it))}</div>`).join("");
           return `<div class="doc-cf-item">${esc(String(x))}</div>`;
         };
         const cvf = d.validation_status === "invalid" ? ((d.extracted && d.extracted.cross_validation_flags) || null) : null;
-        const cvfRow = cvf ? `<div class="doc-cf"><b>⚠ Rilono AI flagged:</b>${cvfItems(cvf)}</div>` : "";
+        const cvfBody = cvf ? cvfItems(cvf) : "";
+        const cvfRow = cvfBody ? `<div class="doc-cf"><b>⚠ Rilono AI flagged:</b>${cvfBody}</div>` : "";
         const acceptRow = (canEdit && (d.validation_status === "invalid" || d.validation_status === "error"))
           ? `<div class="doc-accept-row"><button class="btn btn-soft btn-sm doc-accept" data-id="${d.id}">✓ Checked it myself — accept anyway</button></div>` : "";
         return `

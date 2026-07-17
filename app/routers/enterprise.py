@@ -5716,10 +5716,12 @@ def _start_document_text_extraction(document_id: int, data: bytes, filename: str
                             pass
                 elif row.validation_status == "invalid" and client is not None:
                     # Surface the AI's red flag to the whole org, not just the uploader.
+                    # The filename keeps re-uploads distinct (notify_org dedupes on title).
                     try:
                         notif.notify_org(
                             db2, row.organization_id, type="document_flagged",
-                            title=f"⚠ Rilono AI flagged the {row.document_type} for {client.full_name} — needs review",
+                            title=(f"⚠ Rilono AI flagged {row.document_type} "
+                                   f"({row.original_filename}) for {client.full_name} — needs review"),
                             reference_type="client", reference_id=client.id, commit=False,
                         )
                     except Exception:
@@ -5832,11 +5834,7 @@ def enterprise_accept_client_document(
         raise HTTPException(status_code=404, detail="Document not found.")
     if doc.validation_status not in ("invalid", "error"):
         raise HTTPException(status_code=400, detail="Only documents Rilono AI flagged can be accepted manually.")
-    client = (
-        db.query(models.EnterpriseClient)
-        .filter(models.EnterpriseClient.id == int(client_id))
-        .first()
-    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
 
     staff_name = (current_user.full_name or current_user.email or "staff").strip()
     prior_message = (doc.validation_message or "").strip()

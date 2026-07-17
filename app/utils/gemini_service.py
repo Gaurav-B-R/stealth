@@ -621,20 +621,26 @@ Remember: Output ONLY the JSON object, nothing else."""
             import json
             result = json.loads(response_text)
             
-            # Ensure required fields exist
+            # Ensure required fields exist. NEVER default a missing verdict to "Yes":
+            # the AI is the sole validation gatekeeper, so a garbled/incomplete response
+            # must land in "needs review"/"error" downstream (only an explicit "Yes"
+            # counts as validated) — not show a green "Validated" badge.
             if "Document Validation" not in result:
-                result["Document Validation"] = "Yes"
+                result["Document Validation"] = "Unknown"
+                if "Message" not in result:
+                    result["Message"] = ("The document was processed but Rilono AI did not return a "
+                                         "clear validation verdict. Please verify this document manually.")
             if "Message" not in result:
                 result["Message"] = "Document processed successfully"
-            
+
             return result
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON response from Gemini: {str(e)}")
             # Privacy: do not log the response content.
-            # Return a fallback response
+            # Return a fallback response ("Unknown" verdict — see note above).
             return {
-                "Document Validation": "Yes",
-                "Message": "Document processed but validation response format was invalid. Please verify your document manually.",
+                "Document Validation": "Unknown",
+                "Message": "Document processed but the validation response format was invalid. Please verify this document manually.",
                 "Name": None,
                 "Date of Birth": None,
                 "Document Number": None,
