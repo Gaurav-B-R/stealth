@@ -1262,13 +1262,16 @@
     const isInr = (cr.currency || "INR") === "INR";
     const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
     const money = (credits) => isInr ? ` (≈ ${fmtInr(Math.round(credits * perInr))})` : "";
-    const opts = clients.map((c) => `<option value="${c.id}" ${preselectId === c.id ? "selected" : ""}>${esc(c.full_name)} — ${esc(c.email)}</option>`).join("");
 
     openModal(`<div class="modal-head"><h3>🎤 Send a mock interview</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
       <form id="sendIvForm"><div class="modal-body">
         <p style="margin:0 0 16px;color:var(--text-2);font-size:14px;line-height:1.6">We'll email a secure link to the student. They verify with a one-time code, take the interview(s) on their own time, and every result appears in their profile here.</p>
         <div class="field"><label>Student</label>
-          <select id="sendIvClient" class="select-mini" style="width:100%">${opts}</select></div>
+          <div class="docsel" id="sendIvSel" style="max-width:none;min-width:0">
+            <input type="text" id="sendIvSearch" class="docsel-input" autocomplete="off" placeholder="Search students by name or email…" role="combobox" aria-expanded="false" aria-autocomplete="list" />
+            <input type="hidden" id="sendIvClient" value="" />
+            <div class="docsel-menu hidden" id="sendIvMenu" role="listbox"></div>
+          </div></div>
         <div class="field"><label>How many interviews can they take?</label>
           <input type="number" id="sendIvCount" min="1" max="20" value="3" /></div>
         <div id="sendIvCost" style="background:rgba(99,102,241,.07);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--text-2);line-height:1.5;margin:-2px 0 4px"></div>
@@ -1276,6 +1279,59 @@
       </div>
       <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
       <button type="submit" class="btn btn-primary" id="sendIvSave">✉ Send link</button></div></form>`);
+
+    // ---- Searchable student picker (typeahead + suggestions) ----
+    const ivSearch = $("#sendIvSearch"), ivMenu = $("#sendIvMenu"), ivHidden = $("#sendIvClient");
+    let ivActive = -1, ivFiltered = clients.slice();
+    const ivLabel = (c) => `${c.full_name} — ${c.email}`;
+    const ivPick = (c) => {
+      if (!c) return;
+      ivHidden.value = c.id;
+      ivSearch.value = ivLabel(c);
+      ivMenu.classList.add("hidden");
+      ivSearch.setAttribute("aria-expanded", "false");
+      ivActive = -1;
+    };
+    function ivPaint(q) {
+      const term = (q || "").trim().toLowerCase();
+      ivFiltered = term
+        ? clients.filter((c) => (c.full_name + " " + c.email + " " + (c.destination_country_name || "") + " " + (c.visa_type || "")).toLowerCase().includes(term))
+        : clients.slice();
+      if (ivActive >= ivFiltered.length) ivActive = ivFiltered.length - 1;
+      ivMenu.innerHTML = ivFiltered.length
+        ? ivFiltered.map((c, i) => {
+            const flag = (c.country && c.country.flag_emoji) ? c.country.flag_emoji + " " : "";
+            return `<div class="docsel-item${i === ivActive ? " active" : ""}" data-idx="${i}" role="option">
+              <div class="docsel-line"><span class="docsel-label">${esc(c.full_name)}</span></div>
+              <div class="docsel-hint">${flag}${esc(c.email)}${c.visa_type ? " · " + esc(c.visa_type) : ""}</div>
+            </div>`;
+          }).join("")
+        : `<div class="docsel-empty">No student matches “${esc(q || "")}”. Add them under Clients first.</div>`;
+      ivMenu.querySelectorAll(".docsel-item").forEach((el) => {
+        el.onmousedown = (e) => { e.preventDefault(); ivPick(ivFiltered[parseInt(el.dataset.idx, 10)]); };
+      });
+      ivMenu.classList.remove("hidden");
+      ivSearch.setAttribute("aria-expanded", "true");
+    }
+    const ivScroll = () => { const el = ivMenu.querySelector(".docsel-item.active"); if (el) el.scrollIntoView({ block: "nearest" }); };
+    ivSearch.addEventListener("focus", () => { ivActive = -1; ivPaint(""); });
+    ivSearch.addEventListener("input", () => { ivHidden.value = ""; ivActive = -1; ivPaint(ivSearch.value); });
+    ivSearch.addEventListener("blur", () => setTimeout(() => { ivMenu.classList.add("hidden"); ivSearch.setAttribute("aria-expanded", "false"); }, 150));
+    ivSearch.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (ivMenu.classList.contains("hidden")) { ivActive = 0; ivPaint(ivSearch.value); ivScroll(); return; }
+        ivActive = Math.min(ivFiltered.length - 1, ivActive + 1); ivPaint(ivSearch.value); ivScroll();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault(); ivActive = Math.max(0, ivActive - 1); ivPaint(ivSearch.value); ivScroll();
+      } else if (e.key === "Enter") {
+        if (!ivMenu.classList.contains("hidden") && ivActive >= 0 && ivFiltered[ivActive]) { e.preventDefault(); ivPick(ivFiltered[ivActive]); }
+      } else if (e.key === "Escape") {
+        ivMenu.classList.add("hidden"); ivSearch.setAttribute("aria-expanded", "false");
+      }
+    });
+    // Preselect the caller's client, or default to the first so there's always a valid target.
+    ivPick(clients.find((c) => c.id === preselectId) || clients[0]);
 
     function updateCost() {
       const el = $("#sendIvCost"); if (!el) return;
@@ -1296,6 +1352,11 @@
     $("#sendIvForm").onsubmit = async (e) => {
       e.preventDefault();
       const id = parseInt($("#sendIvClient").value, 10);
+      if (!id || Number.isNaN(id)) {
+        const er = $("#sendIvErr"); er.textContent = "Pick a student from the list first."; er.classList.remove("hidden");
+        $("#sendIvSearch").focus();
+        return;
+      }
       const n = Math.max(1, Math.min(20, parseInt($("#sendIvCount").value, 10) || 3));
       const btn = $("#sendIvSave"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
       try {
