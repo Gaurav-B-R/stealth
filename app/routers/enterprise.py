@@ -525,6 +525,13 @@ def _build_enterprise_portal_url(
 
 
 def _extract_enterprise_subdomain_from_request(request: Request | None) -> str | None:
+    # SECURITY NOTE: x-forwarded-host is client-controllable unless the edge proxy overwrites
+    # it. The value here only drives the *cosmetic* subdomain guard (_enforce_request_subdomain_
+    # matches_org) — the acting org is ALWAYS resolved from the caller's membership, never from
+    # the host — so a spoofed header cannot cross tenants, only bypass a "use your org URL" 403.
+    # Harden at the infra layer: configure the proxy (Render/Cloudflare) to STRIP any inbound
+    # X-Forwarded-Host and set it itself, so clients can't inject it. (Kept XFH-first here to
+    # match app-wide host resolution in main.py:_request_host and avoid breaking prod routing.)
     if request is None:
         return None
 

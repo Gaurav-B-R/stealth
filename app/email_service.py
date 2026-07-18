@@ -1920,7 +1920,7 @@ def send_enterprise_client_email(
 
     try:
         params = {
-            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
             "to": [recipient],
             "subject": clean_subject,
             "html": html_content,
@@ -2007,7 +2007,7 @@ def send_enterprise_interview_invite_email(
     )
     try:
         params = {
-            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
             "to": [recipient],
             "subject": subject,
             "html": html_content,
@@ -2110,7 +2110,7 @@ def send_enterprise_payment_request_email(
     )
     try:
         params = {
-            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
             "to": [recipient],
             "subject": subject,
             "html": html_content,
@@ -2268,7 +2268,7 @@ def send_enterprise_interview_code_email(
     text_content = f"{org_label}\n\nYour mock interview verification code is: {code}\nThis code expires in 15 minutes.\n"
     try:
         params = {
-            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
             "to": [recipient],
             "subject": subject,
             "html": html_content,
@@ -2411,7 +2411,7 @@ def send_enterprise_interview_report_email(
     )
     try:
         params = {
-            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
             "to": [recipient],
             "subject": subject,
             "html": html_content,
@@ -2511,7 +2511,7 @@ def send_enterprise_document_request_email(
     )
     try:
         params = {
-            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
             "to": [recipient],
             "subject": subject,
             "html": html_content,
@@ -2563,7 +2563,7 @@ def send_enterprise_document_request_code_email(
     text_content = f"{org_label}\n\nYour document upload verification code is: {code}\nThis code expires in 15 minutes.\n"
     try:
         params = {
-            "from": f"{org_label} <{_resolve_transactional_from_email()}>",
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
             "to": [recipient],
             "subject": subject,
             "html": html_content,
