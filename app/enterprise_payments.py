@@ -667,7 +667,13 @@ def issue_full_refund(
     return audit
 
 
-def serialize_linked_account(la: Optional[models.EnterpriseLinkedAccount]) -> Optional[dict]:
+def serialize_linked_account(
+    la: Optional[models.EnterpriseLinkedAccount], *, include_sensitive: bool = True
+) -> Optional[dict]:
+    """Serialize the linked account. Settlement identity fields (bank IFSC + last4,
+    beneficiary, GST, the Razorpay account id) are only included when include_sensitive=True —
+    callers must pass False for non-admin viewers so a read-only member can't read the
+    consultancy's settlement details (least privilege)."""
     if la is None:
         return None
     requirements = []
@@ -676,7 +682,7 @@ def serialize_linked_account(la: Optional[models.EnterpriseLinkedAccount]) -> Op
             requirements = json.loads(la.requirements_json)
         except Exception:
             requirements = []
-    return {
+    data = {
         "id": la.id,
         "activation_status": la.activation_status,
         "is_payable": bool(la.is_payable),
@@ -684,13 +690,17 @@ def serialize_linked_account(la: Optional[models.EnterpriseLinkedAccount]) -> Op
         "business_type": la.business_type,
         "contact_name": la.contact_name,
         "contact_email": la.contact_email,
-        "gst_number": la.gst_number,
-        "bank_account_last4": la.bank_account_last4,
-        "bank_ifsc": la.bank_ifsc,
-        "beneficiary_name": la.beneficiary_name,
-        "razorpay_account_id": la.razorpay_account_id,
         "requirements": requirements,
         "attested": bool(la.attested_service_delivery and la.attested_turnover_ok),
         "created_at": la.created_at.isoformat() if la.created_at else None,
         "updated_at": la.updated_at.isoformat() if la.updated_at else None,
     }
+    if include_sensitive:
+        data.update({
+            "gst_number": la.gst_number,
+            "bank_account_last4": la.bank_account_last4,
+            "bank_ifsc": la.bank_ifsc,
+            "beneficiary_name": la.beneficiary_name,
+            "razorpay_account_id": la.razorpay_account_id,
+        })
+    return data

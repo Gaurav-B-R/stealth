@@ -3527,9 +3527,12 @@ def enterprise_finance_summary(
 ):
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
     la = enterprise_payments.get_linked_account(db, organization.id)
+    # Only admins may see the settlement identity fields (bank IFSC/last4, beneficiary, GST,
+    # Razorpay account id). Viewers/editors get the non-sensitive status only (least privilege).
+    is_admin = role == ENTERPRISE_ROLE_ADMIN
     return {
         "payments_enabled": enterprise_payments.razorpay_enabled(),
-        "linked_account": enterprise_payments.serialize_linked_account(la),
+        "linked_account": enterprise_payments.serialize_linked_account(la, include_sensitive=is_admin),
         "fee": enterprise_payments.fee_config_public(),
         "permissions": _enterprise_permissions_for_role(role),
     }
@@ -4231,6 +4234,15 @@ def enterprise_billing_verify(
     if not payment_row:
         raise HTTPException(status_code=404, detail="Payment order not found for this organization.")
 
+    # Idempotency: a payment may be redeemed only once. Replaying a valid (order, payment,
+    # signature) triple must NOT re-extend the plan (that would allow renewal-without-payment),
+    # matching the credit/infra verify paths. Return the current state instead of re-activating.
+    if payment_row.status == "verified":
+        return {
+            "message": "This payment has already been verified.",
+            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+        }
+
     expected_signature = hmac.new(
         key_secret.encode("utf-8"),
         f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}".encode("utf-8"),
@@ -4715,6 +4727,11 @@ def _verify_credit_payment_or_402(
             models.EnterpriseCreditPayment.organization_id == organization.id,
             models.EnterpriseCreditPayment.kind == expected_kind,
         )
+        # Lock the payment row (Postgres) so two concurrent verifies for the SAME payment
+        # serialize: the second blocks here until the first commits, then the caller's
+        # "already credited?" ledger check sees the committed row and skips — closing the
+        # non-atomic check-then-insert race that could otherwise double-credit the wallet.
+        .with_for_update()
         .first()
     )
     if not payment_row:
