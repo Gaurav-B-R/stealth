@@ -5321,6 +5321,20 @@ ENTERPRISE_DOC_ALLOWED_EXT = {
     ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt",
 }
 ENTERPRISE_DOC_INLINE_EXT = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+# Safe served Content-Type per (validated) extension. The download endpoint uses THIS, never
+# the uploader-supplied mime_type — a file named *.pdf can arrive with Content-Type text/html
+# and a <script> body, which served inline under our 'unsafe-inline' CSP would execute in the
+# portal origin (account takeover). Deriving from the extension makes that impossible.
+ENTERPRISE_DOC_EXT_MIME = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".webp": "image/webp", ".gif": "image/gif", ".heic": "image/heic",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".csv": "text/csv", ".txt": "text/plain",
+}
 
 
 def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
@@ -5786,12 +5800,24 @@ def enterprise_download_client_document(
         raise HTTPException(status_code=502, detail="Could not retrieve the document right now.")
 
     ext = os.path.splitext(doc.original_filename)[1].lower()
-    disposition = "inline" if ext in ENTERPRISE_DOC_INLINE_EXT else "attachment"
+    # Serve a Content-Type derived from the validated extension — NEVER the uploader-supplied
+    # doc.mime_type. Only known-safe visual types (PDF/images) render inline; everything else is
+    # forced to an octet-stream attachment. This prevents a *.pdf uploaded as text/html+<script>
+    # from executing in the portal origin (stored XSS / account takeover).
+    if ext in ENTERPRISE_DOC_INLINE_EXT:
+        disposition = "inline"
+        media_type = ENTERPRISE_DOC_EXT_MIME.get(ext, "application/octet-stream")
+    else:
+        disposition = "attachment"
+        media_type = "application/octet-stream"
     filename = _safe_filename(doc.original_filename)
     return Response(
         content=data,
-        media_type=(doc.mime_type or "application/octet-stream"),
-        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
     )
 
 
