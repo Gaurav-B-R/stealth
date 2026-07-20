@@ -29,6 +29,7 @@ from app import enterprise_ai
 from app import enterprise_copilot
 from app import enterprise_interview
 from app import ai_guardrails
+from app import ai_usage
 from app import enterprise_storage
 from app import enterprise_notifications as notif
 from app.utils import gemini_service
@@ -2130,6 +2131,21 @@ def _apply_status_change(client: models.EnterpriseClient, new_status: str) -> No
     client.status = new_status
 
 
+def _load_stage_data(client: models.EnterpriseClient) -> dict:
+    """Parse the client's per-stage record JSON. Always returns a dict of dicts."""
+    raw = getattr(client, "stage_data", None)
+    if not raw:
+        return {}
+    try:
+        import json
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {k: v for k, v in parsed.items() if isinstance(v, dict)}
+
+
 def _serialize_client(client: models.EnterpriseClient, member_names: dict[int, str] | None = None) -> dict:
     assigned_name = None
     if client.assigned_to_user_id and member_names is not None:
@@ -2157,6 +2173,9 @@ def _serialize_client(client: models.EnterpriseClient, member_names: dict[int, s
         "held_from_stage": _stage_brief(client.held_from_status) if getattr(client, "held_from_status", None) else None,
         "priority": client.priority,
         "target_date": _iso(client.target_date),
+        # Per-stage case record: {"<stage_key>": {"<field_key>": value}}. Field definitions
+        # come from the destination-aware catalog served by /catalog.
+        "stage_data": _load_stage_data(client),
         "assigned_to_user_id": client.assigned_to_user_id,
         "assigned_to_name": assigned_name,
         "created_at": _iso(client.created_at),
@@ -2580,6 +2599,67 @@ def enterprise_update_client_status(
     member_names = _org_member_name_map(db, organization.id)
     return {
         "message": "Status updated.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "client": _serialize_client(client, member_names),
+    }
+
+
+class EnterpriseStageDataUpdateRequest(BaseModel):
+    """Save the case record for ONE stage. `values` is {field_key: value}; an empty/omitted
+    value clears that field. Unknown keys (e.g. after a catalog change) are ignored."""
+    stage_key: str
+    values: dict = {}
+
+
+@router.patch("/clients/{client_id}/stage-data")
+def enterprise_update_client_stage_data(
+    client_id: int,
+    payload: EnterpriseStageDataUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Record the destination-specific case details a counselor captures at a pipeline stage
+    (e.g. US: SEVIS ID / DS-160 confirmation; UK: CAS number / IHS reference)."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+
+    stage_key = str(payload.stage_key or "").strip().lower()
+    if stage_key not in catalog.CLIENT_STAGE_KEYS:
+        raise HTTPException(status_code=400, detail="Unknown stage.")
+
+    # Only fields defined for THIS client's destination + stage are accepted, so a stale or
+    # tampered payload can't write arbitrary keys into the record.
+    allowed = {f["key"] for f in catalog.stage_fields_for(client.destination_country_code, stage_key)}
+    if not allowed:
+        raise HTTPException(status_code=400, detail="This stage has no record fields for this destination.")
+
+    incoming = payload.values if isinstance(payload.values, dict) else {}
+    cleaned: dict[str, str] = {}
+    for key, value in incoming.items():
+        if key not in allowed:
+            continue
+        text_value = ("" if value is None else str(value)).strip()
+        if len(text_value) > 500:
+            raise HTTPException(status_code=400, detail=f"'{key}' is too long (max 500 characters).")
+        if text_value:
+            cleaned[key] = text_value
+
+    data = _load_stage_data(client)
+    if cleaned:
+        data[stage_key] = cleaned
+    else:
+        data.pop(stage_key, None)
+    import json
+    client.stage_data = json.dumps(data) if data else None
+    db.commit()
+    db.refresh(client)
+
+    member_names = _org_member_name_map(db, organization.id)
+    return {
+        "message": "Case record saved.",
         "permissions": _enterprise_permissions_for_role(role),
         "client": _serialize_client(client, member_names),
     }
@@ -7108,4 +7188,375 @@ async def public_document_request_upload(
         "message": "Uploaded.",
         "items": [_serialize_docreq_item(i) for i in (req.items or [])],
         "status": req.status,
+    }
+
+
+# ===========================================================================
+# Per-client university shortlisting (B2B)
+#
+# Each consultancy client gets their own shortlist, tailored to THAT student's
+# destination country. Reuses the proven B2C recommendation engine
+# (app/university_shortlist.py) — it is a pure function over a country name — but
+# every row here is org+client scoped, staff-attributed, and the AI action is
+# metered against the organization's Rilono Credits wallet.
+# ===========================================================================
+
+UNIVERSITY_ACTION_KEY = "university_match"
+_UNIVERSITY_DIFFICULTY = {"reach", "match", "safety"}
+
+
+def _serialize_client_university(row: models.EnterpriseClientUniversity) -> dict:
+    try:
+        requirements = json.loads(row.key_requirements) if row.key_requirements else []
+        if not isinstance(requirements, list):
+            requirements = []
+    except Exception:
+        requirements = []
+    return {
+        "id": int(row.id),
+        "university_name": row.university_name,
+        "program": row.program,
+        "location": row.location,
+        "country_code": row.country_code,
+        "status": row.status or "considering",
+        "source": row.source or "manual",
+        "est_tuition": row.est_tuition,
+        "rationale": row.rationale,
+        "notes": row.notes,
+        "qs_world_rank": row.qs_world_rank,
+        "country_rank": row.country_rank,
+        "admission_difficulty": row.admission_difficulty,
+        "application_fee": row.application_fee,
+        "website_url": row.website_url,
+        "admissions_url": row.admissions_url,
+        "key_requirements": [str(x)[:140] for x in requirements][:6],
+        "added_by_name": row.added_by_name,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _safe_external_url(value) -> Optional[str]:
+    """Only absolute http(s) URLs are stored — these are rendered as hrefs, so a
+    javascript:/data: value from the model (or a crafted API call) must never persist."""
+    s = str(value or "").strip()
+    if not s or not re.match(r"^https?://[^\s/$.?#].[^\s]*$", s, re.I):
+        return None
+    return s[:400]
+
+
+def _normalize_university_status(value) -> str:
+    from app.university_shortlist import VALID_STATUSES, DEFAULT_STATUS
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in VALID_STATUSES else DEFAULT_STATUS
+
+
+def _client_universities_query(db: Session, organization_id: int, client_id: int):
+    return (
+        db.query(models.EnterpriseClientUniversity)
+        .filter(
+            models.EnterpriseClientUniversity.organization_id == organization_id,
+            models.EnterpriseClientUniversity.client_id == client_id,
+        )
+        .order_by(
+            models.EnterpriseClientUniversity.created_at.desc(),
+            models.EnterpriseClientUniversity.id.desc(),
+        )
+    )
+
+
+class EnterpriseUniversityCreate(BaseModel):
+    university_name: str = Field(..., min_length=1, max_length=200)
+    program: Optional[str] = Field(None, max_length=200)
+    location: Optional[str] = Field(None, max_length=160)
+    status: Optional[str] = None
+    source: Optional[str] = "manual"
+    est_tuition: Optional[str] = Field(None, max_length=80)
+    rationale: Optional[str] = Field(None, max_length=600)
+    notes: Optional[str] = Field(None, max_length=1000)
+    qs_world_rank: Optional[str] = Field(None, max_length=20)
+    country_rank: Optional[str] = Field(None, max_length=20)
+    admission_difficulty: Optional[str] = Field(None, max_length=20)
+    application_fee: Optional[str] = Field(None, max_length=60)
+    website_url: Optional[str] = Field(None, max_length=400)
+    admissions_url: Optional[str] = Field(None, max_length=400)
+    key_requirements: Optional[list[str]] = None
+
+
+class EnterpriseUniversityUpdate(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=1000)
+
+
+class EnterpriseUniversityRecommend(BaseModel):
+    field_of_study: str = Field(..., min_length=1, max_length=120)
+    level: Optional[str] = Field(None, max_length=60)
+    budget: Optional[str] = Field(None, max_length=60)
+    gpa: Optional[str] = Field(None, max_length=60)
+    test_scores: Optional[str] = Field(None, max_length=160)
+    preferences: Optional[str] = Field(None, max_length=300)
+    max_results: int = Field(6, ge=1, le=8)
+
+
+@router.get("/clients/{client_id}/universities")
+def enterprise_client_universities_list(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """The client's shortlist + the destination context the UI tailors itself to."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    rows = _client_universities_query(db, organization.id, client.id).all()
+    from app import university_shortlist
+
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "entries": [_serialize_client_university(r) for r in rows],
+        "destination_country_code": client.destination_country_code,
+        "destination_country": client.destination_country_name,
+        "client_name": client.full_name,
+        "recommend_available": university_shortlist.ai_available(),
+        "recommend_cost": credits.action_cost(UNIVERSITY_ACTION_KEY),
+    }
+
+
+@router.get("/clients/{client_id}/universities/search")
+def enterprise_client_universities_search(
+    client_id: int,
+    request: Request,
+    q: str = "",
+    limit: int = 8,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Typeahead over the shared registry, scoped to THIS client's destination country,
+    so a UK applicant never sees US-only schools."""
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+
+    term = (q or "").strip()
+    if len(term) < 2:
+        return {"country_code": client.destination_country_code, "results": []}
+    take = max(1, min(int(limit or 8), 15))
+    code = (client.destination_country_code or "").strip().upper()
+
+    rows = (
+        db.query(models.USUniversity)
+        .filter(
+            models.USUniversity.country_code == code,
+            models.USUniversity.university_name.ilike(f"%{term}%"),
+        )
+        .limit(take * 6)
+        .all()
+    )
+    # One university can hold several rows (the registry PK is the email domain), so
+    # dedupe by name, then surface prefix matches before mid-string matches.
+    seen, prefix, contains = set(), [], []
+    lowered = term.lower()
+    for row in rows:
+        name = (row.university_name or "").strip()
+        key = name.lower()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        item = {"name": name, "location": row.location}
+        (prefix if key.startswith(lowered) else contains).append(item)
+    return {"country_code": code, "results": (prefix + contains)[:take]}
+
+
+@router.post("/clients/{client_id}/universities", status_code=status.HTTP_201_CREATED)
+def enterprise_client_university_add(
+    client_id: int,
+    payload: EnterpriseUniversityCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+
+    name = (payload.university_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="University name is required.")
+
+    difficulty = str(payload.admission_difficulty or "").strip().lower()
+    requirements = [str(x).strip()[:140] for x in (payload.key_requirements or []) if str(x).strip()][:6]
+
+    row = models.EnterpriseClientUniversity(
+        organization_id=organization.id,
+        client_id=client.id,
+        # Snapshot the destination the shortlist was built for (server-decided, never client-supplied).
+        country_code=client.destination_country_code,
+        university_name=name[:200],
+        program=(payload.program or "").strip()[:200] or None,
+        location=(payload.location or "").strip()[:160] or None,
+        status=_normalize_university_status(payload.status),
+        source="ai" if str(payload.source or "").strip().lower() == "ai" else "manual",
+        est_tuition=(payload.est_tuition or "").strip()[:80] or None,
+        rationale=(payload.rationale or "").strip()[:600] or None,
+        notes=(payload.notes or "").strip()[:1000] or None,
+        qs_world_rank=(payload.qs_world_rank or "").strip()[:20] or None,
+        country_rank=(payload.country_rank or "").strip()[:20] or None,
+        admission_difficulty=difficulty if difficulty in _UNIVERSITY_DIFFICULTY else None,
+        application_fee=(payload.application_fee or "").strip()[:60] or None,
+        # Re-validate server-side: these render as clickable links, so only absolute
+        # http(s) URLs are stored (a javascript:/data: href would be a stored-XSS vector).
+        website_url=_safe_external_url(payload.website_url),
+        admissions_url=_safe_external_url(payload.admissions_url),
+        key_requirements=json.dumps(requirements) if requirements else None,
+        added_by_user_id=current_user.id,
+        added_by_name=(current_user.full_name or current_user.email or "")[:120] or None,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "entry": _serialize_client_university(row),
+    }
+
+
+@router.patch("/clients/{client_id}/universities/{entry_id}")
+def enterprise_client_university_update(
+    client_id: int,
+    entry_id: int,
+    payload: EnterpriseUniversityUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    row = (
+        db.query(models.EnterpriseClientUniversity)
+        .filter(
+            models.EnterpriseClientUniversity.id == entry_id,
+            models.EnterpriseClientUniversity.organization_id == organization.id,
+            models.EnterpriseClientUniversity.client_id == client.id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="University not found.")
+
+    fields = payload.model_dump(exclude_unset=True)
+    if "status" in fields:
+        row.status = _normalize_university_status(fields.get("status"))
+    if "notes" in fields:
+        note = (fields.get("notes") or "").strip()
+        row.notes = note[:1000] or None
+    db.commit()
+    db.refresh(row)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "entry": _serialize_client_university(row),
+    }
+
+
+@router.delete("/clients/{client_id}/universities/{entry_id}")
+def enterprise_client_university_delete(
+    client_id: int,
+    entry_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    deleted = (
+        db.query(models.EnterpriseClientUniversity)
+        .filter(
+            models.EnterpriseClientUniversity.id == entry_id,
+            models.EnterpriseClientUniversity.organization_id == organization.id,
+            models.EnterpriseClientUniversity.client_id == client.id,
+        )
+        .delete(synchronize_session=False)
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="University not found.")
+    db.commit()
+    return {"deleted": True, "id": entry_id, "permissions": _enterprise_permissions_for_role(role)}
+
+
+@router.post("/clients/{client_id}/universities/recommend")
+def enterprise_client_university_recommend(
+    client_id: int,
+    payload: EnterpriseUniversityRecommend,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """AI university matches for this client, tailored to their destination country.
+
+    Choreography mirrors the proven B2C/Deep-Scan ordering: rate-limit → wallet
+    pre-check → generate → fail without charging → charge ONLY on a usable result.
+    """
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="enterprise.university_recommend",
+        limit=20,
+        window_seconds=600,
+        extra_key=str(current_user.id),
+    )
+
+    from app import university_shortlist
+
+    if not university_shortlist.ai_available():
+        raise HTTPException(status_code=503, detail="AI recommendations are not configured.")
+
+    destination = (client.destination_country_name or "").strip()
+    if not destination:
+        raise HTTPException(status_code=400, detail="Set this client's destination country first.")
+
+    # Hard-block a broke wallet BEFORE spending any Gemini tokens.
+    credits.enforce_action_or_402(db, organization.id, UNIVERSITY_ACTION_KEY)
+
+    ai_usage.set_usage_account(organization_id=organization.id)
+    result = university_shortlist.recommend_universities(
+        destination_country=destination,
+        field_of_study=payload.field_of_study,
+        level=payload.level,
+        budget=payload.budget,
+        gpa=payload.gpa,
+        test_scores=payload.test_scores,
+        home_country=client.nationality,
+        preferences=payload.preferences,
+        max_results=payload.max_results,
+        usage_source="enterprise_university_shortlist",
+    )
+
+    if not result.get("available"):
+        raise HTTPException(status_code=503, detail=result.get("message") or "Recommendations are unavailable right now.")
+    universities = result.get("universities") or []
+    if not universities:
+        # Nothing usable came back — never bill the consultancy for an empty result.
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't generate recommendations. Refine the field of study or preferences and retry.",
+        )
+
+    txn = credits.charge_action(
+        db, organization.id, UNIVERSITY_ACTION_KEY,
+        user=current_user, reference_type="client", reference_id=client.id,
+        description=f"University shortlist — {client.full_name}", commit=True,
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "universities": universities,
+        "destination_country": destination,
+        "grounded": bool(result.get("grounded")),
+        "credits_charged": credits.action_cost(UNIVERSITY_ACTION_KEY) if txn else 0,
+        "wallet": credits.wallet_state(db, organization.id),
     }

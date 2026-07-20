@@ -146,6 +146,12 @@ ACTIONS = {
         "description": "A full dynamic mock consular interview tailored to the client's weak points.",
         "credits": _int_env("ENTERPRISE_CREDIT_COST_MOCK_INTERVIEW", 20),
     },
+    "university_match": {
+        "key": "university_match",
+        "label": "AI university shortlist",
+        "description": "Rilono AI recommends real universities matched to the client's destination, budget, grades and intake.",
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_UNIVERSITY_MATCH", 5),
+    },
     "ai_copilot": {
         "key": "ai_copilot",
         "label": "Rilono AI assistant",
@@ -178,12 +184,14 @@ ACTION_SOURCE_MAP = {
     "deep_scan": ["deep_scan"],
     "mock_interview": ["mock_interview", "interview_feedback"],
     "ai_copilot": ["enterprise_copilot", "enterprise_copilot_extension"],
+    "university_match": ["enterprise_university_shortlist"],
 }
 
 # Every Gemini source the enterprise platform incurs cost on (billed or not).
 ENTERPRISE_COST_SOURCES = [
     "deep_scan", "document_ai", "mock_interview", "interview_feedback",
     "enterprise_copilot", "enterprise_copilot_extension",
+    "enterprise_university_shortlist",
 ]
 
 

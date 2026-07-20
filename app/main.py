@@ -55,6 +55,7 @@ from app.schema_patch import (
     ensure_subscription_usage_columns,
     ensure_student_journey_country_columns,
     ensure_university_shortlist_table,
+    ensure_enterprise_client_university_table,
     ensure_sop_feature_schema,
     ensure_user_legal_consent_column,
     ensure_user_acquisition_columns,
@@ -281,6 +282,7 @@ def startup_backfill_subscriptions():
     ensure_enterprise_calendar_reminder_runs_table()
     ensure_enterprise_support_requests_table()
     ensure_enterprise_notifications_table()
+    ensure_enterprise_client_university_table()
     ensure_enterprise_demo_requests_table()
     ensure_enterprise_signup_otps_table()
     ensure_coupon_percent_column()

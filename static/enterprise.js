@@ -538,7 +538,8 @@
     $("#signupDomainSuffix").textContent = suffix;
     $("#onboardDomainSuffix").textContent = suffix;
     initializeEnterpriseTurnstile();
-    renderEnterpriseTurnstile("signup");
+    // Login is the default card, so its security widget is the one to pre-render.
+    renderEnterpriseTurnstile("login");
 
     $("#toLogin").onclick = () => showLoginCard();
     $("#toSignup").onclick = () => showSignupCard();
@@ -1638,7 +1639,9 @@
     const pendingDocIds = new Set();  // docs uploaded this session, awaiting AI validation (for the "scanning…" badge)
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
     const dr = { request: undefined };  // secure document-request state (lazy-loaded)
+    const uni = { data: null, suggestions: [] };  // university shortlist state (lazy-loaded)
     let overviewEditing = false;  // inline "Edit details" mode on the Overview tab
+    let openStageKey = null;      // stage whose case-record panel is expanded under the tracker
     $("#viewTitle").textContent = cl.full_name;
 
     const detail = (label, val) => `<div class="detail-item"><label>${label}</label><div>${val || "—"}</div></div>`;
@@ -1670,6 +1673,7 @@
           <button class="cp-tab" data-tab="notes">Notes${data.notes.length ? ` (${data.notes.length})` : ""}</button>
           <button class="cp-tab" data-tab="emails">Emails${data.emails.length ? ` (${data.emails.length})` : ""}</button>
           <button class="cp-tab" data-tab="payments">💳 Payments</button>
+          <button class="cp-tab" data-tab="universities">🎓 Universities</button>
           <button class="cp-tab" data-tab="interview">🎤 Mock Interview</button>
         </div>
         <div class="cp-body" id="cpBody"></div>
@@ -1742,8 +1746,12 @@
           : cls.indexOf("done") >= 0 ? "✓"
           : (cls.indexOf("current") >= 0 && s._o === 6 ? "✓" : String(s._o));
         const jk = interactive ? ` data-jkey="${s.key}"` : "";
-        return `<div class="jtrack-step ${cls}"${jk} title="${esc(s.label)}">
-            <div class="jtrack-node">${inner}</div>
+        // Amber dot on a reached stage whose required case-record fields are still empty.
+        const gaps = (interactive && s._o <= (curOrder || heldOrder)) ? stageMissingRequired(s.key).length : 0;
+        const openCls = (openStageKey === s.key) ? " panel-open" : "";
+        const tip = gaps ? `${s.label} — ${gaps} required field${gaps === 1 ? "" : "s"} still empty` : s.label;
+        return `<div class="jtrack-step ${cls}${gaps ? " has-gap" : ""}${openCls}"${jk} title="${esc(tip)}">
+            <div class="jtrack-node">${inner}${gaps ? '<span class="jtrack-gap" aria-hidden="true"></span>' : ""}</div>
             <div class="jtrack-label">${esc(s.label)}</div>
           </div>`;
       }).join("");
@@ -1769,7 +1777,7 @@
           ? `${first} is on hold at “${esc(heldStage.label)}”. Click Resume to continue, or click any stage.`
           : `${first} is on hold. Click a stage to resume the case.`;
         else if (isRejected) hint = `This case is closed as rejected. Click any stage to reopen it.`;
-        else hint = `Click a stage to move ${first} — we'll ask you to confirm before anything changes.`;
+        else hint = `Click a stage to open its case record — the details to capture are tailored to ${esc(cl.destination_country_name || "this destination")}. Moving ${first} is a separate button inside.`;
       }
 
       const dArr = docs || [];
@@ -1788,6 +1796,70 @@
         ${docHtml}`;
     }
 
+    /* ---- Per-stage case record (destination-aware fields under the journey tracker) ---- */
+    // Field definitions come from /catalog (stage_fields_by_country), resolved for THIS
+    // client's destination, so a US case records SEVIS/DS-160 and a UK case records CAS/IHS.
+    function stageFieldsFor(stageKey) {
+      const byCountry = (state.catalog && state.catalog.stage_fields_by_country) || {};
+      const cc = String(cl.destination_country_code || "").toUpperCase();
+      return ((byCountry[cc] || {})[stageKey]) || [];
+    }
+    function stageValuesFor(stageKey) {
+      return ((cl.stage_data || {})[stageKey]) || {};
+    }
+    function stageMissingRequired(stageKey) {
+      const vals = stageValuesFor(stageKey);
+      return stageFieldsFor(stageKey).filter((f) => f.required && !String(vals[f.key] || "").trim());
+    }
+
+    function stagePanelHtml() {
+      if (!openStageKey) return "";
+      const stages = (state.catalog && state.catalog.stages) || [];
+      const s = stages.find((x) => x.key === openStageKey);
+      if (!s) return "";
+      const fields = stageFieldsFor(openStageKey);
+      const vals = stageValuesFor(openStageKey);
+      const isCurrent = cl.status === openStageKey;
+
+      const body = fields.length ? `<div class="stage-fields">${fields.map((f) => {
+        const raw = vals[f.key] == null ? "" : String(vals[f.key]);
+        const id = "sf_" + f.key;
+        let control;
+        if (f.type === "select") {
+          const opts = ['<option value="">—</option>'].concat((f.options || []).map((o) =>
+            `<option value="${esc(o)}"${raw === o ? " selected" : ""}>${esc(o)}</option>`)).join("");
+          control = `<select id="${id}" data-fkey="${esc(f.key)}"${canEdit ? "" : " disabled"}>${opts}</select>`;
+        } else if (f.type === "textarea") {
+          control = `<textarea id="${id}" data-fkey="${esc(f.key)}" rows="2"${canEdit ? "" : " disabled"}>${esc(raw)}</textarea>`;
+        } else {
+          const t = f.type === "date" ? "date" : (f.type === "number" ? "number" : "text");
+          control = `<input id="${id}" data-fkey="${esc(f.key)}" type="${t}" value="${esc(raw)}"${canEdit ? "" : " disabled"}>`;
+        }
+        return `<div class="field stage-field">
+            <label for="${id}">${esc(f.label)}${f.required ? ' <span class="sf-req" title="Required for this stage">*</span>' : ""}</label>
+            ${control}
+            ${f.hint ? `<div class="sf-hint">${esc(f.hint)}</div>` : ""}
+          </div>`;
+      }).join("")}</div>`
+        : `<p class="muted" style="margin:0;font-size:13px">No case-record fields for this stage yet.</p>`;
+
+      const actions = canEdit ? `<div class="stage-panel-actions">
+          ${fields.length ? `<button type="button" class="btn btn-primary btn-sm" id="stageSave">Save record</button>` : ""}
+          ${isCurrent ? `<span class="stage-current-pill">Current stage</span>`
+                      : `<button type="button" class="btn btn-soft btn-sm" id="stageMove">Move ${esc((cl.full_name || "client").split(" ")[0])} here</button>`}
+          <button type="button" class="btn btn-ghost btn-sm" id="stageClose">Close</button>
+        </div>` : `<div class="stage-panel-actions"><button type="button" class="btn btn-ghost btn-sm" id="stageClose">Close</button></div>`;
+
+      return `<div class="stage-panel" id="stagePanel">
+          <div class="stage-panel-head">
+            <div><h4>${esc(s.label)}</h4><p>${esc(s.description || "")}</p></div>
+            ${isCurrent ? "" : `<span class="stage-panel-tag">Not the current stage</span>`}
+          </div>
+          ${body}
+          ${actions}
+        </div>`;
+    }
+
     function renderOverview() {
       if (overviewEditing && canEdit) { renderOverviewEdit(); return; }
 
@@ -1799,6 +1871,7 @@
         <div class="cp-card">
           <div class="cp-card-head"><h3>Visa journey</h3>${statusPill(cl.stage)}</div>
           <div id="ovStageFlow">${journeyTrackHtml(canEdit, cl.status, docs)}</div>
+          <div id="ovStagePanel">${stagePanelHtml()}</div>
         </div>
         ${isUKClient ? `
         <div class="cp-card">
@@ -1843,36 +1916,79 @@
         try { await navigator.clipboard.writeText(url); toast("Calculator link copied — paste it to your student.", "success"); }
         catch (e) { toast(url, "info"); }
       };
-      // Quick-select pipeline stage: clicking a stage asks for a confirmation first
-      // (a stray click must never silently move the case), then setStatus PATCHes
-      // and re-renders. Only wired when the user can edit.
+      // Clicking a stage OPENS that stage's case-record panel underneath the tracker.
+      // Moving the case is a deliberate button inside the panel, so a stray click on the
+      // journey can never silently change the client's status.
       if (canEdit) {
         $$("#ovStageFlow [data-jkey]").forEach((b) => {
-          b.onclick = async () => {
+          b.onclick = () => {
             const key = b.dataset.jkey;
-            if (!key || key === cl.status) return;
-            const stages = (state.catalog && state.catalog.stages) || [];
-            const labelOf = (k) => { const s = stages.find((x) => x.key === k); return s ? s.label : (k || "").replace(/_/g, " "); };
-            const first = (cl.full_name || "the client").split(" ")[0];
-            const toLabel = labelOf(key);
-            const fromLabel = labelOf(cl.status);
-            const isReject = /reject/i.test(key);
-            const isHold = /hold/i.test(key);
-            const title = isReject ? "Mark case as rejected?" : isHold ? "Put case on hold?" : `Move to “${toLabel}”?`;
-            const message = isReject
-              ? `${first}'s case will be closed as “${toLabel}”. You can reopen it later by clicking any stage.`
-              : isHold
-                ? `${first}'s case will be paused at “${fromLabel}”. You can resume it anytime.`
-                : `${first} will move from “${fromLabel}” to “${toLabel}”.`;
-            const ok = await confirmModal(message, {
-              title,
-              okText: isReject ? "Mark rejected" : isHold ? "Put on hold" : "Move stage",
-              danger: isReject,
-            });
-            if (ok) setStatus(cl.id, key);
+            if (!key) return;
+            openStageKey = (openStageKey === key) ? null : key;   // click again to collapse
+            renderOverview();
+            const panel = $("#stagePanel");
+            if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
           };
         });
+        wireStagePanel();
       }
+    }
+
+    function wireStagePanel() {
+      const closeBtn = $("#stageClose");
+      if (closeBtn) closeBtn.onclick = () => { openStageKey = null; renderOverview(); };
+
+      const saveBtn = $("#stageSave");
+      if (saveBtn) saveBtn.onclick = async () => {
+        const stageKey = openStageKey;
+        const values = {};
+        $$("#stagePanel [data-fkey]").forEach((el) => { values[el.dataset.fkey] = el.value; });
+        saveBtn.disabled = true; saveBtn.innerHTML = '<span class="spinner"></span> Saving…';
+        try {
+          const r = await api(`/clients/${cl.id}/stage-data`, { method: "PATCH", body: { stage_key: stageKey, values } });
+          if (r && r.client) Object.assign(cl, r.client);
+          toast("Case record saved", "success");
+          renderOverview();
+        } catch (ex) {
+          toast(ex.message, "error");
+          saveBtn.disabled = false; saveBtn.textContent = "Save record";
+        }
+      };
+
+      const moveBtn = $("#stageMove");
+      if (moveBtn) moveBtn.onclick = async () => {
+        const key = openStageKey;
+        if (!key || key === cl.status) return;
+        const stages = (state.catalog && state.catalog.stages) || [];
+        const stageOf = (k) => stages.find((x) => x.key === k) || {};
+        const labelOf = (k) => stageOf(k).label || (k || "").replace(/_/g, " ");
+        const orderOf = (k) => (stageOf(k).order != null ? stageOf(k).order : 0);
+        const first = (cl.full_name || "the client").split(" ")[0];
+        const toLabel = labelOf(key), fromLabel = labelOf(cl.status);
+        const isReject = /reject/i.test(key), isHold = /hold/i.test(key);
+
+        // Warn — but never block — when advancing while the stage being LEFT is still
+        // missing required record fields.
+        let warn = "";
+        if (!isReject && !isHold && orderOf(key) > orderOf(cl.status)) {
+          const missing = stageMissingRequired(cl.status);
+          if (missing.length) {
+            warn = `\n\n⚠ “${fromLabel}” is still missing: ${missing.map((f) => f.label).join(", ")}.\nYou can continue and fill this in later.`;
+          }
+        }
+        const title = isReject ? "Mark case as rejected?" : isHold ? "Put case on hold?" : `Move to “${toLabel}”?`;
+        const message = (isReject
+          ? `${first}'s case will be closed as “${toLabel}”. You can reopen it later by clicking any stage.`
+          : isHold
+            ? `${first}'s case will be paused at “${fromLabel}”. You can resume it anytime.`
+            : `${first} will move from “${fromLabel}” to “${toLabel}”.`) + warn;
+        const ok = await confirmModal(message, {
+          title,
+          okText: isReject ? "Mark rejected" : isHold ? "Put on hold" : "Move stage",
+          danger: isReject,
+        });
+        if (ok) { openStageKey = null; setStatus(cl.id, key); }
+      };
     }
 
     // Inline edit of the client details, in-pane (no popup). Save writes via PATCH and
@@ -2795,6 +2911,430 @@
       });
     }
 
+    /* ---- Universities tab (per-client shortlist, tailored to their destination) ---- */
+    const UNI_STATUSES = [
+      { key: "considering", label: "Considering", color: "#64748b" },
+      { key: "applied", label: "Applied", color: "#2563eb" },
+      { key: "admitted", label: "Admitted", color: "#059669" },
+      { key: "rejected", label: "Rejected", color: "#dc2626" },
+    ];
+    const UNI_DIFFICULTY = {
+      reach: { label: "Reach", bg: "rgba(239,68,68,.12)", fg: "#b91c1c" },
+      match: { label: "Match", bg: "rgba(37,99,235,.12)", fg: "#1d4ed8" },
+      safety: { label: "Safety", bg: "rgba(16,185,129,.14)", fg: "#047857" },
+    };
+
+    // Defence in depth: the server already stores only http(s) URLs, but never build an
+    // href from model-authored text without re-checking the scheme.
+    function safeUrl(u) {
+      return typeof u === "string" && /^https?:\/\/[^\s]+$/i.test(u.trim());
+    }
+
+    function renderUniversities() {
+      body.innerHTML = `<div id="uniWrap"><div class="muted" style="padding:8px 0">Loading shortlist…</div></div>`;
+      // Let the module-level row handlers (status change / remove) redraw this tab,
+      // since they're invoked from inline onclick and can't see this closure.
+      _uniRefresh = loadUniversities;
+      // Bring back any paid-for AI matches the user hasn't actioned yet.
+      restoreUniSuggestions();
+      loadUniversities();
+    }
+
+    async function loadUniversities() {
+      try {
+        uni.data = await api(`/clients/${cl.id}/universities`);
+      } catch (ex) {
+        uni.data = null;
+        const w = $("#uniWrap");
+        if (w) w.innerHTML = `<div class="cp-card"><div class="muted">Could not load the shortlist: ${esc(ex.message)}</div></div>`;
+        return;
+      }
+      if ($("#uniWrap")) drawUniversities();
+    }
+
+    function uniStatusSelect(entry) {
+      const opts = UNI_STATUSES.map((s) =>
+        `<option value="${s.key}"${entry.status === s.key ? " selected" : ""}>${s.label}</option>`).join("");
+      const color = (UNI_STATUSES.find((s) => s.key === entry.status) || UNI_STATUSES[0]).color;
+      return `<select class="uni-status" style="color:${color}" onchange="__ent.setUniStatus(${cl.id},${entry.id},this.value)">${opts}</select>`;
+    }
+
+    function uniRow(e) {
+      const d = UNI_DIFFICULTY[(e.admission_difficulty || "").toLowerCase()];
+      const meta = [e.program, e.location].filter(Boolean).join(" · ");
+      const ranks = [
+        e.qs_world_rank ? `QS #${esc(e.qs_world_rank)}` : "",
+        e.country_rank ? `National #${esc(e.country_rank)}` : "",
+        e.est_tuition ? esc(e.est_tuition) : "",
+        e.application_fee ? `App fee ${esc(e.application_fee)}` : "",
+      ].filter(Boolean).join(" &nbsp;·&nbsp; ");
+      const reqs = (e.key_requirements || []).length
+        ? `<div class="uni-reqs">${e.key_requirements.map((r) => `<span>${esc(r)}</span>`).join("")}</div>` : "";
+      // Only http(s) URLs are ever stored, but re-check before rendering an href.
+      const links = [
+        safeUrl(e.website_url) ? `<a class="uni-link" href="${esc(e.website_url)}" target="_blank" rel="noopener noreferrer">🔗 University site</a>` : "",
+        safeUrl(e.admissions_url) ? `<a class="uni-link" href="${esc(e.admissions_url)}" target="_blank" rel="noopener noreferrer">📋 Entry requirements</a>` : "",
+      ].filter(Boolean).join("");
+      const linkRow = links ? `<div class="uni-links">${links}</div>` : "";
+      return `<div class="uni-row">
+        <div class="uni-main">
+          <div class="uni-name">${esc(e.university_name)}
+            ${e.source === "ai" ? '<span class="uni-badge-ai">AI</span>' : ""}
+            ${d ? `<span class="uni-badge" style="background:${d.bg};color:${d.fg}">${d.label}</span>` : ""}
+          </div>
+          ${meta ? `<div class="uni-meta">${esc(meta)}</div>` : ""}
+          ${ranks ? `<div class="uni-ranks">${ranks}</div>` : ""}
+          ${e.rationale ? `<div class="uni-why">${esc(e.rationale)}</div>` : ""}
+          ${reqs}
+          ${linkRow}
+        </div>
+        <div class="uni-actions">
+          ${canEdit ? uniStatusSelect(e) : `<span class="uni-status-ro">${esc((UNI_STATUSES.find((s) => s.key === e.status) || UNI_STATUSES[0]).label)}</span>`}
+          ${canEdit ? `<button class="uni-del" title="Remove" onclick="__ent.removeUni(${cl.id},${e.id})">&times;</button>` : ""}
+        </div>
+      </div>`;
+    }
+
+    function drawUniversities() {
+      const w = $("#uniWrap");
+      if (!w || !uni.data) return;
+      const d = uni.data;
+      const entries = d.entries || [];
+      const dest = d.destination_country || "their destination";
+      const cost = d.recommend_cost || 0;
+      const first = (cl.full_name || "this client").split(" ")[0];
+
+      const aiCard = !canEdit ? "" : `
+        <div class="cp-card uni-ai-card">
+          <div class="uni-ai-head">
+            <div>
+              <div class="cp-card-head" style="margin:0"><h3>🎓 Find universities in ${esc(dest)}</h3></div>
+              <p class="muted" style="margin:4px 0 0;font-size:13px">Rilono AI matches real ${esc(dest)} universities to ${esc(first)}'s profile, budget and grades — with rankings and entry requirements.</p>
+            </div>
+            <span class="uni-cost">${cost} credits</span>
+          </div>
+          ${d.recommend_available === false
+            ? `<div class="muted" style="margin-top:10px">AI recommendations are not available right now.</div>`
+            : `<div class="uni-form">
+                 <div class="field"><label>Field of study <span style="color:#dc2626">*</span></label><input id="uniField" placeholder="e.g. Computer Science" maxlength="120"></div>
+                 <div class="field"><label>Study level</label>
+                   <select id="uniLevel"><option value="">Any</option><option>Bachelors</option><option>Masters</option><option>PhD</option><option>Diploma</option></select></div>
+                 <div class="field"><label>Annual budget</label><input id="uniBudget" placeholder="${esc(uniBudgetHint(d.destination_country_code))}" maxlength="60"></div>
+                 <div class="field"><label>Grades / GPA</label><input id="uniGpa" placeholder="${esc(uniGpaHint(d.destination_country_code))}" maxlength="60"></div>
+                 <div class="field"><label>Test scores</label><input id="uniScores" placeholder="${esc(uniScoreHint(d.destination_country_code))}" maxlength="160"></div>
+                 <div class="field"><label>Other preferences</label><input id="uniPrefs" placeholder="e.g. scholarships, near a major city" maxlength="300"></div>
+               </div>
+               <div class="uni-ai-foot">
+                 <button class="btn btn-primary" id="uniRecBtn">✨ Get AI recommendations</button>
+                 <span class="muted" id="uniRecMsg"></span>
+               </div>`}
+        </div>`;
+
+      const addCard = !canEdit ? "" : `
+        <div class="cp-card">
+          <div class="cp-sub-label">Add manually</div>
+          <div class="uni-add-row">
+            <input id="uniManual" placeholder="Search ${esc(dest)} universities…" autocomplete="off">
+            <input id="uniManualProgram" placeholder="Program (optional)" maxlength="200">
+            <button class="btn btn-soft" id="uniAddBtn">Add</button>
+          </div>
+          <div id="uniSuggest" class="uni-suggest" style="display:none"></div>
+        </div>`;
+
+      w.innerHTML = `
+        ${aiCard}
+        ${canEdit ? uniSuggestionsPanel() : ""}
+        ${addCard}
+        <div class="cp-card">
+          <div class="cp-card-head"><h3>Shortlist</h3>
+            <div class="uni-head-right">
+              <span class="muted">${entries.length} ${entries.length === 1 ? "university" : "universities"}</span>
+              ${entries.length ? `<button class="btn btn-soft btn-sm" id="uniExportBtn" title="Download as CSV — opens directly in Excel">⬇ Export</button>` : ""}
+            </div>
+          </div>
+          ${entries.length
+            ? `<div class="uni-list">${entries.map(uniRow).join("")}</div>`
+            : `<div class="uni-empty">No universities shortlisted yet${canEdit ? ` — run an AI match for ${esc(dest)} or add one manually.` : "."}</div>`}
+        </div>`;
+
+      // Export is available to viewers too — reading the shortlist doesn't require edit rights.
+      const exportBtn = $("#uniExportBtn");
+      if (exportBtn) exportBtn.onclick = () => exportUniversitiesCsv();
+
+      if (canEdit) {
+        const rec = $("#uniRecBtn");
+        if (rec) rec.onclick = () => recommendUniversities();
+        const addBtn = $("#uniAddBtn");
+        if (addBtn) addBtn.onclick = () => addManualUniversity();
+        const save = $("#uniSavePicks");
+        if (save) save.onclick = () => addSelectedUniSuggestions();
+        const dismiss = $("#uniDismissSugg");
+        if (dismiss) dismiss.onclick = () => dismissUniSuggestions();
+        wireUniAutocomplete();
+      }
+    }
+
+    // Country-aware placeholders so a UK client never sees "$" / "GRE" hints.
+    function uniBudgetHint(code) {
+      return ({ US: "e.g. $30,000", UK: "e.g. £22,000", CA: "e.g. C$25,000", AU: "e.g. A$35,000", DE: "e.g. €12,000", IE: "e.g. €18,000" })[code] || "e.g. annual budget";
+    }
+    function uniGpaHint(code) {
+      return ({ US: "e.g. 3.6/4.0", UK: "e.g. 2:1 or AAB", CA: "e.g. 3.6/4.0 or 85%", AU: "e.g. 75% or GPA 5.5/7", DE: "e.g. 1.7 (German scale)", IE: "e.g. 2:1 (Honours)" })[code] || "e.g. GPA or grade average";
+    }
+    function uniScoreHint(code) {
+      return ({ US: "e.g. IELTS 7.5, GRE 320", UK: "e.g. IELTS 7.0", CA: "e.g. IELTS 7.0", AU: "e.g. IELTS 7.0, PTE 65", DE: "e.g. IELTS 6.5, TestDaF 4", IE: "e.g. IELTS 6.5" })[code] || "e.g. IELTS 7.0";
+    }
+
+    function wireUniAutocomplete() {
+      const input = $("#uniManual");
+      const box = $("#uniSuggest");
+      if (!input || !box) return;
+      let timer = null;
+      const hide = () => { box.style.display = "none"; box.innerHTML = ""; };
+      input.addEventListener("input", () => {
+        const q = input.value.trim();
+        if (timer) clearTimeout(timer);
+        if (q.length < 2) return hide();
+        timer = setTimeout(async () => {
+          try {
+            const r = await api(`/clients/${cl.id}/universities/search?q=${encodeURIComponent(q)}`);
+            const results = r.results || [];
+            if (!results.length) return hide();
+            box.innerHTML = results.map((u) =>
+              `<button type="button" class="uni-sugg" data-name="${esc(u.name)}">${esc(u.name)}${u.location ? `<span>${esc(u.location)}</span>` : ""}</button>`).join("");
+            box.style.display = "block";
+            box.querySelectorAll(".uni-sugg").forEach((b) => {
+              b.onclick = () => { input.value = b.dataset.name; hide(); const p = $("#uniManualProgram"); if (p && !p.value) p.focus(); };
+            });
+          } catch (e) { hide(); }
+        }, 220);
+      });
+      input.addEventListener("blur", () => setTimeout(hide, 180));
+    }
+
+    async function addManualUniversity() {
+      const input = $("#uniManual");
+      const prog = $("#uniManualProgram");
+      const name = (input && input.value || "").trim();
+      if (!name) { toast("Enter a university name first.", "error"); return; }
+      const btn = $("#uniAddBtn");
+      if (btn) { btn.disabled = true; btn.textContent = "Adding…"; }
+      try {
+        await api(`/clients/${cl.id}/universities`, {
+          method: "POST",
+          body: { university_name: name, program: (prog && prog.value || "").trim() || null, source: "manual" },
+        });
+        if (input) input.value = "";
+        if (prog) prog.value = "";
+        toast("Added to shortlist", "success");
+        await loadUniversities();
+      } catch (ex) { toast(ex.message, "error"); }
+      finally { const b = $("#uniAddBtn"); if (b) { b.disabled = false; b.textContent = "Add"; } }
+    }
+
+    async function recommendUniversities() {
+      const field = ($("#uniField") && $("#uniField").value || "").trim();
+      const msg = $("#uniRecMsg");
+      if (!field) { if (msg) msg.textContent = "Enter a field of study first."; return; }
+      const btn = $("#uniRecBtn");
+      if (btn) { btn.disabled = true; btn.textContent = "Matching universities…"; }
+      if (msg) msg.textContent = "Rilono AI is researching current rankings — this can take ~20s.";
+      try {
+        const r = await api(`/clients/${cl.id}/universities/recommend`, {
+          method: "POST",
+          timeout: AI_API_TIMEOUT_MS,
+          body: {
+            field_of_study: field,
+            level: ($("#uniLevel") && $("#uniLevel").value) || null,
+            budget: ($("#uniBudget") && $("#uniBudget").value || "").trim() || null,
+            gpa: ($("#uniGpa") && $("#uniGpa").value || "").trim() || null,
+            test_scores: ($("#uniScores") && $("#uniScores").value || "").trim() || null,
+            preferences: ($("#uniPrefs") && $("#uniPrefs").value || "").trim() || null,
+            max_results: 6,
+          },
+        });
+        if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
+        uni.suggestions = r.universities || [];
+        uni.grounded = !!r.grounded;
+        // These cost credits — persist immediately so a refresh, tab switch or stray
+        // click can never destroy results the consultancy already paid for.
+        persistUniSuggestions();
+        drawUniversities();
+        if (r.credits_charged) toast(`${r.universities.length} matches · ${r.credits_charged} credits used`, "success");
+      } catch (ex) {
+        if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); }
+        else if (msg) msg.textContent = ex.message || "Could not generate recommendations.";
+      } finally {
+        const b = $("#uniRecBtn");
+        if (b) { b.disabled = false; b.textContent = "✨ Get AI recommendations"; }
+      }
+    }
+
+    /* AI results cost credits, so they are NEVER shown in a dismissable modal — a stray
+       backdrop click would burn the charge with nothing saved. They render inline in the
+       tab and are mirrored to sessionStorage, so a refresh or tab switch can't lose them.
+       sessionStorage (not localStorage) keeps client data off disk between sessions. */
+    const uniSuggestKey = () => `rilono_ent_uni_sugg_${cl.id}`;
+
+    function persistUniSuggestions() {
+      try {
+        sessionStorage.setItem(uniSuggestKey(), JSON.stringify({
+          universities: uni.suggestions || [], grounded: !!uni.grounded,
+        }));
+      } catch (e) { /* private mode / quota — the in-memory copy still works */ }
+    }
+
+    function restoreUniSuggestions() {
+      if (uni.suggestions && uni.suggestions.length) return;
+      try {
+        const raw = sessionStorage.getItem(uniSuggestKey());
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        uni.suggestions = Array.isArray(saved.universities) ? saved.universities : [];
+        uni.grounded = !!saved.grounded;
+      } catch (e) { uni.suggestions = []; }
+    }
+
+    function clearUniSuggestions() {
+      uni.suggestions = [];
+      uni.grounded = false;
+      try { sessionStorage.removeItem(uniSuggestKey()); } catch (e) { /* noop */ }
+    }
+
+    function uniSuggestionsPanel() {
+      const list = uni.suggestions || [];
+      if (!list.length) return "";
+      const dest = (uni.data && uni.data.destination_country) || "";
+      const first = (cl.full_name || "").split(" ")[0];
+      return `<div class="cp-card uni-sugg-card" id="uniSuggPanel">
+        <div class="uni-sugg-head">
+          <div>
+            <div class="cp-card-head" style="margin:0"><h3>🎓 ${list.length} matches in ${esc(dest)}</h3></div>
+            <p class="muted" style="margin:4px 0 0;font-size:13px">Pick the ones worth shortlisting for ${esc(first)}${uni.grounded ? " · rankings checked against live sources" : ""}.</p>
+          </div>
+          <span class="uni-sugg-saved">✓ Saved — safe to come back to</span>
+        </div>
+        <div class="uni-sugg-list">
+          ${list.map((u, i) => {
+            const d = UNI_DIFFICULTY[(u.admission_difficulty || "").toLowerCase()];
+            const ranks = [u.qs_world_rank ? `QS #${esc(u.qs_world_rank)}` : "", u.country_rank ? `National #${esc(u.country_rank)}` : "", u.estimated_annual_tuition ? esc(u.estimated_annual_tuition) : "", u.application_fee ? `App fee ${esc(u.application_fee)}` : ""].filter(Boolean).join(" · ");
+            const sLinks = [
+              safeUrl(u.official_website) ? `<a class="uni-link" href="${esc(u.official_website)}" target="_blank" rel="noopener noreferrer">🔗 University site</a>` : "",
+              safeUrl(u.admissions_url) ? `<a class="uni-link" href="${esc(u.admissions_url)}" target="_blank" rel="noopener noreferrer">📋 Entry requirements</a>` : "",
+            ].filter(Boolean).join("");
+            return `<label class="uni-sugg-item">
+              <input type="checkbox" class="uni-pick" data-i="${i}" checked>
+              <div>
+                <div class="uni-name">${esc(u.name || "")}${d ? `<span class="uni-badge" style="background:${d.bg};color:${d.fg}">${d.label}</span>` : ""}</div>
+                ${[u.program, u.location].filter(Boolean).length ? `<div class="uni-meta">${esc([u.program, u.location].filter(Boolean).join(" · "))}</div>` : ""}
+                ${ranks ? `<div class="uni-ranks">${ranks}</div>` : ""}
+                ${u.why_recommended ? `<div class="uni-why">${esc(u.why_recommended)}</div>` : ""}
+                ${(u.key_requirements || []).length ? `<div class="uni-reqs">${u.key_requirements.map((r) => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
+                ${sLinks ? `<div class="uni-links">${sLinks}</div>` : ""}
+              </div>
+            </label>`;
+          }).join("")}
+        </div>
+        <div class="uni-sugg-foot">
+          <button class="btn btn-primary" id="uniSavePicks">Add selected to shortlist</button>
+          <button class="btn btn-ghost" id="uniDismissSugg">Dismiss</button>
+        </div>
+      </div>`;
+    }
+
+    async function addSelectedUniSuggestions() {
+      const list = uni.suggestions || [];
+      const picks = [...document.querySelectorAll(".uni-pick")].filter((c) => c.checked).map((c) => list[Number(c.dataset.i)]).filter(Boolean);
+      if (!picks.length) { toast("Tick at least one university first.", "error"); return; }
+      const btn = $("#uniSavePicks");
+      if (btn) { btn.disabled = true; btn.textContent = "Adding…"; }
+      let added = 0;
+      const failed = [];
+      for (const u of picks) {
+        try {
+          await api(`/clients/${cl.id}/universities`, {
+            method: "POST",
+            body: {
+              university_name: u.name, program: u.program || null, location: u.location || null,
+              source: "ai", est_tuition: u.estimated_annual_tuition || null, rationale: u.why_recommended || null,
+              qs_world_rank: u.qs_world_rank || null, country_rank: u.country_rank || null,
+              admission_difficulty: u.admission_difficulty || null,
+              application_fee: u.application_fee || null,
+              website_url: u.official_website || null,
+              admissions_url: u.admissions_url || null,
+              key_requirements: Array.isArray(u.key_requirements) ? u.key_requirements : null,
+            },
+          });
+          added += 1;
+        } catch (e) { failed.push(u); }
+      }
+      // Only drop the paid-for results once everything selected actually saved.
+      if (failed.length) {
+        uni.suggestions = failed;
+        persistUniSuggestions();
+        toast(`${added} added · ${failed.length} failed — still here to retry`, "error");
+      } else {
+        clearUniSuggestions();
+        toast(`${added} added to shortlist`, "success");
+      }
+      await loadUniversities();
+    }
+
+    /* Export the shortlist as CSV — Excel opens it natively, so no server round-trip or
+       spreadsheet dependency is needed. Two details that matter for real Excel use:
+         1. A UTF-8 BOM, or Excel mangles £/€/accented university names.
+         2. Formula-injection guarding: a cell starting with = + - @ is executed by Excel,
+            and these rows carry AI-generated text and free-text notes. */
+    function csvCell(value) {
+      let s = value === null || value === undefined ? "" : String(value);
+      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+
+    function exportUniversitiesCsv() {
+      const entries = (uni.data && uni.data.entries) || [];
+      if (!entries.length) { toast("Nothing to export yet.", "error"); return; }
+
+      const statusLabel = (k) => (UNI_STATUSES.find((s) => s.key === k) || UNI_STATUSES[0]).label;
+      const fitLabel = (k) => (UNI_DIFFICULTY[(k || "").toLowerCase()] || {}).label || "";
+      const headers = [
+        "University", "Program", "Location", "Status", "Fit", "QS World Rank", "National Rank",
+        "Est. Annual Tuition", "Application Fee", "Key Requirements", "University Website",
+        "Entry Requirements Link", "Why Recommended", "Notes", "Source", "Added By", "Added On",
+      ];
+      const rows = entries.map((e) => [
+        e.university_name, e.program, e.location, statusLabel(e.status), fitLabel(e.admission_difficulty),
+        e.qs_world_rank, e.country_rank, e.est_tuition, e.application_fee,
+        (e.key_requirements || []).join("; "), e.website_url, e.admissions_url,
+        e.rationale, e.notes,
+        e.source === "ai" ? "Rilono AI" : "Manual", e.added_by_name,
+        e.created_at ? new Date(e.created_at).toLocaleDateString() : "",
+      ]);
+      const csv = [headers, ...rows].map((r) => r.map(csvCell).join(",")).join("\r\n");
+
+      const safeName = (cl.full_name || "client").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-") || "client";
+      const stamp = new Date().toISOString().slice(0, 10);
+      const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${safeName}-universities-${stamp}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+      toast(`Exported ${entries.length} ${entries.length === 1 ? "university" : "universities"}`, "success");
+    }
+
+    async function dismissUniSuggestions() {
+      const ok = await confirmModal(
+        "Discard these AI matches? The credits for this search have already been used, so they can't be recovered without running it again.",
+        { title: "Discard AI matches", okText: "Discard" }
+      );
+      if (!ok) return;
+      clearUniSuggestions();
+      drawUniversities();
+    }
+
     function showTab(tab) {
       $$(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
       if (tab !== "interview") ivStopSpeak();
@@ -2803,10 +3343,33 @@
       else if (tab === "notes") renderNotes();
       else if (tab === "emails") renderEmails();
       else if (tab === "payments") renderPayments();
+      else if (tab === "universities") renderUniversities();
       else if (tab === "interview") renderInterview();
     }
     $$(".cp-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
     showTab("overview");
+  }
+
+  // Set by the Universities tab so these inline-onclick handlers can redraw it.
+  let _uniRefresh = null;
+
+  async function setUniStatus(clientId, entryId, status) {
+    try {
+      await api(`/clients/${clientId}/universities/${entryId}`, { method: "PATCH", body: { status } });
+      if (_uniRefresh) await _uniRefresh();
+    } catch (ex) { toast(ex.message, "error"); }
+  }
+
+  async function removeUni(clientId, entryId) {
+    const ok = await confirmModal("Remove this university from the shortlist?", {
+      title: "Remove university", okText: "Remove",
+    });
+    if (!ok) return;
+    try {
+      await api(`/clients/${clientId}/universities/${entryId}`, { method: "DELETE" });
+      toast("Removed from shortlist", "success");
+      if (_uniRefresh) await _uniRefresh();
+    } catch (ex) { toast(ex.message, "error"); }
   }
 
   async function setStatus(id, status) {
@@ -4644,6 +5207,7 @@
     saveBank: saveLinkedAccount, refreshBank: refreshLinkedAccount,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
     viewInterview: viewInterviewSession, sendInterview: openSendInterviewPicker,
+    setUniStatus, removeUni,
     calPrev, calNext, calToday, calSetMonth, calSetYear, calEvent, calAdd, calDelete, calToggleDone,
   };
 

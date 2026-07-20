@@ -602,6 +602,7 @@ def ensure_enterprise_crm_tables():
                     held_from_status VARCHAR,
                     priority VARCHAR NOT NULL DEFAULT 'normal',
                     target_date DATE,
+                    stage_data TEXT,
                     assigned_to_user_id INTEGER,
                     created_by_user_id INTEGER NOT NULL,
                     created_at {ts} DEFAULT {now_default} NOT NULL,
@@ -640,6 +641,9 @@ def ensure_enterprise_crm_tables():
         # Additive: remembers the stage a case was held FROM (for one-click Resume).
         if "held_from_status" not in client_cols:
             conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN held_from_status VARCHAR"))
+        # Additive: per-stage, country-aware case record (JSON text).
+        if "stage_data" not in client_cols:
+            conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN stage_data TEXT"))
 
         # --- enterprise_client_notes ------------------------------------------
         if not _table_exists(conn, "enterprise_client_notes"):
@@ -1574,6 +1578,62 @@ def ensure_university_shortlist_table():
         for stmt in (
             "CREATE INDEX IF NOT EXISTS ix_university_shortlist_entries_user_id ON university_shortlist_entries(user_id)",
             "CREATE INDEX IF NOT EXISTS ix_university_shortlist_user_created ON university_shortlist_entries(user_id, created_at)",
+        ):
+            conn.execute(text(stmt))
+
+
+def ensure_enterprise_client_university_table():
+    """Create enterprise_client_universities (per-client university shortlisting, B2B).
+
+    Additive and idempotent — safe on every startup. Separate from the B2C
+    university_shortlist_entries table because these rows are org+client scoped and staff
+    managed, and they persist the AI's ranking/difficulty fields that consultants shortlist on.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_client_universities"):
+            # Table predates the link/fee columns (created earlier in this feature's rollout).
+            # Add them additively so an existing install isn't left without them.
+            existing = _get_table_columns(conn, "enterprise_client_universities")
+            for col in ("application_fee", "website_url", "admissions_url"):
+                if col not in existing:
+                    conn.execute(text(f"ALTER TABLE enterprise_client_universities ADD COLUMN {col} VARCHAR"))
+            return
+        conn.execute(text(f"""
+            CREATE TABLE enterprise_client_universities (
+                id {pk},
+                organization_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL,
+                country_code VARCHAR,
+                university_name VARCHAR NOT NULL,
+                program VARCHAR,
+                location VARCHAR,
+                status VARCHAR NOT NULL DEFAULT 'considering',
+                source VARCHAR NOT NULL DEFAULT 'manual',
+                est_tuition VARCHAR,
+                rationale TEXT,
+                notes TEXT,
+                qs_world_rank VARCHAR,
+                country_rank VARCHAR,
+                admission_difficulty VARCHAR,
+                key_requirements TEXT,
+                application_fee VARCHAR,
+                website_url VARCHAR,
+                admissions_url VARCHAR,
+                added_by_user_id INTEGER,
+                added_by_name VARCHAR,
+                created_at {ts} DEFAULT {now_default} NOT NULL,
+                updated_at {ts}
+            )
+        """))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_client_universities_organization_id ON enterprise_client_universities(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_client_universities_client_id ON enterprise_client_universities(client_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_client_universities_added_by_user_id ON enterprise_client_universities(added_by_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_client_universities_client_created ON enterprise_client_universities(client_id, created_at)",
         ):
             conn.execute(text(stmt))
 

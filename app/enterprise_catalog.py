@@ -532,7 +532,56 @@ def build_catalog_payload(db=None) -> dict:
         # the client-profile pickers use.
         "document_types": list(STUDENT_DOCUMENT_TYPES),
         "document_types_by_country": doc_types_by_country,
+        # Case-record fields to capture at each pipeline stage, resolved per destination.
+        "stage_fields_by_country": stage_fields_by_country(),
         "countries": countries_payload,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Per-stage CASE RECORD fields (destination-aware)
+# ---------------------------------------------------------------------------
+# What a counselor RECORDS on the client at each pipeline stage — the numbers, dates and
+# references that make up the case file. Documents themselves are handled separately by
+# ENTERPRISE_DOCUMENT_CATALOG; these are the data points, and they differ per destination
+# (US SEVIS/DS-160 vs UK CAS/IHS vs Canada IRCC/GIC …).
+#
+# Each field: key (stable, unique within a destination), label, type
+# (text | date | number | select | textarea), hint, required — plus options for select.
+#
+# SHARED fields apply to every destination. The per-country map ADDS destination-specific
+# fields; a country field reusing a shared key overrides it.
+# The field data lives in its own module (it is large); this file owns the resolution rules.
+from app.enterprise_stage_fields import (  # noqa: E402
+    ENTERPRISE_STAGE_SHARED_FIELDS,
+    ENTERPRISE_STAGE_FIELD_CATALOG,
+)
+
+
+def stage_fields_for(country_code: str | None, stage_key: str | None) -> list[dict]:
+    """Fields to record at `stage_key` for `country_code`: the shared set plus that
+    destination's own fields (a country field reusing a shared key overrides it)."""
+    stage = str(stage_key or "").strip().lower()
+    if stage not in CLIENT_STAGE_KEYS:
+        return []
+    merged: dict[str, dict] = {f["key"]: dict(f) for f in ENTERPRISE_STAGE_SHARED_FIELDS.get(stage, [])}
+    country = (ENTERPRISE_STAGE_FIELD_CATALOG.get(str(country_code or "").strip().upper()) or {}).get(stage, [])
+    for field in country:
+        # applicable=False means "this shared field doesn't exist for this destination"
+        # (e.g. the UK issues an eVisa, so there is no passport sticker number to record).
+        if field.get("applicable") is False:
+            merged.pop(field["key"], None)
+            continue
+        merged[field["key"]] = {k: v for k, v in field.items() if k != "applicable"}
+    return list(merged.values())
+
+
+def stage_fields_by_country() -> dict:
+    """Resolved catalog for the frontend: {COUNTRY_CODE: {stage_key: [field, …]}}."""
+    stage_keys = [item["key"] for item in CLIENT_STAGES]
+    return {
+        code: {stage: stage_fields_for(code, stage) for stage in stage_keys}
+        for code in COUNTRY_MAP
     }
 
 

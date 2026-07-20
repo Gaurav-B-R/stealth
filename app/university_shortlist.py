@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Optional
 
 from app.utils import gemini_service
@@ -126,12 +127,18 @@ def _build_prompt(
         '"qs_world_rank":"Most recent QS World University Ranking as a plain number or range, e.g. \\"34\\" or \\"301-350\\". Use \\"N/A\\" if unsure.",'
         '"country_rank":"National rank within the destination country as a plain number, e.g. \\"3\\". Use \\"N/A\\" if unsure.",'
         '"admission_difficulty":"reach | match | safety",'
+        '"application_fee":"Application fee with currency, e.g. \\"AUD $100\\", or \\"No application fee\\". Use \\"N/A\\" if unsure.",'
+        '"official_website":"Absolute https:// URL of the university\'s official website or this program\'s page. Use \\"N/A\\" if unsure.",'
+        '"admissions_url":"Absolute https:// URL of the official entry-requirements / how-to-apply page. Use \\"N/A\\" if unsure.",'
         '"key_requirements":["short requirement 1","short requirement 2"]'
         "}]}\n\n"
         "Rules:\n"
         f"- Only universities in {destination_country}.\n"
         "- Mix reach, match and safety options when the profile allows.\n"
         "- Be realistic about tuition ranges and requirements.\n"
+        "- URLs must be real official university domains you are confident about, starting with https://. "
+        "Never invent a URL to fill the field — use \"N/A\" instead. Do not link to third-party aggregator sites.\n"
+        "- The application fee is the one-off fee to APPLY, which is different from tuition.\n"
         f"- Use up-to-date sources for the most recent QS World University Ranking and the national rank within {destination_country}. "
         "If a reliable figure is not available, use \"N/A\" rather than guessing.\n"
         "- Output ONLY the JSON object. Do NOT include ```json or ``` markers or any prose.\n"
@@ -178,9 +185,34 @@ def _parse_universities(raw: str, max_results: int) -> list[dict]:
             "qs_world_rank": _clean_rank(item.get("qs_world_rank")),
             "country_rank": _clean_rank(item.get("country_rank")),
             "admission_difficulty": difficulty,
+            "application_fee": _clean_optional_text(item.get("application_fee"), 60),
+            "official_website": _clean_url(item.get("official_website")),
+            "admissions_url": _clean_url(item.get("admissions_url")),
             "key_requirements": requirements,
         })
     return out
+
+
+def _clean_optional_text(value, limit: int) -> Optional[str]:
+    s = str(value or "").strip()
+    if not s or s.lower() in {"n/a", "na", "none", "null", "unknown", "-"}:
+        return None
+    return s[:limit]
+
+
+def _clean_url(value) -> Optional[str]:
+    """Only http(s) absolute URLs survive.
+
+    These are rendered as clickable links, so anything else (javascript:, data:, a bare
+    hostname, or the model's "N/A") must be dropped rather than trusted — a model-authored
+    `javascript:` href would otherwise be a stored-XSS vector.
+    """
+    s = str(value or "").strip()
+    if not s or s.lower() in {"n/a", "na", "none", "null", "unknown", "-"}:
+        return None
+    if not re.match(r"^https?://[^\s/$.?#].[^\s]*$", s, re.I):
+        return None
+    return s[:400]
 
 
 def _clean_rank(value) -> Optional[str]:
@@ -202,8 +234,14 @@ def recommend_universities(
     home_country: Optional[str] = None,
     preferences: Optional[str] = None,
     max_results: int = 6,
+    usage_source: str = "university_shortlist",
 ) -> dict:
-    """Return {"available": bool, "universities": [...], "model": str}. Never raises."""
+    """Return {"available": bool, "universities": [...], "model": str}. Never raises.
+
+    `usage_source` tags the Gemini spend in the cost tracker. B2C keeps the default;
+    the enterprise CRM passes "enterprise_university_shortlist" so consultancy spend is
+    billed to the B2B bucket instead of the student one.
+    """
     max_results = max(1, min(int(max_results or 6), MAX_RESULTS))
     if not ai_available():
         return {"available": False, "universities": [], "message": "AI recommendations are not configured."}
@@ -231,7 +269,7 @@ def recommend_universities(
             # build_generative_model), so its token usage must be logged manually.
             try:
                 from app import ai_usage
-                ai_usage.record_gemini_usage("university_shortlist", model_name, response)
+                ai_usage.record_gemini_usage(usage_source, model_name, response)
             except Exception:
                 pass
         else:
@@ -240,7 +278,7 @@ def recommend_universities(
             # the same resilience the document-AI path uses. build_generative_model
             # instruments token usage under "university_shortlist" automatically.
             response = gemini_service._generate_content_with_fallback(
-                candidates, prompt, usage_source="university_shortlist"
+                candidates, prompt, usage_source=usage_source
             )
             text = (getattr(response, "text", "") or "")
 

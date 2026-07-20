@@ -243,6 +243,11 @@ class EnterpriseClient(Base):
     held_from_status = Column(String, nullable=True)
     priority = Column(String, nullable=False, default="normal")
     target_date = Column(Date, nullable=True)  # interview / travel / intake deadline
+    # Per-stage case record, country-aware. JSON: {"<stage_key>": {"<field_key>": "value", …}}.
+    # The field definitions live in enterprise_catalog.ENTERPRISE_STAGE_FIELD_CATALOG (shared +
+    # per-destination), so what a counselor records at "Application Submitted" differs for a US
+    # (DS-160 / SEVIS) vs a UK (CAS / IHS) case. Stored as JSON text like deep_scan_facts.
+    stage_data = Column(Text, nullable=True)
 
     # Consent: the staff member confirmed this client consented to having their
     # personal data processed by the organization through Rilono (the org is the
@@ -313,6 +318,47 @@ class EnterpriseClientNote(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     client = relationship("EnterpriseClient", back_populates="notes")
+
+
+class EnterpriseClientUniversity(Base):
+    """One university on a client's shortlist, scoped to the consultancy AND the client.
+
+    The B2C equivalent (UniversityShortlistEntry) is keyed to a student's own user_id, so
+    it can't be reused here: these rows belong to an organization's client record and are
+    managed by staff. Unlike the B2C table we also persist the ranking/difficulty fields the
+    AI returns — consultants shortlist against them, so throwing them away would lose the
+    most useful part of a recommendation.
+    """
+    __tablename__ = "enterprise_client_universities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Destination the shortlist was built for (snapshotted at add time, like the B2C table).
+    country_code = Column(String, nullable=True)
+    university_name = Column(String, nullable=False)
+    program = Column(String, nullable=True)
+    location = Column(String, nullable=True)
+    status = Column(String, nullable=False, default="considering")  # considering|applied|admitted|rejected
+    source = Column(String, nullable=False, default="manual")       # manual|ai
+    est_tuition = Column(String, nullable=True)
+    rationale = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    qs_world_rank = Column(String, nullable=True)
+    country_rank = Column(String, nullable=True)
+    admission_difficulty = Column(String, nullable=True)            # reach|match|safety
+    key_requirements = Column(Text, nullable=True)                  # JSON-encoded list of short strings
+    application_fee = Column(String, nullable=True)                 # one-off fee to apply (≠ tuition)
+    website_url = Column(String, nullable=True)                     # official university/program page
+    admissions_url = Column(String, nullable=True)                  # entry-requirements / how-to-apply page
+    added_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    added_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_enterprise_client_universities_client_created", "client_id", "created_at"),
+    )
 
 
 class EnterpriseClientEmail(Base):
