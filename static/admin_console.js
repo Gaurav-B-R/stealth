@@ -222,6 +222,7 @@ function bindEvents() {
         if (event.target === refs.couponModal) closeCouponModal();
     });
     refs.couponForm?.addEventListener('submit', handleCouponCreateSubmit);
+    wireCouponPercentClamp(refs.couponPercentInput);
     refs.couponTableBody?.addEventListener('click', handleCouponTableActionClick);
     refs.financeAddBtn?.addEventListener('click', () => openFinanceEntryForm(null));
     refs.financeEntryForm?.addEventListener('submit', submitFinanceEntry);
@@ -898,6 +899,26 @@ function formatUsd(value) {
 function formatPercent(value) {
     const amount = Number(value) || 0;
     return `${amount.toFixed(2)}%`;
+}
+
+// Coupon discounts must stay in the 1–100% band.
+function clampCouponPercent(value) {
+    return Math.min(100, Math.max(1, value));
+}
+
+// Live-clamp a coupon percent input: anything typed above 100 snaps back to 100
+// immediately; values below 1 snap up to 1 once the field is committed (blur/Enter).
+function wireCouponPercentClamp(input) {
+    if (!input || input.dataset.pctClampWired) return;
+    input.dataset.pctClampWired = '1';
+    input.addEventListener('input', () => {
+        const value = parseFloat(input.value);
+        if (Number.isFinite(value) && value > 100) input.value = '100';
+    });
+    input.addEventListener('change', () => {
+        const value = parseFloat(input.value);
+        if (Number.isFinite(value) && (value < 1 || value > 100)) input.value = String(clampCouponPercent(value));
+    });
 }
 
 function formatMonthLabel(monthKey) {
@@ -2158,7 +2179,7 @@ function renderAccountDetail(userId, data) {
                 </label>
                 <label class="coupon-field coupon-field-narrow">
                   <span>% off</span>
-                  <input type="number" id="acctCouponPct" placeholder="20" min="0.01" max="100" step="0.01">
+                  <input type="number" id="acctCouponPct" placeholder="20" min="1" max="100" step="0.01">
                 </label>
                 <label class="coupon-field coupon-field-narrow">
                   <span>Max uses</span>
@@ -2213,6 +2234,7 @@ function renderAccountDetail(userId, data) {
     });
     const couponForm = document.getElementById('acctCouponForm');
     if (couponForm) couponForm.addEventListener('submit', (e) => { e.preventDefault(); void createAccountCoupon(userId); });
+    wireCouponPercentClamp(document.getElementById('acctCouponPct'));
     document.querySelectorAll('#acctCouponList [data-coupon-delete]').forEach((btn) => {
         btn.addEventListener('click', () => deleteAccountCoupon(userId, btn.getAttribute('data-coupon-delete')));
     });
@@ -2228,11 +2250,12 @@ async function createAccountCoupon(userId) {
     const createBtn = document.getElementById('acctCouponCreateBtn');
 
     const code = String(codeInput?.value || '').trim().toUpperCase();
-    const pct = Number(pctInput?.value || 0);
+    const pctRaw = String(pctInput?.value || '').trim();
     const maxRaw = String(maxInput?.value || '').trim();
     const maxUses = maxRaw === '' ? null : Number(maxRaw);
     if (!code) { showFlash('Enter a coupon code (e.g. HENRY20).', 'error'); codeInput?.focus(); return; }
-    if (!Number.isFinite(pct) || pct <= 0 || pct > 100) { showFlash('Enter a discount between 0 and 100 percent.', 'error'); pctInput?.focus(); return; }
+    if (pctRaw === '' || !Number.isFinite(Number(pctRaw))) { showFlash('Enter a discount between 1 and 100 percent.', 'error'); pctInput?.focus(); return; }
+    const pct = clampCouponPercent(Number(pctRaw));
     if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1)) { showFlash('Max uses must be a whole number of at least 1 (or empty for unlimited).', 'error'); maxInput?.focus(); return; }
 
     if (createBtn) { createBtn.disabled = true; createBtn.textContent = 'Creating…'; }
@@ -3007,16 +3030,17 @@ async function handleCouponCreateSubmit(event) {
     setCouponFormError('');
 
     const code = (refs.couponCodeInput?.value || '').trim();
-    const percent = parseFloat(refs.couponPercentInput?.value || '');
+    const percentRaw = (refs.couponPercentInput?.value || '').trim();
     const appliesTo = refs.couponAppliesInput?.value || 'all';
     const maxRaw = (refs.couponMaxInput?.value || '').trim();
     const note = (refs.couponNoteInput?.value || '').trim();
 
     if (!code) { setCouponFormError('Enter a discount code.'); return; }
-    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
-        setCouponFormError('Discount must be between 0 and 100%.');
+    if (percentRaw === '' || !Number.isFinite(parseFloat(percentRaw))) {
+        setCouponFormError('Enter a discount between 1 and 100%.');
         return;
     }
+    const percent = clampCouponPercent(parseFloat(percentRaw));
 
     const body = {
         code,

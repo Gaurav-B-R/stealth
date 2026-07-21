@@ -143,7 +143,7 @@ ACTIONS = {
     "mock_interview": {
         "key": "mock_interview",
         "label": "AI mock visa interview",
-        "description": "A full dynamic mock consular interview tailored to the client's weak points.",
+        "description": "A full dynamic mock visa interview tailored to the client's weak points.",
         "credits": _int_env("ENTERPRISE_CREDIT_COST_MOCK_INTERVIEW", 20),
     },
     "university_match": {

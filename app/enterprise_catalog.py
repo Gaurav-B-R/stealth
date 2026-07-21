@@ -84,8 +84,8 @@ CLIENT_STAGES = [
     },
     {
         "key": STAGE_APPOINTMENT,
-        "label": "Biometrics / Interview",
-        "description": "Biometrics, VFS or visa interview scheduled.",
+        "label": "Biometrics / Appointment",
+        "description": "Biometrics or VFS appointment booked — plus a visa interview where the destination requires one.",
         "order": 4,
         "color": "#8b5cf6",
         "is_open": True,
@@ -158,7 +158,7 @@ STUDENT_DOCUMENT_TYPES = [
     "Statement of Purpose (SOP)",
     "Letters of Recommendation",
     "Visa Application Form",
-    "Visa Fee / SEVIS Receipt",
+    "Visa Fee Receipt",
     "Medical / Health Insurance",
     "Other",
 ]

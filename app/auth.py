@@ -179,6 +179,27 @@ def authenticate_user(db: Session, email: str, password: str):
         return False
     return user
 
+
+# Shown when an Enterprise (B2B) account tries to use the individual/B2C consumer app.
+ENTERPRISE_ACCOUNT_ON_B2C_DETAIL = (
+    "This email belongs to a Rilono Enterprise workspace. "
+    "Please sign in through your Enterprise portal instead."
+)
+
+
+def is_enterprise_only_account(user) -> bool:
+    """True when this account belongs to the B2B Enterprise product and therefore must NOT
+    be able to authenticate against the individual/B2C consumer app.
+
+    The two products share one users table and one auth cookie, so this flag (set only when
+    an account is enterprise-CREATED — workspace owner or an org-created invitee) is what
+    keeps them disconnected. Rilono's own platform admins/developers are always exempt so the
+    admin console keeps working even if their account is attached to an org. See
+    models.User.is_enterprise_account and the schema_patch backfill."""
+    if getattr(user, "is_admin", False) or getattr(user, "is_developer", False):
+        return False
+    return bool(getattr(user, "is_enterprise_account", False))
+
 def _decode_token_payload(token: str) -> dict:
     return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
@@ -251,6 +272,18 @@ def get_current_user(
         # the user straight back to the login page.
         if token_issued_at < invalidated_at.replace(microsecond=0):
             raise credentials_exception
+
+    # Product separation (B2B ↔ B2C). The Enterprise portal and the consumer app share this
+    # same JWT/cookie, so a valid token alone is not enough — an Enterprise (B2B) account must
+    # never be accepted on the individual/B2C app. Enterprise API calls live under
+    # /api/enterprise/ and are governed by the portal's own membership checks; every OTHER
+    # authenticated path is B2C, so we reject enterprise-origin accounts there. This closes the
+    # shared-cookie hole (an enterprise session cookie can't be reused against the consumer app)
+    # and complements the up-front check on the B2C login/OAuth endpoints. Platform
+    # admins/developers are exempt (see is_enterprise_only_account) so the admin console works.
+    request_path = (request.url.path or "") if request is not None else ""
+    if not request_path.startswith("/api/enterprise/") and is_enterprise_only_account(user):
+        raise credentials_exception
 
     # Sliding idle-timeout: refresh token on authenticated activity.
     refreshed_token = create_access_token(

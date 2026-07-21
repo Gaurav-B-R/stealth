@@ -58,6 +58,7 @@ from app.schema_patch import (
     ensure_enterprise_client_university_table,
     ensure_sop_feature_schema,
     ensure_user_legal_consent_column,
+    ensure_user_enterprise_account_column,
     ensure_user_acquisition_columns,
     ensure_account_deletion_otp_columns,
     ensure_country_change_otp_columns,
@@ -74,6 +75,9 @@ from app.token_backfill import backfill_hashed_auth_tokens
 import os
 import re
 import html as html_lib
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -254,6 +258,7 @@ app.include_router(sop.router)
 def startup_backfill_subscriptions():
     """Ensure existing users have default subscription + referral records."""
     ensure_user_legal_consent_column()
+    ensure_user_enterprise_account_column()
     ensure_account_deletion_otp_columns()
     ensure_country_change_otp_columns()
     ensure_university_country_column()
@@ -304,6 +309,15 @@ def startup_backfill_subscriptions():
         backfill_missing_subscriptions(db)
         backfill_missing_referral_codes(db)
         backfill_hashed_auth_tokens(db)
+        # Disconnect B2B ↔ B2C: flag enterprise-origin accounts so they can't sign in to the
+        # individual/B2C app (see routers/enterprise.backfill_enterprise_account_flag). Never let a
+        # backfill hiccup crash startup — the login/OAuth/get_current_user gates still enforce
+        # separation for correctly-flagged accounts, so this is safe to skip on transient error.
+        try:
+            enterprise.backfill_enterprise_account_flag(db)
+        except Exception:
+            db.rollback()
+            logger.exception("backfill_enterprise_account_flag failed; continuing startup")
     finally:
         db.close()
     enterprise.seed_enterprise_user()

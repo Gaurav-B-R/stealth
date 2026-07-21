@@ -1100,6 +1100,93 @@ def seed_enterprise_user() -> None:
         db.close()
 
 
+def backfill_enterprise_account_flag(db: Session) -> None:
+    """Idempotent backfill of users.is_enterprise_account for accounts that predate the B2B/B2C
+    product separation. Flags enterprise-CREATED accounts (so they're blocked from the B2C app)
+    using RELIABLE positive signals only — never a "B2C footprint" heuristic, which is unsafe on
+    this shared users table (a one-time journey migration blanket-set destination_country_code /
+    onboarding_completed_at on every row, and a dormant password B2C signup has no footprint at
+    all — so footprint-guessing both misses old enterprise owners and wrongly locks out real
+    consumers who were later invited to a team).
+
+    Policy ("block only enterprise-created"; keep B2C access for anyone who was a B2C user first):
+      * Workspace OWNERS (EnterpriseOrganization.created_by_user_id) are flagged UNCONDITIONALLY:
+        enterprise signup rejects an existing email, so an owner's account was created BY the
+        enterprise product and was never a prior B2C user.
+      * MEMBERS are flagged only when the account's `university` equals their org's company_name —
+        the exact value the invite flow writes when it CREATES a brand-new teammate. The invite
+        REUSE branch never rewrites an existing user's university, so a person who was a B2C user
+        first keeps their own university (or NULL) and is left untouched → keeps consumer access.
+        Membership rows are considered regardless of is_active: origin doesn't change when a
+        teammate is removed (their going-forward flag would have survived deactivation too), and
+        the university==company_name gate keeps this false-positive-safe.
+
+    Only ever SETS the flag (additive/idempotent); never clears it and never touches
+    admins/developers. Safe to run on every startup.
+
+    KNOWN RESIDUAL (accepted): a member is matched against the org's CURRENT company_name. If an
+    org renamed its company AFTER a historical teammate was invite-created (their frozen university
+    holds the OLD name, and there is no name history to recover it), the backfill won't flag that
+    teammate — they keep B2C access. This is bounded to pre-separation renamed orgs; every account
+    created from now on is flagged at creation, which is the real source of truth.
+    """
+    organizations = db.query(
+        models.EnterpriseOrganization.id,
+        models.EnterpriseOrganization.company_name,
+        models.EnterpriseOrganization.created_by_user_id,
+    ).all()
+    if not organizations:
+        return
+
+    owner_ids: set[int] = set()
+    company_by_org: dict[int, str] = {}
+    for org_id, company_name, created_by in organizations:
+        company_by_org[org_id] = (company_name or "").strip()
+        if created_by is not None:
+            owner_ids.add(int(created_by))
+
+    # For each member (active OR not — membership indicates enterprise origin, which removal from
+    # the team doesn't undo), the set of company names of the org(s) they belong to.
+    member_companies: dict[int, set[str]] = {}
+    for user_id, org_id in (
+        db.query(
+            models.EnterpriseOrganizationMember.user_id,
+            models.EnterpriseOrganizationMember.organization_id,
+        )
+        .all()
+    ):
+        if user_id is None:
+            continue
+        company = company_by_org.get(org_id)
+        if company:
+            member_companies.setdefault(int(user_id), set()).add(company)
+
+    candidate_ids = owner_ids | set(member_companies.keys())
+    if not candidate_ids:
+        return
+
+    changed = 0
+    for user in db.query(models.User).filter(models.User.id.in_(candidate_ids)).all():
+        if getattr(user, "is_enterprise_account", False):
+            continue
+        if user.is_admin or user.is_developer:
+            continue
+        is_owner = user.id in owner_ids
+        # Positive enterprise-origin marker for members: the account's university was set to the
+        # org's company name — which only the invite CREATE path does (reuse leaves it as-is).
+        university = (user.university or "").strip()
+        member_created_by_org = bool(university) and university in member_companies.get(user.id, set())
+        if is_owner or member_created_by_org:
+            user.is_enterprise_account = True
+            changed += 1
+
+    if changed:
+        db.commit()
+        logger.info(
+            "Backfilled is_enterprise_account=True for %d enterprise-origin account(s).", changed
+        )
+
+
 @router.post("/login")
 async def enterprise_login(
     payload: EnterpriseLoginRequest,
@@ -1703,6 +1790,10 @@ def enterprise_team_add_user(
             university=organization.company_name,
             is_active=True,
             email_verified=True,
+            # Account created BY the org for a brand-new teammate → enterprise-origin, so it's
+            # blocked from the B2C consumer app. (When the invite REUSES an existing user row
+            # below, we deliberately leave the flag untouched so a prior B2C user keeps access.)
+            is_enterprise_account=True,
             accepted_terms_privacy_at=datetime.utcnow(),
         )
         db.add(user)
@@ -5013,6 +5104,8 @@ async def enterprise_signup(
         university=company_name,
         is_active=True,
         email_verified=True,
+        # Enterprise-created account (workspace owner) → blocked from the B2C consumer app.
+        is_enterprise_account=True,
         accepted_terms_privacy_at=datetime.utcnow(),
         accepted_terms_privacy_ip=consent_ip,
         accepted_terms_privacy_user_agent=consent_user_agent,

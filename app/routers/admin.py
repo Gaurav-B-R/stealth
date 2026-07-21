@@ -1167,8 +1167,10 @@ def create_coupon_code_admin(
         percent = Decimal(str(payload.percent_off)).quantize(Decimal("0.01"))
     except Exception:
         raise HTTPException(status_code=400, detail="Enter a valid discount percentage.")
-    if percent <= Decimal("0") or percent > Decimal("100"):
-        raise HTTPException(status_code=400, detail="Discount must be between 0 and 100 percent.")
+    if not percent.is_finite():  # NaN survives quantize and would poison comparisons
+        raise HTTPException(status_code=400, detail="Enter a valid discount percentage.")
+    # Discounts are capped to the 1–100% band; out-of-range values clamp.
+    percent = min(max(percent, Decimal("1")), Decimal("100"))
 
     max_uses = payload.max_uses_per_user
     if max_uses is not None:

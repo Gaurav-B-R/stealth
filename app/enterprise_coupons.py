@@ -46,14 +46,18 @@ def format_percent_off(percent_off: Decimal | int | float) -> str:
 
 
 def parse_percent_off(raw_value: Any) -> Decimal:
-    """Coerce/validate a percent discount into 0–100 (raises 400 otherwise)."""
+    """Coerce a percent discount into the allowed 1–100 band.
+
+    Out-of-range numbers clamp (150 → 100, 0.5 → 1) rather than raise, so both
+    admin input and legacy stored rows normalize the same way; only non-numeric
+    values are a 400."""
     try:
         value = Decimal(str(raw_value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     except (InvalidOperation, ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Discount percentage is invalid.")
-    if value <= Decimal("0") or value > Decimal("100"):
-        raise HTTPException(status_code=400, detail="Discount must be between 0% and 100%.")
-    return value
+    if not value.is_finite():  # NaN survives quantize and would poison comparisons
+        raise HTTPException(status_code=400, detail="Discount percentage is invalid.")
+    return min(max(value, Decimal("1")), Decimal("100"))
 
 
 def parse_max_redemptions(raw_value: Any) -> Optional[int]:

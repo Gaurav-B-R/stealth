@@ -31,6 +31,15 @@ class User(Base):
     university_change_token_expires = Column(DateTime(timezone=True), nullable=True)
     is_admin = Column(Boolean, default=False)  # Admin/Developer access
     is_developer = Column(Boolean, default=False)  # Developer team access
+    # Product separation (B2B vs B2C). True when this account's ORIGIN is the Rilono
+    # Enterprise (B2B) product — i.e. it was created as a workspace owner via
+    # /api/enterprise/signup, or created BY an organization when it invited a brand-new
+    # teammate. Such accounts are BLOCKED from the individual/B2C consumer app so the two
+    # products stay disconnected (same credentials can't cross over). A person who existed
+    # as a B2C user first and later joins a team keeps their consumer access (the flag is
+    # only set when the account itself is enterprise-created). Rilono's own platform
+    # admins/developers are always exempt. See app.auth.is_enterprise_only_account.
+    is_enterprise_account = Column(Boolean, nullable=False, default=False)
     auth_provider = Column(String, nullable=True)  # password | google | microsoft | apple
     # Personalized student journey (multi-country). Existing users are backfilled to
     # US/us_f1 with onboarding marked complete; new users leave these NULL until they

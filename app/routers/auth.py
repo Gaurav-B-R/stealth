@@ -14,6 +14,8 @@ from app.auth import (
     get_current_active_user,
     ACCESS_TOKEN_EXPIRE_MINUTES,
     validate_password_strength,
+    is_enterprise_only_account,
+    ENTERPRISE_ACCOUNT_ON_B2C_DETAIL,
     _decode_token_subject,
 )
 from app.email_service import (
@@ -584,6 +586,17 @@ def verify_otp(
     if not token_matches(code, user.verification_token):
         raise invalid
 
+    # Product separation: an Enterprise (B2B) account must never obtain a B2C session, not even
+    # through the signup email-verification step. Checked AFTER the OTP is validated (like the
+    # login gate is checked after the password) so this endpoint can't be used to enumerate which
+    # emails are Enterprise accounts. (Enterprise accounts are created already verified, so this
+    # path is normally unreachable for them — this is defense-in-depth.)
+    if is_enterprise_only_account(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ENTERPRISE_ACCOUNT_ON_B2C_DETAIL,
+        )
+
     # Verified — clear the OTP and treat this as the first login.
     user.email_verified = True
     user.verification_token = None
@@ -703,7 +716,16 @@ async def login(
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
+    # Product separation: an Enterprise (B2B) account can't sign in to the individual/B2C app,
+    # even with the correct password. They belong on the Enterprise portal. (Checked only after
+    # the password is verified so we never disclose enterprise status to a wrong-password guess.)
+    if is_enterprise_only_account(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ENTERPRISE_ACCOUNT_ON_B2C_DETAIL,
+        )
+
     # Check if email is verified
     if not user.email_verified:
         raise HTTPException(
@@ -871,6 +893,11 @@ def _find_or_create_oauth_user(
     email = (email or "").strip().lower()
     user = db.query(models.User).filter(models.User.email == email).first()
     if user:
+        # An Enterprise (B2B) account can't sign in to the B2C app via social login. Return it
+        # UNCHANGED so the caller's product-separation gate rejects it — never link a provider or
+        # mutate the row on a login we're about to deny (keeps "existing users logged in unchanged").
+        if is_enterprise_only_account(user):
+            return user
         if not user.auth_provider:
             user.auth_provider = provider
         if not user.email_verified:
@@ -1021,6 +1048,12 @@ async def oauth_callback(provider: str, request: Request, db: Session = Depends(
         )
     if not user.is_active:
         return _app_redirect("/login", error="Your account is deactivated. Please contact support.")
+
+    # Product separation: an Enterprise (B2B) account can't sign in to the individual/B2C app
+    # via social login either. (A brand-new OAuth account created just above is B2C-origin, so
+    # its flag is False and it is NOT blocked — only pre-existing enterprise accounts are.)
+    if is_enterprise_only_account(user):
+        return _app_redirect("/login", error=ENTERPRISE_ACCOUNT_ON_B2C_DETAIL)
 
     now = datetime.utcnow()
     if user.first_login_at is None:

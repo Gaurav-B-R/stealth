@@ -64,6 +64,25 @@
     if (code === "GB") code = "UK";
     return CLIENT_HERO_THEMES[code] || { key: "intl", code: code || "INTL" };
   }
+  // How prominently to surface the mock-interview feature, by destination. Whether a real
+  // visa interview happens drives the emphasis — the feature is ALWAYS available (tab +
+  // send flow), we only change how hard we push it:
+  //   standard — US F-1: mandatory consular interview → push it ("Recommended", Overview CTA).
+  //   possible — UK: occasional credibility interview → available, not badged.
+  //   rare     — CA study permit (SOP is the "interview"), AU subclass 500 (Genuine Student is
+  //              written), DE Type-D (embassy intake, not an adjudicating interview), IE →
+  //              available but shown as "Optional", no highlight.
+  // Unknown/blank codes default to "standard" (fail open — never hide the feature for a
+  // destination we haven't classified). Mirrors the per-country gating already used for the
+  // UK maintenance-funds card.
+  const INTERVIEW_RELEVANCE = Object.freeze({
+    US: "standard", UK: "possible", CA: "rare", AU: "rare", DE: "rare", IE: "rare",
+  });
+  function interviewRelevance(client) {
+    let code = String((client && client.destination_country_code) || "").trim().toUpperCase();
+    if (code === "GB") code = "UK";
+    return INTERVIEW_RELEVANCE[code] || "standard";
+  }
   // Parse a stored date value into a Date. A DATE-ONLY string (YYYY-MM-DD) is read as
   // LOCAL midnight, not UTC: `new Date("2026-09-15")` would otherwise be UTC midnight,
   // and toLocaleDateString() then shifts it back a day for any viewer west of UTC (all
@@ -1866,8 +1885,12 @@
       const assignField = `<div class="detail-item"><label>Assigned counselor</label><div>${cl.assigned_to_name ? esc(cl.assigned_to_name) : "—"}</div></div>`;
       const ovFirst = (cl.full_name || "the student").split(" ")[0];
       const isUKClient = String(cl.destination_country_code || "").toUpperCase() === "UK";
+      // Only pin the mock-interview CTA to the top of Overview for destinations that actually
+      // run an interview (US). For UK/CA/AU/DE the feature stays reachable in the Mock
+      // Interview tab, just not pushed here — see interviewRelevance().
+      const pushInterview = interviewRelevance(cl) === "standard";
       body.innerHTML = `
-        ${canEdit ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
+        ${canEdit && pushInterview ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
         <div class="cp-card">
           <div class="cp-card-head"><h3>Visa journey</h3>${statusPill(cl.stage)}</div>
           <div id="ovStageFlow">${journeyTrackHtml(canEdit, cl.status, docs)}</div>
@@ -2600,9 +2623,21 @@
         inner = `<p class="iv-hero-sub">Email <b>${esc(cl.email)}</b> a secure link so ${esc(first)} can take the mock interview on their own time — they verify with a one-time code, and every result appears right here.</p>
           <button class="btn btn-primary btn-block" id="ivSendBtn">✉ Send mock interview to ${esc(first)}</button>`;
       }
+      // Badge/emphasis follows the destination's real interview reality (interviewRelevance).
+      // The feature is always usable here; we only change how we frame it.
+      const relevance = interviewRelevance(cl);
+      const country = esc(cl.destination_country_name || "This destination");
+      let badge = "", note = "";
+      if (relevance === "standard") {
+        badge = `<div class="iv-hero-badge">Recommended</div>`;
+      } else if (relevance === "rare") {
+        badge = `<div class="iv-hero-badge iv-hero-badge--opt">Optional</div>`;
+        note = `<p class="iv-hero-note">${country} rarely interviews student-visa applicants, so this is optional — use it if a credibility interview or provider screening is expected.</p>`;
+      }
       return `<div class="cp-card iv-hero">
         <div class="iv-hero-head"><div class="iv-orb">🎤</div>
-          <div><div class="iv-hero-badge">Recommended</div><h3>Send a mock visa interview</h3></div></div>
+          <div>${badge}<h3>Send a mock visa interview</h3></div></div>
+        ${note}
         ${inner}
         <div class="iv-tag">Officer adapts to <b>${esc(cl.destination_country_name)}</b> · ${esc(cl.visa_type)} — using ${esc(first)}'s profile</div>
       </div>`;

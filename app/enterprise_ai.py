@@ -924,7 +924,7 @@ def run_deep_scan_audit(
 
 Cross-check across ALL documents and report:
 1. Identity consistency — name, date of birth, passport number, nationality must match across documents and the profile.
-2. Timeline compliance — bank statements older than 6 months, passport expiring within 6 months of travel, offer/I-20/intake dates already in the past.
+2. Timeline compliance — bank statements older than 6 months, passport expiring within 6 months of travel, offer/enrolment-confirmation (e.g. I-20, CAS, LOA/PAL, CoE, Zulassungsbescheid)/intake dates already in the past.
 3. Financial sufficiency — whether the bank balance / sponsor funds clearly cover tuition + living costs; flag if missing or ambiguous.
 4. Missing critical documents for a {client.visa_type or 'student'} visa to {client.destination_country_name or 'the destination'}.
 

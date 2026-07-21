@@ -3938,6 +3938,13 @@ function currentVisaJourneyPhrase() {
     const code = (currentUser && currentUser.destination_country_code) || 'US';
     return VISA_JOURNEY_PHRASE[code] || 'student visa';
 }
+// Country-aware "current stage" examples for AI prompts (US: I-20/DS-160… ; CA: LOA/PAL… ;
+// AU: CoE/GS… ) — pulled from COPILOT_TAB_COPY so we never show US F-1 stage names to a
+// UK/CA/AU/DE student. Evaluated at call time (COPILOT_TAB_COPY is defined just below).
+function currentVisaStagesPhrase() {
+    const code = (currentUser && currentUser.destination_country_code) || 'US';
+    return (COPILOT_TAB_COPY[code] || COPILOT_TAB_COPY.US).stages;
+}
 // Shorter visa prefix used inside the interviews module (the sidebar is narrow).
 const VISA_INTERVIEW_PREFIX = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Study Permit', AU: 'Student Visa', DE: 'German Visa' };
 
@@ -4059,6 +4066,10 @@ async function openCountryChangeModal() {
 
     const inp = 'width:100%;box-sizing:border-box;background:#fff;border:1px solid #e2e8f0;border-radius:11px;color:#0f172a;font-size:14px;padding:11px 12px';
     const lbl = (t) => `<div style="font-size:12px;font-weight:700;color:#64748b;margin:0 0 6px">${t}</div>`;
+    // Name the CURRENT country's signature documents (not always US I-20/DS-160) so the
+    // "will be removed" warning is accurate for whichever destination the student is on.
+    const CC_DOC_EXAMPLES = { US: 'I-20, DS-160, SEVIS receipt', UK: 'CAS, IHS receipt', CA: 'LOA, PAL, biometrics receipt', AU: 'CoE, OSHC, Genuine Student answers', DE: 'admission letter, blocked-account proof' };
+    const curDocExamples = CC_DOC_EXAMPLES[curCode] || 'your country-specific enrolment and visa documents';
     const countryOpts = countries.map((c) => `<option value="${escapeHtml(c.code)}"${c.code === curCode ? ' selected' : ''}>${(c.flag_emoji || '')} ${escapeHtml(c.name)}</option>`).join('');
 
     const overlay = document.createElement('div');
@@ -4075,7 +4086,7 @@ async function openCountryChangeModal() {
           <div style="margin-bottom:12px">${lbl('New destination country')}<select id="ccCountry" style="${inp}">${countryOpts}</select></div>
           <div style="margin-bottom:12px">${lbl('Visa type')}<select id="ccVisa" style="${inp}"></select></div>
           <div style="background:#fef9c3;border:1px solid #fde68a;border-radius:10px;padding:10px 12px;font-size:12.5px;color:#854d0e;line-height:1.5">
-            Your <strong>passport and personal documents</strong> (transcripts, test scores, finances, SOP) are kept. Documents specific to your current country — like I-20, DS-160, SEVIS — will be <strong>removed</strong>.
+            Your <strong>passport and personal documents</strong> (transcripts, test scores, finances, SOP) are kept. Documents specific to ${escapeHtml(curName)} — like ${escapeHtml(curDocExamples)} — will be <strong>removed</strong>.
           </div>
           <div id="ccOtpRow" style="display:none;margin-top:12px">${lbl('Enter the 6-digit code we emailed you')}<input id="ccCode" inputmode="numeric" maxlength="6" placeholder="••••••" style="${inp};letter-spacing:8px;text-align:center;font-size:18px"></div>
         </div>
@@ -14246,9 +14257,9 @@ function getMainChatWelcomeMarkup() {
                 <p>I can help you with:</p>
                 <p>• What to upload next (document checklist)</p>
                 <p>• Profile and visa-stage gaps you should fix first</p>
-                <p>• Interview prep, mock questions, and answer quality</p>
+                <p>• Mock questions and answer-quality coaching</p>
                 <p>• Important deadlines, risks, and updates</p>
-                <p>Tell me your current stage (I-20, DS-160, fees, or interview), and I'll suggest your best next step.</p>
+                <p>Tell me your current stage (${currentVisaStagesPhrase()}), and I'll suggest your best next step.</p>
             </div>
         </div>
     `;
@@ -15523,8 +15534,8 @@ function handleGalleryKeyPress(e) {
 const floatingChatMessages = [
     "Hey! I'm Rilono AI Assistant. Let's talk about your F-1 Visa journey.",
     "Need help tracking your document progress?",
-    "I can validate your I-20 and financial documents instantly.",
-    "Ready to practice? Let's do a mock visa interview."
+    "I can validate your enrolment and financial documents instantly.",
+    "Ready to practise? Let's run through your likely visa questions."
 ];
 
 let popupMessageInterval;

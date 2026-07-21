@@ -1971,7 +1971,7 @@ def send_enterprise_interview_invite_email(
         logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
                       'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
 
-    subject = f"Practice your {destination_country} visa interview — invite from {org_label}"
+    subject = f"Practise for your {destination_country} student visa — invite from {org_label}"
     html_content = f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
     <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
@@ -1985,8 +1985,8 @@ def send_enterprise_interview_invite_email(
             </td></tr>
             <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
               <p style="margin:0 0 14px;">Hi {safe_name},</p>
-              <p style="margin:0 0 14px;">{safe_org} has invited you to practise your <strong>{safe_country}</strong> student-visa interview
-              ({safe_visa}). An AI interviewer will play the real visa officer and give you honest feedback afterwards.</p>
+              <p style="margin:0 0 14px;">{safe_org} has invited you to practise for your <strong>{safe_country}</strong> student visa
+              ({safe_visa}). An AI interviewer asks the kind of questions a {safe_country} visa officer would, and gives you honest feedback afterwards.</p>
               <div style="background:#eef2ff;color:#3730a3;padding:12px 14px;border-radius:10px;font-size:14px;margin-bottom:20px;">
                 You can take <strong>{count_text}</strong> with this link.
               </div>
@@ -2001,8 +2001,9 @@ def send_enterprise_interview_invite_email(
     </body></html>
     """
     text_content = (
-        f"Hi {name},\n\n{org_label} has invited you to practise your {destination_country} student-visa interview "
-        f"({visa_type}). You can take {count_text}.\n\nStart here: {interview_url}\n\n"
+        f"Hi {name},\n\n{org_label} has invited you to practise for your {destination_country} student visa "
+        f"({visa_type}) with an AI interviewer that asks the kind of questions a {destination_country} visa officer would. "
+        f"You can take {count_text}.\n\nStart here: {interview_url}\n\n"
         "You'll confirm a one-time code sent to this email before you begin. This link is personal to you.\n"
     )
     try:

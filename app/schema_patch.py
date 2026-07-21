@@ -71,6 +71,27 @@ def ensure_e2e_encryption_columns():
             conn.execute(text("ALTER TABLE documents ADD COLUMN e2e_extracted_wrapped_dek TEXT"))
 
 
+def ensure_user_enterprise_account_column():
+    """Add users.is_enterprise_account — marks accounts whose ORIGIN is the B2B Enterprise
+    product (workspace owner via /api/enterprise/signup, or a teammate whose account was created
+    BY the org). These accounts are blocked from the individual/B2C consumer app so the two
+    products stay disconnected; B2C users who later join a team keep their consumer access.
+
+    Idempotent ADD COLUMN for environments without full migrations. The historical backfill of
+    existing rows lives in routers/enterprise.backfill_enterprise_account_flag (run at startup).
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    bool_false = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        user_columns = _get_table_columns(conn, "users")
+        if "is_enterprise_account" not in user_columns:
+            conn.execute(
+                text(
+                    f"ALTER TABLE users ADD COLUMN is_enterprise_account BOOLEAN NOT NULL DEFAULT {bool_false}"
+                )
+            )
+
+
 def ensure_user_legal_consent_column():
     """
     Patch users table schema in-place for environments without full migrations.
