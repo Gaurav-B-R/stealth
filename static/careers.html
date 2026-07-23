@@ -4,22 +4,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Careers at Rilono — AI Product Tester Intern (QA) · 2 Openings</title>
+    <title>Careers at Rilono — Open Roles & Jobs</title>
     <meta name="description"
-        content="Join Rilono, an AI-powered immigration tech startup. We're hiring an AI Product Tester Intern (QA) — red-team our AI, break our workflows, and help prevent visa rejections. 2 positions open. No degree required.">
+        content="Join Rilono, an AI-powered immigration tech startup helping international students cross borders. Explore our open roles — remote-first, impact-driven, and no degree required.">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://rilono.com/careers">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Rilono">
     <meta property="og:url" content="https://rilono.com/careers">
-    <meta property="og:title" content="Careers at Rilono — AI Product Tester Intern (QA)">
+    <meta property="og:title" content="Careers at Rilono — Open Roles & Jobs">
     <meta property="og:description"
-        content="Red-team our AI, break our workflows, and help prevent visa rejections for students worldwide. 2 openings. No degree required — passion matters.">
+        content="Help build the AI that prevents visa rejections for students worldwide. Explore open roles at Rilono — remote-first and impact-driven.">
     <meta property="og:image" content="https://rilono.com/static/logo.png">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Careers at Rilono — AI Product Tester Intern (QA)">
+    <meta name="twitter:title" content="Careers at Rilono — Open Roles & Jobs">
     <meta name="twitter:description"
-        content="Red-team our AI, break our workflows, and help prevent visa rejections. 2 openings. No degree required.">
+        content="Explore open roles at Rilono, an AI-powered immigration tech startup. Remote-first, impact-driven.">
     <link rel="icon" type="image/png" href="/static/logo.png">
     <link rel="apple-touch-icon" href="/static/logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -27,26 +27,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@600;700;800&display=swap"
         rel="stylesheet">
-    <script type="application/ld+json">
-    {
-        "@context": "https://schema.org",
-        "@type": "JobPosting",
-        "title": "AI Product Tester Intern (QA)",
-        "description": "Rigorously test Rilono's AI agents and web workflows to find edge cases, logic flaws, and bugs before we ship. AI red-teaming, document auditing, manual UI testing and clear bug reporting.",
-        "datePosted": "2026-07-22",
-        "employmentType": "INTERN",
-        "hiringOrganization": {
-            "@type": "Organization",
-            "name": "Rilono",
-            "sameAs": "https://rilono.com",
-            "logo": "https://rilono.com/static/logo.png"
-        },
-        "jobLocationType": "TELECOMMUTE",
-        "applicantLocationRequirements": { "@type": "Country", "name": "Anywhere" },
-        "totalJobOpenings": 2,
-        "qualifications": "No degree required. A strong eye for detail, a passion for UX, and creativity about how software can break."
-    }
-    </script>
+    <script type="application/ld+json" id="jobLd"></script>
     <style>
         :root {
             --indigo: #6366f1;
@@ -80,56 +61,36 @@
         }
 
         * { box-sizing: border-box; }
-
         html { scroll-behavior: smooth; }
-
         body {
             margin: 0;
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            color: var(--ink);
-            background: var(--bg);
-            -webkit-font-smoothing: antialiased;
-            line-height: 1.6;
-            overflow-x: hidden;
+            color: var(--ink); background: var(--bg);
+            -webkit-font-smoothing: antialiased; line-height: 1.6; overflow-x: hidden;
         }
-
-        /* Ambient gradient wash */
         body::before {
-            content: "";
-            position: fixed;
-            inset: 0;
-            z-index: -1;
+            content: ""; position: fixed; inset: 0; z-index: -1;
             background:
                 radial-gradient(ellipse 60% 50% at 12% -5%, rgba(99, 102, 241, 0.13), transparent 60%),
                 radial-gradient(ellipse 50% 45% at 100% 0%, rgba(236, 72, 153, 0.10), transparent 55%),
                 radial-gradient(ellipse 60% 50% at 85% 40%, rgba(168, 85, 247, 0.07), transparent 60%);
             pointer-events: none;
         }
-
         a { color: inherit; text-decoration: none; }
-
         h1, h2, h3 { font-family: 'Sora', 'Inter', sans-serif; letter-spacing: -0.02em; line-height: 1.12; margin: 0; }
-
         .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
-
         .grad-text {
-            background: var(--grad);
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-            color: transparent;
+            background: var(--grad); -webkit-background-clip: text; background-clip: text;
+            -webkit-text-fill-color: transparent; color: transparent;
         }
+        [hidden] { display: none !important; }
 
         /* ---------------- Nav ---------------- */
         .nav {
-            position: sticky;
-            top: 0;
-            z-index: 50;
+            position: sticky; top: 0; z-index: 50;
             background: rgba(251, 251, 254, 0.78);
-            -webkit-backdrop-filter: saturate(180%) blur(16px);
-            backdrop-filter: saturate(180%) blur(16px);
-            border-bottom: 1px solid transparent;
-            transition: border-color .3s ease, box-shadow .3s ease, background .3s ease;
+            -webkit-backdrop-filter: saturate(180%) blur(16px); backdrop-filter: saturate(180%) blur(16px);
+            border-bottom: 1px solid transparent; transition: border-color .3s, box-shadow .3s, background .3s;
         }
         .nav.scrolled { border-color: var(--line); box-shadow: 0 8px 30px rgba(23, 28, 74, 0.06); background: rgba(251, 251, 254, 0.92); }
         .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 68px; }
@@ -137,21 +98,27 @@
         .brand img { height: 34px; width: auto; object-fit: contain; }
         .brand span { font-family: 'Sora', sans-serif; font-weight: 800; font-size: 20px; color: var(--ink); }
         .nav-actions { display: flex; align-items: center; gap: 8px; }
-        .nav-link {
-            font-weight: 600; font-size: 14px; color: var(--ink-2);
-            padding: 9px 14px; border-radius: 10px; transition: background .2s, color .2s;
-        }
+        .nav-link { font-weight: 600; font-size: 14px; color: var(--ink-2); padding: 9px 14px; border-radius: 10px; transition: background .2s, color .2s; }
         .nav-link:hover { background: var(--surface-2); color: var(--ink); }
-        .nav-cta {
-            font-weight: 600; font-size: 14px; color: #fff; background: var(--grad-soft);
-            padding: 10px 18px; border-radius: 11px; box-shadow: 0 6px 18px rgba(99, 102, 241, 0.32);
-            transition: transform .15s ease, filter .2s ease;
-        }
+        .nav-cta { font-weight: 600; font-size: 14px; color: #fff; background: var(--grad-soft); padding: 10px 18px; border-radius: 11px; box-shadow: 0 6px 18px rgba(99, 102, 241, 0.32); transition: transform .15s, filter .2s; }
         .nav-cta:hover { filter: brightness(1.06); transform: translateY(-1px); }
         @media (max-width: 640px) { .nav-link.hide-sm { display: none; } .brand span { font-size: 18px; } }
 
-        /* ---------------- Hero ---------------- */
-        .hero { padding: 84px 0 40px; text-align: center; }
+        /* ---------------- Buttons ---------------- */
+        .btn {
+            display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+            font-family: inherit; font-weight: 650; font-size: 15px; cursor: pointer;
+            padding: 14px 26px; border-radius: 13px; border: 1px solid transparent;
+            transition: transform .15s, box-shadow .2s, filter .2s, background .2s, border-color .2s;
+        }
+        .btn-primary { color: #fff; background: var(--grad-soft); box-shadow: 0 12px 30px rgba(99, 102, 241, 0.34); }
+        .btn-primary:hover { transform: translateY(-2px); filter: brightness(1.05); box-shadow: 0 16px 40px rgba(99, 102, 241, 0.42); }
+        .btn-ghost { color: var(--ink); background: var(--surface); border-color: var(--line-2); box-shadow: var(--shadow-sm); }
+        .btn-ghost:hover { transform: translateY(-2px); border-color: var(--indigo); color: var(--indigo-dark); }
+        .btn:disabled { opacity: .6; cursor: not-allowed; transform: none; filter: none; }
+
+        /* ---------------- Hero (list) ---------------- */
+        .hero { padding: 84px 0 26px; text-align: center; }
         .eyebrow {
             display: inline-flex; align-items: center; gap: 8px;
             font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
@@ -160,45 +127,98 @@
         }
         .eyebrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 4px rgba(16,185,129,.18); animation: pulse 2s infinite; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
-        .hero h1 { font-size: clamp(36px, 6vw, 60px); font-weight: 800; margin: 22px auto 0; max-width: 15ch; }
-        .hero p { font-size: clamp(17px, 2.2vw, 20px); color: var(--muted); max-width: 60ch; margin: 20px auto 0; }
-        .hero-actions { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 32px; }
-        .btn {
-            display: inline-flex; align-items: center; justify-content: center; gap: 9px;
-            font-family: inherit; font-weight: 650; font-size: 15px; cursor: pointer;
-            padding: 14px 26px; border-radius: 13px; border: 1px solid transparent; transition: transform .15s ease, box-shadow .2s ease, filter .2s ease, background .2s ease;
-        }
-        .btn-primary { color: #fff; background: var(--grad-soft); box-shadow: 0 12px 30px rgba(99, 102, 241, 0.34); }
-        .btn-primary:hover { transform: translateY(-2px); filter: brightness(1.05); box-shadow: 0 16px 40px rgba(99, 102, 241, 0.42); }
-        .btn-ghost { color: var(--ink); background: var(--surface); border-color: var(--line-2); box-shadow: var(--shadow-sm); }
-        .btn-ghost:hover { transform: translateY(-2px); border-color: var(--indigo); color: var(--indigo-dark); }
-        .btn:disabled { opacity: .6; cursor: not-allowed; transform: none; filter: none; }
-
-        .trust { margin-top: 30px; display: flex; gap: 26px; justify-content: center; flex-wrap: wrap; color: var(--muted); font-size: 14px; font-weight: 500; }
+        .hero h1 { font-size: clamp(38px, 6vw, 62px); font-weight: 800; margin: 22px auto 0; max-width: 16ch; }
+        .hero p { font-size: clamp(17px, 2.2vw, 20px); color: var(--muted); max-width: 62ch; margin: 20px auto 0; }
+        .hero-actions { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 30px; }
+        .trust { margin-top: 28px; display: flex; gap: 26px; justify-content: center; flex-wrap: wrap; color: var(--muted); font-size: 14px; font-weight: 500; }
         .trust b { color: var(--ink); font-weight: 700; }
 
-        /* ---------------- Layout ---------------- */
-        .job-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 40px; align-items: start; padding: 30px 0 20px; }
-        @media (max-width: 900px) { .job-grid { grid-template-columns: 1fr; gap: 24px; } }
-
-        .card {
-            background: var(--surface); border: 1px solid var(--line);
-            border-radius: var(--radius); box-shadow: var(--shadow-md);
+        /* ---------------- Values strip ---------------- */
+        .values { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; padding: 40px 0 8px; }
+        @media (max-width: 860px) { .values { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 480px) { .values { grid-template-columns: 1fr; } }
+        .value {
+            background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+            padding: 22px; box-shadow: var(--shadow-sm);
         }
+        .value .ic { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: rgba(99,102,241,.10); color: var(--indigo-dark); margin-bottom: 12px; }
+        .value .ic svg { width: 21px; height: 21px; }
+        .value h3 { font-size: 16px; font-weight: 700; }
+        .value p { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
 
-        /* Job body */
-        .job-body { padding: 40px; }
-        @media (max-width: 640px) { .job-body { padding: 26px 22px; } }
-        .job-head { border-bottom: 1px solid var(--line); padding-bottom: 26px; margin-bottom: 8px; }
-        .job-title { font-size: clamp(26px, 4vw, 34px); font-weight: 800; }
-        .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+        /* ---------------- Open roles ---------------- */
+        /* Longhand padding so it doesn't clobber .wrap's horizontal 24px gutter
+           (this element carries both .wrap and .roles). */
+        .roles { padding-top: 46px; padding-bottom: 30px; }
+        .roles-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 22px; }
+        .roles-head h2 { font-size: clamp(24px, 3.4vw, 32px); font-weight: 800; }
+        .roles-head .count { color: var(--muted); font-size: 15px; font-weight: 600; }
+        .role-list { display: grid; gap: 16px; }
+
+        .role-card {
+            display: flex; align-items: center; gap: 22px;
+            background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+            padding: 26px 28px; box-shadow: var(--shadow-sm); cursor: pointer;
+            transition: transform .18s, box-shadow .2s, border-color .2s;
+            text-align: left; width: 100%; font-family: inherit;
+        }
+        .role-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); border-color: rgba(99,102,241,.28); }
+        .role-card:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--ring); }
+        .role-card .rc-main { flex: 1 1 auto; min-width: 0; }
+        .role-card h3 { font-size: 20px; font-weight: 700; }
+        .role-card .rc-tag { color: var(--muted); font-size: 15px; margin-top: 6px; }
+        .role-card .rc-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+        .role-card .rc-arrow {
+            flex: 0 0 auto; width: 46px; height: 46px; border-radius: 50%;
+            display: grid; place-items: center; background: var(--surface-2); color: var(--indigo-dark);
+            border: 1px solid var(--line); transition: background .2s, transform .2s, color .2s;
+        }
+        .role-card:hover .rc-arrow { background: var(--grad-soft); color: #fff; transform: translateX(3px); border-color: transparent; }
+        .role-card .rc-arrow svg { width: 20px; height: 20px; }
+        @media (max-width: 560px) { .role-card { padding: 22px; gap: 14px; } .role-card h3 { font-size: 18px; } .role-card .rc-arrow { width: 40px; height: 40px; } }
+
         .chip {
             display: inline-flex; align-items: center; gap: 7px;
-            font-size: 13px; font-weight: 600; color: var(--ink-2);
-            background: var(--surface-2); border: 1px solid var(--line); padding: 8px 13px; border-radius: 999px;
+            font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+            background: var(--surface-2); border: 1px solid var(--line); padding: 6px 11px; border-radius: 999px;
         }
         .chip.accent { color: var(--indigo-dark); background: rgba(99, 102, 241, 0.09); border-color: rgba(99, 102, 241, 0.22); }
-        .chip svg { width: 15px; height: 15px; opacity: .8; }
+        .chip svg { width: 14px; height: 14px; opacity: .85; }
+
+        /* Skeleton / states */
+        .skeleton { display: grid; gap: 16px; }
+        .sk-card { height: 116px; border-radius: var(--radius); border: 1px solid var(--line); background:
+            linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%);
+            background-size: 200% 100%; animation: shimmer 1.3s infinite; }
+        @keyframes shimmer { to { background-position: -200% 0; } }
+        .state-msg { text-align: center; padding: 40px 20px; color: var(--muted); }
+        .state-msg .btn { margin-top: 16px; }
+
+        /* Talent pool CTA */
+        .talent {
+            margin-top: 30px; border-radius: var(--radius); padding: 34px;
+            background: linear-gradient(135deg, rgba(99,102,241,.09), rgba(236,72,153,.06));
+            border: 1px solid rgba(99, 102, 241, 0.18);
+            display: flex; align-items: center; justify-content: space-between; gap: 22px; flex-wrap: wrap;
+        }
+        .talent h3 { font-size: 20px; font-weight: 700; }
+        .talent p { color: var(--muted); margin: 6px 0 0; font-size: 15px; max-width: 52ch; }
+
+        /* ---------------- Detail view ---------------- */
+        .back-link { display: inline-flex; align-items: center; gap: 8px; margin: 26px 0 4px; color: var(--muted); font-weight: 600; font-size: 14.5px; cursor: pointer; background: none; border: none; font-family: inherit; padding: 11px 2px; }
+        .back-link:hover { color: var(--indigo-dark); }
+        .back-link svg { width: 17px; height: 17px; }
+
+        .job-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 40px; align-items: start; padding: 10px 0 20px; }
+        @media (max-width: 900px) { .job-grid { grid-template-columns: 1fr; gap: 24px; } }
+        .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-md); }
+
+        .job-body { padding: 40px; }
+        @media (max-width: 640px) { .job-body { padding: 26px 22px; } }
+        .job-head { border-bottom: 1px solid var(--line); padding-bottom: 26px; }
+        .job-title { font-size: clamp(26px, 4vw, 34px); font-weight: 800; }
+        .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+        .chips .chip { font-size: 13px; padding: 8px 13px; }
 
         .sec { margin-top: 34px; }
         .sec h2 { font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--indigo-dark); }
@@ -207,24 +227,18 @@
 
         .list { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 14px; }
         .list li { display: flex; gap: 14px; align-items: flex-start; color: var(--ink-2); font-size: 15.5px; }
-        .list li .ic {
-            flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-            background: rgba(99, 102, 241, 0.10); color: var(--indigo-dark); margin-top: 1px;
-        }
-        .list li .ic svg { width: 16px; height: 16px; }
         .list li b { color: var(--ink); font-weight: 700; }
-
-        .list.reqs li .ic { background: rgba(16, 185, 129, 0.12); color: #059669; }
-        .list.reqs li .ic.bonus { background: rgba(245, 158, 11, 0.14); color: #d97706; }
-
-        .callout {
-            margin-top: 22px; padding: 16px 18px; border-radius: 12px;
-            background: linear-gradient(135deg, rgba(99,102,241,.07), rgba(236,72,153,.05));
-            border: 1px solid rgba(99, 102, 241, 0.16); color: var(--ink-2); font-size: 15px;
+        .list li .num {
+            flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+            background: var(--grad-soft); color: #fff; font-weight: 700; font-size: 13px; margin-top: 1px;
         }
+        .list.reqs li .ic { flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: rgba(16, 185, 129, 0.12); color: #059669; margin-top: 1px; }
+        .list.reqs li .ic.bonus { background: rgba(245, 158, 11, 0.14); color: #d97706; }
+        .list.reqs li .ic svg { width: 16px; height: 16px; }
+
+        .callout { margin-top: 22px; padding: 16px 18px; border-radius: 12px; background: linear-gradient(135deg, rgba(99,102,241,.07), rgba(236,72,153,.05)); border: 1px solid rgba(99, 102, 241, 0.16); color: var(--ink-2); font-size: 15px; }
         .callout b { color: var(--ink); }
 
-        /* Sidebar */
         .side { position: sticky; top: 92px; }
         @media (max-width: 900px) { .side { position: static; } }
         .side-card { padding: 24px; }
@@ -233,18 +247,16 @@
         .facts li { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-size: 14.5px; }
         .facts .k { color: var(--muted); font-weight: 500; }
         .facts .v { color: var(--ink); font-weight: 700; text-align: right; }
-        .openings-badge {
-            display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px;
-            color: #fff; background: var(--grad); padding: 6px 12px; border-radius: 999px;
-        }
+        .openings-badge { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; color: #fff; background: var(--grad); padding: 6px 12px; border-radius: 999px; }
         .side-card .btn { width: 100%; margin-top: 22px; }
         .side-note { margin-top: 14px; font-size: 12.5px; color: var(--muted-2); text-align: center; }
 
         /* ---------------- Apply form ---------------- */
-        .apply { padding: 50px 0 90px; }
-        .apply-head { text-align: center; max-width: 60ch; margin: 0 auto 34px; }
-        .apply-head h2 { font-size: clamp(28px, 4vw, 40px); font-weight: 800; }
+        .apply { padding: 44px 0 90px; }
+        .apply-head { text-align: center; max-width: 62ch; margin: 0 auto 34px; }
+        .apply-head h2 { font-size: clamp(26px, 4vw, 38px); font-weight: 800; }
         .apply-head p { color: var(--muted); font-size: 17px; margin-top: 12px; }
+        .apply-head .role-pill { display: inline-block; margin-top: 14px; font-weight: 700; font-size: 14px; color: var(--indigo-dark); background: rgba(99,102,241,.10); border: 1px solid rgba(99,102,241,.2); padding: 7px 15px; border-radius: 999px; }
 
         .form-card { max-width: 760px; margin: 0 auto; padding: 40px; }
         @media (max-width: 640px) { .form-card { padding: 26px 20px; } }
@@ -255,24 +267,17 @@
         .field label { font-size: 13.5px; font-weight: 650; color: var(--ink); }
         .field label .req { color: var(--pink); }
         .field label .opt { color: var(--muted-2); font-weight: 500; }
-        .field input, .field textarea, .field select {
+        .field input, .field textarea {
             font-family: inherit; font-size: 15px; color: var(--ink);
-            background: var(--surface-2); border: 1.5px solid var(--line);
-            border-radius: 12px; padding: 13px 15px; transition: border-color .18s, box-shadow .18s, background .18s;
-            width: 100%;
+            background: var(--surface-2); border: 1.5px solid var(--line); border-radius: 12px;
+            padding: 13px 15px; transition: border-color .18s, box-shadow .18s, background .18s; width: 100%;
         }
         .field textarea { resize: vertical; min-height: 120px; }
         .field input::placeholder, .field textarea::placeholder { color: var(--muted-2); }
-        .field input:focus, .field textarea:focus, .field select:focus {
-            outline: none; border-color: var(--indigo); background: #fff; box-shadow: 0 0 0 4px var(--ring);
-        }
+        .field input:focus, .field textarea:focus { outline: none; border-color: var(--indigo); background: #fff; box-shadow: 0 0 0 4px var(--ring); }
         .field .hint { font-size: 12.5px; color: var(--muted-2); }
 
-        /* Dropzone */
-        .dropzone {
-            border: 2px dashed var(--line-2); border-radius: 14px; background: var(--surface-2);
-            padding: 26px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s, transform .1s;
-        }
+        .dropzone { border: 2px dashed var(--line-2); border-radius: 14px; background: var(--surface-2); padding: 26px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s, transform .1s; }
         .dropzone:hover { border-color: var(--indigo); background: rgba(99,102,241,.04); }
         .dropzone.dragover { border-color: var(--indigo); background: rgba(99,102,241,.07); transform: scale(1.005); }
         .dropzone.has-file { border-style: solid; border-color: rgba(16,185,129,.45); background: rgba(16,185,129,.05); }
@@ -298,11 +303,9 @@
         .form-foot .btn { width: 100%; font-size: 16px; padding: 16px; }
         .form-msg { margin-top: 16px; padding: 13px 16px; border-radius: 11px; font-size: 14px; font-weight: 500; display: none; }
         .form-msg.err { display: block; background: rgba(244,63,94,.09); color: #be123c; border: 1px solid rgba(244,63,94,.22); }
-
         .spinner { width: 18px; height: 18px; border: 2.5px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Success */
         .success { display: none; text-align: center; padding: 20px 8px; }
         .success.show { display: block; animation: fadeUp .5s ease; }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
@@ -310,6 +313,7 @@
         .success .badge svg { width: 40px; height: 40px; }
         .success h3 { font-size: 26px; font-weight: 800; }
         .success p { color: var(--muted); font-size: 16px; margin: 12px auto 0; max-width: 46ch; }
+        .success .btn { margin-top: 24px; }
 
         /* ---------------- Footer ---------------- */
         .footer { border-top: 1px solid var(--line); padding: 44px 0; margin-top: 10px; }
@@ -318,13 +322,13 @@
         .footer-links a { color: var(--muted); font-size: 14px; font-weight: 500; transition: color .2s; }
         .footer-links a:hover { color: var(--indigo-dark); }
         .footer-copy { color: var(--muted-2); font-size: 13px; }
-
-        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+        /* Bulletproof visually-hidden — !important so the hidden file <input> isn't
+           re-expanded to width:100% by the ".field input" rule (higher specificity). */
+        .sr-only { position: absolute !important; width: 1px !important; height: 1px !important; padding: 0 !important; margin: -1px !important; overflow: hidden !important; clip: rect(0,0,0,0); white-space: nowrap; border: 0 !important; }
     </style>
 </head>
 
 <body>
-    <!-- Nav -->
     <nav class="nav" id="nav">
         <div class="wrap nav-inner">
             <a class="brand" href="/" aria-label="Rilono home">
@@ -334,240 +338,197 @@
             <div class="nav-actions">
                 <a class="nav-link hide-sm" href="/">Home</a>
                 <a class="nav-link hide-sm" href="/for-enterprise">For Consultancies</a>
-                <a class="nav-cta" href="#apply">Apply now</a>
+                <a class="nav-cta" href="/careers" id="navRolesLink">Open roles</a>
             </div>
         </div>
     </nav>
 
-    <!-- Hero -->
-    <header class="hero">
-        <div class="wrap">
-            <span class="eyebrow"><span class="dot"></span> We're hiring · 2 openings</span>
-            <h1>Break our AI before <span class="grad-text">the world relies on it</span></h1>
-            <p>Rilono is an AI-powered immigration tech startup. We audit complex financial documents,
-                run voice mock interviews, and help prevent visa rejections for international students.
-                Come stress-test the product that stands between a student and their future.</p>
-            <div class="hero-actions">
-                <a class="btn btn-primary" href="#apply">Apply for this role
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-                </a>
-                <a class="btn btn-ghost" href="#role">Read the role</a>
+    <!-- ===================== LIST VIEW ===================== -->
+    <div id="listView">
+        <header class="hero">
+            <div class="wrap">
+                <span class="eyebrow"><span class="dot"></span> <span id="heroOpenings">We're hiring</span></span>
+                <h1>Build the AI that helps students <span class="grad-text">cross borders</span></h1>
+                <p>Rilono is an AI-powered immigration tech startup. We audit complex financial documents,
+                    run voice mock interviews, and help prevent visa rejections for international students.
+                    Come do the most meaningful work of your career.</p>
+                <div class="hero-actions">
+                    <a class="btn btn-primary" href="#roles">See open roles
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M6 13l6 6 6-6"/></svg>
+                    </a>
+                    <a class="btn btn-ghost" href="/">About Rilono</a>
+                </div>
+                <div class="trust">
+                    <span>🌍 <b>Remote-first</b>, work from anywhere</span>
+                    <span>🎓 <b>No degree</b> required</span>
+                    <span>🚀 Real impact, fast</span>
+                </div>
             </div>
-            <div class="trust">
-                <span>🌍 <b>Remote</b>, work from anywhere</span>
-                <span>🎓 <b>No degree</b> required</span>
-                <span>🚀 Ship-fast startup</span>
+        </header>
+
+        <section class="wrap">
+            <div class="values">
+                <div class="value">
+                    <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5l-8-3z"/><path d="m9 12 2 2 4-4"/></svg></div>
+                    <h3>Real-world impact</h3>
+                    <p>Your work directly changes whether a student gets their visa.</p>
+                </div>
+                <div class="value">
+                    <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h7l-1 8 10-12h-7z"/></svg></div>
+                    <h3>Ship fast, learn faster</h3>
+                    <p>Small team, short feedback loops, no bureaucracy in your way.</p>
+                </div>
+                <div class="value">
+                    <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg></div>
+                    <h3>Own your work</h3>
+                    <p>Real ownership from day one — we hire for judgement, not credentials.</p>
+                </div>
+                <div class="value">
+                    <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                    <h3>Global by default</h3>
+                    <p>We help students worldwide — and we hire the same way.</p>
+                </div>
             </div>
-        </div>
-    </header>
-
-    <!-- Job posting -->
-    <main class="wrap">
-        <section class="job-grid" id="role">
-            <!-- Left: details -->
-            <article class="card job-body">
-                <div class="job-head">
-                    <h1 class="job-title">AI Product Tester Intern <span class="grad-text">(QA)</span></h1>
-                    <div class="chips">
-                        <span class="chip accent">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                            2 positions open
-                        </span>
-                        <span class="chip">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
-                            Internship
-                        </span>
-                        <span class="chip">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-                            Remote
-                        </span>
-                        <span class="chip">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-                            QA · AI Red-Teaming
-                        </span>
-                    </div>
-                </div>
-
-                <div class="sec">
-                    <h2>About Rilono</h2>
-                    <p class="lead">Rilono is an AI-powered immigration tech startup. We use advanced AI to audit
-                        complex financial documents, conduct voice mock interviews, and prevent visa rejections for
-                        international students.</p>
-                </div>
-
-                <div class="sec">
-                    <h2>The Role</h2>
-                    <p>We're looking for a detail-oriented <b>AI Product Tester Intern</b> with a “hacker” mindset.
-                        Your mission is to rigorously test our AI agents and web workflows to find edge cases, logic
-                        flaws, and bugs — before we ship new features.</p>
-                </div>
-
-                <div class="sec">
-                    <h2>What You Will Do</h2>
-                    <ul class="list">
-                        <li>
-                            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V5l-8-3z"/><path d="m9 12 2 2 4-4"/></svg></span>
-                            <span><b>AI Red-Teaming:</b> Chat with our AI Visa Bot, intentionally trying to trick it, confuse it, or make it generate inaccurate responses.</span>
-                        </li>
-                        <li>
-                            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13l2 2 4-4"/></svg></span>
-                            <span><b>Document Auditing:</b> Upload test documents (bank statements, passports) with intentional mathematical errors to ensure our Rilono AI integration catches every mismatch.</span>
-                        </li>
-                        <li>
-                            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span>
-                            <span><b>Manual UI Testing:</b> Navigate our B2C student portal and B2B CRM to ensure all paywalls, API limits, and buttons function perfectly.</span>
-                        </li>
-                        <li>
-                            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 2 1.5 1.5M16 2l-1.5 1.5M12 20v2M4.9 4.9 6.3 6.3M19.1 4.9 17.7 6.3"/><rect x="7" y="6" width="10" height="12" rx="5"/><path d="M7 12H4M20 12h-3"/></svg></span>
-                            <span><b>Bug Reporting:</b> Clearly document UI glitches and prompt-hallucinations, working directly with the Product Manager to improve the system.</span>
-                        </li>
-                    </ul>
-                </div>
-
-                <div class="sec">
-                    <h2>Requirements</h2>
-                    <ul class="list reqs">
-                        <li>
-                            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></span>
-                            <span><b>No degree required</b> — pure passion and effort matter.</span>
-                        </li>
-                        <li>
-                            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></span>
-                            <span>A strong eye for detail and a passion for <b>User Experience (UX)</b>.</span>
-                        </li>
-                        <li>
-                            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></span>
-                            <span>Ability to think creatively about <b>how software can break</b>.</span>
-                        </li>
-                        <li>
-                            <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></span>
-                            <span>Clear written communication for documenting <b>reproduction steps</b>.</span>
-                        </li>
-                        <li>
-                            <span class="ic bonus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg></span>
-                            <span><b>Bonus:</b> Basic understanding of Prompt Engineering or the study-abroad / visa process.</span>
-                        </li>
-                    </ul>
-                </div>
-
-                <div class="callout">
-                    💡 <b>Think you can break it?</b> Show us the wildest edge case you'd try on a visa-document AI
-                    in your application — we read every one.
-                </div>
-            </article>
-
-            <!-- Right: sticky summary -->
-            <aside class="side">
-                <div class="card side-card">
-                    <span class="openings-badge">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
-                        2 openings
-                    </span>
-                    <h3 style="margin-top:14px;">Position summary</h3>
-                    <ul class="facts">
-                        <li><span class="k">Role</span><span class="v">AI Product Tester Intern</span></li>
-                        <li><span class="k">Team</span><span class="v">Quality &amp; AI Safety</span></li>
-                        <li><span class="k">Type</span><span class="v">Internship</span></li>
-                        <li><span class="k">Location</span><span class="v">Remote · Anywhere</span></li>
-                        <li><span class="k">Openings</span><span class="v">2 positions</span></li>
-                        <li><span class="k">Degree</span><span class="v">Not required</span></li>
-                    </ul>
-                    <a class="btn btn-primary" href="#apply">Apply now</a>
-                    <p class="side-note">Takes ~3 minutes · Resume required</p>
-                </div>
-            </aside>
         </section>
 
-        <!-- Application form -->
-        <section class="apply" id="apply">
-            <div class="apply-head">
-                <h2>Apply for this role</h2>
-                <p>Fill in a few basics and attach your resume. Your application and resume go straight to our team.</p>
+        <section class="wrap roles" id="roles">
+            <div class="roles-head">
+                <h2>Open roles</h2>
+                <span class="count" id="rolesCount"></span>
             </div>
 
-            <div class="card form-card">
-                <form id="applyForm" novalidate>
-                    <div class="success" id="successState" aria-live="polite">
-                        <div class="badge">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
-                        </div>
-                        <h3>Application received 🎉</h3>
-                        <p id="successText">Thanks for applying! We've received your application and resume. If it's a
-                            match, we'll reach out at the email you provided.</p>
-                    </div>
+            <div class="role-list skeleton" id="rolesSkeleton">
+                <div class="sk-card"></div>
+                <div class="sk-card"></div>
+            </div>
 
-                    <div id="formFields">
-                        <input type="hidden" name="position" value="ai-product-tester-intern">
-                        <div class="field-grid">
-                            <div class="field">
-                                <label for="full_name">Full name <span class="req">*</span></label>
-                                <input type="text" id="full_name" name="full_name" autocomplete="name" placeholder="Jordan Rivera" required maxlength="120">
+            <div class="role-list" id="roleList" hidden></div>
+
+            <div class="state-msg" id="rolesEmpty" hidden>
+                <p><strong>No open roles right now.</strong><br>We're always keen to meet sharp people —
+                    introduce yourself below and we'll reach out when something fits.</p>
+            </div>
+
+            <div class="state-msg" id="rolesError" hidden>
+                <p>We couldn't load our open roles just now.</p>
+                <button class="btn btn-ghost" id="rolesRetry" type="button">Try again</button>
+            </div>
+
+            <div class="talent">
+                <div>
+                    <h3>Don't see your role?</h3>
+                    <p>We hire for talent and curiosity, not just open reqs. Send us your resume and tell us
+                        how you'd make Rilono better.</p>
+                </div>
+                <button class="btn btn-primary" id="talentBtn" type="button">Join our talent pool</button>
+            </div>
+        </section>
+    </div>
+
+    <!-- ===================== DETAIL VIEW ===================== -->
+    <div id="detailView" hidden>
+        <main class="wrap">
+            <button class="back-link" id="backLink" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+                All open roles
+            </button>
+
+            <section class="job-grid" id="jobGrid">
+                <article class="card job-body" id="jobBody"><!-- rendered --></article>
+                <aside class="side" id="jobSide"><!-- rendered --></aside>
+            </section>
+
+            <section class="apply" id="apply">
+                <div class="apply-head">
+                    <h2>Apply now</h2>
+                    <p>Fill in a few basics and attach your resume. Your application and resume go straight to our team.</p>
+                    <span class="role-pill" id="applyRolePill"></span>
+                </div>
+
+                <div class="card form-card">
+                    <form id="applyForm" novalidate>
+                        <div class="success" id="successState" aria-live="polite">
+                            <div class="badge">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                             </div>
-                            <div class="field">
-                                <label for="email">Email <span class="req">*</span></label>
-                                <input type="email" id="email" name="email" autocomplete="email" placeholder="you@example.com" required maxlength="254">
-                            </div>
-                            <div class="field">
-                                <label for="phone">Phone <span class="opt">(optional)</span></label>
-                                <input type="tel" id="phone" name="phone" autocomplete="tel" placeholder="+91 98765 43210" maxlength="40">
-                            </div>
-                            <div class="field">
-                                <label for="location">Location <span class="opt">(optional)</span></label>
-                                <input type="text" id="location" name="location" autocomplete="address-level2" placeholder="City, Country" maxlength="120">
-                            </div>
-                            <div class="field full">
-                                <label for="links">Portfolio / LinkedIn / GitHub <span class="opt">(optional)</span></label>
-                                <input type="text" id="links" name="links" placeholder="https://linkedin.com/in/you  ·  https://github.com/you" maxlength="500">
-                            </div>
-                            <div class="field full">
-                                <label for="cover_note">Why you'd be great at breaking our AI <span class="opt">(optional)</span></label>
-                                <textarea id="cover_note" name="cover_note" placeholder="Tell us how you think about finding edge cases — or describe the trickiest bug you've ever found." maxlength="5000"></textarea>
-                                <span class="hint">A few sentences is plenty. Specifics &gt; buzzwords.</span>
-                            </div>
-                            <div class="field full">
-                                <label>Resume <span class="req">*</span></label>
-                                <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload your resume">
-                                    <div class="dz-default">
-                                        <div class="dz-icon">
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
+                            <h3>Application received 🎉</h3>
+                            <p id="successText">Thanks for applying! We've received your application and resume.
+                                If it's a match, we'll reach out at the email you provided.</p>
+                            <button class="btn btn-ghost" id="successBack" type="button">Back to all roles</button>
+                        </div>
+
+                        <div id="formFields">
+                            <input type="hidden" name="position" id="positionInput" value="">
+                            <div class="field-grid">
+                                <div class="field">
+                                    <label for="full_name">Full name <span class="req">*</span></label>
+                                    <input type="text" id="full_name" name="full_name" autocomplete="name" placeholder="Jordan Rivera" required maxlength="120">
+                                </div>
+                                <div class="field">
+                                    <label for="email">Email <span class="req">*</span></label>
+                                    <input type="email" id="email" name="email" autocomplete="email" placeholder="you@example.com" required maxlength="254">
+                                </div>
+                                <div class="field">
+                                    <label for="phone">Phone <span class="opt">(optional)</span></label>
+                                    <input type="tel" id="phone" name="phone" autocomplete="tel" placeholder="+91 98765 43210" maxlength="40">
+                                </div>
+                                <div class="field">
+                                    <label for="location">Location <span class="opt">(optional)</span></label>
+                                    <input type="text" id="location" name="location" autocomplete="address-level2" placeholder="City, Country" maxlength="120">
+                                </div>
+                                <div class="field full">
+                                    <label for="links">Portfolio / LinkedIn / GitHub <span class="opt">(optional)</span></label>
+                                    <input type="text" id="links" name="links" placeholder="https://linkedin.com/in/you  ·  https://github.com/you" maxlength="500">
+                                </div>
+                                <div class="field full">
+                                    <label for="cover_note" id="coverLabel">A few words on why you're a great fit <span class="opt">(optional)</span></label>
+                                    <textarea id="cover_note" name="cover_note" placeholder="Tell us what draws you to this role — specifics beat buzzwords." maxlength="5000"></textarea>
+                                    <span class="hint">A few sentences is plenty.</span>
+                                </div>
+                                <div class="field full">
+                                    <label>Resume <span class="req">*</span></label>
+                                    <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload your resume">
+                                        <div class="dz-default">
+                                            <div class="dz-icon">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5M12 3v12"/></svg>
+                                            </div>
+                                            <div class="dz-title">Drag &amp; drop your resume, or <b>browse</b></div>
+                                            <div class="dz-sub">PDF, DOC, DOCX, RTF, ODT or TXT · up to 8 MB</div>
                                         </div>
-                                        <div class="dz-title">Drag &amp; drop your resume, or <b>browse</b></div>
-                                        <div class="dz-sub">PDF, DOC, DOCX, RTF, ODT or TXT · up to 8 MB</div>
+                                        <div class="dz-file">
+                                            <div class="dz-icon">
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                                            </div>
+                                            <div style="text-align:left;">
+                                                <div class="name" id="fileName">resume.pdf</div>
+                                                <div class="size" id="fileSize">0 KB</div>
+                                            </div>
+                                            <button type="button" class="dz-clear" id="fileClear">Remove</button>
+                                        </div>
+                                        <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx,.rtf,.odt,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="sr-only" required>
                                     </div>
-                                    <div class="dz-file">
-                                        <div class="dz-icon">
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-                                        </div>
-                                        <div style="text-align:left;">
-                                            <div class="name" id="fileName">resume.pdf</div>
-                                            <div class="size" id="fileSize">0 KB</div>
-                                        </div>
-                                        <button type="button" class="dz-clear" id="fileClear">Remove</button>
-                                    </div>
-                                    <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx,.rtf,.odt,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="sr-only" required>
                                 </div>
                             </div>
+
+                            <label class="consent">
+                                <input type="checkbox" id="consent" required>
+                                <span>I agree that Rilono may store and process my application data to evaluate me
+                                    for this role, in line with the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
+                            </label>
+
+                            <div class="form-foot">
+                                <button type="submit" class="btn btn-primary" id="submitBtn">
+                                    <span>Submit application</span>
+                                </button>
+                                <div class="form-msg err" id="formError" role="alert"></div>
+                            </div>
                         </div>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
 
-                        <label class="consent">
-                            <input type="checkbox" id="consent" required>
-                            <span>I agree that Rilono may store and process my application data to evaluate me for this
-                                role, in line with the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
-                        </label>
-
-                        <div class="form-foot">
-                            <button type="submit" class="btn btn-primary" id="submitBtn">
-                                <span id="submitLabel">Submit application</span>
-                            </button>
-                            <div class="form-msg err" id="formError" role="alert"></div>
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </section>
-    </main>
-
-    <!-- Footer -->
     <footer class="footer">
         <div class="wrap footer-inner">
             <a class="brand" href="/" style="gap:9px;"><img src="/static/logo.png" alt="Rilono logo" style="height:28px;"><span style="font-size:18px;">Rilono</span></a>
@@ -587,137 +548,327 @@
         (function () {
             "use strict";
 
-            // Nav shadow on scroll
+            var TALENT_POOL_SLUG = "talent-pool";
+            var ALLOWED_EXT = ["pdf", "doc", "docx", "rtf", "odt", "txt"];
+            var MAX_BYTES = 8 * 1024 * 1024;
+
+            var JOBS = [];
+            var JOB_BY_SLUG = {};
+
+            // ---- element refs ----
             var nav = document.getElementById("nav");
+            var listView = document.getElementById("listView");
+            var detailView = document.getElementById("detailView");
+            var rolesSkeleton = document.getElementById("rolesSkeleton");
+            var roleList = document.getElementById("roleList");
+            var rolesEmpty = document.getElementById("rolesEmpty");
+            var rolesError = document.getElementById("rolesError");
+            var rolesCount = document.getElementById("rolesCount");
+            var heroOpenings = document.getElementById("heroOpenings");
+            var jobBody = document.getElementById("jobBody");
+            var jobSide = document.getElementById("jobSide");
+            var applyRolePill = document.getElementById("applyRolePill");
+            var positionInput = document.getElementById("positionInput");
+            var coverLabel = document.getElementById("coverLabel");
+
+            // ---- utils ----
+            function esc(s) {
+                return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+                    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+                });
+            }
+            function plural(n, one, many) { return n === 1 ? one : many; }
+
+            // ---- nav shadow ----
             var onScroll = function () { nav.classList.toggle("scrolled", window.scrollY > 8); };
             window.addEventListener("scroll", onScroll, { passive: true });
             onScroll();
 
-            // ---- Resume upload ----
-            var ALLOWED_EXT = ["pdf", "doc", "docx", "rtf", "odt", "txt"];
-            var MAX_BYTES = 8 * 1024 * 1024;
+            // ============ LIST RENDERING ============
+            function renderList() {
+                var count = JOBS.length;
+                var totalOpenings = JOBS.reduce(function (s, j) { return s + (parseInt(j.openings, 10) || 1); }, 0);
+                rolesCount.textContent = count + " " + plural(count, "role", "roles") + " open";
+                heroOpenings.textContent = count > 0
+                    ? ("We're hiring · " + totalOpenings + " " + plural(totalOpenings, "opening", "openings"))
+                    : "We're always looking for great people";
 
+                roleList.innerHTML = "";
+                if (count === 0) {
+                    roleList.hidden = true;
+                    rolesEmpty.hidden = false;
+                    return;
+                }
+                rolesEmpty.hidden = true;
+                roleList.hidden = false;
+
+                JOBS.forEach(function (job) {
+                    var chips = [];
+                    if (job.type) chips.push(chip(iconBriefcase(), job.type));
+                    if (job.location) chips.push(chip(iconGlobe(), job.location));
+                    if (job.team) chips.push(chip(iconUsers(), job.team));
+                    if (job.openings) chips.push(chip(null, job.openings + " " + plural(job.openings, "position", "positions"), true));
+
+                    var card = document.createElement("button");
+                    card.type = "button";
+                    card.className = "role-card";
+                    card.setAttribute("aria-label", "View " + job.title);
+                    card.innerHTML =
+                        '<div class="rc-main">' +
+                            '<h3>' + esc(job.title) + '</h3>' +
+                            (job.tagline ? '<div class="rc-tag">' + esc(job.tagline) + '</div>' : '') +
+                            '<div class="rc-chips">' + chips.join("") + '</div>' +
+                        '</div>' +
+                        '<span class="rc-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>';
+                    card.addEventListener("click", function () { go(job.slug); });
+                    roleList.appendChild(card);
+                });
+            }
+
+            function chip(svg, label, accent) {
+                return '<span class="chip' + (accent ? " accent" : "") + '">' + (svg || "") + esc(label) + '</span>';
+            }
+            function iconBriefcase() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>'; }
+            function iconGlobe() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>'; }
+            function iconUsers() { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>'; }
+
+            // ============ DETAIL RENDERING ============
+            function renderDetail(job) {
+                var isTalent = !job;
+                // ---- job body ----
+                if (isTalent) {
+                    jobBody.innerHTML =
+                        '<div class="job-head"><h1 class="job-title">General Application <span class="grad-text">· Talent Pool</span></h1>' +
+                        '<div class="chips">' + chip(iconGlobe(), "Remote · Anywhere") + chip(null, "Open application", true) + '</div></div>' +
+                        '<div class="sec"><h2>Introduce yourself</h2><p class="lead">We hire for talent, curiosity and grit — not just open roles. ' +
+                        'Tell us what you\'re great at and how you\'d help Rilono prevent visa rejections for students worldwide. ' +
+                        'If there\'s a fit now or later, we\'ll reach out.</p></div>' +
+                        '<div class="callout">💡 <b>Tip:</b> the strongest talent-pool applications are specific — a project you shipped, ' +
+                        'a bug you caught, or a problem in study-abroad you\'d love to fix.</div>';
+                    jobSide.innerHTML =
+                        '<div class="card side-card"><h3>Talent pool</h3><ul class="facts">' +
+                        '<li><span class="k">Type</span><span class="v">Open application</span></li>' +
+                        '<li><span class="k">Location</span><span class="v">Remote · Anywhere</span></li>' +
+                        '<li><span class="k">Degree</span><span class="v">Not required</span></li>' +
+                        '</ul><a class="btn btn-primary" href="#apply">Apply</a>' +
+                        '<p class="side-note">Takes ~3 minutes · Resume required</p></div>';
+                    setJobLd(null);
+                } else {
+                    var respHtml = (job.responsibilities || []).map(function (r, i) {
+                        return '<li><span class="num">' + (i + 1) + '</span><span><b>' + esc(r.title) + ':</b> ' + esc(r.body) + '</span></li>';
+                    }).join("");
+                    var reqHtml = (job.requirements || []).map(function (r) {
+                        return '<li><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg></span><span>' + esc(r) + '</span></li>';
+                    }).join("");
+                    var bonusHtml = job.bonus
+                        ? '<li><span class="ic bonus"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 2 3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z"/></svg></span><span><b>Bonus:</b> ' + esc(job.bonus) + '</span></li>'
+                        : '';
+                    var chips = [];
+                    if (job.openings) chips.push(chip(iconUsers(), job.openings + " " + plural(job.openings, "position open", "positions open"), true));
+                    if (job.type) chips.push(chip(iconBriefcase(), job.type));
+                    if (job.location) chips.push(chip(iconGlobe(), job.location));
+                    if (job.team) chips.push(chip(null, job.team));
+
+                    jobBody.innerHTML =
+                        '<div class="job-head"><h1 class="job-title">' + esc(job.title) + '</h1>' +
+                        '<div class="chips">' + chips.join("") + '</div></div>' +
+                        (job.about ? '<div class="sec"><h2>About Rilono</h2><p class="lead">' + esc(job.about) + '</p></div>' : '') +
+                        (job.role ? '<div class="sec"><h2>The Role</h2><p>' + esc(job.role) + '</p></div>' : '') +
+                        (respHtml ? '<div class="sec"><h2>What You Will Do</h2><ul class="list">' + respHtml + '</ul></div>' : '') +
+                        ((reqHtml || bonusHtml) ? '<div class="sec"><h2>Requirements</h2><ul class="list reqs">' + reqHtml + bonusHtml + '</ul></div>' : '');
+
+                    jobSide.innerHTML =
+                        '<div class="card side-card">' +
+                        (job.openings ? '<span class="openings-badge"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>' + job.openings + ' ' + plural(job.openings, "opening", "openings") + '</span>' : '') +
+                        '<h3 style="margin-top:14px;">Position summary</h3><ul class="facts">' +
+                        '<li><span class="k">Role</span><span class="v">' + esc(job.title.replace(/\s*\(.*\)\s*$/, "")) + '</span></li>' +
+                        (job.team ? '<li><span class="k">Team</span><span class="v">' + esc(job.team) + '</span></li>' : '') +
+                        (job.type ? '<li><span class="k">Type</span><span class="v">' + esc(job.type) + '</span></li>' : '') +
+                        (job.location ? '<li><span class="k">Location</span><span class="v">' + esc(job.location) + '</span></li>' : '') +
+                        (job.openings ? '<li><span class="k">Openings</span><span class="v">' + job.openings + ' ' + plural(job.openings, "position", "positions") + '</span></li>' : '') +
+                        '<li><span class="k">Degree</span><span class="v">Not required</span></li>' +
+                        '</ul><a class="btn btn-primary" href="#apply">Apply now</a>' +
+                        '<p class="side-note">Takes ~3 minutes · Resume required</p></div>';
+                    setJobLd(job);
+                }
+
+                // ---- apply form context ----
+                positionInput.value = isTalent ? TALENT_POOL_SLUG : job.slug;
+                applyRolePill.textContent = isTalent ? "General Application · Talent Pool" : job.title;
+                coverLabel.innerHTML = isTalent
+                    ? 'Tell us about yourself <span class="req">*</span>'
+                    : 'A few words on why you\'re a great fit <span class="opt">(optional)</span>';
+                document.getElementById("cover_note").required = isTalent;
+                resetForm();
+            }
+
+            function setJobLd(job) {
+                var el = document.getElementById("jobLd");
+                if (!job) { el.textContent = ""; return; }
+                var ld = {
+                    "@context": "https://schema.org", "@type": "JobPosting",
+                    "title": job.title, "description": job.role || job.tagline || "",
+                    "datePosted": job.posted || undefined,
+                    "employmentType": job.employment_type || undefined,
+                    "hiringOrganization": { "@type": "Organization", "name": "Rilono", "sameAs": "https://rilono.com", "logo": "https://rilono.com/static/logo.png" },
+                    "jobLocationType": "TELECOMMUTE",
+                    "applicantLocationRequirements": { "@type": "Country", "name": "Anywhere" },
+                    "totalJobOpenings": job.openings || undefined,
+                    "url": "https://rilono.com/careers/" + job.slug
+                };
+                el.textContent = JSON.stringify(ld);
+            }
+
+            // ============ ROUTING ============
+            function slugFromPath() {
+                var m = location.pathname.match(/^\/careers\/([^\/]+)\/?$/);
+                return m ? decodeURIComponent(m[1]) : null;
+            }
+            function showList() {
+                detailView.hidden = true;
+                listView.hidden = false;
+                document.title = "Careers at Rilono — Open Roles & Jobs";
+                setJobLd(null);
+            }
+            function showDetail(slug) {
+                var job = slug === TALENT_POOL_SLUG ? null : JOB_BY_SLUG[slug];
+                if (slug !== TALENT_POOL_SLUG && !job) { // unknown/closed role -> list
+                    route("/careers", true);
+                    showList();
+                    return;
+                }
+                renderDetail(job);
+                listView.hidden = true;
+                detailView.hidden = false;
+                document.title = (job ? job.title : "General Application") + " — Careers at Rilono";
+                window.scrollTo(0, 0);
+            }
+            function route(path, replace) {
+                if (location.pathname === path) return;
+                history[replace ? "replaceState" : "pushState"]({}, "", path);
+            }
+            // navigate to a role (or talent pool)
+            function go(slug) {
+                route("/careers/" + encodeURIComponent(slug));
+                showDetail(slug);
+            }
+            function goList() {
+                route("/careers");
+                showList();
+                window.scrollTo(0, 0);
+            }
+            window.addEventListener("popstate", applyRoute);
+            function applyRoute() {
+                var slug = slugFromPath();
+                if (slug) { showDetail(slug); } else { showList(); }
+            }
+
+            document.getElementById("backLink").addEventListener("click", goList);
+            document.getElementById("successBack").addEventListener("click", goList);
+            document.getElementById("talentBtn").addEventListener("click", function () { go(TALENT_POOL_SLUG); });
+            document.getElementById("navRolesLink").addEventListener("click", function (e) {
+                e.preventDefault(); goList();
+                var r = document.getElementById("roles");
+                if (r) r.scrollIntoView({ behavior: "smooth" });
+            });
+            document.getElementById("rolesRetry").addEventListener("click", loadJobs);
+
+            // ============ DATA LOAD ============
+            function loadJobs() {
+                rolesError.hidden = true;
+                rolesSkeleton.hidden = false;
+                fetch("/api/careers/positions", { headers: { "Accept": "application/json" } })
+                    .then(function (r) { if (!r.ok) throw new Error("bad status"); return r.json(); })
+                    .then(function (data) {
+                        JOBS = (data && data.positions) || [];
+                        JOB_BY_SLUG = {};
+                        JOBS.forEach(function (j) { JOB_BY_SLUG[j.slug] = j; });
+                        rolesSkeleton.hidden = true;
+                        renderList();
+                        applyRoute(); // if we deep-linked to /careers/<slug>, show it now that data is ready
+                    })
+                    .catch(function () {
+                        rolesSkeleton.hidden = true;
+                        roleList.hidden = true;
+                        rolesEmpty.hidden = true;
+                        rolesError.hidden = false;
+                        // If a deep link needs data we don't have, fall back to the list shell.
+                        if (slugFromPath()) { showList(); }
+                    });
+            }
+
+            // ============ RESUME UPLOAD + SUBMIT ============
             var dropzone = document.getElementById("dropzone");
             var fileInput = document.getElementById("resume");
             var fileNameEl = document.getElementById("fileName");
             var fileSizeEl = document.getElementById("fileSize");
             var fileClear = document.getElementById("fileClear");
             var formError = document.getElementById("formError");
-
-            function fmtSize(bytes) {
-                if (bytes < 1024) return bytes + " B";
-                if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
-                return (bytes / (1024 * 1024)).toFixed(2) + " MB";
-            }
-            function extOf(name) {
-                var i = name.lastIndexOf(".");
-                return i >= 0 ? name.slice(i + 1).toLowerCase() : "";
-            }
-            function showError(msg) {
-                formError.textContent = msg;
-                formError.style.display = "block";
-            }
-            function clearError() {
-                formError.textContent = "";
-                formError.style.display = "none";
-            }
-
-            function setFile(file) {
-                clearError();
-                if (!file) return;
-                if (ALLOWED_EXT.indexOf(extOf(file.name)) === -1) {
-                    showError("Please upload a PDF, DOC, DOCX, RTF, ODT or TXT file.");
-                    resetFile();
-                    return;
-                }
-                if (file.size > MAX_BYTES) {
-                    showError("That file is larger than 8 MB. Please upload a smaller resume.");
-                    resetFile();
-                    return;
-                }
-                // Assign to the input so it's submitted with the form.
-                try {
-                    var dt = new DataTransfer();
-                    dt.items.add(file);
-                    fileInput.files = dt.files;
-                } catch (e) { /* DataTransfer unsupported: input.files already set via picker */ }
-                fileNameEl.textContent = file.name;
-                fileSizeEl.textContent = fmtSize(file.size);
-                dropzone.classList.add("has-file");
-            }
-
-            function resetFile() {
-                try { fileInput.value = ""; } catch (e) {}
-                dropzone.classList.remove("has-file");
-            }
-
-            dropzone.addEventListener("click", function (e) {
-                if (e.target === fileClear) return;
-                fileInput.click();
-            });
-            dropzone.addEventListener("keydown", function (e) {
-                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
-            });
-            fileInput.addEventListener("change", function () {
-                if (fileInput.files && fileInput.files[0]) setFile(fileInput.files[0]);
-            });
-            fileClear.addEventListener("click", function (e) {
-                e.stopPropagation();
-                resetFile();
-                clearError();
-            });
-
-            ["dragenter", "dragover"].forEach(function (ev) {
-                dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.add("dragover"); });
-            });
-            ["dragleave", "drop"].forEach(function (ev) {
-                dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.remove("dragover"); });
-            });
-            dropzone.addEventListener("drop", function (e) {
-                var files = e.dataTransfer && e.dataTransfer.files;
-                if (files && files[0]) setFile(files[0]);
-            });
-
-            // ---- Submit ----
             var form = document.getElementById("applyForm");
             var submitBtn = document.getElementById("submitBtn");
-            var submitLabel = document.getElementById("submitLabel");
             var formFields = document.getElementById("formFields");
             var successState = document.getElementById("successState");
             var successText = document.getElementById("successText");
             var EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
+            function fmtSize(b) { return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(0) + " KB" : (b / 1048576).toFixed(2) + " MB"; }
+            function extOf(n) { var i = n.lastIndexOf("."); return i >= 0 ? n.slice(i + 1).toLowerCase() : ""; }
+            function showError(m) { formError.textContent = m; formError.style.display = "block"; }
+            function clearError() { formError.textContent = ""; formError.style.display = "none"; }
+
+            function resetForm() {
+                form.reset();
+                resetFile();
+                clearError();
+                successState.classList.remove("show");
+                formFields.style.display = "";
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = "<span>Submit application</span>";
+            }
+            function setFile(file) {
+                clearError();
+                if (!file) return;
+                if (ALLOWED_EXT.indexOf(extOf(file.name)) === -1) { showError("Please upload a PDF, DOC, DOCX, RTF, ODT or TXT file."); resetFile(); return; }
+                if (file.size > MAX_BYTES) { showError("That file is larger than 8 MB. Please upload a smaller resume."); resetFile(); return; }
+                try { var dt = new DataTransfer(); dt.items.add(file); fileInput.files = dt.files; } catch (e) {}
+                fileNameEl.textContent = file.name;
+                fileSizeEl.textContent = fmtSize(file.size);
+                dropzone.classList.add("has-file");
+            }
+            function resetFile() { try { fileInput.value = ""; } catch (e) {} dropzone.classList.remove("has-file"); }
+
+            dropzone.addEventListener("click", function (e) { if (e.target === fileClear) return; fileInput.click(); });
+            dropzone.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+            fileInput.addEventListener("change", function () { if (fileInput.files && fileInput.files[0]) setFile(fileInput.files[0]); });
+            fileClear.addEventListener("click", function (e) { e.stopPropagation(); resetFile(); clearError(); });
+            ["dragenter", "dragover"].forEach(function (ev) { dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.add("dragover"); }); });
+            ["dragleave", "drop"].forEach(function (ev) { dropzone.addEventListener(ev, function (e) { e.preventDefault(); dropzone.classList.remove("dragover"); }); });
+            dropzone.addEventListener("drop", function (e) { var f = e.dataTransfer && e.dataTransfer.files; if (f && f[0]) setFile(f[0]); });
+
             form.addEventListener("submit", async function (e) {
                 e.preventDefault();
                 clearError();
-
                 var name = document.getElementById("full_name").value.trim();
                 var email = document.getElementById("email").value.trim();
+                var cover = document.getElementById("cover_note");
                 var consent = document.getElementById("consent").checked;
 
                 if (name.length < 2) { showError("Please enter your full name."); return; }
                 if (!EMAIL_RE.test(email)) { showError("Please enter a valid email address."); return; }
                 if (!fileInput.files || !fileInput.files[0]) { showError("Please attach your resume."); return; }
+                if (cover.required && cover.value.trim().length < 2) { showError("Please tell us a little about yourself."); return; }
                 if (!consent) { showError("Please agree to the privacy terms to continue."); return; }
 
-                var busy = true;
                 submitBtn.disabled = true;
                 submitBtn.innerHTML = '<span class="spinner"></span><span>Submitting…</span>';
-
                 try {
                     var fd = new FormData(form);
                     var controller = new AbortController();
                     var timeout = setTimeout(function () { controller.abort(); }, 45000);
-                    var res = await fetch("/api/careers/apply", {
-                        method: "POST",
-                        body: fd,
-                        signal: controller.signal
-                    });
+                    var res = await fetch("/api/careers/apply", { method: "POST", body: fd, signal: controller.signal });
                     clearTimeout(timeout);
-
                     var data = {};
                     try { data = await res.json(); } catch (e2) {}
-
                     if (res.ok) {
                         if (data && data.message) successText.textContent = data.message;
                         formFields.style.display = "none";
@@ -725,22 +876,22 @@
                         successState.scrollIntoView({ behavior: "smooth", block: "center" });
                         return;
                     }
-
                     var detail = (data && (data.detail || data.message)) || "Something went wrong. Please try again.";
                     if (typeof detail !== "string") detail = "Something went wrong. Please try again.";
                     showError(detail);
                 } catch (err) {
-                    if (err && err.name === "AbortError") {
-                        showError("The request timed out. Please check your connection and try again.");
-                    } else {
-                        showError("We couldn't submit your application. Please try again, or email your resume to contact@rilono.com.");
-                    }
+                    if (err && err.name === "AbortError") showError("The request timed out. Please check your connection and try again.");
+                    else showError("We couldn't submit your application. Please try again, or email your resume to contact@rilono.com.");
                 } finally {
-                    busy = false;
-                    submitBtn.disabled = false;
-                    submitBtn.innerHTML = '<span id="submitLabel">Submit application</span>';
+                    if (formFields.style.display !== "none") {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = "<span>Submit application</span>";
+                    }
                 }
             });
+
+            // ---- boot ----
+            loadJobs();
         })();
     </script>
 </body>

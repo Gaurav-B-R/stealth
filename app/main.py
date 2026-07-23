@@ -398,11 +398,19 @@ async def read_for_enterprise_slash():
 @app.get("/jobs")
 @app.get("/jobs/")
 async def read_careers():
-    """Serve the public careers / job-openings page."""
+    """Serve the public careers hub (job listings)."""
     html_path = os.path.join(os.path.dirname(__file__), "..", "static", "careers.html")
     if os.path.exists(html_path):
         return FileResponse(html_path)
     raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/careers/{slug}")
+@app.get("/careers/{slug}/")
+async def read_careers_role(slug: str):
+    """Serve the careers hub for a deep-linked role (e.g. /careers/ai-product-tester-intern).
+    The page reads the slug client-side and renders that posting's detail + apply form."""
+    return await read_careers()
 
 
 @app.get("/enterprise/demo")

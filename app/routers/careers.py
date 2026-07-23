@@ -1,17 +1,19 @@
-"""Public careers / job-application endpoint.
+"""Public careers hub API — job listings + job-application endpoint.
 
-The careers page (static/careers.html, served at /careers) posts here. Every submission
-is emailed — all fields plus the uploaded resume as an attachment — to the careers inbox
-(contact@rilono.com by default, overridable via CAREERS_EMAIL). No authentication required;
-IP rate-limited to deter abuse.
+The careers hub (static/careers.html, served at /careers and /careers/{slug}) reads the
+job catalog from here and posts applications back. Every application is emailed — all
+fields plus the uploaded resume as an attachment — to the careers inbox (contact@rilono.com
+by default, overridable via CAREERS_EMAIL). No authentication required; IP rate-limited.
 
-- POST /api/careers/apply   multipart form: applicant fields + resume file
+- GET  /api/careers/positions   list open job postings (source of truth: careers_catalog)
+- POST /api/careers/apply       multipart form: applicant fields + resume file
 """
 import os
 import re
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
+from app import careers_catalog
 from app.email_service import (
     send_job_application_email,
     send_job_application_ack_email,
@@ -36,19 +38,19 @@ ALLOWED_RESUME_TYPES = {
     ".odt": "application/vnd.oasis.opendocument.text",
 }
 
-# Positions the careers page advertises. Keeps the emailed "position" trustworthy
-# rather than accepting arbitrary attacker-controlled strings.
-KNOWN_POSITIONS = {
-    "ai-product-tester-intern": "AI Product Tester Intern (QA)",
-}
-DEFAULT_POSITION = "AI Product Tester Intern (QA)"
-
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _clean(value: str | None, limit: int) -> str:
     """Collapse newlines, trim, and cap length for a single-line field."""
     return re.sub(r"[\r\n]+", " ", (value or "").strip())[:limit]
+
+
+@router.get("/positions")
+def list_positions():
+    """Open job postings, rendered by the careers hub. Public, no auth."""
+    jobs = careers_catalog.list_jobs()
+    return {"positions": jobs, "count": len(jobs)}
 
 
 @router.post("/apply")
@@ -84,9 +86,10 @@ async def submit_job_application(
     links_clean = _clean(links, 500)
     cover_clean = (cover_note or "").strip()[:5000]
 
-    # Resolve the position from the allow-list; fall back to the default posting.
+    # Resolve the applied-for slug to a trustworthy title via the catalog. Unknown /
+    # stale / tampered slugs collapse to the general "Talent Pool" label.
     position_key = _clean(position, 80).lower()
-    role = KNOWN_POSITIONS.get(position_key, DEFAULT_POSITION)
+    role = careers_catalog.resolve_position_title(position_key)
 
     # Validate the resume: extension, size, and non-empty.
     original_name = _clean(resume.filename or "", 200) or "resume"
