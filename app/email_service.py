@@ -1842,6 +1842,7 @@ def send_enterprise_client_email(
     sender_name: Optional[str] = None,
     logo_url: Optional[str] = None,
     reply_to: Optional[str] = None,
+    direct_reply_hint: bool = False,
 ) -> tuple[bool, Optional[str], Optional[str]]:
     """
     Send an email composed by an enterprise team member to one of their clients.
@@ -1873,6 +1874,11 @@ def send_enterprise_client_email(
             'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">'
         )
 
+    # When inbound routing is live, replies land back in the org's Rilono thread —
+    # tell the student replying actually works (the From is still a no-reply address).
+    reply_hint_html = " You can reply directly to this email." if direct_reply_hint else ""
+    reply_hint_text = "\nYou can reply directly to this email.\n" if direct_reply_hint else ""
+
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -1901,7 +1907,7 @@ def send_enterprise_client_email(
               </tr>
               <tr>
                 <td style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;line-height:1.6;">
-                  This message was sent by {safe_org} regarding your visa application.
+                  This message was sent by {safe_org} regarding your visa application.{reply_hint_html}
                 </td>
               </tr>
             </table>
@@ -1916,6 +1922,7 @@ def send_enterprise_client_email(
         f"{clean_subject}\n\n"
         f"{(body or '').strip()}\n\n"
         f"Warm regards,\n{signer}\n{org_label}\n"
+        f"{reply_hint_text}"
     )
 
     try:
@@ -2562,6 +2569,149 @@ def send_enterprise_document_request_code_email(
     </body></html>
     """
     text_content = f"{org_label}\n\nYour document upload verification code is: {code}\nThis code expires in 15 minutes.\n"
+    try:
+        params = {
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def _sanitize_header_text(value) -> str:
+    """Strip CR/LF and header-breaking characters from text interpolated into
+    email headers (From display name, Subject) — header-injection guard for
+    org-controlled strings like company_name."""
+    return re.sub(r'[\r\n<>"]+', " ", str(value or "")).strip()
+
+
+def send_enterprise_portal_share_email(
+    *,
+    to_email: str,
+    client_name: Optional[str],
+    organization_name: str,
+    portal_url: str,
+    destination_country: str,
+    visa_type: str,
+    logo_url: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email a client a secure link to their read-only case-tracking portal."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = _sanitize_header_text(organization_name) or "Your consultancy"
+    name = (client_name or "").strip() or "there"
+    safe_org = escape(org_label)
+    safe_name = escape(name)
+    safe_url = escape(portal_url)
+    safe_country = escape(destination_country or "")
+    safe_visa = escape(visa_type or "")
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
+                      'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
+
+    subject = f"Track your {destination_country} visa application — {org_label}"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:26px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
+              {logo_block}
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
+              <h1 style="margin:8px 0 0 0;font-size:23px;">🧭 Your visa application portal</h1>
+            </td></tr>
+            <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
+              <p style="margin:0 0 14px;">Hi {safe_name},</p>
+              <p style="margin:0 0 18px;"><b>{safe_org}</b> has shared your application file with you.
+                You can now follow your <b>{safe_country}</b> {safe_visa} application every step of the way —
+                your current stage, recorded details, documents on file, university shortlist and payments,
+                all in one place.</p>
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto 18px;"><tr><td align="center" style="border-radius:12px;background:linear-gradient(135deg,#4f46e5,#7c3aed);">
+                <a href="{safe_url}" style="display:inline-block;padding:13px 30px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;">Open my portal &rarr;</a>
+              </td></tr></table>
+              <p style="margin:0;font-size:13px;color:#64748b;">🔒 For your security, you'll confirm a one-time code sent to this email before viewing.
+                This link is personal to you — please don't share it. The portal is read-only: to change anything,
+                contact {safe_org}.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        f"Hi {name},\n\n{org_label} has shared your visa application portal with you.\n"
+        f"Track your {destination_country or 'visa'} {visa_type or ''} application — stages, details, documents, "
+        f"universities and payments — at:\n{portal_url}\n\n"
+        "For your security, you'll confirm a one-time code sent to this email before viewing. "
+        "This link is personal to you — please don't share it.\n"
+    )
+    try:
+        params = {
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def send_enterprise_portal_code_email(
+    *,
+    to_email: str,
+    client_name: Optional[str],
+    organization_name: str,
+    code: str,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email the one-time verification code for the read-only client portal."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+    org_label = _sanitize_header_text(organization_name) or "Your consultancy"
+    safe_org = escape(org_label)
+    safe_code = escape(str(code))
+    subject = f"{code} is your application portal verification code"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:28px;color:#0f172a;text-align:center;">
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;">{safe_org}</div>
+              <p style="margin:14px 0 8px;font-size:15px;">Your application portal verification code is:</p>
+              <div style="font-size:34px;font-weight:800;letter-spacing:.18em;color:#4338ca;margin:6px 0 14px;">{safe_code}</div>
+              <p style="margin:0;font-size:13px;color:#64748b;">This code expires in 15 minutes. If you didn't request it, you can ignore this email.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = f"{org_label}\n\nYour application portal verification code is: {code}\nThis code expires in 15 minutes.\n"
     try:
         params = {
             "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",

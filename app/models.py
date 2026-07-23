@@ -371,7 +371,9 @@ class EnterpriseClientUniversity(Base):
 
 
 class EnterpriseClientEmail(Base):
-    """Log of an email sent to a client from the dashboard."""
+    """Email thread between the org and a client: staff sends from the dashboard
+    (direction=outbound) and, when Resend Inbound is configured, client replies
+    land here too (direction=inbound, status=received)."""
     __tablename__ = "enterprise_client_emails"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -382,9 +384,11 @@ class EnterpriseClientEmail(Base):
     to_email = Column(String, nullable=False)
     subject = Column(String, nullable=False)
     body = Column(Text, nullable=False)
-    status = Column(String, nullable=False, default="sent")  # sent|failed
+    status = Column(String, nullable=False, default="sent")  # sent|failed|received
     provider_message_id = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
+    direction = Column(String, nullable=False, default="outbound")  # outbound|inbound
+    from_email = Column(String, nullable=True)  # inbound only: the actual sender
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     client = relationship("EnterpriseClient", back_populates="emails")
@@ -519,6 +523,42 @@ class EnterpriseDocumentRequestItem(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     request = relationship("EnterpriseDocumentRequest", back_populates="items")
+
+
+class EnterpriseClientPortalShare(Base):
+    """A secure email share giving a client read-only access to their own case portal.
+
+    Mirrors the interview-invite / document-request security model: a high-entropy
+    capability token (stored hashed) plus a one-time email code (OTP) the client
+    must confirm, after which a short-lived signed session token authorizes the
+    read-only portal data endpoint. Strictly view-only — no write path exists.
+    """
+    __tablename__ = "enterprise_client_portal_shares"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)  # hashed capability token
+    email = Column(String, nullable=False)  # client email the link was sent to
+    # One-time email verification (OTP) — same scheme as EnterpriseInterviewInvite.
+    code_hash = Column(String, nullable=True)
+    code_expires_at = Column(DateTime(timezone=True), nullable=True)
+    code_attempts = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked = Column(Boolean, nullable=False, default=False)
+    # Staff-facing engagement signal: has the client actually opened their portal?
+    last_opened_at = Column(DateTime(timezone=True), nullable=True)
+    open_count = Column(Integer, nullable=False, default=0)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    client = relationship("EnterpriseClient")
+
+    __table_args__ = (
+        Index("ix_ent_portal_shares_client_created", "client_id", "created_at"),
+    )
 
 
 class EnterpriseCalendarEvent(Base):
@@ -915,7 +955,10 @@ class EnterpriseStudentPayment(Base):
     commission_paise = Column(Integer, nullable=False, default=0)  # Rilono's gross take (retained)
     payout_paise = Column(Integer, nullable=False, default=0)      # to consultancy = amount - commission
     currency = Column(String, nullable=False, default="INR")
-    provider = Column(String, nullable=False, default="razorpay")
+    provider = Column(String, nullable=False, default="razorpay")   # razorpay | manual
+    # For off-platform ("manual") payments recorded by staff — money the consultancy collected
+    # OUTSIDE Rilono (cash/bank transfer/UPI/cheque/card/other). NULL for Razorpay rows.
+    manual_method = Column(String, nullable=True)
 
     razorpay_order_id = Column(String, nullable=True, unique=True, index=True)
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)

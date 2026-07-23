@@ -40,8 +40,10 @@ from app.schema_patch import (
     ensure_enterprise_credit_tables,
     ensure_enterprise_payment_coupon_columns,
     ensure_enterprise_crm_tables,
+    ensure_enterprise_client_email_reply_columns,
     ensure_enterprise_interview_invite_columns,
     ensure_enterprise_document_request_tables,
+    ensure_enterprise_client_portal_shares_table,
     ensure_enterprise_refunds_table,
     ensure_enterprise_payments_tables,
     ensure_enterprise_organization_columns,
@@ -276,8 +278,10 @@ def startup_backfill_subscriptions():
     ensure_enterprise_organization_columns()
     ensure_enterprise_students_table()
     ensure_enterprise_crm_tables()
+    ensure_enterprise_client_email_reply_columns()
     ensure_enterprise_interview_invite_columns()
     ensure_enterprise_document_request_tables()
+    ensure_enterprise_client_portal_shares_table()
     ensure_enterprise_credit_tables()
     ensure_enterprise_refunds_table()
     ensure_enterprise_payments_tables()
@@ -969,6 +973,16 @@ async def read_interview_invite(token: str):
 async def read_document_upload(token: str):
     """Serve the public client-facing secure document upload page (token validated client-side via API)."""
     html_path = os.path.join(os.path.dirname(__file__), "..", "static", "upload.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/portal/{token}")
+async def read_client_portal(token: str):
+    """Serve the public read-only client case portal (token validated client-side via
+    /api/enterprise/public/portal/{token})."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "portal.html")
     if os.path.exists(html_path):
         return FileResponse(html_path)
     raise HTTPException(status_code=404, detail="Not found")

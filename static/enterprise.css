@@ -532,6 +532,10 @@ button { font-family: inherit; cursor: pointer; }
 .email-item .ei-subject { font-weight: 650; font-size: 14px; }
 .email-item .ei-body { font-size: 13px; color: var(--text-2); white-space: pre-wrap; }
 .email-item .ei-fail { color: var(--danger); font-size: 12px; font-weight: 600; }
+.email-item .ei-meta { font-size: 12px; color: var(--muted); margin: -2px 0 5px; }
+.email-item.inbound { border-left: 3px solid var(--primary); }
+.email-item.inbound .ei-meta { color: var(--primary); font-weight: 600; }
+.email-item .ei-unverified { color: var(--danger); font-weight: 600; }
 
 /* ---------- Team ---------- */
 .member-row { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
@@ -680,6 +684,7 @@ button { font-family: inherit; cursor: pointer; }
 
 /* ===================== AI Assistant (Rilono AI Assistant) ===================== */
 .ai-pill { font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; padding: 2px 6px; border-radius: 999px; margin-left: auto; }
+.beta-pill { font-size: 9px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; background: rgba(245, 158, 11, .12); color: #b45309; border: 1px solid rgba(245, 158, 11, .35); padding: 1px 6px; border-radius: 999px; margin-left: auto; }
 .ai-wrap { display: flex; flex-direction: column; gap: 14px; height: calc(100vh - 142px); max-width: 880px; margin: 0 auto; }
 .ai-head { display: flex; gap: 14px; align-items: center; }
 .ai-head h2 { font-size: 18px; font-weight: 750; margin: 0; }

@@ -13,7 +13,9 @@ from urllib.parse import quote, urlparse
 import requests
 from jose import jwt as jose_jwt, JWTError
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime, date, timezone as dt_timezone
 from pydantic import BaseModel, EmailStr, Field
@@ -52,9 +54,11 @@ from app.utils.rate_limiter import (
 )
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 from app.email_service import send_enterprise_team_invite_email, send_enterprise_client_email
+from app import enterprise_inbound_email as inbound_email
 from app.email_service import send_enterprise_interview_invite_email, send_enterprise_interview_code_email
 from app.email_service import send_enterprise_interview_report_email
 from app.email_service import send_enterprise_document_request_email, send_enterprise_document_request_code_email
+from app.email_service import send_enterprise_portal_share_email, send_enterprise_portal_code_email
 from app.email_service import send_enterprise_payment_request_email
 from app.email_service import send_enterprise_payment_dispute_alert_email
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
@@ -2295,6 +2299,8 @@ def _serialize_client_email(row: models.EnterpriseClientEmail) -> dict:
         "status": row.status,
         "sent_by_name": row.sent_by_name,
         "error_message": row.error_message,
+        "direction": getattr(row, "direction", None) or "outbound",
+        "from_email": getattr(row, "from_email", None),
         "created_at": _iso(row.created_at),
     }
 
@@ -2852,6 +2858,15 @@ def _send_and_log_client_email(
     body: str,
     current_user: models.User,
 ) -> models.EnterpriseClientEmail:
+    # Replies: route into the CRM thread via a tokenized Reply-To when Resend
+    # Inbound is configured; otherwise fall back to the staffer's own inbox.
+    reply_to = current_user.email
+    direct_reply_hint = False
+    if inbound_email.reply_routing_enabled():
+        tokenized = inbound_email.reply_address_for_client(client.id)
+        if tokenized:
+            reply_to = tokenized
+            direct_reply_hint = True
     success, message_id, error = send_enterprise_client_email(
         to_email=client.email,
         subject=subject,
@@ -2859,7 +2874,8 @@ def _send_and_log_client_email(
         organization_name=organization.company_name,
         sender_name=current_user.full_name or current_user.email,
         logo_url=_resolve_enterprise_logo_url(organization),
-        reply_to=current_user.email,
+        reply_to=reply_to,
+        direct_reply_hint=direct_reply_hint,
     )
     row = models.EnterpriseClientEmail(
         organization_id=organization.id,
@@ -3832,6 +3848,15 @@ class EnterprisePaymentRequestCreate(BaseModel):
     due_date: Optional[date] = None
 
 
+class EnterpriseManualPaymentCreate(BaseModel):
+    """Record a payment collected off-platform (cash / bank transfer / UPI / …)."""
+    amount_paise: int = Field(gt=0)
+    method: str = Field(min_length=2, max_length=30)
+    description: Optional[str] = Field(default=None, max_length=300)
+    reference: Optional[str] = Field(default=None, max_length=80)
+    received_on: Optional[date] = None
+
+
 class EnterprisePublicPayVerifyRequest(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
@@ -3980,6 +4005,71 @@ def enterprise_create_client_payment(
         "payment": enterprise_payments.serialize_payment(payment),
         "totals": enterprise_payments.client_payment_totals(db, organization.id, client.id),
     }
+
+
+@router.post("/clients/{client_id}/payments/manual")
+def enterprise_record_manual_payment(
+    client_id: int,
+    payload: EnterpriseManualPaymentCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Record a payment the org collected OUTSIDE Rilono (cash / bank transfer / UPI / cheque / …).
+
+    Bookkeeping only — no money moves through the platform, so it needs no linked account and works
+    even when online collection isn't live. Lands as a 'paid' row in this client's ledger."""
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.payment_manual",
+        limit=120, window_seconds=3600, extra_key=str(organization.id),
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    payment = enterprise_payments.record_manual_payment(
+        db=db,
+        organization=organization,
+        client=client,
+        amount_paise=int(payload.amount_paise),
+        method=payload.method,
+        description=payload.description,
+        reference=payload.reference,
+        received_on=payload.received_on,
+        created_by=current_user,
+    )
+    db.commit()
+    db.refresh(payment)
+    return {
+        "message": f"Recorded ₹{payment.amount_paise / 100:,.2f} received from {client.full_name}.",
+        "payment": enterprise_payments.serialize_payment(payment),
+        "totals": enterprise_payments.client_payment_totals(db, organization.id, client.id),
+    }
+
+
+@router.delete("/finance/payments/{payment_id}/manual")
+def enterprise_delete_manual_payment(
+    payment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Remove a manually-recorded (off-platform) payment — e.g. to correct a mistake. Only manual
+    rows can be removed; real Razorpay payments are immutable financial records."""
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_manage_users=True
+    )
+    payment = _get_org_payment_or_404(db, organization.id, payment_id)
+    if (payment.provider or "") != "manual":
+        raise HTTPException(status_code=409, detail="Only manually-recorded payments can be removed.")
+    client_id = payment.client_id
+    db.delete(payment)
+    db.commit()
+    totals = (
+        enterprise_payments.client_payment_totals(db, organization.id, client_id)
+        if client_id else None
+    )
+    return {"message": "Payment record removed.", "totals": totals}
 
 
 @router.post("/finance/payments/{payment_id}/resend-email")
@@ -4261,6 +4351,132 @@ def _send_dispute_alert_to_org_admins(
             reason_code=str(entity.get("reason_code") or "") or None,
             respond_by_text=respond_by_text,
         )
+
+
+# ---- Resend inbound-email webhook (client replies -> Emails thread) ---------
+
+@router.post("/webhooks/inbound-email")
+async def enterprise_inbound_email_webhook(request: Request, db: Session = Depends(get_db)):
+    """Receive Resend Inbound `email.received` events (Svix-signed over the RAW body)
+    and thread client replies into the CRM. Replies arrive on the tokenized
+    reply+c{id}-{sig}@{inbound domain} address set as Reply-To on outbound client
+    emails; the HMAC token resolves the client. Unmatched/duplicate mail returns
+    200 so the provider doesn't retry forever."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.inbound_email_webhook", limit=300, window_seconds=60,
+    )
+    secret = inbound_email.webhook_secret()
+    if not secret:
+        raise HTTPException(status_code=503, detail="Webhook not configured.")
+    try:
+        declared_length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared_length = 0
+    if declared_length > 1_000_000:
+        raise HTTPException(status_code=413, detail="Payload too large.")
+    body = await request.body()
+    if len(body) > 1_000_000:
+        raise HTTPException(status_code=413, detail="Payload too large.")
+    if not inbound_email.verify_svix_signature(secret=secret, headers=request.headers, body=body):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature.")
+
+    try:
+        event = json.loads(body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if str(event.get("type") or "").strip() != "email.received":
+        return {"status": "ignored"}
+    data = event.get("data") or {}
+    if not isinstance(data, dict):
+        return {"status": "ignored"}
+
+    # Resolve the client from our tokenized reply+ recipient address.
+    client_id = None
+    matched_address = None
+    recipients = inbound_email.recipient_addresses(data)
+    for addr in recipients:
+        client_id = inbound_email.parse_reply_address(addr)
+        if client_id is not None:
+            matched_address = addr
+            break
+    if client_id is None:
+        # 200 so the provider doesn't retry, but leave an operator trace —
+        # a real reply landing here means a stale/foreign token.
+        logger.info("inbound-email webhook: no reply-token match (recipients=%s)", recipients[:10])
+        return {"status": "no_match"}
+    client = (
+        db.query(models.EnterpriseClient)
+        .filter(models.EnterpriseClient.id == int(client_id))
+        .first()
+    )
+    if client is None:
+        return {"status": "no_match"}
+
+    provider_message_id = str(data.get("email_id") or data.get("id") or "").strip() or None
+    if provider_message_id:
+        duplicate = (
+            db.query(models.EnterpriseClientEmail)
+            .filter(
+                models.EnterpriseClientEmail.provider_message_id == provider_message_id,
+                models.EnterpriseClientEmail.direction == "inbound",
+            )
+            .first()
+        )
+        if duplicate:
+            return {"status": "duplicate"}
+
+    from_email = inbound_email.sender_address(data)
+    subject = str(data.get("subject") or "").strip()[:300] or "(no subject)"
+    # The body fetch is a blocking HTTP call (the webhook carries metadata only) —
+    # run it off the event loop. On fetch failure, 5xx so Svix retries with the
+    # same email_id instead of us committing an empty reply forever.
+    reply_text, fetch_failed = await run_in_threadpool(inbound_email.extract_reply_text, data)
+    if fetch_failed and not reply_text:
+        logger.warning("inbound-email webhook: body fetch failed for %s; asking provider to retry",
+                       provider_message_id)
+        raise HTTPException(status_code=500, detail="Inbound body fetch failed — retry.")
+    if not reply_text:
+        reply_text = "(Empty message — the reply may only contain an attachment.)"
+
+    # From: is spoofable and the reply+ address is forwardable — never assert the
+    # client wrote it unless the sender matches the email we have on file.
+    sender_matches = bool(
+        from_email and (client.email or "").strip() and from_email == client.email.strip().lower()
+    )
+    row = models.EnterpriseClientEmail(
+        organization_id=client.organization_id,
+        client_id=client.id,
+        sent_by_user_id=None,
+        sent_by_name=client.full_name,
+        to_email=matched_address or (inbound_email.reply_address_for_client(client.id) or "inbound"),
+        subject=subject,
+        body=reply_text[:20000],
+        status="received",
+        provider_message_id=provider_message_id,
+        direction="inbound",
+        from_email=from_email,
+    )
+    db.add(row)
+    notif.notify_org(
+        db,
+        client.organization_id,
+        type="client_email_reply",
+        # Subject in the title keeps distinct replies from tripping notify_org's
+        # 10-minute identical-title dedupe.
+        title=(f"✉️ {client.full_name} replied: {subject}" if sender_matches
+               else f"✉️ Reply from {from_email or 'unknown sender'} on {client.full_name}'s thread"),
+        body=reply_text[:140] or None,
+        reference_type="client",
+        reference_id=client.id,
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        # Unique index on inbound provider_message_id: a concurrent Svix
+        # redelivery beat us to the insert.
+        db.rollback()
+        return {"status": "duplicate"}
+    return {"status": "ok"}
 
 
 @router.get("/billing/plans")
@@ -7653,3 +7869,473 @@ def enterprise_client_university_recommend(
         "credits_charged": credits.action_cost(UNIVERSITY_ACTION_KEY) if txn else 0,
         "wallet": credits.wallet_state(db, organization.id),
     }
+
+
+# ===========================================================================
+# Client portal share — read-only case tracking for the client
+#
+# Staff share a client's case as a secure emailed link. The client verifies an
+# OTP sent to their own email, then sees a VIEW-ONLY portal: journey stages with
+# the per-stage case record, profile details, documents, universities and their
+# payment history. Security model mirrors interview invites / document requests
+# (hashed capability token + OTP + short-lived signed session token). There is
+# deliberately NO write path, and staff notes / internal financials (commission
+# split, settlement state) are never included in the payload.
+# ===========================================================================
+
+ENTERPRISE_PORTAL_SHARE_EXPIRES_DAYS = int(os.getenv("ENTERPRISE_PORTAL_SHARE_EXPIRES_DAYS", "180"))
+ENTERPRISE_PORTAL_SESSION_HOURS = int(os.getenv("ENTERPRISE_PORTAL_SESSION_HOURS", "24"))
+
+
+class PublicPortalVerifyRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+class PublicPortalDataRequest(BaseModel):
+    session_token: str = Field(..., min_length=10, max_length=4000)
+
+
+def _build_portal_share_url(subdomain_slug, token: str, request: Request | None) -> str:
+    subdomain = str(subdomain_slug or "").strip().lower()
+    base = None
+    if subdomain:
+        host = f"{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+        port = _request_port_for_local_enterprise_url(request)
+        if port:
+            host = f"{host}:{port}"
+        base = f"{ENTERPRISE_PORTAL_SCHEME}://{host}"
+    if not base:
+        base = ENTERPRISE_PASSWORD_SETUP_BASE_URL
+    return f"{base.rstrip('/')}/portal/{token}"
+
+
+def _portal_share_is_live(share: models.EnterpriseClientPortalShare) -> bool:
+    if share.revoked:
+        return False
+    if share.expires_at:
+        exp = share.expires_at.replace(tzinfo=None) if getattr(share.expires_at, "tzinfo", None) else share.expires_at
+        if exp < datetime.utcnow():
+            return False
+    return True
+
+
+def _serialize_portal_share_status(share: models.EnterpriseClientPortalShare | None) -> Optional[dict]:
+    if not share:
+        return None
+    return {
+        "id": share.id,
+        "email": share.email,
+        "revoked": bool(share.revoked),
+        "live": _portal_share_is_live(share),
+        "last_opened_at": _iso(share.last_opened_at),
+        "open_count": int(share.open_count or 0),
+        "created_by_name": share.created_by_name,
+        "created_at": _iso(share.created_at),
+        "expires_at": _iso(share.expires_at),
+    }
+
+
+def _latest_client_portal_share(db: Session, organization_id: int, client_id: int):
+    return (
+        db.query(models.EnterpriseClientPortalShare)
+        .filter(
+            models.EnterpriseClientPortalShare.organization_id == int(organization_id),
+            models.EnterpriseClientPortalShare.client_id == int(client_id),
+        )
+        .order_by(models.EnterpriseClientPortalShare.created_at.desc(), models.EnterpriseClientPortalShare.id.desc())
+        .first()
+    )
+
+
+def _issue_portal_session_token(share_id: int) -> str:
+    return create_access_token(
+        data={"sub": f"entps:{int(share_id)}", "scope": "ent_portal", "psh": int(share_id)},
+        expires_delta=timedelta(hours=ENTERPRISE_PORTAL_SESSION_HOURS),
+    )
+
+
+def _decode_portal_session_token(token: str) -> int:
+    try:
+        payload = jose_jwt.decode(token, AUTH_SECRET_KEY, algorithms=[AUTH_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Your portal session has expired. Please verify your email again.")
+    if payload.get("scope") != "ent_portal" or not payload.get("psh"):
+        raise HTTPException(status_code=401, detail="Invalid portal session.")
+    return int(payload["psh"])
+
+
+def _public_portal_share_or_404(db: Session, token: str) -> models.EnterpriseClientPortalShare:
+    token_hash = hash_token((token or "").strip())
+    share = (
+        db.query(models.EnterpriseClientPortalShare)
+        .filter(models.EnterpriseClientPortalShare.token_hash == token_hash)
+        .first()
+    )
+    if not share or not _portal_share_is_live(share):
+        raise HTTPException(status_code=404, detail="This portal link is invalid or has expired.")
+    return share
+
+
+def _public_load_portal_context(db: Session, session_token: str):
+    share_id = _decode_portal_session_token(session_token)
+    share = db.query(models.EnterpriseClientPortalShare).filter(models.EnterpriseClientPortalShare.id == share_id).first()
+    if not share or not _portal_share_is_live(share):
+        raise HTTPException(status_code=401, detail="This portal link is no longer active.")
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == share.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == share.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This portal is no longer available.")
+    return share, client, org
+
+
+# Payment states a student should see. Route plumbing states (transferred /
+# settled / on_hold) are all just "paid" from the payer's side; the fee split
+# (commission/payout) is consultancy-internal and never serialized here.
+_PORTAL_PAYMENT_STATUS = {
+    "created": ("pending", "Payment requested"),
+    "paid": ("paid", "Paid"),
+    "transferred": ("paid", "Paid"),
+    "on_hold": ("paid", "Paid"),
+    "settled": ("paid", "Paid"),
+    "failed": ("failed", "Failed"),
+    "refunded": ("refunded", "Refunded"),
+    "partially_refunded": ("partially_refunded", "Partially refunded"),
+    "cancelled": ("cancelled", "Cancelled"),
+}
+
+
+def _mask_passport_number(value) -> Optional[str]:
+    """'M1234567' -> '•••• 567'. Short values mask fully; None stays None."""
+    p = str(value or "").strip()
+    if not p:
+        return None
+    if len(p) < 6:
+        return "••••"
+    return f"•••• {p[-3:]}"
+
+
+def _portal_stage_records(client: models.EnterpriseClient) -> dict:
+    """Per-stage recorded fields, resolved against the destination-aware catalog.
+
+    Returns {stage_key: [{label, value, type}, …]} containing only fields with a
+    recorded value, in catalog order — the client sees exactly what staff filled in."""
+    data = _load_stage_data(client)
+    out: dict[str, list] = {}
+    for stage in catalog.CLIENT_STAGES:
+        stage_key = stage["key"]
+        recorded = data.get(stage_key) or {}
+        if not recorded:
+            continue
+        fields = []
+        for field in catalog.stage_fields_for(client.destination_country_code, stage_key):
+            # Textarea fields are counselor free-text (hold_notes, refusal_notes,
+            # shortfall notes, "rebuttal plan" debriefs …) written before any
+            # client-visible surface existed. The share modal promises staff that
+            # internal notes are never shown — only structured facts go out.
+            if (field.get("type") or "").strip().lower() == "textarea":
+                continue
+            value = recorded.get(field["key"])
+            if value is None or str(value).strip() == "":
+                continue
+            fields.append({"label": field.get("label") or field["key"], "value": str(value)[:2000], "type": field.get("type") or "text"})
+        if fields:
+            out[stage_key] = fields
+    return out
+
+
+def _build_client_portal_payload(db: Session, share: models.EnterpriseClientPortalShare,
+                                 client: models.EnterpriseClient, org: models.EnterpriseOrganization) -> dict:
+    documents = (
+        db.query(models.EnterpriseClientDocument)
+        .filter(models.EnterpriseClientDocument.client_id == client.id)
+        .order_by(models.EnterpriseClientDocument.created_at.desc())
+        .all()
+    )
+    universities = _client_universities_query(db, org.id, client.id).all()
+    payments = (
+        db.query(models.EnterpriseStudentPayment)
+        .filter(
+            models.EnterpriseStudentPayment.organization_id == org.id,
+            models.EnterpriseStudentPayment.client_id == client.id,
+        )
+        .order_by(models.EnterpriseStudentPayment.created_at.desc())
+        .all()
+    )
+    interviews_done = (
+        db.query(func.count(models.EnterpriseInterviewSession.id))
+        .filter(models.EnterpriseInterviewSession.client_id == client.id)
+        .scalar()
+    ) or 0
+
+    doc_status = {"valid": "verified", "invalid": "needs_review", "error": None, None: None}
+    pay_rows = []
+    for p in payments:
+        state, state_label = _PORTAL_PAYMENT_STATUS.get(p.status, ("pending", "Payment requested"))
+        pay_rows.append({
+            "invoice_number": p.invoice_number,
+            "description": p.description or "Consultancy fee",
+            "amount": round((p.amount_paise or 0) / 100, 2),
+            "refunded_amount": round((p.refunded_amount_paise or 0) / 100, 2),
+            "currency": p.currency or "INR",
+            "status": state,
+            "status_label": state_label,
+            "due_date": _iso(p.due_date),
+            "paid_at": _iso(p.paid_at),
+            "created_at": _iso(p.created_at),
+        })
+
+    return {
+        "organization": {
+            "name": org.company_name,
+            "logo_url": _resolve_enterprise_logo_url(org),
+        },
+        "client": {
+            "full_name": client.full_name,
+            "email": client.email,
+            "phone": client.phone,
+            "nationality": client.nationality,
+            "date_of_birth": _iso(client.date_of_birth),
+            # Masked: the portal's only auth anchor is the client's inbox (link + OTP),
+            # so a compromised inbox must not yield a full identity kit. Last 3 chars
+            # are enough for the client to confirm which passport is on file.
+            "passport_number": _mask_passport_number(client.passport_number),
+            "passport_expiry": _iso(client.passport_expiry),
+            "visa_category_label": _category_label(client.visa_category),
+            "destination_country_code": client.destination_country_code,
+            "destination_country_name": client.destination_country_name,
+            "country": _country_brief(client.destination_country_code),
+            "visa_type": client.visa_type,
+            "intake": client.intake,
+            "application_reference": client.application_reference,
+            "target_date": _iso(client.target_date),
+            "created_at": _iso(client.created_at),
+            "updated_at": _iso(client.updated_at or client.created_at),
+        },
+        "status": client.status,
+        "stage": _stage_brief(client.status),
+        "held_from_status": getattr(client, "held_from_status", None),
+        "held_from_stage": _stage_brief(client.held_from_status) if getattr(client, "held_from_status", None) else None,
+        "stages": [
+            {k: s[k] for k in ("key", "label", "description", "order", "color")}
+            for s in catalog.CLIENT_STAGES
+        ],
+        "stage_records": _portal_stage_records(client),
+        "documents": [
+            {
+                "document_type": d.document_type,
+                "original_filename": d.original_filename,
+                "file_size": d.file_size,
+                "status": doc_status.get(d.validation_status),
+                "uploaded_at": _iso(d.created_at),
+            }
+            for d in documents
+        ],
+        "universities": [
+            {
+                "university_name": u.university_name,
+                "program": u.program,
+                "location": u.location,
+                "status": u.status or "considering",
+                "est_tuition": u.est_tuition,
+                "application_fee": u.application_fee,
+                "qs_world_rank": u.qs_world_rank,
+                "country_rank": u.country_rank,
+                "admission_difficulty": u.admission_difficulty,
+                "key_requirements": _serialize_client_university(u)["key_requirements"],
+                "website_url": _safe_external_url(u.website_url),
+                "admissions_url": _safe_external_url(u.admissions_url),
+                "rationale": u.rationale,
+            }
+            for u in universities
+        ],
+        "payments": pay_rows,
+        "mock_interviews_completed": int(interviews_done),
+    }
+
+
+# ---- Staff: create / view / revoke the share ------------------------------
+
+@router.post("/clients/{client_id}/portal-share")
+def enterprise_create_portal_share(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    email = (client.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Add an email to this client before sharing their portal.")
+
+    # Supersede any prior shares for this client — one live link at a time.
+    db.query(models.EnterpriseClientPortalShare).filter(
+        models.EnterpriseClientPortalShare.client_id == client.id,
+        models.EnterpriseClientPortalShare.revoked.is_(False),
+    ).update({"revoked": True})
+
+    raw_token = generate_verification_token()
+    share = models.EnterpriseClientPortalShare(
+        organization_id=organization.id,
+        client_id=client.id,
+        token_hash=hash_token(raw_token),
+        email=email,
+        expires_at=datetime.utcnow() + timedelta(days=ENTERPRISE_PORTAL_SHARE_EXPIRES_DAYS),
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(share)
+    db.commit()
+    db.refresh(share)
+
+    link = _build_portal_share_url(organization.subdomain_slug, raw_token, request)
+    sent, _mid, err = send_enterprise_portal_share_email(
+        to_email=email,
+        client_name=client.full_name,
+        organization_name=organization.company_name,
+        portal_url=link,
+        destination_country=client.destination_country_name,
+        visa_type=client.visa_type,
+        logo_url=_resolve_enterprise_logo_url(organization),
+    )
+    message = (f"Portal access sent to {email}."
+               if sent else f"Share created but the email could not be sent right now. {err or ''}".strip())
+    return {
+        "message": message,
+        "email_sent": sent,
+        # Returned once for copy/WhatsApp convenience. Opening it still requires the
+        # OTP sent to the client's own email, so the link alone grants nothing.
+        "link": link,
+        "share": _serialize_portal_share_status(share),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.get("/clients/{client_id}/portal-share")
+def enterprise_get_portal_share(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    share = _latest_client_portal_share(db, organization.id, client.id)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "share": _serialize_portal_share_status(share),
+    }
+
+
+@router.post("/clients/{client_id}/portal-share/revoke")
+def enterprise_revoke_portal_share(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    db.query(models.EnterpriseClientPortalShare).filter(
+        models.EnterpriseClientPortalShare.client_id == client.id,
+        models.EnterpriseClientPortalShare.revoked.is_(False),
+    ).update({"revoked": True})
+    db.commit()
+    return {"message": "Portal access revoked.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ---- Public (client-facing, token-scoped, no staff auth) ------------------
+
+@router.get("/public/portal/{token}")
+def public_portal_info(token: str, db: Session = Depends(get_db)):
+    share = _public_portal_share_or_404(db, token)
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == share.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == share.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This portal link is no longer available.")
+    return {
+        "organization_name": org.company_name,
+        "logo_url": _resolve_enterprise_logo_url(org),
+        "client_first_name": (client.full_name or "there").split(" ")[0],
+        "destination_country": client.destination_country_name,
+        "visa_type": client.visa_type,
+        "masked_email": _mask_email(share.email),
+    }
+
+
+@router.post("/public/portal/{token}/send-code")
+def public_portal_send_code(token: str, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.portal_code",
+        limit=ENTERPRISE_CODE_RATE_LIMIT, window_seconds=ENTERPRISE_CODE_RATE_WINDOW, extra_key=hash_token(token)[:16],
+    )
+    share = _public_portal_share_or_404(db, token)
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == share.organization_id).first()
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == share.client_id).first()
+    if not org or not client:
+        raise HTTPException(status_code=404, detail="This portal link is no longer available.")
+
+    code = f"{_secrets.randbelow(900000) + 100000:06d}"
+    share.code_hash = hash_token(code)
+    share.code_expires_at = datetime.utcnow() + timedelta(minutes=ENTERPRISE_INTERVIEW_CODE_EXPIRES_MIN)
+    share.code_attempts = 0
+    db.commit()
+
+    sent, _mid, err = send_enterprise_portal_code_email(
+        to_email=share.email, client_name=client.full_name, organization_name=org.company_name, code=code,
+    )
+    if not sent:
+        logger.warning("Portal code email failed for share %s: %s", share.id, err)
+    return {"sent": bool(sent), "masked_email": _mask_email(share.email)}
+
+
+@router.post("/public/portal/{token}/verify")
+def public_portal_verify(token: str, payload: PublicPortalVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.portal_verify",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW, extra_key=hash_token(token)[:16],
+    )
+    share = _public_portal_share_or_404(db, token)
+    if not share.code_hash or not share.code_expires_at:
+        raise HTTPException(status_code=400, detail="Please request a verification code first.")
+    code_exp = share.code_expires_at.replace(tzinfo=None) if getattr(share.code_expires_at, "tzinfo", None) else share.code_expires_at
+    if code_exp < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That code has expired. Please request a new one.")
+    if int(share.code_attempts or 0) >= ENTERPRISE_INTERVIEW_CODE_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please request a new code.")
+
+    share.code_attempts = int(share.code_attempts or 0) + 1
+    if hash_token((payload.code or "").strip()) != share.code_hash:
+        db.commit()
+        raise HTTPException(status_code=400, detail="That code is incorrect. Please try again.")
+
+    # Verified — consume the code and issue a short-lived read-only session token.
+    share.code_hash = None
+    share.code_expires_at = None
+    db.commit()
+    return {
+        "session_token": _issue_portal_session_token(share.id),
+        "session_hours": ENTERPRISE_PORTAL_SESSION_HOURS,
+    }
+
+
+@router.post("/public/portal/data")
+def public_portal_data(payload: PublicPortalDataRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.portal_data",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
+    )
+    share, client, org = _public_load_portal_context(db, payload.session_token)
+    # Atomic SQL increment — concurrent portal loads must not lose updates.
+    db.query(models.EnterpriseClientPortalShare).filter(
+        models.EnterpriseClientPortalShare.id == share.id
+    ).update({
+        "last_opened_at": datetime.utcnow(),
+        "open_count": models.EnterpriseClientPortalShare.open_count + 1,
+    }, synchronize_session=False)
+    db.commit()
+    return _build_client_portal_payload(db, share, client, org)

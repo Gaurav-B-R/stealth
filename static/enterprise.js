@@ -770,6 +770,13 @@
 
   /* ---------------- sign out ---------------- */
   $("#signoutBtn").onclick = async () => {
+    const ok = await confirmModal("Do you want to sign out of your Rilono Enterprise workspace?", {
+      title: "Sign out",
+      okText: "Sign out",
+      cancelText: "Stay signed in",
+      danger: false,
+    });
+    if (!ok) return;
     try { await fetch("/api/auth/logout", { method: "POST", credentials: "include" }); } catch (e) {}
     location.reload();
   };
@@ -929,6 +936,7 @@
   const NOTIF_ICONS = {
     client_added: "👤", status_changed: "🔀", interview_completed: "🎤",
     docs_submitted: "📁", member_added: "👥", member_removed: "👥", credits_low: "💳",
+    client_email_reply: "✉️",
   };
 
   function notifAgo(iso) {
@@ -1670,8 +1678,8 @@
         <div class="cp-actionbar">
           <button class="cp-back" id="cpBack"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M11 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg> Back</button>
           <div style="flex:1"></div>
-          ${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEdit">Edit details</button>
-            <button class="btn btn-danger btn-sm" id="cpDelete">Delete</button>` : ""}
+          ${canEdit ? `<button class="btn btn-soft btn-sm" id="cpShare">🔗 Share with client</button>
+            <button class="btn btn-soft btn-sm" id="cpEdit">Edit details</button>` : ""}
         </div>
         <div class="cp-hero cp-hero--${hero.key}" style="--cp-hero-fallback:${grad}"
           aria-label="${esc(cl.destination_country_name)} visa case for ${esc(cl.full_name)}">
@@ -1701,10 +1709,110 @@
     $("#cpBack").onclick = () => navigate(state.clientReturnView || "clients");
     if (canEdit) {
       // Edit inline within the Overview pane (no popup) instead of opening a modal.
+      // Deleting is deliberately NOT here — it lives in a type-to-confirm "Danger zone"
+      // at the bottom of Edit details, so a client can't be removed with a stray click.
       $("#cpEdit").onclick = () => { overviewEditing = true; showTab("overview"); };
-      $("#cpDelete").onclick = () => deleteClient(cl.id);
+      $("#cpShare").onclick = openPortalShareModal;
     }
     const body = $("#cpBody");
+
+    /* ---- Share portal with client (read-only tracking link) ----
+       Mirrors the interview-invite flow: secure emailed link + one-time code.
+       The raw link is only known right after a send, so "Copy link" appears
+       only in that window; a resend rotates the token (old link dies). */
+    const ps = { share: undefined, link: null, busy: false };
+    function psStatusHtml() {
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const s = ps.share;
+      if (!cl.email) {
+        return `<p class="muted" style="margin:0 0 14px">Add an email address to ${esc(first)}'s profile first — the secure portal link is emailed to them.</p>
+          <button class="btn btn-primary btn-block" id="psAddEmail">Add an email</button>`;
+      }
+      if (s && s.live) {
+        const opened = (s.open_count || 0) > 0
+          ? `✓ Opened ${s.open_count} time${s.open_count === 1 ? "" : "s"}${s.last_opened_at ? " · last " + fmtDate(s.last_opened_at) : ""}`
+          : "Not opened yet";
+        return `<p style="margin:0 0 12px">A secure portal link is with <b>${esc(s.email)}</b>. ${esc(first)} confirms a one-time code sent to that address, then sees a <b>view-only</b> copy of this case — stages, recorded details, documents, universities and payments. Internal notes are never shown.</p>
+          <div style="background:var(--surface-2,#f8fafc);border:1px solid var(--border,#e7e9f3);border-radius:10px;padding:12px 14px;margin:0 0 14px">
+            <span class="iv-sv ${(s.open_count || 0) > 0 ? "ok" : ""}" ${(s.open_count || 0) > 0 ? "" : 'style="background:#eef2f7;color:#64748b"'}>${esc(opened)}</span>
+            <div class="muted" style="font-size:12px;margin-top:6px">Shared${s.created_at ? " " + fmtDate(s.created_at) : ""}${s.created_by_name ? " by " + esc(s.created_by_name) : ""}${s.expires_at ? " · link valid until " + fmtDate(s.expires_at) : ""}</div>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            ${ps.link ? `<button class="btn btn-soft btn-sm" id="psCopy">Copy link</button>` : ""}
+            <button class="btn btn-soft btn-sm" id="psResend">Resend new link</button>
+            <div style="flex:1"></div>
+            <button class="btn btn-danger btn-sm" id="psRevoke">Revoke access</button>
+          </div>`;
+      }
+      return `<p style="margin:0 0 10px">Email <b>${esc(cl.email)}</b> a secure link so ${esc(first)} can follow their own application — journey stage, recorded case details, profile info, documents on file, university shortlist and payment history.</p>
+        <p style="margin:0 0 10px">Everything is <b>strictly view-only</b> — ${esc(first)} can't change anything, and your internal notes are never shown.</p>
+        <p class="muted" style="font-size:12.5px;margin:0 0 16px">🔒 They confirm a one-time code sent to their email before viewing. You can revoke access anytime.</p>
+        <button class="btn btn-primary btn-block" id="psSend">✉ Share portal with ${esc(first)}</button>`;
+    }
+    function psDraw() {
+      const b = $("#psBody");
+      if (!b) return;
+      b.innerHTML = ps.share === undefined
+        ? '<div style="text-align:center;padding:18px 0"><span class="spinner"></span></div>'
+        : psStatusHtml();
+      const send = $("#psSend"); if (send) send.onclick = () => psSend();
+      const rs = $("#psResend"); if (rs) rs.onclick = () => psSend();
+      const rv = $("#psRevoke"); if (rv) rv.onclick = psRevoke;
+      const ae = $("#psAddEmail"); if (ae) ae.onclick = () => { closeModal(); overviewEditing = true; showTab("overview"); };
+      const cp = $("#psCopy"); if (cp) cp.onclick = async () => {
+        try { await navigator.clipboard.writeText(ps.link); toast("Link copied", "success"); }
+        catch (e) { toast("Couldn't copy — the emailed link still works", "error"); }
+      };
+    }
+    async function psSend() {
+      if (ps.busy) return;
+      ps.busy = true;
+      const btn = $("#psSend") || $("#psResend");
+      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…'; }
+      try {
+        const r = await api(`/clients/${cl.id}/portal-share`, { method: "POST" });
+        ps.share = r.share || null;
+        ps.link = r.link || null;
+        toast(r.message || "Portal link sent", r.email_sent ? "success" : "error");
+      } catch (ex) { toast(ex.message, "error"); }
+      ps.busy = false;
+      if (state.activeClient !== cl.id) return;  // user moved on mid-request
+      psDraw();
+    }
+    async function psRevoke() {
+      const first = (cl.full_name || "The student").split(" ")[0];
+      const ok = await confirmModal(`${first} will lose access to their portal until you share it again.`, { title: "Revoke portal access?", okText: "Revoke" });
+      if (ok) {
+        try {
+          await api(`/clients/${cl.id}/portal-share/revoke`, { method: "POST" });
+          ps.share = null; ps.link = null;
+          toast("Portal access revoked", "success");
+        } catch (ex) { toast(ex.message, "error"); }
+      }
+      if (state.activeClient !== cl.id) return;  // user moved on mid-request
+      openPortalShareModal();  // confirmModal replaced + closed the share modal — restore it
+    }
+    function openPortalShareModal() {
+      openModal(`<div class="modal-head"><h3>Share with ${esc((cl.full_name || "client").split(" ")[0])}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+        <div class="modal-body" id="psBody"></div>`);
+      psDraw();
+      if (ps.share === undefined) {
+        api(`/clients/${cl.id}/portal-share`)
+          .then((r) => { if (state.activeClient !== cl.id) return;  // stale response for a client we've left
+            ps.share = r.share || null; psDraw(); })
+          .catch(() => {
+            if (state.activeClient !== cl.id) return;
+            // Leave ps.share undefined: a transient failure must NOT be cached as
+            // "no share exists" — Send would then quietly rotate a live token.
+            const b = $("#psBody");
+            if (b) {
+              b.innerHTML = `<p class="muted" style="margin:0 0 14px">Couldn't load the share status. Check your connection and try again.</p>
+                <button class="btn btn-soft btn-sm" id="psRetry">Retry</button>`;
+              const rt = $("#psRetry"); if (rt) rt.onclick = openPortalShareModal;
+            }
+          });
+      }
+    }
 
     function tabCount(tab, n) {
       const labels = { documents: "Documents", notes: "Notes", emails: "Emails" };
@@ -2053,6 +2161,16 @@
               <button type="submit" class="btn btn-primary btn-sm" id="cpEditSave">Save changes</button>
             </div>
           </form>
+        </div>
+        <div class="cp-card" style="border-color:#f3c9c9;background:linear-gradient(0deg,#fff8f8,#fff)">
+          <div class="cp-card-head"><h3 style="color:#b42318">Danger zone</h3></div>
+          <p style="margin:0 0 14px;color:var(--text-2);font-size:13.5px;line-height:1.6">Deleting removes <b>${esc(cl.full_name)}</b> along with all their notes, emails and case records. This is permanent and <b>cannot be undone</b>.</p>
+          <div class="field cpe-full">
+            <label>To confirm, type the client's full name — <b>${esc(cl.full_name)}</b></label>
+            <input id="cpDelConfirm" autocomplete="off" spellcheck="false" placeholder="${esc(cl.full_name)}">
+          </div>
+          <div style="margin-top:14px"><button type="button" class="btn btn-danger btn-sm" id="cpDelBtn" disabled>Delete client</button></div>
+          <div id="cpDelError" class="auth-error hidden" style="margin-top:10px"></div>
         </div>`;
 
       // Visa-status stage selector — clicking only marks a pending choice (re-highlights
@@ -2112,6 +2230,28 @@
           btn.disabled = false; btn.innerHTML = "Save changes";
         }
       };
+
+      // Danger zone — delete stays disabled until the exact client name is typed.
+      const delInput = $("#cpDelConfirm"), delBtn = $("#cpDelBtn"), delErr = $("#cpDelError");
+      if (delInput && delBtn) {
+        const target = (cl.full_name || "").trim();
+        const matches = () => (delInput.value || "").trim() === target && target !== "";
+        const sync = () => { delBtn.disabled = !matches(); };
+        delInput.addEventListener("input", sync);
+        delInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); if (matches()) delBtn.click(); } });
+        sync();
+        delBtn.onclick = async () => {
+          if (!matches()) return;
+          delErr.classList.add("hidden");
+          delBtn.disabled = true; delBtn.innerHTML = '<span class="spinner"></span> Deleting…';
+          try {
+            await deleteClient(cl.id);  // navigates away on success
+          } catch (ex) {
+            delErr.textContent = ex.message; delErr.classList.remove("hidden");
+            delBtn.innerHTML = "Delete client"; sync();
+          }
+        };
+      }
     }
 
     // Destination-personalized document list for THIS client (US/UK/CA/AU/DE/IE each
@@ -2466,9 +2606,16 @@
           <div class="email-to">To: <b>${esc(cl.email)}</b></div>
           <button class="btn btn-primary btn-sm" id="emailSendBtn">✉ Send email</button></div>`
         : `<div class="plan-banner warn" style="margin-bottom:18px"><div class="pb-icon">✉</div><div class="pb-text"><b>No email on file.</b> <span>Add an email to message this client (Edit details).</span></div></div>`) : "";
-      const hist = data.emails.length ? data.emails.map((em) =>
-        `<div class="email-item"><div class="ei-top"><span class="ei-subject">${esc(em.subject)}</span><span style="font-size:12px;color:var(--muted)">${fmtDateTime(em.created_at)}</span></div>
-         <div class="ei-body">${esc(em.body)}</div>${em.status !== "sent" ? `<div class="ei-fail">⚠ Failed: ${esc(em.error_message || "")}</div>` : ""}</div>`).join("")
+      const hist = data.emails.length ? data.emails.map((em) => {
+        const inbound = em.direction === "inbound";
+        const mismatch = inbound && em.from_email && cl.email &&
+          em.from_email.toLowerCase() !== cl.email.trim().toLowerCase();
+        const meta = inbound
+          ? `<div class="ei-meta">↩ Reply from ${esc(em.from_email || cl.full_name)}${mismatch ? ' <span class="ei-unverified">· differs from the email on file</span>' : ""}</div>`
+          : (em.sent_by_name ? `<div class="ei-meta">Sent by ${esc(em.sent_by_name)}</div>` : "");
+        return `<div class="email-item${inbound ? " inbound" : ""}"><div class="ei-top"><span class="ei-subject">${esc(em.subject)}</span><span style="font-size:12px;color:var(--muted)">${fmtDateTime(em.created_at)}</span></div>
+         ${meta}<div class="ei-body">${esc(em.body)}</div>${em.status === "failed" ? `<div class="ei-fail">⚠ Failed: ${esc(em.error_message || "")}</div>` : ""}</div>`;
+      }).join("")
         : `<div class="empty" style="padding:30px"><div class="emoji">✉️</div><h3>No emails sent yet</h3><p>Send the student an update in one click.</p></div>`;
       body.innerHTML = composer + hist;
       const sb = $("#emailSendBtn");
@@ -2782,6 +2929,9 @@
       const canManage = !!(d.permissions && d.permissions.can_manage_users);
       const t = d.totals || {};
       const fee = d.fee || { percent: 2, min_fee_rupees: 49 };
+      const MANUAL_METHODS = [["cash", "Cash"], ["bank_transfer", "Bank transfer"], ["upi", "UPI"], ["card", "Card / POS"], ["cheque", "Cheque"], ["other", "Other"]];
+      const manualMethodLabel = (m) => (MANUAL_METHODS.find((x) => x[0] === m) || [m, m || "Payment"])[1];
+      const todayISO = () => { const dt = new Date(); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
 
       const chipRow = `
         <div class="pay-chips">
@@ -2793,7 +2943,7 @@
       let gateNote = "";
       if (!d.collect_enabled) {
         gateNote = `<div class="pay-gate-note">Online collection isn't live yet — connect your company bank account in
-          <a href="#" id="payGoFinance">Finance</a> first. You can still browse this ledger.</div>`;
+          <a href="#" id="payGoFinance">Finance</a> to charge clients online.${canManage ? " Meanwhile you can <b>record payments you've taken offline</b> below." : " You can still browse this ledger."}</div>`;
       } else if (!d.client_email) {
         gateNote = `<div class="pay-gate-note">Add an email address to this client to send them a payment request.</div>`;
       }
@@ -2821,6 +2971,34 @@
           </div>
         </div></div>`;
 
+      // Manual / off-platform recording — available to managers even when online collection is off.
+      const manualBtn = canManage
+        ? `<button class="btn btn-ghost btn-sm" id="payManualToggle">+ Record payment</button>`
+        : "";
+      const manualForm = canManage ? `
+        <div class="card hidden" id="payManualForm"><div class="card-body">
+          <div style="font-weight:800;font-size:14.5px;margin-bottom:4px">Record an off-platform payment</div>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">For money already collected outside Rilono (cash, bank transfer, UPI…). This is a bookkeeping entry — it does not charge the client.</div>
+          <div class="field-row">
+            <div class="field"><label>Amount received (₹) *</label>
+              <input id="mpAmt" type="number" min="1" step="1" placeholder="e.g. 25000" autocomplete="off"></div>
+            <div class="field"><label>How was it paid? *</label>
+              <select id="mpMethod">${MANUAL_METHODS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div>
+          </div>
+          <div class="field-row">
+            <div class="field"><label>Date received</label>
+              <input id="mpDate" type="date" value="${todayISO()}" max="${todayISO()}"></div>
+            <div class="field"><label>Reference <span style="color:var(--muted);font-weight:500">(optional)</span></label>
+              <input id="mpRef" type="text" maxlength="80" placeholder="UTR / cheque no. / txn id" autocomplete="off"></div>
+          </div>
+          <div class="field"><label>What is this payment for? <span style="color:var(--muted);font-weight:500">(optional)</span></label>
+            <input id="mpDesc" type="text" maxlength="300" placeholder="e.g. Initial consultation fee" autocomplete="off"></div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
+            <button class="btn btn-primary" id="mpSaveBtn">Record payment</button>
+            <span style="font-size:12px;color:var(--muted)">Added to this client's ledger &amp; Collected total</span>
+          </div>
+        </div></div>` : "";
+
       const chip = (s) => {
         const map = {
           created: ["Awaiting payment", "pend"], failed: ["Failed", "err"], cancelled: ["Cancelled", "mut"],
@@ -2834,18 +3012,27 @@
 
       const rows = (d.payments || []).map((p) => {
         const acts = [];
-        if (canManage && (p.status === "created" || p.status === "failed")) {
+        const isManual = !!p.is_manual;
+        if (canManage && !isManual && (p.status === "created" || p.status === "failed")) {
           acts.push(`<button class="btn btn-ghost btn-xs" data-act="resend" data-id="${p.id}">Copy / resend link</button>`);
           acts.push(`<button class="btn btn-ghost btn-xs" data-act="cancel" data-id="${p.id}">Cancel</button>`);
         }
-        if (canManage && ["paid", "transferred", "settled", "partially_refunded"].includes(p.status)) {
+        if (canManage && !isManual && ["paid", "transferred", "settled", "partially_refunded"].includes(p.status)) {
           acts.push(`<button class="btn btn-ghost btn-xs danger" data-act="refund" data-id="${p.id}" data-amt="${fmtPaise(p.amount_paise - (p.refunded_amount_paise || 0))}">Refund</button>`);
         }
+        if (canManage && isManual) {
+          acts.push(`<button class="btn btn-ghost btn-xs danger" data-act="delete-manual" data-id="${p.id}">Remove</button>`);
+        }
+        const when = isManual ? (p.paid_at || p.created_at) : p.created_at;
+        const statusCell = isManual ? `<span class="pay-status ok">Recorded manually</span>` : chip(p.status);
+        const sub = isManual
+          ? `${esc(manualMethodLabel(p.manual_method))}${p.utr ? " · Ref " + esc(p.utr) : ""}`
+          : `${esc(p.invoice_number || "")}${p.utr ? " · UTR " + esc(p.utr) : ""}`;
         return `<tr>
-          <td>${dateStr(p.created_at)}</td>
-          <td>${esc(p.description || "Payment")}<div class="pay-sub">${esc(p.invoice_number || "")}${p.utr ? " · UTR " + esc(p.utr) : ""}</div></td>
+          <td>${dateStr(when)}</td>
+          <td>${esc(p.description || (isManual ? "Offline payment" : "Payment"))}<div class="pay-sub">${sub}</div></td>
           <td style="font-weight:700;white-space:nowrap">${fmtPaise(p.amount_paise)}</td>
-          <td>${chip(p.status)}</td>
+          <td>${statusCell}</td>
           <td class="pay-acts">${acts.join("")}</td>
         </tr>`;
       }).join("");
@@ -2855,22 +3042,25 @@
         <div class="card"><div class="card-body">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px">
             <div style="font-weight:800;font-size:15px">Payments from ${esc(cl.full_name)}</div>
-            ${reqBtn}
+            <div style="display:flex;gap:8px;flex-wrap:wrap">${manualBtn}${reqBtn}</div>
           </div>
           ${chipRow}
         </div></div>
         ${reqForm}
+        ${manualForm}
         <div class="card"><div class="card-body" style="overflow-x:auto">
           ${rows ? `<table class="client-table pay-table">
               <thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th><th></th></tr></thead>
               <tbody>${rows}</tbody></table>`
-            : `<div style="color:var(--muted);font-size:13.5px;padding:6px 0">No payment requests yet${canRequest ? " — raise the first one above." : "."}</div>`}
+            : `<div style="color:var(--muted);font-size:13.5px;padding:6px 0">No payments yet${canManage ? " — request one online or record an offline payment above." : "."}</div>`}
         </div></div>`;
 
       const goFin = $("#payGoFinance");
       if (goFin) goFin.onclick = (e) => { e.preventDefault(); navigate("finance"); };
       const tgl = $("#payReqToggle");
-      if (tgl) tgl.onclick = () => $("#payReqForm").classList.toggle("hidden");
+      if (tgl) tgl.onclick = () => { $("#payReqForm").classList.toggle("hidden"); const mf = $("#payManualForm"); if (mf) mf.classList.add("hidden"); };
+      const mtgl = $("#payManualToggle");
+      if (mtgl) mtgl.onclick = () => { $("#payManualForm").classList.toggle("hidden"); const rf = $("#payReqForm"); if (rf) rf.classList.add("hidden"); };
 
       const previewEl = $("#paySplit");
       const amtEl = $("#payAmt");
@@ -2912,6 +3102,28 @@
         }
       };
 
+      const mpSave = $("#mpSaveBtn");
+      if (mpSave) mpSave.onclick = async () => {
+        const rupees = parseFloat(($("#mpAmt").value || "0"));
+        const method = $("#mpMethod").value;
+        const date = ($("#mpDate").value || "").trim() || null;
+        const ref = ($("#mpRef").value || "").trim();
+        const desc = ($("#mpDesc").value || "").trim();
+        if (!rupees || rupees <= 0) { toast("Enter the amount received.", "error"); return; }
+        mpSave.disabled = true; mpSave.textContent = "Saving…";
+        try {
+          const res = await api(`/clients/${cl.id}/payments/manual`, {
+            method: "POST",
+            body: { amount_paise: Math.round(rupees * 100), method, received_on: date, reference: ref || null, description: desc || null },
+          });
+          toast(res.message || "Payment recorded.", "success");
+          renderPayments();
+        } catch (ex) {
+          toast(ex.message || "Could not record the payment.", "error");
+          mpSave.disabled = false; mpSave.textContent = "Record payment";
+        }
+      };
+
       body.querySelectorAll("[data-act]").forEach((btn) => {
         btn.onclick = async () => {
           const pid = btn.dataset.id;
@@ -2937,6 +3149,15 @@
               if (!ok) return;
               const res = await api(`/finance/payments/${pid}/refund`, { method: "POST", body: { reason: "" } });
               toast(res.message, "success");
+              renderPayments();
+            } else if (act === "delete-manual") {
+              const ok = await confirmModal(
+                "Remove this manually-recorded payment? This only deletes the ledger note — it does not move any money.",
+                { title: "Remove payment record", okText: "Remove" }
+              );
+              if (!ok) return;
+              const res = await api(`/finance/payments/${pid}/manual`, { method: "DELETE" });
+              toast(res.message || "Removed.", "success");
               renderPayments();
             }
           } catch (ex) {
@@ -3421,19 +3642,14 @@
     await ensureTeam();
     openClientForm(cl);
   }
+  // Executes the delete. The ONLY UI path here is the type-to-confirm "Danger zone"
+  // inside Edit details — there is deliberately no one-click delete control. Throws on
+  // failure so the caller can surface the error; navigates away on success.
   async function deleteClient(id) {
-    openModal(`<div class="modal-head"><h3>Delete client?</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
-      <div class="modal-body"><p style="margin:0;color:var(--text-2)">This permanently removes the client and all their notes and email history. This cannot be undone.</p></div>
-      <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
-      <button class="btn btn-danger" id="confirmDel">Delete client</button></div>`);
-    $("#confirmDel").onclick = async () => {
-      try {
-        await api("/clients/" + id, { method: "DELETE" });
-        toast("Client deleted", "success"); closeModal();
-        if (state.view === "clientPage") navigate(state.clientReturnView || "clients");
-        else loadAndRenderClientList();
-      } catch (ex) { toast(ex.message, "error"); }
-    };
+    await api("/clients/" + id, { method: "DELETE" });
+    toast("Client deleted", "success");
+    if (state.view === "clientPage") navigate(state.clientReturnView || "clients");
+    else loadAndRenderClientList();
   }
 
   /* ============================================================

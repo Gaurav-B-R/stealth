@@ -368,6 +368,83 @@ def create_payment_request(
     return payment
 
 
+# Off-platform payment methods staff can record. Keys are stored; labels are for display.
+MANUAL_PAYMENT_METHODS: dict[str, str] = {
+    "cash": "Cash",
+    "bank_transfer": "Bank transfer",
+    "upi": "UPI",
+    "card": "Card / POS",
+    "cheque": "Cheque",
+    "other": "Other",
+}
+
+
+def normalize_manual_method(method: Optional[str]) -> Optional[str]:
+    key = (method or "").strip().lower().replace(" ", "_")
+    return key if key in MANUAL_PAYMENT_METHODS else None
+
+
+def record_manual_payment(
+    *,
+    db: Session,
+    organization: models.EnterpriseOrganization,
+    client: models.EnterpriseClient,
+    amount_paise: int,
+    method: str,
+    description: Optional[str] = None,
+    reference: Optional[str] = None,
+    received_on=None,
+    created_by: models.User,
+) -> models.EnterpriseStudentPayment:
+    """Record a payment the consultancy collected OUTSIDE Rilono (cash / bank transfer / UPI / …).
+
+    This is a bookkeeping entry only — no money moves through the platform, so there is no
+    Razorpay order, Rilono takes NO commission (the full amount is the consultancy's), and it
+    needs no linked account (works even before online collection is activated). It lands as an
+    immediately-'paid' row so it counts toward the client's Collected total next to online ones.
+    """
+    amount = int(amount_paise or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Enter the amount received.")
+    if amount > MAX_AMOUNT_PAISE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Amount exceeds the per-payment limit of ₹{MAX_AMOUNT_PAISE / 100:,.0f}.",
+        )
+    method_key = normalize_manual_method(method)
+    if not method_key:
+        raise HTTPException(status_code=400, detail="Choose a valid payment method.")
+
+    if received_on is not None:
+        from datetime import time as _time
+        paid_at = datetime.combine(received_on, _time.min)
+    else:
+        paid_at = datetime.utcnow()
+
+    payment = models.EnterpriseStudentPayment(
+        organization_id=organization.id,
+        client_id=client.id,
+        client_name_snapshot=client.full_name,
+        linked_account_id=None,
+        description=(description or "").strip()[:300] or None,
+        amount_paise=amount,
+        commission_paise=0,        # Rilono earns nothing on money it never touched
+        payout_paise=amount,       # the full amount is the consultancy's
+        currency="INR",
+        provider="manual",
+        manual_method=method_key,
+        status="paid",             # already collected → counts toward the Collected total
+        utr=(reference or "").strip()[:80] or None,
+        paid_at=paid_at,
+        created_by_user_id=created_by.id,
+    )
+    db.add(payment)
+    db.flush()  # get id for the reference number
+    payment.invoice_number = f"MAN-{organization.id}-{payment.id:06d}"
+    db.flush()
+    return payment
+
+
 def client_payment_totals(db: Session, organization_id: int, client_id: int) -> dict:
     """Aggregate money view for one client's dossier (integer paise)."""
     rows = (
@@ -400,6 +477,9 @@ def serialize_payment(p: models.EnterpriseStudentPayment) -> dict:
         "commission_paise": p.commission_paise,
         "payout_paise": p.payout_paise,
         "currency": p.currency,
+        "provider": p.provider,
+        "is_manual": (p.provider == "manual"),
+        "manual_method": getattr(p, "manual_method", None),
         "status": p.status,
         "settlement_status": p.settlement_status,
         "refunded_amount_paise": int(p.refunded_amount_paise or 0),

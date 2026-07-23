@@ -701,6 +701,8 @@ def ensure_enterprise_crm_tables():
                     status VARCHAR NOT NULL DEFAULT 'sent',
                     provider_message_id VARCHAR,
                     error_message TEXT,
+                    direction VARCHAR NOT NULL DEFAULT 'outbound',
+                    from_email VARCHAR,
                     created_at {ts} DEFAULT {now_default} NOT NULL
                 )
             """))
@@ -878,6 +880,31 @@ def ensure_enterprise_interview_invite_columns():
             ))
 
 
+def ensure_enterprise_client_email_reply_columns():
+    """Add inbound-reply threading columns to enterprise_client_emails for older DBs
+    (in-place, idempotent). direction backfills existing rows as 'outbound'."""
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_client_emails"):
+            return
+        columns = _get_table_columns(conn, "enterprise_client_emails")
+        if "direction" not in columns:
+            conn.execute(text(
+                "ALTER TABLE enterprise_client_emails ADD COLUMN direction VARCHAR NOT NULL DEFAULT 'outbound'"
+            ))
+        if "from_email" not in columns:
+            conn.execute(text(
+                "ALTER TABLE enterprise_client_emails ADD COLUMN from_email VARCHAR"
+            ))
+        # Concurrency-safe inbound dedupe: Svix redeliveries race the
+        # check-then-insert, so back it with a partial unique index (works on
+        # both sqlite and postgres). Self-healing on both create paths.
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_client_emails_inbound_msg "
+            "ON enterprise_client_emails(provider_message_id) "
+            "WHERE direction = 'inbound' AND provider_message_id IS NOT NULL"
+        ))
+
+
 def ensure_enterprise_demo_requests_table():
     """Create the enterprise_demo_requests table (public 'book a demo' leads)."""
     is_sqlite = engine.dialect.name == "sqlite"
@@ -1026,6 +1053,49 @@ def ensure_enterprise_document_request_tables():
             for stmt in (
                 "CREATE INDEX IF NOT EXISTS ix_enterprise_document_request_items_request_id ON enterprise_document_request_items(request_id)",
                 "CREATE INDEX IF NOT EXISTS ix_enterprise_document_request_items_organization_id ON enterprise_document_request_items(organization_id)",
+            ):
+                conn.execute(text(stmt))
+
+
+def ensure_enterprise_client_portal_shares_table():
+    """Create the secure client portal-share table (read-only client tracking portal).
+
+    A share is a tokenized, OTP-verified capability sent to a client's email so
+    they can view (never edit) their own case: journey stages, stage records,
+    profile details, documents, universities and payments. Idempotent and
+    additive — safe to run on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_false = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_client_portal_shares"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_client_portal_shares (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    token_hash VARCHAR NOT NULL,
+                    email VARCHAR NOT NULL,
+                    code_hash VARCHAR,
+                    code_expires_at {ts},
+                    code_attempts INTEGER NOT NULL DEFAULT 0,
+                    expires_at {ts},
+                    revoked BOOLEAN NOT NULL DEFAULT {bool_false},
+                    last_opened_at {ts},
+                    open_count INTEGER NOT NULL DEFAULT 0,
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_client_portal_shares_token ON enterprise_client_portal_shares(token_hash)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_portal_shares_organization_id ON enterprise_client_portal_shares(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_portal_shares_client_id ON enterprise_client_portal_shares(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_portal_shares_client_created ON enterprise_client_portal_shares(client_id, created_at)",
             ):
                 conn.execute(text(stmt))
 
@@ -1192,6 +1262,10 @@ def ensure_enterprise_payments_tables():
             ):
                 if col not in cols:
                     conn.execute(text(f"ALTER TABLE enterprise_student_payments ADD COLUMN {col} {ddl}"))
+        # Off-platform ("manual") payment recording — self-healing on BOTH paths (fresh create and
+        # augmented), since the fresh-create DDL above does not list this column.
+        if "manual_method" not in _get_table_columns(conn, "enterprise_student_payments"):
+            conn.execute(text("ALTER TABLE enterprise_student_payments ADD COLUMN manual_method VARCHAR"))
         # Self-healing on both paths (fresh create and augmented).
         conn.execute(text(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_student_pay_token ON enterprise_student_payments(pay_token_hash)"

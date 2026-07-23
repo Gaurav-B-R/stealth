@@ -13,7 +13,7 @@ python-dotenv==1.0.0
 email-validator==2.3.0
 psycopg2-binary==2.9.10
 boto3==1.34.34
-resend>=2.19.0
+resend>=2.22.0
 cryptography>=41.0.0
 google-generativeai>=0.3.0
 google-genai>=1.4.0

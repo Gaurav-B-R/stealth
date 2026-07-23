@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Visa Application · Rilono</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="/static/logo.png" />
+  <style>
+    :root{
+      --grad:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);
+      --primary:#6366f1;--primary-600:#4f46e5;--text:#0f172a;--text-2:#475569;--muted:#94a3b8;
+      --surface:#fff;--surface-2:#f8fafc;--border:#e7e9f3;--border-strong:#d6d9ea;--danger:#ef4444;
+      --radius:16px;--radius-sm:11px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    }
+    *{box-sizing:border-box}html,body{margin:0;padding:0}
+    body{font-family:var(--font);color:var(--text);background:
+      radial-gradient(900px 500px at 15% -5%,rgba(99,102,241,.16),transparent 60%),
+      radial-gradient(800px 480px at 90% 0%,rgba(124,58,237,.12),transparent 55%),#eef0f8;
+      min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:28px 16px;-webkit-font-smoothing:antialiased;}
+    .wrap{width:100%;max-width:720px;}
+    .wrap.wide{max-width:960px;}
+    .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:18px;color:#312e81;font-weight:800;font-size:15px;}
+    .brand img{height:30px;width:30px;border-radius:8px;object-fit:cover}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 18px 48px rgba(15,23,42,.14);overflow:hidden;}
+    .hero{background:var(--grad);color:#fff;padding:24px 28px;}
+    .hero .eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9}
+    .hero h1{margin:8px 0 0;font-size:22px;}
+    .hero .sub{margin:6px 0 0;opacity:.92;font-size:14px}
+    .body{padding:26px 28px;}
+    .muted{color:var(--muted)} .t2{color:var(--text-2)}
+    .lead{color:var(--text-2);line-height:1.65;font-size:15px;margin:0 0 18px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1.5px solid transparent;border-radius:var(--radius-sm);
+      font-family:var(--font);font-size:15px;font-weight:700;padding:13px 22px;cursor:pointer;transition:box-shadow .15s,transform .08s,background .15s;}
+    .btn:active{transform:translateY(1px)} .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn-primary{background:var(--grad);color:#fff;box-shadow:0 8px 22px rgba(99,102,241,.32)}
+    .btn-primary:hover{box-shadow:0 12px 28px rgba(99,102,241,.42)}
+    .btn-ghost{background:var(--surface);color:var(--text);border-color:var(--border-strong);font-size:13.5px;padding:9px 14px}
+    .input{width:100%;font-family:var(--font);font-size:16px;color:var(--text);background:var(--surface-2);border:1.5px solid var(--border-strong);
+      border-radius:var(--radius-sm);padding:13px 15px;outline:none;transition:border-color .15s,box-shadow .15s}
+    .input:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+    .code-input{letter-spacing:.32em;text-align:center;font-size:24px;font-weight:700}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .err{background:rgba(239,68,68,.08);color:#b91c1c;border:1px solid rgba(239,68,68,.22);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:14px}
+    .ok{background:rgba(16,185,129,.1);color:#047857;border:1px solid rgba(16,185,129,.28);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:14px}
+    .hidden{display:none!important}
+    .center{text-align:center}
+    .spinner{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
+    .spinner.dark{border-color:rgba(99,102,241,.25);border-top-color:var(--primary)}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .load-wrap{display:flex;justify-content:center;padding:60px 0}
+    .foot{text-align:center;margin-top:16px;color:var(--muted);font-size:12px;line-height:1.7}
+    .foot a{color:inherit;text-decoration:underline}
+
+    /* ============ portal (post-verification) ============ */
+    .p-topbar{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+    .p-topbar img{height:38px;width:38px;border-radius:10px;object-fit:cover;border:1px solid var(--border)}
+    .p-topbar .org{font-weight:800;font-size:16px;color:#1e1b4b}
+    .p-topbar .tagline{font-size:12px;color:var(--muted)}
+    .p-view-badge{margin-left:auto;background:#eef2ff;color:#4338ca;border:1px solid #dce3ff;border-radius:999px;padding:6px 13px;font-size:12px;font-weight:700;white-space:nowrap}
+
+    .p-hero{position:relative;border-radius:var(--radius);overflow:hidden;color:#fff;padding:100px 30px 32px;min-height:170px;
+      display:flex;flex-direction:column;justify-content:flex-end;background:var(--p-hero-fallback,var(--grad));box-shadow:0 18px 48px rgba(15,23,42,.18)}
+    .p-hero::before{content:"";position:absolute;inset:0;background-image:var(--p-hero-image,none);background-size:cover;background-position:center;}
+    .p-hero::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,rgba(2,6,23,.82) 5%,rgba(2,6,23,.55) 45%,rgba(2,6,23,.18) 80%)}
+    .p-hero>*{position:relative;z-index:1}
+    .p-hero .kicker{font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:#67e8f9;margin-bottom:6px}
+    .p-hero h1{margin:0;font-size:30px;letter-spacing:-.01em}
+    .p-hero .hsub{margin-top:6px;font-size:14.5px;opacity:.9}
+    .p-hero .hstatus{position:absolute;top:20px;right:20px;z-index:2}
+    .p-seal{position:absolute;top:20px;left:24px;z-index:2;border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:8px 12px;background:rgba(2,6,23,.35);backdrop-filter:blur(4px);text-align:center}
+    .p-seal span{display:block;font-size:8.5px;letter-spacing:.18em;text-transform:uppercase;opacity:.8}
+    .p-seal strong{font-size:19px;letter-spacing:.03em}
+    .p-seal small{font-size:14px;margin-left:4px}
+    @media (max-width:640px){ .p-seal{display:none} .p-hero{padding-top:72px} .p-hero h1{font-size:24px} .p-hero .hstatus{top:14px;right:14px} }
+
+    .status-pill{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:7px 14px;font-size:12.5px;font-weight:700;background:rgba(255,255,255,.92)}
+    .status-pill .sd{width:8px;height:8px;border-radius:50%}
+
+    .p-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 10px 30px rgba(15,23,42,.08);padding:24px 26px;margin-top:18px}
+    .p-card h2{margin:0 0 4px;font-size:16.5px}
+    .p-card .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+    @media (max-width:640px){ .p-card{padding:18px 16px} }
+
+    /* journey stepper */
+    .jt{display:flex;align-items:flex-start;margin-top:8px}
+    .jt-step{flex:1;text-align:center;position:relative;min-width:0}
+    .jt-step:not(:last-child)::after{content:"";position:absolute;top:17px;left:calc(50% + 20px);right:calc(-50% + 20px);height:3px;border-radius:2px;background:#e6e8f4}
+    .jt-step.done:not(:last-child)::after{background:var(--primary)}
+    .jt-node{width:36px;height:36px;border-radius:50%;margin:0 auto;display:grid;place-items:center;font-weight:800;font-size:14px;
+      background:#eef0f8;color:var(--muted);border:2.5px solid #e6e8f4;position:relative;z-index:1}
+    .jt-step.done .jt-node{background:var(--primary);border-color:var(--primary);color:#fff}
+    .jt-step.current .jt-node{background:#fff;border-color:var(--primary);color:var(--primary-600);box-shadow:0 0 0 5px rgba(99,102,241,.16)}
+    .jt-step.current.approved .jt-node,.jt-step.done.approved .jt-node{background:#10b981;border-color:#10b981;color:#fff;box-shadow:0 0 0 5px rgba(16,185,129,.16)}
+    .jt-step.current.paused .jt-node{border-color:#9ca3af;color:#6b7280;box-shadow:0 0 0 5px rgba(156,163,175,.18)}
+    .jt-label{font-size:11.5px;font-weight:700;color:var(--muted);margin-top:8px;line-height:1.35;padding:0 4px}
+    .jt-step.done .jt-label,.jt-step.current .jt-label{color:var(--text)}
+    @media (max-width:640px){ .jt{flex-wrap:wrap;gap:14px 0} .jt-step{flex:0 0 33.33%} .jt-step:not(:last-child)::after{display:none} }
+
+    .p-banner{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:13px 16px;font-size:14px;line-height:1.6;margin-top:16px}
+    .p-banner.red{background:rgba(239,68,68,.08);color:#b91c1c;border:1px solid rgba(239,68,68,.22)}
+    .p-banner.gray{background:#f4f5fa;color:#475569;border:1px solid var(--border)}
+    .p-banner.green{background:rgba(16,185,129,.1);color:#047857;border:1px solid rgba(16,185,129,.28)}
+
+    /* stage detail accordion */
+    .stage-acc{margin-top:18px;border:1px solid var(--border);border-radius:13px;overflow:hidden}
+    .stage-acc .st{border-top:1px solid var(--border)}
+    .stage-acc .st:first-child{border-top:none}
+    .st-head{display:flex;align-items:center;gap:12px;padding:14px 16px;cursor:pointer;background:#fff;user-select:none}
+    .st-head:hover{background:var(--surface-2)}
+    .st-dot{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12.5px;font-weight:800;flex:none;
+      background:#eef0f8;color:var(--muted)}
+    .st.done .st-dot{background:var(--primary);color:#fff}
+    .st.current .st-dot{background:#fff;color:var(--primary-600);border:2px solid var(--primary)}
+    .st-ttl{font-weight:700;font-size:14px}
+    .st-note{font-size:12px;color:var(--muted)}
+    .st-flag{margin-left:auto;font-size:11.5px;font-weight:700;color:var(--muted);display:flex;align-items:center;gap:8px;white-space:nowrap}
+    .st-flag .n{background:#eef2ff;color:#4338ca;border-radius:999px;padding:3px 9px}
+    .st-chev{transition:transform .18s;color:var(--muted)}
+    .st.open .st-chev{transform:rotate(180deg)}
+    .st-body{display:none;padding:4px 16px 16px 54px;background:#fff}
+    .st.open .st-body{display:block}
+    .st-desc{font-size:13px;color:var(--text-2);margin:0 0 12px;line-height:1.6}
+    .kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:10px 18px}
+    .kv .it{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:9px 12px}
+    .kv .it label{display:block;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+    .kv .it div{font-size:13.5px;font-weight:600;word-break:break-word;white-space:pre-wrap}
+    @media (max-width:640px){ .st-body{padding-left:16px} }
+
+    /* documents */
+    .doc-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid var(--border)}
+    .doc-row:first-child{border-top:none}
+    .doc-ic{width:36px;height:36px;border-radius:10px;background:#eef2ff;display:grid;place-items:center;font-size:16px;flex:none}
+    .doc-main{min-width:0;flex:1}
+    .doc-type{font-weight:700;font-size:13.5px}
+    .doc-file{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .doc-meta{font-size:12px;color:var(--muted);white-space:nowrap;text-align:right}
+    .badge{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:3px 10px;font-size:11px;font-weight:700}
+    .badge.ok{background:rgba(16,185,129,.12);color:#047857}
+    .badge.warn{background:rgba(245,158,11,.14);color:#b45309}
+    .badge.mut{background:#eef0f8;color:#64748b}
+    .badge.red{background:rgba(239,68,68,.1);color:#b91c1c}
+
+    /* universities */
+    .uni{border:1px solid var(--border);border-radius:13px;padding:15px 16px;margin-top:12px}
+    .uni:first-of-type{margin-top:0}
+    .uni-top{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+    .uni-name{font-weight:800;font-size:14.5px}
+    .uni-prog{font-size:13px;color:var(--text-2);margin-top:2px}
+    .uni-badges{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+    .uni-meta{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:12.5px;color:var(--text-2)}
+    .uni-meta b{color:var(--text)}
+    .uni-reqs{margin:10px 0 0;padding-left:18px;font-size:12.5px;color:var(--text-2)}
+    .uni-reqs li{margin:2px 0}
+    .uni-links{margin-top:10px;display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px}
+    .uni-links a{color:var(--primary-600);font-weight:700;text-decoration:none}
+    .uni-links a:hover{text-decoration:underline}
+
+    /* payments */
+    .pay-tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+    .pay-tbl th{text-align:left;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:700;padding:8px 10px;border-bottom:1px solid var(--border)}
+    .pay-tbl td{padding:11px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+    .pay-tbl tr:last-child td{border-bottom:none}
+    .pay-amt{font-weight:800;white-space:nowrap}
+    .tbl-scroll{overflow-x:auto}
+
+    .p-updated{text-align:right;font-size:12px;color:var(--muted);margin-top:14px}
+    /* Staff-entered values can be arbitrarily long unbroken strings — never overflow a card. */
+    .p-hero h1,.uni,.st-body,.doc-main,.pay-tbl td{overflow-wrap:anywhere}
+  </style>
+</head>
+<body>
+  <div class="wrap" id="wrap">
+    <div class="brand" id="brandRow"><img src="/static/logo.png" alt="" onerror="this.style.display='none'"> Powered by Rilono</div>
+
+    <div class="card" id="gateCard">
+      <div id="loading" class="load-wrap"><span class="spinner dark"></span></div>
+
+      <!-- invalid -->
+      <div id="invalidView" class="hidden">
+        <div class="hero"><div class="eyebrow">Application portal</div><h1>Link unavailable</h1></div>
+        <div class="body"><p class="lead" id="invalidMsg">This portal link is invalid or has expired. Please ask your consultancy for a new link.</p></div>
+      </div>
+
+      <!-- verify -->
+      <div id="verifyView" class="hidden">
+        <div class="hero">
+          <div class="eyebrow" id="vOrg">Your consultancy</div>
+          <h1>🧭 Your visa application portal</h1>
+          <div class="sub" id="vSub">Track your application every step of the way.</div>
+        </div>
+        <div class="body">
+          <p class="lead" id="vLead"></p>
+          <div id="vError" class="err hidden"></div>
+          <div id="vMsg" class="ok hidden"></div>
+
+          <div id="vStep1">
+            <p class="t2" style="font-size:14px;margin:0 0 14px">To confirm it's you, we'll email a 6-digit code to <b id="vEmail"></b>.</p>
+            <button class="btn btn-primary" id="sendCodeBtn">Send verification code</button>
+          </div>
+
+          <div id="vStep2" class="hidden">
+            <label class="t2" style="font-size:13px;font-weight:600;display:block;margin-bottom:8px">Enter the 6-digit code</label>
+            <input class="input code-input" id="codeInput" inputmode="numeric" maxlength="6" placeholder="••••••" />
+            <div class="row" style="margin-top:14px">
+              <button class="btn btn-primary" id="verifyBtn">Verify &amp; view my portal</button>
+              <button class="btn btn-ghost" id="resendBtn">Resend code</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- portal (rendered by JS after verification) -->
+    <div id="portalView" class="hidden"></div>
+
+    <div class="foot">🔒 This link is personal to you. Don't share it.<br>
+      <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a> ·
+      <a href="/terms" target="_blank" rel="noopener">Terms</a>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var token = location.pathname.split("/").filter(Boolean).pop();
+      var API = "/api/enterprise/public/portal";
+      var SS_KEY = "rilono_portal_session_" + token.slice(0, 10);
+      var $ = function (id) { return document.getElementById(id); };
+      var info = null, sessionToken = null, data = null;
+
+      // Destination hero imagery — same assets the consultancy dashboard uses.
+      var HERO_CODES = { US: "us", CA: "ca", UK: "uk", GB: "uk", AU: "au", DE: "de", IE: "ie" };
+
+      function show(id) { ["loading","invalidView","verifyView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
+      function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+      function publicError(status, detail, fallback){
+        var msg=typeof detail==="string"?detail.trim().replace(/\s+/g," "):"";
+        var internal=/(?:traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
+        if(!msg||msg.length>300||status>=500||internal.test(msg)){
+          if(status===404)return fallback||"This link is invalid or has expired.";
+          if(status===408||status===504)return "The request timed out. Please try again.";
+          if(status===429)return "Too many requests. Please wait a moment and try again.";
+          return fallback||"Sorry, we encountered an error. Please try again shortly.";
+        }
+        return msg;
+      }
+      function apiError(r,d,fallback){ var ex=new Error(publicError(r.status,d&&(d.detail||d.message),fallback)); ex.status=r.status; ex.publicSafe=true; return ex; }
+      function safeError(ex,fallback){ return ex&&ex.publicSafe&&ex.message?ex.message:(fallback||"Sorry, we encountered an error. Please try again shortly."); }
+      function api(path, body){ return fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})})
+        .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw apiError(r,d); return d; }); }); }
+
+      function fmtDate(iso){ if(!iso) return ""; try{
+        // Date-only strings must parse as LOCAL dates — new Date("2003-04-12") is UTC
+        // midnight and shows the previous day in timezones west of UTC.
+        var m=String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        var d=m?new Date(+m[1],+m[2]-1,+m[3]):new Date(iso);
+        if(isNaN(d)) return ""; return d.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}); }catch(e){ return ""; } }
+      function fmtDateTime(iso){ if(!iso) return ""; try{ var d=new Date(iso); if(isNaN(d)) return ""; return d.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})+" · "+d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } }
+      function fmtMoney(amount, currency){ try{ return new Intl.NumberFormat("en-IN",{style:"currency",currency:currency||"INR",maximumFractionDigits:2,minimumFractionDigits:0}).format(amount||0); }
+        catch(e){ return (currency||"INR")+" "+(amount||0); } }
+      function fmtSize(bytes){ if(!bytes&&bytes!==0) return ""; if(bytes<1024) return bytes+" B"; if(bytes<1048576) return (bytes/1024).toFixed(0)+" KB"; return (bytes/1048576).toFixed(1)+" MB"; }
+
+      /* ---------- load & verify flow ---------- */
+      function load(){
+        // A still-valid session (page refresh) skips straight to the portal.
+        var stored = null;
+        try { stored = sessionStorage.getItem(SS_KEY); } catch (e) {}
+        var boot = function(){
+          fetch(API+"/"+encodeURIComponent(token)).then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw apiError(r,d,"This link is invalid or has expired."); return d; }); })
+            .then(function(d){ info=d; renderVerify(); })
+            .catch(function(ex){ $("invalidMsg").textContent=safeError(ex,"This link is invalid or has expired."); show("invalidView"); });
+        };
+        if (stored) {
+          sessionToken = stored;
+          fetchPortal().catch(function(){ sessionToken=null; try{ sessionStorage.removeItem(SS_KEY); }catch(e){} boot(); });
+        } else boot();
+      }
+
+      function renderVerify(){
+        $("vOrg").textContent=info.organization_name||"Your consultancy";
+        $("vSub").textContent="Track your "+(info.destination_country||"")+" application every step of the way.";
+        $("vLead").innerHTML="Hi <b>"+esc(info.client_first_name)+"</b>, <b>"+esc(info.organization_name||"your consultancy")+"</b> has shared your <b>"+esc(info.destination_country||"visa")+"</b> application file ("+esc(info.visa_type||"")+") with you — your current stage, recorded details, documents and more, all view-only.";
+        $("vEmail").textContent=info.masked_email||"your email";
+        show("verifyView");
+      }
+
+      $("sendCodeBtn").onclick=function(){ var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Sending…';
+        api("/"+encodeURIComponent(token)+"/send-code").then(function(d){
+          if(d && d.sent===false){ $("vError").textContent="We couldn't send the code right now. Please try again in a moment."; $("vError").classList.remove("hidden"); return; }
+          $("vError").classList.add("hidden");
+          $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
+          $("vMsg").textContent="We sent a 6-digit code to "+(d.masked_email||info.masked_email)+"."; $("vMsg").classList.remove("hidden"); $("codeInput").focus();
+        }).catch(function(ex){ $("vError").textContent=safeError(ex); $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
+      $("resendBtn").onclick=function(){ $("vError").classList.add("hidden"); $("sendCodeBtn").click(); };
+      $("verifyBtn").onclick=function(){ var code=($("codeInput").value||"").trim(); $("vError").classList.add("hidden");
+        if(code.length<4){ $("vError").textContent="Enter the 6-digit code."; $("vError").classList.remove("hidden"); return; }
+        var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Verifying…';
+        api("/"+encodeURIComponent(token)+"/verify",{code:code}).then(function(d){
+          sessionToken=d.session_token;
+          try { sessionStorage.setItem(SS_KEY, sessionToken); } catch (e) {}
+          return fetchPortal();
+        }).catch(function(ex){ $("vError").textContent=safeError(ex); $("vError").classList.remove("hidden"); })
+          .finally(function(){ b.disabled=false; b.innerHTML="Verify &amp; view my portal"; }); };
+      $("codeInput").addEventListener("keydown",function(e){ if(e.key==="Enter") $("verifyBtn").click(); });
+
+      function fetchPortal(){
+        return api("/data",{session_token:sessionToken}).then(function(d){ data=d; renderPortal(); });
+      }
+
+      /* ---------- portal rendering ---------- */
+      function statusPill(stage){
+        var c=(stage&&stage.color)||"#94a3b8";
+        return '<span class="status-pill" style="color:'+c+'"><span class="sd" style="background:'+c+'"></span>'+esc(stage&&stage.label||"")+'</span>';
+      }
+
+      function journeyHtml(){
+        var stages=(data.stages||[]).slice().sort(function(a,b){return (a.order||0)-(b.order||0);});
+        var linear=stages.filter(function(s){return (s.order||0)<=6;});
+        var status=data.status, isRejected=status==="rejected", isOnHold=status==="on_hold";
+        var curOrder=0;
+        // Only linear stages (order 1-6) can be "current". An on-hold case with no
+        // recorded hold position, or any non-linear status key, must NOT fall through
+        // to order 7/8 — that would paint the whole track (incl. Approved) as done.
+        if(isOnHold){ var h=stages.filter(function(s){return s.key===data.held_from_status;})[0]; curOrder=(h&&h.order<=6)?h.order:0; }
+        else if(!isRejected){ var c=stages.filter(function(s){return s.key===status;})[0]; curOrder=(c&&c.order<=6)?c.order:1; }
+        var nodes=linear.map(function(s){
+          var cls;
+          if(isRejected) cls=s.order<=5?"done":"upcoming";
+          else if(s.order<curOrder) cls="done";
+          else if(s.order===curOrder) cls="current"+(isOnHold?" paused":"");
+          else cls="upcoming";
+          if(s.order===6&&cls!=="upcoming"&&!isOnHold) cls+=" approved";
+          var inner=cls.indexOf("done")===0?"✓":String(s.order);
+          if(s.order===6&&cls.indexOf("upcoming")<0&&!isOnHold&&!isRejected) inner="🎉";
+          return '<div class="jt-step '+cls+'"><div class="jt-node">'+inner+'</div><div class="jt-label">'+esc(s.label)+'</div></div>';
+        }).join("");
+        var banner="";
+        if(isRejected) banner='<div class="p-banner red">😞 <div><b>This application was refused.</b> Your consultancy can walk you through what happened and what reapplying would look like — many refusals are successfully overturned on a stronger second attempt.</div></div>';
+        else if(isOnHold) banner='<div class="p-banner gray">⏸ <div><b>Your application is currently on hold'+(data.held_from_stage?' (paused at "'+esc(data.held_from_stage.label)+'")':"")+'.</b> Contact your consultancy if you have questions about resuming.</div></div>';
+        else if(status==="approved") banner='<div class="p-banner green">🎉 <div><b>Congratulations — your visa has been approved!</b> Your consultancy will guide you through the next steps before you travel.</div></div>';
+        return '<div class="jt">'+nodes+'</div>'+banner;
+      }
+
+      function stageDetailsHtml(){
+        var stages=(data.stages||[]).slice().sort(function(a,b){return (a.order||0)-(b.order||0);});
+        var records=data.stage_records||{};
+        var status=data.status, isRejected=status==="rejected", isOnHold=status==="on_hold";
+        var curKey=isOnHold?(data.held_from_status||status):status;
+        var curOrder=0;
+        var cs=stages.filter(function(s){return s.key===curKey;})[0];
+        if(cs&&(cs.order||0)<=6) curOrder=cs.order;  // non-linear keys (on_hold/rejected) never mark the track done
+        // The 6 linear stages always render; Rejected / On Hold sections only when staff recorded details there.
+        var list=stages.filter(function(s){ return (s.order||0)<=6 || (records[s.key]&&records[s.key].length); });
+        var html=list.map(function(s){
+          var fields=records[s.key]||[];
+          var isCur=s.key===curKey&&(s.order||0)<=6;
+          // Match the tracker's rejected rendering (orders <= 5 shown as done) so the
+          // accordion and the journey stepper never tell contradictory stories.
+          var st=(s.order||0)<=6?((isRejected?s.order<=5:s.order<curOrder)?"done":(isCur?"current":"")):"";
+          var open=isCur||(isRejected&&s.key==="rejected");
+          var dot=st==="done"?"✓":((s.order||0)<=6?String(s.order):(s.key==="rejected"?"!":"⏸"));
+          var note=fields.length?('<span class="n">'+fields.length+' detail'+(fields.length===1?"":"s")+'</span>'):"";
+          var kv=fields.length
+            ? '<div class="kv">'+fields.map(function(f){ return '<div class="it"><label>'+esc(f.label)+'</label><div>'+(f.type==="date"?esc(fmtDate(f.value)||f.value):esc(f.value))+'</div></div>'; }).join("")+'</div>'
+            : '<p class="st-desc" style="margin:0">No details recorded at this stage yet.</p>';
+          return '<div class="st '+st+(open?" open":"")+'" data-sk="'+esc(s.key)+'">'+
+            '<div class="st-head"><div class="st-dot">'+dot+'</div>'+
+              '<div><div class="st-ttl">'+esc(s.label)+(isCur?' <span class="badge mut" style="margin-left:6px">Current stage</span>':"")+'</div></div>'+
+              '<div class="st-flag">'+note+'<svg class="st-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'+
+            '</div>'+
+            '<div class="st-body"><p class="st-desc">'+esc(s.description||"")+'</p>'+kv+'</div>'+
+          '</div>';
+        }).join("");
+        return '<div class="stage-acc">'+html+'</div>';
+      }
+
+      function profileHtml(){
+        var c=data.client||{};
+        var items=[
+          ["Full name",c.full_name],["Email",c.email],["Phone",c.phone],["Nationality",c.nationality],
+          ["Date of birth",fmtDate(c.date_of_birth)],["Passport number",c.passport_number],
+          ["Passport expiry",fmtDate(c.passport_expiry)],["Destination",(c.destination_country_name||"")+(c.country&&c.country.flag_emoji?" "+c.country.flag_emoji:"")],
+          ["Visa type",c.visa_type],["Category",c.visa_category_label],["Intake",c.intake],
+          ["Application reference",c.application_reference],["Key date",fmtDate(c.target_date)],["Client since",fmtDate(c.created_at)]
+        ].filter(function(p){ return p[1]; });
+        return '<div class="kv">'+items.map(function(p){ return '<div class="it"><label>'+esc(p[0])+'</label><div>'+esc(p[1])+'</div></div>'; }).join("")+'</div>';
+      }
+
+      function documentsHtml(){
+        var docs=data.documents||[];
+        if(!docs.length) return '<p class="st-desc" style="margin:0">No documents on file yet. Your consultancy will let you know what to send.</p>';
+        return docs.map(function(d){
+          var badge=d.status==="verified"?'<span class="badge ok">✓ Verified</span>':(d.status==="needs_review"?'<span class="badge warn">Being reviewed</span>':'<span class="badge mut">On file</span>');
+          return '<div class="doc-row"><div class="doc-ic">📄</div>'+
+            '<div class="doc-main"><div class="doc-type">'+esc(d.document_type||"Document")+' '+badge+'</div>'+
+            '<div class="doc-file">'+esc(d.original_filename||"")+(d.file_size?' · '+fmtSize(d.file_size):"")+'</div></div>'+
+            '<div class="doc-meta">'+esc(fmtDate(d.uploaded_at))+'</div></div>';
+        }).join("");
+      }
+
+      function universitiesHtml(){
+        var unis=data.universities||[];
+        var UNI_STATUS={considering:["Considering","mut"],applied:["Applied","warn"],admitted:["Admitted 🎉","ok"],rejected:["Not admitted","red"]};
+        var DIFF={reach:"Ambitious",match:"Good match",safety:"Safe bet"};
+        return unis.map(function(u){
+          var st=UNI_STATUS[u.status]||[u.status,"mut"];
+          st=[esc(st[0]),st[1]];  // fallback label is server data — escape before innerHTML
+          var meta=[];
+          if(u.location) meta.push(esc(u.location));
+          if(u.qs_world_rank) meta.push("QS world rank <b>"+esc(u.qs_world_rank)+"</b>");
+          if(u.country_rank) meta.push("Country rank <b>"+esc(u.country_rank)+"</b>");
+          if(u.est_tuition) meta.push("Est. tuition <b>"+esc(u.est_tuition)+"</b>");
+          if(u.application_fee) meta.push("Application fee <b>"+esc(u.application_fee)+"</b>");
+          var reqs=(u.key_requirements||[]).length?'<ul class="uni-reqs">'+u.key_requirements.map(function(r){return "<li>"+esc(r)+"</li>";}).join("")+"</ul>":"";
+          var links=[];
+          if(u.website_url) links.push('<a href="'+esc(u.website_url)+'" target="_blank" rel="noopener">University website ↗</a>');
+          if(u.admissions_url) links.push('<a href="'+esc(u.admissions_url)+'" target="_blank" rel="noopener">Entry requirements ↗</a>');
+          return '<div class="uni"><div class="uni-top"><div><div class="uni-name">'+esc(u.university_name)+'</div>'+
+            (u.program?'<div class="uni-prog">'+esc(u.program)+'</div>':"")+'</div>'+
+            '<div class="uni-badges"><span class="badge '+st[1]+'">'+st[0]+'</span>'+(u.admission_difficulty&&DIFF[u.admission_difficulty]?'<span class="badge mut">'+DIFF[u.admission_difficulty]+'</span>':"")+'</div></div>'+
+            (meta.length?'<div class="uni-meta">'+meta.map(function(m){return "<span>"+m+"</span>";}).join("")+'</div>':"")+
+            reqs+(links.length?'<div class="uni-links">'+links.join("")+'</div>':"")+
+          '</div>';
+        }).join("");
+      }
+
+      function paymentsHtml(){
+        var pays=data.payments||[];
+        var CLS={paid:"ok",pending:"warn",failed:"red",refunded:"mut",partially_refunded:"mut",cancelled:"mut"};
+        var rows=pays.map(function(p){
+          var refund=(p.refunded_amount||0)>0?'<div class="muted" style="font-size:11.5px">'+esc(fmtMoney(p.refunded_amount,p.currency))+" refunded</div>":"";
+          return "<tr><td>"+esc(p.description||"Consultancy fee")+(p.invoice_number?'<div class="muted" style="font-size:11.5px">'+esc(p.invoice_number)+"</div>":"")+"</td>"+
+            '<td class="pay-amt">'+esc(fmtMoney(p.amount,p.currency))+refund+"</td>"+
+            '<td><span class="badge '+(CLS[p.status]||"mut")+'">'+esc(p.status_label||p.status)+"</span></td>"+
+            "<td>"+esc(fmtDate(p.paid_at||p.created_at))+(p.status==="pending"&&p.due_date?'<div class="muted" style="font-size:11.5px">due '+esc(fmtDate(p.due_date))+"</div>":"")+"</td></tr>";
+        }).join("");
+        return '<div class="tbl-scroll"><table class="pay-tbl"><thead><tr><th>Payment</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody>'+rows+"</tbody></table></div>";
+      }
+
+      function renderPortal(){
+        var c=data.client||{}, org=data.organization||{};
+        var code=String(c.destination_country_code||"").toUpperCase();
+        var heroKey=HERO_CODES[code]||null;
+        var grad="linear-gradient(135deg,"+((c.country&&c.country.gradient_from)||"#6366f1")+","+((c.country&&c.country.gradient_to)||"#8b5cf6")+")";
+        var heroStyle="--p-hero-fallback:"+grad+(heroKey?";--p-hero-image:url('/static/assets/enterprise/client-banners/"+heroKey+".jpg')":"");
+        var logo=(org.logo_url||"").trim();
+        var logoImg=logo?'<img src="'+esc(logo)+'" alt="" onerror="this.style.display=\'none\'">':"";
+        var interviews=data.mock_interviews_completed||0;
+
+        $("wrap").classList.add("wide");
+        $("brandRow").classList.add("hidden");
+        $("gateCard").classList.add("hidden");
+        var pv=$("portalView");
+        pv.innerHTML=
+          '<div class="p-topbar">'+logoImg+'<div><div class="org">'+esc(org.name||"Your consultancy")+'</div><div class="tagline">Your visa application portal</div></div>'+
+            '<span class="p-view-badge">👁 View-only</span></div>'+
+          '<div class="p-hero" style="'+heroStyle+'">'+
+            '<div class="p-seal"><span>Destination</span><div><strong>'+esc(code==="GB"?"UK":code||"—")+'</strong><small>'+esc((c.country&&c.country.flag_emoji)||"🌐")+'</small></div></div>'+
+            '<div class="hstatus">'+statusPill(data.stage)+'</div>'+
+            '<div class="kicker">Student visa dossier</div>'+
+            '<h1>'+esc(c.full_name||"")+'</h1>'+
+            '<div class="hsub">'+esc(c.destination_country_name||"")+' · '+esc(c.visa_type||"")+(c.intake?" · "+esc(c.intake):"")+'</div>'+
+          '</div>'+
+          '<div class="p-card"><h2>Your visa journey</h2><p class="sub">Where your application is right now — updated by '+esc(org.name||"your consultancy")+'.</p>'+journeyHtml()+'</div>'+
+          '<div class="p-card"><h2>Stage by stage</h2><p class="sub">Tap a stage to see the details recorded for it.</p>'+stageDetailsHtml()+'</div>'+
+          '<div class="p-card"><h2>Your details</h2><p class="sub">The profile information on file for your application.</p>'+profileHtml()+'</div>'+
+          '<div class="p-card"><h2>Documents on file ('+(data.documents||[]).length+')</h2><p class="sub">Documents your consultancy holds for this application.</p>'+documentsHtml()+'</div>'+
+          ((data.universities||[]).length?'<div class="p-card"><h2>🎓 University shortlist</h2><p class="sub">Universities selected with your consultancy.</p>'+universitiesHtml()+'</div>':"")+
+          ((data.payments||[]).length?'<div class="p-card"><h2>💳 Payments</h2><p class="sub">Payment requests and receipts from '+esc(org.name||"your consultancy")+'.</p>'+paymentsHtml()+'</div>':"")+
+          (interviews?'<div class="p-card"><h2>🎤 Interview practice</h2><p class="sub">Mock visa interviews completed with '+esc(org.name||"your consultancy")+'.</p><div class="badge ok" style="font-size:13px;padding:8px 14px">'+interviews+" mock interview"+(interviews===1?"":"s")+" completed</div></div>":"")+
+          '<div class="p-updated">Last updated '+esc(fmtDateTime(c.updated_at)||"recently")+' · shared by '+esc(org.name||"your consultancy")+'</div>';
+        pv.classList.remove("hidden");
+
+        // Accordion toggles
+        Array.prototype.forEach.call(pv.querySelectorAll(".st-head"), function(h){
+          h.onclick=function(){ h.parentElement.classList.toggle("open"); };
+        });
+      }
+
+      load();
+    })();
+  </script>
+</body>
+</html>
