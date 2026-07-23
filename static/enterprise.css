@@ -1295,6 +1295,25 @@ button { font-family: inherit; cursor: pointer; }
 .iv-invite-status { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13.5px; }
 .iv-invite-status .row { gap: 8px; }
 
+/* ---- Portal share modal (client read-only link) ---- */
+.ps-lead { margin: 0 0 16px; font-size: 14px; line-height: 1.65; color: var(--text-2); }
+.ps-lead b { color: var(--text); font-weight: 700; }
+.ps-status { display: flex; align-items: center; gap: 12px; padding: 13px 15px; margin: 0 0 18px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 14px; }
+.ps-status-ic { width: 36px; height: 36px; flex: none; display: grid; place-content: center; border-radius: 11px; font-size: 16px; font-weight: 800; background: var(--bg-2); color: var(--muted); }
+.ps-status-txt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ps-status-txt > b { font-size: 13.5px; font-weight: 700; color: var(--text); }
+.ps-meta { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.ps-status.is-open { background: rgba(16,185,129,.07); border-color: rgba(16,185,129,.28); }
+.ps-status.is-open .ps-status-ic { background: rgba(16,185,129,.16); color: #047857; }
+.ps-status.is-open .ps-status-txt > b { color: #047857; }
+.ps-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 16px; border-top: 1px solid var(--border); }
+.ps-actions .btn { flex: none; }
+.ps-actions .ps-revoke { margin-left: auto; }
+@media (max-width: 480px) {
+  .ps-actions .btn { flex: 1 1 100%; }
+  .ps-actions .ps-revoke { margin-left: 0; }
+}
+
 /* ===================== Calendar ===================== */
 .cal-wrap { display: grid; grid-template-columns: 1fr 320px; gap: 20px; align-items: start; }
 @media (max-width: 980px) { .cal-wrap { grid-template-columns: 1fr; } }

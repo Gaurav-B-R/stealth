@@ -65,6 +65,54 @@ JOBS: list[dict] = [
         "bonus": "Basic understanding of Prompt Engineering or the study-abroad / visa process.",
         "open": True,
     },
+    {
+        "slug": "social-media-marketing-intern",
+        "title": "Social Media Marketing Intern (Strategy & Growth)",
+        "team": "Marketing & Growth",
+        "type": "Internship",
+        "location": "Remote · Anywhere",
+        "openings": 1,
+        "posted": "2026-07-23",
+        "employment_type": "INTERN",  # schema.org JobPosting value
+        "tagline": "Architect our digital growth — audit our channels, spot the gaps, and build "
+                   "campaigns that turn international students and consultancies into a community.",
+        "about": "Rilono is an AI-powered immigration tech startup. We use advanced AI to help "
+                 "international students secure their study visas and provide smart CRM tools for "
+                 "study abroad consultancies.",
+        "role": "We are looking for a highly strategic Social Media Marketing Intern to architect "
+                "our digital growth. Your goal is to analyze our current online presence, identify "
+                "gaps, and build scalable campaigns that drive organic engagement and brand awareness.",
+        "responsibilities": [
+            {
+                "title": "Social Media Strategy",
+                "body": "Audit our existing channels (LinkedIn, Instagram, Twitter/X) and build a "
+                        "roadmap to increase our digital footprint.",
+            },
+            {
+                "title": "Campaign Ideation",
+                "body": "Brainstorm and plan high-impact content series and marketing campaigns "
+                        "targeted at international students and B2B agencies.",
+            },
+            {
+                "title": "Growth Tactics",
+                "body": "Implement creative ways to boost organic reach, attract followers, and "
+                        "foster meaningful community engagement.",
+            },
+            {
+                "title": "Market & Trend Analysis",
+                "body": "Monitor competitor activities and broader immigration trends to ensure "
+                        "Rilono's messaging is always highly relevant.",
+            },
+        ],
+        "requirements": [
+            "A strong understanding of social media algorithms, growth strategies, and engagement metrics.",
+            "Ability to think strategically and translate creative ideas into actionable marketing plans.",
+            "Excellent copywriting skills with an eye for compelling brand messaging.",
+            "A proactive mindset with the ability to identify marketing gaps and propose solutions.",
+        ],
+        "bonus": "Familiarity with the study abroad / visa landscape or SaaS marketing.",
+        "open": True,
+    },
 ]
 
 

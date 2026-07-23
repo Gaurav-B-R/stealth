@@ -1729,19 +1729,23 @@
           <button class="btn btn-primary btn-block" id="psAddEmail">Add an email</button>`;
       }
       if (s && s.live) {
-        const opened = (s.open_count || 0) > 0
-          ? `✓ Opened ${s.open_count} time${s.open_count === 1 ? "" : "s"}${s.last_opened_at ? " · last " + fmtDate(s.last_opened_at) : ""}`
+        const opens = s.open_count || 0;
+        const opened = opens > 0
+          ? `Opened ${opens} time${opens === 1 ? "" : "s"}${s.last_opened_at ? " · last " + fmtDate(s.last_opened_at) : ""}`
           : "Not opened yet";
-        return `<p style="margin:0 0 12px">A secure portal link is with <b>${esc(s.email)}</b>. ${esc(first)} confirms a one-time code sent to that address, then sees a <b>view-only</b> copy of this case — stages, recorded details, documents, universities and payments. Internal notes are never shown.</p>
-          <div style="background:var(--surface-2,#f8fafc);border:1px solid var(--border,#e7e9f3);border-radius:10px;padding:12px 14px;margin:0 0 14px">
-            <span class="iv-sv ${(s.open_count || 0) > 0 ? "ok" : ""}" ${(s.open_count || 0) > 0 ? "" : 'style="background:#eef2f7;color:#64748b"'}>${esc(opened)}</span>
-            <div class="muted" style="font-size:12px;margin-top:6px">Shared${s.created_at ? " " + fmtDate(s.created_at) : ""}${s.created_by_name ? " by " + esc(s.created_by_name) : ""}${s.expires_at ? " · link valid until " + fmtDate(s.expires_at) : ""}</div>
+        const meta = `Shared${s.created_at ? " " + fmtDate(s.created_at) : ""}${s.created_by_name ? " by " + esc(s.created_by_name) : ""}${s.expires_at ? " · valid until " + fmtDate(s.expires_at) : ""}`;
+        return `<p class="ps-lead">A secure portal link is with <b>${esc(s.email)}</b>. ${esc(first)} confirms a one-time code sent to that address, then sees a <b>view-only</b> copy of this case — stages, recorded details, documents, universities and payments. Internal notes are never shown.</p>
+          <div class="ps-status${opens > 0 ? " is-open" : ""}">
+            <span class="ps-status-ic">${opens > 0 ? "✓" : "✉"}</span>
+            <div class="ps-status-txt">
+              <b>${esc(opened)}</b>
+              <span class="ps-meta">${meta}</span>
+            </div>
           </div>
-          <div class="row" style="gap:8px;flex-wrap:wrap">
-            ${ps.link ? `<button class="btn btn-soft btn-sm" id="psCopy">Copy link</button>` : ""}
+          <div class="ps-actions">
             <button class="btn btn-soft btn-sm" id="psResend">Resend new link</button>
-            <div style="flex:1"></div>
-            <button class="btn btn-danger btn-sm" id="psRevoke">Revoke access</button>
+            ${ps.link ? `<button class="btn btn-ghost btn-sm" id="psCopy">Copy link</button>` : ""}
+            <button class="btn btn-danger btn-sm ps-revoke" id="psRevoke">Revoke access</button>
           </div>`;
       }
       return `<p style="margin:0 0 10px">Email <b>${esc(cl.email)}</b> a secure link so ${esc(first)} can follow their own application — journey stage, recorded case details, profile info, documents on file, university shortlist and payment history.</p>
