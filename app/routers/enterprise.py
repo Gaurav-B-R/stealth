@@ -54,6 +54,7 @@ from app.utils.rate_limiter import (
 )
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
 from app.email_service import send_enterprise_team_invite_email, send_enterprise_client_email
+from app.email_service import send_enterprise_inbound_reply_alert_email
 from app import enterprise_inbound_email as inbound_email
 from app.email_service import send_enterprise_interview_invite_email, send_enterprise_interview_code_email
 from app.email_service import send_enterprise_interview_report_email
@@ -4476,7 +4477,105 @@ async def enterprise_inbound_email_webhook(request: Request, db: Session = Depen
         # redelivery beat us to the insert.
         db.rollback()
         return {"status": "duplicate"}
+
+    # Email heads-up so staff don't have to be watching the portal. Best-effort:
+    # a mail failure must never make the webhook 5xx (the reply is already saved).
+    try:
+        await _alert_staff_of_inbound_reply(
+            db, organization_id=client.organization_id, client=client,
+            reply_subject=subject, reply_snippet=reply_text,
+        )
+    except Exception:
+        logger.exception("inbound-email: staff heads-up email failed (client_id=%s)", client.id)
     return {"status": "ok"}
+
+
+def _inbound_reply_recipients(
+    db: Session, *, organization_id: int, client: models.EnterpriseClient
+) -> list[models.User]:
+    """Who gets the email nudge for an inbound reply: the staffer who sent the most
+    recent outbound message in this thread (the person waiting on the reply); fall
+    back to active org admins. Honors each user's email-notification preference."""
+    def _wants_email(u: models.User) -> bool:
+        return (
+            u is not None and u.is_active
+            and getattr(u, "email_notifications_enabled", True) is not False
+            and bool((u.email or "").strip())
+        )
+
+    recipients: list[models.User] = []
+    last_out = (
+        db.query(models.EnterpriseClientEmail)
+        .filter(
+            models.EnterpriseClientEmail.client_id == client.id,
+            models.EnterpriseClientEmail.direction == "outbound",
+            models.EnterpriseClientEmail.sent_by_user_id.isnot(None),
+        )
+        .order_by(models.EnterpriseClientEmail.created_at.desc())
+        .first()
+    )
+    if last_out and last_out.sent_by_user_id:
+        sender = db.query(models.User).filter(models.User.id == last_out.sent_by_user_id).first()
+        if _wants_email(sender):
+            recipients.append(sender)
+    if not recipients:
+        admins = (
+            db.query(models.User)
+            .join(
+                models.EnterpriseOrganizationMember,
+                models.EnterpriseOrganizationMember.user_id == models.User.id,
+            )
+            .filter(
+                models.EnterpriseOrganizationMember.organization_id == organization_id,
+                models.EnterpriseOrganizationMember.is_active.is_(True),
+                models.EnterpriseOrganizationMember.role == ENTERPRISE_ROLE_ADMIN,
+                models.User.is_active.is_(True),
+            )
+            .all()
+        )
+        recipients.extend(a for a in admins if _wants_email(a))
+
+    seen: set[str] = set()
+    deduped: list[models.User] = []
+    for u in recipients:
+        key = (u.email or "").strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(u)
+    return deduped
+
+
+async def _alert_staff_of_inbound_reply(
+    db: Session, *, organization_id: int, client: models.EnterpriseClient,
+    reply_subject: str, reply_snippet: str,
+) -> None:
+    """Send the 'client replied — view in portal' nudge. The thread lives in the
+    portal; this is only awareness. Resend calls run off the event loop."""
+    recipients = _inbound_reply_recipients(db, organization_id=organization_id, client=client)
+    if not recipients:
+        return
+    organization = (
+        db.query(models.EnterpriseOrganization)
+        .filter(models.EnterpriseOrganization.id == organization_id)
+        .first()
+    )
+    org_name = organization.company_name if organization else "your consultancy"
+    logo_url = _resolve_enterprise_logo_url(organization) if organization else None
+    for user in recipients:
+        try:
+            await run_in_threadpool(
+                send_enterprise_inbound_reply_alert_email,
+                to_email=user.email,
+                staff_name=user.full_name or user.email,
+                organization_name=org_name,
+                client_name=client.full_name,
+                client_id=client.id,
+                reply_subject=reply_subject,
+                reply_snippet=reply_snippet,
+                logo_url=logo_url,
+            )
+        except Exception:
+            logger.exception("inbound-email: alert email to %s failed", user.email)
 
 
 @router.get("/billing/plans")

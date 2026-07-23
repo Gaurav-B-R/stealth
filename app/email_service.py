@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 from datetime import datetime, timedelta
 from html import escape
 from urllib.parse import quote
@@ -15,6 +16,10 @@ load_dotenv()
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "noreply@rilono.com")
 RESEND_TRANSACTIONAL_FROM_EMAIL = os.getenv("RESEND_TRANSACTIONAL_FROM_EMAIL", RESEND_FROM_EMAIL)
+# Consultant -> client (student) emails invite a reply, so they must NOT come from a
+# no-reply address. Kept separate from the transactional sender (OTPs/receipts) and
+# configurable; the tokenized Reply-To (reply+…@inbound.rilono.com) still routes the reply.
+RESEND_ENTERPRISE_FROM_EMAIL = os.getenv("RESEND_ENTERPRISE_FROM_EMAIL", "hello@rilono.com")
 RESEND_FROM_NAME = os.getenv("RESEND_FROM_NAME", "Rilono")
 # For development: use Resend's test email (delivered@resend.dev) which doesn't require domain verification
 USE_TEST_EMAIL = os.getenv("USE_TEST_EMAIL", "false").lower() == "true"
@@ -63,6 +68,13 @@ def _resolve_transactional_from_email() -> str:
         print("DEV MODE: Using test email sender (delivered@resend.dev)")
         return "delivered@resend.dev"
     return RESEND_TRANSACTIONAL_FROM_EMAIL
+
+
+def _resolve_enterprise_from_email() -> str:
+    """Sender for consultant->client emails — a real, replyable address (never no-reply)."""
+    if USE_TEST_EMAIL or DEV_MODE:
+        return "delivered@resend.dev"
+    return RESEND_ENTERPRISE_FROM_EMAIL
 
 
 def _extract_resend_email_id(email_response) -> Optional[str]:
@@ -1124,6 +1136,228 @@ def send_contact_form_email(
         return False
 
 
+def _resolve_careers_recipient() -> str:
+    """Where job applications land. Defaults to the same shared inbox the contact
+    form uses (contact@rilono.com); overridable via CAREERS_EMAIL."""
+    return (os.getenv("CAREERS_EMAIL", "contact@rilono.com").strip() or "contact@rilono.com")
+
+
+def send_job_application_email(
+    *,
+    full_name: str,
+    email: str,
+    position: str,
+    phone: str = "",
+    location: str = "",
+    links: str = "",
+    cover_note: str = "",
+    resume_bytes: bytes,
+    resume_filename: str,
+    resume_content_type: str = "application/octet-stream",
+) -> bool:
+    """Email a careers application — every field plus the resume as an attachment —
+    to the careers inbox (contact@rilono.com by default). Reply-To is set to the
+    applicant so the team can reply straight from the notification.
+
+    Returns True on success, False otherwise. Never raises.
+    """
+    if not RESEND_API_KEY:
+        print("ERROR: Cannot send job application email - Resend not configured")
+        return False
+
+    def _one_line(value: str) -> str:
+        return re.sub(r"[\r\n]+", " ", (value or "").strip())
+
+    applicant_name = _one_line(full_name) or "Unknown applicant"
+    applicant_email = _one_line(email)
+    applicant_phone = _one_line(phone)
+    applicant_location = _one_line(location)
+    applicant_links = _one_line(links)
+    role = _one_line(position) or "General application"
+    note = (cover_note or "").strip()
+
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", applicant_email):
+        print("ERROR: Invalid applicant email in job application payload")
+        return False
+
+    if not resume_bytes:
+        print("ERROR: Missing resume bytes in job application payload")
+        return False
+
+    safe_name = escape(applicant_name)
+    safe_email = escape(applicant_email)
+    safe_phone = escape(applicant_phone) or "—"
+    safe_location = escape(applicant_location) or "—"
+    safe_links = escape(applicant_links) or "—"
+    safe_role = escape(role)
+    safe_note = escape(note) if note else "—"
+    safe_reply_subject = quote(f"Re: Your Rilono application — {role}", safe="")
+
+    # Render the links field as clickable anchors when they look like URLs.
+    def _linkify(raw: str) -> str:
+        parts = re.split(r"[\s,]+", (raw or "").strip())
+        anchors = []
+        for part in parts:
+            if not part:
+                continue
+            safe_part = escape(part)
+            if re.match(r"^https?://", part):
+                anchors.append(f'<a href="{safe_part}" target="_blank" rel="noopener noreferrer">{safe_part}</a>')
+            else:
+                anchors.append(safe_part)
+        return "<br>".join(anchors) if anchors else "—"
+
+    links_html = _linkify(applicant_links)
+
+    recipient = _resolve_careers_recipient()
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 620px; margin: 0 auto; padding: 20px; }}
+            .header {{ background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%); color: white; padding: 30px; border-radius: 14px 14px 0 0; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 22px; }}
+            .header p {{ margin: 8px 0 0; opacity: 0.92; font-size: 14px; }}
+            .content {{ background: #f8fafc; padding: 26px; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 14px 14px; }}
+            .field {{ margin-bottom: 14px; padding: 14px 16px; background: white; border-radius: 10px; border: 1px solid #e2e8f0; }}
+            .field-label {{ font-weight: 700; color: #6366f1; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 5px; }}
+            .field-value {{ color: #1e293b; font-size: 15px; word-break: break-word; }}
+            .note {{ white-space: pre-wrap; }}
+            .reply-btn {{ display: inline-block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: white; padding: 12px 24px; text-decoration: none; border-radius: 10px; font-weight: 600; margin-top: 18px; }}
+            .attach {{ margin-top: 16px; padding: 12px 16px; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 10px; font-size: 14px; color: #3730a3; }}
+            .footer {{ text-align: center; margin-top: 18px; color: #64748b; font-size: 12px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>🧑‍💻 New Job Application</h1>
+            <p>{safe_role}</p>
+        </div>
+        <div class="content">
+            <div class="field">
+                <div class="field-label">Applicant</div>
+                <div class="field-value">{safe_name}</div>
+            </div>
+            <div class="field">
+                <div class="field-label">Email</div>
+                <div class="field-value"><a href="mailto:{safe_email}">{safe_email}</a></div>
+            </div>
+            <div class="field">
+                <div class="field-label">Phone</div>
+                <div class="field-value">{safe_phone}</div>
+            </div>
+            <div class="field">
+                <div class="field-label">Location</div>
+                <div class="field-value">{safe_location}</div>
+            </div>
+            <div class="field">
+                <div class="field-label">Portfolio / Links</div>
+                <div class="field-value">{links_html}</div>
+            </div>
+            <div class="field">
+                <div class="field-label">Position</div>
+                <div class="field-value">{safe_role}</div>
+            </div>
+            <div class="field">
+                <div class="field-label">Why they're a fit</div>
+                <div class="field-value note">{safe_note}</div>
+            </div>
+            <div class="attach">📎 Resume attached: <strong>{escape(_one_line(resume_filename) or 'resume')}</strong></div>
+            <div style="text-align:center;">
+                <a href="mailto:{safe_email}?subject={safe_reply_subject}" class="reply-btn">Reply to {safe_name}</a>
+            </div>
+        </div>
+        <div class="footer">
+            <p>Submitted via the Rilono careers page.</p>
+        </div>
+    </body>
+    </html>
+    """
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>",
+            "to": [recipient],
+            "reply_to": applicant_email,
+            "subject": f"[Rilono Careers] {applicant_name} — {role}",
+            "html": html_content,
+            "attachments": [
+                {
+                    "filename": _one_line(resume_filename) or "resume",
+                    "content": base64.b64encode(resume_bytes).decode("ascii"),
+                    "content_type": (resume_content_type or "application/octet-stream").strip() or "application/octet-stream",
+                }
+            ],
+        }
+
+        email_response = resend.Emails.send(params)
+        if email_response and email_response.get("id"):
+            print(f"✓ Job application email sent (ID: {email_response['id']})")
+            return True
+        print(f"✗ Failed to send job application email: {email_response}")
+        return False
+    except Exception as e:
+        print(f"Error sending job application email: {e}")
+        return False
+
+
+def send_job_application_ack_email(*, to_email: str, full_name: str, position: str) -> bool:
+    """Best-effort warm acknowledgement to the applicant. Never raises."""
+    if not RESEND_API_KEY:
+        return False
+
+    applicant_email = re.sub(r"[\r\n]+", " ", (to_email or "").strip())
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", applicant_email):
+        return False
+
+    first_name = escape((full_name or "").strip().split(" ")[0] or "there")
+    safe_role = escape(re.sub(r"[\r\n]+", " ", (position or "").strip()) or "the role")
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; line-height: 1.6; color: #1e293b; max-width: 560px; margin: 0 auto; padding: 20px; }}
+            .header {{ background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%); color: white; padding: 34px 30px; border-radius: 14px 14px 0 0; text-align: center; }}
+            .header h1 {{ margin: 0; font-size: 22px; }}
+            .content {{ background: #f8fafc; padding: 30px; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 14px 14px; font-size: 15px; }}
+            .footer {{ text-align: center; margin-top: 18px; color: #64748b; font-size: 12px; }}
+        </style>
+    </head>
+    <body>
+        <div class="header"><h1>Application received 🎉</h1></div>
+        <div class="content">
+            <p>Hi {first_name},</p>
+            <p>Thanks for applying to <strong>{safe_role}</strong> at Rilono. We've received your
+            application and resume, and our team is reviewing it.</p>
+            <p>If it looks like a match, we'll reach out to you directly at this email address to set up
+            a conversation. Either way, we genuinely appreciate the time you took to apply.</p>
+            <p>— The Rilono Team</p>
+        </div>
+        <div class="footer">
+            <p>You're receiving this because you applied via the Rilono careers page.</p>
+        </div>
+    </body>
+    </html>
+    """
+
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_transactional_from_email()}>",
+            "to": [applicant_email],
+            "subject": "We received your Rilono application",
+            "html": html_content,
+        }
+        resend.Emails.send(params)
+        return True
+    except Exception as e:
+        print(f"Error sending job application acknowledgement: {e}")
+        return False
+
+
 def _format_datetime_for_subscription_email(value: Optional[datetime]) -> str:
     if not value:
         return "N/A"
@@ -1927,7 +2161,7 @@ def send_enterprise_client_email(
 
     try:
         params = {
-            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
+            "from": f"{org_label} via Rilono <{_resolve_enterprise_from_email()}>",
             "to": [recipient],
             "subject": clean_subject,
             "html": html_content,
@@ -1936,6 +2170,102 @@ def send_enterprise_client_email(
         clean_reply_to = (reply_to or "").strip()
         if clean_reply_to:
             params["reply_to"] = clean_reply_to
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def send_enterprise_inbound_reply_alert_email(
+    *,
+    to_email: str,
+    staff_name: Optional[str],
+    organization_name: str,
+    client_name: str,
+    client_id: int,
+    reply_subject: str,
+    reply_snippet: str,
+    logo_url: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Notify a team member that a client replied. The conversation lives in the
+    Rilono portal — this is only a heads-up with a link. Returns (ok, id, error)."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = (organization_name or "your consultancy").strip()
+    who = (staff_name or "there").strip() or "there"
+    client_label = (client_name or "your client").strip() or "your client"
+    snippet = (reply_snippet or "").strip()
+    if len(snippet) > 400:
+        snippet = snippet[:400].rstrip() + "…"
+    client_url = f"{DEFAULT_PUBLIC_BASE_URL.rstrip('/')}/enterprise/clients/{int(client_id)}"
+
+    safe_org = escape(org_label)
+    safe_who = escape(who)
+    safe_client = escape(client_label)
+    safe_subject = escape((reply_subject or "").strip() or "(no subject)")
+    safe_snippet = escape(snippet).replace("\r\n", "\n").replace("\n", "<br>") or "<em>(no text)</em>"
+    safe_url = escape(client_url)
+
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (
+            f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
+            'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">'
+        )
+
+    subject_line = f"{client_label} replied — {org_label}"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:24px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
+              {logo_block}
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
+              <h1 style="margin:8px 0 0 0;font-size:22px;">📨 {safe_client} replied</h1>
+            </td></tr>
+            <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
+              <p style="margin:0 0 14px;">Hi {safe_who},</p>
+              <p style="margin:0 0 14px;">{safe_client} just replied to your email. The full thread is in your Rilono portal.</p>
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #6366f1;border-radius:8px;padding:12px 14px;margin-bottom:20px;">
+                <div style="font-size:13px;color:#64748b;margin-bottom:4px;">Re: {safe_subject}</div>
+                <div style="font-size:14px;color:#0f172a;">{safe_snippet}</div>
+              </div>
+              <div style="text-align:center;margin:8px 0 4px;">
+                <a href="{safe_url}" style="display:inline-block;padding:13px 26px;border-radius:10px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#fff;font-size:15px;font-weight:700;text-decoration:none;">Open the conversation →</a>
+              </div>
+            </td></tr>
+            <tr><td style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;line-height:1.6;">
+              Reply from the Rilono portal so your whole team sees it and it stays on the client's record.
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        f"Hi {who},\n\n{client_label} just replied to your email.\n\n"
+        f"Re: {(reply_subject or '').strip() or '(no subject)'}\n{snippet or '(no text)'}\n\n"
+        f"Open the conversation: {client_url}\n\n"
+        "Reply from the Rilono portal so your whole team sees it and it stays on the client's record.\n"
+    )
+    try:
+        params = {
+            "from": f"Rilono <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject_line,
+            "html": html_content,
+            "text": text_content,
+        }
         email_response = resend.Emails.send(params)
         email_id = _extract_resend_email_id(email_response)
         if email_id:

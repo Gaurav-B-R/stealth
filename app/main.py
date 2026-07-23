@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e, outcomes, sop
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e, outcomes, sop, careers
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.services.daily_ai_notifications import (
@@ -254,6 +254,7 @@ app.include_router(visa_pass.router)
 app.include_router(e2e.router)
 app.include_router(outcomes.router)
 app.include_router(sop.router)
+app.include_router(careers.router)
 
 
 @app.on_event("startup")
@@ -390,6 +391,18 @@ async def read_for_enterprise():
 @app.get("/for-enterprise/")
 async def read_for_enterprise_slash():
     return await read_for_enterprise()
+
+
+@app.get("/careers")
+@app.get("/careers/")
+@app.get("/jobs")
+@app.get("/jobs/")
+async def read_careers():
+    """Serve the public careers / job-openings page."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "careers.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 @app.get("/enterprise/demo")
