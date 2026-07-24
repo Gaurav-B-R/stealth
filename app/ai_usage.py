@@ -225,7 +225,7 @@ SOURCE_LABELS = {
     "student_ai_chat_copilot": "Student AI chat — Rilono Copilot (Chrome extension)",
     "enterprise_copilot": "Enterprise AI assistant",
     "enterprise_copilot_extension": "Enterprise Copilot — staff mode (Chrome extension)",
-    "deep_scan": "Deep Scan document audit",
+    "deep_scan": "Deep Scan client audit",
     "deep_scan_extract": "Deep Scan — per-document extraction",
     "mock_interview": "Mock interviews",
     "interview_feedback": "Interview feedback",

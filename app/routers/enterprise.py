@@ -6170,6 +6170,9 @@ def _start_document_text_extraction(document_id: int, data: bytes, filename: str
             )
             if row is None:
                 return
+            # Fresh thread = fresh contextvars: attribute this worker's Gemini calls
+            # (extraction + validation) to the org so their cost isn't unattributed.
+            ai_usage.set_usage_account(organization_id=row.organization_id)
             client = (
                 db2.query(models.EnterpriseClient)
                 .filter(models.EnterpriseClient.id == row.client_id)
@@ -6414,6 +6417,120 @@ def enterprise_accept_client_document(
     }
 
 
+ENTERPRISE_DEEP_SCAN_RATE_LIMIT = int(os.getenv("ENTERPRISE_DEEP_SCAN_RATE_LIMIT", "10"))
+ENTERPRISE_DEEP_SCAN_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_DEEP_SCAN_RATE_WINDOW_SECONDS", "600"))
+
+
+def _serialize_deep_scan(scan: models.EnterpriseClientDeepScan, *, include_findings: bool = True) -> dict:
+    def _json_list(raw):
+        try:
+            value = json.loads(raw) if raw else []
+        except Exception:
+            value = []
+        return value if isinstance(value, list) else []
+
+    def _json_dict(raw):
+        try:
+            value = json.loads(raw) if raw else {}
+        except Exception:
+            value = {}
+        return value if isinstance(value, dict) else {}
+
+    out = {
+        "id": scan.id,
+        "client_id": scan.client_id,
+        "risk_level": scan.risk_level,
+        "summary": scan.summary,
+        "stats": _json_dict(scan.stats),
+        "credits_charged": scan.credits_charged or 0,
+        "triggered_by_name": scan.triggered_by_name,
+        "created_at": _iso(scan.created_at),
+        # model_used stays server-side only (provider details are internal).
+    }
+    if include_findings:
+        out["findings"] = _json_list(scan.findings)
+        out["checks_passed"] = _json_list(scan.checks_passed)
+    return out
+
+
+def _deep_scan_count(db: Session, organization_id: int, client_id: int) -> int:
+    return (
+        db.query(func.count(models.EnterpriseClientDeepScan.id))
+        .filter(
+            models.EnterpriseClientDeepScan.organization_id == int(organization_id),
+            models.EnterpriseClientDeepScan.client_id == int(client_id),
+        )
+        .scalar()
+    ) or 0
+
+
+def _deep_scan_pricing(db: Session, organization_id: int, client_id: int) -> dict:
+    """What the NEXT scan of this client will cost (each client's first scan is free)."""
+    scans_run = _deep_scan_count(db, organization_id, client_id)
+    free_remaining = max(0, credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT - scans_run)
+    return {
+        "cost_credits": credits.action_cost("deep_scan"),
+        "free_remaining": free_remaining,
+        "next_scan_free": free_remaining > 0,
+    }
+
+
+@router.get("/clients/{client_id}/deep-scans")
+def enterprise_client_deep_scan_history(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Stored Deep Scan history for a client (newest first, summaries only) plus the
+    pricing state for the next run. Viewers can read history; running one needs edit."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    scans = (
+        db.query(models.EnterpriseClientDeepScan)
+        .filter(
+            models.EnterpriseClientDeepScan.organization_id == organization.id,
+            models.EnterpriseClientDeepScan.client_id == client.id,
+        )
+        .order_by(models.EnterpriseClientDeepScan.created_at.desc(), models.EnterpriseClientDeepScan.id.desc())
+        .limit(50)
+        .all()
+    )
+    return {
+        "scans": [_serialize_deep_scan(s, include_findings=False) for s in scans],
+        "pricing": _deep_scan_pricing(db, organization.id, client.id),
+        "ai_available": enterprise_ai.is_ai_configured(),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.get("/clients/{client_id}/deep-scans/{scan_id}")
+def enterprise_client_deep_scan_detail(
+    client_id: int,
+    scan_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    scan = (
+        db.query(models.EnterpriseClientDeepScan)
+        .filter(
+            models.EnterpriseClientDeepScan.id == int(scan_id),
+            models.EnterpriseClientDeepScan.organization_id == organization.id,
+            models.EnterpriseClientDeepScan.client_id == client.id,
+        )
+        .first()
+    )
+    if not scan:
+        raise HTTPException(status_code=404, detail="Deep Scan not found.")
+    return {
+        "scan": _serialize_deep_scan(scan),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
 @router.post("/clients/{client_id}/deep-scan")
 def enterprise_client_deep_scan(
     client_id: int,
@@ -6421,18 +6538,30 @@ def enterprise_client_deep_scan(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """Premium credit-billed action: Gemini cross-references the client's documents
-    to catch mismatches/missing funds before the visa appointment."""
+    """Premium AI action: Rilono AI strictly audits the client's ENTIRE dossier —
+    profile, stage case records, document contents, notes, emails, universities,
+    interview results and payments — and stores the structured result as history.
+    Each client's first scan is free; after that it's credit-billed."""
     _, organization, role = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_edit_data=True
     )
     client = _get_org_client_or_404(db, organization.id, client_id)
+    _enforce_rate_limit_or_429(
+        request, scope="enterprise.deep_scan",
+        limit=ENTERPRISE_DEEP_SCAN_RATE_LIMIT,
+        window_seconds=ENTERPRISE_DEEP_SCAN_RATE_WINDOW_SECONDS,
+        extra_key=str(current_user.id),
+    )
 
     if not enterprise_ai.is_ai_configured():
         raise HTTPException(status_code=503, detail="Deep Scan isn't available right now.")
 
-    # Hard-block before spending any Gemini tokens if the wallet can't cover it.
-    credits.enforce_action_or_402(db, organization.id, "deep_scan")
+    # Each client's first scan is free (counted from STORED scans — failures store
+    # nothing, so they never burn the freebie). Paid runs are hard-blocked before
+    # spending any Gemini tokens if the wallet can't cover them.
+    is_free = _deep_scan_count(db, organization.id, client.id) < credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT
+    if not is_free:
+        credits.enforce_action_or_402(db, organization.id, "deep_scan")
 
     documents = (
         db.query(models.EnterpriseClientDocument)
@@ -6440,6 +6569,10 @@ def enterprise_client_deep_scan(
         .order_by(models.EnterpriseClientDocument.created_at.asc(), models.EnterpriseClientDocument.id.asc())
         .all()
     )
+
+    # Attribute every Gemini call in this scan (map + reduce) to the org so the
+    # admin margin analytics see the real per-scan token cost.
+    usage_token = ai_usage.set_usage_account(user_id=current_user.id, organization_id=organization.id)
     try:
         result = enterprise_ai.run_deep_scan_audit(
             db=db,
@@ -6454,24 +6587,42 @@ def enterprise_client_deep_scan(
     except Exception:
         logger.exception("Deep Scan failed (org_id=%s, client_id=%s)", organization.id, client.id)
         raise HTTPException(status_code=502, detail="The Deep Scan ran into a problem. Please try again.")
+    finally:
+        ai_usage.reset_usage_account(usage_token)
 
-    # Charge only after a successful audit.
-    txn = credits.charge_action(
-        db, organization.id, "deep_scan",
-        user=current_user, reference_type="client", reference_id=client.id,
-        description=f"Deep Scan — {client.full_name}", commit=True,
+    staff_name = current_user.full_name or current_user.email
+    charged = 0 if is_free else credits.action_cost("deep_scan")
+    scan = models.EnterpriseClientDeepScan(
+        organization_id=organization.id,
+        client_id=client.id,
+        risk_level=result["risk_level"],
+        summary=result.get("summary") or None,
+        findings=json.dumps(result.get("findings") or [], ensure_ascii=False)[:400000],
+        checks_passed=json.dumps(result.get("checks_passed") or [], ensure_ascii=False)[:100000],
+        stats=json.dumps(result.get("stats") or {}, ensure_ascii=False)[:20000],
+        model_used=result.get("model_used"),
+        credits_charged=charged,
+        triggered_by_user_id=current_user.id,
+        triggered_by_name=staff_name,
     )
+    db.add(scan)
+
+    # Charge only after a successful audit (the scan row and the debit commit together).
+    if not is_free:
+        credits.charge_action(
+            db, organization.id, "deep_scan",
+            user=current_user, reference_type="client", reference_id=client.id,
+            description=f"Deep Scan — {client.full_name}", commit=False,
+        )
+    db.commit()
+    db.refresh(scan)
 
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "report": result["report"],
-        "risk_level": result["risk_level"],
-        "documents_analyzed": result["documents_analyzed"],
-        "documents_total": result.get("documents_total"),
-        "documents_skipped": result.get("documents_skipped"),
-        "documents_over_cap": result.get("documents_over_cap"),
-        "extraction_failures": result.get("extraction_failures"),
-        "credits_charged": credits.action_cost("deep_scan"),
+        "scan": _serialize_deep_scan(scan),
+        "credits_charged": charged,
+        "was_free": is_free,
+        "pricing": _deep_scan_pricing(db, organization.id, client.id),
         "wallet": credits.wallet_state(db, organization.id),
     }
 

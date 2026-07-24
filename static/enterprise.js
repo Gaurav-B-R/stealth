@@ -1667,6 +1667,8 @@
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
     const dr = { request: undefined };  // secure document-request state (lazy-loaded)
     const uni = { data: null, suggestions: [] };  // university shortlist state (lazy-loaded)
+    // Deep Scan tab state (lazy-loaded): stored scan history + the currently open report.
+    const ds = { scans: null, active: null, pricing: null, aiAvailable: true, loading: false, error: null, busy: false };
     let overviewEditing = false;  // inline "Edit details" mode on the Overview tab
     let openStageKey = null;      // stage whose case-record panel is expanded under the tracker
     $("#viewTitle").textContent = cl.full_name;
@@ -1702,6 +1704,7 @@
           <button class="cp-tab" data-tab="payments">💳 Payments</button>
           <button class="cp-tab" data-tab="universities">🎓 Universities</button>
           <button class="cp-tab" data-tab="interview">🎤 Mock Interview</button>
+          <button class="cp-tab" data-tab="deepscan">🛡️ Deep Scan</button>
         </div>
         <div class="cp-body" id="cpBody"></div>
       </div>`;
@@ -2380,22 +2383,21 @@
         </div>`;
       }).join("")}</div>`
         : `<div class="empty" style="padding:34px"><div class="emoji">📁</div><h3>No documents yet</h3><p>${canEdit ? "Upload this student's passport, offer letter, financials, test scores and more — securely." : "No documents have been uploaded for this client."}</p></div>`;
-      const deepScanCost = ((state.credits && (state.credits.actions || []).find((a) => a.key === "deep_scan")) || {}).credits || 5;
-      const deepScanBar = (canEdit && docs.length) ? `
+      // The full audit lives in its own Deep Scan tab now — this card is a pointer.
+      const deepScanBar = docs.length ? `
         <div class="cp-card deep-scan-card" id="deepScanCard">
           <div class="deep-scan-head">
             <div class="deep-scan-copy">
-              <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">⌕</span> Deep Scan document audit</div>
-              <div class="deep-scan-description">Rilono AI cross-references every uploaded document for mismatched dates, names &amp; missing funds before the visa appointment. Costs <b>${deepScanCost} credits</b>.</div>
+              <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">🛡️</span> Deep Scan client audit</div>
+              <div class="deep-scan-description">Rilono AI strictly audits the <b>entire dossier</b> — these documents' contents plus profile, case records, notes, emails and payments — and flags anything irregular.</div>
             </div>
-            <button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn">Run Deep Scan · ${deepScanCost} cr</button>
+            <button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanOpenBtn">Open Deep Scan</button>
           </div>
-          <div class="deep-scan-visualizer hidden" id="deepScanVisualizer" aria-live="polite"></div>
         </div>` : "";
       const docReqHolder = canEdit ? `<div id="docReqCard" class="cp-card doc-req-card" style="margin-bottom:14px"></div>` : "";
       body.innerHTML = uploader + docReqHolder + deepScanBar + list;
-      const dsb = $("#deepScanBtn");
-      if (dsb) dsb.onclick = () => runDeepScan(cl, docs.slice());
+      const dsb = $("#deepScanOpenBtn");
+      if (dsb) dsb.onclick = () => showTab("deepscan");
       if (canEdit) { drawDocReq(); if (dr.request === undefined) loadDocReq(); }
 
       if (canEdit) {
@@ -3595,6 +3597,142 @@
       drawUniversities();
     }
 
+    /* ---- Deep Scan tab: full-dossier AI audit with stored history ----
+       The scan itself is POST /deep-scan (first one per client free, then billed);
+       results persist server-side, so this tab re-opens past audits like the
+       interview tab re-opens past sessions. */
+    async function loadDeepScans() {
+      try {
+        const r = await api(`/clients/${cl.id}/deep-scans`);
+        ds.scans = r.scans || [];
+        ds.pricing = r.pricing || null;
+        ds.aiAvailable = r.ai_available !== false;
+        ds.error = null;
+        if (ds.scans.length && !ds.active) {
+          // Re-open the most recent stored audit so the tab remembers where things stand.
+          try { ds.active = (await api(`/clients/${cl.id}/deep-scans/${ds.scans[0].id}`)).scan; } catch (e) { /* list still renders */ }
+        }
+      } catch (ex) { ds.scans = []; ds.error = ex.message; }
+      ds.loading = false;
+      if (state.activeClient === cl.id && $("#dsWrap")) drawDeepScan();
+    }
+    async function openDeepScanResult(scanId) {
+      if (ds.active && ds.active.id === scanId) return;
+      try { ds.active = (await api(`/clients/${cl.id}/deep-scans/${scanId}`)).scan; }
+      catch (ex) { toast(ex.message, "error"); return; }
+      if (state.activeClient === cl.id && $("#dsWrap")) drawDeepScan();
+    }
+    async function runDeepScanNow() {
+      if (ds.busy) return;
+      ds.busy = true;
+      const btn = $("#deepScanBtn");
+      const visualizer = startDeepScanVisualizer(docs.slice());
+      // The full audit reads the whole dossier and cross-references it (map-reduce),
+      // so it's the slowest AI action — escalate the button so staff know it's working.
+      let ticks = 0, progressTimer = null;
+      if (btn) {
+        btn.disabled = true;
+        const paint = () => {
+          const s = ticks;
+          const label = s < 8 ? "Auditing the dossier…"
+            : s < 20 ? `Cross-checking every source… ${s}s`
+            : `Almost done — reconciling… ${s}s`;
+          const phase = s < 8 ? 0 : s < 20 ? 1 : 2;
+          const phaseLabel = phase === 0 ? "Reading profile, records & documents"
+            : phase === 1 ? "Cross-checking names, dates, funds & activity"
+            : "Preparing audit findings";
+          btn.innerHTML = `<span class="spinner"></span> ${label}`;
+          visualizer.setPhase(phase, phaseLabel, s);
+        };
+        paint();
+        progressTimer = setInterval(() => { ticks += 1; paint(); }, 1000);
+      }
+      const stopProgress = () => { if (progressTimer) { clearInterval(progressTimer); progressTimer = null; } };
+      let res;
+      try { res = await api(`/clients/${cl.id}/deep-scan`, { method: "POST", timeout: AI_API_TIMEOUT_MS }); }
+      catch (ex) {
+        stopProgress();
+        ds.busy = false;
+        visualizer.fail();
+        visualizer.destroy(900);
+        if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); return; }
+        toast(ex.message, "error");
+        if (state.activeClient === cl.id && $("#dsWrap")) drawDeepScan();
+        return;
+      }
+      stopProgress();
+      ds.busy = false;
+      if (res.wallet) { state.credits = res.wallet; updatePlanChip(); }
+      if (res.pricing) ds.pricing = res.pricing;
+      if (res.scan) {
+        ds.active = res.scan;
+        ds.scans = [{
+          id: res.scan.id, risk_level: res.scan.risk_level, summary: res.scan.summary,
+          stats: res.scan.stats, credits_charged: res.scan.credits_charged,
+          triggered_by_name: res.scan.triggered_by_name, created_at: res.scan.created_at,
+        }].concat(ds.scans || []);
+      }
+      toast(res.was_free ? "Deep Scan complete — this first scan was free"
+        : `Deep Scan complete · ${res.credits_charged} credits used`, "success");
+      visualizer.complete();
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
+      visualizer.destroy();
+      if (state.activeClient === cl.id && $("#dsWrap")) drawDeepScan();
+    }
+    function drawDeepScan() {
+      const wrap = $("#dsWrap");
+      if (!wrap) return;
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const pricing = ds.pricing || {};
+      const cost = pricing.cost_credits != null ? pricing.cost_credits
+        : (((state.credits && (state.credits.actions || []).find((a) => a.key === "deep_scan")) || {}).credits || 20);
+      const isFree = !!pricing.next_scan_free;
+      const heroCard = `
+        <div class="cp-card deep-scan-card" id="deepScanCard">
+          <div class="deep-scan-head">
+            <div class="deep-scan-copy">
+              <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">🛡️</span> Deep Scan — full client audit</div>
+              <div class="deep-scan-description">Rilono AI strictly audits ${esc(first)}'s <b>entire dossier</b> — profile details, stage case records, the contents of every uploaded document, notes, emails, universities, interview results and payments — and flags anything irregular or inconsistent.
+                ${!ds.aiAvailable ? "<b>Rilono AI isn't configured on this server yet.</b>"
+                  : isFree ? `The first scan for each client is <b>free</b>; after that it's <b>${cost} credits</b> per scan.`
+                  : `Each scan costs <b>${cost} credits</b>.`}</div>
+            </div>
+            ${canEdit ? `<button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn" ${(!ds.aiAvailable || ds.busy) ? "disabled" : ""}>${
+              ds.busy ? '<span class="spinner"></span> Scanning…' : isFree ? "Run Deep Scan · Free" : `Run Deep Scan · ${cost} cr`}</button>` : ""}
+          </div>
+          <div class="deep-scan-visualizer hidden" id="deepScanVisualizer" aria-live="polite"></div>
+        </div>`;
+      const resultBlock = ds.loading
+        ? `<div class="cp-card"><div class="center-load"><div class="spinner dark"></div></div></div>`
+        : ds.active
+          ? `<div class="cp-card" id="dsResult">${deepScanResultHtml(ds.active)}</div>`
+          : `<div class="cp-card"><div class="empty" style="padding:30px"><div class="emoji">🛡️</div><h3>No Deep Scan yet</h3>
+              <p>${ds.error ? esc(ds.error) : canEdit ? `Run ${esc(first)}'s first full-dossier audit — it's free.` : "No audits have been run for this client yet."}</p></div></div>`;
+      const historyCard = (ds.scans || []).length ? `
+        <div class="cp-card">
+          <div class="cp-sub-label">Scan history</div>
+          ${ds.scans.map((s) => {
+            const st = s.stats || {};
+            const issues = (st.critical || 0) + (st.warning || 0) + (st.info || 0);
+            const active = ds.active && ds.active.id === s.id;
+            return `<div class="ds-hrow${active ? " active" : ""}" data-id="${s.id}">
+              <span class="iv-sv ${s.risk_level === "low" ? "ok" : s.risk_level === "high" ? "bad" : "mid"}">${esc((s.risk_level || "medium").toUpperCase())}</span>
+              <div class="ds-hmain"><b>${fmtDateTime(s.created_at)}</b><span>${issues} finding${issues === 1 ? "" : "s"}${s.triggered_by_name ? " · by " + esc(s.triggered_by_name) : ""}</span></div>
+              <span class="ds-hcredits">${s.credits_charged ? s.credits_charged + " cr" : "Free"}</span>
+            </div>`;
+          }).join("")}
+        </div>` : "";
+      wrap.innerHTML = heroCard + resultBlock + historyCard;
+      const runBtn = $("#deepScanBtn");
+      if (runBtn) runBtn.onclick = runDeepScanNow;
+      $$(".ds-hrow", wrap).forEach((r) => { r.onclick = () => openDeepScanResult(Number(r.dataset.id)); });
+    }
+    function renderDeepScan() {
+      body.innerHTML = `<div id="dsWrap"></div>`;
+      if (ds.scans === null && !ds.loading) { ds.loading = true; loadDeepScans(); }
+      drawDeepScan();
+    }
+
     function showTab(tab) {
       $$(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
       if (tab !== "interview") ivStopSpeak();
@@ -3605,6 +3743,7 @@
       else if (tab === "payments") renderPayments();
       else if (tab === "universities") renderUniversities();
       else if (tab === "interview") renderInterview();
+      else if (tab === "deepscan") renderDeepScan();
     }
     $$(".cp-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
     showTab("overview");
@@ -4935,141 +5074,83 @@
     };
   }
 
-  async function runDeepScan(cl, scanDocuments) {
-    const btn = $("#deepScanBtn");
-    const visualizer = startDeepScanVisualizer(scanDocuments);
-    // Deep Scan reads every document and cross-references them (map-reduce), so it's the
-    // slowest AI action — escalate the button so staff know it's still working, not stuck.
-    let ticks = 0, progressTimer = null;
-    if (btn) {
-      btn.disabled = true;
-      const paint = () => {
-        const s = ticks;
-        const label = s < 8 ? "Scanning documents…"
-          : s < 20 ? `Cross-checking the file… ${s}s`
-          : `Almost done — reconciling… ${s}s`;
-        const phase = s < 8 ? 0 : s < 20 ? 1 : 2;
-        const phaseLabel = phase === 0 ? "Reading uploaded document"
-          : phase === 1 ? "Cross-checking names, dates and funds"
-          : "Reconciling audit findings";
-        btn.innerHTML = `<span class="spinner"></span> ${label}`;
-        visualizer.setPhase(phase, phaseLabel, s);
-      };
-      paint();
-      progressTimer = setInterval(() => { ticks += 1; paint(); }, 1000);
-    }
-    const stopProgress = () => { if (progressTimer) { clearInterval(progressTimer); progressTimer = null; } };
-    let res;
-    try { res = await api(`/clients/${cl.id}/deep-scan`, { method: "POST", timeout: AI_API_TIMEOUT_MS }); }
-    catch (ex) {
-      stopProgress();
-      visualizer.fail();
-      visualizer.destroy(900);
-      if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); if (btn) { btn.disabled = false; btn.textContent = "Run Deep Scan"; } return; }
-      toast(ex.message, "error");
-      if (btn) { btn.disabled = false; btn.textContent = "Run Deep Scan"; }
-      return;
-    }
-    stopProgress();
-    if (res.wallet) { state.credits = res.wallet; updatePlanChip(); }
-    toast(`Deep Scan complete · ${res.credits_charged} credits used`, "success");
-    if (btn) { btn.disabled = false; btn.innerHTML = "Run Deep Scan · " + (res.credits_charged || 5) + " cr"; }
-    visualizer.complete();
-    await new Promise((resolve) => window.setTimeout(resolve, 700));
-    visualizer.destroy();
-    showDeepScanReport(cl, res);
-  }
-
-  // --- Deep Scan report: parse the AI's markdown into readable, styled sections ---
-  function dsSections(md) {
-    const out = {}; let cur = "_pre"; out[cur] = [];
-    String(md || "").split(/\n/).forEach((line) => {
-      const h = line.match(/^\s*#{1,4}\s+(.*)$/);
-      if (h) { cur = h[1].trim().toLowerCase().replace(/[:*]+$/, "").trim(); out[cur] = []; }
-      else out[cur].push(line);
-    });
-    return out;
-  }
-  function dsLines(sections, keyword) {
-    const key = Object.keys(sections).find((k) => k.includes(keyword));
-    return key ? sections[key] : [];
-  }
-  function dsText(sections, keyword) {
-    return (dsLines(sections, keyword) || []).map((x) => x.trim()).filter(Boolean).join(" ").trim();
-  }
-  function dsItems(sections, keyword) {
-    const lines = dsLines(sections, keyword);
-    const items = [];
-    (lines || []).forEach((l) => {
-      const m = l.match(/^\s*(?:[-*•]|\d+[.)])\s+(.*)$/);
-      if (m && m[1].trim()) items.push(m[1].trim());
-    });
-    if (items.length) return items.filter((x) => !/^none\b/i.test(x.replace(/[*_.]/g, "").trim()));
-    const joined = (lines || []).map((x) => x.trim()).filter(Boolean).join(" ").trim();
-    if (joined && !/^none\b/i.test(joined.replace(/[*_.#]/g, "").trim())) return [joined];
-    return [];
-  }
+  // --- Deep Scan report: render the stored structured findings (JSON, not markdown) ---
   function dsInline(s) {
     let t = esc(s);
     t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     t = t.replace(/`([^`]+)`/g, '<code style="background:var(--bg-2);padding:1px 5px;border-radius:5px;font-size:.92em">$1</code>');
     return t;
   }
-  function dsItemText(it) {
-    let cite = "";
-    it = String(it).replace(/\s*\((?:DOCUMENT|DOC)\s*#?\s*(\d+)\)\s*/gi, (m, n) => { cite += `<span class="cite">Doc ${n}</span>`; return " "; }).trim();
-    const tag = it.match(/^\*{0,2}(Missing|Stale|Expired|Outdated|Mismatch|Inconsistent|Incorrect)\*{0,2}\s*[:\-–]\s*(.*)$/i);
-    if (tag) {
-      const isMiss = /^(missing|stale|expired|outdated)$/i.test(tag[1]);
-      const bg = isMiss ? "#fef3c7" : "#fee2e2", color = isMiss ? "#b45309" : "#dc2626";
-      return `<span class="tag" style="background:${bg};color:${color}">${esc(tag[1])}</span>${dsInline(tag[2])}${cite}`;
-    }
-    return dsInline(it) + cite;
+  const DS_AREA_LABELS = {
+    profile: "Profile", stage_records: "Case records", documents: "Documents", notes: "Notes",
+    emails: "Emails", universities: "Universities", interviews: "Interviews", payments: "Payments",
+  };
+  const DS_CATEGORY_LABELS = {
+    identity: "Identity", documents: "Documents", timeline: "Timeline", financial: "Financial",
+    academic: "Academic", communication: "Communication", payments: "Payments",
+    data_quality: "Data quality", process: "Process", other: "Other",
+  };
+  function dsSevMeta(sev) {
+    if (sev === "critical") return { cls: "err", label: "Critical", bg: "#fee2e2", color: "#dc2626" };
+    if (sev === "info") return { cls: "note", label: "Info", bg: "#e0e7ff", color: "#4338ca" };
+    return { cls: "miss", label: "Warning", bg: "#fef3c7", color: "#b45309" };
   }
-  function dsFindingSection(title, items, cls, icon, clearMsg) {
-    if (!items.length) return `<div class="ds-sec"><div class="ds-sec-h">${title}</div><div class="ds-clear">✓ ${esc(clearMsg)}</div></div>`;
-    const rows = items.map((it) => `<div class="ds-item ${cls}"><div class="b">${icon}</div><div>${dsItemText(it)}</div></div>`).join("");
-    return `<div class="ds-sec"><div class="ds-sec-h">${title} <span class="n">${items.length}</span></div><div class="ds-list">${rows}</div></div>`;
+  function dsFindingHtml(f) {
+    const sev = dsSevMeta(f.severity);
+    const chips = [];
+    if (DS_CATEGORY_LABELS[f.category]) chips.push(DS_CATEGORY_LABELS[f.category]);
+    const area = DS_AREA_LABELS[f.area];
+    if (area && area !== chips[0]) chips.push(area);
+    return `<div class="ds-item ${sev.cls}"><div class="b">!</div><div class="ds-item-body">
+      <div class="ds-item-top"><span class="tag" style="background:${sev.bg};color:${sev.color}">${sev.label}</span>
+        ${chips.map((c) => `<span class="ds-chip">${esc(c)}</span>`).join("")}</div>
+      <div class="ds-item-title">${dsInline(f.title || "Irregularity found")}</div>
+      ${f.detail ? `<div class="ds-item-detail">${dsInline(f.detail)}</div>` : ""}
+      ${(f.evidence || []).length ? `<div class="ds-evidence">${f.evidence.map((e) => `<div class="ds-ev">${dsInline(e)}</div>`).join("")}</div>` : ""}
+      ${f.recommendation ? `<div class="ds-fix"><b>Fix:</b> ${dsInline(f.recommendation)}</div>` : ""}
+    </div></div>`;
   }
-  function deepScanReportHtml(res) {
-    const risk = (res.risk_level || "medium").toLowerCase();
-    const sections = dsSections(res.report);
-    const overall = dsText(sections, "overall") || dsText(sections, "risk");
-    const mism = dsItems(sections, "mismatch");
-    const missing = dsItems(sections, "missing");
-    const actions = dsItems(sections, "action").length ? dsItems(sections, "action") : dsItems(sections, "recommend");
+  function deepScanResultHtml(scan) {
+    const risk = (scan.risk_level || "medium").toLowerCase();
+    const stats = scan.stats || {};
+    const findings = Array.isArray(scan.findings) ? scan.findings : [];
+    const checks = Array.isArray(scan.checks_passed) ? scan.checks_passed : [];
+    const nCrit = stats.critical != null ? stats.critical : findings.filter((f) => f.severity === "critical").length;
+    const nWarn = stats.warning != null ? stats.warning : findings.filter((f) => f.severity === "warning").length;
+    const nInfo = stats.info != null ? stats.info : findings.filter((f) => f.severity === "info").length;
     const meta = ({ high: { ic: "⚠️", word: "High risk" }, medium: { ic: "⚡", word: "Medium risk" }, low: { ic: "✅", word: "Low risk" } })[risk] || { ic: "⚡", word: "Medium risk" };
-    const why = overall.replace(/^\s*(HIGH|MEDIUM|LOW)\b[\s:—–-]*/i, "").trim();
-    const n = res.documents_analyzed;
-    const total = (res.documents_total != null) ? res.documents_total : n;
-    const skipped = res.documents_skipped || 0, overCap = res.documents_over_cap || 0, failed = res.extraction_failures || 0;
+    const analyzed = stats.documents_analyzed || 0;
+    const total = stats.documents_total != null ? stats.documents_total : analyzed;
+    const skipped = stats.documents_skipped || 0, overCap = stats.documents_over_cap || 0, failed = stats.extraction_failures || 0;
     const coverBits = [];
     if (skipped) coverBits.push(`${skipped} had no readable text yet`);
     if (overCap) coverBits.push(`${overCap} exceeded the per-scan limit`);
     if (failed) coverBits.push(`${failed} audited from a raw excerpt only`);
-    const coverWarn = (skipped + overCap + failed) > 0
-      ? `<div style="margin:8px 0 2px;padding:9px 12px;border-radius:9px;background:rgba(245,158,11,.12);color:#b45309;font-size:12.5px;font-weight:600;border:1px solid rgba(245,158,11,.28)">⚠️ Audited <b>${n}</b> of <b>${total}</b> documents — ${coverBits.join("; ")}.${(skipped + overCap) > 0 ? " Re-run once they're ready for full coverage." : ""}</div>`
+    const coverWarn = coverBits.length
+      ? `<div class="ds-coverage">⚠️ Audited <b>${analyzed}</b> of <b>${total}</b> documents — ${coverBits.join("; ")}.${(skipped + overCap) > 0 ? " Re-run once they're ready for full coverage." : ""}</div>`
       : "";
+    const when = [
+      fmtDateTime(scan.created_at),
+      scan.triggered_by_name ? "by " + esc(scan.triggered_by_name) : "",
+      scan.credits_charged ? scan.credits_charged + " credits" : "Free scan",
+      `<b>${analyzed}</b>&nbsp;of&nbsp;<b>${total}</b>&nbsp;document${total === 1 ? "" : "s"} audited`,
+    ].filter(Boolean).join(" · ");
     return `
-      <div class="ds-meta"><b>${n}</b>&nbsp;of&nbsp;<b>${total}</b>&nbsp;document${total === 1 ? "" : "s"} audited&nbsp;·&nbsp;${res.credits_charged} credits</div>
+      <div class="ds-meta">${when}</div>
       ${coverWarn}
       <div class="ds-risk ${risk}"><div class="ds-ic">${meta.ic}</div>
-        <div><div class="lvl">${meta.word}</div><div class="why">${why ? dsInline(why) : "See the findings below."}</div></div></div>
+        <div><div class="lvl">${meta.word}</div><div class="why">${scan.summary ? dsInline(scan.summary) : "See the findings below."}</div></div></div>
       <div class="ds-stats">
-        <div class="ds-stat"><b style="color:${mism.length ? "#dc2626" : "#10b981"}">${mism.length}</b><span>Mismatches</span></div>
-        <div class="ds-stat"><b style="color:${missing.length ? "#b45309" : "#10b981"}">${missing.length}</b><span>Missing / stale</span></div>
-        <div class="ds-stat"><b style="color:#4338ca">${actions.length}</b><span>Actions</span></div>
+        <div class="ds-stat"><b style="color:${nCrit ? "#dc2626" : "#10b981"}">${nCrit}</b><span>Critical</span></div>
+        <div class="ds-stat"><b style="color:${nWarn ? "#b45309" : "#10b981"}">${nWarn}</b><span>Warnings</span></div>
+        <div class="ds-stat"><b style="color:#4338ca">${nInfo}</b><span>Info</span></div>
+        <div class="ds-stat"><b style="color:#10b981">${checks.length}</b><span>Checks passed</span></div>
       </div>
-      ${dsFindingSection("⚠️ Mismatches &amp; errors", mism, "err", "!", "No mismatches or errors found across the documents.")}
-      ${dsFindingSection("📄 Missing or stale documents", missing, "miss", "!", "Nothing missing — all expected documents are present and current.")}
-      ${actions.length ? `<div class="ds-sec"><div class="ds-sec-h">✅ Recommended actions <span class="n">${actions.length}</span></div>
-        <div class="ds-list">${actions.map((it, i) => `<div class="ds-item act"><div class="b">${i + 1}</div><div>${dsItemText(it)}</div></div>`).join("")}</div></div>` : ""}`;
-  }
-
-  function showDeepScanReport(cl, res) {
-    openModal(`<div class="modal-head"><h3>🔍 Deep Scan · ${esc(cl.full_name)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
-      <div class="modal-body">${res && res.report ? deepScanReportHtml(res) : '<div class="ds-clear">✓ No findings returned.</div>'}</div>
-      <div class="modal-foot"><button class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`);
+      ${findings.length
+        ? `<div class="ds-sec"><div class="ds-sec-h">🚩 Findings <span class="n">${findings.length}</span></div><div class="ds-list">${findings.map(dsFindingHtml).join("")}</div></div>`
+        : `<div class="ds-sec"><div class="ds-sec-h">🚩 Findings</div><div class="ds-clear">✓ Nothing irregular found — the dossier looks clean and consistent.</div></div>`}
+      ${checks.length ? `<div class="ds-sec"><div class="ds-sec-h">✅ Checks passed <span class="n">${checks.length}</span></div>
+        <div class="ds-list">${checks.map((c) => `<div class="ds-item ok"><div class="b">✓</div><div>${dsInline(c)}</div></div>`).join("")}</div></div>` : ""}`;
   }
 
   /* ============================================================
@@ -5458,7 +5539,7 @@
     go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
     closeModal, closeDrawer, changeRole, removeMember, checkout, setCycle,
     applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
-    topup: openCreditCheckout, activateInfra: activateInfraFee, deepScan: runDeepScan,
+    topup: openCreditCheckout, activateInfra: activateInfraFee,
     saveBank: saveLinkedAccount, refreshBank: refreshLinkedAccount,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
     viewInterview: viewInterviewSession, sendInterview: openSendInterviewPicker,

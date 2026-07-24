@@ -1100,6 +1100,41 @@ def ensure_enterprise_client_portal_shares_table():
                 conn.execute(text(stmt))
 
 
+def ensure_enterprise_deep_scan_table():
+    """Create the stored Deep Scan results table (full-dossier AI audits, kept as
+    per-client history). Idempotent and additive — safe to run on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_client_deep_scans"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_client_deep_scans (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    risk_level VARCHAR NOT NULL DEFAULT 'medium',
+                    summary TEXT,
+                    findings TEXT,
+                    checks_passed TEXT,
+                    stats TEXT,
+                    model_used VARCHAR,
+                    credits_charged INTEGER NOT NULL DEFAULT 0,
+                    triggered_by_user_id INTEGER,
+                    triggered_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_deep_scans_organization_id ON enterprise_client_deep_scans(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_deep_scans_client_id ON enterprise_client_deep_scans(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_deep_scans_created_at ON enterprise_client_deep_scans(created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_deep_scans_client_created ON enterprise_client_deep_scans(client_id, created_at)",
+            ):
+                conn.execute(text(stmt))
+
+
 def ensure_enterprise_refunds_table():
     """Create the enterprise_refunds audit table and the refunded-amount tracker on
     credit payments. Idempotent and additive — safe to run on every startup."""

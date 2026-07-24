@@ -300,6 +300,12 @@ class EnterpriseClient(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    deep_scans = relationship(
+        "EnterpriseClientDeepScan",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     # Money records are RETAINED (not deleted) when a client is removed: default cascade
     # only, no delete-orphan and no passive_deletes, so SQLAlchemy nulls client_id via
     # UPDATE rather than deleting the financial rows (see EnterpriseStudentPayment).
@@ -425,6 +431,34 @@ class EnterpriseClientDocument(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     client = relationship("EnterpriseClient", back_populates="documents")
+
+
+class EnterpriseClientDeepScan(Base):
+    """A stored Deep Scan result: one AI audit of a client's ENTIRE dossier (profile,
+    stage case records, document contents, notes, emails, universities, interview
+    results and payments). Kept as history so counselors can re-open past audits and
+    see how the file improved between scans."""
+    __tablename__ = "enterprise_client_deep_scans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    risk_level = Column(String, nullable=False, default="medium")  # low|medium|high
+    summary = Column(Text, nullable=True)          # short plain-English overview
+    findings = Column(Text, nullable=True)         # JSON list of structured findings
+    checks_passed = Column(Text, nullable=True)    # JSON list of clean checks (strings)
+    stats = Column(Text, nullable=True)            # JSON: severity counts + document coverage
+    model_used = Column(String, nullable=True)     # internal only — never sent to the frontend
+    credits_charged = Column(Integer, nullable=False, default=0)  # 0 = free first scan
+    triggered_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    triggered_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    client = relationship("EnterpriseClient", back_populates="deep_scans")
+
+    __table_args__ = (
+        Index("ix_ent_deep_scans_client_created", "client_id", "created_at"),
+    )
 
 
 class EnterpriseInterviewSession(Base):

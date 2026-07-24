@@ -713,6 +713,16 @@ DEEP_SCAN_MAX_DOCUMENTS = int(os.getenv("DEEP_SCAN_MAX_DOCUMENTS", "40") or "40"
 # files; this is a generous guardrail, not a real constraint.
 DEEP_SCAN_RECONCILE_MAX_CHARS = int(os.getenv("DEEP_SCAN_RECONCILE_MAX_CHARS", "160000") or "160000")
 
+# Bounds for the related-data blocks the full-dossier audit feeds the reduce step.
+# Newest-first everywhere; each block is individually capped so no single noisy
+# surface (e.g. a long email thread) can crowd the others out of context.
+DEEP_SCAN_MAX_NOTES = int(os.getenv("DEEP_SCAN_MAX_NOTES", "30") or "30")
+DEEP_SCAN_MAX_EMAILS = int(os.getenv("DEEP_SCAN_MAX_EMAILS", "30") or "30")
+DEEP_SCAN_MAX_UNIVERSITIES = int(os.getenv("DEEP_SCAN_MAX_UNIVERSITIES", "20") or "20")
+DEEP_SCAN_MAX_INTERVIEWS = int(os.getenv("DEEP_SCAN_MAX_INTERVIEWS", "10") or "10")
+DEEP_SCAN_MAX_PAYMENTS = int(os.getenv("DEEP_SCAN_MAX_PAYMENTS", "25") or "25")
+DEEP_SCAN_MAX_FINDINGS = int(os.getenv("DEEP_SCAN_MAX_FINDINGS", "60") or "60")
+
 
 def _deep_scan_generate(system_instruction: str, prompt: str, usage_source: str, model_state: dict):
     """Generate with enterprise model-candidate FALLBACK (mirrors the copilot loop).
@@ -763,18 +773,171 @@ def _parse_json_object(text: Optional[str]):
     return None
 
 
+def _clip(value, limit: int) -> str:
+    """One-line, whitespace-collapsed excerpt of any value (for prompt blocks)."""
+    s = re.sub(r"\s+", " ", str(value if value is not None else "")).strip()
+    return s[:limit] + ("…" if len(s) > limit else "")
+
+
+def _strip_html(value) -> str:
+    return re.sub(r"<[^>]+>", " ", str(value or ""))
+
+
+def _inr(paise) -> str:
+    try:
+        return f"₹{int(paise or 0) / 100:,.0f}"
+    except Exception:
+        return "₹0"
+
+
 def _deep_scan_client_block(client: models.EnterpriseClient) -> str:
+    """EVERY staff-entered profile field, so the audit can catch errors in the
+    record itself (typos, placeholders, impossible dates), not just in documents."""
+    consent = (
+        f"yes ({_iso(client.client_consent_confirmed_at)})"
+        if getattr(client, "client_consent_confirmed_at", None) else "NOT confirmed"
+    )
     bits = [
         f"Full name: {client.full_name or '—'}",
+        f"Email: {client.email or '—'}",
+        f"Phone: {client.phone or '—'}",
+        f"Nationality: {client.nationality or '—'}",
+        f"Date of birth: {_iso(client.date_of_birth) or '—'}",
+        f"Passport number: {client.passport_number or '—'}",
+        f"Passport expiry: {_iso(client.passport_expiry) or '—'}",
+        f"Visa category: {client.visa_category or '—'}",
         f"Destination: {client.destination_country_name or client.destination_country_code or '—'}",
         f"Visa type: {client.visa_type or '—'}",
         f"Intake: {client.intake or '—'}",
-        f"Passport number: {client.passport_number or '—'}",
-        f"Passport expiry: {_iso(client.passport_expiry) or '—'}",
-        f"Date of birth: {_iso(client.date_of_birth) or '—'}",
-        f"Nationality: {client.nationality or '—'}",
+        f"Application reference: {client.application_reference or '—'}",
+        f"Current pipeline stage: {_stage_label(client.status)}"
+        + (f" (on hold — was at {_stage_label(client.held_from_status)})" if getattr(client, "held_from_status", None) else ""),
+        f"Priority: {client.priority or '—'}",
+        f"Target date (interview/travel/intake deadline): {_iso(client.target_date) or '—'}",
+        f"Data-processing consent confirmed: {consent}",
+        f"Record created: {_iso(client.created_at) or '—'} · last updated: {_iso(client.updated_at) or '—'}",
     ]
     return "\n".join(bits)
+
+
+def _deep_scan_stage_records_block(client: models.EnterpriseClient) -> str:
+    """The per-stage case record (stage_data JSON), with field keys resolved to their
+    destination-aware catalog labels so the auditor sees what each value means."""
+    try:
+        raw = json.loads(client.stage_data) if client.stage_data else {}
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    lines: list[str] = []
+    for stage in catalog.CLIENT_STAGES:
+        stage_key = stage["key"]
+        values = raw.get(stage_key)
+        if not isinstance(values, dict) or not values:
+            continue
+        labels = {f["key"]: f.get("label") or f["key"]
+                  for f in catalog.stage_fields_for(client.destination_country_code, stage_key)}
+        lines.append(f"Stage “{stage.get('label', stage_key)}”:")
+        for key, value in values.items():
+            lines.append(f"  - {labels.get(key, key)}: {_clip(value, 400) or '—'}")
+    return "\n".join(lines)
+
+
+def _deep_scan_notes_block(db: Session, client_id: int) -> str:
+    rows = (
+        db.query(models.EnterpriseClientNote)
+        .filter(models.EnterpriseClientNote.client_id == int(client_id))
+        .order_by(models.EnterpriseClientNote.created_at.desc())
+        .limit(DEEP_SCAN_MAX_NOTES)
+        .all()
+    )
+    return "\n".join(
+        f"[{_iso(n.created_at) or '—'}] {n.author_name or 'Staff'}: {_clip(n.body, 600)}"
+        for n in rows
+    )
+
+
+def _deep_scan_emails_block(db: Session, client_id: int) -> str:
+    rows = (
+        db.query(models.EnterpriseClientEmail)
+        .filter(models.EnterpriseClientEmail.client_id == int(client_id))
+        .order_by(models.EnterpriseClientEmail.created_at.desc())
+        .limit(DEEP_SCAN_MAX_EMAILS)
+        .all()
+    )
+    lines = []
+    for e in rows:
+        inbound = (getattr(e, "direction", None) or "outbound") == "inbound"
+        who = (f"IN from {e.from_email or 'client'}" if inbound
+               else f"OUT to {e.to_email} by {e.sent_by_name or 'Staff'}")
+        lines.append(
+            f"[{_iso(e.created_at) or '—'}] {who} ({e.status}): "
+            f"“{_clip(e.subject, 150)}” — {_clip(_strip_html(e.body), 400)}"
+        )
+    return "\n".join(lines)
+
+
+def _deep_scan_universities_block(db: Session, client_id: int) -> str:
+    rows = (
+        db.query(models.EnterpriseClientUniversity)
+        .filter(models.EnterpriseClientUniversity.client_id == int(client_id))
+        .order_by(models.EnterpriseClientUniversity.created_at.desc())
+        .limit(DEEP_SCAN_MAX_UNIVERSITIES)
+        .all()
+    )
+    lines = []
+    for u in rows:
+        extras = [x for x in (
+            f"tuition {u.est_tuition}" if u.est_tuition else None,
+            f"difficulty {u.admission_difficulty}" if u.admission_difficulty else None,
+            f"added {(_iso(u.created_at) or '')[:10]} ({u.source})",
+        ) if x]
+        lines.append(f"- {u.university_name}" + (f" — {u.program}" if u.program else "")
+                     + f" [{u.status}] ({'; '.join(extras)})")
+    return "\n".join(lines)
+
+
+def _deep_scan_interviews_block(db: Session, client_id: int) -> str:
+    rows = (
+        db.query(models.EnterpriseInterviewSession)
+        .filter(models.EnterpriseInterviewSession.client_id == int(client_id))
+        .order_by(models.EnterpriseInterviewSession.created_at.desc())
+        .limit(DEEP_SCAN_MAX_INTERVIEWS)
+        .all()
+    )
+    return "\n".join(
+        f"[{_iso(s.created_at) or '—'}] {s.mode} mock interview — verdict: {s.verdict or 'n/a'}"
+        + (f" — feedback excerpt: {_clip(s.feedback, 500)}" if s.feedback else "")
+        for s in rows
+    )
+
+
+def _deep_scan_payments_block(db: Session, client_id: int) -> str:
+    rows = (
+        db.query(models.EnterpriseStudentPayment)
+        .filter(models.EnterpriseStudentPayment.client_id == int(client_id))
+        .order_by(models.EnterpriseStudentPayment.created_at.desc())
+        .limit(DEEP_SCAN_MAX_PAYMENTS)
+        .all()
+    )
+    lines = []
+    for p in rows:
+        bits = [
+            f"{_inr(p.amount_paise)} {p.status}",
+            f"via {p.manual_method or p.provider}",
+            f"created {(_iso(p.created_at) or '')[:10]}",
+        ]
+        if p.due_date:
+            bits.append(f"due {_iso(p.due_date)}")
+        if p.paid_at:
+            bits.append(f"paid {(_iso(p.paid_at) or '')[:10]}")
+        if p.refunded_amount_paise:
+            bits.append(f"refunded {_inr(p.refunded_amount_paise)}")
+        if p.dispute_status:
+            bits.append(f"DISPUTE: {p.dispute_status}")
+        label = _clip(p.description, 120) or p.invoice_number or "Payment"
+        lines.append(f"- {label}: " + " · ".join(bits))
+    return "\n".join(lines)
 
 
 _DEEP_SCAN_EXTRACT_SYSTEM = (
@@ -844,27 +1007,28 @@ def run_deep_scan_audit(
     current_date: Optional[str] = None,
 ) -> dict:
     """
-    Cross-reference a client's uploaded documents with Gemini (map-reduce) to surface
-    mismatched dates/names, missing funds and timeline risks before the visa appointment.
+    Strictly audit a client's ENTIRE dossier with Gemini: the full staff-entered profile,
+    stage case records, every document's extracted contents (map-reduce with per-doc
+    caching), notes, emails, university shortlist, mock-interview results and payment
+    records — flagging anything irregular, not just visa-specific problems.
 
-    Reads every document in full (no silent truncation), then reconciles the extracted
-    facts across the whole file in one pass. Returns:
-      {"report": <markdown>, "risk_level": "low|medium|high",
-       "documents_analyzed": int, "documents_total": int,
-       "documents_skipped": int, "documents_over_cap": int, "extraction_failures": int}
-    Raises if the AI isn't configured or no readable documents exist (so the caller can
-    avoid charging credits).
+    Returns a structured result:
+      {"risk_level": "low|medium|high", "summary": str,
+       "findings": [{severity, category, area, title, detail, evidence[], recommendation}],
+       "checks_passed": [str],
+       "stats": {critical, warning, info, documents_analyzed, documents_total,
+                 documents_skipped, documents_over_cap, extraction_failures},
+       "model_used": str|None}
+    Raises RuntimeError if the AI isn't configured or every model candidate fails
+    (the caller then errors WITHOUT charging credits). A dossier with no readable
+    documents still gets a full profile/records audit — missing documents are
+    findings, not a reason to refuse the scan.
     """
     if not is_ai_configured():
         raise RuntimeError("Deep Scan AI is not configured.")
 
     all_docs = list(documents or [])
     readable = [d for d in all_docs if (getattr(d, "extracted_text", None) or "").strip()]
-    if not readable:
-        raise ValueError(
-            "No readable document text yet. Upload documents (PDF/images) and wait a moment "
-            "for text extraction before running a Deep Scan."
-        )
 
     # One resolved-model cache shared across every Gemini call in this scan (map + reduce),
     # so a dead primary id (e.g. gemini-3.1-pro 404) is skipped after the first fallback.
@@ -892,12 +1056,22 @@ def run_deep_scan_audit(
                 "extraction_failed": True,
                 "raw_excerpt": (getattr(doc, "extracted_text", None) or "").strip()[:2000],
             }
-        per_doc.append({
+        entry = {
             "doc_index": idx,
             "document_type": getattr(doc, "document_type", "Document"),
             "filename": getattr(doc, "original_filename", "file"),
+            "uploaded_at": _iso(getattr(doc, "created_at", None)),
             "facts": facts,
-        })
+        }
+        # Surface the per-document upload-time AI verdict so the audit can weigh
+        # already-red-flagged files instead of rediscovering (or missing) them.
+        validation_status = getattr(doc, "validation_status", None)
+        if validation_status:
+            entry["upload_validation"] = {
+                "status": validation_status,
+                "message": _clip(getattr(doc, "validation_message", None), 300) or None,
+            }
+        per_doc.append(entry)
 
     # Persist freshly-cached extractions (best-effort; independent of the credit charge).
     if db is not None:
@@ -906,73 +1080,163 @@ def run_deep_scan_audit(
         except Exception:
             db.rollback()
 
-    # ---- REDUCE: reconcile the compact facts across ALL documents in one pass ----
+    # ---- REDUCE: audit the WHOLE dossier (profile + records + docs + activity) ----
     eval_date = (current_date or "").strip() or datetime.utcnow().date().isoformat()
+
+    facts_json = (
+        json.dumps(per_doc, ensure_ascii=False, indent=1)[:DEEP_SCAN_RECONCILE_MAX_CHARS]
+        if per_doc else ""
+    )
+    if not all_docs:
+        docs_block = "No documents have been uploaded for this client."
+    elif not per_doc:
+        docs_block = (f"{len(all_docs)} document(s) uploaded but none have readable text yet "
+                      "(extraction may still be running).")
+    else:
+        docs_block = facts_json
+
+    sections = [
+        ("CLIENT PROFILE (entered by staff)", _deep_scan_client_block(client)),
+        ("STAGE CASE RECORDS (per-stage fields entered by staff)",
+         _deep_scan_stage_records_block(client) or "No stage records entered yet."),
+        ("DOCUMENTS — structured facts extracted from each file's actual contents "
+         "(JSON; 'doc_index' identifies each document)", docs_block),
+    ]
+    if db is not None:
+        sections += [
+            ("STAFF NOTES (newest first)", _deep_scan_notes_block(db, client.id) or "No notes."),
+            ("EMAIL LOG between the consultancy and the client (newest first)",
+             _deep_scan_emails_block(db, client.id) or "No emails."),
+            ("UNIVERSITY SHORTLIST", _deep_scan_universities_block(db, client.id) or "No universities shortlisted."),
+            ("MOCK INTERVIEW RESULTS", _deep_scan_interviews_block(db, client.id) or "No mock interviews yet."),
+            ("PAYMENT RECORDS", _deep_scan_payments_block(db, client.id) or "No payment records."),
+        ]
+    context_text = "\n\n".join(f"=== {title} ===\n{body}" for title, body in sections)
+
     system = (
-        "You are a meticulous senior visa-documentation auditor for a study-abroad consultancy. "
-        "You are given a CLIENT PROFILE and STRUCTURED FACTS already extracted from each uploaded "
-        "document. Cross-reference them to catch errors BEFORE the visa appointment, protecting the "
-        "agency's university commission. Be precise, cite the document index for every finding, and "
-        "never invent facts that are not present in the provided data."
+        "You are Rilono AI's Deep Scan: a strict, meticulous forensic auditor for a visa "
+        "consultancy, reviewing one client's complete dossier before money and a visa outcome "
+        "ride on it. You are given everything the consultancy holds on this client. Scrutinize "
+        "ALL of it and flag every error or irregularity — not only visa-specific problems: "
+        "contradictions between any two sources, impossible or expired dates, placeholder/test/"
+        "garbage values, formatting errors in emails or phone numbers, financial shortfalls, "
+        "missing critical documents, stale pipeline states, unresolved concerns buried in notes "
+        "or emails, and payment anomalies. Be exact: quote the actual values and name their "
+        "sources (e.g. 'Doc 2 (passport.pdf)', 'Profile', 'Stage “Application Submitted”', "
+        "'Email 2026-05-01'). NEVER invent facts not present in the data. Do not flag the mere "
+        "absence of optional data as critical. Return STRICT JSON only — no prose, no code fences."
     )
-    facts_json = json.dumps(per_doc, ensure_ascii=False, indent=1)[:DEEP_SCAN_RECONCILE_MAX_CHARS]
-    context_text = (
-        f"CLIENT PROFILE:\n{_deep_scan_client_block(client)}\n\n"
-        f"STRUCTURED DOCUMENT FACTS (JSON array; 'doc_index' identifies each document):\n{facts_json}"
+
+    output_schema = (
+        "{\n"
+        '  "risk_level": "low | medium | high — overall risk to this application/file",\n'
+        '  "summary": "2-4 plain-English sentences: overall state of the file and the main concerns",\n'
+        '  "findings": [\n'
+        "    {\n"
+        '      "severity": "critical (blocks/derails the application or is clearly wrong) | warning (needs attention) | info (minor / worth knowing)",\n'
+        '      "category": "identity | documents | timeline | financial | academic | communication | payments | data_quality | process | other",\n'
+        '      "area": "profile | stage_records | documents | notes | emails | universities | interviews | payments",\n'
+        '      "title": "short headline (max 80 chars)",\n'
+        '      "detail": "what exactly is wrong/irregular and why it matters",\n'
+        '      "evidence": ["exact conflicting/irregular values WITH their sources"],\n'
+        '      "recommendation": "the concrete fix or next step for the counselor"\n'
+        "    }\n"
+        "  ],\n"
+        '  "checks_passed": ["important checks that came back clean, e.g. \'Name consistent across passport, offer letter and profile\'"]\n'
+        "}"
     )
-    question = f"""Audit this student's visa file using the CLIENT PROFILE and STRUCTURED DOCUMENT FACTS above. Today's date for evaluation is {eval_date}.
 
-Cross-check across ALL documents and report:
-1. Identity consistency — name, date of birth, passport number, nationality must match across documents and the profile.
-2. Timeline compliance — bank statements older than 6 months, passport expiring within 6 months of travel, offer/enrolment-confirmation (e.g. I-20, CAS, LOA/PAL, CoE, Zulassungsbescheid)/intake dates already in the past.
-3. Financial sufficiency — whether the bank balance / sponsor funds clearly cover tuition + living costs; flag if missing or ambiguous.
-4. Missing critical documents for a {client.visa_type or 'student'} visa to {client.destination_country_name or 'the destination'}.
+    question = f"""Audit this client's ENTIRE dossier above. Today's date for evaluation is {eval_date}.
 
-Respond in concise Markdown with these sections:
-## Overall Risk
-One of: LOW, MEDIUM, or HIGH — on its own line, followed by a one-sentence reason.
-## Mismatches & Errors
-Bullet list. Cite the document like "(Doc 2)" using its doc_index. If none, say "None found".
-## Missing or Stale Documents
-Bullet list. If none, say "None".
-## Recommended Actions
-A short prioritized checklist for the counselor."""
+Check at minimum (report anything else irregular too):
+1. Identity consistency — name, date of birth, passport number, nationality identical across the profile, stage records and every document.
+2. Timeline compliance — passport validity (6 months beyond travel), bank statements older than 6 months, offer/enrolment confirmations (I-20, CAS, LOA/PAL, CoE, Zulassungsbescheid), intake or target dates already past, stale pipeline stage vs the target date.
+3. Financial sufficiency — do the documented funds clearly cover tuition + living costs for a {client.visa_type or 'student'} visa to {client.destination_country_name or 'the destination'}? Flag missing or ambiguous evidence.
+4. Missing critical documents for this destination and visa type.
+5. Staff data-entry quality — placeholder/test values, typos, invalid email/phone formats, wrong-looking passport numbers, contradictions between profile fields and stage records or documents.
+6. Cross-source contradictions — anything in notes, emails, universities, interview results or payments that contradicts the profile, the documents, or each other.
+7. Process health — unconfirmed data-processing consent, failed/unpaid/disputed/refunded payments, poor mock-interview verdicts close to the appointment, red-flagged documents never resolved.
 
-    response = _deep_scan_generate(system, f"{context_text}\n\n{question}", "deep_scan", model_state)
-    report = (getattr(response, "text", None) or "").strip()
-    if not report:
-        raise RuntimeError("The Deep Scan did not return a report. Please try again.")
+Every finding must cite its evidence with sources. If the file is genuinely clean, return few or no findings — do not manufacture problems.
 
-    upper = report.upper()
-    risk_level = "medium"
-    head = upper.split("## MISMATCHES")[0]
-    if "HIGH" in head:
-        risk_level = "high"
-    elif "LOW" in head:
-        risk_level = "low"
+Return STRICT JSON exactly matching this schema:
+{output_schema}"""
 
-    # Be honest about coverage — never let a counselor assume the whole file was scanned
-    # when some documents had no text, were over the cap, or failed to parse.
-    coverage_notes = []
-    if skipped_no_text:
-        coverage_notes.append(f"{skipped_no_text} had no readable text yet and were skipped")
-    if over_cap:
-        coverage_notes.append(f"{over_cap} beyond the {DEEP_SCAN_MAX_DOCUMENTS}-document limit were not scanned")
-    if extraction_failures:
-        coverage_notes.append(f"{extraction_failures} could not be fully parsed and were audited from a raw excerpt")
-    if coverage_notes:
-        report += (
-            f"\n\n---\n_Scan coverage: audited {len(processed)} of {len(all_docs)} document(s). "
-            + "; ".join(coverage_notes)
-            + "._"
+    parsed = None
+    prompt = f"{context_text}\n\n{question}"
+    for attempt in range(2):
+        response = _deep_scan_generate(
+            system,
+            prompt if attempt == 0
+            else prompt + "\n\nREMINDER: respond with ONLY the JSON object — no prose, no code fences.",
+            "deep_scan",
+            model_state,
         )
+        parsed = _parse_json_object(getattr(response, "text", None))
+        if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list):
+            break
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("findings"), list):
+        raise RuntimeError("The Deep Scan did not return a readable report. Please try again.")
+
+    findings = []
+    for raw in parsed["findings"][:DEEP_SCAN_MAX_FINDINGS]:
+        if not isinstance(raw, dict):
+            continue
+        severity = str(raw.get("severity", "")).strip().lower()
+        if severity not in ("critical", "warning", "info"):
+            severity = "warning"
+        area = str(raw.get("area", "")).strip().lower()
+        if area not in ("profile", "stage_records", "documents", "notes", "emails",
+                        "universities", "interviews", "payments"):
+            area = "profile"
+        category = str(raw.get("category", "")).strip().lower()
+        if category not in ("identity", "documents", "timeline", "financial", "academic",
+                            "communication", "payments", "data_quality", "process", "other"):
+            category = "other"
+        evidence = raw.get("evidence")
+        if not isinstance(evidence, list):
+            evidence = [evidence] if evidence else []
+        findings.append({
+            "severity": severity,
+            "category": category,
+            "area": area,
+            "title": sanitize_public_ai_text(_clip(raw.get("title"), 120)) or "Irregularity found",
+            "detail": sanitize_public_ai_text(_clip(raw.get("detail"), 1200)),
+            "evidence": [sanitize_public_ai_text(_clip(e, 300)) for e in evidence[:8] if _clip(e, 300)],
+            "recommendation": sanitize_public_ai_text(_clip(raw.get("recommendation"), 600)),
+        })
+
+    severity_rank = {"critical": 0, "warning": 1, "info": 2}
+    findings.sort(key=lambda f: severity_rank[f["severity"]])
+
+    checks_passed = [
+        sanitize_public_ai_text(_clip(c, 300))
+        for c in (parsed.get("checks_passed") or [])[:20] if _clip(c, 300)
+    ] if isinstance(parsed.get("checks_passed"), list) else []
+
+    n_critical = sum(1 for f in findings if f["severity"] == "critical")
+    n_warning = sum(1 for f in findings if f["severity"] == "warning")
+    risk_level = str(parsed.get("risk_level", "")).strip().lower()
+    if risk_level not in ("low", "medium", "high"):
+        # Derive from what was actually found rather than defaulting optimistically.
+        risk_level = "high" if n_critical else ("medium" if n_warning else "low")
 
     return {
-        "report": report,
         "risk_level": risk_level,
-        "documents_analyzed": len(processed),
-        "documents_total": len(all_docs),
-        "documents_skipped": skipped_no_text,
-        "documents_over_cap": over_cap,
-        "extraction_failures": extraction_failures,
+        "summary": sanitize_public_ai_text(_clip(parsed.get("summary"), 900)),
+        "findings": findings,
+        "checks_passed": checks_passed,
+        "stats": {
+            "critical": n_critical,
+            "warning": n_warning,
+            "info": sum(1 for f in findings if f["severity"] == "info"),
+            # Coverage honesty — never let a counselor assume the whole file was
+            # scanned when some documents had no text, were over the cap, or failed.
+            "documents_analyzed": len(processed),
+            "documents_total": len(all_docs),
+            "documents_skipped": skipped_no_text,
+            "documents_over_cap": over_cap,
+            "extraction_failures": extraction_failures,
+        },
+        "model_used": model_state.get("ok"),
     }

@@ -44,6 +44,7 @@ from app.schema_patch import (
     ensure_enterprise_interview_invite_columns,
     ensure_enterprise_document_request_tables,
     ensure_enterprise_client_portal_shares_table,
+    ensure_enterprise_deep_scan_table,
     ensure_enterprise_refunds_table,
     ensure_enterprise_payments_tables,
     ensure_enterprise_organization_columns,
@@ -283,6 +284,7 @@ def startup_backfill_subscriptions():
     ensure_enterprise_interview_invite_columns()
     ensure_enterprise_document_request_tables()
     ensure_enterprise_client_portal_shares_table()
+    ensure_enterprise_deep_scan_table()
     ensure_enterprise_credit_tables()
     ensure_enterprise_refunds_table()
     ensure_enterprise_payments_tables()

@@ -54,3 +54,4 @@ build/
 
 # Local sandbox document storage (rilono-local preview / e2e sandbox)
 _docs_local/
+.aider*

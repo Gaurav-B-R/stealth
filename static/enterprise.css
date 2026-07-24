@@ -1280,6 +1280,29 @@ button { font-family: inherit; cursor: pointer; }
 .ds-item .cite { display: inline-block; font-size: 10.5px; font-weight: 700; color: var(--text-2); background: var(--bg-2); padding: 1px 7px; border-radius: 6px; margin-left: 6px; white-space: nowrap; }
 .ds-clear { display: flex; align-items: center; gap: 9px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; border-radius: 11px; padding: 12px 14px; font-size: 13.5px; font-weight: 600; }
 
+/* Deep Scan tab: structured findings + stored scan history */
+.ds-item.note .b { background: #e0e7ff; color: #4338ca; }
+.ds-item.ok .b { background: #d1fae5; color: #059669; }
+.ds-item-body { flex: 1; min-width: 0; }
+.ds-item-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.ds-item-top .tag { margin-right: 0; vertical-align: baseline; }
+.ds-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--bg-2); color: var(--text-2); font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; }
+.ds-item-title { font-weight: 700; margin: 2px 0; }
+.ds-item-detail { color: var(--text-2); margin: 2px 0 4px; }
+.ds-evidence { margin: 7px 0 4px; display: flex; flex-direction: column; gap: 4px; }
+.ds-ev { font-size: 12.5px; background: var(--bg-2); border-left: 3px solid var(--border); padding: 5px 10px; border-radius: 0 8px 8px 0; color: var(--text-2); }
+.ds-fix { font-size: 13px; margin-top: 5px; }
+.ds-fix b { color: #047857; }
+.ds-coverage { margin: 8px 0 12px; padding: 9px 12px; border-radius: 9px; background: rgba(245, 158, 11, .12); color: #b45309; font-size: 12.5px; font-weight: 600; border: 1px solid rgba(245, 158, 11, .28); }
+.ds-hrow { display: flex; align-items: center; gap: 12px; padding: 10px 10px; border-radius: 10px; cursor: pointer; }
+.ds-hrow:hover { background: var(--bg-2); }
+.ds-hrow.active { background: rgba(99, 102, 241, .08); }
+.ds-hrow .iv-sv { flex: none; }
+.ds-hmain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ds-hmain b { font-size: 13.5px; }
+.ds-hmain span { font-size: 12px; color: var(--muted); }
+.ds-hcredits { font-size: 12px; color: var(--muted); font-weight: 700; white-space: nowrap; }
+
 /* Verdict + readiness badge header on the interview feedback */
 .iv-fb-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 4px 0 14px; }
 .iv-verdict { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; padding: 5px 13px; border-radius: 999px; border: 1px solid; }

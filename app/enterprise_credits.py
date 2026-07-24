@@ -136,9 +136,13 @@ PACKAGE_ORDER = ["starter", "pro", "enterprise"]
 ACTIONS = {
     "deep_scan": {
         "key": "deep_scan",
-        "label": "Deep Scan document audit",
-        "description": "Rilono AI cross-references the client's documents for mismatched dates, names and missing funds.",
-        "credits": _int_env("ENTERPRISE_CREDIT_COST_DEEP_SCAN", 5),
+        "label": "Deep Scan client audit",
+        "description": (
+            "Rilono AI strictly audits the client's ENTIRE dossier — profile, stage records, "
+            "every document's contents, notes, emails, universities, interviews and payments — "
+            "and flags anything irregular. Each client's first scan is free."
+        ),
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_DEEP_SCAN", 20),
     },
     "mock_interview": {
         "key": "mock_interview",
@@ -177,6 +181,11 @@ COPILOT_MSGS_PER_CREDIT = max(1, _int_env("ENTERPRISE_COPILOT_MSGS_PER_CREDIT", 
 # free (to try the software or interview a student sitting with them), then it costs
 # the normal mock_interview price. Self-serve/public interviews always charge.
 INTERVIEW_FREE_STAFF_PREVIEWS = _int_env("ENTERPRISE_INTERVIEW_FREE_STAFF_PREVIEWS", 3)
+
+# Each CLIENT's first N Deep Scans are free (per client, not per org) so staff see the
+# full audit's value on every new dossier before the 20-credit price kicks in. Counted
+# from stored scan rows — a failed scan stores nothing, so it never burns the freebie.
+DEEP_SCAN_FREE_SCANS_PER_CLIENT = _int_env("ENTERPRISE_DEEP_SCAN_FREE_SCANS_PER_CLIENT", 1)
 
 # Maps a billed action to the Gemini cost-tracker `source` values it consumes, so
 # the admin report can compute real per-action margin from app.ai_usage.
