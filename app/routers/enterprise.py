@@ -6465,9 +6465,12 @@ def _deep_scan_count(db: Session, organization_id: int, client_id: int) -> int:
 
 
 def _deep_scan_pricing(db: Session, organization_id: int, client_id: int) -> dict:
-    """What the NEXT scan of this client will cost (each client's first scan is free)."""
+    """What the NEXT scan of this client will cost. Each client's first scan is free,
+    bounded by the org's monthly free-scan budget (anti-farming — see enterprise_credits)."""
     scans_run = _deep_scan_count(db, organization_id, client_id)
     free_remaining = max(0, credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT - scans_run)
+    if free_remaining and credits.deep_scan_free_budget_left(db, organization_id) <= 0:
+        free_remaining = 0
     return {
         "cost_credits": credits.action_cost("deep_scan"),
         "free_remaining": free_remaining,
@@ -6557,9 +6560,13 @@ def enterprise_client_deep_scan(
         raise HTTPException(status_code=503, detail="Deep Scan isn't available right now.")
 
     # Each client's first scan is free (counted from STORED scans — failures store
-    # nothing, so they never burn the freebie). Paid runs are hard-blocked before
-    # spending any Gemini tokens if the wallet can't cover them.
-    is_free = _deep_scan_count(db, organization.id, client.id) < credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT
+    # nothing, so they never burn the freebie), bounded by the org's monthly free-scan
+    # budget so client create→scan→delete churn can't farm unlimited free audits.
+    # Paid runs are hard-blocked before spending any Gemini tokens.
+    is_free = (
+        _deep_scan_count(db, organization.id, client.id) < credits.DEEP_SCAN_FREE_SCANS_PER_CLIENT
+        and credits.deep_scan_free_budget_left(db, organization.id) > 0
+    )
     if not is_free:
         credits.enforce_action_or_402(db, organization.id, "deep_scan")
 
@@ -6581,14 +6588,22 @@ def enterprise_client_deep_scan(
             documents=documents,
             current_date=datetime.utcnow().date().isoformat(),
         )
-    except ValueError as exc:
-        # Nothing to audit yet — do NOT charge credits.
-        raise HTTPException(status_code=400, detail=str(exc))
     except Exception:
+        # No charge on any failure (the debit only happens after success below).
         logger.exception("Deep Scan failed (org_id=%s, client_id=%s)", organization.id, client.id)
         raise HTTPException(status_code=502, detail="The Deep Scan ran into a problem. Please try again.")
     finally:
         ai_usage.reset_usage_account(usage_token)
+
+    def _json_capped(items: list, cap_chars: int) -> str:
+        """JSON-encode a list, dropping tail items (never slicing mid-string —
+        a raw [:N] cut would store invalid JSON that parses back as empty)."""
+        items = list(items)
+        while True:
+            encoded = json.dumps(items, ensure_ascii=False)
+            if len(encoded) <= cap_chars or not items:
+                return encoded
+            items = items[:-1]
 
     staff_name = current_user.full_name or current_user.email
     charged = 0 if is_free else credits.action_cost("deep_scan")
@@ -6597,9 +6612,9 @@ def enterprise_client_deep_scan(
         client_id=client.id,
         risk_level=result["risk_level"],
         summary=result.get("summary") or None,
-        findings=json.dumps(result.get("findings") or [], ensure_ascii=False)[:400000],
-        checks_passed=json.dumps(result.get("checks_passed") or [], ensure_ascii=False)[:100000],
-        stats=json.dumps(result.get("stats") or {}, ensure_ascii=False)[:20000],
+        findings=_json_capped(result.get("findings") or [], 400000),
+        checks_passed=_json_capped(result.get("checks_passed") or [], 100000),
+        stats=json.dumps(result.get("stats") or {}, ensure_ascii=False),
         model_used=result.get("model_used"),
         credits_charged=charged,
         triggered_by_user_id=current_user.id,
@@ -6607,8 +6622,11 @@ def enterprise_client_deep_scan(
     )
     db.add(scan)
 
-    # Charge only after a successful audit (the scan row and the debit commit together).
-    if not is_free:
+    # Charge (or consume the monthly free budget) only after a successful audit —
+    # the scan row and the wallet change commit together.
+    if is_free:
+        credits.consume_deep_scan_free(db, organization.id)
+    else:
         credits.charge_action(
             db, organization.id, "deep_scan",
             user=current_user, reference_type="client", reference_id=client.id,

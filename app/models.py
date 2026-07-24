@@ -793,6 +793,11 @@ class EnterpriseCreditWallet(Base):
     # real product; staff can run a few in-browser test interviews free, then it costs
     # the normal mock_interview price). See app/enterprise_credits.py.
     interview_staff_previews_used = Column(Integer, nullable=False, default=0)
+    # Deep Scan freebie guard: each CLIENT's first scan is free, but the org's total
+    # free scans are ALSO capped per month — otherwise create-scan-delete client churn
+    # could farm unlimited free Gemini audits. 'YYYY-MM' window + count used in it.
+    deep_scan_free_month = Column(String, nullable=True)
+    deep_scan_free_used = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

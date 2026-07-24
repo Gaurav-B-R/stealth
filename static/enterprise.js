@@ -292,6 +292,10 @@
   // request (slow network / backend hiccup) would spin forever with no recovery.
   const DEFAULT_API_TIMEOUT_MS = 30000;
   const AI_API_TIMEOUT_MS = 90000;
+  // Deep Scan reads the whole dossier (sequential per-document AI calls + a large
+  // reconcile pass) — much slower than other AI actions. Aborting at 90s would hide a
+  // scan the server still finishes (and bills), so it gets a far longer leash.
+  const DEEP_SCAN_API_TIMEOUT_MS = 300000;
 
   async function api(path, opts) {
     opts = opts || {};
@@ -3612,19 +3616,20 @@
           // Re-open the most recent stored audit so the tab remembers where things stand.
           try { ds.active = (await api(`/clients/${cl.id}/deep-scans/${ds.scans[0].id}`)).scan; } catch (e) { /* list still renders */ }
         }
-      } catch (ex) { ds.scans = []; ds.error = ex.message; }
+      } catch (ex) { ds.scans = null; ds.error = ex.message; }  // null = retry on next tab entry
       ds.loading = false;
-      if (state.activeClient === cl.id && $("#dsWrap")) drawDeepScan();
+      if (state.activeClient === cl.id && body.isConnected && $("#dsWrap")) drawDeepScan();
     }
     async function openDeepScanResult(scanId) {
       if (ds.active && ds.active.id === scanId) return;
       try { ds.active = (await api(`/clients/${cl.id}/deep-scans/${scanId}`)).scan; }
       catch (ex) { toast(ex.message, "error"); return; }
-      if (state.activeClient === cl.id && $("#dsWrap")) drawDeepScan();
+      if (state.activeClient === cl.id && body.isConnected && $("#dsWrap")) drawDeepScan();
     }
     async function runDeepScanNow() {
-      if (ds.busy) return;
+      if (ds.busy || deepScanInflight.has(cl.id)) return;
       ds.busy = true;
+      deepScanInflight.add(cl.id);
       const btn = $("#deepScanBtn");
       const visualizer = startDeepScanVisualizer(docs.slice());
       // The full audit reads the whole dossier and cross-references it (map-reduce),
@@ -3649,19 +3654,27 @@
       }
       const stopProgress = () => { if (progressTimer) { clearInterval(progressTimer); progressTimer = null; } };
       let res;
-      try { res = await api(`/clients/${cl.id}/deep-scan`, { method: "POST", timeout: AI_API_TIMEOUT_MS }); }
+      try { res = await api(`/clients/${cl.id}/deep-scan`, { method: "POST", timeout: DEEP_SCAN_API_TIMEOUT_MS }); }
       catch (ex) {
         stopProgress();
         ds.busy = false;
+        deepScanInflight.delete(cl.id);
         visualizer.fail();
         visualizer.destroy(900);
-        if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); return; }
+        if (!body.isConnected) { deepScanDirty.add(cl.id); }
+        if (ex.status === 402) { toast(ex.message, "error"); ds.scans = null; ds.active = null; navigate("credits"); return; }
         toast(ex.message, "error");
-        if (state.activeClient === cl.id && $("#dsWrap")) drawDeepScan();
+        // A client-side timeout can hide a scan the server still completed (and billed) —
+        // never redraw from stale state; refetch history + pricing from the server.
+        ds.scans = null; ds.active = null; ds.loading = true;
+        if (state.activeClient === cl.id && body.isConnected && $("#dsWrap")) drawDeepScan();
+        loadDeepScans();
         return;
       }
       stopProgress();
       ds.busy = false;
+      deepScanInflight.delete(cl.id);
+      if (!body.isConnected) { deepScanDirty.add(cl.id); }
       if (res.wallet) { state.credits = res.wallet; updatePlanChip(); }
       if (res.pricing) ds.pricing = res.pricing;
       if (res.scan) {
@@ -3677,16 +3690,22 @@
       visualizer.complete();
       await new Promise((resolve) => window.setTimeout(resolve, 700));
       visualizer.destroy();
-      if (state.activeClient === cl.id && $("#dsWrap")) drawDeepScan();
+      if (state.activeClient === cl.id && body.isConnected && $("#dsWrap")) drawDeepScan();
     }
     function drawDeepScan() {
       const wrap = $("#dsWrap");
-      if (!wrap) return;
+      if (!wrap || !body.isConnected) return;
+      // A live scan owns this tree (ticking button + visualizer) — repainting now would
+      // orphan its progress UI. runDeepScanNow always redraws when the request settles.
+      if (ds.busy) return;
       const first = (cl.full_name || "the student").split(" ")[0];
       const pricing = ds.pricing || {};
       const cost = pricing.cost_credits != null ? pricing.cost_credits
         : (((state.credits && (state.credits.actions || []).find((a) => a.key === "deep_scan")) || {}).credits || 20);
       const isFree = !!pricing.next_scan_free;
+      // A scan may be running in an older render of this same client — keep the button
+      // locked so it can't be double-run (and double-charged) from this one.
+      const scanning = deepScanInflight.has(cl.id);
       const heroCard = `
         <div class="cp-card deep-scan-card" id="deepScanCard">
           <div class="deep-scan-head">
@@ -3697,8 +3716,8 @@
                   : isFree ? `The first scan for each client is <b>free</b>; after that it's <b>${cost} credits</b> per scan.`
                   : `Each scan costs <b>${cost} credits</b>.`}</div>
             </div>
-            ${canEdit ? `<button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn" ${(!ds.aiAvailable || ds.busy) ? "disabled" : ""}>${
-              ds.busy ? '<span class="spinner"></span> Scanning…' : isFree ? "Run Deep Scan · Free" : `Run Deep Scan · ${cost} cr`}</button>` : ""}
+            ${canEdit ? `<button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn" ${(!ds.aiAvailable || scanning) ? "disabled" : ""}>${
+              scanning ? '<span class="spinner"></span> Scanning…' : isFree ? "Run Deep Scan · Free" : `Run Deep Scan · ${cost} cr`}</button>` : ""}
           </div>
           <div class="deep-scan-visualizer hidden" id="deepScanVisualizer" aria-live="polite"></div>
         </div>`;
@@ -3706,8 +3725,9 @@
         ? `<div class="cp-card"><div class="center-load"><div class="spinner dark"></div></div></div>`
         : ds.active
           ? `<div class="cp-card" id="dsResult">${deepScanResultHtml(ds.active)}</div>`
-          : `<div class="cp-card"><div class="empty" style="padding:30px"><div class="emoji">🛡️</div><h3>No Deep Scan yet</h3>
-              <p>${ds.error ? esc(ds.error) : canEdit ? `Run ${esc(first)}'s first full-dossier audit — it's free.` : "No audits have been run for this client yet."}</p></div></div>`;
+          : `<div class="cp-card"><div class="empty" style="padding:30px"><div class="emoji">🛡️</div><h3>${ds.error ? "Couldn't load Deep Scans" : "No Deep Scan yet"}</h3>
+              <p>${ds.error ? esc(ds.error) : canEdit ? `Run ${esc(first)}'s first full-dossier audit — it's free.` : "No audits have been run for this client yet."}</p>
+              ${ds.error ? `<button class="btn btn-soft btn-sm" id="dsRetryBtn" style="margin-top:10px">Retry</button>` : ""}</div></div>`;
       const historyCard = (ds.scans || []).length ? `
         <div class="cp-card">
           <div class="cp-sub-label">Scan history</div>
@@ -3725,10 +3745,22 @@
       wrap.innerHTML = heroCard + resultBlock + historyCard;
       const runBtn = $("#deepScanBtn");
       if (runBtn) runBtn.onclick = runDeepScanNow;
+      const retryBtn = $("#dsRetryBtn");
+      if (retryBtn) retryBtn.onclick = () => { ds.error = null; ds.loading = true; drawDeepScan(); loadDeepScans(); };
       $$(".ds-hrow", wrap).forEach((r) => { r.onclick = () => openDeepScanResult(Number(r.dataset.id)); });
     }
     function renderDeepScan() {
       body.innerHTML = `<div id="dsWrap"></div>`;
+      if (ds.busy) {
+        // Tabbed back mid-scan (same closure): show a holding state — runDeepScanNow
+        // repaints the full tab when the request settles.
+        $("#dsWrap").innerHTML = `<div class="cp-card"><div class="center-load"><div class="spinner dark"></div></div>
+          <p class="muted" style="text-align:center;margin:0 0 14px">Deep Scan in progress — this can take a few minutes…</p></div>`;
+        return;
+      }
+      // A scan from a previous render of this client settled after its DOM was replaced —
+      // our cached list predates it, so force a refetch.
+      if (deepScanDirty.has(cl.id)) { deepScanDirty.delete(cl.id); ds.scans = null; ds.active = null; }
       if (ds.scans === null && !ds.loading) { ds.loading = true; loadDeepScans(); }
       drawDeepScan();
     }
@@ -3748,6 +3780,14 @@
     $$(".cp-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
     showTab("overview");
   }
+
+  // Deep Scan cross-render state: renderClientPage re-runs (status change, edit save)
+  // mint a fresh `ds` closure, so a scan still running in an OLD closure must stay
+  // visible to the new one. `deepScanInflight` blocks a double-run (and double-charge)
+  // per client; `deepScanDirty` tells the next renderDeepScan to refetch because a scan
+  // settled while its closure's DOM was already replaced.
+  const deepScanInflight = new Set();
+  const deepScanDirty = new Set();
 
   // Set by the Universities tab so these inline-onclick handlers can redraw it.
   let _uniRefresh = null;
@@ -4964,6 +5004,9 @@
     };
 
     const renderDocument = () => {
+      // Host replaced by a tab switch / repaint: stop cycling (each PDF cycle re-fetches
+      // the full credentialed blob) — the settle path's destroy() clears the timer.
+      if (!host.isConnected) { releasePreview(); return; }
       releasePreview();
       const doc = list[currentIndex];
       const visibleIndex = currentIndex + 1;

@@ -1275,9 +1275,7 @@ button { font-family: inherit; cursor: pointer; }
 .ds-item .b { width: 22px; height: 22px; border-radius: 7px; display: grid; place-content: center; font-size: 12px; font-weight: 800; flex: none; margin-top: 1px; }
 .ds-item.err .b { background: #fee2e2; color: #dc2626; }
 .ds-item.miss .b { background: #fef3c7; color: #b45309; }
-.ds-item.act .b { background: #e0e7ff; color: #4338ca; }
 .ds-item .tag { display: inline-block; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em; padding: 2px 7px; border-radius: 6px; margin-right: 7px; vertical-align: 1.5px; }
-.ds-item .cite { display: inline-block; font-size: 10.5px; font-weight: 700; color: var(--text-2); background: var(--bg-2); padding: 1px 7px; border-radius: 6px; margin-left: 6px; white-space: nowrap; }
 .ds-clear { display: flex; align-items: center; gap: 9px; background: #ecfdf5; border: 1px solid #a7f3d0; color: #047857; border-radius: 11px; padding: 12px 14px; font-size: 13.5px; font-weight: 600; }
 
 /* Deep Scan tab: structured findings + stored scan history */

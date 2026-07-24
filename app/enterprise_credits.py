@@ -186,11 +186,39 @@ INTERVIEW_FREE_STAFF_PREVIEWS = _int_env("ENTERPRISE_INTERVIEW_FREE_STAFF_PREVIE
 # full audit's value on every new dossier before the 20-credit price kicks in. Counted
 # from stored scan rows — a failed scan stores nothing, so it never burns the freebie.
 DEEP_SCAN_FREE_SCANS_PER_CLIENT = _int_env("ENTERPRISE_DEEP_SCAN_FREE_SCANS_PER_CLIENT", 1)
+# Anti-farming cap: scan rows die with their client (cascade), so create→scan→delete
+# churn could otherwise mint unlimited free Gemini audits. The org's TOTAL free scans
+# are therefore also capped per calendar month (generous for honest client intake —
+# beyond it, a new client's first scan simply costs the normal price).
+DEEP_SCAN_FREE_MONTHLY_ORG_CAP = _int_env("ENTERPRISE_DEEP_SCAN_FREE_MONTHLY_ORG_CAP", 25)
+
+
+def _month_str() -> str:
+    return datetime.utcnow().strftime("%Y-%m")
+
+
+def deep_scan_free_budget_left(db: Session, organization_id: int) -> int:
+    """How many free Deep Scans this org has left in the current month's budget."""
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    used = int(getattr(wallet, "deep_scan_free_used", 0) or 0) \
+        if getattr(wallet, "deep_scan_free_month", None) == _month_str() else 0
+    return max(0, DEEP_SCAN_FREE_MONTHLY_ORG_CAP - used)
+
+
+def consume_deep_scan_free(db: Session, organization_id: int) -> None:
+    """Record one free Deep Scan against the org's monthly budget (call only after a
+    successful free scan, inside the caller's transaction — no commit here)."""
+    wallet = get_wallet_for_update(db, organization_id)
+    month = _month_str()
+    if getattr(wallet, "deep_scan_free_month", None) != month:
+        wallet.deep_scan_free_month = month
+        wallet.deep_scan_free_used = 0
+    wallet.deep_scan_free_used = int(wallet.deep_scan_free_used or 0) + 1
 
 # Maps a billed action to the Gemini cost-tracker `source` values it consumes, so
 # the admin report can compute real per-action margin from app.ai_usage.
 ACTION_SOURCE_MAP = {
-    "deep_scan": ["deep_scan"],
+    "deep_scan": ["deep_scan", "deep_scan_extract"],
     "mock_interview": ["mock_interview", "interview_feedback"],
     "ai_copilot": ["enterprise_copilot", "enterprise_copilot_extension"],
     "university_match": ["enterprise_university_shortlist"],
@@ -198,7 +226,7 @@ ACTION_SOURCE_MAP = {
 
 # Every Gemini source the enterprise platform incurs cost on (billed or not).
 ENTERPRISE_COST_SOURCES = [
-    "deep_scan", "document_ai", "mock_interview", "interview_feedback",
+    "deep_scan", "deep_scan_extract", "document_ai", "mock_interview", "interview_feedback",
     "enterprise_copilot", "enterprise_copilot_extension",
     "enterprise_university_shortlist",
 ]

@@ -1133,6 +1133,13 @@ def ensure_enterprise_deep_scan_table():
                 "CREATE INDEX IF NOT EXISTS ix_ent_deep_scans_client_created ON enterprise_client_deep_scans(client_id, created_at)",
             ):
                 conn.execute(text(stmt))
+        # Monthly free-scan budget counters on the wallet (anti-farming guard).
+        if _table_exists(conn, "enterprise_credit_wallets"):
+            wallet_cols = _get_table_columns(conn, "enterprise_credit_wallets")
+            if "deep_scan_free_month" not in wallet_cols:
+                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN deep_scan_free_month VARCHAR"))
+            if "deep_scan_free_used" not in wallet_cols:
+                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN deep_scan_free_used INTEGER NOT NULL DEFAULT 0"))
 
 
 def ensure_enterprise_refunds_table():
