@@ -2321,3 +2321,87 @@ def delete_user_admin(
         )
 
     return {"message": "User account deleted successfully."}
+
+
+# ===========================================================================
+# Course Finder catalog agent — admin controls
+# ===========================================================================
+
+@router.post("/course-catalog/refresh-now")
+def run_course_catalog_refresh_admin(
+    request: Request,
+    limit: int | None = Query(None, ge=1, le=100),
+    countries: str | None = Query(None, max_length=40),
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+):
+    """Force a catalog agent run NOW, in the background (a batch of grounded Gemini
+    calls takes minutes — too long for a request). `limit` bursts past the daily
+    batch (e.g. limit=50 to seed a country fast); `countries` = CSV like "US,UK".
+    Progress/outcome lands in course_catalog_refresh_runs (see /course-catalog/status)."""
+    import threading as _threading
+
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.course_catalog.refresh",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app.services.course_catalog_refresh import run_course_catalog_refresh_job
+
+    country_list = [c.strip().upper() for c in countries.split(",") if c.strip()] if countries else None
+
+    worker = _threading.Thread(
+        target=run_course_catalog_refresh_job,
+        kwargs={"force": True, "limit": limit, "countries": country_list},
+        name="course-catalog-refresh-manual",
+        daemon=True,
+    )
+    worker.start()
+    return {
+        "status": "started",
+        "limit": limit,
+        "countries": country_list,
+        "note": "Running in the background — check /api/admin/course-catalog/status for the run row.",
+    }
+
+
+@router.get("/course-catalog/status")
+def course_catalog_status_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    """Catalog size/freshness per country + recent agent runs."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.course_catalog.status",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    from app import course_catalog
+
+    runs = (
+        db.query(models.CourseCatalogRefreshRun)
+        .order_by(models.CourseCatalogRefreshRun.run_date.desc())
+        .limit(14)
+        .all()
+    )
+    return {
+        **course_catalog.catalog_stats(db),
+        "runs": [
+            {
+                "run_date": r.run_date.isoformat() if r.run_date else None,
+                "status": r.status,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                "universities_discovered": r.universities_discovered,
+                "universities_refreshed": r.universities_refreshed,
+                "courses_upserted": r.courses_upserted,
+                "error_message": r.error_message,
+            }
+            for r in runs
+        ],
+    }

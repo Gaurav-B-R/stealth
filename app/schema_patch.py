@@ -2140,3 +2140,136 @@ def ensure_company_finance_entries_table():
             text("INSERT INTO app_data_migrations (migration_key) VALUES (:k)"),
             {"k": SEED_MARKER},
         )
+
+
+def ensure_course_catalog_tables():
+    """Create the Course Finder catalog tables: shared universities/courses data
+    (written only by the background catalog-refresh agent), the agent's run-state
+    table (UNIQUE run_date = multi-worker double-run guard), and the org-scoped
+    stored AI recommendation history. Idempotent and additive — safe on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_true = "1" if is_sqlite else "TRUE"
+    bool_false = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "course_catalog_universities"):
+            conn.execute(text(f"""
+                CREATE TABLE course_catalog_universities (
+                    id {pk},
+                    country_code VARCHAR NOT NULL,
+                    name VARCHAR NOT NULL,
+                    name_key VARCHAR NOT NULL,
+                    city VARCHAR,
+                    qs_world_rank VARCHAR,
+                    national_rank VARCHAR,
+                    university_type VARCHAR,
+                    website_url VARCHAR,
+                    tuition_note VARCHAR,
+                    summary TEXT,
+                    scholarships_note TEXT,
+                    seed_rank INTEGER,
+                    is_active BOOLEAN NOT NULL DEFAULT {bool_true},
+                    source_urls TEXT,
+                    extra TEXT,
+                    last_verified_at {ts},
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts},
+                    CONSTRAINT uq_course_catalog_uni_country_name UNIQUE (country_code, name_key)
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_universities_country_code ON course_catalog_universities(country_code)",
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_universities_name_key ON course_catalog_universities(name_key)",
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_universities_last_verified_at ON course_catalog_universities(last_verified_at)",
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_uni_country_verified ON course_catalog_universities(country_code, last_verified_at)",
+            ):
+                conn.execute(text(stmt))
+
+        if not _table_exists(conn, "course_catalog_courses"):
+            conn.execute(text(f"""
+                CREATE TABLE course_catalog_courses (
+                    id {pk},
+                    university_id INTEGER NOT NULL REFERENCES course_catalog_universities(id) ON DELETE CASCADE,
+                    country_code VARCHAR NOT NULL,
+                    course_name VARCHAR NOT NULL,
+                    name_key VARCHAR NOT NULL,
+                    degree_level VARCHAR NOT NULL DEFAULT 'masters',
+                    discipline VARCHAR,
+                    duration VARCHAR,
+                    annual_tuition VARCHAR,
+                    tuition_amount INTEGER,
+                    tuition_currency VARCHAR,
+                    intakes TEXT,
+                    application_deadline VARCHAR,
+                    application_fee VARCHAR,
+                    ielts_requirement VARCHAR,
+                    toefl_requirement VARCHAR,
+                    gre_gmat_requirement VARCHAR,
+                    entry_requirements TEXT,
+                    course_url VARCHAR,
+                    is_active BOOLEAN NOT NULL DEFAULT {bool_true},
+                    last_verified_at {ts},
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts},
+                    CONSTRAINT uq_course_catalog_course UNIQUE (university_id, name_key, degree_level)
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_courses_university_id ON course_catalog_courses(university_id)",
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_courses_country_code ON course_catalog_courses(country_code)",
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_courses_degree_level ON course_catalog_courses(degree_level)",
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_courses_discipline ON course_catalog_courses(discipline)",
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_course_country_level ON course_catalog_courses(country_code, degree_level)",
+            ):
+                conn.execute(text(stmt))
+
+        if not _table_exists(conn, "course_catalog_refresh_runs"):
+            conn.execute(text(f"""
+                CREATE TABLE course_catalog_refresh_runs (
+                    id {pk},
+                    run_date DATE NOT NULL UNIQUE,
+                    status VARCHAR NOT NULL DEFAULT 'running',
+                    started_at {ts} DEFAULT {now_default} NOT NULL,
+                    completed_at {ts},
+                    universities_discovered INTEGER NOT NULL DEFAULT 0,
+                    universities_refreshed INTEGER NOT NULL DEFAULT 0,
+                    courses_upserted INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT,
+                    detail TEXT
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_course_catalog_refresh_runs_run_date ON course_catalog_refresh_runs(run_date)"
+            ))
+
+        if not _table_exists(conn, "enterprise_course_finder_recs"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_course_finder_recs (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER,
+                    client_name VARCHAR,
+                    country_code VARCHAR,
+                    degree_level VARCHAR,
+                    discipline VARCHAR,
+                    query TEXT,
+                    summary TEXT,
+                    recommendations TEXT,
+                    catalog_based BOOLEAN NOT NULL DEFAULT {bool_true},
+                    grounded BOOLEAN NOT NULL DEFAULT {bool_false},
+                    model_used VARCHAR,
+                    credits_charged INTEGER NOT NULL DEFAULT 0,
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_course_finder_recs_organization_id ON enterprise_course_finder_recs(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_course_finder_recs_client_id ON enterprise_course_finder_recs(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_course_finder_recs_created_at ON enterprise_course_finder_recs(created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_course_finder_recs_org_created ON enterprise_course_finder_recs(organization_id, created_at)",
+            ):
+                conn.execute(text(stmt))

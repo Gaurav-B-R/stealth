@@ -156,6 +156,16 @@ ACTIONS = {
         "description": "Rilono AI recommends real universities matched to the client's destination, budget, grades and intake.",
         "credits": _int_env("ENTERPRISE_CREDIT_COST_UNIVERSITY_MATCH", 5),
     },
+    "course_finder": {
+        "key": "course_finder",
+        "label": "Course Finder AI shortlist",
+        "description": (
+            "Rilono AI builds a personalized course shortlist from Rilono's verified "
+            "universities & courses database — fees, intakes, deadlines and score "
+            "requirements — tailored to the selected client. Browsing the catalog is free."
+        ),
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_COURSE_FINDER", 5),
+    },
     "ai_copilot": {
         "key": "ai_copilot",
         "label": "Rilono AI assistant",
@@ -222,6 +232,7 @@ ACTION_SOURCE_MAP = {
     "mock_interview": ["mock_interview", "interview_feedback"],
     "ai_copilot": ["enterprise_copilot", "enterprise_copilot_extension"],
     "university_match": ["enterprise_university_shortlist"],
+    "course_finder": ["enterprise_course_finder"],
 }
 
 # Every Gemini source the enterprise platform incurs cost on (billed or not).
@@ -229,6 +240,7 @@ ENTERPRISE_COST_SOURCES = [
     "deep_scan", "deep_scan_extract", "document_ai", "mock_interview", "interview_feedback",
     "enterprise_copilot", "enterprise_copilot_extension",
     "enterprise_university_shortlist",
+    "enterprise_course_finder",
 ]
 
 

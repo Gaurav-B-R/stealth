@@ -243,6 +243,8 @@ SOURCE_LABELS = {
     "news.ingestion.de": "Visa news ingestion — Germany (scheduled)",
     "news.ingestion.ie": "Visa news ingestion — Ireland (scheduled)",
     "daily_ai_notifier": "Daily AI notifications",
+    "course_catalog_refresh": "Course catalog agent — discovery & refresh (scheduled, grounded)",
+    "enterprise_course_finder": "Course Finder — AI shortlist (enterprise)",
 }
 
 

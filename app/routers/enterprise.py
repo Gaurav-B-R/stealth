@@ -8607,3 +8607,391 @@ def public_portal_data(payload: PublicPortalDataRequest, request: Request, db: S
     }, synchronize_session=False)
     db.commit()
     return _build_client_portal_payload(db, share, client, org)
+
+
+# ===========================================================================
+# Course Finder (workspace section)
+#
+# Browse Rilono's shared universities/courses catalog (maintained by the
+# background course-catalog agent — fees, intakes, deadlines, score cutoffs,
+# each row stamped last_verified_at) and generate billed AI course shortlists,
+# optionally personalized to one of the org's clients. Browsing is FREE (pure
+# DB reads); only the AI shortlist debits the credits wallet. Results are
+# persisted (like Deep Scans) so a paid shortlist can never be lost.
+# ===========================================================================
+
+COURSE_FINDER_ACTION_KEY = "course_finder"
+
+
+def _serialize_course_finder_rec(row: models.EnterpriseCourseFinderRec, *, include_items: bool = True) -> dict:
+    try:
+        items = json.loads(row.recommendations) if row.recommendations else []
+        if not isinstance(items, list):
+            items = []
+    except Exception:
+        items = []
+    try:
+        query = json.loads(row.query) if row.query else {}
+        if not isinstance(query, dict):
+            query = {}
+    except Exception:
+        query = {}
+    data = {
+        "id": int(row.id),
+        "client_id": int(row.client_id) if row.client_id else None,
+        "client_name": row.client_name,
+        "country_code": row.country_code,
+        "degree_level": row.degree_level,
+        "discipline": row.discipline,
+        "query": query,
+        "summary": row.summary,
+        "catalog_based": bool(row.catalog_based),
+        "grounded": bool(row.grounded),
+        "credits_charged": int(row.credits_charged or 0),
+        "created_by_name": row.created_by_name,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "count": len(items),
+    }
+    if include_items:
+        data["recommendations"] = items
+    return data
+
+
+@router.get("/course-catalog/meta")
+def enterprise_course_catalog_meta(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Filter options + per-country catalog stats for the Course Finder section."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    from app import course_catalog
+
+    stats = course_catalog.catalog_stats(db)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "countries": stats["countries"],
+        "disciplines": course_catalog.DISCIPLINES,
+        "degree_levels": course_catalog.DEGREE_LEVELS,
+        "cost_credits": credits.action_cost(COURSE_FINDER_ACTION_KEY),
+        "ai_available": course_catalog.ai_available(),
+    }
+
+
+@router.get("/course-catalog")
+def enterprise_course_catalog_browse(
+    request: Request,
+    country: str,
+    level: Optional[str] = None,
+    discipline: Optional[str] = None,
+    q: Optional[str] = None,
+    max_tuition: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """FREE catalog browse — universities with their matching courses."""
+    _require_enterprise_membership(db=db, user=current_user, request=request)
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.course_catalog_browse",
+        limit=120, window_seconds=600, extra_key=str(current_user.id),
+    )
+    from app import course_catalog
+
+    code = (country or "").strip().upper()
+    if not course_catalog.country_name(code):
+        raise HTTPException(status_code=400, detail="Unknown destination country.")
+    safe_max_tuition = None
+    if max_tuition is not None:
+        try:
+            safe_max_tuition = max(0, min(int(max_tuition), 10_000_000)) or None
+        except Exception:
+            safe_max_tuition = None
+    rows = course_catalog.query_catalog(
+        db,
+        country_code=code,
+        degree_level=(level or "").strip().lower() or None,
+        discipline=(discipline or "").strip() or None,
+        q=(q or "").strip() or None,
+        max_tuition=safe_max_tuition,
+        limit_universities=30,
+    )
+    return {
+        "country_code": code,
+        "universities": [course_catalog.serialize_university(u, courses) for u, courses in rows],
+        "total_universities": len(rows),
+        "total_courses": sum(len(courses) for _u, courses in rows),
+    }
+
+
+class EnterpriseCourseFinderRecommend(BaseModel):
+    client_id: Optional[int] = None
+    country_code: Optional[str] = Field(None, max_length=8)
+    degree_level: Optional[str] = Field(None, max_length=20)
+    discipline: Optional[str] = Field(None, max_length=80)
+    field_of_study: Optional[str] = Field(None, max_length=120)
+    budget: Optional[str] = Field(None, max_length=60)
+    notes: Optional[str] = Field(None, max_length=300)
+    max_results: int = Field(6, ge=1, le=8)
+
+
+@router.post("/course-finder/recommend")
+def enterprise_course_finder_recommend(
+    payload: EnterpriseCourseFinderRecommend,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Billed AI course shortlist from the verified catalog (grounded live-search
+    fallback while a destination is still seeding). Charge choreography mirrors
+    Deep Scan: rate-limit → wallet pre-check → generate → fail WITHOUT charging →
+    persist result + debit atomically."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    client = None
+    if payload.client_id:
+        client = _get_org_client_or_404(db, organization.id, payload.client_id)
+
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.course_finder",
+        limit=20, window_seconds=600, extra_key=str(current_user.id),
+    )
+
+    from app import course_catalog
+
+    if not course_catalog.ai_available():
+        raise HTTPException(status_code=503, detail="AI recommendations are not configured.")
+
+    code = (payload.country_code or "").strip().upper()
+    if client is not None and not code:
+        code = (client.destination_country_code or "").strip().upper()
+    if not course_catalog.country_name(code):
+        raise HTTPException(
+            status_code=400,
+            detail="Pick a destination country (or set one on the client) first.",
+        )
+
+    field_query = (payload.field_of_study or "").strip()
+    if not field_query and not (payload.discipline or "").strip():
+        raise HTTPException(status_code=400, detail="Tell Rilono AI the field of study to shortlist for.")
+
+    # Hard-block a broke wallet BEFORE spending any Gemini tokens.
+    credits.enforce_action_or_402(db, organization.id, COURSE_FINDER_ACTION_KEY)
+
+    catalog_rows = course_catalog.query_catalog(
+        db,
+        country_code=code,
+        degree_level=(payload.degree_level or "").strip().lower() or None,
+        discipline=(payload.discipline or "").strip() or None,
+        q=field_query or None,
+        limit_universities=20,
+    )
+    if field_query and sum(len(c) for _u, c in catalog_rows) < course_catalog.RECOMMEND_MIN_CATALOG_ROWS:
+        # A literal name search can be too narrow ("ML" won't match "Machine Learning"
+        # rows verbatim) — widen to the discipline/level slice and let the model pick.
+        catalog_rows = course_catalog.query_catalog(
+            db,
+            country_code=code,
+            degree_level=(payload.degree_level or "").strip().lower() or None,
+            discipline=(payload.discipline or "").strip() or None,
+            limit_universities=20,
+        )
+
+    usage_token = ai_usage.set_usage_account(organization_id=organization.id)
+    try:
+        result = course_catalog.recommend_courses(
+            destination_country=course_catalog.country_name(code),
+            catalog_rows=catalog_rows,
+            client=client,
+            field_of_study=field_query or None,
+            degree_level=(payload.degree_level or "").strip().lower() or None,
+            discipline=(payload.discipline or "").strip() or None,
+            budget=payload.budget,
+            notes=payload.notes,
+            max_results=payload.max_results,
+            usage_source="enterprise_course_finder",
+        )
+    finally:
+        ai_usage.reset_usage_account(usage_token)
+
+    if not result.get("available"):
+        raise HTTPException(status_code=503, detail=result.get("message") or "Recommendations are unavailable right now.")
+    recommendations = result.get("recommendations") or []
+    if not recommendations:
+        # Nothing usable came back — never bill the consultancy for an empty result.
+        raise HTTPException(
+            status_code=502,
+            detail="Couldn't generate a shortlist. Refine the field of study or filters and retry.",
+        )
+
+    rec_row = models.EnterpriseCourseFinderRec(
+        organization_id=organization.id,
+        client_id=client.id if client else None,
+        client_name=client.full_name if client else None,
+        country_code=code,
+        degree_level=(payload.degree_level or "").strip().lower() or None,
+        discipline=(payload.discipline or "").strip() or None,
+        query=json.dumps({
+            "field_of_study": field_query or None,
+            "budget": (payload.budget or "").strip() or None,
+            "notes": (payload.notes or "").strip() or None,
+            "max_results": payload.max_results,
+        }),
+        summary=result.get("summary"),
+        recommendations=json.dumps(recommendations),
+        catalog_based=bool(result.get("catalog_based")),
+        grounded=bool(result.get("grounded")),
+        model_used=result.get("model"),
+        credits_charged=0,
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(rec_row)
+
+    charge_target = f"{client.full_name}" if client else course_catalog.country_name(code)
+    txn = credits.charge_action(
+        db, organization.id, COURSE_FINDER_ACTION_KEY,
+        user=current_user,
+        reference_type="client" if client else "course_finder",
+        reference_id=client.id if client else None,
+        description=f"Course Finder shortlist — {charge_target}",
+        commit=False,
+    )
+    charged = credits.action_cost(COURSE_FINDER_ACTION_KEY) if txn else 0
+    rec_row.credits_charged = charged
+    # The shortlist row and the wallet debit commit atomically (deep-scan pattern).
+    db.commit()
+    db.refresh(rec_row)
+
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "rec": _serialize_course_finder_rec(rec_row),
+        "credits_charged": charged,
+        "wallet": credits.wallet_state(db, organization.id),
+    }
+
+
+@router.get("/course-finder/recs")
+def enterprise_course_finder_recs_list(
+    request: Request,
+    client_id: Optional[int] = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    query = (
+        db.query(models.EnterpriseCourseFinderRec)
+        .filter(models.EnterpriseCourseFinderRec.organization_id == organization.id)
+    )
+    if client_id:
+        query = query.filter(models.EnterpriseCourseFinderRec.client_id == int(client_id))
+    rows = (
+        query.order_by(models.EnterpriseCourseFinderRec.created_at.desc(), models.EnterpriseCourseFinderRec.id.desc())
+        .limit(max(1, min(int(limit or 20), 50)))
+        .all()
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "recs": [_serialize_course_finder_rec(r, include_items=False) for r in rows],
+    }
+
+
+@router.get("/course-finder/recs/{rec_id}")
+def enterprise_course_finder_rec_detail(
+    rec_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    row = (
+        db.query(models.EnterpriseCourseFinderRec)
+        .filter(
+            models.EnterpriseCourseFinderRec.id == rec_id,
+            models.EnterpriseCourseFinderRec.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Shortlist not found.")
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "rec": _serialize_course_finder_rec(row),
+    }
+
+
+class EnterpriseCourseFinderSave(BaseModel):
+    index: int = Field(..., ge=0, le=15)
+    client_id: Optional[int] = None  # required when the shortlist wasn't built for a client
+
+
+@router.post("/course-finder/recs/{rec_id}/save-to-client")
+def enterprise_course_finder_save_to_client(
+    rec_id: int,
+    payload: EnterpriseCourseFinderSave,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Copy one recommendation onto a client's Universities shortlist (free)."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    row = (
+        db.query(models.EnterpriseCourseFinderRec)
+        .filter(
+            models.EnterpriseCourseFinderRec.id == rec_id,
+            models.EnterpriseCourseFinderRec.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Shortlist not found.")
+    target_client_id = payload.client_id or row.client_id
+    if not target_client_id:
+        raise HTTPException(status_code=400, detail="Pick a client to save this recommendation to.")
+    client = _get_org_client_or_404(db, organization.id, int(target_client_id))
+
+    try:
+        items = json.loads(row.recommendations) if row.recommendations else []
+    except Exception:
+        items = []
+    if not isinstance(items, list) or payload.index >= len(items):
+        raise HTTPException(status_code=400, detail="That recommendation no longer exists.")
+    item = items[payload.index] if isinstance(items[payload.index], dict) else {}
+    uni_name = str(item.get("university_name") or "").strip()[:200]
+    if not uni_name:
+        raise HTTPException(status_code=400, detail="That recommendation no longer exists.")
+
+    requirements = item.get("key_requirements")
+    requirements = [str(r).strip()[:140] for r in requirements if str(r).strip()][:6] if isinstance(requirements, list) else []
+    difficulty = str(item.get("fit_level") or "").strip().lower()
+    entry = models.EnterpriseClientUniversity(
+        organization_id=organization.id,
+        client_id=client.id,
+        country_code=row.country_code,
+        university_name=uni_name,
+        program=str(item.get("course_name") or "").strip()[:200] or None,
+        location=str(item.get("location") or "").strip()[:160] or None,
+        status="considering",
+        source="ai",
+        est_tuition=str(item.get("annual_tuition") or "").strip()[:80] or None,
+        rationale=str(item.get("why_recommended") or "").strip()[:600] or None,
+        qs_world_rank=str(item.get("qs_world_rank") or "").strip()[:20] or None,
+        admission_difficulty=difficulty if difficulty in _UNIVERSITY_DIFFICULTY else None,
+        key_requirements=json.dumps(requirements) if requirements else None,
+        application_fee=str(item.get("application_fee") or "").strip()[:60] or None,
+        website_url=_safe_external_url(item.get("website_url")),
+        admissions_url=_safe_external_url(item.get("course_url")),
+        added_by_user_id=current_user.id,
+        added_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "entry": _serialize_client_university(entry),
+        "client_id": client.id,
+    }

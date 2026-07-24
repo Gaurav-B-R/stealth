@@ -1407,3 +1407,136 @@ class GeminiUsageEvent(Base):
     cached_tokens = Column(Integer, nullable=False, default=0)
     estimated_cost_usd = Column(Numeric(12, 6), nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+
+# ===========================================================================
+# Course Finder catalog (shared, cross-tenant)
+#
+# A real universities/courses database — unlike `us_universities` (an email-domain
+# map for signup autofill), these rows carry rankings, fees, intakes and entry
+# requirements. Content is written ONLY by the background course-catalog refresh
+# agent (app/services/course_catalog_refresh.py), which keeps every row stamped
+# with last_verified_at via Google-Search-grounded Gemini runs. The enterprise
+# Course Finder reads it; browsing costs no credits because no AI call happens.
+# ===========================================================================
+
+class CourseCatalogUniversity(Base):
+    __tablename__ = "course_catalog_universities"
+
+    id = Column(Integer, primary_key=True, index=True)
+    country_code = Column(String, nullable=False, index=True)  # US|UK|CA|AU|DE (enterprise_catalog codes)
+    name = Column(String, nullable=False)
+    # Normalized dedup key (lowercased, punctuation stripped) — the AI names the same
+    # university differently across runs ("The University of Melbourne" vs
+    # "University of Melbourne"), so uniqueness can't hang off the display name.
+    name_key = Column(String, nullable=False, index=True)
+    city = Column(String, nullable=True)
+    qs_world_rank = Column(String, nullable=True)      # display string, e.g. "34" or "301-350"
+    national_rank = Column(String, nullable=True)
+    university_type = Column(String, nullable=True)    # public|private
+    website_url = Column(String, nullable=True)
+    tuition_note = Column(String, nullable=True)       # typical intl tuition band, free text
+    summary = Column(Text, nullable=True)              # 1-2 sentence profile
+    scholarships_note = Column(Text, nullable=True)
+    seed_rank = Column(Integer, nullable=True)         # order in the discovery top-N (browse sort)
+    is_active = Column(Boolean, nullable=False, default=True)
+    source_urls = Column(Text, nullable=True)          # JSON list of grounding source URLs
+    extra = Column(Text, nullable=True)                # JSON: anything future refreshes want to keep
+    last_verified_at = Column(DateTime(timezone=True), nullable=True, index=True)  # NULL = seeded stub
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    courses = relationship(
+        "CourseCatalogCourse", back_populates="university",
+        cascade="all, delete-orphan", passive_deletes=True,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("country_code", "name_key", name="uq_course_catalog_uni_country_name"),
+        Index("ix_course_catalog_uni_country_verified", "country_code", "last_verified_at"),
+    )
+
+
+class CourseCatalogCourse(Base):
+    """One program/course at a catalog university, refreshed by the catalog agent."""
+    __tablename__ = "course_catalog_courses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    university_id = Column(Integer, ForeignKey("course_catalog_universities.id", ondelete="CASCADE"), nullable=False, index=True)
+    country_code = Column(String, nullable=False, index=True)  # denormalized for direct filtering
+    course_name = Column(String, nullable=False)
+    name_key = Column(String, nullable=False)          # normalized course_name (dedup within a university+level)
+    degree_level = Column(String, nullable=False, default="masters", index=True)  # bachelors|masters|phd|diploma|other
+    discipline = Column(String, nullable=True, index=True)  # canonical bucket from course_catalog.DISCIPLINES
+    duration = Column(String, nullable=True)           # e.g. "2 years"
+    annual_tuition = Column(String, nullable=True)     # display string incl. currency
+    tuition_amount = Column(Integer, nullable=True)    # numeric annual tuition (destination currency) for sorting/filters
+    tuition_currency = Column(String, nullable=True)   # e.g. USD|GBP|CAD|AUD|EUR
+    intakes = Column(Text, nullable=True)              # JSON list, e.g. ["Fall","Spring"]
+    application_deadline = Column(String, nullable=True)
+    application_fee = Column(String, nullable=True)    # one-off fee to apply (≠ tuition)
+    ielts_requirement = Column(String, nullable=True)
+    toefl_requirement = Column(String, nullable=True)
+    gre_gmat_requirement = Column(String, nullable=True)
+    entry_requirements = Column(Text, nullable=True)   # short free text (GPA, prerequisites)
+    course_url = Column(String, nullable=True)         # official program page
+    is_active = Column(Boolean, nullable=False, default=True)
+    last_verified_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    university = relationship("CourseCatalogUniversity", back_populates="courses")
+
+    __table_args__ = (
+        UniqueConstraint("university_id", "name_key", "degree_level", name="uq_course_catalog_course"),
+        Index("ix_course_catalog_course_country_level", "country_code", "degree_level"),
+    )
+
+
+class CourseCatalogRefreshRun(Base):
+    """One catalog-agent run per day. run_date is UNIQUE so concurrent workers can't
+    double-run (same IntegrityError-skip pattern as AIDailyNotificationRun)."""
+    __tablename__ = "course_catalog_refresh_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_date = Column(Date, nullable=False, unique=True, index=True)
+    status = Column(String, nullable=False, default="running")  # running | completed | failed
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    universities_discovered = Column(Integer, nullable=False, default=0)
+    universities_refreshed = Column(Integer, nullable=False, default=0)
+    courses_upserted = Column(Integer, nullable=False, default=0)
+    error_message = Column(Text, nullable=True)
+    detail = Column(Text, nullable=True)               # JSON per-country breakdown
+
+class EnterpriseCourseFinderRec(Base):
+    """A stored Course Finder AI recommendation (org-scoped, optionally per-client).
+
+    Persisted like Deep Scans so a PAID result can never be lost to a tab switch or
+    timeout — consultants re-open past shortlists from the history list. client_name
+    is snapshotted because client_id rows cascade away when a client is deleted only
+    for client-linked recs; unlinked (general) recs keep client_id NULL.
+    """
+    __tablename__ = "enterprise_course_finder_recs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=True, index=True)
+    client_name = Column(String, nullable=True)        # snapshot for history display
+    country_code = Column(String, nullable=True)
+    degree_level = Column(String, nullable=True)
+    discipline = Column(String, nullable=True)
+    query = Column(Text, nullable=True)                # JSON of the full request (field, budget, notes…)
+    summary = Column(Text, nullable=True)              # AI overview paragraph
+    recommendations = Column(Text, nullable=True)      # JSON list of recommendation objects
+    catalog_based = Column(Boolean, nullable=False, default=True)   # built from our verified catalog rows
+    grounded = Column(Boolean, nullable=False, default=False)       # live web search supplemented
+    model_used = Column(String, nullable=True)         # internal only — never sent to the frontend
+    credits_charged = Column(Integer, nullable=False, default=0)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_ent_course_finder_recs_org_created", "organization_id", "created_at"),
+    )

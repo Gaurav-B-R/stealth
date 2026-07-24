@@ -1049,7 +1049,7 @@
   // deep-links, bookmarks and browser back/forward all work inside the app. ----
   // "billing" removed: the plan-tier system is dormant (free CRM + credits is the model),
   // so the dead Plans page must not be reachable even by deep link. Code kept for reversibility.
-  const ROUTE_VIEWS = ["dashboard", "clients", "calendar", "ai", "team", "credits", "finance", "support", "settings"];
+  const ROUTE_VIEWS = ["dashboard", "clients", "calendar", "coursefinder", "ai", "team", "credits", "finance", "support", "settings"];
   function viewToPath(view) {
     return (view && view !== "dashboard" && ROUTE_VIEWS.includes(view)) ? ("/enterprise/" + view) : "/enterprise";
   }
@@ -1080,13 +1080,14 @@
     state.view = view;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     $("#sidebar").classList.remove("open");
-    const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", finance: "Finance", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
+    const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", coursefinder: "Course Finder", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", finance: "Finance", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
     $("#viewTitle").textContent = titles[view] || "";
     $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
     syncUrl(viewToPath(view), opts);
     if (view === "dashboard") renderDashboard();
     else if (view === "clients") renderClients();
     else if (view === "calendar") renderCalendar();
+    else if (view === "coursefinder") renderCourseFinder();
     else if (view === "ai") renderAIAssistant();
     else if (view === "team") renderTeam();
     else if (view === "credits") renderCredits();
@@ -4027,6 +4028,8 @@
     deep_scan: { label: "Deep Scan", color: "#f59e0b" },
     mock_interview: { label: "Mock interview", color: "#ec4899" },
     ai_copilot: { label: "AI assistant", color: "#6366f1" },
+    university_match: { label: "University shortlist", color: "#0ea5e9" },
+    course_finder: { label: "Course Finder", color: "#10b981" },
     other: { label: "Usage", color: "#64748b" },
   };
   const creditActionColor = (key) => (CREDIT_ACTION_META[key] || {}).color || "#6366f1";
@@ -5576,6 +5579,478 @@
         }
       };
     });
+  }
+
+  /* ============================================================
+     COURSE FINDER — Rilono's verified universities & courses catalog
+     (free browse) + billed AI shortlists, optionally per-client.
+     Catalog data is maintained by the background catalog agent and
+     every row carries a "verified N days ago" stamp.
+     ============================================================ */
+  const cf = {
+    meta: null,
+    country: "", level: "", discipline: "", q: "", maxTuition: "",
+    browse: null, browseSeq: 0,
+    clients: null, clientId: "", clientName: "",
+    recs: null, activeRec: null, aiBusy: false, saveBusy: false,
+    tab: "browse",
+  };
+  const CF_LEVEL_LABELS = { bachelors: "Bachelor's", masters: "Master's", phd: "PhD", diploma: "Diploma", other: "Other" };
+  const CF_FIT_META = {
+    reach: { label: "Reach", color: "#f59e0b" },
+    match: { label: "Match", color: "#10b981" },
+    safety: { label: "Safety", color: "#0ea5e9" },
+  };
+  // Local URL guard — model/API data rendered as hrefs must be http(s) only.
+  function cfSafeUrl(u) {
+    const s = String(u || "").trim();
+    return /^https?:\/\//i.test(s) ? s : "";
+  }
+  function cfAgo(iso) {
+    if (!iso) return "";
+    const days = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
+    if (days === 0) return "today";
+    if (days === 1) return "yesterday";
+    return `${days}d ago`;
+  }
+  function cfCost() {
+    if (cf.meta && cf.meta.cost_credits != null) return cf.meta.cost_credits;
+    return ((state.credits && state.credits.actions || []).find((a) => a.key === "course_finder") || {}).credits || 5;
+  }
+
+  async function renderCourseFinder() {
+    const c = $("#content");
+    if (!cf.meta) c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    try {
+      cf.meta = await api("/course-catalog/meta");
+    } catch (ex) {
+      if (!cf.meta) { c.innerHTML = errBox(ex); return; }
+    }
+    if (!cf.country) {
+      const withData = (cf.meta.countries || []).find((x) => x.universities > 0);
+      cf.country = (withData || (cf.meta.countries || [])[0] || {}).code || "US";
+    }
+    cfDraw();
+  }
+
+  function cfDraw() {
+    if (state.view !== "coursefinder") return;
+    const c = $("#content");
+    const m = cf.meta || {};
+    const totalUnis = (m.countries || []).reduce((s, x) => s + (x.universities || 0), 0);
+    const totalCourses = (m.countries || []).reduce((s, x) => s + (x.courses || 0), 0);
+    const latest = (m.countries || []).map((x) => x.last_verified_at).filter(Boolean).sort().pop();
+    c.innerHTML = `
+      <div class="cf-hero">
+        <div class="cf-hero-main">
+          <h2>🎓 Course Finder</h2>
+          <p>Universities, courses, fees, intakes &amp; entry requirements across your destinations — researched and kept current by Rilono AI. Browsing is free; personalized AI shortlists cost <b>${esc(String(cfCost()))} credits</b>.</p>
+          <div class="cf-hero-chips">
+            ${(m.countries || []).map((x) => `<span class="cf-chip" title="${esc(x.name)}: ${x.universities} universities · ${x.courses} courses">${esc(x.flag_emoji || "")} ${esc(x.code)} · ${x.universities}</span>`).join("")}
+          </div>
+        </div>
+        <div class="cf-hero-stats">
+          <div class="cf-stat"><b>${totalUnis}</b><span>Universities</span></div>
+          <div class="cf-stat"><b>${totalCourses}</b><span>Courses</span></div>
+          <div class="cf-stat"><b>${latest ? esc(cfAgo(latest)) : "—"}</b><span>Data refreshed</span></div>
+        </div>
+      </div>
+      <div class="cf-tabs">
+        <button class="cf-tab ${cf.tab === "browse" ? "active" : ""}" data-cftab="browse">📚 Browse Catalog</button>
+        <button class="cf-tab ${cf.tab === "ai" ? "active" : ""}" data-cftab="ai">✨ AI Shortlists</button>
+      </div>
+      <div id="cfPanel"></div>`;
+    $$(".cf-tab", c).forEach((b) => b.onclick = () => { cf.tab = b.dataset.cftab; cfDraw(); });
+    if (cf.tab === "browse") { cfDrawBrowseShell(); } else { cfDrawAI(); }
+  }
+
+  /* ---------------- Browse (free) ---------------- */
+  function cfDrawBrowseShell() {
+    const panel = $("#cfPanel");
+    if (!panel) return;
+    const m = cf.meta || {};
+    panel.innerHTML = `
+      <div class="card cf-filters-card"><div class="card-body">
+        <div class="cf-filters">
+          <label class="cf-f"><span>Destination</span>
+            <select id="cfCountry">${(m.countries || []).map((x) => `<option value="${esc(x.code)}" ${x.code === cf.country ? "selected" : ""}>${esc(x.flag_emoji || "")} ${esc(x.name)}</option>`).join("")}</select>
+          </label>
+          <label class="cf-f"><span>Level</span>
+            <select id="cfLevel"><option value="">Any level</option>${(m.degree_levels || []).map((l) => `<option value="${esc(l.key)}" ${l.key === cf.level ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select>
+          </label>
+          <label class="cf-f"><span>Discipline</span>
+            <select id="cfDiscipline"><option value="">Any discipline</option>${(m.disciplines || []).map((d) => `<option value="${esc(d)}" ${d === cf.discipline ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
+          </label>
+          <label class="cf-f cf-f-grow"><span>Search</span>
+            <input id="cfQ" type="search" placeholder="Course or university, e.g. Data Science…" value="${esc(cf.q)}" />
+          </label>
+          <label class="cf-f"><span>Max tuition/yr</span>
+            <input id="cfMaxTuition" type="number" min="0" step="1000" placeholder="Local currency" value="${esc(cf.maxTuition)}" />
+          </label>
+          <button class="btn btn-primary btn-sm" id="cfApply">Search</button>
+        </div>
+      </div></div>
+      <div id="cfBrowseBody"><div class="center-load"><div class="spinner dark"></div></div></div>`;
+    const apply = () => {
+      cf.country = $("#cfCountry").value;
+      cf.level = $("#cfLevel").value;
+      cf.discipline = $("#cfDiscipline").value;
+      cf.q = $("#cfQ").value.trim();
+      cf.maxTuition = $("#cfMaxTuition").value;
+      cfLoadBrowse();
+    };
+    $("#cfApply").onclick = apply;
+    $("#cfQ").onkeydown = (e) => { if (e.key === "Enter") apply(); };
+    ["cfCountry", "cfLevel", "cfDiscipline"].forEach((id) => { $("#" + id).onchange = apply; });
+    cfLoadBrowse();
+  }
+
+  async function cfLoadBrowse() {
+    const body = $("#cfBrowseBody");
+    if (!body) return;
+    body.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    const seq = ++cf.browseSeq;
+    const p = new URLSearchParams({ country: cf.country });
+    if (cf.level) p.set("level", cf.level);
+    if (cf.discipline) p.set("discipline", cf.discipline);
+    if (cf.q) p.set("q", cf.q);
+    if (cf.maxTuition && Number(cf.maxTuition) > 0) p.set("max_tuition", String(Math.floor(Number(cf.maxTuition))));
+    try {
+      const d = await api("/course-catalog?" + p.toString());
+      if (seq !== cf.browseSeq || state.view !== "coursefinder") return; // stale response
+      cf.browse = d;
+      cfDrawBrowse();
+    } catch (ex) {
+      if (seq !== cf.browseSeq) return;
+      body.innerHTML = errBox(ex);
+    }
+  }
+
+  function cfDrawBrowse() {
+    const body = $("#cfBrowseBody");
+    if (!body || !cf.browse) return;
+    const unis = cf.browse.universities || [];
+    if (!unis.length) {
+      body.innerHTML = `
+        <div class="empty"><div class="emoji">🛰️</div>
+          <h3>Nothing here yet</h3>
+          <p>No catalog matches for these filters. Rilono's research agent adds &amp; re-verifies universities every day — or try the <b>AI Shortlists</b> tab, which can also search live data.</p>
+        </div>`;
+      return;
+    }
+    body.innerHTML = unis.map((u, i) => cfUniCard(u, i)).join("");
+    $$(".cf-uni-toggle", body).forEach((btn) => {
+      btn.onclick = () => {
+        const card = btn.closest(".cf-uni");
+        if (card) card.classList.toggle("cf-uni-open");
+        const tbl = card && card.querySelector(".cf-courses");
+        btn.textContent = tbl && card.classList.contains("cf-uni-open") ? "Hide courses" : `View courses (${btn.dataset.n})`;
+      };
+    });
+  }
+
+  function cfUniCard(u, idx) {
+    const verified = u.last_verified_at
+      ? `<span class="cf-verified" title="Last verified by Rilono AI">✓ Verified ${esc(cfAgo(u.last_verified_at))}</span>`
+      : '<span class="cf-verified cf-pending" title="Queued for the research agent">⏳ Enriching soon</span>';
+    const site = cfSafeUrl(u.website_url);
+    const courses = u.courses || [];
+    const open = idx < 3 && courses.length; // first few expanded so the page never looks empty
+    return `
+    <div class="card cf-uni ${open ? "cf-uni-open" : ""}">
+      <div class="card-body">
+        <div class="cf-uni-head">
+          <div class="cf-uni-title">
+            <h3>${esc(u.name)}</h3>
+            <div class="cf-uni-sub">${esc(u.city || "")}${u.university_type ? ` · ${esc(u.university_type)}` : ""}</div>
+          </div>
+          <div class="cf-uni-meta">
+            ${u.qs_world_rank ? `<span class="cf-rank" title="QS World University Ranking">QS #${esc(u.qs_world_rank)}</span>` : ""}
+            ${u.national_rank ? `<span class="cf-rank cf-rank-nat" title="National rank">Nat. #${esc(u.national_rank)}</span>` : ""}
+            ${verified}
+          </div>
+        </div>
+        ${u.summary ? `<p class="cf-uni-summary">${esc(u.summary)}</p>` : ""}
+        <div class="cf-uni-facts">
+          ${u.tuition_note ? `<span title="Typical international tuition">💰 ${esc(u.tuition_note)}</span>` : ""}
+          ${u.scholarships_note ? `<span title="Scholarships">🎁 ${esc(u.scholarships_note)}</span>` : ""}
+          ${site ? `<a href="${esc(site)}" target="_blank" rel="noopener noreferrer">🔗 Official website</a>` : ""}
+        </div>
+        ${courses.length ? `
+          <button class="btn btn-soft btn-sm cf-uni-toggle" data-n="${courses.length}">${open ? "Hide courses" : `View courses (${courses.length})`}</button>
+          <div class="cf-courses-wrap"><table class="client-table cf-courses">
+            <thead><tr><th>Course</th><th>Level</th><th>Tuition / yr</th><th>Intakes</th><th>IELTS / TOEFL</th><th>Deadline</th><th>App. fee</th><th></th></tr></thead>
+            <tbody>${courses.map((cr) => cfCourseRow(cr)).join("")}</tbody>
+          </table></div>` : `<div class="hint" style="margin-top:8px">Course list coming with this university's next agent refresh.</div>`}
+      </div>
+    </div>`;
+  }
+
+  function cfCourseRow(cr) {
+    const link = cfSafeUrl(cr.course_url);
+    const scores = [cr.ielts_requirement ? `IELTS ${cr.ielts_requirement}` : "", cr.toefl_requirement ? `TOEFL ${cr.toefl_requirement}` : ""].filter(Boolean).join(" · ");
+    return `<tr>
+      <td><b>${esc(cr.course_name)}</b>${cr.discipline ? `<div class="cf-td-sub">${esc(cr.discipline)}${cr.duration ? ` · ${esc(cr.duration)}` : ""}</div>` : ""}</td>
+      <td>${esc(CF_LEVEL_LABELS[cr.degree_level] || cr.degree_level || "—")}</td>
+      <td>${esc(cr.annual_tuition || "—")}</td>
+      <td>${esc((cr.intakes || []).join(", ") || "—")}</td>
+      <td>${esc(scores || "—")}</td>
+      <td>${esc(cr.application_deadline || "—")}</td>
+      <td>${esc(cr.application_fee || "—")}</td>
+      <td>${link ? `<a class="cf-course-link" href="${esc(link)}" target="_blank" rel="noopener noreferrer">Page ↗</a>` : ""}</td>
+    </tr>`;
+  }
+
+  /* ---------------- AI shortlists (billed) ---------------- */
+  async function cfEnsureClients() {
+    if (cf.clients) return cf.clients;
+    try {
+      const d = await api("/clients?limit=500");
+      cf.clients = d.clients || [];
+    } catch (ex) { cf.clients = []; }
+    return cf.clients;
+  }
+
+  function cfDrawAI() {
+    const panel = $("#cfPanel");
+    if (!panel) return;
+    const m = cf.meta || {};
+    const canEdit = state.perms && state.perms.can_edit_data;
+    const cost = cfCost();
+    panel.innerHTML = `
+      <div class="card"><div class="card-head"><h3>✨ New AI shortlist <span class="uni-cost">${esc(String(cost))} credits</span></h3></div>
+      <div class="card-body">
+        ${!m.ai_available ? '<div class="hint" style="margin-bottom:10px">AI is not configured on this server right now.</div>' : ""}
+        <div class="cf-ai-grid">
+          <label class="cf-f cf-f-grow"><span>Client (optional — personalizes the shortlist)</span>
+            <div class="docsel">
+              <input id="cfClientSearch" class="docsel-input" placeholder="Search your clients…" autocomplete="off" value="${esc(cf.clientName)}" />
+              <div class="docsel-menu hidden" id="cfClientMenu"></div>
+            </div>
+          </label>
+          <label class="cf-f"><span>Destination</span>
+            <select id="cfAiCountry">${(m.countries || []).map((x) => `<option value="${esc(x.code)}" ${x.code === cf.country ? "selected" : ""}>${esc(x.flag_emoji || "")} ${esc(x.name)}</option>`).join("")}</select>
+          </label>
+          <label class="cf-f"><span>Level</span>
+            <select id="cfAiLevel"><option value="">Any</option>${(m.degree_levels || []).map((l) => `<option value="${esc(l.key)}" ${l.key === cf.level ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select>
+          </label>
+          <label class="cf-f"><span>Discipline</span>
+            <select id="cfAiDiscipline"><option value="">Any</option>${(m.disciplines || []).map((d) => `<option value="${esc(d)}" ${d === cf.discipline ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
+          </label>
+          <label class="cf-f cf-f-grow"><span>Field of study</span>
+            <input id="cfAiField" placeholder="e.g. Machine Learning, MBA, Public Health…" value="${esc(cf.q)}" maxlength="120" />
+          </label>
+          <label class="cf-f"><span>Annual budget</span>
+            <input id="cfAiBudget" placeholder="e.g. USD 40,000" maxlength="60" />
+          </label>
+          <label class="cf-f cf-f-grow"><span>Notes for Rilono AI</span>
+            <input id="cfAiNotes" placeholder="e.g. prefers co-op programs, needs scholarships" maxlength="300" />
+          </label>
+        </div>
+        <div class="cf-ai-actions">
+          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available) ? "disabled" : ""}>Generate shortlist · ${esc(String(cost))} cr</button>
+          ${!canEdit ? '<span class="hint">Viewers can browse, but only editors can run AI actions.</span>' : ""}
+        </div>
+      </div></div>
+      <div id="cfAiResult"></div>
+      <div class="card"><div class="card-head"><h3>Past shortlists</h3></div><div class="card-body" id="cfRecsList"><div class="center-load"><div class="spinner dark"></div></div></div></div>`;
+
+    cfWireClientPicker();
+    $("#cfAiRun").onclick = cfRunRecommend;
+    if (cf.activeRec) cfDrawActiveRec();
+    cfLoadRecs();
+  }
+
+  function cfWireClientPicker() {
+    const input = $("#cfClientSearch");
+    const menu = $("#cfClientMenu");
+    if (!input || !menu) return;
+    let items = [];
+    const paint = (list) => {
+      items = list;
+      menu.innerHTML = list.length
+        ? list.map((cl, i) => `<div class="docsel-item" data-i="${i}"><b>${esc(cl.full_name)}</b> <span class="cf-td-sub">${esc(cl.destination_country_name || cl.destination_country_code || "")}</span></div>`).join("")
+        : '<div class="docsel-empty">No matching clients</div>';
+      $$(".docsel-item", menu).forEach((el) => {
+        el.onmousedown = (e) => { e.preventDefault(); pick(items[Number(el.dataset.i)]); };
+      });
+    };
+    const pick = (cl) => {
+      if (!cl) return;
+      cf.clientId = String(cl.id);
+      cf.clientName = cl.full_name;
+      input.value = cl.full_name;
+      menu.classList.add("hidden");
+      // Personalizing for a client → default the destination to THEIR country when we cover it.
+      const dest = (cl.destination_country_code || "").toUpperCase();
+      const sel = $("#cfAiCountry");
+      if (sel && dest && (cf.meta.countries || []).some((x) => x.code === dest)) sel.value = dest;
+    };
+    const openMenu = async () => {
+      const all = await cfEnsureClients();
+      const needle = input.value.trim().toLowerCase();
+      const list = all.filter((cl) => !needle || (cl.full_name || "").toLowerCase().includes(needle) || (cl.email || "").toLowerCase().includes(needle)).slice(0, 30);
+      paint(list);
+      menu.classList.remove("hidden");
+    };
+    input.onfocus = openMenu;
+    input.oninput = () => { cf.clientId = ""; cf.clientName = ""; openMenu(); };
+    input.onblur = () => setTimeout(() => menu.classList.add("hidden"), 150);
+    input.onkeydown = (e) => {
+      if (e.key === "Escape") { menu.classList.add("hidden"); input.blur(); }
+      if (e.key === "Enter" && items.length) { e.preventDefault(); pick(items[0]); }
+    };
+  }
+
+  async function cfRunRecommend() {
+    if (cf.aiBusy) return;
+    const btn = $("#cfAiRun");
+    const body = {
+      client_id: cf.clientId ? Number(cf.clientId) : null,
+      country_code: $("#cfAiCountry") ? $("#cfAiCountry").value : cf.country,
+      degree_level: $("#cfAiLevel") ? $("#cfAiLevel").value || null : null,
+      discipline: $("#cfAiDiscipline") ? $("#cfAiDiscipline").value || null : null,
+      field_of_study: $("#cfAiField") ? $("#cfAiField").value.trim() || null : null,
+      budget: $("#cfAiBudget") ? $("#cfAiBudget").value.trim() || null : null,
+      notes: $("#cfAiNotes") ? $("#cfAiNotes").value.trim() || null : null,
+      max_results: 6,
+    };
+    if (!body.field_of_study && !body.discipline) { toast("Add a field of study (or pick a discipline) first.", "error"); return; }
+    cf.aiBusy = true;
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> Rilono AI is researching…';
+    try {
+      const r = await api("/course-finder/recommend", { method: "POST", body, timeout: AI_API_TIMEOUT_MS });
+      if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
+      cf.activeRec = r.rec;
+      cf.recs = null; // refresh history below
+      toast(r.credits_charged ? `Shortlist ready — ${r.credits_charged} credits used` : "Shortlist ready", "success");
+      cfDrawActiveRec();
+      cfLoadRecs();
+    } catch (ex) {
+      if (ex && ex.status === 402) {
+        toast(ex.message, "error");
+        navigate("credits");
+        return;
+      }
+      toast(ex.message || "Couldn't generate the shortlist.", "error");
+      // A client-side timeout doesn't guarantee the server didn't complete AND bill —
+      // refresh history so a stored (paid) result is never invisible. (Deep Scan pattern.)
+      cf.recs = null;
+      cfLoadRecs();
+    } finally {
+      cf.aiBusy = false;
+      if ($("#cfAiRun")) { $("#cfAiRun").disabled = !(state.perms && state.perms.can_edit_data); $("#cfAiRun").innerHTML = orig; }
+    }
+  }
+
+  function cfDrawActiveRec() {
+    const mount = $("#cfAiResult");
+    if (!mount) return;
+    const rec = cf.activeRec;
+    if (!rec) { mount.innerHTML = ""; return; }
+    const items = rec.recommendations || [];
+    const canEdit = state.perms && state.perms.can_edit_data;
+    const target = rec.client_name ? `for <b>${esc(rec.client_name)}</b>` : (cf.clientName ? `→ can save to <b>${esc(cf.clientName)}</b>` : "");
+    mount.innerHTML = `
+      <div class="card cf-rec-card"><div class="card-head">
+        <h3>🎯 Shortlist ${target} <span class="cf-td-sub">${esc(fmtDateTime(rec.created_at))}</span></h3>
+        <div>
+          ${rec.catalog_based ? '<span class="cf-verified" title="Built from Rilono\'s verified catalog">✓ Catalog data</span>' : '<span class="cf-verified cf-pending" title="Generated with live search while this destination is still being seeded">🌐 Live research</span>'}
+        </div>
+      </div>
+      <div class="card-body">
+        ${rec.summary ? `<p class="cf-rec-summary">${esc(rec.summary)}</p>` : ""}
+        <div class="cf-rec-grid">${items.map((it, i) => cfRecItem(it, i, rec, canEdit)).join("")}</div>
+      </div></div>`;
+    $$(".cf-rec-save", mount).forEach((b) => { b.onclick = () => cfSaveRec(Number(b.dataset.i)); });
+  }
+
+  function cfRecItem(it, i, rec, canEdit) {
+    const fit = CF_FIT_META[it.fit_level] || CF_FIT_META.match;
+    const site = cfSafeUrl(it.website_url);
+    const page = cfSafeUrl(it.course_url);
+    const canSave = canEdit && (rec.client_id || cf.clientId);
+    return `
+    <div class="cf-rec-item">
+      <div class="cf-rec-top">
+        <span class="status-pill" style="background:${fit.color}1a;color:${fit.color}"><span class="sd" style="background:${fit.color}"></span>${fit.label}</span>
+        ${it.qs_world_rank ? `<span class="cf-rank">QS #${esc(it.qs_world_rank)}</span>` : ""}
+        ${it.in_catalog ? '<span class="cf-verified" title="From Rilono\'s verified catalog">✓ Verified</span>' : '<span class="cf-verified cf-pending" title="Not yet in our catalog — double-check on the official page">Verify</span>'}
+      </div>
+      <h4>${esc(it.course_name)}</h4>
+      <div class="cf-rec-uni">${esc(it.university_name)}${it.location ? ` · ${esc(it.location)}` : ""}</div>
+      ${it.why_recommended ? `<p>${esc(it.why_recommended)}</p>` : ""}
+      <div class="cf-rec-facts">
+        ${it.annual_tuition ? `<span>💰 ${esc(it.annual_tuition)}</span>` : ""}
+        ${it.intakes ? `<span>📅 ${esc(it.intakes)}</span>` : ""}
+        ${it.application_deadline ? `<span>⏰ ${esc(it.application_deadline)}</span>` : ""}
+        ${it.application_fee ? `<span>🧾 ${esc(it.application_fee)}</span>` : ""}
+      </div>
+      ${(it.key_requirements || []).length ? `<div class="cf-rec-reqs">${it.key_requirements.map((r) => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
+      <div class="cf-rec-actions">
+        ${page ? `<a class="btn btn-ghost btn-sm" href="${esc(page)}" target="_blank" rel="noopener noreferrer">Course page ↗</a>` : (site ? `<a class="btn btn-ghost btn-sm" href="${esc(site)}" target="_blank" rel="noopener noreferrer">Website ↗</a>` : "")}
+        ${canSave ? `<button class="btn btn-soft btn-sm cf-rec-save" data-i="${i}">➕ Add to client's universities</button>` : ""}
+      </div>
+    </div>`;
+  }
+
+  async function cfSaveRec(index) {
+    if (cf.saveBusy || !cf.activeRec) return;
+    const clientId = cf.activeRec.client_id || (cf.clientId ? Number(cf.clientId) : null);
+    if (!clientId) { toast("Pick a client above first.", "error"); return; }
+    cf.saveBusy = true;
+    try {
+      const r = await api(`/course-finder/recs/${cf.activeRec.id}/save-to-client`, { method: "POST", body: { index, client_id: clientId } });
+      toast(`Added to ${cf.activeRec.client_name || cf.clientName || "the client"}'s Universities tab`, "success");
+    } catch (ex) {
+      toast(ex.message || "Couldn't save.", "error");
+    } finally {
+      cf.saveBusy = false;
+    }
+  }
+
+  async function cfLoadRecs() {
+    const mount = $("#cfRecsList");
+    if (!mount) return;
+    try {
+      const d = await api("/course-finder/recs?limit=20");
+      cf.recs = d.recs || [];
+    } catch (ex) {
+      mount.innerHTML = errBox(ex);
+      return;
+    }
+    if (!$("#cfRecsList")) return; // user navigated away mid-fetch
+    if (!cf.recs.length) {
+      mount.innerHTML = '<div class="hint">No AI shortlists yet. Your team\'s past shortlists will appear here — results are stored, so a paid shortlist is never lost.</div>';
+      return;
+    }
+    mount.innerHTML = cf.recs.map((r) => `
+      <button class="cf-hist-row" data-id="${r.id}">
+        <div class="cf-hist-main">
+          <b>${esc(r.client_name || "General")}</b>
+          <span>${esc(r.country_code || "")}${r.degree_level ? ` · ${esc(CF_LEVEL_LABELS[r.degree_level] || r.degree_level)}` : ""}${r.discipline ? ` · ${esc(r.discipline)}` : ""}${(r.query && r.query.field_of_study) ? ` · ${esc(r.query.field_of_study)}` : ""}</span>
+        </div>
+        <div class="cf-hist-side">
+          <span>${r.count} picks</span>
+          <span>${r.credits_charged ? `${r.credits_charged} cr` : "—"}</span>
+          <span>${esc(fmtDateTime(r.created_at))}</span>
+        </div>
+      </button>`).join("");
+    $$(".cf-hist-row", mount).forEach((b) => { b.onclick = () => cfOpenRec(Number(b.dataset.id)); });
+  }
+
+  async function cfOpenRec(id) {
+    try {
+      const d = await api(`/course-finder/recs/${id}`);
+      cf.activeRec = d.rec;
+      cfDrawActiveRec();
+      const mount = $("#cfAiResult");
+      if (mount) mount.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (ex) {
+      toast(ex.message || "Couldn't open that shortlist.", "error");
+    }
   }
 
   window.__ent = {

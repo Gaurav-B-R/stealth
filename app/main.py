@@ -22,6 +22,10 @@ from app.services.document_retention import (
     start_document_retention_scheduler,
     stop_document_retention_scheduler,
 )
+from app.services.course_catalog_refresh import (
+    start_course_catalog_refresh_scheduler,
+    stop_course_catalog_refresh_scheduler,
+)
 from app.schema_patch import (
     ensure_ai_optimization_events_table,
     ensure_company_finance_entries_table,
@@ -68,6 +72,7 @@ from app.schema_patch import (
     ensure_university_country_column,
     ensure_e2e_encryption_columns,
     ensure_subscription_payments_user_id_nullable,
+    ensure_course_catalog_tables,
 )
 from app.document_catalog import ensure_default_document_type_catalog
 from app.au_universities import seed_au_universities
@@ -306,6 +311,7 @@ def startup_backfill_subscriptions():
     ensure_company_finance_entries_table()
     ensure_gemini_usage_table()
     ensure_ai_optimization_events_table()
+    ensure_course_catalog_tables()
     db = SessionLocal()
     try:
         ensure_default_document_type_catalog(db)
@@ -332,6 +338,7 @@ def startup_backfill_subscriptions():
     start_f1_news_ingestion_scheduler()
     start_enterprise_calendar_reminder_scheduler()
     start_document_retention_scheduler()
+    start_course_catalog_refresh_scheduler()
     from app import fx
     fx.prime()  # warm the live USD→INR rate in the background
     from app import uk_maintenance
@@ -344,6 +351,7 @@ def shutdown_background_services():
     stop_f1_news_ingestion_scheduler()
     stop_enterprise_calendar_reminder_scheduler()
     stop_document_retention_scheduler()
+    stop_course_catalog_refresh_scheduler()
 
 # Serve static files
 static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
