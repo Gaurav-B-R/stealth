@@ -5,9 +5,25 @@ Uploaded documents (passports, financial statements, transcripts, …) should no
 forever. When DOCUMENT_RETENTION_DAYS > 0, this background job periodically deletes documents
 older than that many days, purging BOTH the R2 objects (file + extracted text) and the DB rows.
 
-Default OFF (0): the retention PERIOD is a policy/legal decision, so nothing is deleted until an
-operator sets DOCUMENT_RETENTION_DAYS. Whatever period you choose should be disclosed in the
-privacy policy's Data Retention section.
+The retention periods below are the ones Rilono has adopted and disclosed in the Retention
+clause of the enterprise DPA (and the privacy policy's Data Retention section):
+
+  * uploaded documents ...... 1095 days (3 years) from upload, then file + DB row deleted
+  * raw payment-webhook payloads ... 180 days, then the payload is redacted (the ledger row
+    itself is retained)
+
+Those are the ADOPTED POLICY periods. The CODE DEFAULTS below are still 0 (both sweeps
+disabled) because enabling them is irreversible and production runs on Postgres — enable them
+per the checklist on each constant once the real oldest-row ages have been checked there.
+Until then the periods are met operationally, which is exactly how the DPA describes them.
+
+Note this module sweeps ONLY models.Document (the B2C `documents` table) and
+models.EnterprisePaymentEvent. Enterprise Client Data — enterprise_client_documents and
+enterprise_client_email_attachments — is NOT covered by any automated sweep. The DPA says so
+explicitly; do not add a period to that document without also building the sweep.
+
+If you change a period here, update the DPA / privacy policy to match — the disclosed period
+and the enforced period must agree.
 """
 
 import os
@@ -21,6 +37,15 @@ from app import models
 
 logger = logging.getLogger(__name__)
 
+# POLICY: 1095 days (3 years from upload) — the period stated in the DPA's Retention clause.
+# CODE DEFAULT: still 0 (disabled), deliberately. This sweep HARD-DELETES rows and their R2
+# objects, and production runs on Postgres (see DATABASE_URL) — the local _preview.db being
+# empty says nothing about what is in production. Enable ONLY after checking the real oldest
+# row age there:
+#     SELECT MIN(created_at), COUNT(*) FROM documents WHERE created_at < NOW() - INTERVAL '1095 days';
+# then set DOCUMENT_RETENTION_DAYS=1095 in the environment. The DPA describes the 3-year limit
+# as an operational commitment, not as a sweep the platform runs by itself, so a 0 default here
+# does not contradict the published text.
 DOCUMENT_RETENTION_DAYS = int(os.getenv("DOCUMENT_RETENTION_DAYS", "0") or "0")
 DOCUMENT_RETENTION_SWEEP_INTERVAL_SECONDS = int(
     os.getenv("DOCUMENT_RETENTION_SWEEP_INTERVAL_SECONDS", str(24 * 3600)) or str(24 * 3600)
@@ -31,7 +56,13 @@ DOCUMENT_RETENTION_BATCH = int(os.getenv("DOCUMENT_RETENTION_BATCH", "500") or "
 # payer's contact details and masked payment-instrument metadata. After the window below
 # the payload is REDACTED (set to NULL) while the event row itself is kept — the ledger's
 # razorpay_event_id / event_type / entity ids / amount stay intact for idempotency and
-# audit. Default OFF (0): pick a period and disclose it in the privacy policy.
+# audit. POLICY: 180 days, the period stated in the DPA's Retention clause.
+# CODE DEFAULT: still 0 (disabled) for the same reason as the document sweep above —
+# redaction is irreversible and production is Postgres, not the empty local _preview.db.
+# Check the real data before enabling:
+#     SELECT MIN(created_at), COUNT(*) FROM enterprise_payment_events
+#      WHERE payload_json IS NOT NULL AND created_at < NOW() - INTERVAL '180 days';
+# then set PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS=180 in the environment.
 PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS = int(
     os.getenv("PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS", "0") or "0"
 )

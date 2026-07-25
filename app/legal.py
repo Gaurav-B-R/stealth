@@ -13,7 +13,22 @@ LEGAL_TERMS_PRIVACY_VERSION = "2026-07-16"
 
 # Version of the enterprise Data Processing Agreement (DPA) accepted by organizations
 # that handle their own clients' personal data through Rilono Enterprise.
-LEGAL_DPA_VERSION = "2026-06-20"
+#
+# v2026-07-24 covers the rewritten DPA, which replaced the placeholder text with what the
+# platform actually does:
+#   * a real sub-processor register (the named third parties that process client data),
+#   * an accurate description of the technical and organizational security measures,
+#   * Rilono Finance (payment collection on behalf of the organization),
+#   * the direct interactions Rilono has with an organization's own clients
+#     (client portal shares, document requests, notification email),
+#   * stated retention periods (kept in sync with the defaults in
+#     app/services/document_retention.py), and
+#   * Annexes I-III (processing details, security measures, sub-processors).
+#
+# Bumping this value makes every organization that accepted an EARLIER version show as
+# requiring re-acceptance: enterprise_organizations.dpa_accepted_version no longer matches
+# LEGAL_DPA_VERSION, so those orgs are re-prompted to accept the current DPA.
+LEGAL_DPA_VERSION = "2026-07-24"
 
 # Version of the Rilono Finance bank-connect eligibility attestations. Bump whenever the
 # checkbox wording in the Finance onboarding form (static/enterprise.js) changes, so the

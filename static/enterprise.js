@@ -888,6 +888,7 @@
     $("#userAvatar").textContent = (initials(u.full_name || u.email) || "U").toUpperCase();
     $("#userAvatar").style.background = `linear-gradient(135deg, ${c1}, ${avatarColor(u.email)[1]})`;
     updatePlanChip();
+    renderDpaBanner();
     maybeShowEntHeardAbout(me);
 
     if (!state.perms.can_edit_data) $("#topAddClient").classList.add("hidden");
@@ -1233,6 +1234,54 @@
   function trialBanner() {
     // Rilono Enterprise is free — no trial countdown or upgrade prompts.
     return "";
+  }
+
+  /* ---------------- Data Processing Agreement re-consent ---------------- */
+  // The org's stored dpa_accepted_version is compared server-side against the current
+  // LEGAL_DPA_VERSION. When they differ the portal shows a banner that only an org admin
+  // can clear, so nobody keeps working under superseded processor terms unnoticed.
+  function renderDpaBanner() {
+    const wrap = $("#dpaBannerWrap");
+    if (!wrap) return;
+    const dpa = (state.me && state.me.dpa) || null;
+    if (!dpa || !dpa.reconsent_required) {
+      wrap.innerHTML = "";
+      wrap.style.display = "none";
+      return;
+    }
+    const updatedOn = fmtDate(dpa.current_version);
+    const canAccept = !!(state.perms && state.perms.can_manage_users);
+    wrap.innerHTML = `
+      <div class="plan-banner warn" role="status">
+        <div class="pb-icon">📄</div>
+        <div class="pb-text"><b>Our Data Processing Agreement was updated on ${esc(updatedOn)}.</b>
+          <span>${canAccept
+            ? `Please review and accept the updated terms to continue using Rilono Enterprise.`
+            : `An administrator must review and accept the updated terms to continue using Rilono Enterprise. Ask an admin in your organization to sign in and accept them.`}</span></div>
+        <a class="btn btn-soft btn-sm" href="/dpa" target="_blank" rel="noopener noreferrer">Review DPA</a>
+        ${canAccept ? `<button class="btn btn-primary btn-sm" id="dpaAcceptBtn" type="button">Accept updated terms</button>` : ""}
+      </div>`;
+    wrap.style.display = "";
+    const btn = $("#dpaAcceptBtn");
+    if (btn) btn.onclick = () => acceptDpa(btn);
+  }
+
+  async function acceptDpa(btn) {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = "Accepting…";
+    let res;
+    try {
+      res = await api("/dpa/accept", { method: "POST", body: {} });
+    } catch (ex) {
+      btn.disabled = false;
+      btn.textContent = label;
+      toast(ex.message || "Could not record your acceptance. Please try again.", "error");
+      return;
+    }
+    if (state.me) state.me.dpa = res.dpa || state.me.dpa;
+    renderDpaBanner();
+    toast("Updated Data Processing Agreement accepted.", "success");
   }
 
   /* ============================================================
@@ -2532,6 +2581,14 @@
         </div>` : "";
       const docValInfo = (d) => {
         const s = d.validation_status;
+        // A staff override is stored as "valid" — but a human cleared it, not the AI.
+        // Label it as such so nobody mistakes an overridden document for an AI-verified one.
+        if (d.manually_accepted) {
+          const bits = [];
+          if (d.manually_accepted_by) bits.push("by " + d.manually_accepted_by);
+          if (d.manually_accepted_at) bits.push(fmtDate(d.manually_accepted_at));
+          return { cls: "manual", txt: "✓ Manually approved", msg: bits.join(" · ") };
+        }
         if (s === "valid") return { cls: "ok", txt: "✓ Validated by Rilono AI", msg: "" };
         if (s === "invalid") return { cls: "warn", txt: "⚠ Needs review", msg: d.validation_message || "" };
         if (s === "error") return { cls: "muted", txt: "Not auto-scanned", msg: d.validation_message || "" };
@@ -2565,9 +2622,19 @@
           if (x && typeof x === "object") return cvfItem(x) || Object.entries(x).map(([k, it]) => `<div class="doc-cf-item">${esc(k)}: ${esc(typeof it === "string" ? it : JSON.stringify(it))}</div>`).join("");
           return `<div class="doc-cf-item">${esc(String(x))}</div>`;
         };
-        const cvf = d.validation_status === "invalid" ? ((d.extracted && d.extracted.cross_validation_flags) || null) : null;
+        // Show the AI's red flags while the document is flagged — and keep showing them
+        // (as overridden history) after staff accept it, so the override stays auditable.
+        const cvf = (d.validation_status === "invalid" || d.manually_accepted)
+          ? ((d.extracted && d.extracted.cross_validation_flags) || null) : null;
         const cvfBody = cvf ? cvfItems(cvf) : "";
-        const cvfRow = cvfBody ? `<div class="doc-cf"><b>⚠ Rilono AI flagged:</b>${cvfBody}</div>` : "";
+        const cvfHead = d.manually_accepted
+          ? `⚠ Rilono AI had flagged this — overridden${d.manually_accepted_by ? " by " + esc(d.manually_accepted_by) : ""}:`
+          : "⚠ Rilono AI flagged:";
+        const cvfNote = (d.manually_accepted && d.ai_flag_before_accept && !cvfBody)
+          ? `<div class="doc-cf overridden"><b>${cvfHead}</b><div class="doc-cf-item">${esc(d.ai_flag_before_accept)}</div></div>` : "";
+        const cvfRow = cvfBody
+          ? `<div class="doc-cf${d.manually_accepted ? " overridden" : ""}"><b>${cvfHead}</b>${cvfBody}</div>`
+          : cvfNote;
         const acceptRow = (canEdit && (d.validation_status === "invalid" || d.validation_status === "error"))
           ? `<div class="doc-accept-row"><button class="btn btn-soft btn-sm doc-accept" data-id="${d.id}">✓ Checked it myself — accept anyway</button></div>` : "";
         return `
@@ -2678,7 +2745,7 @@
         $$(".doc-accept", body).forEach((b) => b.onclick = async () => {
           const id = parseInt(b.dataset.id, 10);
           const ok = await confirmModal(
-            "Rilono AI flagged this document. Accept it only if you've reviewed it yourself — it will show as validated (with an audit note) and empty profile fields will be auto-filled from it.",
+            "Rilono AI flagged this document. Accept it only if you've reviewed it yourself — it will show as “Manually approved” in your name (never as AI-validated), the flag stays on record, and empty profile fields will be auto-filled from it.",
             { title: "Accept this document?", okText: "Accept & apply", danger: false }
           );
           if (!ok) return;
@@ -2688,7 +2755,7 @@
             const i = docs.findIndex((x) => x.id === id);
             if (i >= 0 && r.document) docs.splice(i, 1, r.document);
             try { const c = await api("/clients/" + cl.id); Object.assign(cl, c.client); } catch (e) {}
-            toast("Document accepted — profile updated where empty", "success");
+            toast("Marked as manually approved — profile updated where empty", "success");
             renderDocs();
           } catch (ex) { b.disabled = false; toast(ex.message, "error"); }
         });
@@ -2808,6 +2875,9 @@
 
     const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
     const EM_SEND_HINT = IS_MAC ? "⌘ + Enter" : "Ctrl + Enter";
+    // Mirrors ENTERPRISE_EMAIL_ATTACH_MAX_FILES / _MAX_TOTAL_BYTES on the server.
+    const EM_MAX_FILES = 10;
+    const EM_MAX_TOTAL_BYTES = 15 * 1024 * 1024;
 
     // Merge-field values for this client. Every field has a readable fallback so a
     // template never emails a student a blank or a leftover {{placeholder}}.
@@ -2927,10 +2997,25 @@
     function emAddFiles(fileList) {
       const files = Array.prototype.slice.call(fileList || []);
       if (!files.length) return;
-      const room = 10 - em.attachments.length;
-      if (room <= 0) { toast("You can attach up to 10 files to one email", "error"); return; }
-      files.slice(0, room).forEach(emUploadFile);
-      if (files.length > room) toast(`Only the first ${room} file${room === 1 ? "" : "s"} were attached — the limit is 10`, "error");
+      const room = EM_MAX_FILES - em.attachments.length;
+      if (room <= 0) { toast(`You can attach up to ${EM_MAX_FILES} files to one email`, "error"); return; }
+      const used = em.attachments.reduce((sum, a) => sum + (a.size || 0), 0);
+      const accepted = [];
+      let running = used;
+      files.slice(0, room).forEach((f) => {
+        if (running + (f.size || 0) > EM_MAX_TOTAL_BYTES) return;   // don't upload what the server will refuse
+        running += f.size || 0;
+        accepted.push(f);
+      });
+      accepted.forEach(emUploadFile);
+      const skipped = files.length - accepted.length;
+      if (skipped > 0) {
+        toast(
+          accepted.length
+            ? `${skipped} file${skipped === 1 ? "" : "s"} skipped — an email can carry ${EM_MAX_FILES} files totalling ${fmtSize(EM_MAX_TOTAL_BYTES)}`
+            : `That's over the ${fmtSize(EM_MAX_TOTAL_BYTES)} limit for one email. Share the file as a link instead.`,
+          "error");
+      }
     }
 
     /* -- selection helpers: toolbar clicks must not steal the caret -- */
@@ -3054,7 +3139,17 @@
       $("#adOk").onclick = () => {
         const picked = $$(".docreq-checks input:checked:not(:disabled)").map((i) => parseInt(i.value, 10));
         if (!picked.length) { toast("Pick at least one document", "error"); return; }
-        if (em.attachments.length + picked.length > 10) { toast("You can attach up to 10 files to one email", "error"); return; }
+        if (em.attachments.length + picked.length > EM_MAX_FILES) {
+          toast(`You can attach up to ${EM_MAX_FILES} files to one email`, "error"); return;
+        }
+        // Mirror the server ceiling here so an oversized pick is refused before the
+        // server copies anything (the copy is what costs storage).
+        const projected = em.attachments.reduce((sum, a) => sum + (a.size || 0), 0)
+          + picked.reduce((sum, id) => sum + ((docs.find((d) => d.id === id) || {}).file_size || 0), 0);
+        if (projected > EM_MAX_TOTAL_BYTES) {
+          toast(`Attachments would total ${fmtSize(projected)} — the limit is ${fmtSize(EM_MAX_TOTAL_BYTES)} per email. Send a secure link instead.`, "error");
+          return;
+        }
         picked.forEach((id) => {
           const doc = docs.find((d) => d.id === id);
           if (!doc) return;
@@ -3217,7 +3312,7 @@
           <input type="file" id="emFile" class="hidden" multiple
             accept=".pdf,.jpg,.jpeg,.png,.webp,.gif,.heic,.doc,.docx,.xls,.xlsx,.csv,.txt">
           <span class="emc-att-note" id="emAttNote"></span>
-          <div style="flex:1"></div>
+          <div class="emc-foot-spacer"></div>
           <button type="button" class="emc-tool emc-tool-ghost" id="emDiscard">Discard</button>
         </div>
         <div class="emc-hint">

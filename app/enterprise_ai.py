@@ -1069,11 +1069,19 @@ def run_deep_scan_audit(
         # Surface the per-document upload-time AI verdict so the audit can weigh
         # already-red-flagged files instead of rediscovering (or missing) them.
         validation_status = getattr(doc, "validation_status", None)
+        accepted_by = getattr(doc, "manually_accepted_by", None)
+        accepted_at = getattr(doc, "manually_accepted_at", None)
         if validation_status:
             entry["upload_validation"] = {
                 "status": validation_status,
                 "message": _clip(getattr(doc, "validation_message", None), 300) or None,
             }
+            # "valid" here can mean a human overrode an AI red flag — never let the audit
+            # treat that as an independent AI clearance.
+            if accepted_by or accepted_at:
+                entry["upload_validation"]["cleared_by"] = "staff_manual_override"
+                entry["upload_validation"]["manually_accepted_by"] = _clip(accepted_by, 120) or None
+                entry["upload_validation"]["manually_accepted_at"] = _iso(accepted_at)
         per_doc.append(entry)
 
     # Persist freshly-cached extractions (best-effort; independent of the credit charge).

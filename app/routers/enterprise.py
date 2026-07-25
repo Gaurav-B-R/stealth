@@ -767,6 +767,22 @@ def _org_display_currency(organization) -> dict:
     }
 
 
+def _build_dpa_consent_state(organization) -> dict:
+    """Whether the org is still on a superseded Data Processing Agreement.
+
+    ``dpa_accepted_version`` is stamped at signup (and on every re-acceptance) so we can
+    detect organizations that agreed to an older DPA and re-prompt an admin. Legacy rows
+    created before the column existed have a NULL version and also need re-consent.
+    """
+    accepted_version = (getattr(organization, "dpa_accepted_version", None) or "").strip() or None
+    return {
+        "current_version": LEGAL_DPA_VERSION,
+        "accepted_version": accepted_version,
+        "accepted_at": getattr(organization, "dpa_accepted_at", None),
+        "reconsent_required": accepted_version != LEGAL_DPA_VERSION,
+    }
+
+
 def _build_enterprise_context(
     db: Session,
     user: models.User,
@@ -779,6 +795,13 @@ def _build_enterprise_context(
             "organization": None,
             "membership": None,
             "permissions": _blocked_enterprise_permissions(),
+            "dpa": {
+                "current_version": LEGAL_DPA_VERSION,
+                "accepted_version": None,
+                "accepted_at": None,
+                # Nothing to re-accept until an organization exists.
+                "reconsent_required": False,
+            },
         }
 
     normalized_role = _normalize_enterprise_role(membership.role)
@@ -826,6 +849,7 @@ def _build_enterprise_context(
             if not onboarding_required
             else _blocked_enterprise_permissions()
         ),
+        "dpa": _build_dpa_consent_state(organization),
     }
 
 
@@ -1294,6 +1318,49 @@ def enterprise_me(
             "heard_about_answered": getattr(current_user, "heard_about_us_at", None) is not None,
         },
         **_build_enterprise_context(db, current_user, request),
+    }
+
+
+@router.post("/dpa/accept")
+def enterprise_accept_dpa(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Record an admin's acceptance of the CURRENT Data Processing Agreement.
+
+    Used when ``LEGAL_DPA_VERSION`` is bumped and existing organizations are still on a
+    superseded version: the portal shows a blocking banner until an admin accepts here.
+    Idempotent — re-accepting the version already on file is a no-op that returns the
+    same state, so a double-click cannot rewrite the original proof-of-consent timestamp.
+    """
+    _, organization, _ = _require_enterprise_membership(
+        db=db,
+        user=current_user,
+        request=request,
+        require_manage_users=True,
+    )
+
+    already_current = (
+        (organization.dpa_accepted_version or "").strip() == LEGAL_DPA_VERSION
+    )
+    if not already_current:
+        organization.dpa_accepted_at = datetime.utcnow()
+        organization.dpa_accepted_version = LEGAL_DPA_VERSION
+        organization.dpa_accepted_by_user_id = current_user.id
+        db.commit()
+        db.refresh(organization)
+        logger.info(
+            "Enterprise DPA re-accepted (org_id=%s, user_id=%s, version=%s)",
+            organization.id,
+            current_user.id,
+            LEGAL_DPA_VERSION,
+        )
+
+    return {
+        "accepted": True,
+        "already_current": already_current,
+        "dpa": _build_dpa_consent_state(organization),
     }
 
 
@@ -2826,6 +2893,35 @@ def enterprise_delete_client(
         db=db, user=current_user, request=request, require_edit_data=True
     )
     client = _get_org_client_or_404(db, organization.id, client_id)
+
+    # Purge the stored bytes BEFORE the rows go. The child rows cascade at the DB level
+    # (passive_deletes), so no Python-side hook ever runs for them — without this the R2
+    # objects would be orphaned forever while the DPA's deletion clause promises otherwise.
+    # delete_document is best-effort and never raises, so a missing blob cannot block the
+    # record deletion.
+    storage_keys = [
+        key
+        for (key,) in db.query(models.EnterpriseClientDocument.storage_key)
+        .filter(
+            models.EnterpriseClientDocument.client_id == client.id,
+            models.EnterpriseClientDocument.organization_id == organization.id,
+        )
+        .all()
+        if key
+    ]
+    storage_keys += [
+        key
+        for (key,) in db.query(models.EnterpriseClientEmailAttachment.storage_key)
+        .filter(
+            models.EnterpriseClientEmailAttachment.client_id == client.id,
+            models.EnterpriseClientEmailAttachment.organization_id == organization.id,
+        )
+        .all()
+        if key
+    ]
+    for key in storage_keys:
+        enterprise_storage.delete_document(key)
+
     db.delete(client)
     db.commit()
     return {
@@ -3114,6 +3210,10 @@ def _collect_email_attachments(
     Draft uploads are looked up (scoped to this org + client + uploader); documents
     already on file are *copied* into the email's own storage key, so deleting the
     document later never rewrites the history of what was sent.
+
+    Everything is resolved and size-checked *before* a single byte is copied. A DB
+    rollback cannot un-write an object, so a limit breach discovered after copying
+    would strand bytes in the bucket that no row references and no sweep can find.
     """
     rows: list[models.EnterpriseClientEmailAttachment] = []
 
@@ -3136,8 +3236,10 @@ def _collect_email_attachments(
             )
         rows.append(row)
 
+    # Resolve the picked documents (metadata only) and check the ceilings first.
+    picked_docs: list[models.EnterpriseClientDocument] = []
     for document_id in list(dict.fromkeys(document_ids or [])):
-        if len(rows) >= ENTERPRISE_EMAIL_ATTACH_MAX_FILES:
+        if len(rows) + len(picked_docs) >= ENTERPRISE_EMAIL_ATTACH_MAX_FILES:
             break
         doc = (
             db.query(models.EnterpriseClientDocument)
@@ -3150,45 +3252,62 @@ def _collect_email_attachments(
         )
         if not doc:
             raise HTTPException(status_code=404, detail="One of the selected documents is no longer on file.")
-        try:
-            data = enterprise_storage.fetch_document(doc.storage_key)
-        except Exception:
-            logger.exception("Could not read document %s for email attachment", doc.id)
-            raise HTTPException(
-                status_code=502,
-                detail=f"Could not read “{doc.original_filename}” from storage. Try attaching it as a file instead.",
-            )
-        ext = os.path.splitext(doc.original_filename)[1].lower()
-        storage_key = f"enterprise/{organization.id}/clients/{client.id}/email/{uuid.uuid4().hex}{ext}"
-        try:
-            enterprise_storage.store_document(storage_key, data, content_type=doc.mime_type)
-        except Exception:
-            logger.exception("Could not copy document %s into an email attachment", doc.id)
-            raise HTTPException(status_code=502, detail="Could not attach that document right now. Please try again.")
-        row = models.EnterpriseClientEmailAttachment(
-            organization_id=organization.id,
-            client_id=client.id,
-            source_document_id=doc.id,
-            original_filename=doc.original_filename,
-            storage_key=storage_key,
-            file_size=len(data),
-            mime_type=doc.mime_type,
-            uploaded_by_user_id=current_user.id,
-        )
-        db.add(row)
-        rows.append(row)
+        picked_docs.append(doc)
 
-    total = sum(int(r.file_size or 0) for r in rows)
-    if total > ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES:
+    projected = (
+        sum(int(r.file_size or 0) for r in rows)
+        + sum(int(d.file_size or 0) for d in picked_docs)
+    )
+    if projected > ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES:
         raise HTTPException(
             status_code=400,
             detail=(
                 "Attachments total "
-                f"{total // (1024 * 1024)} MB — the limit is "
+                f"{projected // (1024 * 1024)} MB — the limit is "
                 f"{ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES // (1024 * 1024)} MB per email. "
                 "Remove a file, or share it as a link instead."
             ),
         )
+
+    written_keys: list[str] = []
+    try:
+        for doc in picked_docs:
+            try:
+                data = enterprise_storage.fetch_document(doc.storage_key)
+            except Exception:
+                logger.exception("Could not read document %s for email attachment", doc.id)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Could not read “{doc.original_filename}” from storage. Try attaching it as a file instead.",
+                )
+            ext = os.path.splitext(doc.original_filename)[1].lower()
+            storage_key = f"enterprise/{organization.id}/clients/{client.id}/email/{uuid.uuid4().hex}{ext}"
+            try:
+                enterprise_storage.store_document(storage_key, data, content_type=doc.mime_type)
+            except Exception:
+                logger.exception("Could not copy document %s into an email attachment", doc.id)
+                raise HTTPException(
+                    status_code=502, detail="Could not attach that document right now. Please try again."
+                )
+            written_keys.append(storage_key)
+            row = models.EnterpriseClientEmailAttachment(
+                organization_id=organization.id,
+                client_id=client.id,
+                source_document_id=doc.id,
+                original_filename=doc.original_filename,
+                storage_key=storage_key,
+                file_size=len(data),
+                mime_type=doc.mime_type,
+                uploaded_by_user_id=current_user.id,
+            )
+            db.add(row)
+            rows.append(row)
+    except Exception:
+        # The pending DB rows roll back on their own; the objects would not.
+        for key in written_keys:
+            enterprise_storage.delete_document(key)
+        raise
+
     return rows
 
 
@@ -6287,6 +6406,14 @@ def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
             extracted = json.loads(doc.extracted_fields)
         except Exception:
             extracted = None
+    # A staff override reads as "valid" everywhere downstream, but it was NOT the AI that
+    # cleared it — surface the provenance so the UI can label it "Manually approved".
+    # Rows accepted before these columns existed fall back to the audit keys the accept
+    # endpoint has always written into extracted_fields.
+    payload = extracted if isinstance(extracted, dict) else {}
+    accepted_by = (doc.manually_accepted_by or payload.get("accepted_by") or "").strip() or None
+    accepted_at = _iso(doc.manually_accepted_at) or (payload.get("accepted_at") or None)
+    manually_accepted = bool(accepted_by or doc.manually_accepted_at or payload.get("accepted_at"))
     return {
         "id": doc.id,
         "client_id": doc.client_id,
@@ -6301,6 +6428,11 @@ def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
         "validation_status": doc.validation_status,
         "validation_message": doc.validation_message,
         "validated_at": _iso(doc.validated_at),
+        # Human-in-the-loop override (staff accepted a document Rilono AI flagged).
+        "manually_accepted": manually_accepted,
+        "manually_accepted_by": accepted_by,
+        "manually_accepted_at": accepted_at,
+        "ai_flag_before_accept": (payload.get("ai_flag_before_accept") or None),
         "extracted": extracted,
     }
 
@@ -6522,9 +6654,14 @@ def _ent_related_documents_context(db: Session, client, exclude_document_id) -> 
         return ""
     blocks, used = [], 0
     for index, doc in enumerate(rows, start=1):
+        # A staff override is stored as "valid" — say so explicitly, so the model does not
+        # read a human-accepted document as one Rilono AI itself cleared.
+        status_label = (doc.validation_status or "not scanned").upper()
+        if doc.manually_accepted_by or doc.manually_accepted_at:
+            status_label = f"{status_label} — MANUALLY APPROVED BY STAFF, NOT AI-VALIDATED"
         header = (
             f"\n--- PRIOR DOCUMENT {index}: {(doc.document_type or 'document').upper()} "
-            f"({doc.original_filename}) [{(doc.validation_status or 'not scanned').upper()}] ---\n"
+            f"({doc.original_filename}) [{status_label}] ---\n"
         )
         body = ""
         if doc.extracted_fields:
@@ -6838,8 +6975,14 @@ def enterprise_accept_client_document(
         f"Accepted by {staff_name} after manual review."
         + (f" Rilono AI had flagged: {prior_message}" if prior_message else "")
     )[:2000]
+    accepted_at = datetime.now(dt_timezone.utc)
+    # Provenance columns: the document is valid, but a human — not the AI — cleared it.
+    doc.manually_accepted_at = accepted_at
+    doc.manually_accepted_by = staff_name[:255]
     payload["accepted_by"] = staff_name
-    payload["accepted_at"] = datetime.now(dt_timezone.utc).isoformat()
+    payload["accepted_at"] = accepted_at.isoformat()
+    if prior_message:
+        payload["ai_flag_before_accept"] = prior_message[:2000]
 
     fields = payload.get("fields") or {}
     if client is not None and isinstance(fields, dict) and fields:

@@ -1030,11 +1030,17 @@ button.set-url:hover { border-color: var(--primary); color: var(--primary-600); 
 .doc-accept-row { margin-top: 8px; }
 .doc-val.muted .doc-val-badge { background: rgba(100, 116, 139, .12); color: #475569; border-color: rgba(100, 116, 139, .35); }
 .doc-val.pending .doc-val-badge { background: rgba(99, 102, 241, .1); color: #4338ca; border-color: rgba(99, 102, 241, .35); }
+/* Human override — cleared by staff, not by Rilono AI. Deliberately a different hue from
+   the green AI badge so the two are never confused at a glance. */
+.doc-val.manual .doc-val-badge { background: rgba(37, 99, 235, .1); color: #1d4ed8; border-color: rgba(37, 99, 235, .38); }
 .doc-val-msg { color: var(--muted); font-size: 12px; }
 .doc-af { margin-top: 6px; font-size: 12.5px; color: #047857; font-weight: 600; }
 .doc-af b { font-weight: 700; }
 .doc-cf { margin-top: 6px; font-size: 12px; color: #92400e; background: rgba(245, 158, 11, .08); border: 1px solid rgba(245, 158, 11, .3); border-radius: 8px; padding: 7px 10px; }
 .doc-cf-item { font-weight: 500; margin-top: 3px; }
+/* The same flags after a human override: kept for the audit trail, toned down so they
+   don't read as an open issue. */
+.doc-cf.overridden { color: #475569; background: rgba(100, 116, 139, .07); border-color: rgba(100, 116, 139, .28); }
 .doc-act { width: 34px; height: 34px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); display: grid; place-items: center; color: var(--text-2); flex: none; font-size: 14px; text-decoration: none; }
 .doc-act:hover { background: var(--bg-2); color: var(--text); }
 .doc-del:hover { background: rgba(239,68,68,.1); color: var(--danger); border-color: rgba(239,68,68,.3); }
@@ -1243,6 +1249,7 @@ button.set-url:hover { border-color: var(--primary); color: var(--primary-600); 
   display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
   padding: 12px 16px; border-top: 1px solid var(--border);
 }
+.emc-foot-spacer { flex: 1; }
 .emc-send { display: inline-flex; align-items: center; gap: 7px; }
 .emc-send svg { display: block; }
 .emc-tool {
@@ -1404,6 +1411,8 @@ button.set-url:hover { border-color: var(--primary); color: var(--primary-600); 
   .emc-hint { padding: 0 13px 12px; }
   .emc-menu { width: min(288px, calc(100vw - 48px)); }
   .emc-email { max-width: 150px; }
+  /* Without the spacer, Discard sits beside the other actions instead of alone on a row. */
+  .emc-foot-spacer { display: none; }
   /* Stack the footnotes rather than wrapping mid-sentence around the separators. */
   .emc-hint { flex-direction: column; align-items: flex-start; gap: 3px; }
   .emc-hint-sep { display: none; }

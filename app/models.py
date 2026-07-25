@@ -464,6 +464,12 @@ class EnterpriseClientDocument(Base):
     validation_message = Column(Text, nullable=True)
     extracted_fields = Column(Text, nullable=True)
     validated_at = Column(DateTime(timezone=True), nullable=True)
+    # Human override: staff reviewed a document the AI flagged and accepted it themselves.
+    # validation_status is flipped to "valid" so downstream logic is unchanged, but these
+    # two columns keep the provenance honest — the UI must never call such a document
+    # "Validated by Rilono AI".
+    manually_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    manually_accepted_by = Column(String, nullable=True)
     uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     uploaded_by_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)

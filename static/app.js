@@ -29,7 +29,7 @@ const LEGAL_LAST_UPDATED = {
     terms: 'July 16, 2026',
     refund: 'July 16, 2026',
     delivery: 'July 10, 2026',
-    dpa: 'June 20, 2026'
+    dpa: 'July 24, 2026'
 };
 const COOKIE_CONSENT_STORAGE_KEY = 'rilono_cookie_preferences_v1';
 const COOKIE_CONSENT_VERSION = 1;

@@ -732,6 +732,8 @@ def ensure_enterprise_crm_tables():
                     validation_message TEXT,
                     extracted_fields TEXT,
                     validated_at {ts},
+                    manually_accepted_at {ts},
+                    manually_accepted_by VARCHAR,
                     uploaded_by_user_id INTEGER,
                     uploaded_by_name VARCHAR,
                     created_at {ts} DEFAULT {now_default} NOT NULL
@@ -759,6 +761,10 @@ def ensure_enterprise_crm_tables():
                 conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN extracted_fields TEXT"))
             if "validated_at" not in doc_cols:
                 conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN validated_at TIMESTAMP"))
+            if "manually_accepted_at" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN manually_accepted_at TIMESTAMP"))
+            if "manually_accepted_by" not in doc_cols:
+                conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN manually_accepted_by VARCHAR"))
 
         # --- enterprise_interview_sessions ------------------------------------
         if not _table_exists(conn, "enterprise_interview_sessions"):
