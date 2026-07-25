@@ -531,30 +531,13 @@ def list_users_admin(
     }
 
 
-@router.get(
-    "/company-finance/analytics",
-    response_model=schemas.AdminCompanyFinanceAnalyticsResponse,
-)
-def company_finance_analytics_admin(
-    request: Request,
-    current_user: models.User = Depends(get_current_admin_user),
-    _: None = Depends(require_admin_turnstile_proof),
-    db: Session = Depends(get_db),
-):
+def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None = 250) -> dict:
     """
-    Company-level finance analytics for the admin console.
+    Build the company finance analytics payload.
 
-    Investment rows come from company_finance_entries. Returns are calculated live
-    from verified subscription payments, with INR converted using ADMIN_ANALYTICS_INR_TO_USD.
+    Shared by the console endpoint (capped ledger) and the spreadsheet export
+    (ledger_limit=None → every row, so the download is the complete book).
     """
-    _enforce_rate_limit_or_429(
-        request=request,
-        scope="admin.company_finance.analytics",
-        limit=ADMIN_ENDPOINT_RATE_LIMIT,
-        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
-        extra_key=f"user:{current_user.id}",
-    )
-
     entries = (
         db.query(models.CompanyFinanceEntry)
         .order_by(desc(models.CompanyFinanceEntry.occurred_on), desc(models.CompanyFinanceEntry.id))
@@ -695,7 +678,7 @@ def company_finance_analytics_admin(
         "monthly_series": monthly_series,
         "expense_breakdown": breakdown_items,
         "contributor_breakdown": contributor_items,
-        "ledger": ledger[:250],
+        "ledger": ledger[:ledger_limit] if ledger_limit else ledger,
         "notes": [
             "Investment rows are stored in company_finance_entries.",
             "Founder spend uses the paid_by column on each investment row.",
@@ -703,6 +686,256 @@ def company_finance_analytics_admin(
             f"INR payments are converted using ADMIN_ANALYTICS_INR_TO_USD={ADMIN_ANALYTICS_INR_TO_USD}.",
         ],
     }
+
+
+@router.get(
+    "/company-finance/analytics",
+    response_model=schemas.AdminCompanyFinanceAnalyticsResponse,
+)
+def company_finance_analytics_admin(
+    request: Request,
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """
+    Company-level finance analytics for the admin console.
+
+    Investment rows come from company_finance_entries. Returns are calculated live
+    from verified subscription payments, with INR converted using ADMIN_ANALYTICS_INR_TO_USD.
+    """
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.company_finance.analytics",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+    return _compute_company_finance_analytics(db)
+
+
+# --- Company finance spreadsheet export (Excel .xlsx, CSV fallback) ---
+
+FINANCE_EXPORT_LEDGER_HEADERS = [
+    "Date (UTC)", "Type", "Vendor", "Category", "Paid By", "Description", "Amount (USD)", "Source",
+]
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _finance_export_rows(payload: dict) -> list[list]:
+    """Ledger rows in export order (dates as `date` so Excel sorts/filters them properly)."""
+    rows: list[list] = []
+    for item in payload.get("ledger", []):
+        rows.append([
+            _finance_parse_date_safe(item.get("occurred_on")),
+            item.get("kind") or "",
+            item.get("vendor") or "",
+            item.get("category") or "",
+            item.get("paid_by") or "",
+            item.get("description") or "",
+            float(item.get("amount_usd") or 0),
+            item.get("source") or "",
+        ])
+    return rows
+
+
+def _finance_parse_date_safe(value):
+    try:
+        return datetime.strptime(str(value).strip()[:10], "%Y-%m-%d").date()
+    except Exception:
+        return value or ""
+
+
+def _build_finance_csv(payload: dict) -> bytes:
+    """CSV fallback (also the explicit ?format=csv output). BOM so Excel reads UTF-8."""
+    import csv
+    import io as _io
+
+    buffer = _io.StringIO()
+    writer = csv.writer(buffer)
+    summary = payload.get("summary", {})
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    writer.writerow(["Rilono - Company Finance Export"])
+    writer.writerow(["Generated (UTC)", generated])
+    writer.writerow([])
+    writer.writerow(["Total invested (USD)", summary.get("total_invested_usd", 0)])
+    writer.writerow(["Total returns (USD)", summary.get("total_returns_usd", 0)])
+    writer.writerow(["Net (USD)", summary.get("net_usd", 0)])
+    writer.writerow(["ROI (%)", summary.get("roi_percent", 0)])
+    writer.writerow(["Break-even gap (USD)", summary.get("break_even_gap_usd", 0)])
+    writer.writerow([])
+    writer.writerow(FINANCE_EXPORT_LEDGER_HEADERS)
+    for row in _finance_export_rows(payload):
+        writer.writerow([value.isoformat() if isinstance(value, date) else value for value in row])
+
+    return b"\xef\xbb\xbf" + buffer.getvalue().encode("utf-8")
+
+
+def _build_finance_xlsx(payload: dict) -> bytes | None:
+    """
+    Real .xlsx workbook (Summary / Ledger / Spend by vendor / Spend by founder / Monthly).
+    Returns None when openpyxl isn't installed so the caller can fall back to CSV.
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except Exception:  # pragma: no cover - depends on the deployed environment
+        logger.warning("openpyxl unavailable; falling back to CSV for the finance export")
+        return None
+
+    from io import BytesIO
+
+    USD_FORMAT = '"$"#,##0.00'
+    PCT_FORMAT = '0.00"%"'
+    DATE_FORMAT = "yyyy-mm-dd"
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="4338CA")
+    title_font = Font(bold=True, size=14)
+
+    summary = payload.get("summary", {})
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    workbook = Workbook()
+
+    def style_header(sheet, row_index: int, column_count: int) -> None:
+        for column_index in range(1, column_count + 1):
+            cell = sheet.cell(row=row_index, column=column_index)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    def set_widths(sheet, widths: list[int]) -> None:
+        for index, width in enumerate(widths, start=1):
+            sheet.column_dimensions[get_column_letter(index)].width = width
+
+    # --- Summary ---
+    overview = workbook.active
+    overview.title = "Summary"
+    overview["A1"] = "Rilono — Company Finance"
+    overview["A1"].font = title_font
+    overview["A2"] = "Generated (UTC)"
+    overview["B2"] = generated
+    overview["A4"] = "Metric"
+    overview["B4"] = "Value"
+    style_header(overview, 4, 2)
+    metrics = [
+        ("Total invested (USD)", summary.get("total_invested_usd", 0), USD_FORMAT),
+        ("Total returns (USD)", summary.get("total_returns_usd", 0), USD_FORMAT),
+        ("Net (USD)", summary.get("net_usd", 0), USD_FORMAT),
+        ("ROI (%)", summary.get("roi_percent", 0), PCT_FORMAT),
+        ("Break-even gap (USD)", summary.get("break_even_gap_usd", 0), USD_FORMAT),
+        ("Investment entries", summary.get("investment_entry_count", 0), "0"),
+        ("Return entries", summary.get("return_entry_count", 0), "0"),
+    ]
+    for offset, (label, value, number_format) in enumerate(metrics):
+        row_index = 5 + offset
+        overview.cell(row=row_index, column=1, value=label)
+        value_cell = overview.cell(row=row_index, column=2, value=value)
+        value_cell.number_format = number_format
+    notes_row = 5 + len(metrics) + 1
+    overview.cell(row=notes_row, column=1, value="Notes").font = Font(bold=True)
+    for offset, note in enumerate(payload.get("notes", []), start=1):
+        overview.cell(row=notes_row + offset, column=1, value=note)
+    set_widths(overview, [34, 26])
+
+    # --- Ledger ---
+    ledger_sheet = workbook.create_sheet("Ledger")
+    ledger_sheet.append(FINANCE_EXPORT_LEDGER_HEADERS)
+    style_header(ledger_sheet, 1, len(FINANCE_EXPORT_LEDGER_HEADERS))
+    for row in _finance_export_rows(payload):
+        ledger_sheet.append(row)
+    for row_index in range(2, ledger_sheet.max_row + 1):
+        ledger_sheet.cell(row=row_index, column=1).number_format = DATE_FORMAT
+        ledger_sheet.cell(row=row_index, column=7).number_format = USD_FORMAT
+    ledger_sheet.freeze_panes = "A2"
+    if ledger_sheet.max_row > 1:
+        ledger_sheet.auto_filter.ref = f"A1:H{ledger_sheet.max_row}"
+    set_widths(ledger_sheet, [13, 12, 18, 22, 16, 42, 15, 22])
+
+    # --- Breakdowns ---
+    def write_breakdown(title: str, label_header: str, items: list[dict]) -> None:
+        sheet = workbook.create_sheet(title)
+        sheet.append([label_header, "Amount (USD)", "% of invested"])
+        style_header(sheet, 1, 3)
+        for item in items:
+            sheet.append([
+                item.get("label") or "",
+                float(item.get("amount_usd") or 0),
+                float(item.get("percentage") or 0),
+            ])
+        for row_index in range(2, sheet.max_row + 1):
+            sheet.cell(row=row_index, column=2).number_format = USD_FORMAT
+            sheet.cell(row=row_index, column=3).number_format = PCT_FORMAT
+        sheet.freeze_panes = "A2"
+        set_widths(sheet, [28, 16, 16])
+
+    write_breakdown("Spend by vendor", "Vendor", payload.get("expense_breakdown", []))
+    write_breakdown("Spend by founder", "Paid by", payload.get("contributor_breakdown", []))
+
+    # --- Monthly ---
+    monthly_sheet = workbook.create_sheet("Monthly")
+    monthly_sheet.append(["Month", "Investment (USD)", "Returns (USD)", "Net (USD)"])
+    style_header(monthly_sheet, 1, 4)
+    for item in payload.get("monthly_series", []):
+        monthly_sheet.append([
+            item.get("month") or "",
+            float(item.get("investment_usd") or 0),
+            float(item.get("returns_usd") or 0),
+            float(item.get("net_usd") or 0),
+        ])
+    for row_index in range(2, monthly_sheet.max_row + 1):
+        for column_index in (2, 3, 4):
+            monthly_sheet.cell(row=row_index, column=column_index).number_format = USD_FORMAT
+    monthly_sheet.freeze_panes = "A2"
+    set_widths(monthly_sheet, [14, 18, 18, 16])
+
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
+@router.get("/company-finance/export")
+def export_company_finance_admin(
+    request: Request,
+    export_format: str = Query("xlsx", alias="format", pattern="^(xlsx|csv)$"),
+    current_user: models.User = Depends(get_current_admin_user),
+    _: None = Depends(require_admin_turnstile_proof),
+    db: Session = Depends(get_db),
+):
+    """Download the full finance book (ledger + summary + breakdowns) as Excel or CSV."""
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="admin.company_finance.export",
+        limit=ADMIN_ENDPOINT_RATE_LIMIT,
+        window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
+        extra_key=f"user:{current_user.id}",
+    )
+
+    payload = _compute_company_finance_analytics(db, ledger_limit=None)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    content: bytes | None = None
+    if export_format == "xlsx":
+        content = _build_finance_xlsx(payload)
+
+    if content is None:  # explicit CSV request, or openpyxl missing on this host
+        content = _build_finance_csv(payload)
+        filename = f"rilono-finance-{stamp}.csv"
+        media_type = "text/csv; charset=utf-8"
+    else:
+        filename = f"rilono-finance-{stamp}.xlsx"
+        media_type = XLSX_MEDIA_TYPE
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 # --- Company finance entries: admin CRUD (the DB is the source of truth) ---
@@ -2332,6 +2565,7 @@ def run_course_catalog_refresh_admin(
     request: Request,
     limit: int | None = Query(None, ge=1, le=100),
     countries: str | None = Query(None, max_length=40),
+    db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),
 ):
@@ -2348,7 +2582,23 @@ def run_course_catalog_refresh_admin(
         window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
         extra_key=f"user:{current_user.id}",
     )
-    from app.services.course_catalog_refresh import run_course_catalog_refresh_job
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app.services.course_catalog_refresh import run_course_catalog_refresh_job, run_in_progress
+
+    # Immediate feedback beats a silent background skip: the job itself also refuses
+    # to stack onto a live run, but a 409 here stops the double-click → double-spend
+    # pattern at the source.
+    existing_run = (
+        db.query(models.CourseCatalogRefreshRun)
+        .filter(models.CourseCatalogRefreshRun.run_date == _dt.now(_tz.utc).date())
+        .first()
+    )
+    if run_in_progress(existing_run):
+        raise HTTPException(
+            status_code=409,
+            detail="A catalog refresh is already running — check /api/admin/course-catalog/status.",
+        )
 
     country_list = [c.strip().upper() for c in countries.split(",") if c.strip()] if countries else None
 

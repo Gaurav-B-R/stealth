@@ -26,8 +26,9 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -106,6 +107,10 @@ RECOMMEND_MAX_RESULTS = 8
 
 GROUNDING_ENABLED = os.getenv("COURSE_CATALOG_GROUNDING_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
+# Re-verification cadence (same env var as the refresh agent) — a course not
+# re-confirmed across ~2 cycles is treated as renamed/discontinued and pruned.
+_REVERIFY_DAYS = max(1, int(os.getenv("COURSE_CATALOG_REVERIFY_DAYS", "30") or "30"))
+
 
 def ai_available() -> bool:
     has_service_account = os.path.exists(gemini_service.SERVICE_ACCOUNT_PATH)
@@ -158,11 +163,67 @@ def _extract_grounding_urls(response: Any, limit: int = 8) -> list[str]:
     return urls
 
 
+# Second-level public suffixes common for university domains, so eTLD+1 extraction
+# doesn't collapse "unimelb.edu.au" to "edu.au".
+_SECOND_LEVEL_SUFFIXES = {
+    "ac.uk", "co.uk", "org.uk", "gov.uk", "ac.ie",
+    "edu.au", "com.au", "org.au", "ac.nz", "co.nz",
+    "edu.in", "ac.in", "co.in", "edu.pk", "edu.bd", "edu.np", "edu.lk",
+    "edu.sg", "com.sg", "edu.my", "edu.hk", "com.hk", "edu.cn", "com.cn",
+    "ac.jp", "co.jp", "ac.kr", "co.kr", "edu.tw",
+    "ac.za", "co.za", "edu.br", "com.br", "edu.mx", "com.mx",
+    "ac.at", "ac.ir", "edu.tr", "edu.sa", "edu.eg", "ac.ae",
+}
+
+
+def _registrable_domain(url) -> Optional[str]:
+    """eTLD+1-ish domain of a URL ("https://www.study.unimelb.edu.au/x" → "unimelb.edu.au").
+    Heuristic suffix list, not the full PSL — plenty for comparing university domains."""
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower().strip(".")
+    except Exception:
+        return None
+    if not host or "." not in host:
+        return None
+    parts = host.split(".")
+    if len(parts) >= 3 and ".".join(parts[-2:]) in _SECOND_LEVEL_SUFFIXES:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def _extract_grounding_domains(response: Any, limit: int = 24) -> set[str]:
+    """Registrable domains of the pages Google Search grounding actually consulted.
+    Used to corroborate model-returned website URLs — grounded output is untrusted
+    web-derived content, so a URL the sources never mentioned must not persist.
+    chunk.web.uri is usually a vertexaisearch redirect; chunk.web.domain has the
+    real host, so both are tried (Google's own hosts filtered out)."""
+    domains: set[str] = set()
+    try:
+        for candidate in (getattr(response, "candidates", None) or []):
+            meta = getattr(candidate, "grounding_metadata", None)
+            for chunk in (getattr(meta, "grounding_chunks", None) or []):
+                web = getattr(chunk, "web", None)
+                for raw in (getattr(web, "domain", None), getattr(web, "uri", None)):
+                    raw = str(raw or "").strip()
+                    if not raw:
+                        continue
+                    if not raw.startswith("http"):
+                        raw = f"https://{raw}"
+                    d = _registrable_domain(raw)
+                    if d and "google" not in d:
+                        domains.add(d)
+                if len(domains) >= limit:
+                    return domains
+    except Exception:
+        pass
+    return domains
+
+
 def _grounded_generate(prompt: str, model_name: str, usage_source: str):
     """Google-Search-grounded JSON generation (google-genai SDK, API-key auth).
 
-    Returns (text, source_urls) or None so the caller falls back to the ungrounded
-    model — catalog runs must survive grounding being unavailable.
+    Returns (text, source_urls, source_domains) or None so the caller falls back to
+    the ungrounded model — catalog runs must survive grounding being unavailable.
     """
     if not GROUNDING_ENABLED:
         return None
@@ -187,28 +248,33 @@ def _grounded_generate(prompt: str, model_name: str, usage_source: str):
             ai_usage.record_gemini_usage(usage_source, model_name, response)
         except Exception:
             pass
-        return text, _extract_grounding_urls(response)
+        return text, _extract_grounding_urls(response), _extract_grounding_domains(response)
     except Exception as exc:
         logger.warning("Course catalog grounding unavailable (%s); using ungrounded model.", exc)
         return None
 
 
-def _generate_json(prompt: str, usage_source: str, *, prefer_grounded: bool) -> tuple[Optional[dict], bool, list[str], str]:
-    """Run the prompt and parse a JSON object. Returns (data, grounded, source_urls, model)."""
+def _generate_json(prompt: str, usage_source: str, *, prefer_grounded: bool) -> tuple[Optional[dict], bool, list[str], set[str], str]:
+    """Run the prompt and parse a JSON object.
+    Returns (data, grounded, source_urls, source_domains, model)."""
     candidates = _model_candidates()
     model_name = candidates[0]
     text: str = ""
     grounded = False
     source_urls: list[str] = []
+    source_domains: set[str] = set()
     if prefer_grounded:
         grounded_result = _grounded_generate(prompt, model_name, usage_source)
         if grounded_result is not None:
-            text, source_urls = grounded_result
+            text, source_urls, source_domains = grounded_result
             grounded = True
     if not text:
         response = gemini_service._generate_content_with_fallback(candidates, prompt, usage_source=usage_source)
         text = (getattr(response, "text", "") or "")
-    return _parse_json_object(text), grounded, source_urls, model_name
+        # The fallback chain may have served from a later candidate — report the
+        # model that actually answered when the response exposes it.
+        model_name = str(getattr(response, "model_version", "") or "").strip() or model_name
+    return _parse_json_object(text), grounded, source_urls, source_domains, model_name
 
 
 def _parse_json_object(raw: str) -> Optional[dict]:
@@ -341,7 +407,7 @@ def discover_universities(db: Session, country_code: str, target: int, usage_sou
         "- URLs must be the university's real official domain — never invent one.\n"
         "- Output ONLY the JSON object, no prose and no ``` fences."
     )
-    data, grounded, _urls, _model = _generate_json(prompt, usage_source, prefer_grounded=True)
+    data, grounded, _urls, source_domains, _model = _generate_json(prompt, usage_source, prefer_grounded=True)
     items = (data or {}).get("universities")
     if not isinstance(items, list):
         logger.warning("Course catalog discovery for %s returned no usable list.", code)
@@ -358,6 +424,12 @@ def discover_universities(db: Session, country_code: str, target: int, usage_sou
         if not key or key in existing_keys:
             continue
         existing_keys.add(key)
+        # This catalog is shared across every tenant, so a model-invented (or
+        # search-poisoned) domain must never persist: only keep a website the
+        # grounded sources corroborate — enrichment gets another shot later.
+        site = _clean_url(item.get("website"))
+        if site and _registrable_domain(site) not in source_domains:
+            site = None
         db.add(models.CourseCatalogUniversity(
             country_code=code,
             name=name,
@@ -366,7 +438,7 @@ def discover_universities(db: Session, country_code: str, target: int, usage_sou
             qs_world_rank=_clean_rank(item.get("qs_world_rank")),
             national_rank=_clean_rank(item.get("national_rank")),
             university_type=_clean_text(item.get("university_type"), 20),
-            website_url=_clean_url(item.get("website")),
+            website_url=site,
             seed_rank=idx + 1,
             is_active=True,
         ))
@@ -429,22 +501,37 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
         "- The application fee is the one-off fee to APPLY, which is different from tuition.\n"
         "- Output ONLY the JSON object, no prose and no ``` fences."
     )
-    data, grounded, source_urls, _model = _generate_json(prompt, usage_source, prefer_grounded=True)
+    data, grounded, source_urls, source_domains, _model = _generate_json(prompt, usage_source, prefer_grounded=True)
     if not data:
         raise RuntimeError(f"Catalog refresh for {uni.name}: model returned no usable JSON")
 
+    # URL trust policy (this table is cross-tenant and its links render as "official"):
+    # the university's website domain may only be SET or CHANGED to a domain the
+    # grounded sources corroborate (or kept as-is), and every course_url must live on
+    # that same registrable domain — a prompt-injected/hallucinated off-domain link
+    # is dropped rather than served to every consultancy as verified data.
+    established_domain = _registrable_domain(uni.website_url)
     profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
     if profile:
         uni.city = _clean_text(profile.get("city"), 160) or uni.city
         uni.qs_world_rank = _clean_rank(profile.get("qs_world_rank")) or uni.qs_world_rank
         uni.national_rank = _clean_rank(profile.get("national_rank")) or uni.national_rank
         uni.university_type = _clean_text(profile.get("university_type"), 20) or uni.university_type
-        uni.website_url = _clean_url(profile.get("website")) or uni.website_url
+        new_site = _clean_url(profile.get("website"))
+        if new_site:
+            new_domain = _registrable_domain(new_site)
+            if new_domain and (new_domain == established_domain or new_domain in source_domains):
+                uni.website_url = new_site
+            elif not established_domain:
+                logger.info(
+                    "Catalog refresh %s: uncorroborated website domain %r dropped", uni.name, new_domain
+                )
         uni.tuition_note = _clean_text(profile.get("tuition_note"), 160) or uni.tuition_note
         uni.summary = _clean_text(profile.get("summary"), 500) or uni.summary
         uni.scholarships_note = _clean_text(profile.get("scholarships_note"), 400) or uni.scholarships_note
     if source_urls:
         uni.source_urls = json.dumps(source_urls)
+    site_domain = _registrable_domain(uni.website_url)
 
     existing_courses = {
         (c.name_key, c.degree_level): c
@@ -478,13 +565,22 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
         row.tuition_amount = _clean_int(item.get("tuition_amount")) or row.tuition_amount
         row.tuition_currency = (_clean_text(item.get("tuition_currency"), 8) or row.tuition_currency or "").upper() or None
         row.intakes = _clean_intakes(item.get("intakes")) or row.intakes
-        row.application_deadline = _clean_text(item.get("application_deadline"), 120) or row.application_deadline
+        # Deadline is the one field that ROTS: unlike the keep-old pattern above, an
+        # "N/A" here must CLEAR the stored value — re-stamping an expired deadline as
+        # freshly verified is worse than showing none.
+        row.application_deadline = _clean_text(item.get("application_deadline"), 120)
         row.application_fee = _clean_text(item.get("application_fee"), 60) or row.application_fee
         row.ielts_requirement = _clean_text(item.get("ielts_requirement"), 80) or row.ielts_requirement
         row.toefl_requirement = _clean_text(item.get("toefl_requirement"), 80) or row.toefl_requirement
         row.gre_gmat_requirement = _clean_text(item.get("gre_gmat_requirement"), 80) or row.gre_gmat_requirement
         row.entry_requirements = _clean_text(item.get("entry_requirements"), 400) or row.entry_requirements
-        row.course_url = _clean_url(item.get("course_url")) or row.course_url
+        course_url = _clean_url(item.get("course_url"))
+        # Strict same-domain rule (also scrubs any pre-validation legacy value).
+        row.course_url = (
+            course_url
+            if course_url and site_domain and _registrable_domain(course_url) == site_domain
+            else None
+        )
         row.is_active = True
         row.last_verified_at = now
         upserted += 1
@@ -493,7 +589,19 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
         # Profile-only responses shouldn't count as a verified refresh of the courses.
         raise RuntimeError(f"Catalog refresh for {uni.name}: no usable courses in response")
 
+    # Prune drift: a course the model hasn't re-confirmed across ~2 re-verification
+    # cycles is likely renamed/discontinued — deactivate it (the upsert path revives
+    # it automatically if it ever reappears).
+    prune_cutoff = now - timedelta(days=2 * _REVERIFY_DAYS + 7)
+    for stale in existing_courses.values():
+        ts = stale.last_verified_at
+        if ts is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts is None or ts < prune_cutoff:
+            stale.is_active = False
+
     uni.is_active = True
+    uni.consecutive_failures = 0
     uni.last_verified_at = now
     db.commit()
     return {"courses_upserted": upserted, "grounded": grounded}
@@ -726,8 +834,8 @@ def _catalog_context_block(rows: list[tuple[Any, list]]) -> tuple[str, int]:
                 "toefl": course.toefl_requirement,
                 "gre_gmat": course.gre_gmat_requirement,
                 "entry_requirements": course.entry_requirements,
-                "course_url": course.course_url,
-                "website": uni.website_url,
+                # URLs deliberately excluded: catalog hits get their (domain-validated)
+                # URLs snapped from the DB after parsing, never echoed via the model.
             }
             lines.append(json.dumps({k: v for k, v in entry.items() if v}, ensure_ascii=False))
             count += 1
@@ -824,8 +932,22 @@ def recommend_courses(
         "- Identity guardrail: never mention Gemini, Google, or internal model names; you are Rilono AI."
     )
 
+    # "✓ Verified" in the UI hangs off in_catalog, so it is computed HERE by matching
+    # against the rows we actually handed the model — never trusted from model output.
+    # Catalog hits also get their URLs from our domain-validated rows, not the model.
+    catalog_keys: set[tuple[str, str]] = set()
+    catalog_course_urls: dict[tuple[str, str], Optional[str]] = {}
+    catalog_site_urls: dict[str, Optional[str]] = {}
+    for cat_uni, cat_courses in (catalog_rows or []):
+        uk = normalize_key(cat_uni.name)
+        catalog_site_urls.setdefault(uk, cat_uni.website_url)
+        for cat_course in cat_courses:
+            ck = (uk, normalize_key(cat_course.course_name))
+            catalog_keys.add(ck)
+            catalog_course_urls.setdefault(ck, cat_course.course_url)
+
     try:
-        data, grounded, _urls, model_name = _generate_json(prompt, usage_source, prefer_grounded=not catalog_based)
+        data, grounded, _urls, _domains, model_name = _generate_json(prompt, usage_source, prefer_grounded=not catalog_based)
         items = (data or {}).get("recommendations")
         recommendations = []
         for item in (items if isinstance(items, list) else [])[:max_results]:
@@ -838,6 +960,14 @@ def recommend_courses(
             fit = str(item.get("fit_level") or "match").strip().lower()
             reqs = item.get("key_requirements")
             requirements = [str(r).strip()[:140] for r in reqs if str(r).strip()][:6] if isinstance(reqs, list) else []
+            rec_key = (normalize_key(uni_name), normalize_key(course_name_value))
+            in_catalog = rec_key in catalog_keys
+            if in_catalog:
+                course_url = catalog_course_urls.get(rec_key)
+                website_url = catalog_site_urls.get(rec_key[0])
+            else:
+                course_url = _clean_url(item.get("course_url"))
+                website_url = _clean_url(item.get("website_url"))
             recommendations.append({
                 "university_name": uni_name,
                 "course_name": course_name_value,
@@ -850,10 +980,10 @@ def recommend_courses(
                 "application_deadline": _clean_text(item.get("application_deadline"), 120),
                 "application_fee": _clean_text(item.get("application_fee"), 60),
                 "key_requirements": requirements,
-                "course_url": _clean_url(item.get("course_url")),
-                "website_url": _clean_url(item.get("website_url")),
+                "course_url": course_url,
+                "website_url": website_url,
                 "qs_world_rank": _clean_rank(item.get("qs_world_rank")),
-                "in_catalog": bool(item.get("in_catalog")),
+                "in_catalog": in_catalog,
             })
         return {
             "available": True,

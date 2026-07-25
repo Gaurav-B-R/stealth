@@ -51,6 +51,25 @@ COURSE_CATALOG_REVERIFY_DAYS = max(1, int(os.getenv("COURSE_CATALOG_REVERIFY_DAY
 
 USAGE_SOURCE = "course_catalog_refresh"
 
+# A stub that fails enrichment this many times in a row is deactivated (it's almost
+# certainly a hallucinated/defunct entry); already-enriched universities are never
+# deactivated for failures — they just sort behind healthier work in the queue.
+STUB_FAILURE_DEACTIVATE_AFTER = 6
+# After an outer-loop failure, wait this long before the poll loop retries the day's
+# run — without it a systemic failure would re-burn Gemini spend every 5 minutes.
+FAILED_RUN_RETRY_COOLDOWN = timedelta(hours=6)
+
+
+def run_in_progress(existing_run: Optional[models.CourseCatalogRefreshRun]) -> bool:
+    """True while a run row is legitimately mid-flight (running, started <2h ago).
+    Older 'running' rows are stale (a hot-reload killed the thread) and may be seized."""
+    if existing_run is None or existing_run.status != "running" or not existing_run.started_at:
+        return False
+    started = existing_run.started_at
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - started) < timedelta(hours=2)
+
 
 def _catalog_country_codes() -> list[str]:
     raw = os.getenv("COURSE_CATALOG_COUNTRIES", "").strip()
@@ -102,24 +121,43 @@ def run_course_catalog_refresh_job(
         )
         if existing_run and not force and existing_run.status == "completed":
             return {"status": "skipped", "reason": "already_ran_for_today", "run_date": run_date.isoformat()}
-        if (
-            existing_run
-            and not force
-            and existing_run.status == "running"
-            and existing_run.started_at
-            and (datetime.now(timezone.utc) - existing_run.started_at.replace(tzinfo=timezone.utc)
-                 if existing_run.started_at.tzinfo is None
-                 else datetime.now(timezone.utc) - existing_run.started_at) < timedelta(hours=2)
-        ):
+        # force may re-run a COMPLETED day, but never stack onto a live run — each
+        # concurrent run would burn the full grounded-call batch again.
+        if run_in_progress(existing_run):
             return {"status": "skipped", "reason": "run_already_in_progress", "run_date": run_date.isoformat()}
+        if existing_run and not force and existing_run.status == "failed":
+            last = existing_run.completed_at or existing_run.started_at
+            if last is not None:
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - last < FAILED_RUN_RETRY_COOLDOWN:
+                    return {"status": "skipped", "reason": "failed_recently_cooldown", "run_date": run_date.isoformat()}
 
         if existing_run:
-            run_row = existing_run
-            run_row.status = "running"
-            run_row.started_at = datetime.now(timezone.utc)
-            run_row.completed_at = None
-            run_row.error_message = None
+            # Optimistic seize: two workers can pass the guards in the same instant
+            # (poll loop vs admin trigger), so only the one whose conditional UPDATE
+            # lands may run — the other sees 0 rows changed and backs off.
+            seize = db.query(models.CourseCatalogRefreshRun).filter(
+                models.CourseCatalogRefreshRun.id == existing_run.id,
+                models.CourseCatalogRefreshRun.status == existing_run.status,
+            )
+            if existing_run.started_at is None:
+                seize = seize.filter(models.CourseCatalogRefreshRun.started_at.is_(None))
+            else:
+                seize = seize.filter(models.CourseCatalogRefreshRun.started_at == existing_run.started_at)
+            taken = seize.update(
+                {
+                    "status": "running",
+                    "started_at": datetime.now(timezone.utc),
+                    "completed_at": None,
+                    "error_message": None,
+                },
+                synchronize_session=False,
+            )
             db.commit()
+            if not taken:
+                return {"status": "skipped", "reason": "run_already_in_progress", "run_date": run_date.isoformat()}
+            run_row = existing_run
             db.refresh(run_row)
         else:
             run_row = models.CourseCatalogRefreshRun(run_date=run_date, status="running")
@@ -164,12 +202,14 @@ def run_course_catalog_refresh_job(
 
         def _staleness(uni: models.CourseCatalogUniversity):
             # Never-enriched stubs first (in discovery order), then oldest-verified.
+            # Repeat failers sort behind healthy peers so they can't starve the batch.
+            fails = int(getattr(uni, "consecutive_failures", 0) or 0)
             if uni.last_verified_at is None:
-                return (0, uni.seed_rank if uni.seed_rank is not None else 10_000, "")
+                return (0, fails, uni.seed_rank if uni.seed_rank is not None else 10_000, "")
             ts = uni.last_verified_at
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
-            return (1, 0, ts.isoformat())
+            return (1, fails, 0, ts.isoformat())
 
         queue = [
             u for u in sorted(queue, key=_staleness)
@@ -187,6 +227,17 @@ def run_course_catalog_refresh_job(
                 db.rollback()
                 logger.exception("Course catalog refresh failed for %s (%s)", uni.name, uni.country_code)
                 detail["errors"].append(f"refresh:{uni.country_code}:{uni.name}: {str(exc)[:200]}")
+                try:
+                    uni.consecutive_failures = int(uni.consecutive_failures or 0) + 1
+                    if uni.consecutive_failures >= STUB_FAILURE_DEACTIVATE_AFTER and uni.last_verified_at is None:
+                        uni.is_active = False
+                        detail["errors"].append(
+                            f"deactivated:{uni.country_code}:{uni.name}: never enriched after "
+                            f"{uni.consecutive_failures} attempts"
+                        )
+                    db.commit()
+                except Exception:
+                    db.rollback()
 
         run_row.status = "completed"
         run_row.completed_at = datetime.now(timezone.utc)
@@ -194,7 +245,11 @@ def run_course_catalog_refresh_job(
         run_row.universities_refreshed = refreshed_total
         run_row.courses_upserted = courses_total
         run_row.error_message = "; ".join(detail["errors"])[:2000] if detail["errors"] else None
-        run_row.detail = json.dumps(detail)[:20000]
+        # Cap the lists (not the serialized string — a blind slice would persist
+        # invalid JSON on large admin burst runs).
+        detail["refreshed"] = detail["refreshed"][:150]
+        detail["errors"] = detail["errors"][:60]
+        run_row.detail = json.dumps(detail)
         db.commit()
         summary = {
             "status": "completed",

@@ -1109,6 +1109,61 @@
       e.preventDefault(); t.click();
     }
   });
+  /* ---------------- full screen ----------------
+     Puts the whole console into the browser's full-screen mode so the pipeline, calendar
+     and tables get the entire display. The button hides itself where the browser can't do
+     it — e.g. iOS Safari, which only allows full screen on <video>. Deliberately no
+     single-letter hotkey: a bare "f" would fire on every non-input surface in the console
+     (pipeline rows are role="button", confirm dialogs focus a <button>) and single-character
+     shortcuts need an off/remap switch to satisfy WCAG 2.1.4. The browser's own F11 covers it. */
+  const fullscreenBtn = $("#fullscreenBtn");
+
+  function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+
+  function fsSupported() {
+    const el = document.documentElement;
+    return !!(document.fullscreenEnabled || document.webkitFullscreenEnabled) &&
+           !!(el.requestFullscreen || el.webkitRequestFullscreen);
+  }
+
+  function syncFullscreenUi() {
+    const on = !!fsElement();
+    document.body.classList.toggle("is-fullscreen", on);
+    if (!fullscreenBtn) return;
+    // One state channel only: the accessible name always names the action the click performs.
+    // (aria-pressed alongside a swapping label makes screen readers announce a contradiction.)
+    fullscreenBtn.setAttribute("aria-label", on ? "Exit full screen" : "Enter full screen");
+    fullscreenBtn.title = on ? "Exit full screen (Esc)" : "Full screen";
+    const iconIn = $(".fs-in", fullscreenBtn), iconOut = $(".fs-out", fullscreenBtn);
+    if (iconIn) iconIn.classList.toggle("hidden", on);
+    if (iconOut) iconOut.classList.toggle("hidden", !on);
+  }
+
+  function toggleFullscreen() {
+    if (!fsSupported()) { toast("Your browser doesn't support full screen here", "error"); return; }
+    const blocked = () => toast("Your browser blocked full screen", "error");
+    try {
+      if (fsElement()) {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        const r = exit && exit.call(document);
+        if (r && r.catch) r.catch(() => {});
+      } else {
+        const el = document.documentElement;
+        const enter = el.requestFullscreen || el.webkitRequestFullscreen;
+        const r = enter && enter.call(el);
+        if (r && r.catch) r.catch(blocked);
+      }
+    } catch (_) { blocked(); }
+  }
+
+  if (fullscreenBtn) {
+    if (fsSupported()) fullscreenBtn.onclick = toggleFullscreen;
+    else fullscreenBtn.classList.add("hidden");
+  }
+  document.addEventListener("fullscreenchange", syncFullscreenUi);
+  document.addEventListener("webkitfullscreenchange", syncFullscreenUi);
+  syncFullscreenUi();
+
   let searchTimer;
   const globalSearch = $("#globalSearch");
   const globalSearchClear = $("#globalSearchClear");
@@ -1646,6 +1701,140 @@
     return "📄";
   }
 
+  /* ---------------- rich text (email composer) ----------------
+     The composer is a contenteditable, so three places need HTML that is safe to
+     put in the DOM: what a user pastes in, what we render back from the server,
+     and what we POST. sanitizeRichHtml() is the one gate for all three — it mirrors
+     app/utils/html_sanitizer.py (which sanitizes again server-side, authoritatively).
+     Everything is rebuilt node by node: nothing from the input string is ever
+     re-inserted as markup. */
+  const RT_ALLOWED_TAGS = {
+    P: 1, BR: 1, DIV: 1, SPAN: 1, B: 1, STRONG: 1, I: 1, EM: 1, U: 1, S: 1, STRIKE: 1,
+    A: 1, UL: 1, OL: 1, LI: 1, BLOCKQUOTE: 1, H2: 1, H3: 1, H4: 1, HR: 1, PRE: 1, CODE: 1,
+    // Kept so a fee table pasted from Excel/Word survives as a table instead of
+    // collapsing into one run-on line. Matches app/utils/html_sanitizer.py.
+    TABLE: 1, THEAD: 1, TBODY: 1, TFOOT: 1, TR: 1, TD: 1, TH: 1, CAPTION: 1,
+  };
+  // Tags whose *contents* go too (rather than being unwrapped into plain text).
+  const RT_DROP_SUBTREE = {
+    SCRIPT: 1, STYLE: 1, IFRAME: 1, OBJECT: 1, EMBED: 1, SVG: 1, MATH: 1, TEMPLATE: 1,
+    NOSCRIPT: 1, TEXTAREA: 1, TITLE: 1, LINK: 1, META: 1, BASE: 1, FORM: 1, INPUT: 1,
+    BUTTON: 1, SELECT: 1, IMG: 1, VIDEO: 1, AUDIO: 1, CANVAS: 1,
+  };
+  const RT_INVISIBLE = /[\x00-\x20\u00a0\u180e\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]/g;
+
+  function safeLinkUrl(raw) {
+    const value = String(raw == null ? "" : raw).trim();
+    if (!value) return null;
+    const probe = value.replace(RT_INVISIBLE, "").toLowerCase();
+    if (!/^(https?:\/\/|mailto:|tel:)/.test(probe)) return null;
+    if (/[\r\n\t]/.test(value)) return null;
+    return value.slice(0, 2000);
+  }
+
+  function sanitizeRichHtml(html) {
+    const parsed = new DOMParser().parseFromString("<body>" + String(html == null ? "" : html) + "</body>", "text/html");
+    const out = document.createElement("div");
+    (function walk(source, target, depth) {
+      if (depth > 40) return;
+      Array.prototype.forEach.call(source.childNodes, (node) => {
+        if (node.nodeType === 3) {
+          target.appendChild(document.createTextNode(node.nodeValue.replace(/[\u202a-\u202e\u2066-\u2069]/g, "")));
+          return;
+        }
+        if (node.nodeType !== 1) return;               // comments, CDATA, PIs
+        const tag = node.tagName;
+        if (RT_DROP_SUBTREE[tag]) return;
+        if (!RT_ALLOWED_TAGS[tag]) { walk(node, target, depth + 1); return; }  // unwrap, keep text
+        const el = document.createElement(tag === "STRIKE" ? "S" : tag);
+        if (tag === "A") {
+          const href = safeLinkUrl(node.getAttribute("href"));
+          if (!href) { walk(node, target, depth + 1); return; }
+          el.setAttribute("href", href);
+          el.setAttribute("target", "_blank");
+          el.setAttribute("rel", "noopener noreferrer nofollow");
+        }
+        target.appendChild(el);
+        walk(node, el, depth + 1);
+      });
+    })(parsed.body, out, 0);
+    return out.innerHTML;
+  }
+
+  // Plain-text bodies (inbound replies, legacy sends) rendered with clickable links.
+  function plainTextToHtml(text) {
+    return esc(text)
+      .replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)\]])/g,
+        (m) => `<a href="${m}" target="_blank" rel="noopener noreferrer nofollow">${m}</a>`)
+      .replace(/\r?\n/g, "<br>");
+  }
+
+  /* Starter templates for the composer. Merge fields are resolved at insert time,
+     so a half-substituted "{{first_name}}" can never reach a student. */
+  const EMAIL_TEMPLATES = [
+    {
+      key: "documents", icon: "📄", label: "Request documents",
+      hint: "Ask for the files you're missing",
+      subject: "Documents needed for your {{destination}} visa application",
+      body: "<p>Hi {{first_name}},</p><p>Your {{visa_type}} application is moving along nicely. To take the next step I need a few documents from you:</p><ul><li>Passport — photo page</li><li>Latest 6 months of bank statements</li><li>Academic transcripts and certificates</li></ul><p>You can reply to this email with the files attached, and I'll confirm as soon as they're in.</p>",
+    },
+    {
+      key: "interview", icon: "🎤", label: "Interview preparation",
+      hint: "Prep notes before the visa interview",
+      subject: "Preparing for your {{destination}} visa interview",
+      body: "<p>Hi {{first_name}},</p><p>Your interview is the last big step, so let's get you ready for it.</p><ul><li>Be clear on why you chose this course and this university</li><li>Know who is funding your studies and be ready to show the proof</li><li>Have a straight answer for what you'll do after you graduate</li></ul><p>Answer calmly and honestly — short, confident answers work best. I'll send a practice session across shortly.</p>",
+    },
+    {
+      key: "offer", icon: "🎓", label: "Offer received — next steps",
+      hint: "Congratulate and lay out what's next",
+      subject: "Congratulations! Next steps for your {{destination}} offer",
+      body: "<p>Hi {{first_name}},</p><p>Congratulations — this is a great result, and everything from here is process.</p><p>Here's what happens next:</p><ol><li>Accept the offer and pay the deposit before the deadline</li><li>Arrange your funds and keep the statements ready</li><li>We prepare and submit your visa application</li></ol><p>I'll guide you through each step.</p>",
+    },
+    {
+      key: "payment", icon: "💳", label: "Payment reminder",
+      hint: "Gentle nudge about a pending fee",
+      subject: "Reminder: pending payment for your {{destination}} application",
+      body: "<p>Hi {{first_name}},</p><p>Just a gentle reminder that a payment on your file is still pending. Clearing it lets us keep your application on schedule.</p><p>If you've already paid, ignore this note — and if anything is unclear, reply here and I'll sort it out.</p>",
+    },
+    {
+      key: "appointment", icon: "📅", label: "Appointment confirmed",
+      hint: "Confirm a booked date and what to bring",
+      subject: "Your {{destination}} visa appointment is confirmed",
+      body: "<p>Hi {{first_name}},</p><p>Your appointment is confirmed. Please arrive at least 30 minutes early and carry:</p><ul><li>Your passport</li><li>The appointment confirmation</li><li>Your full document folder</li></ul><p>Tell me if anything changes and I'll rearrange it.</p>",
+    },
+    {
+      key: "checkin", icon: "👋", label: "Friendly check-in",
+      hint: "Warm nudge when a file goes quiet",
+      subject: "Quick check-in on your {{destination}} application",
+      body: "<p>Hi {{first_name}},</p><p>I wanted to check in on your application. Nothing is urgent right now — I just want to make sure you're not stuck on anything.</p><p>If you have questions about the timeline, funds or the next steps, reply here and I'll walk you through it.</p>",
+    },
+  ];
+
+  // Composer dropdowns close on any outside click. Registered once (not per render)
+  // so re-rendering the Emails tab can't stack duplicate document listeners.
+  function emCloseMenus() {
+    ["#emTplMenu", "#emFieldMenu"].forEach((sel) => {
+      const menu = $(sel);
+      if (menu) menu.classList.add("hidden");
+    });
+    ["#emTplBtn", "#emFieldBtn"].forEach((sel) => {
+      const btn = $(sel);
+      if (btn) btn.setAttribute("aria-expanded", "false");
+    });
+  }
+  document.addEventListener("click", emCloseMenus);
+
+  const EMAIL_MERGE_FIELDS = [
+    { key: "first_name", label: "First name" },
+    { key: "full_name", label: "Full name" },
+    { key: "destination", label: "Destination country" },
+    { key: "visa_type", label: "Visa type" },
+    { key: "intake", label: "Intake" },
+    { key: "target_date", label: "Key date" },
+    { key: "counselor", label: "Your name" },
+    { key: "company", label: "Company name" },
+  ];
+
   async function openClient(id, opts) {
     state.activeClient = id;
     if (state.view !== "clientPage") state.clientReturnView = state.view || "clients";
@@ -1671,6 +1860,12 @@
     const pendingDocIds = new Set();  // docs uploaded this session, awaiting AI validation (for the "scanning…" badge)
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
     const dr = { request: undefined };  // secure document-request state (lazy-loaded)
+    // Email composer state. Kept on the client page (not inside renderEmails) so a
+    // half-written message survives switching tabs and re-rendering the thread.
+    const em = {
+      subject: "", html: "", attachments: [], busy: false,
+      draftsLoaded: false, filter: "all", query: "", expanded: {}, seq: 0,
+    };
     const uni = { data: null, suggestions: [] };  // university shortlist state (lazy-loaded)
     // Deep Scan tab state (lazy-loaded): stored scan history + the currently open report.
     const ds = { scans: null, active: null, pricing: null, aiAvailable: true, loading: false, error: null, busy: false };
@@ -2609,35 +2804,676 @@
       });
     }
 
-    function renderEmails() {
-      const composer = canEdit ? (cl.email ? `<div class="cp-card note-add">
-          <div class="cp-sub-label">Email ${esc(cl.full_name)}</div>
-          <input id="emailSubject" type="text" placeholder="Subject"/>
-          <textarea id="emailBody" placeholder="Write your message…"></textarea>
-          <div class="email-to">To: <b>${esc(cl.email)}</b></div>
-          <button class="btn btn-primary btn-sm" id="emailSendBtn">✉ Send email</button></div>`
-        : `<div class="plan-banner warn" style="margin-bottom:18px"><div class="pb-icon">✉</div><div class="pb-text"><b>No email on file.</b> <span>Add an email to message this client (Edit details).</span></div></div>`) : "";
-      const hist = data.emails.length ? data.emails.map((em) => {
-        const inbound = em.direction === "inbound";
-        const mismatch = inbound && em.from_email && cl.email &&
-          em.from_email.toLowerCase() !== cl.email.trim().toLowerCase();
-        const meta = inbound
-          ? `<div class="ei-meta">↩ Reply from ${esc(em.from_email || cl.full_name)}${mismatch ? ' <span class="ei-unverified">· differs from the email on file</span>' : ""}</div>`
-          : (em.sent_by_name ? `<div class="ei-meta">Sent by ${esc(em.sent_by_name)}</div>` : "");
-        return `<div class="email-item${inbound ? " inbound" : ""}"><div class="ei-top"><span class="ei-subject">${esc(em.subject)}</span><span style="font-size:12px;color:var(--muted)">${fmtDateTime(em.created_at)}</span></div>
-         ${meta}<div class="ei-body">${esc(em.body)}</div>${em.status === "failed" ? `<div class="ei-fail">⚠ Failed: ${esc(em.error_message || "")}</div>` : ""}</div>`;
-      }).join("")
-        : `<div class="empty" style="padding:30px"><div class="emoji">✉️</div><h3>No emails sent yet</h3><p>Send the student an update in one click.</p></div>`;
-      body.innerHTML = composer + hist;
-      const sb = $("#emailSendBtn");
-      if (sb) sb.onclick = async () => {
-        const subject = $("#emailSubject").value.trim(), bodyv = $("#emailBody").value.trim();
-        if (!subject || !bodyv) { toast("Add a subject and message", "error"); return; }
-        sb.disabled = true; sb.innerHTML = '<span class="spinner"></span> Sending…';
-        try { const r = await api(`/clients/${cl.id}/email`, { method: "POST", body: { subject, body: bodyv } });
-          data.emails.unshift(r.email); tabCount("emails", data.emails.length); renderEmails(); toast("Email sent", "success"); }
-        catch (ex) { toast(ex.message, "error"); sb.disabled = false; sb.innerHTML = "✉ Send email"; }
+    /* ---- Emails tab: rich-text composer + conversation thread ---- */
+
+    const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+    const EM_SEND_HINT = IS_MAC ? "⌘ + Enter" : "Ctrl + Enter";
+
+    // Merge-field values for this client. Every field has a readable fallback so a
+    // template never emails a student a blank or a leftover {{placeholder}}.
+    function emMergeValues() {
+      const meUser = (state.me && state.me.user) || {};
+      const org = (state.me && state.me.organization) || {};
+      return {
+        first_name: (cl.full_name || "").trim().split(/\s+/)[0] || "there",
+        full_name: cl.full_name || "there",
+        destination: cl.destination_country_name || "your destination",
+        visa_type: cl.visa_type || "visa",
+        intake: cl.intake || "your intake",
+        target_date: cl.target_date ? fmtDate(cl.target_date) : "the scheduled date",
+        counselor: meUser.full_name || meUser.email || "your counselor",
+        company: (org.company_name || "our team"),
       };
+    }
+    function emMerge(text, asHtml) {
+      const values = emMergeValues();
+      return String(text || "").replace(/\{\{\s*(\w+)\s*\}\}/g, (whole, key) => {
+        const value = values[key];
+        if (value == null) return whole;
+        return asHtml ? esc(value) : value;
+      });
+    }
+
+    /* -- attachments -- */
+    function emAttsHtml() {
+      if (!em.attachments.length) return "";
+      return em.attachments.map((a) => {
+        const cls = a.status === "error" ? " is-error" : a.status === "uploading" ? " is-uploading" : "";
+        const meta = a.status === "uploading" ? (a.pct || 0) + "%"
+          : a.status === "error" ? "Couldn't upload" : fmtSize(a.size);
+        return `<div class="emc-chip${cls}">
+            <span class="emc-chip-ic">${a.status === "error" ? "⚠️" : docIcon(a.name)}</span>
+            <span class="emc-chip-name" title="${esc(a.name)}">${esc(a.name)}</span>
+            <span class="emc-chip-meta">${esc(meta)}</span>
+            ${a.documentId ? '<span class="emc-chip-tag">on file</span>' : ""}
+            <button type="button" class="emc-chip-x" data-uid="${esc(a.uid)}" aria-label="Remove ${esc(a.name)}">✕</button>
+            ${a.status === "uploading" ? `<span class="emc-chip-bar" style="width:${a.pct || 0}%"></span>` : ""}
+          </div>`;
+      }).join("");
+    }
+    function emDrawAtts() {
+      const host = $("#emAtts");
+      if (!host) return;
+      host.innerHTML = emAttsHtml();
+      host.classList.toggle("hidden", !em.attachments.length);
+      $$(".emc-chip-x", host).forEach((b) => b.onclick = () => emRemoveAttachment(b.dataset.uid));
+      const total = em.attachments.reduce((sum, a) => sum + (a.size || 0), 0);
+      const note = $("#emAttNote");
+      if (note) {
+        note.textContent = em.attachments.length
+          ? `${em.attachments.length} file${em.attachments.length === 1 ? "" : "s"} · ${fmtSize(total)}` : "";
+      }
+    }
+    async function emRemoveAttachment(uid) {
+      const index = em.attachments.findIndex((a) => a.uid === uid);
+      if (index < 0) return;
+      const entry = em.attachments[index];
+      if (entry.xhr && entry.status === "uploading") { try { entry.xhr.abort(); } catch (e) {} }
+      em.attachments.splice(index, 1);
+      emDrawAtts();
+      if (entry.id) {
+        // Best-effort: the draft is swept server-side anyway if this ever fails.
+        try { await api(`/clients/${cl.id}/email/attachments/${entry.id}`, { method: "DELETE" }); } catch (e) {}
+      }
+    }
+    function emUploadFile(file) {
+      const entry = {
+        uid: "u" + (++em.seq), name: file.name || "file", size: file.size || 0,
+        status: "uploading", pct: 0, id: null, xhr: null,
+      };
+      em.attachments.push(entry);
+      emDrawAtts();
+
+      const form = new FormData();
+      form.append("file", file);
+      const xhr = new XMLHttpRequest();
+      entry.xhr = xhr;
+      xhr.open("POST", API + "/clients/" + cl.id + "/email/attachments");
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        entry.pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
+        emDrawAtts();
+      };
+      xhr.onload = () => {
+        let out = null;
+        try { out = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status >= 200 && xhr.status < 300 && out && out.attachment) {
+          entry.status = "done";
+          entry.pct = 100;
+          entry.id = out.attachment.id;
+          entry.size = out.attachment.file_size || entry.size;
+        } else {
+          entry.status = "error";
+          const detail = out && typeof out.detail === "string" && out.detail.length < 300 ? out.detail : "";
+          toast(detail || `Couldn't attach ${entry.name}`, "error");
+        }
+        entry.xhr = null;
+        emDrawAtts();
+      };
+      xhr.onerror = () => {
+        entry.status = "error"; entry.xhr = null; emDrawAtts();
+        toast("Upload failed — check your connection and try again", "error");
+      };
+      // Without this a stalled connection leaves the chip spinning forever and the
+      // send button permanently blocked on an upload that will never finish.
+      xhr.timeout = 180000;
+      xhr.ontimeout = () => {
+        entry.status = "error"; entry.xhr = null; emDrawAtts();
+        toast(`${entry.name} took too long to upload — remove it and try again`, "error");
+      };
+      xhr.send(form);
+    }
+    function emAddFiles(fileList) {
+      const files = Array.prototype.slice.call(fileList || []);
+      if (!files.length) return;
+      const room = 10 - em.attachments.length;
+      if (room <= 0) { toast("You can attach up to 10 files to one email", "error"); return; }
+      files.slice(0, room).forEach(emUploadFile);
+      if (files.length > room) toast(`Only the first ${room} file${room === 1 ? "" : "s"} were attached — the limit is 10`, "error");
+    }
+
+    /* -- selection helpers: toolbar clicks must not steal the caret -- */
+    let emSavedRange = null;
+    function emSaveRange() {
+      const editor = $("#emEditor");
+      const sel = window.getSelection();
+      if (!editor || !sel || !sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      if (editor.contains(range.commonAncestorContainer)) emSavedRange = range.cloneRange();
+    }
+    function emRestoreRange() {
+      const editor = $("#emEditor");
+      if (!editor) return;
+      editor.focus();
+      if (!emSavedRange) return;
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(emSavedRange);
+    }
+    function emInsertHtml(html) {
+      emRestoreRange();
+      document.execCommand("insertHTML", false, html);
+      emSyncEditor();
+    }
+    function emExec(command, value) {
+      emRestoreRange();
+      try { document.execCommand("styleWithCSS", false, false); } catch (e) {}
+      try { document.execCommand(command, false, value || null); } catch (e) {}
+      emSaveRange();
+      emSyncEditor();
+      emSyncToolbar();
+    }
+    // Keep the composer's cached copy current so switching tabs never loses a draft.
+    function emSyncEditor() {
+      const editor = $("#emEditor");
+      if (!editor) return;
+      em.html = editor.innerHTML;
+      editor.classList.toggle("is-empty", !(editor.textContent || "").trim() && !editor.querySelector("li, hr"));
+    }
+    function emSyncToolbar() {
+      const bar = $("#emToolbar");
+      if (!bar) return;
+      $$(".emc-tb[data-cmd]", bar).forEach((b) => {
+        const cmd = b.dataset.cmd;
+        let on = false;
+        try { on = document.queryCommandState(cmd); } catch (e) {}
+        b.classList.toggle("active", !!on);
+      });
+    }
+
+    /* -- link dialog (never window.prompt) -- */
+    function emOpenLinkDialog() {
+      emSaveRange();
+      const selected = emSavedRange ? String(emSavedRange).trim() : "";
+      const presetUrl = /^(https?:\/\/|mailto:|www\.)/i.test(selected) ? selected : "";
+      openModal(`
+        <div class="modal-head"><h3>Insert link</h3><button class="x" id="lkClose" aria-label="Close">×</button></div>
+        <div class="modal-body">
+          <div class="field"><label>Link to</label>
+            <input type="text" id="lkUrl" placeholder="https://example.com or name@email.com" value="${esc(presetUrl)}" autocomplete="off"></div>
+          <div class="field"><label>Text to show</label>
+            <input type="text" id="lkText" placeholder="e.g. Book your slot" value="${esc(presetUrl ? "" : selected)}" autocomplete="off"></div>
+          <p class="muted" style="margin:2px 0 0;font-size:12.5px">Links open in a new tab for the student.</p>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-ghost" id="lkCancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="lkOk">Insert link</button>
+        </div>`);
+      const urlEl = $("#lkUrl");
+      setTimeout(() => urlEl && urlEl.focus(), 40);
+      const close = () => closeModal();
+      $("#lkClose").onclick = close;
+      $("#lkCancel").onclick = close;
+      const submit = () => {
+        let raw = (urlEl.value || "").trim();
+        if (!raw) { toast("Add a link address", "error"); return; }
+        // Typing "rilono.com" or an email address should just work.
+        if (/^www\./i.test(raw) || /^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(raw)) raw = "https://" + raw;
+        else if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) raw = "mailto:" + raw;
+        const href = safeLinkUrl(raw);
+        if (!href) { toast("That link isn't valid. Use a https:// address or an email.", "error"); return; }
+        const label = ($("#lkText").value || "").trim() || selected || href.replace(/^mailto:/, "");
+        closeModal();
+        emInsertHtml(`<a href="${esc(href)}" target="_blank" rel="noopener noreferrer nofollow">${esc(label)}</a>&nbsp;`);
+      };
+      $("#lkOk").onclick = submit;
+      [urlEl, $("#lkText")].forEach((el) => el.onkeydown = (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submit(); }
+      });
+    }
+
+    /* -- attach a document already on file -- */
+    function emOpenDocsDialog() {
+      if (!docs.length) {
+        toast("No documents on file for this client yet", "error");
+        return;
+      }
+      const already = new Set(em.attachments.filter((a) => a.documentId).map((a) => a.documentId));
+      openModal(`
+        <div class="modal-head"><h3>Attach from documents on file</h3><button class="x" id="adClose" aria-label="Close">×</button></div>
+        <div class="modal-body">
+          <p class="muted" style="margin:0 0 12px;font-size:13.5px">These are ${esc(cl.full_name.split(" ")[0])}'s stored documents. A copy is sent with the email, so deleting the original later won't change what was sent.</p>
+          <div class="docreq-checks">
+            ${docs.map((d) => `
+              <label class="docreq-check">
+                <input type="checkbox" value="${d.id}" ${already.has(d.id) ? "checked disabled" : ""}>
+                <span style="flex:1;min-width:0">
+                  <span style="display:block;font-weight:600">${docIcon(d.original_filename)} ${esc(d.original_filename)}</span>
+                  <span class="muted" style="font-size:12px">${esc(d.document_type)} · ${fmtSize(d.file_size)}${already.has(d.id) ? " · already attached" : ""}</span>
+                </span>
+              </label>`).join("")}
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-ghost" id="adCancel">Cancel</button>
+          <button type="button" class="btn btn-primary" id="adOk">Attach selected</button>
+        </div>`);
+      $("#adClose").onclick = closeModal;
+      $("#adCancel").onclick = closeModal;
+      $("#adOk").onclick = () => {
+        const picked = $$(".docreq-checks input:checked:not(:disabled)").map((i) => parseInt(i.value, 10));
+        if (!picked.length) { toast("Pick at least one document", "error"); return; }
+        if (em.attachments.length + picked.length > 10) { toast("You can attach up to 10 files to one email", "error"); return; }
+        picked.forEach((id) => {
+          const doc = docs.find((d) => d.id === id);
+          if (!doc) return;
+          em.attachments.push({
+            uid: "d" + (++em.seq), name: doc.original_filename, size: doc.file_size || 0,
+            status: "done", pct: 100, id: null, documentId: doc.id,
+          });
+        });
+        closeModal();
+        emDrawAtts();
+      };
+    }
+
+    /* -- templates & merge fields -- */
+    function emApplyTemplate(key) {
+      const tpl = EMAIL_TEMPLATES.find((t) => t.key === key);
+      if (!tpl) return;
+      const subjectEl = $("#emSubject");
+      const editor = $("#emEditor");
+      if (!subjectEl || !editor) return;
+      const write = () => {
+        subjectEl.value = emMerge(tpl.subject, false);
+        editor.innerHTML = sanitizeRichHtml(emMerge(tpl.body, true));
+        em.subject = subjectEl.value;
+        emSyncEditor();
+        editor.focus();
+      };
+      const hasContent = (editor.textContent || "").trim() || (subjectEl.value || "").trim();
+      if (!hasContent) { write(); return; }
+      confirmModal("Applying this template replaces what you've written so far.", {
+        title: "Replace your draft?", okText: "Use template", danger: false,
+      }).then((ok) => { if (ok) write(); });
+    }
+
+    /* -- send -- */
+    async function emSend() {
+      if (em.busy) return;
+      const subjectEl = $("#emSubject");
+      const editor = $("#emEditor");
+      if (!subjectEl || !editor) return;
+      const subject = (subjectEl.value || "").trim();
+      const text = (editor.innerText || "").replace(/\u00a0/g, " ").trim();
+      if (!subject) { toast("Add a subject so the student knows what this is about", "error"); subjectEl.focus(); return; }
+      if (!text) { toast("Write a message before sending", "error"); editor.focus(); return; }
+      if (em.attachments.some((a) => a.status === "uploading")) { toast("Hold on — attachments are still uploading", "error"); return; }
+      if (em.attachments.some((a) => a.status === "error")) { toast("Remove the attachment that failed to upload, then send", "error"); return; }
+
+      const payload = {
+        subject: subject,
+        body: text,
+        body_html: sanitizeRichHtml(editor.innerHTML),
+        attachment_ids: em.attachments.filter((a) => a.id).map((a) => a.id),
+        document_ids: em.attachments.filter((a) => a.documentId).map((a) => a.documentId),
+      };
+      const btn = $("#emSendBtn");
+      em.busy = true;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Sending…';
+      try {
+        // Attachments are relayed to the mail provider inline, so this can outlast a
+        // normal CRM call — give it room rather than aborting a send that succeeds.
+        const r = await api(`/clients/${cl.id}/email`, { method: "POST", body: payload, timeout: 90000 });
+        data.emails.unshift(r.email);
+        tabCount("emails", data.emails.length);
+        em.subject = ""; em.html = ""; em.attachments = []; em.busy = false;
+        renderEmails();
+        toast(`Email sent to ${cl.full_name.split(" ")[0] || "the client"}`, "success");
+      } catch (ex) {
+        em.busy = false;
+        toast(ex.message, "error");
+        btn.disabled = false;
+        btn.innerHTML = `${EM_ICONS.send} Send email`;
+      }
+    }
+
+    /* -- composer markup -- */
+    const EM_ICONS = {
+      ul: '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="3.4" cy="5" r="1.2" fill="currentColor" stroke="none"/><circle cx="3.4" cy="10" r="1.2" fill="currentColor" stroke="none"/><circle cx="3.4" cy="15" r="1.2" fill="currentColor" stroke="none"/><path d="M7.5 5h9M7.5 10h9M7.5 15h9"/></svg>',
+      ol: '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M7.5 5h9M7.5 10h9M7.5 15h9"/><text x="1" y="7" font-size="6" fill="currentColor" stroke="none" font-family="system-ui">1</text><text x="1" y="12.4" font-size="6" fill="currentColor" stroke="none" font-family="system-ui">2</text><text x="1" y="17.6" font-size="6" fill="currentColor" stroke="none" font-family="system-ui">3</text></svg>',
+      link: '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8.5 11.5a3.4 3.4 0 0 0 5 .3l2.2-2.2a3.4 3.4 0 0 0-4.8-4.8l-1.3 1.2"/><path d="M11.5 8.5a3.4 3.4 0 0 0-5-.3L4.3 10.4a3.4 3.4 0 0 0 4.8 4.8l1.2-1.2"/></svg>',
+      unlink: '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8.5 11.5a3.4 3.4 0 0 0 5 .3l1.2-1.2"/><path d="M11.5 8.5a3.4 3.4 0 0 0-5-.3l-1.2 1.2a3.4 3.4 0 0 0 2.4 5.8"/><path d="M3 3l14 14"/></svg>',
+      quote: '<svg viewBox="0 0 20 20" width="15" height="15" fill="currentColor"><path d="M7.6 5.2c-2.3 1-3.8 3.1-3.8 5.7 0 2.3 1.3 3.9 3.1 3.9 1.5 0 2.7-1.1 2.7-2.6s-1-2.5-2.4-2.5c-.2 0-.5 0-.7.1.3-1.2 1.2-2.2 2.4-2.8l-1.3-1.8Zm7.3 0c-2.3 1-3.8 3.1-3.8 5.7 0 2.3 1.3 3.9 3.1 3.9 1.5 0 2.7-1.1 2.7-2.6s-1-2.5-2.4-2.5c-.2 0-.5 0-.7.1.3-1.2 1.2-2.2 2.4-2.8l-1.3-1.8Z"/></svg>',
+      clear: '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6.5 4.5h9M9 4.5 7.5 15.5M12.5 9.5l4 4M16.5 9.5l-4 4"/></svg>',
+      attach: '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M14.5 9.2 9.3 14.4a3.3 3.3 0 0 1-4.7-4.7l5.6-5.6a2.2 2.2 0 0 1 3.1 3.1l-5.5 5.6a1.1 1.1 0 0 1-1.6-1.6l5-5"/></svg>',
+      send: '<svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 2.5 9 11M17.5 2.5l-5.6 15-3-6.5-6.4-3 15-5.5Z"/></svg>',
+    };
+
+    function emComposerHtml() {
+      if (!canEdit) return "";
+      if (!cl.email) {
+        return `<div class="plan-banner warn" style="margin-bottom:18px">
+          <div class="pb-icon">✉</div>
+          <div class="pb-text"><b>No email address on file.</b>
+            <span>Add one under “Edit details” to message ${esc(cl.full_name.split(" ")[0] || "this client")}.</span></div>
+          <button class="btn btn-soft btn-sm" id="emAddEmail">Add an email</button></div>`;
+      }
+      const meUser = (state.me && state.me.user) || {};
+      const [c1, c2] = avatarColor(cl.email || cl.full_name);
+      const tb = (cmd, label, title, extra) =>
+        `<button type="button" class="emc-tb${extra || ""}" data-cmd="${cmd}" title="${esc(title)}" aria-label="${esc(title)}">${label}</button>`;
+      return `
+      <div class="emc" id="emCompose">
+        <div class="emc-dropzone" id="emDrop" aria-hidden="true"><div>${EM_ICONS.attach} Drop files to attach</div></div>
+        <div class="emc-head">
+          <span class="emc-to-label">To</span>
+          <span class="emc-recipient">
+            <span class="emc-av" style="background:linear-gradient(135deg,${c1},${c2})">${esc(initials(cl.full_name) || "C")}</span>
+            <b>${esc(cl.full_name)}</b><span class="emc-email">${esc(cl.email)}</span>
+          </span>
+          <div style="flex:1"></div>
+          <div class="emc-menu-wrap">
+            <button type="button" class="emc-tool" id="emTplBtn" aria-haspopup="true" aria-expanded="false">⚡ Templates</button>
+            <div class="emc-menu emc-menu-right hidden" id="emTplMenu" role="menu">
+              <div class="emc-menu-label">Start from a template</div>
+              ${EMAIL_TEMPLATES.map((t) => `<button type="button" class="emc-menu-item" role="menuitem" data-tpl="${t.key}">
+                  <span class="emc-menu-ic">${t.icon}</span>
+                  <span><b>${esc(t.label)}</b><small>${esc(t.hint)}</small></span>
+                </button>`).join("")}
+            </div>
+          </div>
+        </div>
+
+        <input id="emSubject" class="emc-subject" type="text" maxlength="200" autocomplete="off"
+          placeholder="Subject" value="${esc(em.subject)}" aria-label="Subject">
+
+        <div class="emc-toolbar" id="emToolbar">
+          ${tb("bold", "<b>B</b>", "Bold (" + (IS_MAC ? "⌘B" : "Ctrl+B") + ")")}
+          ${tb("italic", "<i>I</i>", "Italic (" + (IS_MAC ? "⌘I" : "Ctrl+I") + ")")}
+          ${tb("underline", "<u>U</u>", "Underline (" + (IS_MAC ? "⌘U" : "Ctrl+U") + ")")}
+          <span class="emc-tb-sep"></span>
+          ${tb("insertUnorderedList", EM_ICONS.ul, "Bulleted list")}
+          ${tb("insertOrderedList", EM_ICONS.ol, "Numbered list")}
+          ${tb("formatBlock:h3", "H", "Heading")}
+          ${tb("formatBlock:blockquote", EM_ICONS.quote, "Quote")}
+          <span class="emc-tb-sep"></span>
+          <button type="button" class="emc-tb" id="emLinkBtn" title="Insert link (${IS_MAC ? "⌘K" : "Ctrl+K"})" aria-label="Insert link">${EM_ICONS.link}</button>
+          ${tb("unlink", EM_ICONS.unlink, "Remove link")}
+          ${tb("removeFormat", EM_ICONS.clear, "Clear formatting")}
+          <div style="flex:1"></div>
+          <div class="emc-menu-wrap">
+            <button type="button" class="emc-tool emc-tool-sm" id="emFieldBtn" aria-haspopup="true" aria-expanded="false">Insert detail</button>
+            <div class="emc-menu emc-menu-right hidden" id="emFieldMenu" role="menu">
+              <div class="emc-menu-label">Insert from this client's file</div>
+              ${EMAIL_MERGE_FIELDS.map((f) => `<button type="button" class="emc-menu-item is-compact" role="menuitem" data-field="${f.key}">
+                  <span><b>${esc(f.label)}</b><small>${esc(emMergeValues()[f.key] || "—")}</small></span>
+                </button>`).join("")}
+            </div>
+          </div>
+        </div>
+
+        <div id="emEditor" class="emc-editor is-empty" contenteditable="true" role="textbox" aria-multiline="true"
+          aria-label="Message" data-placeholder="Write your message…"></div>
+
+        <div class="emc-atts hidden" id="emAtts"></div>
+
+        <div class="emc-foot">
+          <button class="btn btn-primary btn-sm emc-send" id="emSendBtn">${EM_ICONS.send} Send email</button>
+          <button type="button" class="emc-tool" id="emAttachBtn">${EM_ICONS.attach} Attach files</button>
+          <button type="button" class="emc-tool" id="emDocsBtn">🗂 From documents${docs.length ? ` (${docs.length})` : ""}</button>
+          <input type="file" id="emFile" class="hidden" multiple
+            accept=".pdf,.jpg,.jpeg,.png,.webp,.gif,.heic,.doc,.docx,.xls,.xlsx,.csv,.txt">
+          <span class="emc-att-note" id="emAttNote"></span>
+          <div style="flex:1"></div>
+          <button type="button" class="emc-tool emc-tool-ghost" id="emDiscard">Discard</button>
+        </div>
+        <div class="emc-hint">
+          <span>↩ Replies go to <b>${esc(meUser.email || "your inbox")}</b></span>
+          <span class="emc-hint-sep">·</span><span>${esc(EM_SEND_HINT)} to send</span>
+          <span class="emc-hint-sep">·</span><span>🔒 Attachments encrypted · up to 10 files, 15 MB</span>
+        </div>
+      </div>`;
+    }
+
+    /* -- conversation thread -- */
+    function emThreadHtml() {
+      const all = data.emails || [];
+      if (!all.length) {
+        return `<div class="empty" style="padding:38px 30px"><div class="emoji">✉️</div>
+          <h3>No emails yet</h3>
+          <p>${canEdit && cl.email
+            ? "Everything you send from here is kept on the client's file, so your whole team sees the same history."
+            : "Messages sent to this client will appear here."}</p></div>`;
+      }
+      const query = (em.query || "").trim().toLowerCase();
+      const rows = all.filter((m) => {
+        if (em.filter === "sent" && m.direction === "inbound") return false;
+        if (em.filter === "replies" && m.direction !== "inbound") return false;
+        if (!query) return true;
+        return ((m.subject || "") + " " + (m.body || "")).toLowerCase().includes(query);
+      });
+      const replies = all.filter((m) => m.direction === "inbound").length;
+      const showTools = all.length >= 3;
+      const chip = (key, label) =>
+        `<button type="button" class="emt-chip${em.filter === key ? " active" : ""}" data-filter="${key}">${esc(label)}</button>`;
+      const head = `
+        <div class="emt-head">
+          <div class="emt-title">Conversation<span class="emt-count">${all.length}</span></div>
+          ${showTools ? `<div class="emt-filters">
+              ${chip("all", "All")}${chip("sent", "Sent")}${replies ? chip("replies", `Replies (${replies})`) : ""}
+            </div>
+            <input type="search" class="emt-search" id="emSearch" placeholder="Search this conversation…"
+              value="${esc(em.query)}" aria-label="Search this conversation">` : ""}
+        </div>`;
+
+      if (!rows.length) {
+        return head + `<div class="empty" style="padding:30px"><div class="emoji">🔍</div><h3>Nothing matches</h3>
+          <p>Try a different search or clear the filter.</p></div>`;
+      }
+
+      const messages = rows.map((m) => {
+        const inbound = m.direction === "inbound";
+        const failed = m.status === "failed";
+        const who = inbound ? (m.from_email || cl.full_name) : (m.sent_by_name || "Your team");
+        const [a1, a2] = avatarColor(inbound ? (m.from_email || cl.email || cl.full_name) : who);
+        const mismatch = inbound && m.from_email && cl.email &&
+          m.from_email.toLowerCase() !== cl.email.trim().toLowerCase();
+        // Rich HTML is only ever rendered for messages this org composed. Inbound mail
+        // is plain text by design and stays escaped.
+        const bodyHtml = (!inbound && m.body_html)
+          ? sanitizeRichHtml(m.body_html)
+          : plainTextToHtml(m.body || "");
+        const long = (m.body || "").length > 620;
+        const open = !!em.expanded[m.id];
+        const atts = (m.attachments || []).length ? `<div class="em-msg-atts">${m.attachments.map((a) => `
+            <a class="em-att" href="${esc(a.download_url || "#")}" target="_blank" rel="noopener">
+              <span>${docIcon(a.filename)}</span><b>${esc(a.filename)}</b><span class="em-att-size">${fmtSize(a.file_size)}</span>
+            </a>`).join("")}</div>` : "";
+        return `
+        <article class="em-msg${inbound ? " is-inbound" : ""}${failed ? " is-failed" : ""}">
+          <div class="em-av" style="background:linear-gradient(135deg,${a1},${a2})">${esc(initials(who) || (inbound ? "S" : "T"))}</div>
+          <div class="em-msg-main">
+            <div class="em-msg-top">
+              <div class="em-msg-who">
+                <b>${esc(who)}</b>
+                <span>${inbound ? "replied" : `to ${esc(cl.full_name.split(" ")[0] || "client")}`}</span>
+                ${mismatch ? '<span class="ei-unverified">· not the address on file</span>' : ""}
+                ${failed ? '<span class="em-tag is-fail">Not delivered</span>' : ""}
+              </div>
+              <time class="em-msg-when" title="${esc(fmtDateTime(m.created_at))}">${esc(fmtDateTime(m.created_at))}</time>
+            </div>
+            <h4 class="em-msg-subject">${esc(m.subject)}</h4>
+            <div class="em-msg-body${long && !open ? " is-clamped" : ""}">${bodyHtml}</div>
+            ${long ? `<button type="button" class="em-more" data-id="${m.id}">${open ? "Show less" : "Show more"}</button>` : ""}
+            ${atts}
+            ${failed ? `<div class="ei-fail">⚠ Delivery failed${m.error_message ? ": " + esc(m.error_message) : ""}</div>` : ""}
+          </div>
+        </article>`;
+      }).join("");
+      return head + `<div class="em-thread">${messages}</div>`;
+    }
+
+    function emDrawThread() {
+      const host = $("#emThread");
+      if (!host) return;
+      host.innerHTML = emThreadHtml();
+      $$(".emt-chip", host).forEach((b) => b.onclick = () => { em.filter = b.dataset.filter; emDrawThread(); });
+      $$(".em-more", host).forEach((b) => b.onclick = () => {
+        em.expanded[b.dataset.id] = !em.expanded[b.dataset.id];
+        emDrawThread();
+      });
+      const search = $("#emSearch", host);
+      if (search) {
+        search.oninput = () => {
+          em.query = search.value;
+          const at = search.selectionStart;
+          emDrawThread();
+          const again = $("#emSearch");
+          if (again) { again.focus(); try { again.setSelectionRange(at, at); } catch (e) {} }
+        };
+      }
+    }
+
+    function renderEmails() {
+      body.innerHTML = emComposerHtml() + `<div id="emThread"></div>`;
+      emDrawThread();
+
+      const addEmail = $("#emAddEmail");
+      if (addEmail) addEmail.onclick = () => { overviewEditing = true; showTab("overview"); };
+
+      const editor = $("#emEditor");
+      if (!editor) return;   // read-only member, or no email on file
+
+      const subjectEl = $("#emSubject");
+      editor.innerHTML = em.html || "";
+      emSyncEditor();
+      emDrawAtts();
+      if (!em.draftsLoaded) { em.draftsLoaded = true; emLoadDraftAttachments(); }
+
+      subjectEl.oninput = () => { em.subject = subjectEl.value; };
+      subjectEl.onkeydown = (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        // ⌘/Ctrl+Enter sends from anywhere; a plain Enter just moves on to the body.
+        if (e.metaKey || e.ctrlKey) emSend();
+        else editor.focus();
+      };
+
+      // Toolbar: mousedown-preventDefault keeps the caret in the editor.
+      $$(".emc-tb", $("#emToolbar")).forEach((btn) => {
+        btn.onmousedown = (e) => { e.preventDefault(); emSaveRange(); };
+        btn.onclick = () => {
+          const cmd = btn.dataset.cmd;
+          if (!cmd) return;
+          if (cmd.indexOf("formatBlock:") === 0) {
+            const tag = cmd.split(":")[1];
+            // Toggle back to a paragraph when the block is already applied.
+            let current = "";
+            try { current = (document.queryCommandValue("formatBlock") || "").toLowerCase(); } catch (e) {}
+            emExec("formatBlock", "<" + (current === tag ? "p" : tag) + ">");
+            return;
+          }
+          emExec(cmd);
+        };
+      });
+      const linkBtn = $("#emLinkBtn");
+      linkBtn.onmousedown = (e) => { e.preventDefault(); emSaveRange(); };
+      linkBtn.onclick = emOpenLinkDialog;
+
+      editor.oninput = () => { emSyncEditor(); emSaveRange(); };
+      editor.onkeyup = () => { emSaveRange(); emSyncToolbar(); };
+      editor.onmouseup = () => { emSaveRange(); emSyncToolbar(); };
+      editor.onblur = emSaveRange;
+      editor.onkeydown = (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); emSend(); return; }
+        if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) { e.preventDefault(); emOpenLinkDialog(); }
+      };
+      // Pasted markup is rebuilt through the allow-list before it touches the DOM.
+      editor.onpaste = (e) => {
+        if (!e.clipboardData) return;
+        const html = e.clipboardData.getData("text/html");
+        const text = e.clipboardData.getData("text/plain");
+        if (!html && !text) return;
+        e.preventDefault();
+        document.execCommand("insertHTML", false, html ? sanitizeRichHtml(html) : plainTextToHtml(text));
+        emSyncEditor();
+      };
+
+      const tplBtn = $("#emTplBtn"), tplMenu = $("#emTplMenu");
+      tplBtn.onclick = (e) => {
+        e.stopPropagation();
+        const open = tplMenu.classList.contains("hidden");
+        emCloseMenus();
+        tplMenu.classList.toggle("hidden", !open);
+        tplBtn.setAttribute("aria-expanded", String(open));
+      };
+      $$(".emc-menu-item[data-tpl]", tplMenu).forEach((b) => b.onclick = () => {
+        emCloseMenus(); emApplyTemplate(b.dataset.tpl);
+      });
+
+      const fieldBtn = $("#emFieldBtn"), fieldMenu = $("#emFieldMenu");
+      fieldBtn.onmousedown = (e) => { e.preventDefault(); emSaveRange(); };
+      fieldBtn.onclick = (e) => {
+        e.stopPropagation();
+        const open = fieldMenu.classList.contains("hidden");
+        emCloseMenus();
+        fieldMenu.classList.toggle("hidden", !open);
+        fieldBtn.setAttribute("aria-expanded", String(open));
+      };
+      $$(".emc-menu-item[data-field]", fieldMenu).forEach((b) => b.onmousedown = (e) => {
+        e.preventDefault();
+        emCloseMenus();
+        emInsertHtml(esc(emMergeValues()[b.dataset.field] || ""));
+      });
+
+      $("#emSendBtn").onclick = emSend;
+      const fileInput = $("#emFile");
+      $("#emAttachBtn").onclick = () => fileInput.click();
+      fileInput.onchange = () => { emAddFiles(fileInput.files); fileInput.value = ""; };
+      $("#emDocsBtn").onclick = emOpenDocsDialog;
+      $("#emDiscard").onclick = async () => {
+        if (!(em.subject || "").trim() && !(editor.textContent || "").trim() && !em.attachments.length) return;
+        const ok = await confirmModal("This clears the subject, the message and any attachments you added.", {
+          title: "Discard this draft?", okText: "Discard",
+        });
+        if (!ok) return;
+        em.attachments.slice().forEach((a) => emRemoveAttachment(a.uid));
+        em.subject = ""; em.html = "";
+        renderEmails();
+      };
+
+      // Drag & drop anywhere over the composer.
+      const card = $("#emCompose");
+      let dragDepth = 0;
+      const hasFiles = (e) => {
+        const types = (e.dataTransfer && e.dataTransfer.types) || [];
+        return Array.prototype.indexOf.call(types, "Files") >= 0;
+      };
+      card.addEventListener("dragenter", (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault(); dragDepth++; card.classList.add("is-dragging");
+      });
+      card.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+      card.addEventListener("dragleave", () => {
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) card.classList.remove("is-dragging");
+      });
+      card.addEventListener("drop", (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth = 0;
+        card.classList.remove("is-dragging");
+        emAddFiles(e.dataTransfer.files);
+      });
+    }
+
+    // Files uploaded for a message that was never sent (tab closed, page refreshed)
+    // are still on the server — put them back on the composer instead of orphaning them.
+    async function emLoadDraftAttachments() {
+      try {
+        const r = await api(`/clients/${cl.id}/email/attachments`);
+        (r.attachments || []).forEach((a) => {
+          if (em.attachments.some((x) => x.id === a.id)) return;
+          em.attachments.push({
+            uid: "u" + (++em.seq), name: a.filename, size: a.file_size || 0,
+            status: "done", pct: 100, id: a.id,
+          });
+        });
+        emDrawAtts();
+      } catch (e) { /* drafts are a convenience — never block the composer */ }
     }
 
     /* ---- Mock interview tab ---- */
@@ -4626,6 +5462,20 @@
   /* ============================================================
      SETTINGS
      ============================================================ */
+  // Inline 24×24 outline icons, matching the sidebar/topbar set. Held as consts because
+  // the async handlers below restore button contents on finish — they must put back
+  // exactly what was rendered, not a text-only label.
+  const ICON_UPLOAD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+  const ICON_SHUFFLE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg>';
+  const ICON_CAMERA = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>';
+  const ICON_GLOBE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>';
+  const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+  const ICON_INFO = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
+  // One source of truth for the two logo buttons — the template and the `finally`
+  // blocks that restore them after a spinner must agree exactly.
+  const BTN_UPLOAD_HTML = ICON_UPLOAD + "Upload logo";
+  const BTN_REGEN_HTML = ICON_SHUFFLE + "Generate new";
+
   function renderSettings() {
     const c = $("#content");
     const org = state.me.organization || {};
@@ -4649,56 +5499,133 @@
     const curDesc = dc.code === "INR"
       ? "INR (₹)"
       : `${dc.code} · ₹1 ≈ ${dc.symbol}${Number(dc.rate_from_inr || 0).toFixed(4)} (live rate, refreshed daily)`;
+    // A worked example beats quoting the raw rate — it shows what the conversion
+    // actually does to a number the consultancy recognises.
+    const curNote = dc.code === "INR"
+      ? "Amounts across this portal display in <b>INR (₹)</b>."
+      : `Amounts display in <b>${esc(dc.code)}</b> — a ₹10,000 fee shows as ` +
+        `<b>${esc(dc.symbol || "")}${(10000 * Number(dc.rate_from_inr || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</b> ` +
+        "at today's rate, refreshed daily. Payments themselves are still charged in INR.";
+    const portalHost = (org.subdomain_slug || "") + "." + rootDomain();
+    const membership = state.me.membership || {};
+    const role = membership.role || "";
+    const bal = state.credits && state.credits.balance_credits != null ? state.credits.balance_credits : null;
     c.innerHTML = `
-      <div class="settings-section">
-        <div class="card"><div class="card-head"><h3>Organization branding</h3></div>
-          <div class="card-body">
-            <div style="display:flex;align-items:center;gap:18px;margin-bottom:20px">
-              <img class="logo-preview" id="settingsLogo" src="${esc(org.logo_url || "")}" alt="logo" onerror="this.style.visibility='hidden'"/>
-              <div><b style="font-size:16px">${esc(org.company_name || "")}</b>
-                <div style="color:var(--muted);font-size:13px">${esc((org.subdomain_slug || "") + "." + rootDomain())}</div></div>
+      <div class="settings-page">
+        <div class="set-hero">
+          ${canManage
+            ? `<button type="button" class="set-logo" id="heroLogoBtn" title="Replace logo" aria-label="Replace organization logo">
+                 <img id="settingsLogo" src="${esc(org.logo_url || "")}" alt="" onerror="this.style.visibility='hidden'"/>
+                 <span class="set-logo-ov">${ICON_CAMERA}Replace</span>
+               </button>`
+            : `<div class="set-logo"><img id="settingsLogo" src="${esc(org.logo_url || "")}" alt="" onerror="this.style.visibility='hidden'"/></div>`}
+          <div class="set-hero-main">
+            <h2 id="setHeroName">${esc(org.company_name || "Your organization")}</h2>
+            <button type="button" class="set-url" id="copyPortalUrl" title="Copy portal URL">${ICON_GLOBE}<span>${esc(portalHost)}</span>${ICON_COPY}</button>
+            <div class="set-facts">
+              <span class="set-fact"><span class="sd"></span>${esc(role ? role.charAt(0).toUpperCase() + role.slice(1) : "Member")}</span>
+              <span class="set-fact">${bal != null ? `<b>${bal}</b> credits` : "Pay-as-you-go credits"}</span>
+              <span class="set-fact">Showing amounts in <b>${esc(dc.code || "INR")}</b></span>
             </div>
+          </div>
+          ${canManage ? `
+          <div class="set-hero-actions">
+            <button class="btn btn-ghost btn-sm" id="uploadLogoBtn">${BTN_UPLOAD_HTML}</button>
+            <button class="btn btn-ghost btn-sm" id="regenLogo">${BTN_REGEN_HTML}</button>
+            <span class="set-hint">PNG, JPG or WebP · up to 2 MB</span>
+            <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" style="display:none"/>
+          </div>` : ""}
+        </div>
+
+        <section class="set-sec">
+          <div class="set-sec-desc">
+            <h3>Organization branding</h3>
+            <p>The name and logo on this portal, on your students' portal and on every email you send them.</p>
+          </div>
+          <div class="card"><div class="card-body">
             ${canManage ? `
-            <div class="field"><label>Company name</label><input id="setCompany" value="${esc(org.company_name || "")}"/></div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap">
+            <div class="field"><label for="setCompany">Company name</label><input id="setCompany" value="${esc(org.company_name || "")}" maxlength="120"/></div>
+            <div class="set-actions">
               <button class="btn btn-primary btn-sm" id="saveBranding">Save name</button>
-              <button class="btn btn-ghost btn-sm" id="uploadLogoBtn">🖼 Upload logo</button>
-              <button class="btn btn-ghost btn-sm" id="regenLogo">🎲 Generate new logo</button>
-              <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" style="display:none"/>
-            </div>
-            <div style="font-size:12px;color:var(--muted);margin-top:8px">PNG, JPG or WebP · up to 2 MB · shown at up to 512×512.</div>` : `<p style="color:var(--muted);font-size:13px">Only admins can change branding.</p>`}
-          </div></div>
-
-        <div class="card" style="margin-top:20px"><div class="card-head"><h3>Company location</h3></div>
-          <div class="card-body">
-            <p style="color:var(--muted);font-size:13px;margin:0 0 14px">For your organization's records. The country also sets your portal's <b>display currency</b> — every amount converts from INR at the live exchange rate. Payments themselves are still billed in INR.</p>
-            ${canManage ? `
-            <div class="detail-grid">
-              <div class="field"><label>Country</label><select id="setCountry">${countryOpts}</select></div>
-              <div class="field"><label>State / Region</label><input id="setState" value="${esc(org.state_region || "")}" placeholder="e.g. Karnataka, California" maxlength="80"/></div>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:8px">
-              <button class="btn btn-primary btn-sm" id="saveLocation">Save location</button>
-              <span style="font-size:12.5px;color:var(--muted)">Current display currency: <b>${esc(curDesc)}</b></span>
             </div>` : `
-            <div class="detail-grid">
-              <div class="detail-item"><label>Country</label><div>${esc(countryLabel)}</div></div>
-              <div class="detail-item"><label>State / Region</label><div>${esc(org.state_region || "—")}</div></div>
-            </div>`}
-          </div></div>
-
-        <div class="card" style="margin-top:20px"><div class="card-head"><h3>Workspace</h3></div>
-          <div class="card-body">
-            <div class="detail-grid">
-              <div class="detail-item"><label>Portal URL</label><div>${esc((org.subdomain_slug || "") + "." + rootDomain())}</div></div>
-              <div class="detail-item"><label>Billing</label><div>Pay-as-you-go credits${state.credits && state.credits.balance_credits != null ? ` · ${state.credits.balance_credits} cr` : ""}</div></div>
-              <div class="detail-item"><label>Display currency</label><div>${esc(curDesc)}</div></div>
-              <div class="detail-item"><label>Your role</label><div style="text-transform:capitalize">${esc((state.me.membership && state.me.membership.role) || "")}</div></div>
-              <div class="detail-item"><label>Signed in as</label><div>${esc(state.me.user.email)}</div></div>
+            <div class="set-rows">
+              <div class="set-row"><span class="set-row-k">Company name</span><span class="set-row-v">${esc(org.company_name || "—")}</span></div>
             </div>
-            <button class="btn btn-danger btn-sm" style="margin-top:18px" onclick="document.getElementById('signoutBtn').click()">Sign out</button>
+            <div class="set-note">${ICON_INFO}<span>Only organization admins can change the company name or logo.</span></div>`}
           </div></div>
+        </section>
+
+        <section class="set-sec">
+          <div class="set-sec-desc">
+            <h3>Company location</h3>
+            <p>Kept on your organization's record. The country also picks the currency amounts are displayed in.</p>
+          </div>
+          <div class="card"><div class="card-body">
+            ${canManage ? `
+            <div class="field-row">
+              <div class="field"><label for="setCountry">Country</label><select id="setCountry">${countryOpts}</select></div>
+              <div class="field"><label for="setState">State / Region</label><input id="setState" value="${esc(org.state_region || "")}" placeholder="e.g. Karnataka, California" maxlength="80"/></div>
+            </div>
+            <div class="set-actions">
+              <button class="btn btn-primary btn-sm" id="saveLocation">Save location</button>
+            </div>` : `
+            <div class="set-rows">
+              <div class="set-row"><span class="set-row-k">Country</span><span class="set-row-v">${esc(countryLabel)}</span></div>
+              <div class="set-row"><span class="set-row-k">State / Region</span><span class="set-row-v">${esc(org.state_region || "—")}</span></div>
+            </div>`}
+            <div class="set-note">${ICON_INFO}<span>${curNote}</span></div>
+          </div></div>
+        </section>
+
+        <section class="set-sec">
+          <div class="set-sec-desc">
+            <h3>Workspace</h3>
+            <p>Where this portal lives and how it's billed.</p>
+          </div>
+          <div class="card"><div class="card-body">
+            <div class="set-rows">
+              <div class="set-row"><span class="set-row-k">Portal URL</span><span class="set-row-v">${esc(portalHost)}</span></div>
+              <div class="set-row"><span class="set-row-k">Billing</span><span class="set-row-v">Pay-as-you-go${bal != null ? ` · ${bal} cr left` : ""} &nbsp;<button type="button" class="link" id="setGoCredits">Manage credits</button></span></div>
+              <div class="set-row"><span class="set-row-k">Display currency</span><span class="set-row-v">${esc(curDesc)}</span></div>
+              ${org.created_at ? `<div class="set-row"><span class="set-row-k">Workspace created</span><span class="set-row-v">${esc(fmtDate(org.created_at))}</span></div>` : ""}
+            </div>
+          </div></div>
+        </section>
+
+        <section class="set-sec set-sec-danger">
+          <div class="set-sec-desc">
+            <h3>Your account</h3>
+            <p>The account you're signed in with on this device.</p>
+          </div>
+          <div class="card"><div class="card-body">
+            <div>
+              <div style="font-weight:700;font-size:14.5px">${esc(state.me.user.email)}</div>
+              <div class="set-hint" style="margin-top:2px">Signed in as ${esc(role || "member")}${membership.joined_at ? ` · joined ${esc(fmtDate(membership.joined_at))}` : ""}</div>
+            </div>
+            <button class="btn btn-danger btn-sm" id="setSignout">Sign out</button>
+          </div></div>
+        </section>
       </div>`;
+
+    $("#setSignout").onclick = () => { const b = $("#signoutBtn"); if (b) b.click(); };
+    $("#setGoCredits").onclick = () => navigate("credits");
+    $("#copyPortalUrl").onclick = async () => {
+      const url = org.portal_url || ("https://" + portalHost);
+      // navigator.clipboard is undefined on insecure origins (local http portals),
+      // so fall back to the old selection trick rather than failing outright.
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(url);
+        else {
+          const ta = document.createElement("textarea");
+          ta.value = url; ta.style.position = "fixed"; ta.style.opacity = "0";
+          document.body.appendChild(ta); ta.select();
+          const ok = document.execCommand("copy");
+          document.body.removeChild(ta);
+          if (!ok) throw new Error("copy blocked");
+        }
+        toast("Portal URL copied", "success");
+      } catch (ex) { toast("Couldn't copy — your portal URL is " + url, "error"); }
+    };
 
     if (canManage) {
       $("#saveBranding").onclick = async () => {
@@ -4706,24 +5633,30 @@
         const btn = $("#saveBranding"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
         try { const r = await api("/organization/branding", { method: "PATCH", body: { company_name: name } });
           state.me.organization = Object.assign(state.me.organization, r.organization || {});
-          $("#brandName").textContent = name; toast("Saved", "success"); }
+          $("#brandName").textContent = name;
+          $("#setHeroName").textContent = name;   // the hero title is the live preview of this field
+          toast("Saved", "success"); }
         catch (ex) { toast(ex.message, "error"); }
         finally { btn.disabled = false; btn.textContent = "Save name"; }
       };
       $("#regenLogo").onclick = async () => {
-        const btn = $("#regenLogo"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        // .spinner is white-on-transparent — on a white .btn-ghost it needs the dark variant.
+        const btn = $("#regenLogo"); btn.disabled = true; btn.innerHTML = '<span class="spinner dark"></span>';
+        const tile = $("#heroLogoBtn"); if (tile) tile.classList.add("busy");
         try { const r = await api("/organization/branding", { method: "PATCH", body: { generate_random_logo: true } });
           const url = (r.organization || {}).logo_url; if (url) { $("#settingsLogo").src = url; $("#settingsLogo").style.visibility = "visible"; $("#brandLogo").src = url; $("#brandLogo").style.display = ""; state.me.organization.logo_url = url; }
           toast("New logo generated", "success"); }
         catch (ex) { toast(ex.message, "error"); }
-        finally { btn.disabled = false; btn.innerHTML = "🎲 Generate new logo"; }
+        finally { btn.disabled = false; btn.innerHTML = BTN_REGEN_HTML; if (tile) tile.classList.remove("busy"); }
       };
       $("#uploadLogoBtn").onclick = () => $("#logoFile").click();
+      $("#heroLogoBtn").onclick = () => $("#logoFile").click();
       $("#logoFile").onchange = async () => {
         const f = $("#logoFile").files && $("#logoFile").files[0];
         if (!f) return;
         if (f.size > 2 * 1024 * 1024) { toast("Logo must be under 2 MB", "error"); $("#logoFile").value = ""; return; }
-        const btn = $("#uploadLogoBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Uploading…';
+        const btn = $("#uploadLogoBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner dark"></span> Uploading…';
+        const tile = $("#heroLogoBtn"); if (tile) tile.classList.add("busy");
         try {
           const fd = new FormData();
           fd.append("file", f);
@@ -4738,7 +5671,7 @@
           }
           toast("Logo updated", "success");
         } catch (ex) { toast(ex.message, "error"); }
-        finally { btn.disabled = false; btn.innerHTML = "🖼 Upload logo"; $("#logoFile").value = ""; }
+        finally { btn.disabled = false; btn.innerHTML = BTN_UPLOAD_HTML; if (tile) tile.classList.remove("busy"); $("#logoFile").value = ""; }
       };
       $("#saveLocation").onclick = async () => {
         const cc = $("#setCountry").value;
@@ -5593,8 +6526,14 @@
     browse: null, browseSeq: 0,
     clients: null, clientId: "", clientName: "",
     recs: null, activeRec: null, aiBusy: false, saveBusy: false,
+    aiField: "", aiBudget: "", aiNotes: "", // survive tab switches/re-renders
+    saved: {}, // "recId:index" → true once added to a client (idempotent UI)
     tab: "browse",
   };
+  // The recommend endpoint can fall back to grounded live search on a thin catalog —
+  // slower than plain AI calls, and (like Deep Scan) a completed run bills even if
+  // the client gave up, so give it a longer leash than AI_API_TIMEOUT_MS.
+  const CF_AI_TIMEOUT_MS = 150000;
   const CF_LEVEL_LABELS = { bachelors: "Bachelor's", masters: "Master's", phd: "PhD", diploma: "Diploma", other: "Other" };
   const CF_FIT_META = {
     reach: { label: "Reach", color: "#f59e0b" },
@@ -5624,8 +6563,11 @@
     try {
       cf.meta = await api("/course-catalog/meta");
     } catch (ex) {
+      // Guard the async gap: never paint an error over a view the user moved on to.
+      if (state.view !== "coursefinder") return;
       if (!cf.meta) { c.innerHTML = errBox(ex); return; }
     }
+    if (state.view !== "coursefinder") return;
     if (!cf.country) {
       const withData = (cf.meta.countries || []).find((x) => x.universities > 0);
       cf.country = (withData || (cf.meta.countries || [])[0] || {}).code || "US";
@@ -5781,7 +6723,7 @@
           <div class="cf-courses-wrap"><table class="client-table cf-courses">
             <thead><tr><th>Course</th><th>Level</th><th>Tuition / yr</th><th>Intakes</th><th>IELTS / TOEFL</th><th>Deadline</th><th>App. fee</th><th></th></tr></thead>
             <tbody>${courses.map((cr) => cfCourseRow(cr)).join("")}</tbody>
-          </table></div>` : `<div class="hint" style="margin-top:8px">Course list coming with this university's next agent refresh.</div>`}
+          </table></div>` : `<div class="hint" style="margin-top:8px">${u.last_verified_at ? "No courses here match the current filters — clear them to see this university's full course list." : "Course list coming with this university's next agent refresh."}</div>`}
       </div>
     </div>`;
   }
@@ -5807,8 +6749,13 @@
     try {
       const d = await api("/clients?limit=500");
       cf.clients = d.clients || [];
-    } catch (ex) { cf.clients = []; }
-    return cf.clients;
+      return cf.clients;
+    } catch (ex) {
+      // Don't cache the failure (an empty [] is truthy) — surface it and let the
+      // next focus retry, matching the send-interview picker's behavior.
+      toast(ex.message, "error");
+      return [];
+    }
   }
 
   function cfDrawAI() {
@@ -5822,14 +6769,18 @@
       <div class="card-body">
         ${!m.ai_available ? '<div class="hint" style="margin-bottom:10px">AI is not configured on this server right now.</div>' : ""}
         <div class="cf-ai-grid">
-          <label class="cf-f cf-f-grow"><span>Client (optional — personalizes the shortlist)</span>
+          <label class="cf-f"><span>Client</span>
             <div class="docsel">
               <input id="cfClientSearch" class="docsel-input" placeholder="Search your clients…" autocomplete="off" value="${esc(cf.clientName)}" />
               <div class="docsel-menu hidden" id="cfClientMenu"></div>
             </div>
+            <span class="cf-f-hint">Optional — tailors picks to their profile</span>
           </label>
           <label class="cf-f"><span>Destination</span>
             <select id="cfAiCountry">${(m.countries || []).map((x) => `<option value="${esc(x.code)}" ${x.code === cf.country ? "selected" : ""}>${esc(x.flag_emoji || "")} ${esc(x.name)}</option>`).join("")}</select>
+          </label>
+          <label class="cf-f"><span>Field of study</span>
+            <input id="cfAiField" placeholder="e.g. Machine Learning, MBA…" value="${esc(cf.aiField || cf.q)}" maxlength="120" />
           </label>
           <label class="cf-f"><span>Level</span>
             <select id="cfAiLevel"><option value="">Any</option>${(m.degree_levels || []).map((l) => `<option value="${esc(l.key)}" ${l.key === cf.level ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select>
@@ -5837,18 +6788,15 @@
           <label class="cf-f"><span>Discipline</span>
             <select id="cfAiDiscipline"><option value="">Any</option>${(m.disciplines || []).map((d) => `<option value="${esc(d)}" ${d === cf.discipline ? "selected" : ""}>${esc(d)}</option>`).join("")}</select>
           </label>
-          <label class="cf-f cf-f-grow"><span>Field of study</span>
-            <input id="cfAiField" placeholder="e.g. Machine Learning, MBA, Public Health…" value="${esc(cf.q)}" maxlength="120" />
-          </label>
           <label class="cf-f"><span>Annual budget</span>
-            <input id="cfAiBudget" placeholder="e.g. USD 40,000" maxlength="60" />
+            <input id="cfAiBudget" placeholder="e.g. USD 40,000" value="${esc(cf.aiBudget)}" maxlength="60" />
           </label>
-          <label class="cf-f cf-f-grow"><span>Notes for Rilono AI</span>
-            <input id="cfAiNotes" placeholder="e.g. prefers co-op programs, needs scholarships" maxlength="300" />
+          <label class="cf-f cf-f-full"><span>Notes for Rilono AI</span>
+            <input id="cfAiNotes" placeholder="e.g. prefers co-op programs, needs scholarships, open to smaller cities" value="${esc(cf.aiNotes)}" maxlength="300" />
           </label>
         </div>
         <div class="cf-ai-actions">
-          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available) ? "disabled" : ""}>Generate shortlist · ${esc(String(cost))} cr</button>
+          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy) ? "disabled" : ""}>${cf.aiBusy ? '<span class="spinner"></span> Rilono AI is researching…' : `Generate shortlist · ${esc(String(cost))} cr`}</button>
           ${!canEdit ? '<span class="hint">Viewers can browse, but only editors can run AI actions.</span>' : ""}
         </div>
       </div></div>
@@ -5856,6 +6804,13 @@
       <div class="card"><div class="card-head"><h3>Past shortlists</h3></div><div class="card-body" id="cfRecsList"><div class="center-load"><div class="spinner dark"></div></div></div></div>`;
 
     cfWireClientPicker();
+    // Persist form state so tab switches / re-renders never wipe what was typed.
+    $("#cfAiField").oninput = (e) => { cf.aiField = e.target.value; };
+    $("#cfAiBudget").oninput = (e) => { cf.aiBudget = e.target.value; };
+    $("#cfAiNotes").oninput = (e) => { cf.aiNotes = e.target.value; };
+    $("#cfAiCountry").onchange = (e) => { cf.country = e.target.value; };
+    $("#cfAiLevel").onchange = (e) => { cf.level = e.target.value; };
+    $("#cfAiDiscipline").onchange = (e) => { cf.discipline = e.target.value; };
     $("#cfAiRun").onclick = cfRunRecommend;
     if (cf.activeRec) cfDrawActiveRec();
     cfLoadRecs();
@@ -5917,11 +6872,10 @@
     };
     if (!body.field_of_study && !body.discipline) { toast("Add a field of study (or pick a discipline) first.", "error"); return; }
     cf.aiBusy = true;
-    const orig = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Rilono AI is researching…';
     try {
-      const r = await api("/course-finder/recommend", { method: "POST", body, timeout: AI_API_TIMEOUT_MS });
+      const r = await api("/course-finder/recommend", { method: "POST", body, timeout: CF_AI_TIMEOUT_MS });
       if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
       cf.activeRec = r.rec;
       cf.recs = null; // refresh history below
@@ -5941,7 +6895,13 @@
       cfLoadRecs();
     } finally {
       cf.aiBusy = false;
-      if ($("#cfAiRun")) { $("#cfAiRun").disabled = !(state.perms && state.perms.can_edit_data); $("#cfAiRun").innerHTML = orig; }
+      // Rebuild the label explicitly — the button may have been re-rendered (in its
+      // busy state) by a tab switch mid-run, so a captured snapshot can't be trusted.
+      const runBtn = $("#cfAiRun");
+      if (runBtn) {
+        runBtn.disabled = !(state.perms && state.perms.can_edit_data);
+        runBtn.innerHTML = `Generate shortlist · ${esc(String(cfCost()))} cr`;
+      }
     }
   }
 
@@ -5972,6 +6932,7 @@
     const site = cfSafeUrl(it.website_url);
     const page = cfSafeUrl(it.course_url);
     const canSave = canEdit && (rec.client_id || cf.clientId);
+    const savedAlready = !!cf.saved[`${rec.id}:${i}`];
     return `
     <div class="cf-rec-item">
       <div class="cf-rec-top">
@@ -5991,7 +6952,9 @@
       ${(it.key_requirements || []).length ? `<div class="cf-rec-reqs">${it.key_requirements.map((r) => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
       <div class="cf-rec-actions">
         ${page ? `<a class="btn btn-ghost btn-sm" href="${esc(page)}" target="_blank" rel="noopener noreferrer">Course page ↗</a>` : (site ? `<a class="btn btn-ghost btn-sm" href="${esc(site)}" target="_blank" rel="noopener noreferrer">Website ↗</a>` : "")}
-        ${canSave ? `<button class="btn btn-soft btn-sm cf-rec-save" data-i="${i}">➕ Add to client's universities</button>` : ""}
+        ${canSave ? (savedAlready
+          ? '<button class="btn btn-soft btn-sm" disabled>✓ Added</button>'
+          : `<button class="btn btn-soft btn-sm cf-rec-save" data-i="${i}">➕ Add to client's universities</button>`) : ""}
       </div>
     </div>`;
   }
@@ -6003,7 +6966,11 @@
     cf.saveBusy = true;
     try {
       const r = await api(`/course-finder/recs/${cf.activeRec.id}/save-to-client`, { method: "POST", body: { index, client_id: clientId } });
-      toast(`Added to ${cf.activeRec.client_name || cf.clientName || "the client"}'s Universities tab`, "success");
+      cf.saved[`${cf.activeRec.id}:${index}`] = true;
+      toast(r.already_saved
+        ? "Already on that client's Universities tab"
+        : `Added to ${cf.activeRec.client_name || cf.clientName || "the client"}'s Universities tab`, "success");
+      cfDrawActiveRec(); // re-render so the button flips to "✓ Added"
     } catch (ex) {
       toast(ex.message || "Couldn't save.", "error");
     } finally {

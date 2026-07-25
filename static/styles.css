@@ -10563,62 +10563,6 @@ body.b2c-light .pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
     box-shadow: 0 0 0 1px rgba(168, 85, 247, 0.24), 0 26px 52px rgba(124, 58, 237, 0.18);
 }
 
-/* Footer Styles */
-.footer {
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-    padding: 2rem 0;
-    margin-top: 4rem;
-    border-top: 1px solid var(--border-color);
-}
-
-.footer-content {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 0 2rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 1rem;
-}
-
-.footer-links {
-    display: flex;
-    gap: 2rem;
-    flex-wrap: wrap;
-}
-
-.footer-links a {
-    color: var(--text-secondary);
-    text-decoration: none;
-    transition: color 0.3s ease;
-}
-
-.footer-links a:hover {
-    color: var(--primary-light);
-}
-
-.footer-enterprise-link {
-    color: var(--accent-color, var(--primary-light)) !important;
-    font-weight: 700;
-}
-
-.footer-enterprise-link:hover {
-    color: var(--primary-light) !important;
-}
-
-.footer-copyright {
-    color: var(--text-muted);
-    font-size: 0.875rem;
-}
-
-.footer-social a:hover {
-    background: rgba(10, 102, 194, 0.2) !important;
-    border-color: rgba(10, 102, 194, 0.4) !important;
-    transform: translateY(-2px);
-}
-
 /* Contact Page Styles */
 .contact-page {
     max-width: 1120px;
@@ -10944,14 +10888,6 @@ body.b2c-light .pricing-grid.pricing-grid-journey-focus .pricing-card-journey {
         font-size: 1.5rem;
     }
 
-    .footer-content {
-        flex-direction: column;
-        text-align: center;
-    }
-
-    .footer-links {
-        justify-content: center;
-    }
 }
 
 /* Rilono AI Chat Animations */
@@ -14203,8 +14139,7 @@ svg {
         max-height: min(58vh, 360px);
     }
 
-    .container,
-    .footer-content {
+    .container {
         padding-left: 1rem;
         padding-right: 1rem;
     }
@@ -14688,8 +14623,7 @@ svg {
         padding: 0.6rem;
     }
 
-    .container,
-    .footer-content {
+    .container {
         padding-left: 0.75rem;
         padding-right: 0.75rem;
     }

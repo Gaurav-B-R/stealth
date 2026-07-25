@@ -7,7 +7,7 @@
     <title>Rilono Admin Console</title>
     <meta name="robots" content="noindex,nofollow">
     <link rel="icon" type="image/png" href="/static/logo.png">
-    <link rel="stylesheet" href="/static/admin_console.css?v=20260715a">
+    <link rel="stylesheet" href="/static/admin_console.css?v=20260724a">
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 
@@ -336,7 +336,10 @@
                             <h3>Ledger</h3>
                             <p>Entries live in the database. Add, edit, or remove them here — subscription-revenue returns are read-only.</p>
                         </div>
-                        <button type="button" id="adminFinanceAddBtn" class="table-btn primary">+ Add entry</button>
+                        <div class="finance-ledger-actions">
+                            <button type="button" id="adminFinanceExportBtn" class="table-btn">⬇ Export to Excel</button>
+                            <button type="button" id="adminFinanceAddBtn" class="table-btn primary">+ Add entry</button>
+                        </div>
                     </div>
 
                     <form id="adminFinanceEntryForm" class="finance-entry-form" hidden>
@@ -720,7 +723,7 @@
         </div>
     </div>
 
-    <script src="/static/admin_console.js?v=20260715a"></script>
+    <script src="/static/admin_console.js?v=20260724a"></script>
 </body>
 
 </html>

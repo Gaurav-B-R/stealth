@@ -2077,9 +2077,16 @@ def send_enterprise_client_email(
     logo_url: Optional[str] = None,
     reply_to: Optional[str] = None,
     direct_reply_hint: bool = False,
+    body_html: Optional[str] = None,
+    attachments: Optional[list[dict]] = None,
 ) -> tuple[bool, Optional[str], Optional[str]]:
     """
     Send an email composed by an enterprise team member to one of their clients.
+
+    `body` is always the plain-text part. `body_html` is the composer's rich-text
+    version and MUST already be sanitized by app.utils.html_sanitizer — this function
+    drops it into the branded template verbatim. `attachments` are dicts of
+    {filename, content (bytes), content_type}.
 
     Returns (success, provider_message_id, error_message).
     """
@@ -2098,7 +2105,10 @@ def send_enterprise_client_email(
     safe_org_banner = escape(org_label.upper())
     safe_subject = escape(clean_subject)
     safe_signer = escape(signer)
-    body_html = (escape(body or "").replace("\r\n", "\n").replace("\n", "<br>"))
+    # Pre-sanitized rich text when the composer sent it; otherwise the plain-text body
+    # with its line breaks preserved.
+    rich_html = (body_html or "").strip()
+    rendered_body = rich_html or (escape(body or "").replace("\r\n", "\n").replace("\n", "<br>"))
 
     logo_block = ""
     clean_logo = (logo_url or "").strip()
@@ -2110,8 +2120,13 @@ def send_enterprise_client_email(
 
     # When inbound routing is live, replies land back in the org's Rilono thread —
     # tell the student replying actually works (the From is still a no-reply address).
-    reply_hint_html = " You can reply directly to this email." if direct_reply_hint else ""
-    reply_hint_text = "\nYou can reply directly to this email.\n" if direct_reply_hint else ""
+    # Reply-To is the staff member who sent this, so a reply reaches a real person.
+    reply_hint_html = (
+        f" Reply to this email and it goes straight to {safe_signer}." if direct_reply_hint else ""
+    )
+    reply_hint_text = (
+        f"\nReply to this email and it goes straight to {signer}.\n" if direct_reply_hint else ""
+    )
 
     html_content = f"""
     <!DOCTYPE html>
@@ -2120,6 +2135,29 @@ def send_enterprise_client_email(
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>{safe_subject}</title>
+      <style>
+        /* The composer emits bare tags (no inline styles), so give them sane defaults
+           here. Clients that ignore <style> still render readable HTML. */
+        .rilono-body p {{ margin: 0 0 14px 0; }}
+        .rilono-body ul, .rilono-body ol {{ margin: 0 0 14px 0; padding-left: 22px; }}
+        .rilono-body li {{ margin: 0 0 6px 0; }}
+        .rilono-body a {{ color: #4f46e5; text-decoration: underline; }}
+        .rilono-body h2, .rilono-body h3, .rilono-body h4 {{ margin: 20px 0 8px 0; line-height: 1.35; }}
+        .rilono-body h2 {{ font-size: 19px; }}
+        .rilono-body h3 {{ font-size: 17px; }}
+        .rilono-body h4 {{ font-size: 15px; }}
+        .rilono-body blockquote {{
+          margin: 0 0 14px 0; padding: 8px 0 8px 14px;
+          border-left: 3px solid #c7d2fe; color: #475569;
+        }}
+        .rilono-body pre, .rilono-body code {{
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
+        }}
+        .rilono-body hr {{ border: none; border-top: 1px solid #e2e8f0; margin: 18px 0; }}
+        .rilono-body table {{ border-collapse: collapse; width: 100%; margin: 0 0 14px 0; font-size: 14px; }}
+        .rilono-body th, .rilono-body td {{ border: 1px solid #e2e8f0; padding: 8px 10px; text-align: left; }}
+        .rilono-body th {{ background: #f8fafc; font-weight: 700; }}
+      </style>
     </head>
     <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
@@ -2134,8 +2172,8 @@ def send_enterprise_client_email(
                 </td>
               </tr>
               <tr>
-                <td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
-                  {body_html}
+                <td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;" class="rilono-body">
+                  {rendered_body}
                   <p style="margin:24px 0 0 0;color:#475569;font-size:14px;">Warm regards,<br><strong>{safe_signer}</strong><br>{safe_org}</p>
                 </td>
               </tr>
@@ -2170,6 +2208,22 @@ def send_enterprise_client_email(
         clean_reply_to = (reply_to or "").strip()
         if clean_reply_to:
             params["reply_to"] = clean_reply_to
+        payload_attachments = []
+        for item in attachments or []:
+            content = item.get("content")
+            filename = (item.get("filename") or "attachment").strip()
+            if not content or not filename:
+                continue
+            entry = {
+                "filename": filename,
+                # Resend takes attachment content as a base64 string.
+                "content": base64.b64encode(content).decode("ascii"),
+            }
+            if item.get("content_type"):
+                entry["content_type"] = item["content_type"]
+            payload_attachments.append(entry)
+        if payload_attachments:
+            params["attachments"] = payload_attachments
         email_response = resend.Emails.send(params)
         email_id = _extract_resend_email_id(email_response)
         if email_id:
@@ -2187,11 +2241,15 @@ def send_enterprise_inbound_reply_alert_email(
     client_name: str,
     client_id: int,
     reply_subject: str,
-    reply_snippet: str,
+    reply_body: str,
+    client_reply_to: Optional[str] = None,
     logo_url: Optional[str] = None,
 ) -> tuple[bool, Optional[str], Optional[str]]:
-    """Notify a team member that a client replied. The conversation lives in the
-    Rilono portal — this is only a heads-up with a link. Returns (ok, id, error)."""
+    """Notify a team member that a client replied, carrying the full reply text.
+
+    Two ways to answer, by design: hit Reply in your inbox and it goes straight to
+    the client (untracked), or open the portal to keep the thread on the client's
+    record. Returns (ok, id, error)."""
     if not RESEND_API_KEY:
         return False, None, "Email service is not configured."
     recipient = (to_email or "").strip().lower()
@@ -2201,16 +2259,24 @@ def send_enterprise_inbound_reply_alert_email(
     org_label = (organization_name or "your consultancy").strip()
     who = (staff_name or "there").strip() or "there"
     client_label = (client_name or "your client").strip() or "your client"
-    snippet = (reply_snippet or "").strip()
-    if len(snippet) > 400:
-        snippet = snippet[:400].rstrip() + "…"
+    # Full reply, capped to match the stored row so the email and the client
+    # record never disagree about what the client actually said.
+    body_text = (reply_body or "").strip()
+    if len(body_text) > 20000:
+        body_text = body_text[:20000].rstrip() + "…"
     client_url = f"{DEFAULT_PUBLIC_BASE_URL.rstrip('/')}/enterprise/clients/{int(client_id)}"
+
+    # Reply-To is the client's address ON FILE — never the inbound From:, which is
+    # spoofable. Hitting Reply in the inbox must reach the real client, not a forger.
+    clean_reply_to = (client_reply_to or "").strip()
+    if any(c in clean_reply_to for c in "\r\n") or "@" not in clean_reply_to:
+        clean_reply_to = ""
 
     safe_org = escape(org_label)
     safe_who = escape(who)
     safe_client = escape(client_label)
     safe_subject = escape((reply_subject or "").strip() or "(no subject)")
-    safe_snippet = escape(snippet).replace("\r\n", "\n").replace("\n", "<br>") or "<em>(no text)</em>"
+    safe_body = escape(body_text).replace("\r\n", "\n").replace("\n", "<br>") or "<em>(no text)</em>"
     safe_url = escape(client_url)
 
     logo_block = ""
@@ -2221,31 +2287,34 @@ def send_enterprise_inbound_reply_alert_email(
             'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">'
         )
 
-    subject_line = f"{client_label} replied — {org_label}"
+    # Carry the thread's own subject so a Reply straight from the inbox reaches the
+    # client as a normal "Re: …" instead of "Re: {client} replied — {org}".
+    subject_line = (reply_subject or "").strip() or f"{client_label} replied — {org_label}"
     html_content = f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
     <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
         <tr><td align="center">
           <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
-            <tr><td style="padding:24px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
+            <tr><td bgcolor="#5b28c9" style="padding:24px 28px;background:#5b28c9;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
               {logo_block}
               <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
               <h1 style="margin:8px 0 0 0;font-size:22px;">📨 {safe_client} replied</h1>
             </td></tr>
             <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
               <p style="margin:0 0 14px;">Hi {safe_who},</p>
-              <p style="margin:0 0 14px;">{safe_client} just replied to your email. The full thread is in your Rilono portal.</p>
+              <p style="margin:0 0 14px;">{safe_client} just replied to your email.</p>
               <div style="background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #6366f1;border-radius:8px;padding:12px 14px;margin-bottom:20px;">
                 <div style="font-size:13px;color:#64748b;margin-bottom:4px;">Re: {safe_subject}</div>
-                <div style="font-size:14px;color:#0f172a;">{safe_snippet}</div>
+                <div style="font-size:14px;color:#0f172a;">{safe_body}</div>
               </div>
               <div style="text-align:center;margin:8px 0 4px;">
-                <a href="{safe_url}" style="display:inline-block;padding:13px 26px;border-radius:10px;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#fff;font-size:15px;font-weight:700;text-decoration:none;">Open the conversation →</a>
+                <a href="{safe_url}" style="display:inline-block;padding:13px 26px;border-radius:10px;background:#7c4dea;background:linear-gradient(135deg,#6366f1 0%,#a855f7 100%);color:#fff;font-size:15px;font-weight:700;text-decoration:none;">Open the conversation →</a>
               </div>
             </td></tr>
             <tr><td style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;line-height:1.6;">
-              Reply from the Rilono portal so your whole team sees it and it stays on the client's record.
+              Replying to this email answers {safe_client} directly — that reply is not saved on their record.
+              Reply from the portal instead to keep the thread on the client's record for your whole team.
             </td></tr>
           </table>
         </td></tr>
@@ -2254,9 +2323,11 @@ def send_enterprise_inbound_reply_alert_email(
     """
     text_content = (
         f"Hi {who},\n\n{client_label} just replied to your email.\n\n"
-        f"Re: {(reply_subject or '').strip() or '(no subject)'}\n{snippet or '(no text)'}\n\n"
+        f"Re: {(reply_subject or '').strip() or '(no subject)'}\n{body_text or '(no text)'}\n\n"
         f"Open the conversation: {client_url}\n\n"
-        "Reply from the Rilono portal so your whole team sees it and it stays on the client's record.\n"
+        f"Replying to this email answers {client_label} directly — that reply is not saved on "
+        "their record. Reply from the portal instead to keep the thread on the client's record "
+        "for your whole team.\n"
     )
     try:
         params = {
@@ -2266,6 +2337,8 @@ def send_enterprise_inbound_reply_alert_email(
             "html": html_content,
             "text": text_content,
         }
+        if clean_reply_to:
+            params["reply_to"] = clean_reply_to
         email_response = resend.Emails.send(params)
         email_id = _extract_resend_email_id(email_response)
         if email_id:

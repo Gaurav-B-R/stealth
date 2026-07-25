@@ -53,6 +53,7 @@ from app.utils.rate_limiter import (
     is_request_ip_whitelisted,
 )
 from app.utils.turnstile import is_turnstile_enabled, verify_turnstile_token
+from app.utils.html_sanitizer import sanitize_email_html, html_to_text
 from app.email_service import send_enterprise_team_invite_email, send_enterprise_client_email
 from app.email_service import send_enterprise_inbound_reply_alert_email
 from app import enterprise_inbound_email as inbound_email
@@ -128,6 +129,12 @@ ENTERPRISE_CLIENT_EMAIL_RATE_LIMIT = int(os.getenv("ENTERPRISE_CLIENT_EMAIL_RATE
 ENTERPRISE_CLIENT_EMAIL_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_CLIENT_EMAIL_RATE_WINDOW_SECONDS", "3600"))
 ENTERPRISE_BULK_EMAIL_RATE_LIMIT = int(os.getenv("ENTERPRISE_BULK_EMAIL_RATE_LIMIT", "10"))
 ENTERPRISE_BULK_EMAIL_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_BULK_EMAIL_RATE_WINDOW_SECONDS", "3600"))
+# Composer attachment uploads: generous for real use (10 files per email), bounded
+# enough that an abused account can't grow storage without limit.
+ENTERPRISE_EMAIL_ATTACH_RATE_LIMIT = int(os.getenv("ENTERPRISE_EMAIL_ATTACH_RATE_LIMIT", "120"))
+ENTERPRISE_EMAIL_ATTACH_RATE_WINDOW_SECONDS = int(
+    os.getenv("ENTERPRISE_EMAIL_ATTACH_RATE_WINDOW_SECONDS", "3600")
+)
 ENTERPRISE_INVITE_ONLY_DETAIL = (
     "Enterprise access is invite-only. Request access via Contact Sales."
 )
@@ -1989,6 +1996,19 @@ ENTERPRISE_CLIENT_NAME_MAX = 160
 ENTERPRISE_NOTE_MAX = 5000
 ENTERPRISE_EMAIL_SUBJECT_MAX = 200
 ENTERPRISE_EMAIL_BODY_MAX = 20000
+# The rich-text version of the same message: markup makes it several times longer
+# than its plain-text rendition, so it gets its own (larger) ceiling.
+ENTERPRISE_EMAIL_HTML_MAX = 120000
+# Attachment ceilings. Resend caps a whole message at 40 MB and base64 inflates
+# payloads by ~33%, so the total here stays well under that even with the HTML body.
+ENTERPRISE_EMAIL_ATTACH_MAX_FILES = int(os.getenv("ENTERPRISE_EMAIL_ATTACH_MAX_FILES", "10"))
+ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES = int(
+    os.getenv("ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES", str(15 * 1024 * 1024))
+)
+# Draft attachments uploaded but never sent are swept on the next upload.
+ENTERPRISE_EMAIL_ATTACH_DRAFT_TTL_HOURS = int(
+    os.getenv("ENTERPRISE_EMAIL_ATTACH_DRAFT_TTL_HOURS", "48")
+)
 ENTERPRISE_SIGNUP_RATE_LIMIT = int(os.getenv("ENTERPRISE_SIGNUP_RATE_LIMIT", "6"))
 ENTERPRISE_SIGNUP_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_SIGNUP_RATE_WINDOW_SECONDS", "900"))
 ENTERPRISE_BULK_EMAIL_MAX_RECIPIENTS = int(os.getenv("ENTERPRISE_BULK_EMAIL_MAX_RECIPIENTS", "200"))
@@ -2071,6 +2091,13 @@ class EnterpriseClientNoteRequest(BaseModel):
 class EnterpriseClientEmailRequest(BaseModel):
     subject: str = Field(..., min_length=1, max_length=ENTERPRISE_EMAIL_SUBJECT_MAX)
     body: str = Field(..., min_length=1, max_length=ENTERPRISE_EMAIL_BODY_MAX)
+    # Rich-text body from the composer. Sanitized server-side before it is stored or
+    # sent — `body` remains the authoritative plain-text rendition either way.
+    body_html: Optional[str] = Field(default=None, max_length=ENTERPRISE_EMAIL_HTML_MAX)
+    # Draft attachments already uploaded via /clients/{id}/email/attachments.
+    attachment_ids: list[int] = Field(default_factory=list, max_length=100)
+    # Documents already on file for this client, attached by reference (copied on send).
+    document_ids: list[int] = Field(default_factory=list, max_length=100)
 
 
 class EnterpriseBulkEmailRequest(BaseModel):
@@ -2290,18 +2317,43 @@ def _serialize_note(note: models.EnterpriseClientNote) -> dict:
     }
 
 
+def _serialize_email_attachment(row: models.EnterpriseClientEmailAttachment) -> dict:
+    return {
+        "id": row.id,
+        "filename": row.original_filename,
+        "file_size": row.file_size,
+        "mime_type": row.mime_type,
+        "source_document_id": row.source_document_id,
+        "download_url": (
+            f"/api/enterprise/clients/{row.client_id}/email/attachments/{row.id}/download"
+            if row.client_id else None
+        ),
+        "created_at": _iso(row.created_at),
+    }
+
+
 def _serialize_client_email(row: models.EnterpriseClientEmail) -> dict:
+    direction = getattr(row, "direction", None) or "outbound"
+    # Inbound bodies are stored as plain text and rendered escaped — never hand the
+    # dashboard HTML that originated outside the org.
+    body_html = getattr(row, "body_html", None) if direction == "outbound" else None
+    try:
+        attachments = [_serialize_email_attachment(a) for a in (row.attachments or [])]
+    except Exception:  # pragma: no cover - pre-migration DBs without the table
+        attachments = []
     return {
         "id": row.id,
         "client_id": row.client_id,
         "to_email": row.to_email,
         "subject": row.subject,
         "body": row.body,
+        "body_html": body_html,
         "status": row.status,
         "sent_by_name": row.sent_by_name,
         "error_message": row.error_message,
-        "direction": getattr(row, "direction", None) or "outbound",
+        "direction": direction,
         "from_email": getattr(row, "from_email", None),
+        "attachments": attachments,
         "created_at": _iso(row.created_at),
     }
 
@@ -2858,25 +2910,29 @@ def _send_and_log_client_email(
     subject: str,
     body: str,
     current_user: models.User,
+    body_html: Optional[str] = None,
+    attachment_rows: Optional[list[models.EnterpriseClientEmailAttachment]] = None,
 ) -> models.EnterpriseClientEmail:
-    # Replies: route into the CRM thread via a tokenized Reply-To when Resend
-    # Inbound is configured; otherwise fall back to the staffer's own inbox.
+    # Replies go straight back to the staffer who sent the message, and the two of
+    # them carry on in their own mail clients from there. Deliberately unconditional:
+    # the tokenized reply+ routing in app/enterprise_inbound_email.py stays dormant,
+    # so a stale RESEND_INBOUND_REPLY_DOMAIN can never re-arm a Reply-To that bounces.
+    # To revisit portal threading, restore the reply_routing_enabled() branch here.
     reply_to = current_user.email
-    direct_reply_hint = False
-    if inbound_email.reply_routing_enabled():
-        tokenized = inbound_email.reply_address_for_client(client.id)
-        if tokenized:
-            reply_to = tokenized
-            direct_reply_hint = True
+    payload_attachments = _load_attachment_payloads(attachment_rows or [])
     success, message_id, error = send_enterprise_client_email(
         to_email=client.email,
         subject=subject,
         body=body,
+        body_html=body_html,
         organization_name=organization.company_name,
         sender_name=current_user.full_name or current_user.email,
         logo_url=_resolve_enterprise_logo_url(organization),
         reply_to=reply_to,
-        direct_reply_hint=direct_reply_hint,
+        # Always true now — Reply-To is a real person's inbox, so telling the client
+        # they can reply is accurate rather than the lie it was while it bounced.
+        direct_reply_hint=True,
+        attachments=payload_attachments,
     )
     row = models.EnterpriseClientEmail(
         organization_id=organization.id,
@@ -2886,12 +2942,52 @@ def _send_and_log_client_email(
         to_email=client.email,
         subject=subject,
         body=body,
+        body_html=body_html,
         status="sent" if success else "failed",
         provider_message_id=message_id,
         error_message=error,
     )
     db.add(row)
+    # Bind the (previously draft) attachments to the message that carried them, so the
+    # thread shows exactly what the client received. On a failed send they stay drafts
+    # instead, which is what lets the composer retry with the same files attached.
+    if success:
+        for attachment in attachment_rows or []:
+            attachment.email = row
     return row
+
+
+def _load_attachment_payloads(rows: list[models.EnterpriseClientEmailAttachment]) -> list[dict]:
+    """Read attachment bytes out of encrypted storage for the mail provider.
+
+    An unreadable file aborts the whole send. Skipping it would deliver a message
+    without the document while the thread still showed the file as attached — the
+    consultant would believe a passport or offer letter went out when it didn't.
+    Failing here leaves the drafts intact so the send can simply be retried.
+    """
+    payloads: list[dict] = []
+    for row in rows:
+        try:
+            data = enterprise_storage.fetch_document(row.storage_key)
+        except Exception:
+            logger.exception("Email attachment unreadable (id=%s, key=%s)", row.id, row.storage_key)
+            raise HTTPException(
+                status_code=502,
+                detail=f"“{row.original_filename}” could not be read from storage, so nothing was sent. "
+                       "Remove it and attach the file again.",
+            )
+        if not data:
+            raise HTTPException(
+                status_code=502,
+                detail=f"“{row.original_filename}” is empty in storage, so nothing was sent. "
+                       "Remove it and attach the file again.",
+            )
+        payloads.append({
+            "filename": _safe_filename(row.original_filename),
+            "content": data,
+            "content_type": row.mime_type or None,
+        })
+    return payloads
 
 
 @router.post("/clients/{client_id}/email")
@@ -2917,9 +3013,27 @@ def enterprise_email_client(
         raise HTTPException(status_code=400, detail="This client has no email address on file.")
 
     subject = payload.subject.strip()
-    body = payload.body.strip()
+    # Never trust the composer's markup: re-serialize it through the allow-list
+    # sanitizer, and derive the plain-text part from the *sanitized* HTML so the two
+    # halves of the message can never disagree about what was actually sent.
+    body_html = sanitize_email_html(payload.body_html)
+    body = (html_to_text(body_html) if body_html else payload.body).strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Write a message before sending.")
+    body = body[:ENTERPRISE_EMAIL_BODY_MAX]
+
+    attachment_rows = _collect_email_attachments(
+        db,
+        organization=organization,
+        client=client,
+        current_user=current_user,
+        attachment_ids=payload.attachment_ids,
+        document_ids=payload.document_ids,
+    )
+
     row = _send_and_log_client_email(
-        db, organization=organization, client=client, subject=subject, body=body, current_user=current_user
+        db, organization=organization, client=client, subject=subject, body=body,
+        current_user=current_user, body_html=body_html, attachment_rows=attachment_rows,
     )
     db.commit()
     db.refresh(row)
@@ -2932,6 +3046,336 @@ def enterprise_email_client(
         "permissions": _enterprise_permissions_for_role(role),
         "email": _serialize_client_email(row),
     }
+
+
+# ---------------------------------------------------------------------------
+# Composer attachments. Files are uploaded while the message is still being
+# written (email_id is null = draft) and bound to the email when it sends.
+# ---------------------------------------------------------------------------
+
+def _email_attachment_or_404(
+    db: Session, *, organization_id: int, client_id: int, attachment_id: int
+) -> models.EnterpriseClientEmailAttachment:
+    row = (
+        db.query(models.EnterpriseClientEmailAttachment)
+        .filter(
+            models.EnterpriseClientEmailAttachment.id == int(attachment_id),
+            models.EnterpriseClientEmailAttachment.organization_id == int(organization_id),
+            models.EnterpriseClientEmailAttachment.client_id == int(client_id),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    return row
+
+
+def _sweep_stale_draft_attachments(db: Session, *, organization_id: int, user_id: int) -> list[str]:
+    """Mark this user's abandoned draft attachments for deletion (composer closed
+    without sending) and return their storage keys.
+
+    Only the DB rows are deleted here. The caller drops the blobs *after* the commit
+    succeeds — deleting bytes first would, on a failed commit, leave surviving rows
+    pointing at files that no longer exist.
+    """
+    cutoff = datetime.now(dt_timezone.utc) - timedelta(hours=ENTERPRISE_EMAIL_ATTACH_DRAFT_TTL_HOURS)
+    keys: list[str] = []
+    try:
+        stale = (
+            db.query(models.EnterpriseClientEmailAttachment)
+            .filter(
+                models.EnterpriseClientEmailAttachment.organization_id == organization_id,
+                models.EnterpriseClientEmailAttachment.uploaded_by_user_id == user_id,
+                models.EnterpriseClientEmailAttachment.email_id.is_(None),
+                models.EnterpriseClientEmailAttachment.created_at < cutoff,
+            )
+            .limit(50)
+            .all()
+        )
+        for row in stale:
+            keys.append(row.storage_key)
+            db.delete(row)
+    except Exception:
+        logger.exception("Draft attachment sweep failed (org_id=%s)", organization_id)
+    return keys
+
+
+def _collect_email_attachments(
+    db: Session,
+    *,
+    organization: models.EnterpriseOrganization,
+    client: models.EnterpriseClient,
+    current_user: models.User,
+    attachment_ids: list[int],
+    document_ids: list[int],
+) -> list[models.EnterpriseClientEmailAttachment]:
+    """Resolve the composer's attachment selection into storage-backed rows.
+
+    Draft uploads are looked up (scoped to this org + client + uploader); documents
+    already on file are *copied* into the email's own storage key, so deleting the
+    document later never rewrites the history of what was sent.
+    """
+    rows: list[models.EnterpriseClientEmailAttachment] = []
+
+    for attachment_id in list(dict.fromkeys(attachment_ids or []))[:ENTERPRISE_EMAIL_ATTACH_MAX_FILES]:
+        row = (
+            db.query(models.EnterpriseClientEmailAttachment)
+            .filter(
+                models.EnterpriseClientEmailAttachment.id == int(attachment_id),
+                models.EnterpriseClientEmailAttachment.organization_id == organization.id,
+                models.EnterpriseClientEmailAttachment.client_id == client.id,
+                models.EnterpriseClientEmailAttachment.email_id.is_(None),
+                models.EnterpriseClientEmailAttachment.uploaded_by_user_id == current_user.id,
+            )
+            .first()
+        )
+        if not row:
+            raise HTTPException(
+                status_code=400,
+                detail="One of the attachments is no longer available. Remove it and attach the file again.",
+            )
+        rows.append(row)
+
+    for document_id in list(dict.fromkeys(document_ids or [])):
+        if len(rows) >= ENTERPRISE_EMAIL_ATTACH_MAX_FILES:
+            break
+        doc = (
+            db.query(models.EnterpriseClientDocument)
+            .filter(
+                models.EnterpriseClientDocument.id == int(document_id),
+                models.EnterpriseClientDocument.client_id == client.id,
+                models.EnterpriseClientDocument.organization_id == organization.id,
+            )
+            .first()
+        )
+        if not doc:
+            raise HTTPException(status_code=404, detail="One of the selected documents is no longer on file.")
+        try:
+            data = enterprise_storage.fetch_document(doc.storage_key)
+        except Exception:
+            logger.exception("Could not read document %s for email attachment", doc.id)
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not read “{doc.original_filename}” from storage. Try attaching it as a file instead.",
+            )
+        ext = os.path.splitext(doc.original_filename)[1].lower()
+        storage_key = f"enterprise/{organization.id}/clients/{client.id}/email/{uuid.uuid4().hex}{ext}"
+        try:
+            enterprise_storage.store_document(storage_key, data, content_type=doc.mime_type)
+        except Exception:
+            logger.exception("Could not copy document %s into an email attachment", doc.id)
+            raise HTTPException(status_code=502, detail="Could not attach that document right now. Please try again.")
+        row = models.EnterpriseClientEmailAttachment(
+            organization_id=organization.id,
+            client_id=client.id,
+            source_document_id=doc.id,
+            original_filename=doc.original_filename,
+            storage_key=storage_key,
+            file_size=len(data),
+            mime_type=doc.mime_type,
+            uploaded_by_user_id=current_user.id,
+        )
+        db.add(row)
+        rows.append(row)
+
+    total = sum(int(r.file_size or 0) for r in rows)
+    if total > ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Attachments total "
+                f"{total // (1024 * 1024)} MB — the limit is "
+                f"{ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES // (1024 * 1024)} MB per email. "
+                "Remove a file, or share it as a link instead."
+            ),
+        )
+    return rows
+
+
+@router.get("/clients/{client_id}/email/attachments")
+def enterprise_list_draft_email_attachments(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """This user's not-yet-sent attachments for this client, so a refreshed or
+    reopened composer picks the files back up instead of orphaning them."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    client = _get_org_client_or_404(db, organization.id, client_id)
+    rows = (
+        db.query(models.EnterpriseClientEmailAttachment)
+        .filter(
+            models.EnterpriseClientEmailAttachment.organization_id == organization.id,
+            models.EnterpriseClientEmailAttachment.client_id == client.id,
+            models.EnterpriseClientEmailAttachment.email_id.is_(None),
+            models.EnterpriseClientEmailAttachment.uploaded_by_user_id == current_user.id,
+        )
+        .order_by(models.EnterpriseClientEmailAttachment.id.asc())
+        .all()
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "attachments": [_serialize_email_attachment(r) for r in rows],
+    }
+
+
+@router.post("/clients/{client_id}/email/attachments")
+async def enterprise_upload_email_attachment(
+    client_id: int,
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Upload one file for the message currently being composed (a draft attachment)."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    # Uploads are cheap to trigger and expensive to store, so cap them the same way
+    # sends are capped — otherwise a compromised editor account could fill the bucket.
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="enterprise.email_attachment",
+        limit=ENTERPRISE_EMAIL_ATTACH_RATE_LIMIT,
+        window_seconds=ENTERPRISE_EMAIL_ATTACH_RATE_WINDOW_SECONDS,
+        extra_key=f"org:{organization.id}:user:{current_user.id}",
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id)
+
+    if not enterprise_storage.is_configured():
+        raise HTTPException(status_code=503, detail="File storage is not configured.")
+
+    original = _safe_filename(file.filename)
+    ext = os.path.splitext(original)[1].lower()
+    if ext not in ENTERPRISE_DOC_ALLOWED_EXT:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, images, Word/Excel, CSV, or text.",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="That file is empty.")
+
+    pending = (
+        db.query(models.EnterpriseClientEmailAttachment)
+        .filter(
+            models.EnterpriseClientEmailAttachment.organization_id == organization.id,
+            models.EnterpriseClientEmailAttachment.client_id == client.id,
+            models.EnterpriseClientEmailAttachment.email_id.is_(None),
+            models.EnterpriseClientEmailAttachment.uploaded_by_user_id == current_user.id,
+        )
+        .all()
+    )
+    if len(pending) >= ENTERPRISE_EMAIL_ATTACH_MAX_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"You can attach up to {ENTERPRISE_EMAIL_ATTACH_MAX_FILES} files to one email.",
+        )
+    limit_mb = ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES // (1024 * 1024)
+    if sum(int(p.file_size or 0) for p in pending) + len(data) > ENTERPRISE_EMAIL_ATTACH_MAX_TOTAL_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Attachments can total {limit_mb} MB per email. "
+                "Send this file on its own, or share it as a link instead."
+            ),
+        )
+
+    storage_key = f"enterprise/{organization.id}/clients/{client.id}/email/{uuid.uuid4().hex}{ext}"
+    try:
+        enterprise_storage.store_document(storage_key, data, content_type=file.content_type)
+    except Exception:
+        logger.exception("Failed to store email attachment (org_id=%s, client_id=%s)", organization.id, client.id)
+        raise HTTPException(status_code=502, detail="Could not upload that file right now. Please try again.")
+
+    row = models.EnterpriseClientEmailAttachment(
+        organization_id=organization.id,
+        client_id=client.id,
+        original_filename=original,
+        storage_key=storage_key,
+        file_size=len(data),
+        mime_type=(file.content_type or None),
+        uploaded_by_user_id=current_user.id,
+    )
+    db.add(row)
+    swept_keys = _sweep_stale_draft_attachments(db, organization_id=organization.id, user_id=current_user.id)
+    db.commit()
+    db.refresh(row)
+    for key in swept_keys:
+        enterprise_storage.delete_document(key)
+
+    return {
+        "message": "File attached.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "attachment": _serialize_email_attachment(row),
+    }
+
+
+@router.delete("/clients/{client_id}/email/attachments/{attachment_id}")
+def enterprise_delete_email_attachment(
+    client_id: int,
+    attachment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Remove a draft attachment. Files already sent are part of the record and stay."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_edit_data=True
+    )
+    row = _email_attachment_or_404(
+        db, organization_id=organization.id, client_id=client_id, attachment_id=attachment_id
+    )
+    if row.email_id is not None:
+        raise HTTPException(status_code=400, detail="This file was already sent and can't be removed.")
+    storage_key = row.storage_key
+    db.delete(row)
+    # Row first, blob second: a failed commit must never leave a surviving row
+    # pointing at bytes that are already gone.
+    db.commit()
+    enterprise_storage.delete_document(storage_key)
+    return {"message": "Attachment removed.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+@router.get("/clients/{client_id}/email/attachments/{attachment_id}/download")
+def enterprise_download_email_attachment(
+    client_id: int,
+    attachment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request)
+    row = _email_attachment_or_404(
+        db, organization_id=organization.id, client_id=client_id, attachment_id=attachment_id
+    )
+    try:
+        data = enterprise_storage.fetch_document(row.storage_key)
+    except Exception:
+        logger.exception("Failed to fetch email attachment id=%s", row.id)
+        raise HTTPException(status_code=502, detail="Could not retrieve that file right now.")
+
+    # Same hardening as the document download: the served Content-Type comes from the
+    # validated extension, never the uploader-supplied mime_type, so a *.pdf holding
+    # HTML+<script> can't execute on this origin.
+    ext = os.path.splitext(row.original_filename)[1].lower()
+    if ext in ENTERPRISE_DOC_INLINE_EXT:
+        disposition = "inline"
+        media_type = ENTERPRISE_DOC_EXT_MIME.get(ext, "application/octet-stream")
+    else:
+        disposition = "attachment"
+        media_type = "application/octet-stream"
+    filename = _safe_filename(row.original_filename)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post("/clients/email/bulk")
@@ -4483,7 +4927,7 @@ async def enterprise_inbound_email_webhook(request: Request, db: Session = Depen
     try:
         await _alert_staff_of_inbound_reply(
             db, organization_id=client.organization_id, client=client,
-            reply_subject=subject, reply_snippet=reply_text,
+            reply_subject=subject, reply_body=reply_text,
         )
     except Exception:
         logger.exception("inbound-email: staff heads-up email failed (client_id=%s)", client.id)
@@ -4547,10 +4991,11 @@ def _inbound_reply_recipients(
 
 async def _alert_staff_of_inbound_reply(
     db: Session, *, organization_id: int, client: models.EnterpriseClient,
-    reply_subject: str, reply_snippet: str,
+    reply_subject: str, reply_body: str,
 ) -> None:
-    """Send the 'client replied — view in portal' nudge. The thread lives in the
-    portal; this is only awareness. Resend calls run off the event loop."""
+    """Send the 'client replied' email, carrying the full reply. Staff can answer
+    from their own inbox (Reply-To = the client on file, untracked) or from the
+    portal (tracked). Resend calls run off the event loop."""
     recipients = _inbound_reply_recipients(db, organization_id=organization_id, client=client)
     if not recipients:
         return
@@ -4571,7 +5016,9 @@ async def _alert_staff_of_inbound_reply(
                 client_name=client.full_name,
                 client_id=client.id,
                 reply_subject=reply_subject,
-                reply_snippet=reply_snippet,
+                reply_body=reply_body,
+                # The address on file, not the inbound From: — that one is spoofable.
+                client_reply_to=(client.email or "").strip() or None,
                 logo_url=logo_url,
             )
         except Exception:
@@ -8706,6 +9153,10 @@ def enterprise_course_catalog_browse(
             safe_max_tuition = max(0, min(int(max_tuition), 10_000_000)) or None
         except Exception:
             safe_max_tuition = None
+    # Cover the agent's full per-country target (default 50) — a cap below it would
+    # silently hide the tail of the catalog with no pagination to reach it.
+    from app.services.course_catalog_refresh import COURSE_CATALOG_TARGET_PER_COUNTRY
+
     rows = course_catalog.query_catalog(
         db,
         country_code=code,
@@ -8713,7 +9164,7 @@ def enterprise_course_catalog_browse(
         discipline=(discipline or "").strip() or None,
         q=(q or "").strip() or None,
         max_tuition=safe_max_tuition,
-        limit_universities=30,
+        limit_universities=max(50, COURSE_CATALOG_TARGET_PER_COUNTRY + 10),
     )
     return {
         "country_code": code,
@@ -8847,13 +9298,16 @@ def enterprise_course_finder_recommend(
         created_by_name=current_user.full_name or current_user.email,
     )
     db.add(rec_row)
+    # Assign rec_row.id now: a client-less debit must still point at the artifact it
+    # paid for, or the ledger row is untraceable in a billing dispute.
+    db.flush()
 
     charge_target = f"{client.full_name}" if client else course_catalog.country_name(code)
     txn = credits.charge_action(
         db, organization.id, COURSE_FINDER_ACTION_KEY,
         user=current_user,
         reference_type="client" if client else "course_finder",
-        reference_id=client.id if client else None,
+        reference_id=client.id if client else rec_row.id,
         description=f"Course Finder shortlist — {charge_target}",
         commit=False,
     )
@@ -8964,6 +9418,19 @@ def enterprise_course_finder_save_to_client(
     if not uni_name:
         raise HTTPException(status_code=400, detail="That recommendation no longer exists.")
 
+    program = str(item.get("course_name") or "").strip()[:200] or None
+    # Idempotent: re-clicking "Add" must not stack duplicate shortlist rows.
+    for prior in _client_universities_query(db, organization.id, client.id).all():
+        if (prior.university_name or "").strip().lower() == uni_name.lower() and (
+            (prior.program or "").strip().lower() == (program or "").strip().lower()
+        ):
+            return {
+                "permissions": _enterprise_permissions_for_role(role),
+                "entry": _serialize_client_university(prior),
+                "client_id": client.id,
+                "already_saved": True,
+            }
+
     requirements = item.get("key_requirements")
     requirements = [str(r).strip()[:140] for r in requirements if str(r).strip()][:6] if isinstance(requirements, list) else []
     difficulty = str(item.get("fit_level") or "").strip().lower()
@@ -8972,7 +9439,7 @@ def enterprise_course_finder_save_to_client(
         client_id=client.id,
         country_code=row.country_code,
         university_name=uni_name,
-        program=str(item.get("course_name") or "").strip()[:200] or None,
+        program=program,
         location=str(item.get("location") or "").strip()[:160] or None,
         status="considering",
         source="ai",

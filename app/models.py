@@ -389,7 +389,10 @@ class EnterpriseClientEmail(Base):
     sent_by_name = Column(String, nullable=True)
     to_email = Column(String, nullable=False)
     subject = Column(String, nullable=False)
-    body = Column(Text, nullable=False)
+    body = Column(Text, nullable=False)  # always plain text (the email's text/plain part)
+    # Rich-text version of `body` as composed in the dashboard editor, already run
+    # through app/utils/html_sanitizer. Null for plain-text and inbound messages.
+    body_html = Column(Text, nullable=True)
     status = Column(String, nullable=False, default="sent")  # sent|failed|received
     provider_message_id = Column(String, nullable=True)
     error_message = Column(Text, nullable=True)
@@ -398,6 +401,41 @@ class EnterpriseClientEmail(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
     client = relationship("EnterpriseClient", back_populates="emails")
+    attachments = relationship(
+        "EnterpriseClientEmailAttachment",
+        back_populates="email",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="EnterpriseClientEmailAttachment.id",
+    )
+
+
+class EnterpriseClientEmailAttachment(Base):
+    """A file attached to a staff-composed client email.
+
+    Rows are created by the composer's upload endpoint *before* the email exists
+    (email_id is null = still a draft attachment) and are bound to the email when
+    it sends. Bytes live in the same encrypted private storage as client documents;
+    attaching a document already on file copies it, so deleting that document later
+    never breaks the record of what was actually sent."""
+    __tablename__ = "enterprise_client_email_attachments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    email_id = Column(
+        Integer, ForeignKey("enterprise_client_emails.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=True, index=True)
+    # Provenance when the file came from the client's document locker rather than a upload.
+    source_document_id = Column(Integer, nullable=True)
+    original_filename = Column(String, nullable=False)
+    storage_key = Column(String, nullable=False)  # private object key (not a public URL)
+    file_size = Column(Integer, nullable=True)
+    mime_type = Column(String, nullable=True)
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    email = relationship("EnterpriseClientEmail", back_populates="attachments")
 
 
 class EnterpriseClientDocument(Base):
@@ -1442,6 +1480,10 @@ class CourseCatalogUniversity(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     source_urls = Column(Text, nullable=True)          # JSON list of grounding source URLs
     extra = Column(Text, nullable=True)                # JSON: anything future refreshes want to keep
+    # Consecutive failed enrichment attempts — lets the agent deprioritize (and, for
+    # never-enriched stubs, deactivate) universities that keep failing, instead of
+    # burning the daily batch on them forever. Reset to 0 on any successful refresh.
+    consecutive_failures = Column(Integer, nullable=False, default=0)
     last_verified_at = Column(DateTime(timezone=True), nullable=True, index=True)  # NULL = seeded stub
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

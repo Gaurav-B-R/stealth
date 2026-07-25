@@ -1,0 +1,186 @@
+/* ==========================================================================
+   Rilono site footer — ONE footer, shared by every public page.
+   Loaded via <link rel="stylesheet" href="/static/footer.css"> so the markup in
+   each page stays identical and this file is the single source of truth.
+   Everything is scoped under .hx-footer / .hx-foot-* so it never collides with
+   a page's own container classes (.wrap, .container, .footer, …).
+   ========================================================================== */
+
+.hx-footer {
+    position: relative;
+    margin-top: 56px;
+    color: #c9cdea;
+    background: radial-gradient(130% 84% at 50% 0%, rgba(139, 92, 246, .17), transparent 58%),
+                linear-gradient(180deg, #191545 0%, #120e33 100%);
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+.hx-footer *,
+.hx-footer *::before,
+.hx-footer *::after {
+    box-sizing: border-box;
+}
+
+/* Gradient hairline across the top edge. */
+.hx-footer::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899);
+}
+
+.hx-foot-wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 24px;
+}
+
+.hx-foot-cols {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr 1fr 1fr;
+    gap: 32px;
+    padding: 62px 0 40px;
+}
+
+.hx-foot-logo {
+    display: inline-block;
+    margin-bottom: 14px;
+}
+
+.hx-foot-brand img {
+    height: 34px;
+    width: auto;
+    display: block;
+}
+
+.hx-foot-brand p {
+    margin: 0;
+    color: #8f96bd;
+    font-size: .9rem;
+    line-height: 1.65;
+    max-width: 290px;
+}
+
+.hx-foot-social {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+}
+
+.hx-foot-social a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    color: #c6cbe8;
+    background: rgba(255, 255, 255, .06);
+    border: 1px solid rgba(255, 255, 255, .12);
+    transition: background .2s ease, border-color .2s ease, color .2s ease, transform .2s ease;
+}
+
+.hx-foot-social a:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, .13);
+    border-color: rgba(255, 255, 255, .3);
+    transform: translateY(-2px);
+}
+
+.hx-foot-social svg {
+    width: 18px;
+    height: 18px;
+    display: block;
+    fill: currentColor;
+}
+
+.hx-footer h5 {
+    margin: 0 0 16px;
+    font-size: .74rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: #7b82ad;
+}
+
+.hx-footer ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 11px;
+}
+
+.hx-footer a {
+    color: #c6cbe8;
+    text-decoration: none;
+    font-size: .92rem;
+    transition: color .2s ease;
+}
+
+.hx-footer a:hover {
+    color: #d9c9ff;
+}
+
+.hx-foot-note {
+    margin: 0 0 22px;
+    color: #6f76a0;
+    font-size: .78rem;
+    line-height: 1.6;
+}
+
+.hx-foot-bottom {
+    border-top: 1px solid rgba(255, 255, 255, .09);
+    padding: 24px 0;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    color: #7b82ad;
+    font-size: .85rem;
+}
+
+/* Build version — only the SPA fills this in; stays hidden everywhere else. */
+.hx-foot-version {
+    margin-left: 8px;
+    opacity: .65;
+}
+
+.hx-foot-version:empty {
+    display: none;
+}
+
+@media (max-width: 860px) {
+    .hx-foot-cols {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+
+@media (max-width: 560px) {
+    .hx-foot-wrap {
+        padding: 0 18px;
+    }
+
+    .hx-foot-cols {
+        padding: 46px 0 30px;
+        gap: 26px;
+    }
+
+    .hx-foot-brand {
+        grid-column: 1 / -1;
+    }
+
+    .hx-foot-brand p {
+        max-width: none;
+    }
+
+    .hx-foot-bottom {
+        justify-content: center;
+        text-align: center;
+    }
+}

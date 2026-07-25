@@ -217,6 +217,20 @@ button { font-family: inherit; cursor: pointer; }
 }
 .search-clear:hover { background: #e2e8f0; color: var(--text); }
 
+/* ---------- Full-screen toggle (topbar) ----------
+   Matches the bell so the two read as one control cluster. */
+.fs-btn {
+  flex: none; width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--border-strong);
+  background: var(--surface); color: var(--text-2); display: grid; place-items: center; cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.fs-btn:hover { border-color: var(--primary); color: var(--primary-600); }
+.fs-btn svg { width: 17px; height: 17px; }
+/* The topbar is a no-wrap flex row: below ~960px this button's 56px would squeeze
+   "+ Add Client" onto two lines and then past the edge. Full screen is a big-window
+   affordance anyway, so drop it well before that point rather than at the phone breakpoint. */
+@media (max-width: 1024px) { .fs-btn { display: none; } }
+
 /* ---------- Notification bell (topbar) ---------- */
 .notif-wrap { position: relative; }
 .notif-btn {
@@ -643,9 +657,133 @@ button { font-family: inherit; cursor: pointer; }
 .usage-bar { height: 8px; background: var(--bg-2); border-radius: 6px; overflow: hidden; margin-top: 8px; }
 .usage-fill { height: 100%; background: var(--grad); border-radius: 6px; }
 
-/* ---------- Settings ---------- */
-.settings-section { max-width: 640px; }
-.logo-preview { width: 88px; height: 88px; border-radius: 18px; object-fit: cover; border: 1px solid var(--border); }
+/* ---------- Settings ----------
+   Identity hero on top, then description/control section rows (a 260px explainer
+   column beside the card that actually holds the inputs) so the page uses the
+   width of .content instead of stranding a 640px column against 600px of blank. */
+.settings-page { max-width: 1080px; }
+
+.set-hero {
+  display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+  padding: 22px 24px; margin-bottom: 26px; border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(99, 102, 241, .11), rgba(139, 92, 246, .09)), var(--surface);
+  border: 1px solid rgba(99, 102, 241, .22);
+  box-shadow: var(--shadow-sm);
+}
+.set-hero-main { flex: 1 1 260px; min-width: 0; }
+.set-hero-main h2 {
+  margin: 0; font-size: 25px; font-weight: 760; letter-spacing: -0.025em;
+  line-height: 1.2; word-break: break-word;
+}
+.set-hero-actions { display: flex; flex-direction: column; align-items: stretch; gap: 8px; flex: none; }
+.set-hero-actions .btn { justify-content: flex-start; }
+.set-hero-actions .set-hint { text-align: center; font-size: 11.5px; }
+
+/* The logo tile doubles as the upload affordance for admins — a plain <img> gave no
+   hint it was replaceable, so the only route was the button beside it. */
+.set-logo {
+  position: relative; width: 96px; height: 96px; flex: none; padding: 0; overflow: hidden;
+  border-radius: 24px; border: 1px solid var(--border); background: var(--surface);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .12);
+}
+.set-logo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+button.set-logo { cursor: pointer; }
+/* The tile is itself an upload trigger, so it needs its own in-flight state — the
+   spinner in the button beside it isn't where the user clicked. */
+.set-logo.busy { opacity: .5; pointer-events: none; }
+button.set-logo:focus-visible { outline: 2px solid var(--primary-600); outline-offset: 3px; }
+.set-logo-ov {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 4px; background: rgba(15, 23, 42, .58); color: #fff;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+  opacity: 0; transition: opacity .16s ease;
+}
+button.set-logo:hover .set-logo-ov, button.set-logo:focus-visible .set-logo-ov { opacity: 1; }
+.set-logo-ov svg { width: 18px; height: 18px; }
+/* On touch there is no hover, so the tile would read as a plain image — show a
+   permanent bottom scrim instead of the full dimming panel. */
+@media (hover: none) {
+  button.set-logo .set-logo-ov {
+    opacity: 1; justify-content: flex-end; padding-bottom: 7px;
+    background: linear-gradient(to top, rgba(15, 23, 42, .7), transparent 58%);
+  }
+  button.set-logo .set-logo-ov svg { display: none; }
+}
+
+.set-url {
+  display: inline-flex; align-items: center; gap: 7px; margin-top: 8px;
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, .8); color: var(--text-2);
+  font-size: 13px; font-weight: 650; font-family: inherit;
+  transition: border-color .15s, color .15s;
+}
+.set-url svg { width: 14px; height: 14px; flex: none; }
+button.set-url:hover { border-color: var(--primary); color: var(--primary-600); }
+
+.set-facts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.set-fact {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 11px; border-radius: 999px; border: 1px solid var(--border);
+  background: rgba(255, 255, 255, .75); color: var(--text-2);
+  font-size: 12.5px; font-weight: 650;
+}
+.set-fact b { color: var(--text); font-weight: 750; }
+.set-fact .sd { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); flex: none; }
+
+.set-sec { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 26px; align-items: start; margin-bottom: 20px; }
+.set-sec-desc { padding-top: 4px; }
+.set-sec-desc h3 { margin: 0 0 6px; font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
+.set-sec-desc p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text-2); }
+.set-sec .card-body > .field:last-of-type { margin-bottom: 16px; }
+/* Cards here are ~700px wide; a full-bleed text input is wider than any other input
+   in the product. The paired country/state fields are already halved by .field-row. */
+.set-sec .field input, .set-sec .field select { max-width: 460px; }
+.set-sec .field-row .field input, .set-sec .field-row .field select { max-width: none; }
+.set-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.set-hint { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+
+.set-note {
+  display: flex; align-items: flex-start; gap: 10px; margin-top: 16px;
+  padding: 11px 13px; border-radius: 12px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 12.5px; line-height: 1.55; color: var(--text-2);
+}
+.set-note svg { width: 15px; height: 15px; flex: none; margin-top: 1px; color: var(--primary); }
+.set-note b { color: var(--text); }
+
+.set-rows { display: flex; flex-direction: column; }
+.set-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 13px 0; border-bottom: 1px solid var(--border);
+}
+.set-row:first-child { padding-top: 0; }
+.set-row:last-child { padding-bottom: 0; border-bottom: none; }
+.set-row-k { font-size: 13px; font-weight: 600; color: var(--text-2); flex: none; }
+.set-row-v { font-size: 14px; font-weight: 650; text-align: right; min-width: 0; word-break: break-word; }
+.set-row-v .link { font-size: 13px; color: var(--primary-600); font-weight: 650; background: none; border: none; padding: 0; }
+.set-row-v .link:hover { text-decoration: underline; }
+
+.set-sec-danger .card { border-color: rgba(239, 68, 68, .3); }
+.set-sec-danger .card-body { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+@media (max-width: 1080px) {
+  .set-sec { grid-template-columns: 1fr; gap: 12px; }
+  .set-sec-desc { padding-top: 0; }
+}
+@media (max-width: 620px) {
+  .set-hero { gap: 16px; padding: 18px; }
+  .set-hero-main h2 { font-size: 21px; }
+  /* .field-row is a fixed 1fr 1fr grid with no global collapse — two selects side by
+     side on a phone leave no room for the country labels. */
+  .set-sec .field-row { grid-template-columns: 1fr; }
+  /* Side-by-side buttons with the file-type hint dropped onto its own full-width line —
+     as a third flex sibling it took a third of 375px and wrapped to three lines. */
+  .set-hero-actions { flex-direction: row; flex-wrap: wrap; width: 100%; }
+  .set-hero-actions .btn { flex: 1 1 0; justify-content: center; white-space: nowrap; }
+  .set-hero-actions .set-hint { flex: 1 0 100%; text-align: left; }
+  .set-row { flex-direction: column; align-items: flex-start; gap: 3px; }
+  .set-row-v { text-align: left; }
+}
 
 /* ---------- Toast ---------- */
 .toast-wrap { position: fixed; bottom: 24px; right: 24px; z-index: 200; display: flex; flex-direction: column; gap: 10px; }
@@ -960,6 +1098,319 @@ button { font-family: inherit; cursor: pointer; }
 .note-add .btn { align-self: flex-start; }
 .note-add .email-to { font-size: 12.5px; color: var(--muted); }
 .note-add .email-to b { color: var(--text-2); font-weight: 650; }
+
+/* ===========================================================================
+   Email composer (client profile → Emails tab)
+   A mail-client-style card: recipient header, subject, formatting toolbar,
+   rich-text body, attachment chips, action footer.
+   =========================================================================== */
+.emc {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 22px;
+  overflow: hidden;
+  transition: box-shadow .18s, border-color .18s;
+}
+.emc:focus-within { border-color: var(--border-strong); box-shadow: var(--shadow); }
+
+.emc-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+}
+.emc-to-label {
+  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted);
+}
+.emc-recipient {
+  display: inline-flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 5px 12px 5px 5px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 999px; font-size: 13.5px;
+}
+.emc-recipient b { font-weight: 650; white-space: nowrap; }
+.emc-av {
+  width: 24px; height: 24px; border-radius: 50%; flex: none;
+  display: grid; place-items: center;
+  color: #fff; font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+}
+.emc-email {
+  color: var(--muted); font-size: 12.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px;
+}
+
+.emc-subject {
+  width: 100%; border: none; border-bottom: 1px solid var(--border);
+  padding: 15px 18px; font-family: var(--font);
+  font-size: 16px; font-weight: 650; color: var(--text);
+  background: transparent; outline: none;
+}
+.emc-subject::placeholder { color: var(--muted); font-weight: 500; }
+.emc-subject:focus { background: rgba(99, 102, 241, .03); }
+
+.emc-toolbar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.emc-tb {
+  display: grid; place-items: center;
+  min-width: 30px; height: 30px; padding: 0 7px;
+  border: none; border-radius: 8px; background: transparent;
+  color: var(--text-2); font-size: 14px; line-height: 1;
+  transition: background .14s, color .14s;
+}
+.emc-tb:hover { background: rgba(99, 102, 241, .1); color: var(--primary-600); }
+.emc-tb.active { background: rgba(99, 102, 241, .16); color: var(--primary-700); }
+.emc-tb b, .emc-tb i, .emc-tb u { font-size: 14.5px; }
+.emc-tb svg { display: block; }
+.emc-tb-sep { width: 1px; height: 18px; background: var(--border-strong); margin: 0 6px; }
+
+.emc-editor {
+  min-height: 168px; max-height: 460px; overflow-y: auto;
+  padding: 16px 18px;
+  font-size: 14.5px; line-height: 1.7; color: var(--text);
+  outline: none;
+}
+.emc-editor.is-empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted); pointer-events: none;
+}
+.emc-editor > *:first-child { margin-top: 0; }
+.emc-editor p { margin: 0 0 12px; }
+.emc-editor ul, .emc-editor ol { margin: 0 0 12px; padding-left: 24px; }
+.emc-editor li { margin-bottom: 5px; }
+.emc-editor h2, .emc-editor h3, .emc-editor h4 { margin: 16px 0 8px; line-height: 1.35; font-weight: 700; }
+.emc-editor h3 { font-size: 16.5px; }
+.emc-editor a { color: var(--primary-600); text-decoration: underline; }
+.emc-editor blockquote {
+  margin: 0 0 12px; padding: 4px 0 4px 14px;
+  border-left: 3px solid rgba(99, 102, 241, .4); color: var(--text-2);
+}
+/* Pasted tables (fee breakdowns out of Excel/Word) — same look in the composer
+   and in the sent-message thread. */
+.emc-editor table, .em-msg-body table {
+  border-collapse: collapse; width: 100%; margin: 0 0 12px; font-size: 13.5px;
+}
+.emc-editor th, .emc-editor td,
+.em-msg-body th, .em-msg-body td {
+  border: 1px solid var(--border); padding: 7px 10px; text-align: left;
+}
+.emc-editor th, .em-msg-body th { background: var(--surface-2); font-weight: 700; }
+
+.emc-atts {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 12px 18px; border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.emc-chip {
+  position: relative; overflow: hidden;
+  display: inline-flex; align-items: center; gap: 8px;
+  max-width: 100%; padding: 7px 8px 7px 11px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 10px; font-size: 12.5px;
+}
+.emc-chip-name {
+  font-weight: 600; color: var(--text);
+  max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.emc-chip-meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+.emc-chip-tag {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--primary-600); background: rgba(99, 102, 241, .12);
+  border-radius: 5px; padding: 2px 6px;
+}
+.emc-chip-x {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 12px; line-height: 1; padding: 4px 5px; border-radius: 6px;
+  transition: background .14s, color .14s;
+}
+.emc-chip-x:hover { background: rgba(239, 68, 68, .12); color: var(--danger); }
+.emc-chip.is-uploading { border-style: dashed; }
+.emc-chip.is-error { border-color: rgba(239, 68, 68, .5); background: rgba(239, 68, 68, .05); }
+.emc-chip.is-error .emc-chip-meta { color: var(--danger); font-weight: 600; }
+.emc-chip-bar {
+  position: absolute; left: 0; bottom: 0; height: 2px;
+  background: var(--primary); transition: width .2s ease;
+}
+
+.emc-foot {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 12px 16px; border-top: 1px solid var(--border);
+}
+.emc-send { display: inline-flex; align-items: center; gap: 7px; }
+.emc-send svg { display: block; }
+.emc-tool {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 13px; border-radius: 9px;
+  border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text-2); font-size: 13px; font-weight: 600; font-family: var(--font);
+  transition: border-color .15s, background .15s, color .15s;
+}
+.emc-tool:hover { border-color: var(--primary); color: var(--primary-600); background: rgba(99, 102, 241, .05); }
+.emc-tool-sm { padding: 5px 11px; font-size: 12.5px; }
+.emc-tool-ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.emc-tool-ghost:hover { background: rgba(239, 68, 68, .08); border-color: transparent; color: var(--danger); }
+.emc-att-note { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.emc-hint {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  padding: 0 16px 13px; font-size: 12px; color: var(--muted);
+}
+.emc-hint b { color: var(--text-2); font-weight: 650; }
+
+/* Template / insert-detail dropdowns */
+.emc-menu-wrap { position: relative; }
+.emc-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
+  width: 288px; max-height: 320px; overflow-y: auto;
+  padding: 6px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 13px; box-shadow: var(--shadow-lg);
+}
+.emc-menu-right { left: auto; right: 0; }
+.emc-menu-label {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); padding: 7px 10px 5px;
+}
+.emc-menu-item {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%;
+  padding: 9px 10px; border: none; border-radius: 9px;
+  background: transparent; text-align: left; font-family: var(--font);
+  transition: background .14s;
+}
+.emc-menu-item:hover { background: rgba(99, 102, 241, .08); }
+.emc-menu-item b { display: block; font-size: 13.5px; font-weight: 650; color: var(--text); }
+.emc-menu-item small { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; }
+.emc-menu-item.is-compact small {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px;
+}
+.emc-menu-ic { font-size: 16px; line-height: 1.35; flex: none; }
+
+/* Drag & drop */
+.emc-dropzone {
+  position: absolute; inset: 0; z-index: 30;
+  display: none; place-items: center;
+  background: rgba(99, 102, 241, .09);
+  backdrop-filter: blur(2px);
+  border: 2px dashed var(--primary); border-radius: var(--radius);
+}
+.emc.is-dragging .emc-dropzone { display: grid; }
+.emc-dropzone > div {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 18px; border-radius: 999px;
+  background: var(--surface); box-shadow: var(--shadow);
+  font-size: 13.5px; font-weight: 650; color: var(--primary-700);
+}
+
+/* ---------- Conversation thread ---------- */
+.emt-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  margin: 4px 0 14px;
+}
+.emt-title { font-size: 13px; font-weight: 700; color: var(--text-2); display: inline-flex; align-items: center; gap: 7px; }
+.emt-count {
+  min-width: 20px; padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-2); color: var(--text-2); font-size: 11.5px; font-weight: 700;
+}
+.emt-filters { display: inline-flex; gap: 5px; }
+.emt-chip {
+  padding: 5px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 650;
+  border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2);
+  font-family: var(--font); transition: border-color .15s, background .15s, color .15s;
+}
+.emt-chip:hover { border-color: var(--primary); color: var(--primary-600); }
+.emt-chip.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.emt-search {
+  flex: 1; min-width: 180px; max-width: 320px; margin-left: auto;
+  padding: 8px 13px; font-family: var(--font); font-size: 13px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 999px; outline: none; transition: border-color .15s, box-shadow .15s;
+}
+.emt-search:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, .13); }
+
+.em-thread { display: flex; flex-direction: column; gap: 12px; }
+.em-msg {
+  display: flex; gap: 13px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 14px; padding: 15px 17px;
+  transition: box-shadow .18s, border-color .18s;
+}
+.em-msg:hover { box-shadow: var(--shadow-sm); }
+.em-msg.is-inbound { border-left: 3px solid var(--primary); background: rgba(99, 102, 241, .025); }
+.em-msg.is-failed { border-color: rgba(239, 68, 68, .38); background: rgba(239, 68, 68, .03); }
+.em-av {
+  width: 36px; height: 36px; border-radius: 11px; flex: none;
+  display: grid; place-items: center;
+  color: #fff; font-size: 12.5px; font-weight: 700;
+}
+.em-msg-main { flex: 1; min-width: 0; }
+.em-msg-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.em-msg-who { font-size: 12.5px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px; }
+.em-msg-who b { font-size: 13.5px; font-weight: 650; color: var(--text); }
+.em-msg-when { font-size: 12px; color: var(--muted); white-space: nowrap; flex: none; }
+.em-tag {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  border-radius: 5px; padding: 2px 6px;
+}
+.em-tag.is-fail { color: var(--danger); background: rgba(239, 68, 68, .12); }
+.em-msg-subject { margin: 6px 0 7px; font-size: 14.5px; font-weight: 650; color: var(--text); }
+.em-msg-body { font-size: 13.5px; line-height: 1.7; color: var(--text-2); overflow-wrap: anywhere; }
+.em-msg-body > *:first-child { margin-top: 0; }
+.em-msg-body > *:last-child { margin-bottom: 0; }
+.em-msg-body p { margin: 0 0 10px; }
+.em-msg-body ul, .em-msg-body ol { margin: 0 0 10px; padding-left: 22px; }
+.em-msg-body li { margin-bottom: 4px; }
+.em-msg-body a { color: var(--primary-600); text-decoration: underline; }
+.em-msg-body h2, .em-msg-body h3, .em-msg-body h4 { margin: 13px 0 6px; font-size: 14.5px; color: var(--text); }
+.em-msg-body blockquote {
+  margin: 0 0 10px; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--border-strong); color: var(--muted);
+}
+.em-msg-body.is-clamped {
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.em-more {
+  margin-top: 7px; padding: 0; border: none; background: none;
+  color: var(--primary-600); font-family: var(--font); font-size: 12.5px; font-weight: 650;
+}
+.em-more:hover { text-decoration: underline; }
+.em-msg-atts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.em-att {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 11px; max-width: 100%;
+  border: 1px solid var(--border-strong); border-radius: 9px;
+  background: var(--surface-2); font-size: 12.5px; color: var(--text-2);
+  transition: border-color .15s, background .15s;
+}
+.em-att:hover { border-color: var(--primary); background: rgba(99, 102, 241, .06); }
+.em-att b {
+  font-weight: 600; color: var(--text);
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.em-att-size { color: var(--muted); }
+
+@media (max-width: 720px) {
+  .emc-head { padding: 11px 13px; }
+  .emc-subject { padding: 13px 14px; font-size: 15px; }
+  .emc-editor { padding: 14px; min-height: 150px; }
+  .emc-toolbar { padding: 6px 8px; }
+  .emc-foot { padding: 11px 13px; }
+  .emc-hint { padding: 0 13px 12px; }
+  .emc-menu { width: min(288px, calc(100vw - 48px)); }
+  .emc-email { max-width: 150px; }
+  /* Stack the footnotes rather than wrapping mid-sentence around the separators. */
+  .emc-hint { flex-direction: column; align-items: flex-start; gap: 3px; }
+  .emc-hint-sep { display: none; }
+  .emt-search { margin-left: 0; max-width: none; }
+  .em-msg { padding: 13px; gap: 10px; }
+  .em-msg-top { flex-direction: column; gap: 2px; }
+}
 
 /* Documents uploader */
 .doc-up-row { gap: 12px; align-items: stretch; }
@@ -1577,15 +2028,31 @@ button { font-family: inherit; cursor: pointer; }
 .cf-tab.active { background: var(--primary); border-color: var(--primary); color: #fff; box-shadow: var(--shadow-sm); }
 
 .cf-filters-card { margin-bottom: 14px; }
-.cf-filters { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+/* Same 12-column system as the shortlist form: four equal dropdowns on top, then the
+   free-text search with its button — flex-wrap left items stranded at three different
+   vertical offsets depending on the label lengths. `order` puts search last without
+   reordering the DOM. */
+.cf-filters { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; align-items: end; }
+.cf-filters .cf-f { grid-column: span 3; }
+.cf-filters .cf-f-grow { grid-column: span 10; order: 1; }
+.cf-filters .btn { grid-column: span 2; order: 2; align-self: end; }
 .cf-f { display: flex; flex-direction: column; gap: 5px; min-width: 130px; }
 .cf-f-grow { flex: 1 1 220px; }
-.cf-f > span { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.cf-f > span { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
 .cf-f select, .cf-f input {
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
   color: var(--text); padding: 9px 11px; font-size: 13.5px; font-family: var(--font); outline: none;
+  /* Fields live in fixed-width grid/flex cells — without this they keep their intrinsic
+     width and spill over the neighbouring column. */
+  width: 100%; min-width: 0; box-sizing: border-box;
 }
 .cf-f select:focus, .cf-f input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, .12); }
+/* Must out-specify `.cf-f > span` above, or the helper text inherits the uppercase
+   label treatment and reads like a stray field label. */
+.cf-f > .cf-f-hint {
+  font-size: 11px; color: var(--muted); line-height: 1.4; margin-top: -1px;
+  text-transform: none; letter-spacing: normal; font-weight: 500;
+}
 
 .cf-uni { margin-bottom: 12px; }
 .cf-uni-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
@@ -1615,12 +2082,39 @@ button { font-family: inherit; cursor: pointer; }
 .cf-course-link { color: var(--primary-600); font-weight: 700; font-size: 12.5px; text-decoration: none; white-space: nowrap; }
 .cf-course-link:hover { text-decoration: underline; }
 
-.cf-ai-grid { display: flex; flex-wrap: wrap; gap: 12px; }
-.cf-ai-grid .cf-f { min-width: 160px; }
-.cf-ai-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+/* Shortlist form: a 12-column grid so every field lands on a predictable column and
+   rows stay aligned. Ordered by intent — who it's for / where / what, then the
+   refinements, then free-form notes. align-items:start keeps the inputs on one line
+   even when a cell carries a helper hint. */
+.cf-ai-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px 12px; align-items: start; }
+.cf-ai-grid .cf-f { min-width: 0; grid-column: span 4; }
+.cf-ai-grid .cf-f-full { grid-column: 1 / -1; }
+/* The client typeahead is shared with the interview picker, where it sizes itself as a
+   flex child. Inside a grid cell those constraints overflow onto the next column. */
+.cf-ai-grid .docsel { min-width: 0; max-width: none; flex: none; width: 100%; }
+.cf-ai-actions {
+  display: flex; align-items: center; gap: 12px; margin-top: 18px; padding-top: 16px;
+  border-top: 1px solid var(--border); flex-wrap: wrap;
+}
+@media (max-width: 1080px) {
+  .cf-ai-grid .cf-f { grid-column: span 6; }
+  /* Re-assert: the rule above has equal specificity and comes later, so without this
+     the full-width fields (Notes) would collapse to half a row. */
+  .cf-ai-grid .cf-f-full { grid-column: 1 / -1; }
+  .cf-filters .cf-f { grid-column: span 6; }
+  .cf-filters .cf-f-grow { grid-column: span 8; }
+  .cf-filters .btn { grid-column: span 4; }
+}
+@media (max-width: 620px) {
+  .cf-ai-grid { gap: 12px; }
+  .cf-ai-grid .cf-f, .cf-ai-grid .cf-f-full { grid-column: 1 / -1; }
+  .cf-ai-actions .btn { width: 100%; }
+  .cf-filters .cf-f, .cf-filters .cf-f-grow, .cf-filters .btn { grid-column: 1 / -1; }
+}
 .cf-rec-card { margin-bottom: 14px; border: 1px solid rgba(99, 102, 241, .3); }
 .cf-rec-summary { color: var(--text-2); font-size: 13.5px; line-height: 1.6; margin: 0 0 12px; }
-.cf-rec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+/* min(300px, 100%) keeps single-column phones (<~330px content width) from overflowing */
+.cf-rec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 12px; }
 .cf-rec-item {
   border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px;
   background: var(--surface-2); display: flex; flex-direction: column; gap: 7px;

@@ -236,11 +236,14 @@ ACTION_SOURCE_MAP = {
 }
 
 # Every Gemini source the enterprise platform incurs cost on (billed or not).
+# course_catalog_refresh is the Course Finder's shared catalog-build cost (the daily
+# grounded agent): it belongs in the top-line margin but NOT in ACTION_SOURCE_MAP,
+# whose per-action economics track marginal cost only.
 ENTERPRISE_COST_SOURCES = [
     "deep_scan", "deep_scan_extract", "document_ai", "mock_interview", "interview_feedback",
     "enterprise_copilot", "enterprise_copilot_extension",
     "enterprise_university_shortlist",
-    "enterprise_course_finder",
+    "enterprise_course_finder", "course_catalog_refresh",
 ]
 
 

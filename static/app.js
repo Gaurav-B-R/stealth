@@ -1067,6 +1067,29 @@ window.addEventListener('popstate', (e) => {
     handleRoute(true); // Skip URL update when handling back/forward
 });
 
+// The site footer is shared verbatim with the static marketing pages, so its
+// links are plain hrefs (crawlable, work without JS). Inside the SPA, the paths
+// handleRoute() already owns are navigated client-side instead of reloading the
+// whole bundle; everything else (/blog, /careers, country pages) loads normally.
+const SPA_FOOTER_ROUTES = new Set([
+    '/', '/pricing', '/about-us', '/contact', '/privacy', '/terms',
+    '/refund-policy', '/delivery-policy', '/dpa', '/login', '/register',
+]);
+
+document.addEventListener('click', (e) => {
+    // defaultPrevented === the Cookie Settings link already opened its modal.
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const link = e.target.closest && e.target.closest('.hx-footer a[href^="/"]');
+    if (!link || link.target === '_blank') return;
+    const href = link.getAttribute('href') || '';
+    const path = href.length > 1 && href.endsWith('/') ? href.slice(0, -1) : href;
+    if (!SPA_FOOTER_ROUTES.has(path)) return;
+    e.preventDefault();
+    updateURL(path);
+    handleRoute(true);
+    window.scrollTo(0, 0);
+});
+
 // Initialize Turnstile site key
 async function initializeTurnstile() {
     try {
@@ -4182,7 +4205,7 @@ function showDashboard(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('dashboardSection').style.display = 'block';
     const navbar = document.querySelector('.navbar');
-    const footer = document.querySelector('.footer');
+    const footer = document.querySelector('footer');
     if (navbar) navbar.style.display = 'none';
     if (footer) footer.style.display = 'none';
     document.body.classList.add('dashboard-active');
@@ -9294,7 +9317,7 @@ function hideAllSections() {
         section.style.display = 'none';
     });
     const navbar = document.querySelector('.navbar');
-    const footer = document.querySelector('.footer');
+    const footer = document.querySelector('footer');
     if (navbar) navbar.style.display = '';
     if (footer) footer.style.display = '';
     document.body.classList.remove('dashboard-active');

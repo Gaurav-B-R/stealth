@@ -45,6 +45,7 @@ from app.schema_patch import (
     ensure_enterprise_payment_coupon_columns,
     ensure_enterprise_crm_tables,
     ensure_enterprise_client_email_reply_columns,
+    ensure_enterprise_email_composer_schema,
     ensure_enterprise_interview_invite_columns,
     ensure_enterprise_document_request_tables,
     ensure_enterprise_client_portal_shares_table,
@@ -286,6 +287,7 @@ def startup_backfill_subscriptions():
     ensure_enterprise_students_table()
     ensure_enterprise_crm_tables()
     ensure_enterprise_client_email_reply_columns()
+    ensure_enterprise_email_composer_schema()
     ensure_enterprise_interview_invite_columns()
     ensure_enterprise_document_request_tables()
     ensure_enterprise_client_portal_shares_table()
@@ -670,6 +672,8 @@ def _apply_seo_meta(
             f'    <meta property="og:description" content="{desc_attr}">\n'
             f'    <meta property="og:image" content="{SITE_ORIGIN}/static/logo.png">\n'
             f'    <meta name="twitter:card" content="summary_large_image">\n'
+            f'    <meta name="twitter:site" content="@Rilono_AI">\n'
+            f'    <meta name="twitter:creator" content="@Rilono_AI">\n'
             f'    <meta name="twitter:title" content="{title_attr}">\n'
             f'    <meta name="twitter:description" content="{desc_attr}">\n'
             f'    <meta name="twitter:image" content="{SITE_ORIGIN}/static/logo.png">\n'

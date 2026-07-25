@@ -130,6 +130,7 @@ const refs = {
     financeContributorChart: document.getElementById('adminFinanceContributorChart'),
     financeTableBody: document.getElementById('adminFinanceTableBody'),
     financeAddBtn: document.getElementById('adminFinanceAddBtn'),
+    financeExportBtn: document.getElementById('adminFinanceExportBtn'),
     financeEntryForm: document.getElementById('adminFinanceEntryForm'),
     financeEntryCancel: document.getElementById('adminFinanceEntryCancel'),
     financeEntryError: document.getElementById('adminFinanceEntryError'),
@@ -225,6 +226,7 @@ function bindEvents() {
     wireCouponPercentClamp(refs.couponPercentInput);
     refs.couponTableBody?.addEventListener('click', handleCouponTableActionClick);
     refs.financeAddBtn?.addEventListener('click', () => openFinanceEntryForm(null));
+    refs.financeExportBtn?.addEventListener('click', exportFinanceLedger);
     refs.financeEntryForm?.addEventListener('submit', submitFinanceEntry);
     refs.financeEntryCancel?.addEventListener('click', () => { if (refs.financeEntryForm) refs.financeEntryForm.hidden = true; });
     document.addEventListener('keydown', (event) => {
@@ -1134,6 +1136,61 @@ function renderFinanceLedger(ledger) {
     refs.financeTableBody.querySelectorAll('[data-finance-delete]').forEach((btn) => {
         btn.addEventListener('click', () => deleteFinanceEntry(btn.getAttribute('data-finance-delete')));
     });
+}
+
+function filenameFromDisposition(header, fallback) {
+    const match = /filename="?([^";]+)"?/i.exec(String(header || ''));
+    return (match && match[1]) ? match[1].trim() : fallback;
+}
+
+async function exportFinanceLedger() {
+    const btn = refs.financeExportBtn;
+    if (!await ensureAdminProtection({ silent: false })) return;
+
+    const originalLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Preparing…';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/admin/company-finance/export?format=xlsx`, {
+            headers: buildAuthHeaders(),
+            credentials: 'same-origin'
+        });
+
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            const message = normalizeErrorMessage(payload, 'Failed to export the finance ledger.');
+            await handleAdminAuthOrProtectionError(response.status, payload);
+            showFlash(message, 'error');
+            return;
+        }
+
+        const blob = await response.blob();
+        const filename = filenameFromDisposition(
+            response.headers.get('Content-Disposition'),
+            'rilono-finance.xlsx'
+        );
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        // Revoke after the click so the download has a live URL to read from.
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+        showFlash(`Downloaded ${filename}`, 'success');
+    } catch (error) {
+        console.error('Failed to export finance ledger:', error);
+        showFlash('Could not export the finance ledger. Please retry.', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+        }
+    }
 }
 
 function setFinanceFormError(message) {

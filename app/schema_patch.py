@@ -905,6 +905,48 @@ def ensure_enterprise_client_email_reply_columns():
         ))
 
 
+def ensure_enterprise_email_composer_schema():
+    """Add the rich-text body column and the email-attachments table used by the
+    client email composer. Idempotent and additive — safe to run on every startup.
+
+    Attachment rows with a NULL email_id are drafts: uploaded while a message is
+    still being written, bound to the email when it sends."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_client_emails"):
+            if "body_html" not in _get_table_columns(conn, "enterprise_client_emails"):
+                conn.execute(text("ALTER TABLE enterprise_client_emails ADD COLUMN body_html TEXT"))
+
+        if not _table_exists(conn, "enterprise_client_email_attachments"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_client_email_attachments (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    email_id INTEGER REFERENCES enterprise_client_emails(id) ON DELETE CASCADE,
+                    client_id INTEGER,
+                    source_document_id INTEGER,
+                    original_filename VARCHAR NOT NULL,
+                    storage_key VARCHAR NOT NULL,
+                    file_size INTEGER,
+                    mime_type VARCHAR,
+                    uploaded_by_user_id INTEGER,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_ent_email_attachments_organization_id ON enterprise_client_email_attachments(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_email_attachments_email_id ON enterprise_client_email_attachments(email_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_email_attachments_client_id ON enterprise_client_email_attachments(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_email_attachments_uploaded_by ON enterprise_client_email_attachments(uploaded_by_user_id)",
+                # The composer's own lookup: this user's still-unsent drafts for a client.
+                "CREATE INDEX IF NOT EXISTS ix_ent_email_attachments_draft ON enterprise_client_email_attachments(client_id, uploaded_by_user_id, email_id)",
+            ):
+                conn.execute(text(stmt))
+
+
 def ensure_enterprise_demo_requests_table():
     """Create the enterprise_demo_requests table (public 'book a demo' leads)."""
     is_sqlite = engine.dialect.name == "sqlite"
@@ -2173,6 +2215,7 @@ def ensure_course_catalog_tables():
                     is_active BOOLEAN NOT NULL DEFAULT {bool_true},
                     source_urls TEXT,
                     extra TEXT,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
                     last_verified_at {ts},
                     created_at {ts} DEFAULT {now_default} NOT NULL,
                     updated_at {ts},
@@ -2186,6 +2229,14 @@ def ensure_course_catalog_tables():
                 "CREATE INDEX IF NOT EXISTS ix_course_catalog_uni_country_verified ON course_catalog_universities(country_code, last_verified_at)",
             ):
                 conn.execute(text(stmt))
+
+        # Added after launch: lets the refresh agent back off universities whose
+        # enrichment keeps failing instead of burning the daily batch on them forever.
+        uni_columns = _get_table_columns(conn, "course_catalog_universities")
+        if "consecutive_failures" not in uni_columns:
+            conn.execute(text(
+                "ALTER TABLE course_catalog_universities ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0"
+            ))
 
         if not _table_exists(conn, "course_catalog_courses"):
             conn.execute(text(f"""

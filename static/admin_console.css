@@ -1319,6 +1319,13 @@ body.admin-modal-open {
     margin: 1.6rem 0 0.4rem;
 }
 
+.finance-ledger-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
 .finance-ledger-head h3 {
     margin: 0;
     font-size: 1.05rem;
