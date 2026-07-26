@@ -98,10 +98,15 @@ UPLOAD_VALIDATION_PROMPT_CONTEXT_CHARS = int(
 # Primary model everywhere: Gemini 3.1 Pro (strongest reasoning). Fallbacks stay on
 # LIVE model ids only — gemini-2.0-flash / gemini-1.5-* are retired and now 404 on
 # the v1beta API, so they must never appear in a candidate chain.
-DEFAULT_GEMINI_MODEL = (os.getenv("GEMINI_MODEL", "gemini-3.1-pro").strip() or "gemini-3.1-pro")
+#
+# 2026-07-26: the bare `gemini-3.1-pro` id is NOT served by the v1beta API (verified
+# against list_models — only `gemini-3.1-pro-preview` exists). It sat at the head of
+# every chain, so each call paid a wasted 404 round-trip before falling through, and
+# single-shot grounded callers (course_catalog) silently degraded to ungrounded. The
+# preview id is the primary until the GA id actually ships; keep the dead id OUT.
+DEFAULT_GEMINI_MODEL = (os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview")
 DEFAULT_GEMINI_MODEL_CANDIDATES = [
     DEFAULT_GEMINI_MODEL,
-    "gemini-3.1-pro",
     "gemini-3.1-pro-preview",
     "gemini-2.5-pro",
     "gemini-2.5-flash",

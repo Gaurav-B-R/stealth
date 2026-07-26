@@ -32,7 +32,7 @@ PREFILTER_ENABLED = os.getenv("AI_GUARDRAIL_PREFILTER_ENABLED", "true").strip().
 # Rough size of a chat prompt we avoid sending when we block off-topic input.
 EST_BLOCKED_PROMPT_TOKENS = int(os.getenv("GUARDRAIL_EST_PROMPT_TOKENS", "1800") or "1800")
 EST_BLOCKED_OUTPUT_TOKENS = int(os.getenv("GUARDRAIL_EST_OUTPUT_TOKENS", "350") or "350")
-_GUARDRAIL_PRICING_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-pro")
+_GUARDRAIL_PRICING_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
 
 
 STUDENT_VISA_GUARDRAIL = (

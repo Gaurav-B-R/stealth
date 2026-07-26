@@ -2209,6 +2209,7 @@ def ensure_course_catalog_tables():
                     country_code VARCHAR NOT NULL,
                     name VARCHAR NOT NULL,
                     name_key VARCHAR NOT NULL,
+                    domain_key VARCHAR,
                     city VARCHAR,
                     qs_world_rank VARCHAR,
                     national_rank VARCHAR,
@@ -2243,6 +2244,21 @@ def ensure_course_catalog_tables():
             conn.execute(text(
                 "ALTER TABLE course_catalog_universities ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0"
             ))
+        # Added 2026-07-26: domain-based identity. name_key alone let aliases of the
+        # same university ("UNSW Sydney" vs "The University of New South Wales") both
+        # insert; the official domain is stable, so it is the real dedup key.
+        if "domain_key" not in uni_columns:
+            conn.execute(text(
+                "ALTER TABLE course_catalog_universities ADD COLUMN domain_key VARCHAR"
+            ))
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_course_catalog_universities_domain_key ON course_catalog_universities(domain_key)",
+            # Partial unique: one row per (country, domain) once a domain is known,
+            # while rows with an unknown domain stay exempt.
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_course_catalog_uni_country_domain "
+            "ON course_catalog_universities(country_code, domain_key) WHERE domain_key IS NOT NULL",
+        ):
+            conn.execute(text(stmt))
 
         if not _table_exists(conn, "course_catalog_courses"):
             conn.execute(text(f"""

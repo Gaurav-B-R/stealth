@@ -9,7 +9,12 @@ so we can later detect users who consented to an older version and re-prompt the
 """
 
 # Matches the most recent Privacy Policy / Terms "Last Updated" date shown to users.
-LEGAL_TERMS_PRIVACY_VERSION = "2026-07-16"
+#
+# v2026-07-25 changed the published Grievance Officer contact in the Privacy Policy from
+# grievance@rilono.com to contact@rilono.com — Rilono operates a single monitored mailbox,
+# and a published grievance address that bounces is worse than none. The same address is
+# now used in the DPA and in the B2C data-export notice (app/routers/profile.py).
+LEGAL_TERMS_PRIVACY_VERSION = "2026-07-25"
 
 # Version of the enterprise Data Processing Agreement (DPA) accepted by organizations
 # that handle their own clients' personal data through Rilono Enterprise.
@@ -28,7 +33,7 @@ LEGAL_TERMS_PRIVACY_VERSION = "2026-07-16"
 # Bumping this value makes every organization that accepted an EARLIER version show as
 # requiring re-acceptance: enterprise_organizations.dpa_accepted_version no longer matches
 # LEGAL_DPA_VERSION, so those orgs are re-prompted to accept the current DPA.
-LEGAL_DPA_VERSION = "2026-07-24"
+LEGAL_DPA_VERSION = "2026-07-25"
 
 # Version of the Rilono Finance bank-connect eligibility attestations. Bump whenever the
 # checkbox wording in the Finance onboarding form (static/enterprise.js) changes, so the

@@ -1474,6 +1474,11 @@ class CourseCatalogUniversity(Base):
     # university differently across runs ("The University of Melbourne" vs
     # "University of Melbourne"), so uniqueness can't hang off the display name.
     name_key = Column(String, nullable=False, index=True)
+    # Registrable domain of the official site ("unsw.edu.au"). Names are unreliable
+    # identity — the model calls one university "UNSW Sydney" and "The University of
+    # New South Wales" on different days and both slip past name_key, creating
+    # duplicates. The domain is stable, so it is the real dedup key when known.
+    domain_key = Column(String, nullable=True, index=True)
     city = Column(String, nullable=True)
     qs_world_rank = Column(String, nullable=True)      # display string, e.g. "34" or "301-350"
     national_rank = Column(String, nullable=True)

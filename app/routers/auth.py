@@ -1068,7 +1068,9 @@ async def oauth_callback(provider: str, request: Request, db: Session = Depends(
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(data={"sub": user.email}, expires_delta=access_token_expires)
-    response = _app_redirect("/dashboard")
+    # `signed_in=1` lets the SPA show the same "Login successful" confirmation the
+    # email/password path shows; the frontend strips it from the URL after reading it.
+    response = _app_redirect("/dashboard?signed_in=1")
     _set_auth_cookie(request, response, access_token, int(access_token_expires.total_seconds()))
     _clear_oauth_nonce_cookie(response, request)  # one-time use — drop the flow nonce
     logger.info(

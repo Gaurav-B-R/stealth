@@ -25,11 +25,11 @@ const PUBLIC_APP_ORIGIN = 'https://rilono.com';
 const RILONO_AI_PUBLIC_ERROR_MESSAGE = 'Sorry, I encountered an issue while responding. Please try again in a little while. This issue has been raised for review.';
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
-    privacy: 'July 16, 2026',
+    privacy: 'July 25, 2026',
     terms: 'July 16, 2026',
     refund: 'July 16, 2026',
     delivery: 'July 10, 2026',
-    dpa: 'July 24, 2026'
+    dpa: 'July 25, 2026'
 };
 const COOKIE_CONSENT_STORAGE_KEY = 'rilono_cookie_preferences_v1';
 const COOKIE_CONSENT_VERSION = 1;
@@ -1269,6 +1269,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     loadSocialAuthButtons();
     showOAuthErrorIfPresent();
+    showOAuthSuccessIfPresent();
     loadNotifications();
     updateFloatingChatVisibility();
     initializeRilonoAiAttachmentUi();
@@ -1771,6 +1772,25 @@ function showOAuthErrorIfPresent() {
     } catch (e) { /* ignore */ }
 }
 
+// Social login (Google/Microsoft/Apple) returns via a redirect, so the in-page success
+// message the email/password path shows would be lost. The backend tags that redirect with
+// `signed_in=1`; surface the same confirmation here, then strip the flag from the URL so a
+// refresh (or the initial updateURL below) never replays it.
+function showOAuthSuccessIfPresent() {
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get('signed_in')) return;
+        params.delete('signed_in');
+        const qs = params.toString();
+        window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+        if (!currentUser || typeof showMessage !== 'function') return;
+        // Same treatment as the email/password path: hold the one-time prompts back (the dashboard
+        // render below queues them) so this confirmation is readable first.
+        holdPostLoginPrompts();
+        showMessage('Login successful!', 'success');
+    } catch (e) { /* ignore */ }
+}
+
 function discardLegacyNotificationStorage() {
     try {
         localStorage.removeItem(LEGACY_NOTIFICATION_STORAGE_KEY);
@@ -1787,6 +1807,9 @@ function clearClientAuthState({ render = true } = {}) {
     subscriptionNotifyStateUserId = null;
     notifications = [];
     persistAuthToken(null);
+    // Drop any post-login prompt still waiting its turn — the session it belonged to is over.
+    postLoginPromptQueue.length = 0;
+    postLoginQuietUntil = 0;
     if (render) {
         updateUIForAuth();
         const authedPaths = ['/dashboard', '/subscription', ...Object.keys(DASHBOARD_PATH_TO_TAB)];
@@ -2639,6 +2662,69 @@ function showMessage(text, type = 'success') {
         messageEl.classList.remove('show');
         messageHideTimer = null;
     }, hideDelayMs);
+}
+
+/* ---------------- Post-login prompt queue ----------------
+   Signing in shows a "Login successful" confirmation, and a brand-new account also has two
+   one-time prompts: "How did you hear about us?" and the referral nudge. Firing them the instant
+   the dashboard painted buried that confirmation AND opened both dialogs at once (the heard-about
+   overlay landing on top of the referral modal). Anything that wants to interrupt the user right
+   after login goes through this queue instead: it waits a beat so the confirmation can be read,
+   then runs prompts strictly one at a time, each waiting for the previous to be dismissed.
+   Outside of login it is a pass-through — the quiet period is zero and nothing else is pending. */
+const POST_LOGIN_PROMPT_DELAY_MS = 2600;   // long enough to read the confirmation, short enough not to feel broken
+const POST_LOGIN_PROMPT_MAX_WAIT_MS = 60000;
+let postLoginQuietUntil = 0;
+const postLoginPromptQueue = [];
+let postLoginPromptDraining = false;
+
+function holdPostLoginPrompts() {
+    postLoginQuietUntil = Date.now() + POST_LOGIN_PROMPT_DELAY_MS;
+}
+
+function postLoginPromptSleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Is something already claiming the screen? (The heard-about dialog removes its overlay node on
+// close; the referral promo toggles display; the onboarding wizard is a full-screen opaque overlay
+// that outranks both — z-index 11000 vs the promo's 10000 — so a prompt opened while it is up
+// would be invisible underneath it.)
+function postLoginPromptOnScreen() {
+    if (document.getElementById('hauOverlay')) return true;
+    if (document.getElementById('onboardingOverlay')) return true;
+    const promo = document.getElementById('referralPromoModal');
+    return !!(promo && promo.style.display && promo.style.display !== 'none');
+}
+
+function queuePostLoginPrompt(run) {
+    postLoginPromptQueue.push(run);
+    void drainPostLoginPrompts();
+}
+
+async function drainPostLoginPrompts() {
+    if (postLoginPromptDraining) return;
+    postLoginPromptDraining = true;
+    try {
+        const quietFor = postLoginQuietUntil - Date.now();
+        if (quietFor > 0) await postLoginPromptSleep(quietFor);
+        while (postLoginPromptQueue.length) {
+            // Never open on top of something else — checked BEFORE opening, so this also covers a
+            // dialog that was already up when we started (the onboarding wizard). If the user
+            // simply leaves that open, stop draining and leave the rest QUEUED rather than firing
+            // into an overlay they can't see: whatever closes it re-renders the dashboard, which
+            // queues again and restarts the drain.
+            const deadline = Date.now() + POST_LOGIN_PROMPT_MAX_WAIT_MS;
+            while (postLoginPromptOnScreen()) {
+                if (Date.now() > deadline) return;
+                await postLoginPromptSleep(300);
+            }
+            const run = postLoginPromptQueue.shift();
+            try { await run(); } catch (e) { /* one bad prompt must not stall the rest */ }
+        }
+    } finally {
+        postLoginPromptDraining = false;
+    }
 }
 
 // Navigation
@@ -4222,7 +4308,7 @@ function showDashboard(skipURLUpdate = false) {
     loadSubscriptionStatus(true);
     renderReferralPromotions();
     updateDashHeaderUser();
-    if (typeof maybeShowHeardAbout === 'function') maybeShowHeardAbout();
+    if (typeof maybeShowHeardAbout === 'function') queuePostLoginPrompt(maybeShowHeardAbout);
     if (typeof loadVisaDecisionPrompt === 'function') void loadVisaDecisionPrompt();
 
     // Set default tab to overview if no tab is active
@@ -9417,14 +9503,26 @@ async function handleLogin(e) {
                     }
                 }
             }
+            // Hold the one-time prompts back so the confirmation above is readable first, and so
+            // they open one at a time instead of stacking. Must precede showDashboard(), which
+            // queues the "How did you hear about us?" prompt.
+            holdPostLoginPrompts();
             showDashboard();
             renderReferralPromotions();
             // Auto-show the referral promo ONCE per browser, then never again (no login nagging).
-            if (!referralPromoSeen()) {
-                markReferralPromoSeen();
-                setTimeout(() => {
-                    openReferralPromoModal(true);
-                }, 260);
+            // Skipped entirely while onboarding is pending: the wizard owns the screen, and the
+            // nudge would burn its one showing on a modal buried underneath it.
+            if (!referralPromoSeen() && !needsOnboarding()) {
+                queuePostLoginPrompt(() => {
+                    // Preconditions are re-checked HERE, not at queue time — the user can sign out
+                    // during the wait, and this must never render their referral code onto a
+                    // logged-out page. Bailing also leaves the flag unset, so it returns next time.
+                    if (!currentUser || !authToken) return;
+                    // Mark it seen only when it actually opens — if the queue drops it (an earlier
+                    // prompt was left open), the nudge is simply offered again next sign-in.
+                    markReferralPromoSeen();
+                    openReferralPromoModal();
+                });
             }
             if (data.referral_bonus_awarded && data.referral_bonus_message) {
                 setTimeout(() => {
@@ -9742,6 +9840,9 @@ async function logout() {
     runtimeSubscriptionNotifyState = null;
     subscriptionNotifyStateUserId = null;
     closeReferralPromoModal();
+    // Cancel any post-login prompt still awaiting its turn — it belongs to the session just ended.
+    postLoginPromptQueue.length = 0;
+    postLoginQuietUntil = 0;
     floatingChatOpen = false;
     rilonoAiConversationHistory = [];  // Clear shared chat history
     clearRilonoAiSessionAttachments(false);

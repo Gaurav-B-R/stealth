@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from sqlalchemy import text as sqltext
 from sqlalchemy.orm import Session
 
 from app import models
@@ -106,6 +107,10 @@ RECOMMEND_MIN_CATALOG_ROWS = int(os.getenv("COURSE_FINDER_MIN_CATALOG_ROWS", "5"
 RECOMMEND_MAX_RESULTS = 8
 
 GROUNDING_ENABLED = os.getenv("COURSE_CATALOG_GROUNDING_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+# Hard per-request ceiling for a grounded call (ms). A grounded research call measures
+# 45-95s, so 240s is generous; without it a hung request has no upper bound and the
+# run-level deadline (checked only between universities) can never fire.
+GROUNDED_REQUEST_TIMEOUT_MS = max(30_000, int(os.getenv("COURSE_CATALOG_REQUEST_TIMEOUT_MS", "240000") or "240000"))
 
 # Re-verification cadence (same env var as the refresh agent) — a course not
 # re-confirmed across ~2 cycles is treated as renamed/discontinued and pruned.
@@ -128,16 +133,29 @@ def _model_candidates() -> list[str]:
         )
     except Exception:
         candidates = []
-    return candidates or [os.getenv("GEMINI_MODEL", "gemini-3.1-pro")]
+    return candidates or [os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")]
 
 
 def normalize_key(name: str) -> str:
     """Dedup key: lowercase, strip punctuation, collapse spaces, drop a leading 'the '.
-    Makes "The University of Melbourne" == "University of Melbourne."."""
-    s = re.sub(r"[^a-z0-9 ]+", " ", str(name or "").lower())
+    Makes "The University of Melbourne" == "University of Melbourne."
+
+    Also strips the alias forms the model alternates between across runs, which are
+    the ones that actually created duplicate rows: a parenthetical acronym
+    ("Australian Catholic University (ACU)") and a trailing country qualifier
+    ("The University of Newcastle, Australia"). Without this they hash differently
+    from the plain name and both insert whenever no corroborated domain is available
+    to dedupe on.
+    """
+    s = str(name or "").lower()
+    s = re.sub(r"\([^)]*\)", " ", s)                      # drop "(ACU)", "(UNSW Sydney)"
+    s = re.sub(r"[^a-z0-9 ]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
     if s.startswith("the "):
         s = s[4:]
+    for suffix in (" australia", " usa", " uk", " canada", " germany", " ireland"):
+        if s.endswith(suffix) and len(s) > len(suffix) + 4:
+            s = s[: -len(suffix)].strip()
     return s[:200]
 
 
@@ -195,17 +213,26 @@ def _extract_grounding_domains(response: Any, limit: int = 24) -> set[str]:
     """Registrable domains of the pages Google Search grounding actually consulted.
     Used to corroborate model-returned website URLs — grounded output is untrusted
     web-derived content, so a URL the sources never mentioned must not persist.
-    chunk.web.uri is usually a vertexaisearch redirect; chunk.web.domain has the
-    real host, so both are tried (Google's own hosts filtered out)."""
+    chunk.web.uri is a vertexaisearch redirect (its own domain is Google's, so it is
+    useless here). `.domain` exists only on some SDK versions — on google-genai as
+    shipped the real host is in `.title` (e.g. "monash.edu"). All three are tried and
+    Google's own hosts filtered out; without the title fallback this returns an empty
+    set, which would strip EVERY corroborated website and course URL."""
     domains: set[str] = set()
     try:
         for candidate in (getattr(response, "candidates", None) or []):
             meta = getattr(candidate, "grounding_metadata", None)
             for chunk in (getattr(meta, "grounding_chunks", None) or []):
                 web = getattr(chunk, "web", None)
-                for raw in (getattr(web, "domain", None), getattr(web, "uri", None)):
+                for raw in (
+                    getattr(web, "domain", None),
+                    getattr(web, "title", None),
+                    getattr(web, "uri", None),
+                ):
                     raw = str(raw or "").strip()
-                    if not raw:
+                    # A title is only a host when it looks like one — real page
+                    # titles ("Fees | Monash") must never be read as domains.
+                    if not raw or (not raw.startswith("http") and (" " in raw or "." not in raw)):
                         continue
                     if not raw.startswith("http"):
                         raw = f"https://{raw}"
@@ -219,8 +246,13 @@ def _extract_grounding_domains(response: Any, limit: int = 24) -> set[str]:
     return domains
 
 
-def _grounded_generate(prompt: str, model_name: str, usage_source: str):
+def _grounded_generate(prompt: str, model_names: list[str] | str, usage_source: str):
     """Google-Search-grounded JSON generation (google-genai SDK, API-key auth).
+
+    Tries EVERY configured model candidate before giving up: a dead primary id
+    (e.g. `gemini-3.1-pro` 404s while only `-preview` exists) must not silently
+    demote the whole catalog to ungrounded model recall — that is exactly how the
+    catalog ended up with zero verified source URLs.
 
     Returns (text, source_urls, source_domains) or None so the caller falls back to
     the ungrounded model — catalog runs must survive grounding being unavailable.
@@ -230,28 +262,44 @@ def _grounded_generate(prompt: str, model_name: str, usage_source: str):
     api_key = (getattr(gemini_service, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")).strip()
     if not api_key or not api_key.startswith("AIza"):
         return None
+    candidates = [model_names] if isinstance(model_names, str) else list(model_names or [])
     try:
         from google import genai as _genai
         from google.genai import types as _types
-
-        client = _genai.Client(api_key=api_key)
-        config = _types.GenerateContentConfig(
-            tools=[_types.Tool(google_search=_types.GoogleSearch())],
-            temperature=0.3,
-        )
-        response = client.models.generate_content(model=model_name, contents=prompt, config=config)
-        text = (getattr(response, "text", "") or "").strip()
-        if not text:
-            return None
-        try:
-            from app import ai_usage
-            ai_usage.record_gemini_usage(usage_source, model_name, response)
-        except Exception:
-            pass
-        return text, _extract_grounding_urls(response), _extract_grounding_domains(response)
     except Exception as exc:
-        logger.warning("Course catalog grounding unavailable (%s); using ungrounded model.", exc)
+        logger.warning("Course catalog grounding SDK unavailable (%s); using ungrounded model.", exc)
         return None
+
+    last_exc: Optional[Exception] = None
+    for model_name in candidates:
+        try:
+            # Hard request timeout. The run-level soft deadline is only evaluated
+            # BETWEEN universities, so without this a single hung call blocks the
+            # daily run indefinitely — long enough for the stale-run takeover to
+            # fire and start a second, concurrent run.
+            client = _genai.Client(
+                api_key=api_key,
+                http_options=_types.HttpOptions(timeout=GROUNDED_REQUEST_TIMEOUT_MS),
+            )
+            config = _types.GenerateContentConfig(
+                tools=[_types.Tool(google_search=_types.GoogleSearch())],
+                temperature=0.3,
+            )
+            response = client.models.generate_content(model=model_name, contents=prompt, config=config)
+            text = (getattr(response, "text", "") or "").strip()
+            if not text:
+                continue
+            try:
+                from app import ai_usage
+                ai_usage.record_gemini_usage(usage_source, model_name, response)
+            except Exception:
+                pass
+            return text, _extract_grounding_urls(response), _extract_grounding_domains(response)
+        except Exception as exc:  # noqa: BLE001 — try the next candidate (404/quota/etc.)
+            last_exc = exc
+            logger.info("Course catalog grounding candidate '%s' failed (%s); trying next.", model_name, str(exc)[:160])
+    logger.warning("Course catalog grounding unavailable on all candidates (%s); using ungrounded model.", last_exc)
+    return None
 
 
 def _generate_json(prompt: str, usage_source: str, *, prefer_grounded: bool) -> tuple[Optional[dict], bool, list[str], set[str], str]:
@@ -264,7 +312,7 @@ def _generate_json(prompt: str, usage_source: str, *, prefer_grounded: bool) -> 
     source_urls: list[str] = []
     source_domains: set[str] = set()
     if prefer_grounded:
-        grounded_result = _grounded_generate(prompt, model_name, usage_source)
+        grounded_result = _grounded_generate(prompt, candidates, usage_source)
         if grounded_result is not None:
             text, source_urls, source_domains = grounded_result
             grounded = True
@@ -278,21 +326,67 @@ def _generate_json(prompt: str, usage_source: str, *, prefer_grounded: bool) -> 
 
 
 def _parse_json_object(raw: str) -> Optional[dict]:
+    """Pull the JSON object out of a model reply.
+
+    Grounded research replies are prose FOLLOWED by the JSON (a bare "return only
+    JSON" prompt makes the model skip the search tool entirely), so a naive
+    first-brace/last-brace slice breaks on any '{' in the prose.
+
+    Strategy: brace-match EVERY '{' into a balanced candidate, then keep the one that
+    ENDS last, tie-breaking on the widest span. Picking by start position instead
+    silently returns the last *nested* object — for these schemas (`courses[]`,
+    `universities[]`, `recommendations[]` all end in a nested object) that means the
+    final array element rather than the payload, which reads as "no usable courses",
+    burns the grounded call, and after repeated failures deactivates a real university.
+    """
     raw = (raw or "").strip()
-    if raw.startswith("```json"):
-        raw = raw[7:].strip()
-    elif raw.startswith("```"):
-        raw = raw[3:].strip()
-    if raw.endswith("```"):
-        raw = raw[:-3].strip()
-    fb, lb = raw.find("{"), raw.rfind("}")
-    if fb == -1 or lb == -1 or lb <= fb:
+    if not raw:
         return None
-    try:
-        data = json.loads(raw[fb:lb + 1])
-    except Exception:
-        return None
-    return data if isinstance(data, dict) else None
+
+    def _loads(candidate: str) -> Optional[dict]:
+        try:
+            data = json.loads(candidate)
+        except Exception:
+            return None
+        return data if isinstance(data, dict) else None
+
+    # Fast path: the whole reply is the object (strict-JSON prompts).
+    parsed = _loads(raw)
+    if parsed is not None:
+        return parsed
+
+    best_key: Optional[tuple[int, int]] = None
+    best_val: Optional[dict] = None
+    for start, ch0 in enumerate(raw):
+        if ch0 != "{":
+            continue
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(raw)):
+            ch = raw[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = _loads(raw[start:i + 1])
+                    if candidate is not None:
+                        # Latest end wins (the trailing deliverable); on a tie the
+                        # earlier start wins (the outermost enclosing object).
+                        key = (i, -start)
+                        if best_key is None or key > best_key:
+                            best_key, best_val = key, candidate
+                    break
+    return best_val
 
 
 def _clean_text(value, limit: int) -> Optional[str]:
@@ -368,12 +462,130 @@ def _clean_intakes(value) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# 0) Registry seeding — real universities from the curated domain registry
+# ---------------------------------------------------------------------------
+
+def domain_key_for(url_or_domain) -> Optional[str]:
+    """Stable identity for a university: the registrable domain of its official site.
+    Accepts a full URL or a bare host."""
+    raw = str(url_or_domain or "").strip().lower()
+    if not raw:
+        return None
+    if not raw.startswith("http"):
+        raw = f"https://{raw}"
+    return _registrable_domain(raw)
+
+
+def registry_universities(db: Session, country_code: str) -> list[dict]:
+    """Curated real universities for a country from the `us_universities` registry
+    (legacy table name — it is the all-country email-domain map, one row per domain).
+
+    The registry is the trustworthy seed source: real institutions with their OFFICIAL
+    domain, so seeding costs no AI call and cannot hallucinate. Rows are collapsed to
+    one entry per registrable domain, preferring the shortest host (`monash.edu` over
+    `student.monash.edu`) and the shortest display name for that domain.
+    """
+    code = (country_code or "").upper()
+    try:
+        rows = db.execute(
+            sqltext(
+                "SELECT university_name, email_domain, location FROM us_universities "
+                "WHERE upper(coalesce(country_code,'US')) = :cc"
+            ),
+            {"cc": code},
+        ).fetchall()
+    except Exception:
+        # Postgres leaves the session in an aborted transaction after a failed
+        # statement — without the rollback every later query in this run fails too.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.exception("Course catalog: university registry unavailable for %s", code)
+        return []
+
+    best: dict[str, dict] = {}
+    for name, domain, location in rows:
+        name = _clean_text(name, 200)
+        dkey = domain_key_for(domain)
+        if not name or not dkey:
+            continue
+        host = str(domain or "").strip().lower()
+        current = best.get(dkey)
+        if current is None or len(host) < len(current["_host"]) or (
+            len(host) == len(current["_host"]) and len(name) < len(current["name"])
+        ):
+            best[dkey] = {
+                "name": name,
+                "domain_key": dkey,
+                "_host": host,
+                "city": _clean_text(location, 160),
+                "website_url": f"https://www.{dkey}",
+            }
+    out = sorted(best.values(), key=lambda d: d["name"].lower())
+    for item in out:
+        item.pop("_host", None)
+    return out
+
+
+def seed_universities_from_registry(db: Session, country_code: str, limit: Optional[int] = None) -> int:
+    """Insert stub rows for every curated registry university not already in the
+    catalog. Free (no AI call) and hallucination-proof; enrichment fills courses and
+    rankings later. Dedupes on domain first, then name. Returns rows added."""
+    code = (country_code or "").upper()
+    if not country_name(code):
+        return 0
+    existing = (
+        db.query(models.CourseCatalogUniversity)
+        .filter(models.CourseCatalogUniversity.country_code == code)
+        .all()
+    )
+    have_domains = {u.domain_key for u in existing if u.domain_key}
+    have_names = {u.name_key for u in existing}
+
+    added = 0
+    for item in registry_universities(db, code):
+        if limit is not None and added >= int(limit):
+            break
+        dkey = item["domain_key"]
+        nkey = normalize_key(item["name"])
+        if not nkey or dkey in have_domains or nkey in have_names:
+            continue
+        have_domains.add(dkey)
+        have_names.add(nkey)
+        db.add(models.CourseCatalogUniversity(
+            country_code=code,
+            name=item["name"],
+            name_key=nkey,
+            domain_key=dkey,
+            city=item["city"],
+            website_url=item["website_url"],
+            seed_rank=None,  # unranked tail; enrichment fills qs_world_rank
+            is_active=True,
+        ))
+        added += 1
+    if added:
+        db.commit()
+    logger.info("Course catalog registry seed %s: +%d universities", code, added)
+    return added
+
+
+# ---------------------------------------------------------------------------
 # 1) Discovery — top-N universities per country (stub rows)
 # ---------------------------------------------------------------------------
 
 def discover_universities(db: Session, country_code: str, target: int, usage_source: str = "course_catalog_refresh") -> int:
-    """Ask grounded Gemini for the top universities for international students in a
-    country; insert missing ones as stub rows (enriched later). Returns rows added."""
+    """Establish the ranked TOP-N head of a country's catalog.
+
+    Since the registry seed provides the full roster, discovery's job is no longer
+    "add rows" but "rank them": a returned university that already exists gets its
+    seed_rank (browse ordering) and rankings filled in, and only genuinely unknown
+    ones are inserted. Gating on the count of ACTIVE rows instead of RANKED rows
+    would make want = 50 - 1119 = 0 for ever, so nothing would ever be ranked and
+    "best-ranked first" browse ordering would never exist.
+
+    Returns the number of rows added or newly ranked.
+    """
     code = (country_code or "").upper()
     cname = country_name(code)
     if not cname:
@@ -384,7 +596,17 @@ def discover_universities(db: Session, country_code: str, target: int, usage_sou
         .all()
     )
     existing_keys = {u.name_key for u in existing}
-    want = max(0, int(target) - len([u for u in existing if u.is_active]))
+    existing_domains = {u.domain_key for u in existing if u.domain_key}
+    by_name = {u.name_key: u for u in existing}
+    by_domain = {u.domain_key: u for u in existing if u.domain_key}
+    # Registry fallback identity: when the model returns no corroborated website we
+    # have no domain to dedupe on, and an alias spelling would insert a second row.
+    # The curated registry maps the real name -> official domain, recovering identity.
+    registry_domain_by_name = {
+        normalize_key(r["name"]): r["domain_key"] for r in registry_universities(db, code)
+    }
+    ranked_active = len([u for u in existing if u.is_active and u.seed_rank is not None])
+    want = max(0, int(target) - ranked_active)
     if want <= 0:
         return 0
 
@@ -421,19 +643,51 @@ def discover_universities(db: Session, country_code: str, target: int, usage_sou
         if not name:
             continue
         key = normalize_key(name)
-        if not key or key in existing_keys:
+        if not key:
             continue
-        existing_keys.add(key)
         # This catalog is shared across every tenant, so a model-invented (or
         # search-poisoned) domain must never persist: only keep a website the
         # grounded sources corroborate — enrichment gets another shot later.
         site = _clean_url(item.get("website"))
         if site and _registrable_domain(site) not in source_domains:
             site = None
+        # Domain is the real identity: the model returns the same university under
+        # different names across runs ("UNSW Sydney" vs "The University of New South
+        # Wales"), and name_key alone let both insert as separate rows.
+        dkey = domain_key_for(site) if site else None
+        if not dkey:
+            dkey = registry_domain_by_name.get(key)
+
+        # Already in the catalog (almost always, post registry-seed): rank it in
+        # place rather than skipping, so the seeded roster gains a ranked head.
+        current = by_domain.get(dkey) if dkey else None
+        if current is None:
+            current = by_name.get(key)
+        if current is not None:
+            if current.seed_rank is None:
+                current.seed_rank = idx + 1
+                added += 1
+            current.qs_world_rank = current.qs_world_rank or _clean_rank(item.get("qs_world_rank"))
+            current.national_rank = current.national_rank or _clean_rank(item.get("national_rank"))
+            current.university_type = current.university_type or _clean_text(item.get("university_type"), 20)
+            current.city = current.city or _clean_text(item.get("city"), 160)
+            if site and not current.website_url:
+                current.website_url = site
+            if dkey and not current.domain_key and dkey not in existing_domains:
+                current.domain_key = dkey
+                existing_domains.add(dkey)
+            if added >= want:
+                break
+            continue
+
+        existing_keys.add(key)
+        if dkey:
+            existing_domains.add(dkey)
         db.add(models.CourseCatalogUniversity(
             country_code=code,
             name=name,
             name_key=key,
+            domain_key=dkey,
             city=_clean_text(item.get("city"), 160),
             qs_world_rank=_clean_rank(item.get("qs_world_rank")),
             national_rank=_clean_rank(item.get("national_rank")),
@@ -460,11 +714,21 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
     {"courses_upserted": int, "grounded": bool}. Raises on total AI failure so the
     caller can decide (a failed refresh must NOT stamp last_verified_at)."""
     cname = country_name(uni.country_code) or uni.country_code
+    site_hint = f" (official site: {uni.website_url})" if uni.website_url else ""
     prompt = (
-        "You are Rilono AI, a study-abroad data researcher keeping a university database current.\n"
-        f"Research {uni.name} ({cname}) and return its CURRENT profile and its most popular degree "
-        "programs for INTERNATIONAL students.\n\n"
-        'Return STRICTLY a JSON object:\n{'
+        "You are Rilono AI, a study-abroad data researcher keeping a university database current.\n\n"
+        # ORDER MATTERS. A prompt that opens with "return STRICTLY a JSON object" makes
+        # the model treat this as pure formatting and it never invokes the Search tool —
+        # measured: 0 grounding chunks for every JSON-first phrasing, vs 8-20 when the
+        # research task leads and the JSON is the closing deliverable. Tuition, deadlines
+        # and score cutoffs change yearly and consultants quote them to students, so this
+        # must come off live official pages, not model memory. Do not reorder this.
+        f"STEP 1 — RESEARCH. Use Google Search to read the OFFICIAL pages of {uni.name} "
+        f"({cname}){site_hint}: international tuition fees, course catalogue, entry "
+        "requirements and application deadlines. Quote the key current figures you find "
+        "and note which official page each came from. Do not answer from memory.\n\n"
+        "STEP 2 — REPORT. After the research, output the findings as a JSON object.\n\n"
+        'JSON shape:\n{'
         '"profile":{'
         '"city":"City, Region",'
         '"qs_world_rank":"Most recent QS World rank, plain number or range. \\"N/A\\" if unranked.",'
@@ -499,7 +763,8 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
         "use up-to-date sources; use \"N/A\" rather than guessing.\n"
         "- URLs must be on the university's real official domain — never invent one; \"N/A\" instead.\n"
         "- The application fee is the one-off fee to APPLY, which is different from tuition.\n"
-        "- Output ONLY the JSON object, no prose and no ``` fences."
+        "- End your reply with the JSON object (a ```json fence is fine). Keep the STEP 1 "
+        "research notes brief — the JSON is the deliverable."
     )
     data, grounded, source_urls, source_domains, _model = _generate_json(prompt, usage_source, prefer_grounded=True)
     if not data:
@@ -532,6 +797,22 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
     if source_urls:
         uni.source_urls = json.dumps(source_urls)
     site_domain = _registrable_domain(uni.website_url)
+    # Backfill the identity key once a website is known, so later runs can dedupe on
+    # domain instead of the unreliable display name. Never overwrite a known key, and
+    # skip if another row in this country already owns it (the partial unique index
+    # would reject the flush and abort the whole enrichment).
+    if site_domain and not uni.domain_key:
+        clash = (
+            db.query(models.CourseCatalogUniversity.id)
+            .filter(
+                models.CourseCatalogUniversity.country_code == uni.country_code,
+                models.CourseCatalogUniversity.domain_key == site_domain,
+                models.CourseCatalogUniversity.id != uni.id,
+            )
+            .first()
+        )
+        if not clash:
+            uni.domain_key = site_domain
 
     existing_courses = {
         (c.name_key, c.degree_level): c
@@ -667,69 +948,74 @@ def query_catalog(
     q: Optional[str] = None,
     max_tuition: Optional[int] = None,
     limit_universities: int = 30,
-) -> list[tuple[models.CourseCatalogUniversity, list[models.CourseCatalogCourse]]]:
+    offset_universities: int = 0,
+) -> tuple[list[tuple[models.CourseCatalogUniversity, list[models.CourseCatalogCourse]]], int]:
     """Universities (with their matching courses) for the browse view, best-ranked first.
 
     Course-level filters (level/discipline/q/max_tuition) narrow WHICH courses show
     AND which universities appear (a university with zero matching courses is
     dropped — unless there are no course filters at all, when stub universities
     awaiting enrichment still show with an empty course list).
+
+    Returns (page_rows, total_matching) — the catalog runs to ~1.5k universities, far
+    past one screen, so the caller pages through with offset_universities and shows
+    the true total rather than silently truncating the tail.
     """
     from sqlalchemy import or_
 
     code = (country_code or "").upper()
-    uq = (
-        db.query(models.CourseCatalogUniversity)
-        .filter(
-            models.CourseCatalogUniversity.country_code == code,
-            models.CourseCatalogUniversity.is_active.is_(True),
-        )
-    )
+    U, C = models.CourseCatalogUniversity, models.CourseCatalogCourse
     has_course_filters = bool(degree_level or discipline or q or max_tuition)
-    unis = uq.all()
+    start = max(0, int(offset_universities or 0))
+    limit = max(1, int(limit_universities))
 
-    # Sort: seeded rank first (it encodes the discovery ordering), then name.
-    unis.sort(key=lambda u: (u.seed_rank if u.seed_rank is not None else 10_000, u.name or ""))
+    def _course_filters(cq):
+        if degree_level and degree_level in _LEVEL_KEYS:
+            cq = cq.filter(C.degree_level == degree_level)
+        if discipline:
+            cq = cq.filter(C.discipline == discipline)
+        if max_tuition:
+            cq = cq.filter(C.tuition_amount.isnot(None), C.tuition_amount <= int(max_tuition))
+        if q:
+            needle = f"%{str(q).strip()[:80]}%"
+            cq = cq.filter(or_(C.course_name.ilike(needle), C.discipline.ilike(needle)))
+        return cq
 
-    cq = db.query(models.CourseCatalogCourse).filter(
-        models.CourseCatalogCourse.country_code == code,
-        models.CourseCatalogCourse.is_active.is_(True),
+    # Order: ranked head first, then rank-less rows by name. Done in SQL so paging is
+    # a real LIMIT/OFFSET — hydrating every university and every course of a country
+    # on each request does not scale now that a country holds ~1.1k universities.
+    order_by = (U.seed_rank.is_(None), U.seed_rank.asc(), U.name.asc(), U.id.asc())
+
+    uq = db.query(U).filter(U.country_code == code, U.is_active.is_(True))
+    if has_course_filters:
+        matching_uni_ids = _course_filters(
+            db.query(C.university_id).filter(C.country_code == code, C.is_active.is_(True))
+        ).distinct()
+        # A name search should also surface universities matched BY NAME even when no
+        # course matches (consultants search "melbourne" as often as "data science").
+        if q:
+            name_needle = f"%{str(q).strip()[:80]}%"
+            uq = uq.filter(or_(U.id.in_(matching_uni_ids), U.name.ilike(name_needle)))
+        else:
+            uq = uq.filter(U.id.in_(matching_uni_ids))
+
+    total = uq.count()
+    page = uq.order_by(*order_by).offset(start).limit(limit).all()
+    if not page:
+        return [], total
+
+    # Courses only for the universities actually on this page.
+    page_ids = [u.id for u in page]
+    cq = _course_filters(
+        db.query(C).filter(C.university_id.in_(page_ids), C.is_active.is_(True))
     )
-    if degree_level and degree_level in _LEVEL_KEYS:
-        cq = cq.filter(models.CourseCatalogCourse.degree_level == degree_level)
-    if discipline:
-        cq = cq.filter(models.CourseCatalogCourse.discipline == discipline)
-    if max_tuition:
-        cq = cq.filter(
-            models.CourseCatalogCourse.tuition_amount.isnot(None),
-            models.CourseCatalogCourse.tuition_amount <= int(max_tuition),
-        )
-    if q:
-        needle = f"%{str(q).strip()[:80]}%"
-        cq = cq.filter(or_(
-            models.CourseCatalogCourse.course_name.ilike(needle),
-            models.CourseCatalogCourse.discipline.ilike(needle),
-        ))
-    by_uni: dict[int, list[models.CourseCatalogCourse]] = {}
+    by_uni: dict[int, list] = {}
     for course in cq.all():
         by_uni.setdefault(course.university_id, []).append(course)
     for course_list in by_uni.values():
         course_list.sort(key=lambda c: (c.degree_level or "", c.course_name or ""))
 
-    # A name search should also surface universities matched BY NAME even when no
-    # course matches (consultants search "melbourne" as often as "data science").
-    name_needle = str(q).strip().lower() if q else ""
-
-    out = []
-    for uni in unis:
-        matched = by_uni.get(uni.id, [])
-        if has_course_filters and not matched:
-            if not (name_needle and name_needle in (uni.name or "").lower()):
-                continue
-        out.append((uni, matched))
-        if len(out) >= max(1, int(limit_universities)):
-            break
-    return out
+    return [(u, by_uni.get(u.id, [])) for u in page], total
 
 
 def catalog_stats(db: Session) -> dict:

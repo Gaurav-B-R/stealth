@@ -42,10 +42,18 @@ COURSE_CATALOG_REFRESH_ENABLED = _env_flag("COURSE_CATALOG_REFRESH_ENABLED", "tr
 COURSE_CATALOG_REFRESH_HOUR_UTC = max(0, min(23, int(os.getenv("COURSE_CATALOG_REFRESH_HOUR_UTC", "4") or "4")))
 COURSE_CATALOG_REFRESH_MINUTE_UTC = max(0, min(59, int(os.getenv("COURSE_CATALOG_REFRESH_MINUTE_UTC", "15") or "15")))
 COURSE_CATALOG_REFRESH_POLL_SECONDS = max(60, int(os.getenv("COURSE_CATALOG_REFRESH_POLL_SECONDS", "300") or "300"))
-# Catalog size target per destination country (the user-facing "Top N").
+# AI-discovery target per country: the ranked "Top N" head of the catalog. The long
+# tail no longer comes from the model — it is seeded for free from the curated domain
+# registry (see COURSE_CATALOG_SEED_FROM_REGISTRY), so this stays small and cheap.
 COURSE_CATALOG_TARGET_PER_COUNTRY = max(1, int(os.getenv("COURSE_CATALOG_TARGET_PER_COUNTRY", "50") or "50"))
-# Enrichment calls per daily run — the spend throttle.
-COURSE_CATALOG_DAILY_BATCH = max(1, int(os.getenv("COURSE_CATALOG_DAILY_BATCH", "12") or "12"))
+# Seed every curated registry university (US 1121 / CA 129 / DE 83 / AU 74 / UK 60).
+# Free — no AI call — and hallucination-proof, since these are real institutions with
+# their official domains. Enrichment then fills courses/rankings over time.
+COURSE_CATALOG_SEED_FROM_REGISTRY = _env_flag("COURSE_CATALOG_SEED_FROM_REGISTRY", "true")
+# Enrichment calls per daily run — the spend throttle. At ~$0.037/university this is
+# the main cost dial: 49/day ≈ a full ~1.5k sweep inside the 30-day re-verify window
+# (~$54/mo). Lower it to slow spend; the queue is staleness-ordered so nothing starves.
+COURSE_CATALOG_DAILY_BATCH = max(1, int(os.getenv("COURSE_CATALOG_DAILY_BATCH", "49") or "49"))
 # A university is due for re-verification after this many days.
 COURSE_CATALOG_REVERIFY_DAYS = max(1, int(os.getenv("COURSE_CATALOG_REVERIFY_DAYS", "30") or "30"))
 
@@ -60,15 +68,26 @@ STUB_FAILURE_DEACTIVATE_AFTER = 6
 FAILED_RUN_RETRY_COOLDOWN = timedelta(hours=6)
 
 
+# How long a "running" row is trusted before another worker may seize it as stale.
+# MUST exceed a legitimate run's wall time or the poll loop starts a second, concurrent
+# run and doubles the spend. Enrichment is sequential and a grounded call measures
+# 45-95s, so this scales with the batch (3 min/university) instead of a fixed 2h —
+# at batch=49 that is ~2.5h of headroom against a ~75-90 min real run.
+STALE_RUN_TAKEOVER = max(timedelta(hours=2), timedelta(seconds=COURSE_CATALOG_DAILY_BATCH * 180))
+# A run must never bleed into the next day's window; stop starting new enrichments
+# past this and finish cleanly with whatever completed.
+RUN_SOFT_DEADLINE = timedelta(seconds=int(STALE_RUN_TAKEOVER.total_seconds() * 0.75))
+
+
 def run_in_progress(existing_run: Optional[models.CourseCatalogRefreshRun]) -> bool:
-    """True while a run row is legitimately mid-flight (running, started <2h ago).
+    """True while a run row is legitimately mid-flight (running, started recently).
     Older 'running' rows are stale (a hot-reload killed the thread) and may be seized."""
     if existing_run is None or existing_run.status != "running" or not existing_run.started_at:
         return False
     started = existing_run.started_at
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - started) < timedelta(hours=2)
+    return (datetime.now(timezone.utc) - started) < STALE_RUN_TAKEOVER
 
 
 def _catalog_country_codes() -> list[str]:
@@ -176,14 +195,30 @@ def run_course_catalog_refresh_job(
         refreshed_total = 0
         courses_total = 0
 
-        # Phase 1 — discovery: top-N stubs for any country below target.
+        # Phase 0 — registry seed: free, exact, no AI. Runs before discovery so the
+        # model is never asked to re-enumerate universities we already hold, which is
+        # what produced alias duplicates ("UNSW Sydney" vs "The University of New
+        # South Wales") every time a country sat below target.
+        for code in codes:
+            seeded = 0
+            if COURSE_CATALOG_SEED_FROM_REGISTRY:
+                try:
+                    seeded = course_catalog.seed_universities_from_registry(db, code)
+                except Exception as exc:  # noqa: BLE001 — never block the run
+                    db.rollback()
+                    logger.exception("Course catalog registry seed failed for %s", code)
+                    detail["errors"].append(f"seed:{code}: {str(exc)[:200]}")
+            discovered_total += seeded
+            detail["countries"][code] = {"seeded": seeded}
+
+        # Phase 1 — discovery: top-N stubs for any country still below target.
         for code in codes:
             try:
                 added = course_catalog.discover_universities(
                     db, code, COURSE_CATALOG_TARGET_PER_COUNTRY, usage_source=USAGE_SOURCE
                 )
                 discovered_total += added
-                detail["countries"][code] = {"discovered": added}
+                detail["countries"].setdefault(code, {})["discovered"] = added
             except Exception as exc:  # noqa: BLE001 — one country must not block the rest
                 db.rollback()
                 logger.exception("Course catalog discovery failed for %s", code)
@@ -201,15 +236,19 @@ def run_course_catalog_refresh_job(
         )
 
         def _staleness(uni: models.CourseCatalogUniversity):
-            # Never-enriched stubs first (in discovery order), then oldest-verified.
-            # Repeat failers sort behind healthy peers so they can't starve the batch.
+            # Never-enriched stubs first (ranked head before the seeded tail), then
+            # oldest-verified. Repeat failers sort behind healthy peers so they can't
+            # starve the batch. The trailing name/id keys matter now that the roster is
+            # ~1.5k registry stubs that tie on every other key — without them the fill
+            # order is arbitrary heap order and differs run to run.
             fails = int(getattr(uni, "consecutive_failures", 0) or 0)
+            tiebreak = ((uni.name or "").lower(), int(uni.id or 0))
             if uni.last_verified_at is None:
-                return (0, fails, uni.seed_rank if uni.seed_rank is not None else 10_000, "")
+                return (0, fails, uni.seed_rank if uni.seed_rank is not None else 10_000, "", tiebreak)
             ts = uni.last_verified_at
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
-            return (1, fails, 0, ts.isoformat())
+            return (1, fails, 0, ts.isoformat(), tiebreak)
 
         queue = [
             u for u in sorted(queue, key=_staleness)
@@ -217,7 +256,21 @@ def run_course_catalog_refresh_job(
             or (u.last_verified_at.replace(tzinfo=timezone.utc) if u.last_verified_at.tzinfo is None else u.last_verified_at) < cutoff
         ][:batch]
 
+        run_started = datetime.now(timezone.utc)
         for uni in queue:
+            # Stop starting new work past the soft deadline: a run that outlives the
+            # stale-takeover window would be seized by the poll loop and re-run
+            # concurrently, doubling spend. Whatever finished is committed normally.
+            if datetime.now(timezone.utc) - run_started > RUN_SOFT_DEADLINE:
+                logger.warning(
+                    "Course catalog run hit the soft deadline after %d/%d universities; "
+                    "finishing early (remaining work rolls into the next run).",
+                    refreshed_total, len(queue),
+                )
+                detail["errors"].append(
+                    f"deadline: stopped after {refreshed_total}/{len(queue)} universities"
+                )
+                break
             try:
                 result = course_catalog.refresh_university(db, uni, usage_source=USAGE_SOURCE)
                 refreshed_total += 1

@@ -9211,6 +9211,9 @@ def public_portal_data(payload: PublicPortalDataRequest, request: Request, db: S
 # ===========================================================================
 
 COURSE_FINDER_ACTION_KEY = "course_finder"
+# Browse page size. Deliberately independent of the agent's per-country target: the
+# catalog holds ~1.5k universities per country, and one response must stay small.
+COURSE_CATALOG_BROWSE_PAGE_SIZE = max(10, min(200, int(os.getenv("COURSE_CATALOG_BROWSE_PAGE_SIZE", "60") or "60")))
 
 
 def _serialize_course_finder_rec(row: models.EnterpriseCourseFinderRec, *, include_items: bool = True) -> dict:
@@ -9276,10 +9279,11 @@ def enterprise_course_catalog_browse(
     discipline: Optional[str] = None,
     q: Optional[str] = None,
     max_tuition: Optional[int] = None,
+    offset: int = 0,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """FREE catalog browse — universities with their matching courses."""
+    """FREE catalog browse — universities with their matching courses (paged)."""
     _require_enterprise_membership(db=db, user=current_user, request=request)
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.course_catalog_browse",
@@ -9296,24 +9300,30 @@ def enterprise_course_catalog_browse(
             safe_max_tuition = max(0, min(int(max_tuition), 10_000_000)) or None
         except Exception:
             safe_max_tuition = None
-    # Cover the agent's full per-country target (default 50) — a cap below it would
-    # silently hide the tail of the catalog with no pagination to reach it.
-    from app.services.course_catalog_refresh import COURSE_CATALOG_TARGET_PER_COUNTRY
+    # The catalog runs to ~1.5k universities per country, so the page size is fixed
+    # and the tail is reached by paging — it must NOT track the agent's target, which
+    # would put the entire country in one response.
+    page_size = COURSE_CATALOG_BROWSE_PAGE_SIZE
+    safe_offset = max(0, min(int(offset or 0), 100_000))
 
-    rows = course_catalog.query_catalog(
+    rows, total = course_catalog.query_catalog(
         db,
         country_code=code,
         degree_level=(level or "").strip().lower() or None,
         discipline=(discipline or "").strip() or None,
         q=(q or "").strip() or None,
         max_tuition=safe_max_tuition,
-        limit_universities=max(50, COURSE_CATALOG_TARGET_PER_COUNTRY + 10),
+        limit_universities=page_size,
+        offset_universities=safe_offset,
     )
     return {
         "country_code": code,
         "universities": [course_catalog.serialize_university(u, courses) for u, courses in rows],
-        "total_universities": len(rows),
-        "total_courses": sum(len(courses) for _u, courses in rows),
+        "total_universities": total,          # all matches, across pages
+        "page_courses": sum(len(courses) for _u, courses in rows),   # this page only
+        "offset": safe_offset,
+        "page_size": page_size,
+        "has_more": (safe_offset + len(rows)) < total,
     }
 
 
@@ -9372,7 +9382,7 @@ def enterprise_course_finder_recommend(
     # Hard-block a broke wallet BEFORE spending any Gemini tokens.
     credits.enforce_action_or_402(db, organization.id, COURSE_FINDER_ACTION_KEY)
 
-    catalog_rows = course_catalog.query_catalog(
+    catalog_rows, _total = course_catalog.query_catalog(
         db,
         country_code=code,
         degree_level=(payload.degree_level or "").strip().lower() or None,
@@ -9383,7 +9393,7 @@ def enterprise_course_finder_recommend(
     if field_query and sum(len(c) for _u, c in catalog_rows) < course_catalog.RECOMMEND_MIN_CATALOG_ROWS:
         # A literal name search can be too narrow ("ML" won't match "Machine Learning"
         # rows verbatim) — widen to the discipline/level slice and let the model pick.
-        catalog_rows = course_catalog.query_catalog(
+        catalog_rows, _total = course_catalog.query_catalog(
             db,
             country_code=code,
             degree_level=(payload.degree_level or "").strip().lower() or None,

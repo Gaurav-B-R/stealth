@@ -1457,6 +1457,42 @@ button.set-url:hover { border-color: var(--primary); color: var(--primary-600); 
 .doc-act { transition: background .15s, color .15s, border-color .15s; }
 .doc-del:hover { background: rgba(239, 68, 68, .12); color: var(--danger); border-color: rgba(239, 68, 68, .25); }
 
+/* ---------- Info tip (ⓘ) ----------
+   The icon sits inline next to a heading; the bubble is a single body-level layer
+   (#infoTipPop, positioned in JS) so cards that clip their overflow can't cut it off. */
+.info-tip {
+  flex: none;
+  width: 17px; height: 17px; padding: 0; margin-left: 2px;
+  display: inline-grid; place-items: center; vertical-align: middle;
+  border: 1px solid var(--border-strong); border-radius: 50%;
+  background: var(--surface-2); color: var(--muted);
+  font: 800 11px/1 var(--font); cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s, transform .15s;
+}
+.info-tip:hover, .info-tip:focus-visible, .info-tip[aria-expanded="true"] {
+  background: var(--primary-600); border-color: transparent; color: #fff; transform: scale(1.08);
+}
+.info-tip:focus-visible { outline: 2px solid rgba(99, 102, 241, .45); outline-offset: 2px; }
+.info-tip-pop {
+  position: fixed; top: 0; left: 0; z-index: 400;
+  width: max-content; max-width: min(340px, calc(100vw - 24px));
+  padding: 11px 13px; border-radius: 12px;
+  background: #101828; color: #e2e8f0;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, .3);
+  font-size: 12.25px; font-weight: 500; line-height: 1.6; text-align: left; white-space: normal;
+  opacity: 0; visibility: hidden; transform: translateY(-4px);
+  transition: opacity .14s ease, transform .14s ease, visibility .14s;
+}
+.info-tip-pop.flip { transform: translateY(4px); }
+.info-tip-pop.show { opacity: 1; visibility: visible; transform: translateY(0); }
+.info-tip-pop b { color: #fff; font-weight: 750; }
+.info-tip-pop::after {
+  content: ""; position: absolute; top: -4px; left: var(--tip-arrow, 50%);
+  width: 9px; height: 9px; margin-left: -4.5px; border-radius: 2px;
+  background: #101828; transform: rotate(45deg);
+}
+.info-tip-pop.flip::after { top: auto; bottom: -4px; }
+
 /* Deep Scan: animate the actual private document instead of a generic illustration. */
 .deep-scan-card {
   padding: 0;
@@ -1480,6 +1516,7 @@ button.set-url:hover { border-color: var(--primary); color: var(--primary-600); 
   box-shadow: 0 7px 16px rgba(99, 102, 241, .24);
 }
 .deep-scan-description { margin-top: 5px; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
+.deep-scan-title .info-tip { margin-left: 0; }  /* the title row already supplies the gap */
 .deep-scan-btn { flex: none; min-width: 188px; }
 .deep-scan-visualizer {
   position: relative;
@@ -2064,6 +2101,8 @@ button.set-url:hover { border-color: var(--primary); color: var(--primary-600); 
 }
 
 .cf-uni { margin-bottom: 12px; }
+.cf-count { font-size: 13px; color: var(--muted); margin: 0 0 12px 2px; }
+.cf-more { display: flex; justify-content: center; padding: 6px 0 18px; }
 .cf-uni-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
 .cf-uni-title h3 { margin: 0; font-size: 16.5px; letter-spacing: -.01em; }
 .cf-uni-sub { color: var(--text-2); font-size: 12.5px; margin-top: 2px; text-transform: capitalize; }

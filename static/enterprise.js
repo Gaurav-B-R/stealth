@@ -526,6 +526,104 @@
     });
   }
 
+  /* ---------------- info tip (ⓘ) ----------------
+     Explanatory copy that would otherwise crowd a card lives behind a small ⓘ: hover or
+     keyboard-focus reveals it, click/tap pins it open, Esc or an outside click closes it.
+     The bubble renders into ONE body-level layer rather than beside the icon because some
+     hosts clip their own overflow (.deep-scan-card) and would cut an in-flow popover off.
+     `html` is trusted markup (interpolate user values through esc() before passing). */
+  function infoTip(html, label) {
+    return `<button type="button" class="info-tip" aria-expanded="false" aria-label="${
+      esc(label || "More information")}" data-tip="${esc(html)}">i</button>`;
+  }
+  const tipState = { el: null, owner: null, pinned: false, wired: false };
+  function infoTipLayer() {
+    if (!tipState.el) {
+      const el = document.createElement("div");
+      el.className = "info-tip-pop";
+      el.id = "infoTipPop";
+      el.setAttribute("role", "tooltip");
+      document.body.appendChild(el);
+      tipState.el = el;
+    }
+    return tipState.el;
+  }
+  function hideInfoTip() {
+    if (tipState.owner) tipState.owner.setAttribute("aria-expanded", "false");
+    tipState.owner = null;
+    tipState.pinned = false;
+    if (tipState.el) tipState.el.classList.remove("show");
+  }
+  function showInfoTip(btn, pinned) {
+    const el = infoTipLayer();
+    if (tipState.owner !== btn) {
+      if (tipState.owner) tipState.owner.setAttribute("aria-expanded", "false");
+      el.innerHTML = btn.dataset.tip || "";
+      tipState.owner = btn;
+      tipState.pinned = false;
+      btn.setAttribute("aria-expanded", "true");
+    }
+    if (pinned) tipState.pinned = true;
+    el.classList.add("show");
+    positionInfoTip();
+  }
+  // The layer is position:fixed and only ever hidden with opacity/visibility, so it always
+  // has real measurements here. Clamp it inside the viewport, flip above the icon when
+  // there's no room below, and re-aim the arrow at the icon after any clamping.
+  function positionInfoTip() {
+    const btn = tipState.owner, el = tipState.el;
+    if (!btn || !el) return;
+    const r = btn.getBoundingClientRect();
+    const gap = 10, edge = 10;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    const roomBelow = window.innerHeight - r.bottom;
+    const flip = roomBelow < h + gap + edge && r.top > roomBelow;
+    const top = flip ? r.top - gap - h : r.bottom + gap;
+    const left = Math.max(edge, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - edge));
+    el.classList.toggle("flip", flip);
+    el.style.left = Math.round(left) + "px";
+    el.style.top = Math.round(top) + "px";
+    // Keep the arrow off the bubble's rounded corners when the icon sits at a screen edge.
+    const arrow = Math.min(Math.max(r.left + r.width / 2 - left, 15), w - 15);
+    el.style.setProperty("--tip-arrow", Math.round(arrow) + "px");
+  }
+  function wireInfoTips() {
+    if (tipState.wired) return;
+    tipState.wired = true;
+    const tipBtn = (e) => (e.target instanceof Element ? e.target.closest(".info-tip") : null);
+    const inTip = (e) => (e.target instanceof Element ? e.target.closest("#infoTipPop") : null);
+    document.addEventListener("pointerover", (e) => {
+      // A re-render (scan finished, status changed) can replace the icon underneath an
+      // open tip — drop the orphan rather than leave a bubble pointing at nothing.
+      if (tipState.owner && !tipState.owner.isConnected) hideInfoTip();
+      const btn = tipBtn(e);
+      if (btn) { if (!tipState.pinned || tipState.owner === btn) showInfoTip(btn, false); return; }
+      if (tipState.owner && !tipState.pinned && !inTip(e)) hideInfoTip();
+    });
+    document.addEventListener("pointerleave", () => { if (!tipState.pinned) hideInfoTip(); });
+    document.addEventListener("focusin", (e) => { const btn = tipBtn(e); if (btn) showInfoTip(btn, false); });
+    document.addEventListener("focusout", (e) => {
+      if (tipBtn(e) && tipBtn(e) === tipState.owner && !tipState.pinned) hideInfoTip();
+    });
+    // Capture phase: the icon can sit inside a clickable row (a history row, a card), and
+    // opening its explanation must not also trigger that row's action.
+    document.addEventListener("click", (e) => {
+      const btn = tipBtn(e);
+      if (btn) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (tipState.owner === btn && tipState.pinned) hideInfoTip();
+        else showInfoTip(btn, true);
+        return;
+      }
+      if (inTip(e)) return;
+      if (tipState.owner) hideInfoTip();
+    }, true);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tipState.owner) hideInfoTip(); });
+    window.addEventListener("scroll", () => { if (tipState.owner) hideInfoTip(); }, true);
+    window.addEventListener("resize", () => { if (tipState.owner) hideInfoTip(); });
+  }
+
   /* ---------------- landmark photo ---------------- */
   // Real bundled landmark photo per country. The parent .country-art carries a
   // gradient background, so if an image is ever missing it degrades gracefully.
@@ -696,6 +794,9 @@
         if (data.onboarding_required) { showOnboard(); return; }
         if (redirectToPortalIfNeeded(data)) return;
         await boot({ fromAuthAction: true });
+        // Confirm only once boot actually landed in the workspace — it can bounce back to the
+        // auth screen (cookie/permission problems), which surfaces its own error instead.
+        if ($("#appView").classList.contains("active")) toast("Login successful — welcome back!", "success");
       } catch (ex) {
         showLoginError(ex.message);
         resetEnterpriseTurnstile("login");
@@ -765,8 +866,24 @@
     let target;
     try { target = new URL(portalUrl, location.href); } catch (e) { return false; }
     if (target.origin === location.origin) return false;
+    // Signing in on the marketing origin hops to the org's own portal subdomain, which would
+    // discard an in-page toast. Carry the confirmation across (consumed by consumeSignedInFlag).
+    target.searchParams.set("signed_in", "1");
     window.location.assign(target.toString());
     return true;
+  }
+
+  // Reads the post-redirect "you just signed in" flag exactly once, stripping it from the URL
+  // so a refresh never replays the confirmation.
+  function consumeSignedInFlag() {
+    try {
+      const params = new URLSearchParams(location.search);
+      if (!params.get("signed_in")) return false;
+      params.delete("signed_in");
+      const qs = params.toString();
+      history.replaceState({}, "", location.pathname + (qs ? `?${qs}` : "") + (location.hash || ""));
+      return true;
+    } catch (e) { return false; }
   }
   function showAuth() { $("#authView").classList.remove("hidden"); $("#onboardView").classList.add("hidden"); $("#appView").classList.remove("active"); }
   function showOnboard() { $("#authView").classList.add("hidden"); $("#onboardView").classList.remove("hidden"); $("#appView").classList.remove("active"); }
@@ -2655,8 +2772,8 @@
         <div class="cp-card deep-scan-card" id="deepScanCard">
           <div class="deep-scan-head">
             <div class="deep-scan-copy">
-              <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">🛡️</span> Deep Scan client audit</div>
-              <div class="deep-scan-description">Rilono AI strictly audits the <b>entire dossier</b> — these documents' contents plus profile, case records, notes, emails and payments — and flags anything irregular.</div>
+              <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">🛡️</span> Deep Scan client audit${
+                infoTip("Rilono AI strictly audits the <b>entire dossier</b> — these documents' contents plus profile, case records, notes, emails and payments — and flags anything irregular.", "What Deep Scan checks")}</div>
             </div>
             <button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanOpenBtn">Open Deep Scan</button>
           </div>
@@ -4638,15 +4755,20 @@
       // A scan may be running in an older render of this same client — keep the button
       // locked so it can't be double-run (and double-charged) from this one.
       const scanning = deepScanInflight.has(cl.id);
+      // The "what does it read / what does it cost" explanation is reference material, not
+      // something to re-read on every visit — it lives behind the ⓘ so the card stays a
+      // one-line header + action. An unconfigured server still shows inline: that's a
+      // blocking state, not an explanation.
+      const scanTip = `Rilono AI strictly audits ${esc(first)}'s <b>entire dossier</b> — profile details, stage case records, the contents of every uploaded document, notes, emails, universities, interview results and payments — and flags anything irregular or inconsistent.<br><br>${
+        isFree ? `The first scan for each client is <b>free</b>; after that it's <b>${cost} credits</b> per scan.`
+          : `Each scan costs <b>${cost} credits</b>.`}`;
       const heroCard = `
         <div class="cp-card deep-scan-card" id="deepScanCard">
           <div class="deep-scan-head">
             <div class="deep-scan-copy">
-              <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">🛡️</span> Deep Scan — full client audit</div>
-              <div class="deep-scan-description">Rilono AI strictly audits ${esc(first)}'s <b>entire dossier</b> — profile details, stage case records, the contents of every uploaded document, notes, emails, universities, interview results and payments — and flags anything irregular or inconsistent.
-                ${!ds.aiAvailable ? "<b>Rilono AI isn't configured on this server yet.</b>"
-                  : isFree ? `The first scan for each client is <b>free</b>; after that it's <b>${cost} credits</b> per scan.`
-                  : `Each scan costs <b>${cost} credits</b>.`}</div>
+              <div class="deep-scan-title"><span class="deep-scan-title-icon" aria-hidden="true">🛡️</span> Deep Scan — full client audit${
+                infoTip(scanTip, "What Deep Scan checks")}</div>
+              ${!ds.aiAvailable ? `<div class="deep-scan-description"><b>Rilono AI isn't configured on this server yet.</b></div>` : ""}
             </div>
             ${canEdit ? `<button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn" ${(!ds.aiAvailable || scanning) ? "disabled" : ""}>${
               scanning ? '<span class="spinner"></span> Scanning…' : isFree ? "Run Deep Scan · Free" : `Run Deep Scan · ${cost} cr`}</button>` : ""}
@@ -6676,6 +6798,9 @@
     const m = cf.meta || {};
     const totalUnis = (m.countries || []).reduce((s, x) => s + (x.universities || 0), 0);
     const totalCourses = (m.countries || []).reduce((s, x) => s + (x.courses || 0), 0);
+    // Most of the roster is seeded-but-not-yet-researched, so show what is actually
+    // verified rather than implying every listed university has verified course data.
+    const totalEnriched = (m.countries || []).reduce((s, x) => s + (x.universities_enriched || 0), 0);
     const latest = (m.countries || []).map((x) => x.last_verified_at).filter(Boolean).sort().pop();
     c.innerHTML = `
       <div class="cf-hero">
@@ -6688,6 +6813,7 @@
         </div>
         <div class="cf-hero-stats">
           <div class="cf-stat"><b>${totalUnis}</b><span>Universities</span></div>
+          <div class="cf-stat" title="Universities whose courses &amp; fees Rilono AI has verified from official sources"><b>${totalEnriched}</b><span>Verified</span></div>
           <div class="cf-stat"><b>${totalCourses}</b><span>Courses</span></div>
           <div class="cf-stat"><b>${latest ? esc(cfAgo(latest)) : "—"}</b><span>Data refreshed</span></div>
         </div>
@@ -6742,24 +6868,37 @@
     cfLoadBrowse();
   }
 
-  async function cfLoadBrowse() {
+  async function cfLoadBrowse(offset) {
     const body = $("#cfBrowseBody");
     if (!body) return;
-    body.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    const append = Number(offset) > 0;
+    if (!append) body.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     const seq = ++cf.browseSeq;
     const p = new URLSearchParams({ country: cf.country });
     if (cf.level) p.set("level", cf.level);
     if (cf.discipline) p.set("discipline", cf.discipline);
     if (cf.q) p.set("q", cf.q);
     if (cf.maxTuition && Number(cf.maxTuition) > 0) p.set("max_tuition", String(Math.floor(Number(cf.maxTuition))));
+    if (append) p.set("offset", String(offset));
     try {
       const d = await api("/course-catalog?" + p.toString());
       if (seq !== cf.browseSeq || state.view !== "coursefinder") return; // stale response
-      cf.browse = d;
-      cfDrawBrowse();
+      // The catalog runs to ~1.5k universities per country, so browse is paged.
+      // Append the new page in place — a full re-render would collapse every
+      // university card the consultant had expanded and jump the scroll position.
+      if (append && cf.browse) {
+        const prev = (cf.browse.universities || []).length;
+        d.universities = (cf.browse.universities || []).concat(d.universities || []);
+        cf.browse = d;
+        cfAppendBrowse(prev);
+      } else {
+        cf.browse = d;
+        cfDrawBrowse();
+      }
     } catch (ex) {
       if (seq !== cf.browseSeq) return;
-      body.innerHTML = errBox(ex);
+      if (append) { const b = $("#cfMoreBtn"); if (b) { b.disabled = false; b.textContent = "Load more"; } toast(ex.message, "error"); }
+      else body.innerHTML = errBox(ex);
     }
   }
 
@@ -6775,7 +6914,13 @@
         </div>`;
       return;
     }
-    body.innerHTML = unis.map((u, i) => cfUniCard(u, i)).join("");
+    const total = Number(cf.browse.total_universities || unis.length);
+    const more = !!cf.browse.has_more;
+    const counter = total > unis.length || more
+      ? `<div class="cf-count">Showing <b>${unis.length}</b> of <b>${total}</b> universities</div>` : "";
+    const moreBtn = more
+      ? `<div class="cf-more"><button class="btn btn-secondary" id="cfMoreBtn">Load more</button></div>` : "";
+    body.innerHTML = counter + unis.map((u, i) => cfUniCard(u, i)).join("") + moreBtn;
     $$(".cf-uni-toggle", body).forEach((btn) => {
       btn.onclick = () => {
         const card = btn.closest(".cf-uni");
@@ -6784,6 +6929,57 @@
         btn.textContent = tbl && card.classList.contains("cf-uni-open") ? "Hide courses" : `View courses (${btn.dataset.n})`;
       };
     });
+    cfWireMore(body);
+  }
+
+  // Wire the toggle handlers for a set of cards + the "Load more" button. Kept
+  // separate from cfDrawBrowse so appending a page doesn't re-render (and collapse)
+  // the cards already on screen.
+  function cfWireCards(scope) {
+    $$(".cf-uni-toggle", scope).forEach((btn) => {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = "1";
+      btn.onclick = () => {
+        const card = btn.closest(".cf-uni");
+        if (card) card.classList.toggle("cf-uni-open");
+        const tbl = card && card.querySelector(".cf-courses");
+        btn.textContent = tbl && card.classList.contains("cf-uni-open") ? "Hide courses" : `View courses (${btn.dataset.n})`;
+      };
+    });
+  }
+
+  function cfWireMore(body) {
+    cfWireCards(body);
+    const mb = $("#cfMoreBtn");
+    if (mb) mb.onclick = () => {
+      mb.disabled = true; mb.innerHTML = '<span class="spinner"></span> Loading…';
+      cfLoadBrowse((cf.browse && (cf.browse.universities || []).length) || 0);
+    };
+  }
+
+  // Append only the newly-fetched universities, leaving existing cards (and any the
+  // consultant expanded) untouched.
+  function cfAppendBrowse(prevCount) {
+    const body = $("#cfBrowseBody");
+    if (!body || !cf.browse) return;
+    const unis = cf.browse.universities || [];
+    const fresh = unis.slice(prevCount);
+    const oldMore = $("#cfMoreBtn");
+    const moreWrap = oldMore && oldMore.closest(".cf-more");
+    if (moreWrap) moreWrap.remove();
+    const frag = document.createElement("div");
+    frag.innerHTML = fresh.map((u, i) => cfUniCard(u, prevCount + i)).join("");
+    while (frag.firstChild) body.appendChild(frag.firstChild);
+    const counter = body.querySelector(".cf-count");
+    const total = Number(cf.browse.total_universities || unis.length);
+    if (counter) counter.innerHTML = `Showing <b>${unis.length}</b> of <b>${total}</b> universities`;
+    if (cf.browse.has_more) {
+      const wrap = document.createElement("div");
+      wrap.className = "cf-more";
+      wrap.innerHTML = '<button class="btn btn-secondary" id="cfMoreBtn">Load more</button>';
+      body.appendChild(wrap);
+    }
+    cfWireMore(body);
   }
 
   function cfUniCard(u, idx) {
@@ -7131,5 +7327,11 @@
      INIT
      ============================================================ */
   setupAuth();
-  boot();
+  wireInfoTips();
+  boot().then(() => {
+    // Signed in on another origin and got redirected here — confirm it now that we're in.
+    if (consumeSignedInFlag() && $("#appView").classList.contains("active")) {
+      toast("Login successful — welcome back!", "success");
+    }
+  });
 })();

@@ -715,7 +715,7 @@ def export_my_data(
         "notice": (
             "This is a copy of the personal data Rilono holds about your account. "
             "Document file contents are not included; download them from your dashboard. "
-            "For questions contact grievance@rilono.com."
+            "For questions contact contact@rilono.com."
         ),
         "account": {
             "id": u.id,

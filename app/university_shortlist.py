@@ -50,7 +50,7 @@ def _model_candidates() -> list[str]:
         )
     except Exception:
         candidates = []
-    return candidates or [os.getenv("GEMINI_MODEL", "gemini-3.1-pro")]
+    return candidates or [os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")]
 
 
 def _model_name() -> str:
