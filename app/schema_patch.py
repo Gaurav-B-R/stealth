@@ -1568,6 +1568,38 @@ def ensure_enterprise_signup_otps_table():
         ))
 
 
+def ensure_enterprise_step_up_otps_table():
+    """Create the enterprise_step_up_otps table (re-confirm codes for irreversible actions)."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        # No early return when the table exists: `Base.metadata.create_all()` may have created
+        # it from the model on an earlier boot, and the unique index below still has to land.
+        if not _table_exists(conn, "enterprise_step_up_otps"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_step_up_otps (
+                    id {pk},
+                    user_id INTEGER NOT NULL,
+                    organization_id INTEGER NOT NULL,
+                    purpose VARCHAR NOT NULL,
+                    context_key VARCHAR,
+                    code_hash VARCHAR NOT NULL,
+                    expires_at {ts} NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    consumed_at {ts},
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+        # One live code per actor per purpose per workspace: re-requesting replaces, so an
+        # older code stops working the moment a new one is sent.
+        conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_step_up_otps_scope "
+            "ON enterprise_step_up_otps(user_id, organization_id, purpose)"
+        ))
+
+
 def ensure_enterprise_support_requests_table():
     """Create the enterprise_support_requests table (help & feature requests)."""
     is_sqlite = engine.dialect.name == "sqlite"
@@ -3219,3 +3251,85 @@ def _backfill_course_catalog_derived_filters(conn):
         text("INSERT INTO app_data_migrations (migration_key) VALUES (:k)"),
         {"k": marker},
     )
+
+
+def ensure_international_payment_columns():
+    """Multi-currency settlement columns on the payment tables.
+
+    Rilono now charges in more than INR (see app/money.py). Two facts follow:
+
+      1. `amount_paise` is in the minor unit of that row's `currency`, so it can no
+         longer be summed across rows. Revenue must sum the INR settlement figure
+         Razorpay reports as `base_amount` — stored here as `base_amount_paise`.
+      2. Whether a card was foreign is not derivable from the amount, but it changes
+         both the cost of collection (~3% + GST vs ~2% domestic) and the GST
+         export-of-services treatment. Hence `is_international`.
+
+    Includes a ONE-TIME BACKFILL setting base_amount_paise = amount_paise for existing
+    rows. That is trivially correct today *because every historical row is genuinely
+    INR* — every write site stamped INR and every table defaults to it. It will never be
+    true again, so this must run before the first non-INR order can be created. It is
+    guarded on `base_amount_paise IS NULL` and on currency, so it is idempotent and can
+    never touch a real foreign-currency row.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    bool_false = "0" if is_sqlite else "FALSE"
+
+    # (table, wants_full_settlement_set)
+    # Route-collected rows (enterprise_student_payments) are INR-only because Razorpay
+    # Route rejects non-INR transfers, so charged == settled there and only the
+    # international-card flag is meaningful.
+    targets = [
+        ("subscription_payments", True),
+        ("enterprise_credit_payments", True),
+        ("enterprise_student_payments", False),
+    ]
+
+    with engine.begin() as conn:
+        # Sticky per-org billing currency for Rilono's own charges (credit top-ups,
+        # infra fee). NULL = not yet chosen -> fall back to country, then INR.
+        if _table_exists(conn, "enterprise_organizations"):
+            org_columns = _get_table_columns(conn, "enterprise_organizations")
+            if "billing_currency" not in org_columns:
+                conn.execute(text(
+                    "ALTER TABLE enterprise_organizations ADD COLUMN billing_currency VARCHAR"
+                ))
+
+        for table, full_set in targets:
+            if not _table_exists(conn, table):
+                continue
+            columns = _get_table_columns(conn, table)
+
+            if "is_international" not in columns:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN is_international BOOLEAN NOT NULL "
+                    f"DEFAULT {bool_false}"
+                ))
+
+            if not full_set:
+                # Route-collected rows: also snapshot the payer's phone. Razorpay hard-fails
+                # an international card payment when Checkout is given placeholder contact
+                # details, and the pay page had no phone to send at all.
+                if table == "enterprise_student_payments" and "payer_phone_snapshot" not in columns:
+                    conn.execute(text(
+                        f"ALTER TABLE {table} ADD COLUMN payer_phone_snapshot VARCHAR"
+                    ))
+                continue
+
+            if "base_amount_paise" not in columns:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN base_amount_paise INTEGER"))
+            if "base_currency" not in columns:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN base_currency VARCHAR NOT NULL DEFAULT 'INR'"
+                ))
+            if "fx_rate_used" not in columns:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN fx_rate_used NUMERIC(18,6)"))
+            if "price_book_version" not in columns:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN price_book_version VARCHAR"))
+
+            # Backfill: historical rows are all INR, so charged == settled.
+            conn.execute(text(
+                f"UPDATE {table} SET base_amount_paise = amount_paise "
+                f"WHERE base_amount_paise IS NULL "
+                f"AND (currency IS NULL OR UPPER(currency) = 'INR')"
+            ))

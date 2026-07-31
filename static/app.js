@@ -26,8 +26,8 @@ const RILONO_AI_PUBLIC_ERROR_MESSAGE = 'Sorry, I encountered an issue while resp
 const LEGAL_LAST_UPDATED = {
     about: 'February 12, 2026',
     privacy: 'July 25, 2026',
-    terms: 'July 16, 2026',
-    refund: 'July 16, 2026',
+    terms: 'July 30, 2026',
+    refund: 'July 30, 2026',
     delivery: 'July 10, 2026',
     dpa: 'July 25, 2026'
 };
@@ -355,12 +355,35 @@ function initializeCookieConsentManager() {
 
 window.openCookieSettings = openCookieSettingsModal;
 
-const PRICING_BASE_USD = {
-    free: 0
-};
-// The one-time Visa Success Pass is charged ₹999 in INR by the backend/Razorpay.
-// The pricing page displays a local-currency estimate but the actual charge stays INR.
-const PRICING_PASS_INR = 999;
+// The Visa Success Pass price ladder — one owner-chosen price per currency, mirroring
+// app/money.py PRICE_BOOK["visa_pass"]. These are NOT conversions of ₹999: a live rate
+// quotes a different number every hour and lands on amounts nobody actually charges
+// ("≈ $12.01"), which is why the old FX estimate is gone.
+//
+// This copy exists only so the PUBLIC pricing page — no session, so no /api/pass/status —
+// can show a real price. It is display-only: the server's own ladder replaces it as soon
+// as entitlements load, and the amount charged is resolved server-side by
+// /api/pass/checkout. Drift here shows a stale price; it cannot mis-charge anyone.
+const PASS_PRICE_LADDER_FALLBACK = Object.freeze([
+    { currency: 'INR', amount_minor: 99900 },
+    { currency: 'USD', amount_minor: 1299 },
+    { currency: 'GBP', amount_minor: 999 },
+    { currency: 'EUR', amount_minor: 1199 },
+    { currency: 'CAD', amount_minor: 1799 },
+    { currency: 'AUD', amount_minor: 1999 },
+    { currency: 'AED', amount_minor: 4900 },
+    { currency: 'SGD', amount_minor: 1699 }
+]);
+// The currency the buyer is being quoted, shared by the pricing page and the paywall so
+// the two can never show different prices for the same product.
+const PASS_CURRENCY_STORAGE_KEY = 'rilono_pass_currency';
+// Region we do not price (or cannot detect): quote USD. Both USD and INR are chargeable,
+// but USD is the one an unknown visitor is most likely to recognise.
+const PASS_CURRENCY_FALLBACK = 'USD';
+let passPriceOptions = PASS_PRICE_LADDER_FALLBACK.map((option) => ({ ...option }));
+let passPriceOptionsPromise = null;
+let selectedPassCurrency = null;
+
 const PRICING_MODEL_MONTHLY = 'pro_monthly';
 const PRICING_MODEL_SIX_MONTH = 'pro_six_month';
 const PRO_PRICING_MODELS = {
@@ -439,8 +462,9 @@ const PRICING_COUNTRY_CONFIG = {
     JP: { country: 'Japan', currency: 'JPY' }
 };
 
-// Geo → currency helpers: auto-pick the visitor's currency on first visit (display only;
-// the actual charge always stays INR via Razorpay).
+// Geo → currency helpers: auto-pick the visitor's currency on first visit. This only
+// chooses which price to show first — a currency we do not price falls back to the ladder
+// default, and the charge is priced server-side from the currency the buyer confirms.
 const PRICING_COUNTRY_TO_CURRENCY = {
     IN: 'INR', GB: 'GBP', CA: 'CAD', AU: 'AUD', AE: 'AED', SG: 'SGD', JP: 'JPY', US: 'USD',
     DE: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR', NL: 'EUR', IE: 'EUR', AT: 'EUR', BE: 'EUR',
@@ -751,23 +775,27 @@ const MOCK_REPORT_PROGRESS_STAGES = [
     { afterSeconds: 15, label: 'Finalizing your report' }
 ];
 
-const PRICING_FALLBACK_RATES = {
-    USD: 1.0,
-    INR: 83.2,
-    GBP: 0.79,
-    CAD: 1.35,
-    AUD: 1.53,
-    EUR: 0.92,
-    AED: 3.67,
-    SGD: 1.35,
-    JPY: 149.0
+// ISO-4217 minor-unit exponents. This must stay a FULL mirror of app/money.py
+// MINOR_UNIT_EXPONENT, not just the eight chargeable codes: the UI also renders
+// historical payment rows, whose `currency` comes from whatever Razorpay reported, and a
+// code missing from this table silently falls back to exponent 2. That is a 100× display
+// error for a zero-decimal currency (ISK 999 rendered as "ISK 9.99") and a 10× one for a
+// three-decimal currency (KWD 99990 rendered as "KWD 999.90" instead of "KWD 99.990").
+// Non-chargeable codes are listed on purpose for exactly that reason.
+const CURRENCY_MINOR_UNIT_EXPONENT = {
+    // 2-decimal — the launch charge set
+    INR: 2, USD: 2, GBP: 2, EUR: 2, CAD: 2, AUD: 2, AED: 2, SGD: 2,
+    // 2-decimal — display only
+    NZD: 2, CHF: 2, ZAR: 2, HKD: 2, MYR: 2, PHP: 2, THB: 2, SEK: 2,
+    NOK: 2, DKK: 2, PLN: 2, MXN: 2, BRL: 2, TRY: 2, SAR: 2, QAR: 2,
+    LKR: 2, NPR: 2, BDT: 2, PKR: 2, CNY: 2, IDR: 2, ILS: 2, RUB: 2,
+    // zero-decimal — dividing these by 100 shows the amount 100× too small
+    JPY: 0, KRW: 0, VND: 0, ISK: 0, CLP: 0, BIF: 0, DJF: 0, GNF: 0,
+    KMF: 0, MGA: 0, PYG: 0, RWF: 0, UGX: 0, VUV: 0, XAF: 0, XOF: 0,
+    XPF: 0,
+    // three-decimal
+    KWD: 3, BHD: 3, OMR: 3, JOD: 3, TND: 3, IQD: 3, LYD: 3
 };
-
-const PRICING_RATES_CACHE_WINDOW_MS = 60 * 60 * 1000;
-let pricingRatesByCurrency = { ...PRICING_FALLBACK_RATES };
-let pricingRatesMeta = { source: 'fallback', providerDate: null, stale: true, missingCurrencies: [] };
-let pricingRatesFetchedAt = 0;
-let pricingRatesRequestPromise = null;
 
 // URL Routing System
 let isNavigating = false; // Flag to prevent recursive navigation
@@ -1236,7 +1264,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     syncMobileNavState();
     await initializeDocumentCatalog();
     initializeSearchableDropdowns();
-    initializePricingSelector();
+    void initializePricingSelector();
     initializeRegisterCountrySelector();
     initializeRilonoProductReel();
     initChromeExtPlayer();
@@ -4439,7 +4467,11 @@ function buildSubscriptionNotifySnapshot(subscription) {
         referralBonusActive: Boolean(subscription.referral_bonus_active),
         latestPaymentStatus: String(subscription.latest_payment_status || '').toLowerCase(),
         latestPaymentAmountPaise: Number(subscription.latest_payment_amount_paise || 0),
-        latestPaymentCurrency: String(subscription.latest_payment_currency || 'INR').toUpperCase()
+        // NOT defaulted to INR. `latest_payment_amount_paise` is minor units of the row's
+        // OWN currency, so guessing "INR" stamps a ₹ on what may be cents — a ~80× misquote
+        // in a notification the buyer reads right after being charged. An absent currency
+        // means "unknown", and an unknown-currency amount is simply not shown.
+        latestPaymentCurrency: String(subscription.latest_payment_currency || '').toUpperCase()
     };
 }
 
@@ -4573,8 +4605,12 @@ function maybeAddSubscriptionChangeNotifications(previousSubscription, nextSubsc
     }
 
     if (previousSnapshot.latestPaymentStatus !== nextSnapshot.latestPaymentStatus && nextSnapshot.latestPaymentStatus) {
-        const paymentAmount = nextSnapshot.latestPaymentAmountPaise > 0
-            ? formatCurrencyAmount(nextSnapshot.latestPaymentAmountPaise / 100, nextSnapshot.latestPaymentCurrency)
+        // "Paise" is the legacy field name — the row holds minor units of its OWN currency,
+        // so cents on a USD payment. Let the formatter apply the right exponent, and drop
+        // the amount entirely when the currency is unknown: "Payment verified" with no
+        // figure is correct, "(₹12.99)" for a $12.99 charge is not.
+        const paymentAmount = (nextSnapshot.latestPaymentAmountPaise > 0 && nextSnapshot.latestPaymentCurrency)
+            ? formatMoneyMinor(nextSnapshot.latestPaymentAmountPaise, nextSnapshot.latestPaymentCurrency)
             : '';
         const paymentText = paymentAmount ? ` (${paymentAmount})` : '';
         if (['verified', 'captured', 'paid', 'authorized'].includes(nextSnapshot.latestPaymentStatus)) {
@@ -4820,9 +4856,10 @@ function updateSubscriptionUI() {
         const hasPaymentAmount = currentSubscription.latest_payment_amount_paise !== null
             && currentSubscription.latest_payment_amount_paise !== undefined;
         if (hasPaymentAmount && currentSubscription.latest_payment_currency) {
-            const amount = Number(currentSubscription.latest_payment_amount_paise) / 100;
+            // Minor units of the payment's own currency (see the field-name note above).
+            const amountMinor = Number(currentSubscription.latest_payment_amount_paise);
             const status = String(currentSubscription.latest_payment_status || '').toLowerCase() || 'created';
-            profileLatestPaymentEl.textContent = `${formatCurrencyAmount(amount, currentSubscription.latest_payment_currency)} (${status})`;
+            profileLatestPaymentEl.textContent = `${formatMoneyMinor(amountMinor, currentSubscription.latest_payment_currency)} (${status})`;
         } else {
             profileLatestPaymentEl.textContent = currentSubscription.latest_payment_status || '-';
         }
@@ -4888,7 +4925,10 @@ function updateSubscriptionUI() {
         if (!PRO_UPGRADE_ENABLED) {
             profileSwitchHintEl.textContent = 'The Visa Success Pass is currently unavailable.';
         } else if (!isPro) {
-            profileSwitchHintEl.textContent = 'One-time ₹999 · 30 days of unlimited access. No subscription, no auto-renew.';
+            // Quote the buyer's own currency, or no price at all — "₹999" in front of
+            // someone who will be charged $12.99 is a misquote, not a rounding difference.
+            const passPrice = passPriceDisplay(currentPassCurrency());
+            profileSwitchHintEl.textContent = `${passPrice ? `One-time ${passPrice}` : 'One-time payment'} · 30 days of unlimited access. No subscription, no auto-renew.`;
         } else if (isLegacyRecurring) {
             profileSwitchHintEl.textContent = autoRenewEnabled
                 ? 'This is a legacy recurring subscription. Cancel auto-renew below to stop future charges.'
@@ -5057,8 +5097,9 @@ function normalizeCouponCode(rawValue = '') {
     return String(rawValue || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
 }
 
-// Rilono's single paid product: the one-time Visa Success Pass (₹999 / 30 days).
-// A clean in-app checkout — no separate page, no feature/quota re-listing.
+// Rilono's single paid product: the one-time Visa Success Pass (30 days), priced per
+// currency from app/money.py PRICE_BOOK. A clean in-app checkout — no separate page, no
+// feature/quota re-listing.
 async function openVisaPassCheckout() {
     const modal = document.getElementById('checkoutLaunchModal');
     if (!modal) { await startVisaPassPayment(); return; }
@@ -5071,7 +5112,46 @@ async function openVisaPassCheckout() {
         continueBtn.textContent = 'Continue to pay';
         continueBtn.onclick = () => startVisaPassPayment();
     }
+    // Paint the best synchronous guess before the modal appears, so the first frame is
+    // never a price in a currency this buyer will not be charged.
+    renderCheckoutLaunchAmount(currentPassCurrency());
     modal.style.display = 'flex';
+
+    // The currency control belongs on the buy surface itself: what the buyer picks here is
+    // the currency hint sent to /api/pass/checkout, and the price shown is the exact
+    // ladder entry the server will charge for it.
+    await ensurePassPriceOptions();
+    const currency = await resolvePassCurrency();
+    const currencySelect = document.getElementById('checkoutLaunchCurrency');
+    renderPassCurrencySelect(currencySelect, currency);
+    if (currencySelect) {
+        currencySelect.onchange = () => renderCheckoutLaunchAmount(setPassCurrency(currencySelect.value));
+    }
+    renderCheckoutLaunchAmount(currency);
+}
+
+// The modal amount, from the ladder while the buyer is still choosing and then from the
+// server's own `amount_display` once the order exists — a coupon or the referral discount
+// makes the two differ, and the server's figure is the one that gets charged.
+function renderCheckoutLaunchAmount(currencyCode, serverDisplay = '') {
+    const amountEl = document.getElementById('checkoutLaunchAmount');
+    if (!amountEl) return;
+    const display = serverDisplay || passPriceDisplay(currencyCode);
+    amountEl.textContent = display ? `${display} / one-time` : 'One-time payment';
+}
+
+// Razorpay: "Your international payment will fail if you send us a dummy email id and
+// phone number of the customer." So the contact details come from the server verbatim
+// (the real name/email/phone on the account) and a blank field is DROPPED rather than
+// filled with a placeholder — Checkout then asks the buyer for it.
+// https://razorpay.com/docs/payments/international-payments/?preferred-country=IN
+function passCheckoutPrefill(prefill) {
+    const out = {};
+    ['name', 'email', 'contact'].forEach((key) => {
+        const value = String(prefill?.[key] ?? '').trim();
+        if (value) out[key] = value;
+    });
+    return out;
 }
 
 async function startVisaPassPayment() {
@@ -5083,13 +5163,21 @@ async function startVisaPassPayment() {
     // and priced entirely server-side.
     const couponInput = document.getElementById('checkoutLaunchCouponCode');
     const couponCode = String(couponInput?.value || '').trim().toUpperCase();
+    // Currency is a HINT only. The server looks the price up in its own book and answers
+    // with the amount it will actually charge — we never send an amount.
+    const currency = normalizePassCurrency(
+        document.getElementById('checkoutLaunchCurrency')?.value || currentPassCurrency()
+    );
 
     let data;
     try {
         const response = await fetch(`${API_BASE}/api/pass/checkout`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
-            body: JSON.stringify(couponCode ? { coupon_code: couponCode } : {}),
+            body: JSON.stringify({
+                ...(couponCode ? { coupon_code: couponCode } : {}),
+                ...(currency ? { currency } : {}),
+            }),
         });
         data = await response.json().catch(() => ({}));
         if (!response.ok) { showMessage(data.detail || 'Could not start checkout.', 'error'); setBtn('Continue to pay', false); if (couponCode) couponInput?.focus(); return; }
@@ -5097,8 +5185,24 @@ async function startVisaPassPayment() {
         showMessage('Could not start checkout. Please try again.', 'error'); setBtn('Continue to pay', false); return;
     }
 
+    // Show what the server priced, in the currency it resolved — not what we guessed.
+    // The fallback is the ORDER's own amount, never passPriceDisplay(): once a coupon or
+    // the referral discount has been applied the ladder list price is higher than what is
+    // being charged, and re-quoting the list price here would overstate the bill.
+    // `> 0` rather than isFinite: `Number(null)` is 0, and an "unavailable"/"already_active"
+    // response carries no amount at all — rendering "$0 / one-time" off a missing field
+    // would be a worse quote than leaving the ladder price up.
+    const serverAmountDisplay = data.amount_display
+        || (Number(data.amount) > 0 && data.currency
+            ? formatMoneyMinor(data.amount, data.currency)
+            : '');
+    if (serverAmountDisplay) {
+        renderCheckoutLaunchAmount(data.currency, serverAmountDisplay);
+    }
+
     if (data.coupon_code && data.coupon_discount > 0) {
-        showMessage(`Coupon ${data.coupon_code} applied — ${data.coupon_percent_off}% off. You pay ₹${(data.amount / 100).toLocaleString('en-IN')}.`, 'success');
+        const payable = serverAmountDisplay || formatMoneyMinor(data.amount, data.currency);
+        showMessage(`Coupon ${data.coupon_code} applied — ${data.coupon_percent_off}% off. You pay ${payable}.`, 'success');
     }
 
     if (data.action === 'already_active') {
@@ -5117,12 +5221,13 @@ async function startVisaPassPayment() {
 
     const rzp = new window.Razorpay({
         key: data.razorpay_key_id,
-        amount: data.amount,
-        currency: data.currency,
+        // No amount/currency here on purpose. The order already carries both, and repeating
+        // them lets a cached page and an updated server disagree — Checkout then fails the
+        // payment on the mismatch. static/pay.html relies on order_id the same way.
+        order_id: data.order_id,
         name: 'Rilono',
         description: (data.product_label || 'Visa Success Pass') + ' (' + (data.duration_days || 30) + ' days)',
-        order_id: data.order_id,
-        prefill: data.prefill || { name: currentUser?.full_name || '', email: currentUser?.email || '' },
+        prefill: passCheckoutPrefill(data.prefill),
         theme: { color: '#6366f1' },
         handler: async function (resp) {
             try {
@@ -8818,7 +8923,7 @@ function showPrivacy(skipURLUpdate = false) {
 function showPricing(skipURLUpdate = false) {
     hideAllSections();
     document.getElementById('pricingSection').style.display = 'block';
-    initializePricingSelector();
+    void initializePricingSelector();
     if (authToken) {
         void loadSubscriptionStatus(true);
     } else {
@@ -8839,142 +8944,245 @@ function showAboutUs(skipURLUpdate = false) {
     }
 }
 
-function initializePricingSelector() {
-    const countrySelect = document.getElementById('pricingCountrySelect');
-    if (!countrySelect) return;
+// ---------------------------------------------------------------------------
+// Visa Success Pass pricing (multi-currency)
+// ---------------------------------------------------------------------------
 
-    const savedCountry = localStorage.getItem('pricingCountry');
-    const hasSaved = Boolean(PRICING_COUNTRY_CONFIG[savedCountry]);
-    const countryCode = hasSaved ? savedCountry : 'US';
-    const searchParams = new URLSearchParams(window.location.search);
-    const shouldForceRefresh = searchParams.get('fx_refresh') === '1';
-    countrySelect.value = countryCode;
-    updatePricingByCountry(countryCode);
+// The server owns both the ladder and the amount. This only caches the ladder that
+// /api/pass/status already returned, so switching currency is instant and so the client
+// never computes a price of its own. Anonymous visitors keep the mirrored ladder above —
+// /api/pass/status needs a session.
+async function ensurePassPriceOptions() {
+    if (passPriceOptionsPromise) return passPriceOptionsPromise;
+    if (!authToken) return passPriceOptions;
 
-    void ensurePricingExchangeRates(shouldForceRefresh).then(() => {
-        updatePricingByCountry(countrySelect.value || countryCode);
-    });
-
-    // First visit (no saved choice): auto-detect the visitor's country and switch the
-    // default currency to theirs — unless they pick one manually in the meantime.
-    if (!hasSaved) {
-        detectPricingCountry().then((detected) => {
-            if (!detected || detected === countrySelect.value) return;
-            if (localStorage.getItem('pricingCountry')) return;  // user chose meanwhile
-            try { localStorage.setItem('pricingCountry', detected); } catch (e) { /* storage blocked */ }
-            countrySelect.value = detected;
-            updatePricingByCountry(detected);
-        });
-    }
-}
-
-function handlePricingCountryChange(countryCode) {
-    if (!PRICING_COUNTRY_CONFIG[countryCode]) {
-        countryCode = 'US';
-    }
-    localStorage.setItem('pricingCountry', countryCode);
-    updatePricingByCountry(countryCode);
-}
-
-function ensurePricingExchangeRates(forceRefresh = false) {
-    const now = Date.now();
-    if (
-        !forceRefresh &&
-        pricingRatesFetchedAt &&
-        (now - pricingRatesFetchedAt) < PRICING_RATES_CACHE_WINDOW_MS
-    ) {
-        return Promise.resolve();
-    }
-
-    if (pricingRatesRequestPromise) {
-        return pricingRatesRequestPromise;
-    }
-
-    pricingRatesRequestPromise = (async () => {
+    passPriceOptionsPromise = (async () => {
         try {
-            const ratesUrl = forceRefresh
-                ? `${API_BASE}/api/pricing/exchange-rates?refresh=1`
-                : `${API_BASE}/api/pricing/exchange-rates`;
-            const response = await fetch(ratesUrl);
-            if (!response.ok) {
-                throw new Error(`Pricing rates request failed: ${response.status}`);
-            }
-
-            const data = await response.json();
-            if (!data || !data.rates || typeof data.rates !== 'object') {
-                throw new Error('Pricing rates response missing rates payload');
-            }
-
-            const normalizedRates = { ...PRICING_FALLBACK_RATES };
-            Object.keys(normalizedRates).forEach((currencyCode) => {
-                const rawRate = Number(data.rates[currencyCode]);
-                if (Number.isFinite(rawRate) && rawRate > 0) {
-                    normalizedRates[currencyCode] = rawRate;
-                }
+            const response = await fetch(`${API_BASE}/api/pass/status`, {
+                headers: { 'Authorization': `Bearer ${authToken}` }
             });
-
-            pricingRatesByCurrency = normalizedRates;
-            pricingRatesMeta = {
-                source: data.source || 'frankfurter',
-                providerDate: data.provider_date || null,
-                stale: Boolean(data.stale),
-                missingCurrencies: Array.isArray(data.missing_currencies) ? data.missing_currencies : []
-            };
-            pricingRatesFetchedAt = Date.now();
+            if (!response.ok) {
+                throw new Error(`Pass status request failed: ${response.status}`);
+            }
+            const data = await response.json();
+            const options = (data?.entitlements?.pass?.price_options || []).filter(
+                (option) => option && option.currency && Number.isFinite(Number(option.amount_minor))
+            );
+            if (options.length) {
+                passPriceOptions = options.map((option) => ({
+                    currency: String(option.currency).toUpperCase(),
+                    amount_minor: Number(option.amount_minor),
+                    // Keep the server's own rendering: the paywall, the order and the
+                    // receipt email then read character-for-character the same.
+                    display: String(option.display || '')
+                }));
+                // The server may price fewer currencies than the mirrored ladder. Drop a
+                // choice it no longer sells so the buyer is re-detected onto one it does,
+                // instead of sitting on a currency with no price.
+                if (selectedPassCurrency && !passPriceOptionFor(selectedPassCurrency)) {
+                    selectedPassCurrency = null;
+                }
+            }
         } catch (error) {
-            console.warn('Unable to refresh pricing exchange rates, using fallback rates:', error);
-            pricingRatesByCurrency = { ...PRICING_FALLBACK_RATES };
-            pricingRatesMeta = { source: 'fallback', providerDate: null, stale: true, missingCurrencies: [] };
-            pricingRatesFetchedAt = Date.now();
-        } finally {
-            pricingRatesRequestPromise = null;
+            console.warn('Using the built-in Visa Success Pass price ladder:', error);
         }
+        return passPriceOptions;
     })();
 
-    return pricingRatesRequestPromise;
+    return passPriceOptionsPromise;
 }
 
-function updatePricingByCountry(countryCode) {
-    const config = PRICING_COUNTRY_CONFIG[countryCode] || PRICING_COUNTRY_CONFIG.US;
+function passPriceOptionFor(currencyCode) {
+    const code = String(currencyCode || '').trim().toUpperCase();
+    return passPriceOptions.find((option) => option.currency === code) || null;
+}
+
+function passPriceDisplay(currencyCode) {
+    const option = passPriceOptionFor(currencyCode);
+    if (!option) return '';
+    return option.display || formatMoneyMinor(option.amount_minor, option.currency);
+}
+
+// A currency is usable only if the ladder has a price for it. Anything else — JPY, a stale
+// saved choice, a region we do not price — is refused rather than coerced: quoting a price
+// we would not charge is exactly the bug this replaces.
+function normalizePassCurrency(rawCode) {
+    const code = String(rawCode || '').trim().toUpperCase();
+    return passPriceOptionFor(code) ? code : '';
+}
+
+function readSavedPassCurrency() {
+    try {
+        return normalizePassCurrency(localStorage.getItem(PASS_CURRENCY_STORAGE_KEY));
+    } catch (error) {
+        return '';  // storage blocked
+    }
+}
+
+// Synchronous guess from browser locale/timezone alone. It exists so the first painted
+// frame is never a price in a currency this visitor will not be charged: the geo lookup in
+// resolvePassCurrency() is a network round-trip, and ₹999 sitting in front of a US buyer
+// for 200ms is still a misquote. Deliberately NOT persisted — only the buyer's own choice
+// and the confirmed detection are.
+function guessPassCurrencyFromBrowser() {
+    try {
+        const langs = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language];
+        for (const lang of langs) {
+            const match = String(lang || '').match(/[-_]([A-Za-z]{2})\b/);
+            const code = match && normalizePassCurrency(PRICING_COUNTRY_TO_CURRENCY[String(match[1]).toUpperCase()]);
+            if (code) return code;
+        }
+    } catch (error) { /* no locale region */ }
+    try {
+        const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || '';
+        return normalizePassCurrency(PRICING_COUNTRY_TO_CURRENCY[PRICING_TZ_COUNTRY[tz]]);
+    } catch (error) { /* no timezone */ }
+    return '';
+}
+
+// Synchronous best guess, for copy rendered before the async detection settles.
+function currentPassCurrency() {
+    return selectedPassCurrency || readSavedPassCurrency() || guessPassCurrencyFromBrowser();
+}
+
+async function resolvePassCurrency() {
+    if (selectedPassCurrency) return selectedPassCurrency;
+    const saved = readSavedPassCurrency();
+    if (saved) {
+        selectedPassCurrency = saved;
+        return saved;
+    }
+    // CDN geo header → browser locale → timezone, the same detection the pricing page has
+    // always used. It only decides which price to show FIRST; the buyer can change it, and
+    // the charge is priced server-side either way.
+    const detectedCountry = await detectPricingCountry();
+    const detected = normalizePassCurrency(PRICING_COUNTRY_CONFIG[detectedCountry]?.currency);
+    selectedPassCurrency = detected
+        || normalizePassCurrency(PASS_CURRENCY_FALLBACK)
+        || (passPriceOptions[0]?.currency || '');
+    return selectedPassCurrency;
+}
+
+function setPassCurrency(currencyCode) {
+    const code = normalizePassCurrency(currencyCode);
+    if (!code) return selectedPassCurrency;
+    selectedPassCurrency = code;
+    try {
+        localStorage.setItem(PASS_CURRENCY_STORAGE_KEY, code);
+    } catch (error) { /* storage blocked */ }
+    return code;
+}
+
+// One renderer for both currency selectors (pricing page and paywall) so the lists and the
+// prices on them cannot drift apart.
+function renderPassCurrencySelect(selectEl, currencyCode) {
+    if (!selectEl) return;
+    selectEl.innerHTML = passPriceOptions
+        .map((option) => {
+            const label = `${option.currency} · ${option.display || formatMoneyMinor(option.amount_minor, option.currency)}`;
+            return `<option value="${escapeHtml(option.currency)}">${escapeHtml(label)}</option>`;
+        })
+        .join('');
+    if (currencyCode) selectEl.value = currencyCode;
+}
+
+async function initializePricingSelector() {
+    const currencySelect = document.getElementById('pricingCurrencySelect');
+    if (!currencySelect) return;
+
+    // Paint the locale guess first, then refine once the server ladder and the geo lookup
+    // land — so the card never shows a currency this visitor will not be charged in.
+    updatePricingByCurrency(currentPassCurrency());
+    await ensurePassPriceOptions();
+    const currency = await resolvePassCurrency();
+    renderPassCurrencySelect(currencySelect, currency);
+    updatePricingByCurrency(currency);
+}
+
+function handlePricingCurrencyChange(currencyCode) {
+    updatePricingByCurrency(setPassCurrency(currencyCode));
+}
+
+function updatePricingByCurrency(currencyCode) {
+    const currency = normalizePassCurrency(currencyCode)
+        || currentPassCurrency()
+        || normalizePassCurrency(PASS_CURRENCY_FALLBACK);
+    const priceDisplay = passPriceDisplay(currency);
     const freePriceEl = document.getElementById('pricingFreePrice');
     const passPriceEl = document.getElementById('pricingPassPrice');
     const passBillingNoteEl = document.getElementById('pricingPassBillingNote');
     const hintEl = document.getElementById('pricingCurrencyHint');
-    const rate = pricingRatesByCurrency[config.currency] || PRICING_FALLBACK_RATES[config.currency] || 1;
-    const inrRate = pricingRatesByCurrency.INR || PRICING_FALLBACK_RATES.INR || 1;
-
-    const isInr = config.currency === 'INR';
-    const convertedFree = PRICING_BASE_USD.free * rate;
-    // Convert the ₹999 pass to the selected currency for display; the real charge stays INR.
-    const convertedPass = (PRICING_PASS_INR / inrRate) * rate;
 
     if (freePriceEl) {
-        freePriceEl.innerHTML = `${formatCurrencyAmount(convertedFree, config.currency)}<span>/month</span>`;
+        freePriceEl.innerHTML = `${escapeHtml(formatMoneyMinor(0, currency))}<span>/month</span>`;
     }
     if (passPriceEl) {
-        passPriceEl.innerHTML = `${isInr ? '' : '≈ '}${formatCurrencyAmount(convertedPass, config.currency)}<span>/ one-time</span>`;
+        // No "≈" anywhere: this is the price, not a conversion of ₹999. With no ladder
+        // entry for this currency, say nothing — leaving whatever number was rendered for
+        // the PREVIOUS currency in place is how a card ends up quoting ₹999 to a USD buyer.
+        passPriceEl.innerHTML = priceDisplay
+            ? `${escapeHtml(priceDisplay)}<span>/ one-time</span>`
+            : '<span>One-time payment</span>';
     }
     if (passBillingNoteEl) {
-        // Non-INR shoppers see an estimate, so be upfront that checkout is billed in INR.
-        passBillingNoteEl.textContent = isInr
-            ? ''
-            : `Billed in Indian Rupees (${formatCurrencyAmount(PRICING_PASS_INR, 'INR')}) at checkout.`;
+        // The only figure that can still move is the buyer's own bank's cross-border
+        // conversion, so say precisely that instead of the old "billed in INR" promise.
+        passBillingNoteEl.textContent = priceDisplay
+            ? `Charged in ${currency} — you pay exactly ${priceDisplay}. A card issued in another currency is converted by your bank at its own rate.`
+            : '';
         passBillingNoteEl.style.display = passBillingNoteEl.textContent ? 'block' : 'none';
     }
     if (hintEl) {
-        hintEl.textContent = `Currency: ${config.currency} (${config.country})`;
+        hintEl.textContent = 'Each currency has its own fixed price — nothing is converted at checkout.';
     }
 }
 
+// The single money formatter for the student app. `minor` is an integer in the MINOR unit
+// of `currencyCode` (paise for INR, cents for USD): 1299 is $12.99 or ₹12.99 depending
+// entirely on the code, so the two must always travel together. Never divide by 100 here —
+// a zero-decimal currency would be shown 100× too small.
+function formatMoneyMinor(minor, currencyCode) {
+    const code = String(currencyCode || '').trim().toUpperCase();
+    const exponent = CURRENCY_MINOR_UNIT_EXPONENT[code] ?? 2;
+    return formatCurrencyAmount(Number(minor || 0) / Math.pow(10, exponent), code);
+}
+
+// Symbols must match CURRENCY_SYMBOLS in app/money.py exactly. Intl picks its own
+// locale-dependent glyphs ("CA$17.99", "SGD 16.99") which disagree with what the server
+// renders ("C$17.99", "S$16.99") — and the anonymous pricing page formats locally while
+// the paywall modal shows the server's string, so the same visitor would see the same
+// price written two ways one click apart.
+const CURRENCY_SYMBOL_OVERRIDES = {
+    INR: '₹', USD: '$', GBP: '£', EUR: '€', CAD: 'C$', AUD: 'A$', AED: 'AED ', SGD: 'S$'
+};
+
+// Major-unit formatter. Whole amounts drop their decimals to match money.format_money(),
+// so "₹999" on the paywall matches "₹999" on the receipt.
 function formatCurrencyAmount(amount, currencyCode) {
+    const code = String(currencyCode || '').trim().toUpperCase();
+    const exponent = CURRENCY_MINOR_UNIT_EXPONENT[code] ?? 2;
+    const value = Number(amount || 0);
+    const fractionDigits = (exponent > 0 && !Number.isInteger(value)) ? exponent : 0;
+    const override = CURRENCY_SYMBOL_OVERRIDES[code];
+    if (override) {
+        const body = value.toLocaleString(code === 'INR' ? 'en-IN' : 'en-US', {
+            minimumFractionDigits: fractionDigits,
+            maximumFractionDigits: fractionDigits
+        });
+        return `${override}${body}`;
+    }
     try {
-        return new Intl.NumberFormat(undefined, {
+        return new Intl.NumberFormat(code === 'INR' ? 'en-IN' : undefined, {
             style: 'currency',
-            currency: currencyCode,
-            maximumFractionDigits: currencyCode === 'JPY' ? 0 : 2
-        }).format(amount);
+            currency: code,
+            minimumFractionDigits: fractionDigits,
+            maximumFractionDigits: fractionDigits
+        }).format(value);
     } catch (error) {
-        return `$${amount.toFixed(2)}`;
+        // Intl throws on an unknown/blank code. Fall back to the CODE, never to "$" — a
+        // rupee amount wearing a dollar sign misquotes the price by ~80×. With no code at
+        // all, print the bare number: an unlabelled amount is honest, a guessed one is not.
+        return code ? `${code} ${value.toFixed(fractionDigits)}` : value.toFixed(fractionDigits);
     }
 }
 

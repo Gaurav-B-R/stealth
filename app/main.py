@@ -41,6 +41,7 @@ from app.schema_patch import (
     ensure_enterprise_notifications_table,
     ensure_enterprise_demo_requests_table,
     ensure_enterprise_signup_otps_table,
+    ensure_enterprise_step_up_otps_table,
     ensure_enterprise_coupons_table,
     ensure_enterprise_credit_tables,
     ensure_enterprise_payment_coupon_columns,
@@ -56,6 +57,7 @@ from app.schema_patch import (
     ensure_enterprise_refunds_table,
     ensure_enterprise_payments_tables,
     ensure_enterprise_finance_tables,
+    ensure_international_payment_columns,
     ensure_enterprise_organization_columns,
     ensure_enterprise_students_table,
     ensure_f1_visa_news_table,
@@ -302,6 +304,10 @@ def startup_backfill_subscriptions():
     ensure_enterprise_refunds_table()
     ensure_enterprise_payments_tables()
     ensure_enterprise_finance_tables()
+    # Must run AFTER the tables above exist — it patches subscription_payments,
+    # enterprise_credit_payments and enterprise_student_payments, and backfills
+    # base_amount_paise while every historical row is still guaranteed INR.
+    ensure_international_payment_columns()
     ensure_enterprise_coupons_table()
     ensure_enterprise_payment_coupon_columns()
     ensure_enterprise_calendar_table()
@@ -312,6 +318,7 @@ def startup_backfill_subscriptions():
     ensure_enterprise_client_university_table()
     ensure_enterprise_demo_requests_table()
     ensure_enterprise_signup_otps_table()
+    ensure_enterprise_step_up_otps_table()
     ensure_coupon_percent_column()
     ensure_coupon_usage_limit_column()
     ensure_coupon_account_columns()

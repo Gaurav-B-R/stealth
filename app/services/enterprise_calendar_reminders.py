@@ -100,7 +100,7 @@ def _collect_org_items_by_recipient(db, organization_id: int, today: date, floor
         label, color = _TYPE_META.get(ev.event_type, _TYPE_META["reminder"])
         when_label, overdue = _when_label(ev.event_date, today)
         add(ev.created_by_user_id, {
-            "title": ev.title, "type_label": label, "color": color,
+            "title": ev.title, "type_label": label, "color": color, "client_id": ev.client_id,
             "time": ev.event_time, "client_name": cname(ev.client_id),
             "date": ev.event_date, "when_label": when_label, "overdue": overdue,
         })
@@ -121,7 +121,7 @@ def _collect_org_items_by_recipient(db, organization_id: int, today: date, floor
         when_label, overdue = _when_label(client.target_date, today)
         add(client.created_by_user_id, {
             "title": f"{client.full_name} — key date", "type_label": label, "color": color,
-            "time": None, "client_name": client.full_name,
+            "time": None, "client_name": client.full_name, "client_id": client.id,
             "date": client.target_date, "when_label": when_label, "overdue": overdue,
         })
 
@@ -140,11 +140,49 @@ def _collect_org_items_by_recipient(db, organization_id: int, today: date, floor
         when_label, overdue = _when_label(client.passport_expiry, today)
         add(client.created_by_user_id, {
             "title": f"{client.full_name} — passport expiry", "type_label": label, "color": color,
-            "time": None, "client_name": client.full_name,
+            "time": None, "client_name": client.full_name, "client_id": client.id,
             "date": client.passport_expiry, "when_label": when_label, "overdue": overdue,
         })
 
-    return by_recipient
+    # The digest is addressed by `created_by_user_id`, which lines up with "clients assigned to
+    # them, plus ones they created" but NOT with office scope: a manager who created a client and
+    # later filed it under another office would still be emailed about it. Drop anything the
+    # recipient could no longer open in the portal — an email is a disclosure like any other.
+    return _filter_items_by_scope(db, organization_id, by_recipient)
+
+
+def _filter_items_by_scope(db, organization_id: int, by_recipient: dict[int, list[dict]]) -> dict[int, list[dict]]:
+    if not by_recipient:
+        return by_recipient
+    try:
+        from app import enterprise_notifications as notif
+
+        resolved = {r["user_id"]: r for r in notif._resolved_org_members(db, organization_id)}
+        client_ids = {int(i["client_id"]) for items in by_recipient.values()
+                      for i in items if i.get("client_id")}
+        clients = {}
+        if client_ids:
+            clients = {
+                int(c.id): c
+                for c in db.query(models.EnterpriseClient)
+                .filter(models.EnterpriseClient.id.in_(client_ids)).all()
+            }
+        filtered: dict[int, list[dict]] = {}
+        for uid, items in by_recipient.items():
+            member = resolved.get(int(uid))
+            if member is None:
+                continue  # no longer an active member — nothing to send
+            kept = [
+                i for i in items
+                if not i.get("client_id")
+                or notif._client_scope_predicate(clients.get(int(i["client_id"])), member)
+            ]
+            if kept:
+                filtered[uid] = kept
+        return filtered
+    except Exception:
+        logger.exception("Reminder scope filter failed (org_id=%s); sending unfiltered", organization_id)
+        return by_recipient
 
 
 def _org_portal_url(org) -> str:

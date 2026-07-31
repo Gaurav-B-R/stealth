@@ -52,6 +52,8 @@
     .pass-card{background:linear-gradient(135deg,#eef2fb,#f4f0fc);border:1px solid #d8def0}
     .price{font-size:38px;font-weight:900;line-height:1}
     .price small{font-size:14px;color:var(--muted);font-weight:600}
+    .cur-label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:0 0 4px}
+    .cur-select{padding:7px 10px;border-radius:9px;border:1px solid var(--border);background:#fff;color:var(--text);font-size:13px;font-weight:700}
     .benefits{list-style:none;padding:0;margin:14px 0 18px}
     .benefits li{padding:6px 0;font-size:14px;display:flex;gap:9px;align-items:flex-start}
     .benefits li::before{content:"✓";color:var(--green);font-weight:900}
@@ -91,8 +93,9 @@
     </div>
     <div id="app"><div class="center-load"><span class="spinner"></span> Loading your pass…</div></div>
 
-    <p class="pay-legal">The Visa Success Pass is a one-time payment of ₹999 for 30 days of
-      access — no subscription and no auto-renewal. All payments are final and non-refundable. By
+    <p class="pay-legal">The Visa Success Pass is a one-time payment for 30 days of access — ₹999 in
+      India, with its own set price in each other supported currency, shown above and at checkout.
+      No subscription and no auto-renewal. All payments are final and non-refundable. By
       purchasing you agree to our <a href="/terms">Terms</a>. Rilono · Bengaluru, Karnataka, India ·
       Secure payments via Razorpay.</p>
   </div>
@@ -163,6 +166,10 @@
     const API = "";
     const esc = (s)=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
     let STATE = null;
+    // Currency the buyer is quoted, shared with the main app on this origin so the two
+    // surfaces never show different prices for the same pass.
+    const PASS_CURRENCY_KEY = "rilono_pass_currency";
+    let payCurrency = "";
 
     function toast(msg, type){
       const t=$("#toast"); t.textContent=msg; t.className="toast show "+(type||"");
@@ -197,6 +204,26 @@
         <p style="margin-top:18px"><a class="btn btn-primary" href="/">Go to Rilono</a></p></div>`;
     }
 
+    // The pass is sold in several currencies, each with its own owner-set price from the
+    // server's ladder — never an exchange-rate conversion of ₹999. `price_display` is only
+    // the currency /api/pass/status happened to quote; `price_options` is the whole ladder.
+    function priceOptions(){ return (STATE && STATE.entitlements && STATE.entitlements.pass.price_options) || []; }
+    function optionFor(code){
+      const want=String(code||"").trim().toUpperCase();
+      return priceOptions().filter(o=>o&&String(o.currency).toUpperCase()===want)[0] || null;
+    }
+    function savedCurrency(){ try{ return localStorage.getItem(PASS_CURRENCY_KEY)||""; }catch(e){ return ""; } }
+    function activeOption(){
+      return optionFor(payCurrency) || optionFor(savedCurrency())
+        || optionFor(STATE.entitlements.currency) || priceOptions()[0] || null;
+    }
+    function setCurrency(code){
+      const opt=optionFor(code); if(!opt) return;   // never quote a currency we can't charge
+      payCurrency=opt.currency;
+      try{ localStorage.setItem(PASS_CURRENCY_KEY,payCurrency); }catch(e){ /* storage blocked */ }
+      render();
+    }
+
     function quotaCard(f){
       const unlimited = f.unlimited;
       const pct = unlimited?100:(f.limit>0?Math.min(100,Math.round((f.used/f.limit)*100)):(f.locked?100:0));
@@ -219,12 +246,29 @@
       pill.textContent = isPass ? `Pass active · ${e.pass.days_left} days left` : "Free plan";
 
       const f = e.features;
+      const opt = activeOption();
+      const priceText = opt ? opt.display : e.pass.price_display;
       const hero = isPass
         ? `<div class="hero"><h1>🎉 Your Visa Success Pass is active</h1>
             <p>${e.pass.days_left} days left. Unlimited document audits, and ${f.voice_interview.remaining} of ${f.voice_interview.limit} Rilono AI voice mock interviews remaining.</p></div>`
         : `<div class="hero"><h1>Pass your visa interview on the first try</h1>
             <p>You're on the free plan: ${f.red_flag_scan.remaining} red-flag scan left.
-            Unlock everything with a one-time <b>${esc(e.pass.price_display)}</b> Visa Success Pass — valid ${e.pass.duration_days} days.</p></div>`;
+            Unlock everything with a one-time <b>${esc(priceText)}</b> Visa Success Pass — valid ${e.pass.duration_days} days.</p></div>`;
+
+      // UPI and NetBanking are INR-only rails: a buyer paying in USD is offered cards, so
+      // only promise the methods that currency can actually use. Key this off the currency
+      // that will ACTUALLY be charged — with no ladder from the server, checkout sends no
+      // currency hint and the server charges its INR default, so `opt` being null means
+      // INR, not "international".
+      const chargeCurrency = String((opt && opt.currency) || e.currency || "INR").toUpperCase();
+      const methods = chargeCurrency === "INR" ? "UPI, cards &amp; NetBanking" : "international cards";
+      const currencyPicker = priceOptions().length > 1 ? `
+          <div style="margin:14px 0 4px">
+            <label class="cur-label" for="curSel">Pay in</label>
+            <select class="cur-select" id="curSel" aria-label="Payment currency">
+              ${priceOptions().map(o=>`<option value="${esc(o.currency)}"${opt&&o.currency===opt.currency?" selected":""}>${esc(o.currency)} · ${esc(o.display)}</option>`).join("")}
+            </select>
+          </div>` : "";
 
       const passCard = isPass ? "" : `
         <div class="section-title">Unlock everything</div>
@@ -234,11 +278,12 @@
               <h3 style="font-size:18px">Visa Success Pass</h3>
               <div class="muted" style="font-size:13px">One-time payment · no subscription</div>
             </div>
-            <div style="text-align:right"><div class="price">${esc(e.pass.price_display)}</div><small>for ${e.pass.duration_days} days</small></div>
+            <div style="text-align:right"><div class="price">${esc(priceText)}</div><small>for ${e.pass.duration_days} days</small></div>
           </div>
           <ul class="benefits">${e.pass.benefits.map(b=>`<li>${esc(b)}</li>`).join("")}</ul>
-          <button class="btn btn-primary btn-block" id="buyBtn">Unlock the Pass · ${esc(e.pass.price_display)}</button>
-          <div class="muted" style="text-align:center;font-size:12px;margin-top:10px">Secure payment via Razorpay (UPI, NetBanking)</div>
+          ${currencyPicker}
+          <button class="btn btn-primary btn-block" id="buyBtn">Unlock the Pass · ${esc(priceText)}</button>
+          <div class="muted" style="text-align:center;font-size:12px;margin-top:10px">Secure payment via Razorpay (${methods})</div>
         </div>`;
 
       $("#app").innerHTML = `
@@ -269,6 +314,7 @@
         </div>`;
 
       const buy=$("#buyBtn"); if(buy) buy.onclick=checkout;
+      const cur=$("#curSel"); if(cur) cur.onchange=()=>setCurrency(cur.value);
       $("#scanBtn").onclick=runScan;
       $("#voiceBtn").onclick=runVoice;
     }
@@ -315,17 +361,31 @@
       catch(ex){ btn.disabled=false; if(paywall(ex))return; toast(ex.message,"error"); }
     }
 
+    // Razorpay: "Your international payment will fail if you send us a dummy email id and
+    // phone number of the customer." Pass the server's real values through untouched and
+    // drop a blank field rather than inventing a placeholder — Checkout will ask for it.
+    function prefillFrom(p){
+      const out={};
+      ["name","email","contact"].forEach(k=>{ const v=String((p&&p[k])||"").trim(); if(v) out[k]=v; });
+      return out;
+    }
+
     async function checkout(){
+      const opt=activeOption();
       let res;
-      try{ res=await api("/api/pass/checkout",{method:"POST"}); }
+      // Currency is a HINT: the server looks the price up in its own book and answers with
+      // the amount it will actually charge. We never send an amount.
+      try{ res=await api("/api/pass/checkout",{method:"POST",body: opt?{currency:opt.currency}:{}}); }
       catch(ex){ toast(ex.message,"error"); return; }
       if(res.action==="already_active"){ toast("Your pass is already active.","success"); STATE.entitlements=res.entitlements; render(); return; }
       if(res.action!=="checkout"){ toast(res.message||"Checkout unavailable.","error"); return; }
       if(typeof Razorpay==="undefined"){ toast("Payment library failed to load. Please refresh.","error"); return; }
       const rzp=new Razorpay({
-        key:res.razorpay_key_id, amount:res.amount, currency:res.currency,
+        // The order already carries the amount and currency. Repeating them here lets a
+        // cached page and an updated server disagree, and Checkout fails on the mismatch.
+        key:res.razorpay_key_id,
         name:"Rilono", description:res.product_label+" ("+res.duration_days+" days)",
-        order_id:res.order_id, prefill:res.prefill, theme:{color:"#6366f1"},
+        order_id:res.order_id, prefill:prefillFrom(res.prefill), theme:{color:"#6366f1"},
         handler: async function(resp){
           try{
             const v=await api("/api/pass/verify",{method:"POST",body:{

@@ -35,6 +35,22 @@ COMMISSION_MIN_PAISE = int(os.getenv("MARKETPLACE_COMMISSION_MIN_PAISE", "4900")
 # Route transfers are INR-only with a 100-paise (₹1) minimum payout.
 MIN_PAYOUT_PAISE = 100
 
+# Razorpay Route does NOT support non-INR. This is a platform wall, not a code choice:
+#   "You cannot create transfers on orders for international currencies. Currently, this
+#    feature only supports orders created using INR."
+#   https://razorpay.com/docs/api/payments/route/create-transfers-orders/?preferred-country=IN
+#   "We support only INR for Route transactions."
+#
+# DO NOT parameterise this. The failure mode is the worst one in the product: a non-INR
+# order with a transfers[] array is rejected at TRANSFER time, which can be after the
+# student has already paid — leaving their money in Rilono's platform account with no
+# automated path to the consultancy.
+#
+# International students are still served: a foreign-issued card can pay an INR-denominated
+# order (the `international` flag on the payment is independent of `currency`), and Route
+# splits it normally. Only the presentment currency is fixed.
+ROUTE_CURRENCY = "INR"
+
 
 def _razorpay_credentials() -> tuple[str, str]:
     return (os.getenv("RAZORPAY_KEY_ID", "").strip(), os.getenv("RAZORPAY_KEY_SECRET", "").strip())
@@ -303,6 +319,8 @@ def create_payment_request(
     created_by: models.User,
     pay_token_hash: str,
     payer_email: Optional[str] = None,
+    payer_phone: Optional[str] = None,
+    currency: Optional[str] = None,
 ) -> models.EnterpriseStudentPayment:
     """Create a student payment request + the Razorpay Route order (inline transfer split).
 
@@ -324,6 +342,16 @@ def create_payment_request(
             status_code=400,
             detail=f"Amount exceeds the per-payment limit of ₹{MAX_AMOUNT_PAISE / 100:,.0f}.",
         )
+    # Belt-and-braces against a future caller threading a currency through here: Route
+    # would accept the order and then fail the transfer, stranding the student's money.
+    if currency is not None and str(currency).strip().upper() != ROUTE_CURRENCY:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Student payments can only be collected in INR. International students can "
+                "still pay this invoice with an overseas card."
+            ),
+        )
     commission, payout = compute_commission(amount)
     assert commission + payout == amount and payout >= MIN_PAYOUT_PAISE
 
@@ -336,13 +364,17 @@ def create_payment_request(
         amount_paise=amount,
         commission_paise=commission,
         payout_paise=payout,
-        currency="INR",
+        currency=ROUTE_CURRENCY,
         provider="razorpay",
         status="created",
         due_date=due_date,
         created_by_user_id=created_by.id,
         pay_token_hash=pay_token_hash,
         payer_email_snapshot=(payer_email or "").strip().lower() or None,
+        # Razorpay: "Your international payment will fail if you send us a dummy email id
+        # and phone number of the customer." Snapshot the student's real phone at request
+        # time so the pay page can prefill it — without it every foreign card fails here.
+        payer_phone_snapshot=(payer_phone or "").strip() or None,
     )
     db.add(payment)
     db.flush()  # get payment.id for notes + invoice number
@@ -350,14 +382,14 @@ def create_payment_request(
 
     order = _razorpay_v1_request("POST", "/orders", {
         "amount": amount,
-        "currency": "INR",
+        "currency": ROUTE_CURRENCY,
         "receipt": f"spr_{organization.id}_{payment.id}",
         "payment_capture": 1,
         "notes": {"spr_id": str(payment.id), "organization_id": str(organization.id)},
         "transfers": [{
             "account": linked_account.razorpay_account_id,
             "amount": payout,
-            "currency": "INR",
+            "currency": ROUTE_CURRENCY,
             "notes": {"spr_id": str(payment.id)},
             "linked_account_notes": ["spr_id"],
             "on_hold": False,  # pass-through: settles on Razorpay's normal schedule

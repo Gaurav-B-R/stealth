@@ -206,7 +206,14 @@ class AdminEnterpriseRefundRequest(BaseModel):
     credits: Optional[int] = None
     # money refund (Razorpay)
     payment_id: Optional[int] = None
-    amount_rupees: Optional[float] = None   # rupees the admin wants refunded
+    # Razorpay issues a refund in the ORIGINAL payment's currency, so the amount is an
+    # integer in THAT currency's minor unit — paise against an INR charge, cents against a
+    # USD one — and `amount_currency` is sent with it purely so the server can ASSERT the
+    # two agree before any money moves. The float `amount_rupees` this replaces refunded
+    # $50.00 when an admin typed 5000 against a $60 charge, because "rupees × 100" is a
+    # rupee assumption baked into a field name.
+    amount_minor: Optional[int] = None
+    amount_currency: Optional[str] = None
     clawback_credits: Optional[int] = None  # credits to deduct from the wallet (default suggested)
 
 
@@ -218,6 +225,10 @@ class AdminCompanyFinanceSummary(BaseModel):
     break_even_gap_usd: float = 0
     investment_entry_count: int = 0
     return_entry_count: int = 0
+    # Payments booked from `amount_paise` because they carry no INR settlement figure.
+    estimated_settlement_count: int = 0
+    usd_to_inr: float = 0                  # the live rate the USD column was built with
+    fx_source: str = "fallback"            # live | fallback (app/fx.py)
 
 
 class AdminCompanyFinanceSeriesPoint(BaseModel):
@@ -243,6 +254,11 @@ class AdminCompanyFinanceLedgerItem(BaseModel):
     amount_usd: float
     occurred_on: str
     source: str
+    # Payment rows only: what the customer was actually charged, and whether the USD
+    # figure above rests on a real settlement number or on a fallback.
+    charged_currency: Optional[str] = None
+    charged_display: Optional[str] = None
+    settlement_estimated: bool = False
 
 
 class AdminCompanyFinanceAnalyticsResponse(BaseModel):

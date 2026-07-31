@@ -1002,7 +1002,13 @@ def _send_subscription_change_email_safe(
             access_until=_normalize_datetime(subscription.ends_at),
             next_renewal_at=_normalize_datetime(next_renewal_at),
             payment_amount_paise=payment_amount_paise,
-            payment_currency=(payment_currency or "INR"),
+            # Pass None through rather than substituting "INR". Every caller that supplies
+            # an amount supplies its currency on the adjacent line; the amountless events
+            # (downgrade, auto-renew off) have no payment at all and render "N/A" either
+            # way. The `or "INR"` re-created one level up exactly the guess the email
+            # signature was made required to prevent — it would have turned "the caller
+            # forgot" back into "the customer paid rupees" on a foreign-currency pass.
+            payment_currency=payment_currency,
             payment_status=payment_status,
             pricing_model=resolved_pricing_model,
             unsubscribe_url=unsubscribe_url,

@@ -224,6 +224,31 @@ def _int(value, default: int = 0) -> int:
         return default
 
 
+def _settled_inr_paise(row) -> int:
+    """The INR value of a payment/refund row that may not be denominated in INR.
+
+    This whole ledger is INR: the entry form takes rupees, every total is summed as paise
+    and the client renders it with the INR formatter. But the rows Rilono bills the org
+    (EnterpriseCreditPayment / EnterpriseRefund) now carry their own `currency`, and their
+    `amount_paise` is minor units OF THAT CURRENCY — a $12.99 top-up is 1299. Booking that
+    integer straight into an INR book records ₹12.99 for a payment of roughly ₹1,100, and
+    it feeds "You paid Rilono", the ROI multiple and the cost split.
+
+    Razorpay's own settlement figure (`base_amount_paise`, captured at verify time from the
+    payment entity — see money.settled_inr_minor) is the only INR number that may be summed
+    here. Never convert with our own FX rate: it will not match the processing bank's and
+    the books would drift permanently out of reconciliation. A non-INR row with no
+    settlement figure yet returns 0 so the caller drops it — an omission is recoverable,
+    a number that is wrong by two orders of magnitude is not.
+    """
+    currency = str(getattr(row, "currency", None) or "INR").strip().upper()
+    if currency == "INR":
+        # Charged == settled. Unchanged for every row that predates multi-currency.
+        return _int(getattr(row, "amount_paise", 0))
+    base = getattr(row, "base_amount_paise", None)
+    return _int(base) if base is not None else 0
+
+
 def _as_date(value) -> Optional[date]:
     """Coerce a stored timestamp/date (tz-aware or not) to a plain date."""
     if value is None:
@@ -1080,7 +1105,9 @@ def _rilono_billing_rows(db: Session, org_id: int, start: Optional[date], end: d
     rows: list[dict] = []
     for c in query.order_by(C.id.desc()).limit(MAX_CREDIT_ROWS).all():
         occurred = _as_date(c.verified_at) or _as_date(c.created_at)
-        gross = _int(c.amount_paise)
+        # NOT _int(c.amount_paise): that is minor units of c.currency, so a non-INR top-up
+        # would be booked into this INR ledger at ~1/85th of what the org actually paid.
+        gross = _settled_inr_paise(c)
         if not occurred or gross <= 0:
             continue
         is_infra = (c.kind == "infra_fee")
@@ -1116,14 +1143,19 @@ def _rilono_billing_rows(db: Session, org_id: int, start: Optional[date], end: d
     refunds = refunds.filter(F.created_at < datetime.combine(end + timedelta(days=1), datetime.min.time()))
     for r in refunds.order_by(F.id.desc()).limit(MAX_CREDIT_ROWS).all():
         occurred = _as_date(r.created_at)
-        if not occurred:
+        # A refund is stored in the currency of the payment it reverses, so the same rule
+        # as the charge above applies. EnterpriseRefund carries no settlement column, so a
+        # non-INR refund is dropped rather than booked as rupees — it would otherwise
+        # overstate income here and be netted off "You paid Rilono" at the wrong scale.
+        back = _settled_inr_paise(r)
+        if not occurred or back <= 0:
             continue
         rows.append(_row(
             row_id=f"rilonoref-{r.id}",
             kind="income",
             source=SOURCE_RILONO_CREDITS,
             category="rilono_refund",
-            amount_paise=_int(r.amount_paise),
+            amount_paise=back,
             occurred_on=occurred,
             description="Refund from Rilono" + (f" · {r.reason.strip()[:120]}" if r.reason else ""),
             counterparty="Rilono",

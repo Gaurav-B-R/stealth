@@ -169,10 +169,16 @@ class EnterpriseOrganization(Base):
     company_name = Column(String, nullable=False, index=True)
     subdomain_slug = Column(String, unique=True, index=True, nullable=True)
     logo_url = Column(String, nullable=True)
-    # Company location (the org's own records) — also drives the portal's DISPLAY currency
-    # (billing itself stays in INR; see _org_display_currency in routers/enterprise.py).
+    # Company location (the org's own records) — seeds both the portal's DISPLAY currency
+    # (_org_display_currency) and the default CHARGE currency for credit top-ups.
     country_code = Column(String, nullable=True)   # ISO-3166 alpha-2, e.g. "US"
     state_region = Column(String, nullable=True)
+    # The currency this org is actually billed in for Rilono's own charges (credit
+    # top-ups, infra fee). Set from the first checkout so the choice is sticky rather
+    # than re-guessed from country on every visit. NULL = not yet chosen; falls back to
+    # country, then INR. Note this does NOT affect what they collect from their own
+    # students — Razorpay Route is INR-only.
+    billing_currency = Column(String, nullable=True)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     # Proof the organization accepted the Data Processing Agreement (controller↔processor
     # terms for handling its clients' personal data). Captured at signup.
@@ -1109,6 +1115,38 @@ class EnterpriseSignupOtp(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
+class EnterpriseStepUpOtp(Base):
+    """One-time code that re-proves the ACTOR's own inbox before an irreversible workspace
+    action (today: transferring ownership).
+
+    A capability check proves the session is *authorised*; it does not prove the session is
+    still the person it was issued to. `context_key` binds the code to the exact action, so a
+    code emailed to hand the workspace to Alice can never be replayed to hand it to Bob. One
+    live row per (user, organization, purpose) — a re-request overwrites the previous code,
+    which is also what makes an older intercepted code useless."""
+    __tablename__ = "enterprise_step_up_otps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    purpose = Column(String, nullable=False, index=True)     # e.g. "owner_transfer"
+    context_key = Column(String, nullable=True)              # e.g. "target:42"
+    code_hash = Column(String, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    consumed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # The "one live code per scope" rule above is what makes a re-request invalidate the
+    # previous code; it is enforced by the database, not by the issuing code path.
+    __table_args__ = (
+        Index(
+            "uq_enterprise_step_up_otps_scope",
+            "user_id", "organization_id", "purpose", unique=True,
+        ),
+    )
+
+
 class EnterpriseSubscription(Base):
     """Per-organization SaaS subscription (the consultancy's own plan)."""
     __tablename__ = "enterprise_subscriptions"
@@ -1222,8 +1260,15 @@ class EnterpriseCreditPayment(Base):
     package_key = Column(String, nullable=True)  # starter | pro | enterprise | infra
     credits = Column(Integer, nullable=False, default=0)        # base credits in the package
     bonus_credits = Column(Integer, nullable=False, default=0)  # promotional bonus credits
+    # Minor unit of `currency` — paise for INR, cents for USD. Never sum across currencies.
     amount_paise = Column(Integer, nullable=False)
     currency = Column(String, nullable=False, default="INR")
+    # --- Settlement (see SubscriptionPayment for the full rationale) ------------------
+    base_amount_paise = Column(Integer, nullable=True)     # Razorpay's INR settlement figure
+    base_currency = Column(String, nullable=False, default="INR")
+    fx_rate_used = Column(Numeric(18, 6), nullable=True)
+    is_international = Column(Boolean, nullable=False, default=False)
+    price_book_version = Column(String, nullable=True)
     razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
     status = Column(String, nullable=False, default="created")  # created | verified | failed
@@ -1378,8 +1423,16 @@ class EnterpriseStudentPayment(Base):
     amount_paise = Column(Integer, nullable=False)          # total the student pays
     commission_paise = Column(Integer, nullable=False, default=0)  # Rilono's gross take (retained)
     payout_paise = Column(Integer, nullable=False, default=0)      # to consultancy = amount - commission
+    # Razorpay Route transfers are INR-ONLY, so gateway-collected rows here are always INR
+    # and `amount_paise` is genuinely paise. Manual (off-platform) rows may carry a foreign
+    # currency — the consultancy really did collect foreign cash and the books should say so.
     currency = Column(String, nullable=False, default="INR")
     provider = Column(String, nullable=False, default="razorpay")   # razorpay | manual
+    # True when an INR invoice here was paid with a foreign-issued card. The order stays INR
+    # (Route requires it), but the cost of collection does not: international cards run
+    # ~3% + GST vs ~2% domestic, so margin/"Rilono savings" figures overstate unless this is
+    # known. Also the signal for export-of-services treatment at filing time.
+    is_international = Column(Boolean, nullable=False, default=False)
     # For off-platform ("manual") payments recorded by staff — money the consultancy collected
     # OUTSIDE Rilono (cash/bank transfer/UPI/cheque/card/other). NULL for Razorpay rows.
     manual_method = Column(String, nullable=True)
@@ -1408,6 +1461,9 @@ class EnterpriseStudentPayment(Base):
     # page resolves the request through this hash.
     pay_token_hash = Column(String, nullable=True, unique=True, index=True)
     payer_email_snapshot = Column(String, nullable=True)   # where the link was sent
+    # The student's phone at request time. Needed because Razorpay hard-fails an
+    # international card payment when the email/phone sent to Checkout are placeholders.
+    payer_phone_snapshot = Column(String, nullable=True)
     email_sent_at = Column(DateTime(timezone=True), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     # Chargeback/dispute state from payment.dispute.* webhooks:
@@ -1697,8 +1753,25 @@ class SubscriptionPayment(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     provider = Column(String, nullable=False, default="razorpay")  # razorpay
     plan = Column(String, nullable=False, default="pro")  # pro
+    # `amount_paise` is in the MINOR UNIT OF `currency` — paise for INR, cents for USD.
+    # It is what the customer was charged and must never be summed across currencies.
     amount_paise = Column(Integer, nullable=False)
     currency = Column(String, nullable=False, default="INR")
+    # --- Settlement (the only figures that may be summed for revenue) -----------------
+    # Razorpay settles everything to INR and reports the converted amount as `base_amount`
+    # (absent on INR payments, where charged == settled). Reporting sums THIS column, never
+    # `amount_paise`: adding 1299 (=$12.99) to 99900 (=₹999) yields a plausible-looking
+    # number that is neither. See app/money.py::settled_inr_minor.
+    base_amount_paise = Column(Integer, nullable=True)
+    base_currency = Column(String, nullable=False, default="INR")
+    fx_rate_used = Column(Numeric(18, 6), nullable=True)   # base_amount/amount, for audit
+    # True when paid with a foreign-issued card. Drives the fee model (international cards
+    # cost ~3% + GST vs ~2% domestic) and the GST export-of-services classification, which
+    # cannot be derived from the INR amount alone.
+    is_international = Column(Boolean, nullable=False, default=False)
+    # Which app/money.py PRICE_BOOK_VERSION set this price — without it an in-flight
+    # price change is unreconcilable after the fact.
+    price_book_version = Column(String, nullable=True)
     razorpay_plan_id = Column(String, nullable=True, index=True)
     razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
     razorpay_subscription_id = Column(String, nullable=True, index=True)

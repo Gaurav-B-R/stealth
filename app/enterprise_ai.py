@@ -23,7 +23,9 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, date
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import and_, func, or_
@@ -32,12 +34,22 @@ from sqlalchemy.orm import Session
 from app import models
 from app import enterprise_access as access
 from app import ai_usage
+from app import course_catalog
 from app import enterprise_catalog as catalog
 from app.utils import gemini_service as gemini_utils
 
 logger = logging.getLogger(__name__)
 
 MAX_HISTORY_TURNS = 12
+
+# Agent-loop guardrails. Every round is a FULL model round-trip that re-sends the
+# entire growing history plus every tool declaration, so an unbounded loop costs
+# superlinearly in the org's tokens. See _run_metered_tool_loop.
+MAX_TOOL_ROUNDS = max(1, int(os.getenv("ENTERPRISE_AI_MAX_TOOL_ROUNDS", "6") or "6"))
+# A tool that returns a huge payload poisons every SUBSEQUENT round (the result stays
+# in history and is re-sent each time), so results are capped at the boundary rather
+# than trusting each tool to bound itself.
+TOOL_RESULT_CHAR_CAP = max(2_000, int(os.getenv("ENTERPRISE_AI_TOOL_RESULT_CHARS", "14000") or "14000"))
 
 INTERNAL_PROVIDER_DISCLOSURE_PATTERN = re.compile(
     r"\b(?:gemini[-\w.]*|google\s+generative\s+ai|google\s+genai|vertex\s+ai)\b",
@@ -63,10 +75,25 @@ def sanitize_public_ai_text(text: str) -> str:
     return INTERNAL_PROVIDER_DISCLOSURE_PATTERN.sub("Rilono AI", value)
 
 
+# The assistant deliberately does NOT inherit the app-wide gemini-3.1-pro default.
+#
+# This surface picks tools and formats rows the database already got right — the model
+# does no reasoning the answer's correctness depends on. Measured on the same question
+# with the full 35-tool surface: 3.1-pro took 2 rounds / 10.4k tokens / $0.0225, flash
+# took 2 rounds / 11.3k tokens / $0.0037. Both answered correctly; flash also fanned out
+# over two tools in one round. At ₹2 (~$0.021) of revenue per metered message that is the
+# difference between a question costing the org 4 messages and costing it 1.
+#
+# Set ENTERPRISE_AI_MODEL=gemini-3.1-pro-preview to put Pro back — the cost-weighted
+# meter keeps the margin either way, the org just spends its allowance ~4x faster.
+_DEFAULT_ASSISTANT_MODELS = ["gemini-2.5-flash", "gemini-3.1-pro-preview", "gemini-2.5-pro"]
+
+
 def _enterprise_model_candidates() -> list[str]:
     return gemini_utils.get_model_candidates(
         primary_env="ENTERPRISE_AI_MODEL",
         candidates_env="ENTERPRISE_AI_MODEL_CANDIDATES",
+        defaults=_DEFAULT_ASSISTANT_MODELS,
     )
 
 
@@ -163,6 +190,10 @@ def _client_brief(c: models.EnterpriseClient, member_names: dict | None = None) 
         "priority": c.priority,
         "key_date": _iso(c.target_date),
         "assigned_to": assigned,
+        # The office the case is filed under — the same value the client profile shows as
+        # "Branch / office". Without it the assistant answered "no office is noted on this
+        # file" for clients that are filed under one.
+        "office": c.branch_name,
         "email": c.email,
         "phone": c.phone,
     }
@@ -172,7 +203,69 @@ def _client_brief(c: models.EnterpriseClient, member_names: dict | None = None) 
 # Tool factory — every tool is a closure bound to (db, organization_id)
 # ---------------------------------------------------------------------------
 
-def build_org_tools(db: Session, organization_id: int, ctx=None) -> list:
+def _credits_mod():
+    """Lazy import — enterprise_credits imports models/fx and is only needed by tools."""
+    from app import enterprise_credits
+    return enterprise_credits
+
+
+def _rupees(paise) -> Optional[float]:
+    """Convert stored integer paise to rupees for the model.
+
+    Every money column in the finance schema is paise (100x the rupee figure). Handing
+    the model a raw *_paise number invites it to quote ₹4,50,000 as ₹4.5 crore, so the
+    conversion happens here and tool payloads never carry a _paise field at all.
+    """
+    if paise is None:
+        return None
+    try:
+        return round(float(paise) / 100.0, 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _slim_catalog_result(rows: list, total: int) -> dict:
+    """Trim a catalog query down to what an answer needs.
+
+    query_catalog returns ORM rows as [(university, [courses])]. The UI serializers
+    (serialize_university / serialize_course) carry marketing prose — summary,
+    scholarships_note — and every course field, which would dominate the prompt. This
+    keeps the decision-relevant columns and drops application_deadline entirely: a
+    catalog audit found 374 active courses still carrying an already-past deadline, so
+    the assistant must never quote one as current.
+    """
+    unis = []
+    for uni, courses in (rows or [])[:8]:
+        unis.append({
+            "name": uni.name,
+            "city": uni.city,
+            "qs_world_rank": uni.qs_world_rank,
+            "university_type": uni.university_type,
+            "typical_tuition": uni.tuition_note,
+            "last_verified_at": _iso(uni.last_verified_at),
+            "courses": [{
+                "course_name": c.course_name,
+                "degree_level": c.degree_level,
+                "discipline": c.discipline,
+                "duration": c.duration,
+                "annual_tuition": c.annual_tuition,
+                "ielts": c.ielts_requirement,
+                "toefl": c.toefl_requirement,
+            } for c in (courses or [])[:4]],
+        })
+    return {
+        "total_matching_universities": int(total or 0),
+        "showing": len(unis),
+        "universities": unis,
+        "deadline_note": (
+            "Application deadlines are deliberately excluded — the catalog's stored "
+            "deadlines are not reliably current. Tell staff to confirm deadlines on the "
+            "university's official page rather than stating one."
+        ),
+    }
+
+
+def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=None) -> list:
     """The tool surface the assistant can call.
 
     `ctx` is the caller's access context. Without it the assistant is the widest hole in the whole
@@ -184,6 +277,11 @@ def build_org_tools(db: Session, organization_id: int, ctx=None) -> list:
     """
     org_id = int(organization_id)
     _scope_query = access.scope_client_query
+    _viewer_user_id = int(viewer_user_id) if viewer_user_id else None
+
+    def _org_row():
+        return db.query(models.EnterpriseOrganization).filter(
+            models.EnterpriseOrganization.id == org_id).first()
 
     def _member_names() -> dict:
         rows = (
@@ -439,8 +537,9 @@ def build_org_tools(db: Session, organization_id: int, ctx=None) -> list:
         }
 
     def get_team_workload() -> dict:
-        """List team members and how many active (non-closed) clients are assigned to
-        each, plus how many clients are currently unassigned. Use for workload questions."""
+        """List EVERY active team member and how many active (non-closed) clients each one
+        is assigned, plus how many clients are currently unassigned. Members with nothing
+        assigned are listed with a count of 0. Use for workload and capacity questions."""
         # A staff-productivity report about colleagues. Scoping the counts would produce a
         # misleading answer rather than a safe one, so it is refused outright below org scope.
         if ctx is not None and getattr(ctx, "scope_kind", "all") != "all":
@@ -457,8 +556,15 @@ def build_org_tools(db: Session, organization_id: int, ctx=None) -> list:
         unassigned = _base().filter(models.EnterpriseClient.status.notin_(terminal),
                                     models.EnterpriseClient.assigned_to_user_id.is_(None)).count()
         workload = [{"member": names.get(int(uid), "Unknown"), "active_clients": int(n)} for uid, n in counts.items()]
-        workload.sort(key=lambda x: x["active_clients"], reverse=True)
-        return {"team": workload, "unassigned_active_clients": unassigned}
+        # Every active member is listed, including the ones holding nothing. Building the
+        # roster from the assignment counts alone hid exactly the people a workload question
+        # is asking about (who has capacity), and in a workspace where nothing is assigned yet
+        # it returned an empty team — which the assistant then reported as "you have no team
+        # members" even though the workspace was fully staffed.
+        seen = {int(uid) for uid in counts}
+        workload += [{"member": nm, "active_clients": 0} for uid, nm in names.items() if int(uid) not in seen]
+        workload.sort(key=lambda x: (-x["active_clients"], str(x["member"]).lower()))
+        return {"team": workload, "team_size": len(workload), "unassigned_active_clients": unassigned}
 
     def _resolve_client_row(name=None, client_id=None):
         q = _base()
@@ -610,8 +716,617 @@ def build_org_tools(db: Session, organization_id: int, ctx=None) -> list:
                            "client": c.full_name, "overdue": bool(d and d < today),
                            "source": "client_key_date"})
         events.sort(key=lambda e: (e["date"] or "", e["time"] or "99:99", e["title"] or ""))
-        return {"today": today.isoformat(), "within_days": days,
-                "count": len(events), "events": events[:60]}
+        payload = {"today": today.isoformat(), "within_days": days,
+                   "count": len(events), "events": events[:60]}
+        if not events:
+            # An empty window is not an empty calendar. Without this the assistant read
+            # "nothing in the next 30 days" as "no client has a key date at all" and said
+            # so out loud — while a key date sat 41 days out.
+            nxt = (_base()
+                   .filter(models.EnterpriseClient.target_date > end,
+                           models.EnterpriseClient.status.notin_(
+                               [catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]))
+                   .order_by(models.EnterpriseClient.target_date.asc()).first())
+            if nxt is not None:
+                payload["next_key_date_after_window"] = {
+                    "client": nxt.full_name,
+                    "date": _iso(nxt.target_date),
+                    "stage": _stage_label(nxt.status),
+                    "note": ("This one falls outside the window that was asked about — say the window "
+                             "is clear and mention this date, never that there are no key dates."),
+                }
+        return payload
+
+    # -----------------------------------------------------------------------
+    # Workspace — the org itself, team, offices, roles, access log, notifications
+    #
+    # These read org-level rows rather than client rows, so `_base()` scoping does not
+    # apply to them; each one is gated on the capability that guards the same screen in
+    # the portal, and the org filter is either inside the reused service function or
+    # applied explicitly here. Never widen a gate to `ctx.is_admin_like` — ctx.has()
+    # already short-circuits True for the owner.
+    # -----------------------------------------------------------------------
+
+    def get_workspace_profile() -> dict:
+        """Get this consultancy's own workspace details: company name, portal address,
+        which country it operates from, when the workspace was created, its current plan
+        and trial state, and how many staff seats and client records are in use.
+        Use for 'what plan are we on', 'how many seats do we have', 'when did we sign up'."""
+        org = db.query(models.EnterpriseOrganization).filter(
+            models.EnterpriseOrganization.id == org_id).first()
+        if not org:
+            return {"error": "Workspace not found."}
+        out = {
+            "company_name": org.company_name,
+            "portal_subdomain": getattr(org, "subdomain_slug", None),
+            "country": getattr(org, "country", None),
+            "created_at": _iso(org.created_at),
+            "active_clients": _credits_mod().active_client_count(db, org_id),
+            "active_team_members": db.query(func.count(models.EnterpriseOrganizationMember.id)).filter(
+                models.EnterpriseOrganizationMember.organization_id == org_id,
+                models.EnterpriseOrganizationMember.is_active.is_(True)).scalar() or 0,
+        }
+        try:
+            from app import enterprise_billing
+            plan = enterprise_billing.build_subscription_state(db, org_id) or {}
+            out["plan"] = {k: plan.get(k) for k in
+                           ("plan", "plan_label", "status", "is_trial", "trial_ends_at",
+                            "max_clients", "max_seats") if k in plan}
+        except Exception:
+            logger.debug("subscription state unavailable for org %s", org_id, exc_info=True)
+        return out
+
+    def list_team_members() -> dict:
+        """List the staff in this workspace: each person's name, role, what records they
+        can see (whole workspace / their offices / only their own clients), which offices
+        they belong to, whether they're active, and when they were last active.
+        Use for 'who is on my team', 'what can <person> see', 'who has admin'."""
+        from app import enterprise_team as team
+        # ctx MUST be threaded: without it list_members exposes every colleague's assigned
+        # client count, and team.view sits in every role preset.
+        members = team.list_members(db, org_id, ctx=ctx)
+        return {"count": len(members), "members": members[:60]}
+
+    def list_offices() -> dict:
+        """List the workspace's offices/branches with their city and country, which one is
+        the default for new clients, and how many staff and clients each holds.
+        Use for 'which offices do we have', 'how many clients does the Delhi office handle'."""
+        from app import enterprise_team as team
+        branches = team.list_branches(db, org_id)
+        return {"count": len(branches),
+                "offices": [team.serialize_branch(b) for b in branches][:40]}
+
+    def list_custom_roles() -> dict:
+        """List the custom permission roles this workspace has defined itself — the role
+        name, what preset it was based on, its default record scope, and how many people
+        hold it. Use for 'what roles do we have', 'who can approve documents'."""
+        from app import enterprise_team as team
+        return {"roles": team.list_roles_payload(db, org_id)[:40]}
+
+    def list_access_audit_log(days: int = 90, limit: int = 25) -> dict:
+        """Read the workspace access log: who changed whose role, permissions, record scope
+        or office, and who was invited, deactivated or reactivated, with dates.
+        Use for 'who gave X admin', 'what access changed last month'."""
+        from app import enterprise_team as team
+        payload = team.access_log_payload(
+            db, organization=_org_row(), ctx=ctx,
+            limit=max(1, min(int(limit or 25), 40)), days=max(1, min(int(days or 90), 365)),
+        ) or {}
+        entries = payload.get("entries") or payload.get("log") or []
+        # detail_json can hold up to 20k chars per row — the summary fields are what a
+        # staff question actually needs, and the raw blob would dominate the prompt.
+        slim = [{k: v for k, v in (e or {}).items() if k != "detail"} for e in entries]
+        return {"count": len(slim), "entries": slim}
+
+    def list_my_notifications(limit: int = 15) -> dict:
+        """Read the signed-in user's own portal notifications, newest first — new clients,
+        pipeline stage changes, completed mock interviews, submitted documents, low credits.
+        Use for 'what have I missed', 'any updates for me'."""
+        N = models.EnterpriseNotification
+        # Per-RECIPIENT scoping is mandatory: the fan-out already applied each member's own
+        # capabilities and record scope when the row was written, so reading anything other
+        # than this user's own rows re-exposes what that fan-out deliberately withheld.
+        if not _viewer_user_id:
+            return {"error": "No signed-in user in context."}
+        rows = (db.query(N)
+                  .filter(N.organization_id == org_id, N.recipient_user_id == int(_viewer_user_id))
+                  .order_by(N.created_at.desc())
+                  .limit(max(1, min(int(limit or 15), 40))).all())
+        return {"count": len(rows), "notifications": [{
+            "type": getattr(r, "type", None),
+            "title": getattr(r, "title", None),
+            "body": _clip(getattr(r, "body", None), 300),
+            "is_read": bool(getattr(r, "is_read", False)),
+            "created_at": _iso(r.created_at),
+        } for r in rows]}
+
+    def list_support_requests(limit: int = 15) -> dict:
+        """List the help and feature requests this workspace has raised with Rilono support —
+        subject, type, status (open / in progress / closed) and when it was raised."""
+        S = models.EnterpriseSupportRequest
+        q = db.query(S).filter(S.organization_id == org_id)
+        # support.request alone means "raise and track MY OWN"; support.manage sees the org's.
+        if not (ctx is None or ctx.has("support.manage")):
+            if not _viewer_user_id:
+                return {"count": 0, "requests": []}
+            q = q.filter(S.user_id == int(_viewer_user_id))
+        rows = q.order_by(S.created_at.desc()).limit(max(1, min(int(limit or 15), 40))).all()
+        return {"count": len(rows), "requests": [{
+            "subject": getattr(r, "subject", None),
+            "type": getattr(r, "request_type", None),
+            "status": getattr(r, "status", None),
+            "created_at": _iso(r.created_at),
+        } for r in rows]}
+
+    # -----------------------------------------------------------------------
+    # Credits, wallet and billing
+    # -----------------------------------------------------------------------
+
+    def get_credit_wallet() -> dict:
+        """Get the Rilono Credits wallet: current balance in credits and rupees, lifetime
+        credits purchased and spent, and whether the balance is running low.
+        Use for 'how many credits do we have left', 'what's our balance'."""
+        state = _credits_mod().wallet_state(db, org_id) or {}
+        # Strip nothing sensitive here — wallet_state is already a UI payload — but keep it
+        # to the fields a question is actually about.
+        return {k: v for k, v in state.items() if k not in ("recent_transactions",)}
+
+    def get_credit_free_allowances() -> dict:
+        """Get how much FREE usage is left before credits are charged: free AI assistant
+        messages remaining today, free Deep Scans left this month, and free staff mock
+        interview previews left. Use for 'do I have free scans left', 'am I being charged'."""
+        c = _credits_mod()
+        wallet = c.get_or_create_wallet(db, org_id, commit=False)
+        used_today = int(wallet.copilot_msgs_today or 0) \
+            if wallet.copilot_usage_date == datetime.utcnow().strftime("%Y-%m-%d") else 0
+        return {
+            "assistant_free_per_day": c.COPILOT_FREE_DAILY,
+            "assistant_used_today": used_today,
+            "assistant_free_remaining_today": max(0, c.COPILOT_FREE_DAILY - used_today),
+            "assistant_messages_per_credit": c.COPILOT_MSGS_PER_CREDIT,
+            "deep_scans_free_left_this_month": c.deep_scan_free_budget_left(db, org_id),
+            "staff_interview_previews_left": c.staff_interview_preview_remaining(db, org_id),
+        }
+
+    def get_credit_pricing() -> dict:
+        """List what every premium AI action costs in Rilono Credits and rupees (Deep Scan,
+        mock interview, university shortlist, Course Finder, Writing Studio, AI assistant)
+        and the credit top-up packs on sale. Use for 'what does a deep scan cost'."""
+        c = _credits_mod()
+        # actions_payload/packages_payload are UI payloads whose `description` fields are
+        # multi-sentence marketing copy (~4.9 KB together). A price question needs the
+        # number, and this result is re-sent on every later round of the turn.
+        return {
+            "actions": [{"action": a.get("label"), "credits": a.get("credits"),
+                         "price_inr": a.get("price_inr")} for a in c.actions_payload()],
+            "packs": [{"pack": p.get("label"), "price": p.get("amount_display"),
+                       "credits": p.get("total_credits") or p.get("credits"),
+                       "bonus": p.get("bonus_credits")} for p in c.packages_payload()],
+        }
+
+    def get_credit_spend_summary(days: int = 30) -> dict:
+        """Summarize where the workspace's credits went over the last N days — total spent,
+        split by AI feature, by client and by team member. Use for 'what are we spending
+        credits on', 'which client costs us the most credits'."""
+        # ctx and include_by_member are BOTH required: without them by_client leaks clients
+        # outside the caller's record scope and by_member reports on colleagues. The row
+        # limits are pushed down rather than sliced afterwards — the full payload runs to
+        # several KB and is re-sent on every later round of the turn.
+        data = _credits_mod().spend_analytics(
+            db, org_id,
+            days=max(1, min(int(days or 30), 365)),
+            client_limit=6, member_limit=6,
+            ctx=ctx,
+            include_by_member=(ctx is None or getattr(ctx, "is_org_scope", False)),
+        ) or {}
+        return {k: v for k, v in data.items() if k not in ("timeline", "series", "trend")}
+
+    def list_credit_transactions(limit: int = 20) -> dict:
+        """List individual credit ledger entries — every top-up, debit, bonus and adjustment,
+        newest first, with what it was for and when. Use for 'show me our credit history',
+        'when did we last top up', 'what used our credits yesterday'."""
+        T = models.EnterpriseCreditTransaction
+        rows = (db.query(T).filter(T.organization_id == org_id)
+                  .order_by(T.created_at.desc())
+                  .limit(max(1, min(int(limit or 20), 50))).all())
+        visible = _scoped_client_ids()
+        out = []
+        for r in rows:
+            # There is no client_id column — a per-client debit points at the client via
+            # reference_type/reference_id, and bakes their full name into the free-text
+            # description ("Deep Scan — Priya Menon"). So a row about a client outside the
+            # caller's record scope has to lose its DESCRIPTION, not just an id; scoping
+            # the id alone would still hand over the name.
+            cid = None
+            if str(getattr(r, "reference_type", "") or "") == "client":
+                try:
+                    cid = int(getattr(r, "reference_id", None))
+                except (TypeError, ValueError):
+                    cid = None
+            hidden = visible is not None and cid is not None and cid not in visible
+            out.append({
+                "date": _iso(r.created_at),
+                "type": r.type,
+                "credits": int(r.credits or 0),   # signed: negative is a debit
+                "action": getattr(r, "action_key", None),
+                "by": getattr(r, "created_by_name", None),
+                "description": "(a client outside your access)" if hidden else _clip(r.description, 120),
+            })
+        return {"count": len(out), "transactions": out}
+
+    # -----------------------------------------------------------------------
+    # Course Finder catalog — GLOBAL reference data, deliberately NOT org-scoped
+    # -----------------------------------------------------------------------
+
+    def get_course_catalog_coverage() -> dict:
+        """Get how big and how fresh Rilono's shared university/course catalog is — how many
+        universities and courses we hold per destination country and when they were last
+        AI-verified. Use for 'how many universities are there', 'what countries do you cover'."""
+        stats = course_catalog.catalog_stats(db) or {}
+        return {
+            "note": "Rilono's shared catalog of universities and courses, the same data the "
+                    "Course Finder screen browses. It is not specific to this consultancy.",
+            **stats,
+        }
+
+    def search_course_catalog(country: str, query: Optional[str] = None,
+                              degree_level: Optional[str] = None,
+                              discipline: Optional[str] = None,
+                              max_tuition: Optional[int] = None,
+                              limit: int = 8) -> dict:
+        """Search the shared university/course catalog for one destination country, by
+        university or course keyword, degree level (bachelors/masters/phd/diploma),
+        discipline and maximum annual tuition. Use for 'which universities in Canada do
+        computer science under 30000', 'find MSc data science in the UK'."""
+        code = str(country or "").strip().upper()[:2]
+        try:
+            rows, total = course_catalog.query_catalog(
+                db, country_code=code, degree_level=degree_level, discipline=discipline,
+                q=query, max_tuition=max_tuition,
+                limit_universities=max(1, min(int(limit or 8), 12)),
+            )
+        except Exception:
+            logger.warning("catalog search failed", exc_info=True)
+            return {"error": "The catalog search failed."}
+        if not rows:
+            return {"total_matching_universities": 0, "universities": [],
+                    "note": f"No catalog universities matched in {code}. Check the country code "
+                            "(US, UK, CA, AU, DE, IE, FR, ES, NL, AE) or loosen the filters."}
+        return _slim_catalog_result(rows, total)
+
+    def list_client_shortlist(name: Optional[str] = None, client_id: Optional[int] = None) -> dict:
+        """List the universities shortlisted on one client's file — university, program,
+        status (considering / applied / admitted / rejected), estimated tuition and how it
+        was added. Use for 'what has X applied to', 'which universities is X considering'."""
+        client, multi = _resolve_client_row(name, client_id)
+        if multi:
+            return {"multiple_matches": [_client_brief(c) for c in multi]}
+        if not client:
+            return {"error": "No matching client found."}
+        U = models.EnterpriseClientUniversity
+        rows = (db.query(U).filter(U.organization_id == org_id, U.client_id == client.id)
+                  .order_by(U.created_at.desc()).limit(40).all())
+        return {"client": client.full_name, "count": len(rows), "universities": [{
+            "university": u.university_name,
+            "program": getattr(u, "program", None),
+            "status": getattr(u, "status", None),
+            "est_tuition": getattr(u, "est_tuition", None),
+            "admission_difficulty": getattr(u, "admission_difficulty", None),
+            "added": _iso(u.created_at),
+        } for u in rows]}
+
+    # -----------------------------------------------------------------------
+    # Finance — the consultancy's own money
+    #
+    # Every figure comes from enterprise_finance.build_book()/analytics(): platform money
+    # is DERIVED per request and never stored, so a hand-rolled SUM over the ledger tables
+    # would silently miss everything Razorpay touched. All amounts are integer paise in the
+    # DB; they are converted once, here, and returned as rupees so the model never does
+    # money arithmetic. Finance has no record-scope dimension by design — the books are
+    # whole-org — which is why the gate is the finance.books / finance.view capability.
+    # -----------------------------------------------------------------------
+
+    def _fin_range(period: Optional[str]):
+        from app import enterprise_finance
+        try:
+            return enterprise_finance.resolve_range(period or "this_month")
+        except Exception:
+            return enterprise_finance.resolve_range("this_month")
+
+    def get_finance_overview(period: str = "this_month") -> dict:
+        """Get the consultancy's own profit & loss for a period: total income, total
+        expenses, net profit and margin, money still owed by students, and what Rilono
+        saved them. Period can be this_month, last_month, this_quarter, this_year, all.
+        Use for 'how did we do this month', 'are we profitable', 'what are we owed'."""
+        from app import enterprise_finance
+        rng = _fin_range(period)
+        try:
+            stats = enterprise_finance.analytics(db, org_id, rng) or {}
+        except Exception:
+            logger.warning("finance overview failed (org=%s)", org_id, exc_info=True)
+            return {"error": "The finance books couldn't be built for that period."}
+        totals = stats.get("totals") or {}
+        receivables = stats.get("receivables") or {}
+        collections = stats.get("collections") or {}
+        out = {
+            "period": (stats.get("range") or {}).get("label") or period,
+            "income": _rupees(totals.get("income_paise")),
+            "expenses": _rupees(totals.get("expense_paise")),
+            "net_profit": _rupees(totals.get("net_paise")),
+            "outstanding_receivable": _rupees(receivables.get("total_paise")),
+            "overdue": _rupees(receivables.get("overdue_paise")),
+            "collected_in_period": _rupees(collections.get("collected_paise")),
+            "currency": "INR",
+        }
+        # margin_is_meaningful is False when there was no income to divide by — reporting
+        # "0% margin" on a month with no revenue reads as a loss rather than as no trading.
+        if totals.get("margin_is_meaningful"):
+            out["margin_percent"] = totals.get("margin_pct")
+        return out
+
+    def list_finance_ledger(period: str = "this_month", direction: str = "income",
+                            limit: int = 20) -> dict:
+        """List the individual money lines for a period — direction 'income' for fees
+        collected, commissions and other money in, or 'expense' for salaries, rent,
+        marketing, refunds and other money out. Use for 'what did we spend on marketing',
+        'show me this month's income lines'."""
+        from app import enterprise_finance
+        rng = _fin_range(period)
+        try:
+            book = enterprise_finance.build_book(db, org_id, rng) or {}
+        except Exception:
+            return {"error": "The finance books couldn't be built for that period."}
+        want = "income" if str(direction or "income").strip().lower().startswith("in") else "expense"
+        # build_book returns one flat `rows` list; `kind` is the income/expense discriminator
+        # (amounts are positive on both sides, so a sign test would return everything).
+        rows = [r for r in (book.get("rows") or []) if (r or {}).get("kind") == want]
+        out = [{
+            "date": r.get("occurred_on"),
+            "category": r.get("category_label") or r.get("category"),
+            "description": _clip(r.get("description"), 120),
+            "client": r.get("client_name"),
+            "counterparty": r.get("counterparty") or None,
+            "amount": _rupees(r.get("amount_paise")),
+        } for r in rows[: max(1, min(int(limit or 20), 40))]]
+        result = {"period": rng.get("label") or period, "direction": want,
+                  "total_lines": len(rows), "showing": len(out), "lines": out, "currency": "INR"}
+        if book.get("truncated"):
+            result["note"] = book.get("truncated_note") or "The period held more lines than were read."
+        return result
+
+    def get_revenue_breakdown(period: str = "this_month", by: str = "client") -> dict:
+        """Break the period's money down by 'client' (which cases earn and cost what),
+        'market' (which destination countries earn most) or 'member' (which staff member
+        collected how much). Use for 'which clients are most profitable', 'who collected
+        the most this quarter'."""
+        from app import enterprise_finance
+        rng = _fin_range(period)
+        try:
+            stats = enterprise_finance.analytics(db, org_id, rng) or {}
+        except Exception:
+            return {"error": "The finance analytics couldn't be built for that period."}
+        key = str(by or "client").strip().lower()
+        if key in ("market", "country", "destination"):
+            key, rows = "market", ((stats.get("dimensions") or {}).get("destinations") or [])
+        elif key in ("member", "staff", "counsellor", "counselor"):
+            key, rows = "member", (stats.get("by_member") or [])
+        elif key in ("category", "expense", "spend"):
+            key, rows = "category", (stats.get("expense_by_category") or [])
+        else:
+            # by_client is a DICT ({"clients": [...], "unassigned_*": ...}), not a list —
+            # slicing it directly raises, so the list has to be reached explicitly.
+            key, rows = "client", ((stats.get("by_client") or {}).get("clients") or [])
+        out = []
+        for r in rows[:12]:
+            if not isinstance(r, dict):
+                continue
+            # Drop raw paise and internal ids; re-add each money field in rupees.
+            row = {k: v for k, v in r.items()
+                   if not str(k).endswith("_paise") and not str(k).endswith("_display")
+                   and k not in ("client_id", "user_id", "member_id")}
+            for money_key in [k for k in r if str(k).endswith("_paise")]:
+                row[money_key[:-6].rstrip("_")] = _rupees(r[money_key])
+            out.append(row)
+        return {"period": (stats.get("range") or {}).get("label") or period,
+                "grouped_by": key, "count": len(out), "rows": out, "currency": "INR"}
+
+    def get_client_payment_history(name: Optional[str] = None,
+                                   client_id: Optional[int] = None) -> dict:
+        """Get one student's money record: how much they have been invoiced, how much has
+        been collected, refunded, and what is still outstanding. Use for 'has X paid',
+        'how much does X still owe'."""
+        client, multi = _resolve_client_row(name, client_id)
+        if multi:
+            return {"multiple_matches": [_client_brief(c) for c in multi]}
+        if not client:
+            return {"error": "No matching client found."}
+        from app import enterprise_payments
+        try:
+            totals = enterprise_payments.client_payment_totals(db, org_id, int(client.id)) or {}
+        except Exception:
+            return {"error": "That client's payment record couldn't be read."}
+        return {
+            "client": client.full_name,
+            "invoiced": _rupees(totals.get("invoiced_paise") or totals.get("requested_paise")),
+            "collected": _rupees(totals.get("collected_paise") or totals.get("paid_paise")),
+            "refunded": _rupees(totals.get("refunded_paise")),
+            "outstanding": _rupees(totals.get("outstanding_paise") or totals.get("due_paise")),
+            "currency": "INR",
+        }
+
+    def get_payment_collection_status() -> dict:
+        """Report whether online student-payment collection is switched on for this
+        consultancy and what stage the payout setup is at. Use for 'can we take payments
+        online yet', 'why can't I send a payment link'."""
+        from app import enterprise_payments
+        try:
+            account = enterprise_payments.get_linked_account(db, org_id)
+        except Exception:
+            account = None
+        if not account:
+            return {"collection_enabled": False,
+                    "note": "Online collection isn't set up. Finance → set up payouts to start."}
+        # Deliberately no razorpay_* identifiers or error text — those are processor
+        # secrets/internal state and would end up verbatim in the model prompt.
+        return {
+            "collection_enabled": bool(getattr(account, "is_active", False)),
+            "onboarding_status": getattr(account, "status", None),
+            "created_at": _iso(getattr(account, "created_at", None)),
+        }
+
+    # -----------------------------------------------------------------------
+    # Case work — interviews, drafts, deep scans, notes, emails, stage records
+    # -----------------------------------------------------------------------
+
+    def get_client_casework_summary(name: Optional[str] = None,
+                                    client_id: Optional[int] = None) -> dict:
+        """One call for everything that has been DONE on a client: how many mock
+        interviews and the latest verdict, how many SOP/LOR drafts exist, the latest Deep
+        Scan risk level, note and email counts, and whether a client portal link is live.
+        Use this first for 'where are we with X' / 'what have we done for X'."""
+        client, multi = _resolve_client_row(name, client_id)
+        if multi:
+            return {"multiple_matches": [_client_brief(c) for c in multi]}
+        if not client:
+            return {"error": "No matching client found."}
+        cid = int(client.id)
+
+        def _count(model):
+            try:
+                return int(db.query(func.count(model.id)).filter(model.client_id == cid).scalar() or 0)
+            except Exception:
+                return 0
+
+        latest_interview = None
+        try:
+            S = models.EnterpriseInterviewSession
+            row = (db.query(S).filter(S.client_id == cid)
+                     .order_by(S.created_at.desc()).first())
+            if row:
+                latest_interview = {
+                    "id": int(row.id), "date": _iso(row.created_at),
+                    # verdict is NULL on many real sessions — it is only set when the
+                    # feedback text matched a known phrase, so absence is not a failure.
+                    "verdict": getattr(row, "verdict", None) or "not scored",
+                }
+        except Exception:
+            pass
+
+        latest_scan = None
+        try:
+            D = models.EnterpriseClientDeepScan
+            row = (db.query(D).filter(D.client_id == cid)
+                     .order_by(D.created_at.desc()).first())
+            if row:
+                latest_scan = {"date": _iso(row.created_at),
+                               "risk_level": getattr(row, "risk_level", None),
+                               "summary": _clip(getattr(row, "summary", None), 300)}
+        except Exception:
+            pass
+
+        portal_live = False
+        try:
+            from app.routers import enterprise as _r
+            share = _r._latest_client_portal_share(db, org_id, cid)
+            portal_live = bool(share and not getattr(share, "revoked_at", None))
+        except Exception:
+            pass
+
+        return {
+            "client": client.full_name,
+            "stage": _stage_label(client.status),
+            "mock_interviews": _count(models.EnterpriseInterviewSession),
+            "latest_interview": latest_interview,
+            "writing_drafts": _count(models.EnterpriseClientWritingDraft),
+            "deep_scans": _count(models.EnterpriseClientDeepScan),
+            "latest_deep_scan": latest_scan,
+            "notes": _count(models.EnterpriseClientNote),
+            "emails_logged": _count(models.EnterpriseClientEmail),
+            "client_portal_link_live": portal_live,
+        }
+
+    def get_mock_interview_report(session_id: int) -> dict:
+        """Read the coaching report for ONE mock interview — the verdict, what went well,
+        the red flags and how to improve. Get the session id from
+        get_client_casework_summary. The raw transcript is deliberately not included."""
+        S = models.EnterpriseInterviewSession
+        row = db.query(S).filter(S.id == int(session_id)).first()
+        if not row:
+            return {"error": "No such interview session."}
+        # Cross-tenant guard: these rows are reached by id, so re-check the client is one
+        # this caller can actually see rather than trusting the id.
+        if not _base().filter(models.EnterpriseClient.id == row.client_id).first():
+            return {"error": "No such interview session."}
+        return {
+            "date": _iso(row.created_at),
+            "verdict": getattr(row, "verdict", None) or "not scored",
+            "report": _clip(getattr(row, "feedback", None), 6000),
+        }
+
+    def list_client_notes(name: Optional[str] = None, client_id: Optional[int] = None,
+                          limit: int = 10) -> dict:
+        """Read recent INTERNAL case notes staff have written on a client, newest first.
+        These are internal-only — never suitable to send to the student verbatim."""
+        client, multi = _resolve_client_row(name, client_id)
+        if multi:
+            return {"multiple_matches": [_client_brief(c) for c in multi]}
+        if not client:
+            return {"error": "No matching client found."}
+        N = models.EnterpriseClientNote
+        rows = (db.query(N).filter(N.client_id == int(client.id))
+                  .order_by(N.created_at.desc())
+                  .limit(max(1, min(int(limit or 10), 25))).all())
+        return {"client": client.full_name, "count": len(rows), "notes": [{
+            "date": _iso(n.created_at),
+            "author": getattr(n, "author_name", None),
+            "note": _clip(_strip_html(getattr(n, "body", None) or getattr(n, "content", None)), 500),
+        } for n in rows]}
+
+    def list_client_emails(name: Optional[str] = None, client_id: Optional[int] = None,
+                           limit: int = 10) -> dict:
+        """Read the email log with a client — what staff sent, when, the subject and an
+        excerpt, and whether it was delivered. Use for 'have we emailed X about their
+        offer', 'what did we last tell X'."""
+        client, multi = _resolve_client_row(name, client_id)
+        if multi:
+            return {"multiple_matches": [_client_brief(c) for c in multi]}
+        if not client:
+            return {"error": "No matching client found."}
+        E = models.EnterpriseClientEmail
+        rows = (db.query(E).filter(E.client_id == int(client.id))
+                  .order_by(E.created_at.desc())
+                  .limit(max(1, min(int(limit or 10), 25))).all())
+        return {"client": client.full_name, "count": len(rows), "emails": [{
+            "date": _iso(e.created_at),
+            "subject": getattr(e, "subject", None),
+            "to": getattr(e, "to_email", None),
+            "status": getattr(e, "status", None),
+            "excerpt": _clip(_strip_html(getattr(e, "body_html", None) or getattr(e, "body", None)), 300),
+        } for e in rows]}
+
+    def get_client_stage_records(name: Optional[str] = None,
+                                 client_id: Optional[int] = None) -> dict:
+        """Read the per-stage case record for a client — the destination-specific fields
+        staff filled in at each pipeline stage (e.g. DS-160 and SEVIS for a US case, CAS
+        for the UK). Internal working notes; not for sending to the student."""
+        client, multi = _resolve_client_row(name, client_id)
+        if multi:
+            return {"multiple_matches": [_client_brief(c) for c in multi]}
+        if not client:
+            return {"error": "No matching client found."}
+        try:
+            from app.routers import enterprise as _r
+            data = _r._load_stage_data(client) or {}
+        except Exception:
+            return {"error": "That client's stage record couldn't be read."}
+        trimmed = {}
+        for stage, fields in list(data.items())[:12]:
+            if not isinstance(fields, dict):
+                continue
+            filled = {k: _clip(v, 300) for k, v in fields.items() if v not in (None, "", [], {})}
+            if filled:
+                trimmed[_stage_label(stage)] = filled
+        return {"client": client.full_name, "stages": trimmed}
 
     # Record scope decides WHICH clients the assistant can reach; capabilities decide WHAT it may
     # say about them. Both are needed: a member deliberately denied `documents.view` or
@@ -632,6 +1347,47 @@ def build_org_tools(db: Session, organization_id: int, ctx=None) -> list:
     if ctx is None or ctx.has("documents.download"):
         # Reading a document's extracted text is the same disclosure as downloading it.
         tools.append(read_client_document)
+
+    # Workspace-level tools, each gated on the capability guarding the same portal screen.
+    if ctx is None or ctx.has("dashboard.view"):
+        tools.append(get_workspace_profile)
+    if ctx is None or ctx.has("team.view"):
+        tools += [list_team_members, list_custom_roles]
+    if ctx is None or ctx.has("branches.view"):
+        tools.append(list_offices)
+    if ctx is None or ctx.has("audit.view"):
+        # audit.view is standalone — team.manage/roles.manage do NOT imply it.
+        tools.append(list_access_audit_log)
+    if ctx is None or ctx.has("notifications.view"):
+        tools.append(list_my_notifications)
+    if ctx is None or ctx.has_any("support.request", "support.manage"):
+        tools.append(list_support_requests)
+
+    if ctx is None or ctx.has("credits.view"):
+        tools += [get_credit_wallet, get_credit_free_allowances, get_credit_pricing,
+                  get_credit_spend_summary, list_credit_transactions]
+
+    if ctx is None or ctx.has("coursefinder.view"):
+        tools += [get_course_catalog_coverage, search_course_catalog]
+    if ctx is None or ctx.has("universities.view"):
+        tools.append(list_client_shortlist)
+
+    # Money. finance.books is the org's own P&L (whole-workspace by design, no record
+    # scope exists in the books); finance.view is the per-client payment record.
+    if ctx is None or ctx.has("finance.books"):
+        tools += [get_finance_overview, list_finance_ledger, get_revenue_breakdown]
+    if ctx is None or ctx.has("finance.view"):
+        tools += [get_client_payment_history, get_payment_collection_status]
+
+    # Case work.
+    if ctx is None or ctx.has("clients.view"):
+        tools += [get_client_casework_summary, get_client_stage_records]
+    if ctx is None or ctx.has("interviews.view"):
+        tools.append(get_mock_interview_report)
+    if ctx is None or ctx.has("notes.view"):
+        tools.append(list_client_notes)
+    if ctx is None or ctx.has("emails.view"):
+        tools.append(list_client_emails)
     return tools
 
 
@@ -648,10 +1404,12 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         f"the student-visa consultancy \"{organization_name}\". You are helping {user_name} "
         f"(role: {role}).\n\n"
         f"Today is {today} (UTC).\n\n"
-        "You help staff understand and act on their own client portal. ALWAYS use the provided "
-        "tools to look up real data before answering anything about clients, counts, statuses or "
-        "activity — never guess or invent numbers, names or details. If the tools return nothing, "
-        "say so plainly.\n\n"
+        "You help staff understand and act on their whole Rilono workspace — not just clients: "
+        "the client pipeline and their documents, the calendar, the team and their permissions, "
+        "offices, the credit wallet and what it is being spent on, the workspace's plan and "
+        "settings, and Rilono's shared catalog of universities and courses. ALWAYS use the "
+        "provided tools to look up real data before answering anything factual — never guess or "
+        "invent numbers, names or details. If the tools return nothing, say so plainly.\n\n"
         f"The visa pipeline stages are: {stages}.\n"
         f"This consultancy handles STUDENT visas for these destinations only: {countries}.\n\n"
         "How to answer:\n"
@@ -675,13 +1433,28 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "Lead with what's soonest or overdue, and name the client and date.\n"
         "- Use light formatting for readability: short **bold** labels and tight bullet lists; keep it "
         "skimmable. Don't pad with filler or repeat the question back, and never invent data.\n"
+        "- Questions about universities and courses are about Rilono's SHARED catalog (the Course "
+        "Finder data), not about this consultancy's own records — answer them from the catalog "
+        "tools and say the figures cover Rilono's whole catalog. Never state an application "
+        "deadline: the catalog's stored deadlines are not reliably current, so send staff to the "
+        "university's official page for those.\n"
         "- You can read data but cannot make changes; if asked to edit, add, or email a client, say so and "
         "point to the exact screen (e.g. 'open the client and use Send email', or '+ Add Client').\n"
         "- Never reveal data about any other organization; you only have access to this one.\n"
         "- Do not output raw JSON or tool names; answer in clean, friendly natural language.\n"
-        "- STRICT SCOPE: only help with this consultancy's portal data and student-visa work. If asked "
-        "anything unrelated (general coding, essays, trivia, using you as a general chatbot), decline in one "
-        "short sentence and redirect — do not answer it, to conserve resources."
+        "\n"
+        "Scope — there are THREE cases, and only the third is a refusal:\n"
+        "1. You have a tool for it → use the tool and answer properly.\n"
+        "2. It is about this workspace, this consultancy's work, student visas, or the Rilono "
+        "product, but NO tool covers it (or a permission puts it out of your reach) → do NOT "
+        "refuse. Say plainly that you can't see that here and name the screen that has it "
+        "(Course Finder, Finance, Credits & Billing, Team, Calendar, Help & Support), then offer "
+        "what you CAN answer. Treat this as the default whenever a question is even loosely about "
+        "the business — a legitimate question answered with a refusal is a worse failure than a "
+        "slightly off-topic one answered helpfully.\n"
+        "3. It is genuinely unrelated to the business (general coding, essays, homework, trivia, "
+        "jokes, using you as a general chatbot) → decline in one short sentence and redirect. "
+        "Only this case gets a refusal."
     )
 
 
@@ -700,6 +1473,229 @@ def _convert_history(history: Optional[list]) -> list:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Metered agent loop
+#
+# The SDK's enable_automatic_function_calling=True is DELIBERATELY not used here.
+# Its _handle_afc() loop reassigns `response` on every round and returns only the
+# last one (see google/generativeai/generative_models.py::_handle_afc), so every
+# intermediate round-trip's tokens are invisible to the caller. A turn that calls
+# two tools bills three generate_content requests — each re-sending the full history
+# and every tool declaration — while AFC hands back the usage of one. Metering that
+# response under-counts the turn by roughly the size of all earlier rounds, which is
+# exactly the number the org's credit meter and our margin report depend on.
+#
+# So the loop is driven manually: identical semantics, but every round is metered.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TurnUsage:
+    """Token + cost totals for ONE assistant turn, summed across every round-trip."""
+    rounds: int = 0
+    prompt_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    cost_usd: Decimal = field(default_factory=lambda: Decimal("0"))
+    model: Optional[str] = None
+    tools_called: list = field(default_factory=list)
+    hit_round_cap: bool = False
+
+    def as_dict(self) -> dict:
+        return {
+            "rounds": self.rounds,
+            "prompt_tokens": self.prompt_tokens,
+            "output_tokens": self.output_tokens,
+            "cached_tokens": self.cached_tokens,
+            "total_tokens": self.prompt_tokens + self.output_tokens,
+            "cost_usd": float(self.cost_usd),
+            "model": self.model,
+            "tools_called": list(self.tools_called),
+            "hit_round_cap": self.hit_round_cap,
+        }
+
+
+@dataclass
+class ChatTurnResult:
+    answer: str
+    usage: TurnUsage
+
+
+def _meter_round(response, *, model_name: str, source: str, usage: TurnUsage,
+                 organization_id: Optional[int], user_id: Optional[int]) -> None:
+    """Record ONE model round-trip in the usage ledger and add it to the turn total.
+
+    Always passes organization_id/user_id explicitly: ai_usage._resolve_account() only
+    falls back to the request contextvar, and the enterprise request path never calls
+    set_usage_account() — which is why every historical enterprise_copilot row landed
+    with a NULL org and could not be attributed in the per-action margin report.
+    """
+    try:
+        pt, ot, _tt, ct = ai_usage._extract_tokens(response)
+    except Exception:
+        pt = ot = ct = 0
+    usage.rounds += 1
+    usage.prompt_tokens += int(pt or 0)
+    usage.output_tokens += int(ot or 0)
+    usage.cached_tokens += int(ct or 0)
+    usage.model = model_name
+    if pt or ot:
+        try:
+            usage.cost_usd += ai_usage.estimate_cost(model_name, int(pt or 0), int(ot or 0),
+                                                     cached_tokens=int(ct or 0))
+        except Exception:
+            pass
+    ai_usage.record_gemini_usage(
+        source, model_name, response,
+        user_id=user_id, organization_id=organization_id,
+    )
+
+
+def _function_calls_in(response) -> list:
+    """The function_call parts of a response, or [] — tolerant of blocked/empty candidates."""
+    try:
+        candidates = list(response.candidates or [])
+    except Exception:
+        return []
+    if not candidates:
+        return []
+    try:
+        parts = candidates[0].content.parts
+    except Exception:
+        return []
+    return [p.function_call for p in parts if p and "function_call" in p]
+
+
+def _capped_tool_result(name: str, result) -> dict:
+    """Normalize a tool's return value into a function_response payload, size-capped.
+
+    Two jobs, both at this single boundary so no individual tool has to remember them:
+
+    1. JSON-SAFETY. A function_response is marshalled into a protobuf Struct, which only
+       accepts str/num/bool/null/list/dict — a stray datetime or Decimal raises
+       "Unable to coerce value" and takes down the whole turn. Several tools hand back
+       service-layer payloads built for FastAPI's encoder (which does accept those), so
+       the result is round-tripped through json with default=str rather than trusting
+       each tool to pre-serialize.
+    2. SIZE. A tool result is appended to the history and re-sent on every LATER round of
+       the same turn, so one oversized payload is billed repeatedly. Truncation is
+       announced in-band so the model reports a partial list as partial instead of
+       presenting it as the complete answer.
+    """
+    if not isinstance(result, dict):
+        result = {"result": result}
+    try:
+        encoded = json.dumps(result, default=str)
+        safe = json.loads(encoded)
+    except Exception:
+        logger.warning("Enterprise AI: tool %s result was not serializable", name, exc_info=True)
+        encoded = str(result)
+        safe = {"result": encoded[:TOOL_RESULT_CHAR_CAP]}
+    if len(encoded) <= TOOL_RESULT_CHAR_CAP:
+        return safe
+    logger.info("Enterprise AI: tool %s result truncated (%d chars)", name, len(encoded))
+    return {
+        "truncated": True,
+        "note": (
+            "This result was too large to return in full and has been cut off. "
+            "Summarize what is shown and tell the user the list is partial."
+        ),
+        "partial_result": encoded[:TOOL_RESULT_CHAR_CAP],
+    }
+
+
+def _run_metered_tool_loop(*, model_name: str, system: str, tools: list, history: list,
+                           message: str, source: str, organization_id: Optional[int],
+                           user_id: Optional[int], usage: TurnUsage) -> str:
+    """Drive the function-calling loop by hand, metering every round-trip.
+
+    Mirrors the SDK's AFC semantics (call every requested tool, feed the results back,
+    repeat until the model answers in text) with three additions: per-round metering,
+    a hard round cap, and per-result size caps.
+    """
+    from google.generativeai import protos
+    from google.generativeai.types import content_types
+
+    library = content_types.to_function_library(tools)
+    model = gemini_utils.genai.GenerativeModel(
+        model_name, tools=library, system_instruction=system,
+    )
+
+    # to_contents(), NOT protos.Content(dict): _convert_history yields
+    # {"role": ..., "parts": ["plain string"]} and protos.Content rejects a bare str part
+    # ("Parameter to MergeFrom() must be instance of same class"). That would have raised
+    # on every message with history — i.e. every follow-up in a conversation — and been
+    # swallowed by the per-candidate except below into a blanket 502.
+    contents = list(content_types.to_contents(history)) if history else []
+    contents.append(protos.Content(role="user", parts=[protos.Part(text=message)]))
+
+    response = None
+    for round_index in range(MAX_TOOL_ROUNDS):
+        response = model.generate_content(contents=contents, tools=library)
+        _meter_round(response, model_name=model_name, source=source, usage=usage,
+                     organization_id=organization_id, user_id=user_id)
+
+        calls = _function_calls_in(response)
+        if not calls:
+            break
+
+        contents.append(response.candidates[0].content)
+        response_parts = []
+        for fc in calls:
+            usage.tools_called.append(fc.name)
+            try:
+                # library[fc] raises KeyError on a hallucinated name. Letting that escape
+                # would abort the turn into the per-candidate retry below, which re-runs
+                # the WHOLE turn on the next model while the rounds already metered stay
+                # on the bill — one user message charged two to four times over.
+                declaration = library[fc]
+                if not callable(declaration):
+                    raise KeyError(fc.name)
+                result = declaration.function(**dict(fc.args))
+            except KeyError:
+                logger.warning("Enterprise AI: model called unknown tool %r", fc.name)
+                result = {"error": f"There is no tool called {fc.name}. Answer from the "
+                                   "tools you do have, or say you can't see that here."}
+            except Exception:
+                # A failing tool must not 502 the whole turn — hand the model an error
+                # it can explain, exactly as it would handle an empty result.
+                logger.warning("Enterprise AI tool %s failed", fc.name, exc_info=True)
+                result = {"error": "This lookup failed. Tell the user it couldn't be retrieved."}
+            response_parts.append(protos.Part(function_response=protos.FunctionResponse(
+                name=fc.name, response=_capped_tool_result(fc.name, result),
+            )))
+        contents.append(protos.Content(role="user", parts=response_parts))
+
+        if round_index == MAX_TOOL_ROUNDS - 1:
+            usage.hit_round_cap = True
+            logger.info("Enterprise AI: hit the %d-round tool cap (org_id=%s)",
+                        MAX_TOOL_ROUNDS, organization_id)
+
+    if response is None:
+        return ""
+
+    if usage.hit_round_cap:
+        # The turn has just been charged for MAX_TOOL_ROUNDS round-trips and the last
+        # response is pure function_call, so it has no .text at all — without this the
+        # most expensive possible turn returns the generic "couldn't find an answer".
+        # One more round with tool calling switched OFF forces a text answer out of
+        # everything already gathered. It is metered like any other round.
+        try:
+            response = model.generate_content(
+                contents=contents,
+                tool_config={"function_calling_config": {"mode": "NONE"}},
+            )
+            _meter_round(response, model_name=model_name, source=source, usage=usage,
+                         organization_id=organization_id, user_id=user_id)
+        except Exception:
+            logger.warning("Enterprise AI: final no-tool round failed", exc_info=True)
+
+    try:
+        return (response.text or "").strip()
+    except Exception:
+        # Pure function_call responses have no .text.
+        return ""
+
+
 def run_enterprise_ai_chat(
     *,
     db: Session,
@@ -709,38 +1705,52 @@ def run_enterprise_ai_chat(
     message: str,
     history: Optional[list] = None,
     ctx=None,
-) -> str:
-    """Run one turn of the enterprise AI assistant. Returns the assistant's text answer.
+) -> "ChatTurnResult":
+    """Run one turn of the enterprise AI assistant.
+
+    Returns a ChatTurnResult carrying the answer AND the turn's real token usage summed
+    across every model round-trip — the caller meters against that, so a turn that fanned
+    out over six tools is not billed as if it were one call.
 
     `ctx` is the caller's access context. It must be threaded through: the assistant answers from
     live database queries, so without it a member limited to their own caseload could simply ask
     for every client in the workspace and get them.
     """
+    usage = TurnUsage()
     if not is_ai_configured():
-        return ("The AI assistant isn't configured yet — an administrator needs to enable "
-                "Rilono AI on the server.")
+        return ChatTurnResult(
+            answer=("The AI assistant isn't configured yet — an administrator needs to enable "
+                    "Rilono AI on the server."),
+            usage=usage,
+        )
 
-    tools = build_org_tools(db, organization.id, ctx=ctx)
+    tools = build_org_tools(db, organization.id, ctx=ctx, viewer_user_id=user.id)
     system = _system_instruction(
         organization_name=organization.company_name or "your consultancy",
         user_name=(user.full_name or user.email or "there"),
         role=role,
     )
+    converted_history = _convert_history(history)
+    prompt = (message or "").strip()[:4000]
 
     last_error = None
     for model_name in _enterprise_model_candidates():
         try:
-            model = gemini_utils.genai.GenerativeModel(model_name, tools=tools, system_instruction=system)
-            chat = model.start_chat(
-                history=_convert_history(history),
-                enable_automatic_function_calling=True,
+            text = _run_metered_tool_loop(
+                model_name=model_name,
+                system=system,
+                tools=tools,
+                history=converted_history,
+                message=prompt,
+                source="enterprise_copilot",
+                organization_id=int(organization.id),
+                user_id=int(user.id) if user.id else None,
+                usage=usage,
             )
-            response = chat.send_message((message or "").strip()[:4000])
-            ai_usage.record_gemini_usage("enterprise_copilot", model_name, response)
-            text = (getattr(response, "text", None) or "").strip()
             if not text:
-                return "I couldn't find an answer to that. Try rephrasing, or ask about your clients, statuses or recent activity."
-            return sanitize_public_ai_text(text)
+                text = ("I couldn't find an answer to that. Try rephrasing, or ask about your "
+                        "clients, statuses or recent activity.")
+            return ChatTurnResult(answer=sanitize_public_ai_text(text), usage=usage)
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             logger.warning("Enterprise AI model attempt failed (%s)", model_name, exc_info=True)

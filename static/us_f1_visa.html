@@ -159,6 +159,13 @@
         .navbar .products-menu .pm-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .09em; color: #6a7091; font-weight: 800; padding: .35rem .85rem .15rem; }
         .navbar .products-menu .pm-flag { font-size: 1.05rem; margin-right: .5rem; vertical-align: -1px; }
         @media (max-width: 900px) { .navbar .products-menu { left: 0; transform: none; } .navbar .products-nav:hover .products-menu, .navbar .products-nav:focus-within .products-menu, .navbar .products-nav.is-open .products-menu { transform: none; } }
+
+        /* Pay-in currency control inside the Visa Success Pass paywall. Feature-prefixed
+           so it cannot collide with the generic .select/.card rules in styles.css. The
+           student app is always body.b2c-light, so it is styled for the light surface. */
+        .checkout-launch-currency-label { display: block; margin-top: .7rem; color: #475569; font-size: .78rem; font-weight: 600; letter-spacing: .01em; }
+        .checkout-launch-currency-select { width: 100%; margin-top: .25rem; padding: .48rem .6rem; border-radius: 10px; border: 1px solid rgba(99, 102, 241, .32); background: #fff; color: #0f172a; font-size: .9rem; font-weight: 600; }
+        .checkout-launch-currency-select:focus { outline: none; border-color: rgba(99, 102, 241, .7); box-shadow: 0 0 0 3px rgba(99, 102, 241, .15); }
     </style>
     <style id="f1LandingRefresh">
         /* ============================================================
@@ -2128,7 +2135,7 @@
                 <div class="value-stats">
                     <div class="value-stat">
                         <span class="value-stat-number green">₹999</span>
-                        <span class="value-stat-label">one-time · vs ₹50K+ agents</span>
+                        <span class="value-stat-label">one-time in India · vs ₹50K+ agents</span>
                     </div>
                     <div class="value-stat">
                         <span class="value-stat-number blue">24/7</span>
@@ -3358,8 +3365,9 @@
                     <div id="dashboardTab-referral" class="dashboard-tab">
                         <div class="tab-header">
                             <h2>Referral Program</h2>
-                            <p class="tab-subtitle">Invite a friend — they get ₹200 off their first Visa Success Pass,
-                                and you earn a free 30-day Visa Success Pass the moment they purchase it.</p>
+                            <p class="tab-subtitle">Invite a friend — they get about 20% off their first Visa Success
+                                Pass (₹200 off in India), and you earn a free 30-day Visa Success Pass the moment they
+                                purchase it.</p>
                         </div>
                         <div style="max-width: 800px; margin: 0 auto;">
                             <div class="dashboard-widget">
@@ -4088,20 +4096,14 @@
                 <div class="pricing-header">
                     <h1>Pricing</h1>
                     <p>Simple plans for every stage of your visa journey.</p>
+                    <!-- Currency, not country: each currency has its own fixed price in the
+                         price book, and the options are filled in from that ladder so this
+                         list can never offer a currency we would refuse to charge. -->
                     <div class="pricing-controls">
-                        <label for="pricingCountrySelect">Country</label>
-                        <select id="pricingCountrySelect" onchange="handlePricingCountryChange(this.value)">
-                            <option value="US">United States</option>
-                            <option value="IN">India</option>
-                            <option value="GB">United Kingdom</option>
-                            <option value="CA">Canada</option>
-                            <option value="AU">Australia</option>
-                            <option value="DE">Germany</option>
-                            <option value="AE">United Arab Emirates</option>
-                            <option value="SG">Singapore</option>
-                            <option value="JP">Japan</option>
-                        </select>
-                        <div id="pricingCurrencyHint" class="pricing-currency-hint">Currency: USD</div>
+                        <label for="pricingCurrencySelect">Currency</label>
+                        <select id="pricingCurrencySelect" onchange="handlePricingCurrencyChange(this.value)"></select>
+                        <div id="pricingCurrencyHint" class="pricing-currency-hint">Each currency has its own fixed
+                            price — nothing is converted at checkout.</div>
                     </div>
                 </div>
 
@@ -4134,7 +4136,11 @@
                         </div>
                         <div class="pricing-plan-meta pricing-plan-meta-value">One-time pass. No subscription, no auto-renew.</div>
                         <div class="pricing-plan-savings">Less than a weekend dinner — pass your interview the first time.</div>
-                        <div id="pricingPassPrice" class="pricing-price">₹999<span>/ one-time</span></div>
+                        <!-- Filled in from the price ladder as soon as the script runs. No
+                             hardcoded ₹999 here: this card is rendered for buyers in eight
+                             currencies, so a rupee price baked into the markup is the wrong
+                             number for seven of them whenever the script is stale or blocked. -->
+                        <div id="pricingPassPrice" class="pricing-price"><span>One-time payment</span></div>
                         <div id="pricingPassBillingNote" class="pricing-billing-note"></div>
                         <ul class="pricing-features">
                             <li>Unlimited document audits &amp; red-flag scans</li>
@@ -4170,7 +4176,8 @@
                         <a href="/for-enterprise" class="pricing-enterprise-link">Explore Rilono Enterprise →</a>
                     </div>
                 </div>
-                <p class="pricing-disclaimer">Prices are shown in local currency and updated daily using exchange rates.
+                <p class="pricing-disclaimer">Every currency has its own price — nothing is converted at a daily
+                    exchange rate. You are charged exactly the amount shown, in the currency shown.
                 </p>
             </div>
         </div>
@@ -4765,11 +4772,16 @@
                     <h3>6.1 Consumer Access</h3>
                     <p>Rilono offers free consumer access and a paid, fixed-duration Visa Success Pass. New consumer
                         purchases are one-time purchases, not recurring subscriptions. By purchasing a Pass, you
-                        authorize our payment processor to charge the amount displayed at checkout.</p>
+                        authorize our payment processor to charge the amount and currency displayed at checkout. If
+                        your payment method is held in a different currency, your bank or card issuer converts that
+                        amount at its own rate and may add a cross-border fee.</p>
 
                     <h3>6.2 Visa Success Pass (One-Time Access)</h3>
                     <p>The Visa Success Pass is a one-time purchase that unlocks premium features for a fixed period
-                        (currently ₹999 for 30 days, as displayed at checkout). It is not a subscription and does not
+                        (currently 30 days). The Pass is sold in several currencies, each with its own price set by
+                        Rilono — currently ₹999 in Indian Rupees, with equivalent local prices in other supported
+                        currencies. Prices are not exchange-rate conversions, and the price and currency shown at
+                        checkout are the amount you are charged. It is not a subscription and does not
                         auto-renew; access ends automatically when the validity period expires, after which you may
                         purchase a new Pass. Feature allowances are shown at checkout and in your dashboard. Prices,
                         validity, and allowances may change for future purchases, but a change will not affect a Pass
@@ -5009,10 +5021,13 @@
 
                 <section>
                     <h2>2. Visa Success Pass</h2>
-                    <p>The Visa Success Pass is a one-time purchase that grants fixed-duration access (currently ₹999
-                        for 30 days, as displayed at checkout). Because access is delivered immediately and does not
-                        auto-renew, Pass fees are non-refundable for unused or partially used time except where required
-                        by law.</p>
+                    <p>The Visa Success Pass is a one-time purchase that grants fixed-duration access (currently 30
+                        days). It is sold in several currencies — currently ₹999 in Indian Rupees, with its own set
+                        price in each other supported currency — and the amount and currency shown at checkout are what
+                        you are charged. Because access is delivered immediately and does not auto-renew, Pass fees are
+                        non-refundable for unused or partially used time except where required by law. Any approved
+                        refund is returned in the currency it was charged in; your bank's conversion rate may differ
+                        between the payment and the refund, and that difference is set by your bank, not by Rilono.</p>
                 </section>
 
                 <section>
@@ -6601,8 +6616,8 @@
                     aria-label="Close">×</button>
                 <div class="referral-promo-icon">🎁</div>
                 <h2 class="referral-promo-title">Invite Friends, Earn a Free Visa Success Pass</h2>
-                <p class="referral-promo-subtitle">Your friend gets ₹200 off their first Visa Success Pass — and the
-                    moment they buy it, you earn a free 30-day Visa Success Pass.</p>
+                <p class="referral-promo-subtitle">Your friend gets about 20% off their first Visa Success Pass (₹200
+                    off in India) — and the moment they buy it, you earn a free 30-day Visa Success Pass.</p>
 
                 <div class="referral-promo-field">
                     <div class="referral-promo-field-label">Your Referral Code</div>
@@ -6650,7 +6665,16 @@
                     </div>
                     <div class="checkout-launch-summary">
                         <div id="checkoutLaunchPlanName" class="checkout-launch-plan-name">Visa Success Pass</div>
-                        <div id="checkoutLaunchAmount" class="checkout-launch-plan-price">₹999 / one-time</div>
+                        <!-- Filled in from the price ladder when the modal opens, then from
+                             the server's own amount once the order is priced. No hardcoded
+                             ₹999 here: this modal is opened for buyers in eight currencies. -->
+                        <div id="checkoutLaunchAmount" class="checkout-launch-plan-price">One-time payment</div>
+                        <!-- Pay-in currency, on the same surface as the buy button. Options
+                             come from the server's price ladder; the choice is sent to
+                             /api/pass/checkout as a hint and the server prices it. -->
+                        <label class="checkout-launch-currency-label" for="checkoutLaunchCurrency">Pay in</label>
+                        <select id="checkoutLaunchCurrency" class="checkout-launch-currency-select"
+                            aria-label="Payment currency"></select>
                         <p id="checkoutLaunchMode" class="checkout-launch-plan-note">One-time payment · valid 30 days ·
                             no subscription, no auto-renew.</p>
                     </div>
@@ -6935,7 +6959,12 @@
         <script src="/static/attribution.js"></script>
         <script src="/static/e2e_crypto.js"></script>
         <script src="/static/uk-maintenance-calc.js?v=20260712b"></script>
-        <script src="/static/app.js?v=20260725a"></script>
+        <!-- Bump on every app.js money change. A returning browser holding the previous
+             app.js would run pre-multi-currency code against this page's new markup: it
+             looks for #pricingCountrySelect (gone), so the currency selector stays empty,
+             the pass price never renders, and the checkout modal has no currency control
+             while the server now prices per currency. -->
+        <script src="/static/app.js?v=20260730a"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');

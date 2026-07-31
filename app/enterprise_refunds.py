@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app import enterprise_credits as credits
+from app import money
 
 
 RAZORPAY_API_BASE = os.getenv("RAZORPAY_API_BASE", "https://api.razorpay.com/v1").rstrip("/")
@@ -74,7 +75,13 @@ def _razorpay_refund(payment_id: str, amount_paise: int, notes: Optional[dict] =
 # ---------------------------------------------------------------------------
 
 def payment_refundable_paise(payment: models.EnterpriseCreditPayment) -> int:
-    """Money still refundable on a verified payment (paise)."""
+    """Money still refundable on a verified payment, in MINOR UNITS OF `payment.currency`.
+
+    Paise on an INR charge, cents on a USD one — Razorpay issues a refund in the original
+    payment's currency, so every amount on this path stays in that currency and is never
+    converted, compared or summed against another one. (The `_paise` in the name is
+    historical; it predates non-INR charges.)
+    """
     if payment.status not in ("verified", "partially_refunded"):
         return 0
     return max(0, int(payment.amount_paise or 0) - int(payment.refunded_amount_paise or 0))
@@ -98,7 +105,9 @@ def serialize_refund(refund: models.EnterpriseRefund) -> dict:
         "kind": refund.kind,
         "payment_id": refund.payment_id,
         "amount_paise": int(refund.amount_paise or 0),
-        "amount_display": credits.format_inr(refund.amount_paise),
+        # A refund is recorded in the ORIGINAL payment's currency, so `amount_paise` is
+        # minor units of `refund.currency` — format_inr() printed "₹60" for a $60 refund.
+        "amount_display": money.format_money(refund.amount_paise, refund.currency or "INR"),
         "currency": refund.currency,
         "credits_delta": int(refund.credits_delta or 0),
         "provider": refund.provider,
@@ -122,6 +131,18 @@ def list_refunds(db: Session, organization_id: int, limit: int = 25) -> list[dic
 
 
 def total_refunded_paise(db: Session, organization_id: int) -> int:
+    """Sum of money-refund amounts for an org — IN MIXED MINOR UNITS.
+
+    A refund is always issued in the ORIGINAL payment's currency (Razorpay does not let
+    you choose), so once an org has refunded a non-INR top-up this total adds cents to
+    paise and is not a rupee figure. There is no settlement column on EnterpriseRefund to
+    normalise against.
+
+    Callers MUST check whether the org has any non-INR refund before presenting this as a
+    number — see the `refunds_mixed_currency` guard in app/routers/admin.py, which
+    suppresses the figure instead of printing a confident wrong one. Do not subtract this
+    from a settled-INR revenue total unconditionally.
+    """
     return int(
         db.query(func.coalesce(func.sum(models.EnterpriseRefund.amount_paise), 0))
         .filter(
@@ -188,7 +209,12 @@ def issue_money_refund(
     admin_user: models.User,
 ) -> models.EnterpriseRefund:
     """Issue a real Razorpay refund against a payment, optionally clawing back credits.
-    Calls the gateway FIRST; only on success do we update the wallet/payment and record it."""
+    Calls the gateway FIRST; only on success do we update the wallet/payment and record it.
+
+    `amount_paise` is minor units of `payment.currency`, NOT rupees — Razorpay refunds in
+    the currency the payment was charged in, so the figure passes through to the gateway
+    untouched and every message about it is formatted with that same currency.
+    """
     if payment.organization_id != int(organization_id):
         raise HTTPException(status_code=400, detail="Payment does not belong to this account.")
     if payment.status not in ("verified", "partially_refunded"):
@@ -196,6 +222,7 @@ def issue_money_refund(
     if not payment.razorpay_payment_id:
         raise HTTPException(status_code=400, detail="This payment has no Razorpay payment id to refund.")
 
+    payment_currency = str(payment.currency or "INR").strip().upper() or "INR"
     amount_paise = int(amount_paise or 0)
     if amount_paise <= 0:
         raise HTTPException(status_code=400, detail="Refund amount must be greater than zero.")
@@ -203,7 +230,10 @@ def issue_money_refund(
     if amount_paise > refundable:
         raise HTTPException(
             status_code=400,
-            detail=f"Refund amount exceeds the refundable balance ({credits.format_inr(refundable)}).",
+            detail=(
+                "Refund amount exceeds the refundable balance "
+                f"({money.format_money(refundable, payment_currency)})."
+            ),
         )
     if not razorpay_enabled():
         raise HTTPException(status_code=503, detail="Razorpay isn't configured, so a money refund can't be issued.")
@@ -231,7 +261,10 @@ def issue_money_refund(
         _txn, applied_delta = credits.apply_adjustment(
             db, organization_id, -clawback,
             txn_type="refund",
-            description=f"Claw-back for {credits.format_inr(amount_paise)} refund",
+            # Formatted in the payment's own currency: this string is PERSISTED on the
+            # credit-ledger row, so format_inr() here permanently recorded "₹60" against a
+            # $60 refund — a wrong number in the books, not just on a screen.
+            description=f"Claw-back for {money.format_money(amount_paise, payment_currency)} refund",
             reference_type="payment",
             reference_id=payment.id,
             user=admin_user,
@@ -243,7 +276,10 @@ def issue_money_refund(
         payment_id=payment.id,
         kind="money",
         amount_paise=amount_paise,
-        currency=(payment.currency or "INR"),
+        # Normalised on the way in so the stored code is comparable: readers group by
+        # currency to decide whether a net-paid total can be stated at all, and "usd" vs
+        # "USD" would read as two currencies.
+        currency=payment_currency,
         credits_delta=int(applied_delta),
         provider="razorpay",
         razorpay_payment_id=payment.razorpay_payment_id,

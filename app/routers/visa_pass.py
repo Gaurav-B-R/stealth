@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import models
+from app import money
 from app import visa_pass
 from app import ai_usage
 from app import referrals
@@ -97,6 +98,10 @@ class PassCheckoutRequest(BaseModel):
     # Optional discount code (admin-issued per-account "conversion play" coupons or
     # global codes). Validated server-side; the client never sets the price.
     coupon_code: Optional[str] = Field(default=None, max_length=64)
+    # Which currency to charge in. A HINT ONLY: the server maps it to a price from
+    # app/money.py PRICE_BOOK. The client never sends an amount, and an unrecognised
+    # code is rejected rather than coerced — see money.normalize_currency(strict=True).
+    currency: Optional[str] = Field(default=None, max_length=3)
 
 
 # ---------------------------------------------------------------------------
@@ -105,14 +110,24 @@ class PassCheckoutRequest(BaseModel):
 
 @router.get("/status")
 def pass_status(
+    currency: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
+    """Entitlements + the pass price.
+
+    `currency` quotes the price in that currency (and the response carries the full
+    ladder in `entitlements.pass.price_options` so the paywall can render a selector).
+    An unsupported value quietly falls back to INR rather than 400-ing, because this is
+    a read-only status call — the strict check that matters happens at /checkout, where
+    money is actually decided.
+    """
     subscription = get_or_create_user_subscription(db, current_user.id)
     return {
-        "entitlements": visa_pass.entitlements_state(db, subscription),
+        "entitlements": visa_pass.entitlements_state(db, subscription, currency=currency),
         "checkout_enabled": _razorpay_enabled(),
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip() or None,
+        "charge_currencies": list(money.supported_charge_currencies()),
     }
 
 
@@ -139,7 +154,23 @@ def pass_checkout(
             "entitlements": visa_pass.entitlements_state(db, subscription),
         }
 
-    amount = int(visa_pass.PASS_PRICE_PAISE)
+    # Resolve the charge currency, then the price. The client hints at a currency; the
+    # PRICE is always looked up server-side from the price book. An unsupported code is a
+    # 400, never a silent fall back to INR — coercing here would charge someone in a
+    # currency they did not choose.
+    raw_currency = (payload.currency if payload else None) or money.DEFAULT_CURRENCY
+    try:
+        currency = money.normalize_currency(raw_currency, strict=True)
+    except money.UnsupportedCurrency:
+        raise HTTPException(
+            status_code=400,
+            detail=f"We can't charge in {str(raw_currency).upper()[:8]} yet. Supported: "
+                   + ", ".join(money.supported_charge_currencies()) + ".",
+        )
+    base_price = money.price_minor("visa_pass", currency)
+    amount = int(base_price)
+    # Currency-aware floor — the old hardcoded 100 was "₹1", which is $1.00 in USD.
+    floor = money.min_charge_minor(currency)
 
     # Referred-friend incentive: a one-time discount off their FIRST Visa Success
     # Pass. Computed server-side (never trusted from the client) and gated by the
@@ -154,9 +185,22 @@ def pass_checkout(
         .first()
         is None
     )
-    referral_discount = referrals.referee_discount_paise(db, current_user, is_first_pass_purchase)
-    if referral_discount > 0:
-        amount = max(100, amount - referral_discount)  # never below Razorpay's ₹1 minimum
+    # The reward is defined as a flat ₹200 off ₹999. A flat INR amount cannot be
+    # subtracted from a foreign price — ₹200 off $12.99 (stored as 1299 cents) would go
+    # deeply negative and clamp to the floor, giving the pass away. So convert it to the
+    # equivalent PROPORTION of the INR list price and apply that, which preserves the
+    # intent (~20% off) in every currency and self-adjusts if either price changes.
+    referral_discount_inr = referrals.referee_discount_paise(db, current_user, is_first_pass_purchase)
+    referral_discount = 0
+    if referral_discount_inr > 0:
+        if currency == "INR":
+            referral_discount = referral_discount_inr
+        else:
+            inr_list = money.price_minor("visa_pass", "INR")
+            ratio = min(1.0, referral_discount_inr / inr_list) if inr_list > 0 else 0.0
+            referral_discount = int(round(base_price * ratio))
+        amount = max(floor, amount - referral_discount)
+        referral_discount = base_price - amount   # what was actually granted, post-floor
 
     # Optional coupon code (admin-issued per-account or global). Reuses the exact
     # validation the recurring checkout uses: existence, per-account restriction and
@@ -176,7 +220,8 @@ def pass_checkout(
         if not coupon_code:
             raise HTTPException(status_code=400, detail="Invalid coupon code.")
         percent_off, _max_uses = _get_coupon_details(db, coupon_code, current_user.id)
-        discounted = max(100, _compute_discounted_amount_paise(amount, percent_off))
+        # Percentage discounts are currency-agnostic; only the floor needs to be.
+        discounted = max(floor, _compute_discounted_amount_paise(amount, percent_off))
         coupon_discount = amount - discounted
         coupon_percent_off = float(percent_off)
         amount = discounted
@@ -187,14 +232,20 @@ def pass_checkout(
             "message": "Online payment is being enabled. Please try again shortly.",
         }
 
-    receipt = f"reln_pass_{current_user.id}_{secrets.token_hex(5)}"[:40]
+    # Receipt carries the currency so provider-side reconciliation can tell a $12.99 row
+    # from a ₹999 one without joining back to our DB.
+    receipt = f"reln_pass_{current_user.id}_{currency.lower()}_{secrets.token_hex(4)}"[:40]
     order = _razorpay_request("POST", "/orders", {
         "amount": amount,
-        "currency": visa_pass.CURRENCY,
+        "currency": currency,
         "receipt": receipt,
         "notes": {
             "user_id": str(current_user.id),
             "product": "visa_success_pass",
+            "currency": currency,
+            # Which price list produced this amount — without it an in-flight price
+            # change makes the order unreconcilable after the fact.
+            "price_book_version": money.PRICE_BOOK_VERSION,
         },
     })
     order_id = str(order.get("id") or "").strip()
@@ -206,7 +257,8 @@ def pass_checkout(
         provider="razorpay",
         plan=PLAN_PRO,
         amount_paise=amount,
-        currency=visa_pass.CURRENCY,
+        currency=currency,
+        price_book_version=money.PRICE_BOOK_VERSION,
         razorpay_order_id=order_id,
         pricing_model=visa_pass.PASS_PRICING_MODEL,
         coupon_code=coupon_code or ("REFERRAL" if referral_discount > 0 else None),
@@ -220,15 +272,24 @@ def pass_checkout(
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
         "order_id": order_id,
         "amount": amount,
-        "original_amount": int(visa_pass.PASS_PRICE_PAISE),
+        "original_amount": int(base_price),
         "referral_discount": int(referral_discount),
         "coupon_code": coupon_code,
         "coupon_percent_off": coupon_percent_off,
         "coupon_discount": int(coupon_discount),
-        "currency": visa_pass.CURRENCY,
+        "currency": currency,
+        "amount_display": money.format_money(amount, currency),
         "product_label": "Visa Success Pass",
         "duration_days": visa_pass.PASS_DURATION_DAYS,
-        "prefill": {"name": current_user.full_name or "", "email": current_user.email or ""},
+        # Razorpay: "Your international payment will fail if you send us a dummy email id
+        # and phone number of the customer." Send the real contact we hold, and send
+        # nothing rather than a placeholder.
+        # https://razorpay.com/docs/payments/international-payments/?preferred-country=IN
+        "prefill": {
+            "name": current_user.full_name or "",
+            "email": current_user.email or "",
+            "contact": (getattr(current_user, "phone", None) or ""),
+        },
     }
 
 
@@ -244,15 +305,18 @@ def pass_verify(
     if not key_id or not key_secret:
         raise HTTPException(status_code=503, detail="Payment verification is not configured.")
 
-    payment_row = (
-        db.query(models.SubscriptionPayment)
-        .filter(
-            models.SubscriptionPayment.razorpay_order_id == payload.razorpay_order_id.strip(),
-            models.SubscriptionPayment.user_id == current_user.id,
-            models.SubscriptionPayment.pricing_model == visa_pass.PASS_PRICING_MODEL,
-        )
-        .first()
+    query = db.query(models.SubscriptionPayment).filter(
+        models.SubscriptionPayment.razorpay_order_id == payload.razorpay_order_id.strip(),
+        models.SubscriptionPayment.user_id == current_user.id,
+        models.SubscriptionPayment.pricing_model == visa_pass.PASS_PRICING_MODEL,
     )
+    # Lock the row so two concurrent verifies of the SAME order serialize. Without this
+    # both can pass the `already_verified` check below and each call grant_pass(), and
+    # grant_pro_access_for_days() EXTENDS from the existing ends_at — so one payment
+    # would buy 60 days.
+    if db.bind and db.bind.dialect.name != "sqlite":
+        query = query.with_for_update()
+    payment_row = query.first()
     if not payment_row:
         raise HTTPException(status_code=404, detail="Payment order not found.")
 
@@ -267,10 +331,52 @@ def pass_verify(
         db.commit()
         raise HTTPException(status_code=400, detail="Invalid payment signature.")
 
+    # The signature only proves "order_id|payment_id" came from Razorpay. It says NOTHING
+    # about how much was paid, in what currency, or whether the money was actually
+    # captured. Re-fetch both entities and assert against what we stored at checkout.
+    # (Mirrors app/routers/subscription.py::_validate_razorpay_order_payment.)
+    order_data = _razorpay_request("GET", f"/orders/{payload.razorpay_order_id.strip()}")
+    payment_data = _razorpay_request("GET", f"/payments/{payload.razorpay_payment_id.strip()}")
+
+    def _reject(detail: str) -> None:
+        payment_row.status = "failed"
+        payment_row.error_message = detail
+        db.commit()
+        raise HTTPException(status_code=400, detail=detail)
+
+    expected_currency = money.normalize_currency(payment_row.currency, strict=False)
+    if str(order_data.get("id") or "") != payment_row.razorpay_order_id:
+        _reject("Razorpay order mismatch.")
+    if str(order_data.get("status", "")).lower() != "paid":
+        _reject("This payment has not completed yet.")
+    if int(order_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
+        _reject("Payment amount mismatch.")
+    if money.normalize_currency(order_data.get("currency"), strict=False) != expected_currency:
+        _reject("Payment currency mismatch.")
+    if str(payment_data.get("order_id") or "") != payment_row.razorpay_order_id:
+        _reject("Payment does not belong to this order.")
+    if int(payment_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
+        _reject("Payment amount mismatch.")
+    if money.normalize_currency(payment_data.get("currency"), strict=False) != expected_currency:
+        _reject("Payment currency mismatch.")
+    # An authorized-but-uncaptured payment can still yield a valid checkout signature, and
+    # capture failure is materially more common on international cards. Without this the
+    # pass is granted for money that never arrives.
+    if not bool(payment_data.get("captured")):
+        _reject("This payment has not been captured yet.")
+
     already_verified = payment_row.status == "verified"
     if not already_verified:
         now = datetime.utcnow()
         payment_row.razorpay_payment_id = payload.razorpay_payment_id.strip()
+        # Razorpay's own INR settlement figure — the ONLY amount that may be summed for
+        # revenue once rows carry different currencies.
+        base_minor, fx_rate = money.settled_inr_minor(payment_data)
+        if base_minor is not None:
+            payment_row.base_amount_paise = base_minor
+            payment_row.fx_rate_used = fx_rate
+        payment_row.base_currency = "INR"
+        payment_row.is_international = bool(payment_data.get("international"))
         payment_row.status = "verified"
         payment_row.verified_at = now
         payment_row.signature_verified_at = now

@@ -103,9 +103,22 @@
           return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
         });
       }
-      function inr(paise) {
-        return "₹" + (Number(paise || 0) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      // Renders in the invoice's own currency. Collection is INR-only (Razorpay Route
+      // requires it), but the dispute/refund paths can already carry a foreign currency
+      // from the gateway, so never assume the rupee symbol.
+      var ZERO_DECIMAL = { JPY: 1, KRW: 1, VND: 1, ISK: 1, CLP: 1, BIF: 1 };
+      function fmtMoney(minor, currency) {
+        var code = String(currency || "INR").toUpperCase();
+        var frac = ZERO_DECIMAL[code] ? 0 : 2;
+        var value = Number(minor || 0) / Math.pow(10, frac);
+        try {
+          return value.toLocaleString(code === "INR" ? "en-IN" : "en-US",
+            { style: "currency", currency: code, minimumFractionDigits: frac, maximumFractionDigits: frac });
+        } catch (e) {
+          return code + " " + value.toLocaleString("en-US", { minimumFractionDigits: frac, maximumFractionDigits: frac });
+        }
       }
+      function inr(minor) { return fmtMoney(minor, info && info.currency); }
       function showState(kind, icon, title, text) {
         $("loading").classList.add("hidden");
         $("payView").classList.add("hidden");
@@ -148,9 +161,15 @@
           $("payDue").textContent = "Due by " + new Date(info.due_date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
           $("payDue").classList.remove("hidden");
         }
+        // Cross-border disclosure: on a foreign-issued card the ISSUER converts this INR
+        // amount at its own rate and may add a cross-border fee, so the old flat promise
+        // that "the full amount shown is what you'll be charged" is not true for them.
         $("payNote").innerHTML =
-          "You are paying <b>" + esc(info.organization_name) + "</b> for their services. The full amount shown is what you'll be charged — " +
-          "it settles directly to " + esc(info.organization_name) + "'s bank account via Razorpay.";
+          "You are paying <b>" + esc(info.organization_name) + "</b> for their services. " +
+          "It settles directly to " + esc(info.organization_name) + "'s bank account via Razorpay." +
+          "<br><span style=\"opacity:.75\">Billed in " + esc(String(info.currency || "INR").toUpperCase()) +
+          ". If you pay with a card issued outside India, your bank converts this amount at " +
+          "its own exchange rate and may add a foreign-transaction fee.</span>";
         $("loading").classList.add("hidden");
         $("payView").classList.remove("hidden");
       }
@@ -168,7 +187,21 @@
           order_id: info.razorpay_order_id,
           name: info.organization_name || "Payment",
           description: info.description || "Visa service payment",
-          prefill: { email: info.payer_email || "", name: info.client_name || "" },
+          // Razorpay rejects international card payments sent with dummy contact details
+          // ("Your international payment will fail if you send us a dummy email id and
+          // phone number of the customer"), so send the real values and omit empties
+          // rather than substituting a placeholder.
+          // An absent field must be ABSENT, not an empty string: Checkout treats a supplied
+          // key as "the merchant provided this" and can carry the blank into the payment
+          // payload, which is exactly the empty/dummy contact data that fails a foreign
+          // card. Omitted keys make Checkout ask the student instead.
+          prefill: (function () {
+            var p = {};
+            if (info.payer_email) p.email = info.payer_email;
+            if (info.client_name) p.name = info.client_name;
+            if (info.payer_phone) p.contact = info.payer_phone;
+            return p;
+          })(),
           theme: { color: "#0f766e" },
           modal: { ondismiss: function () { btn.disabled = false; btn.textContent = "Pay securely"; } },
           handler: function (resp) {

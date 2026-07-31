@@ -22,6 +22,10 @@ from sqlalchemy.orm import Session
 from app import models
 from app import ai_usage
 from app import visa_catalog
+# Shared with the dashboard assistant so BOTH copilot surfaces meter identically —
+# one ledger row per model round-trip, attributed to the org, and a turn cost the
+# credit meter can weight.
+from app.enterprise_ai import ChatTurnResult, TurnUsage, _meter_round
 from app.utils import gemini_service as gemini_utils
 
 logger = logging.getLogger("rilono.enterprise_copilot")
@@ -217,9 +221,18 @@ def run_enterprise_copilot_chat(
     message: str,
     conversation_history: Optional[List[dict]] = None,
     session_attachments=None,
-) -> str:
-    """Generate one staff-mode Copilot reply. Raises on provider failure — the
-    caller maps that to a 502 and only meters the message after success."""
+) -> "ChatTurnResult":
+    """Generate one staff-mode Copilot reply.
+
+    Returns a ChatTurnResult carrying the answer AND the call's real token cost, so the
+    caller can meter by weight like the dashboard assistant does. This surface is a
+    single round-trip, but its prompt is not small — up to DOC_TEXT_CAP_TOTAL of document
+    text plus HISTORY_CAP_TOTAL of history plus inline attachments — so billing it as a
+    flat "one message" was the one remaining way to buy a large turn at a small price.
+
+    Raises on provider failure — the caller maps that to a 502 and only meters after
+    success.
+    """
     # Reuse the B2C chat helpers so both copilots share provider selection and
     # inline-attachment handling. Imported lazily to keep module import light.
     from app.routers import ai_chat as b2c_chat
@@ -309,15 +322,13 @@ Please provide a helpful response:"""
     if response is None:
         raise RuntimeError(f"All enterprise copilot models failed: {last_error}")
 
-    try:
-        ai_usage.record_gemini_usage(
-            USAGE_SOURCE,
-            used_model,
-            response,
-            user_id=staff_user.id,
-            organization_id=organization.id,
-        )
-    except Exception:
-        pass
+    usage = TurnUsage()
+    _meter_round(
+        response, model_name=used_model, source=USAGE_SOURCE, usage=usage,
+        organization_id=organization.id, user_id=staff_user.id,
+    )
 
-    return b2c_chat.sanitize_ai_response_for_public_display(response.text)
+    return ChatTurnResult(
+        answer=b2c_chat.sanitize_ai_response_for_public_display(response.text),
+        usage=usage,
+    )

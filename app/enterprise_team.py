@@ -82,6 +82,7 @@ ACTION_LABELS: dict[str, str] = {
     "member_profile_updated": "Profile updated",
     "member_deactivated": "Member deactivated",
     "member_reactivated": "Member reactivated",
+    "owner_transfer_code_sent": "Ownership transfer code emailed",
     "owner_transferred": "Ownership transferred",
 }
 
@@ -775,9 +776,17 @@ def serialize_audit_entry(row) -> dict:
 
 
 def list_members(
-    db: Session, organization_id: int, *, include_inactive: bool = False
+    db: Session, organization_id: int, *, include_inactive: bool = False, ctx=None
 ) -> list[dict]:
-    """Every member of the org, fully decorated. Six queries total, never per member."""
+    """Every member of the org, fully decorated. Six queries total, never per member.
+
+    `ctx` is the caller's access context. Off org scope the per-member caseload sizes are
+    suppressed: `team.view` is in every preset, so without this a counsellor restricted to their
+    own clients could still read exactly how many clients each colleague in every other office is
+    carrying. That is the same call already made in three other places (the AI's team-workload
+    tool refuses below org scope, the credits breakdown drops `by_member`, and the office list
+    zeroes per-office counts) — this keeps the answer consistent.
+    """
     org_id = int(organization_id)
     M = models.EnterpriseOrganizationMember
 
@@ -793,7 +802,13 @@ def list_members(
     links = member_branch_ids(db, org_id)
     names = _branch_names(db, org_id)
     custom_names = _custom_role_names(db, org_id)
+    # Caseload sizes are an org-scope-only figure (see the docstring). Everyone else sees their
+    # own count and zeroes elsewhere, rather than the column vanishing and shifting the table.
+    show_caseloads = ctx is None or getattr(ctx, "is_org_scope", True)
     assigned = assigned_client_counts(db, org_id)
+    if not show_caseloads:
+        own = int(getattr(ctx, "user_id", 0) or 0)
+        assigned = {own: assigned.get(own, 0)} if own else {}
 
     members: list[dict] = []
     for membership, user in rows:
@@ -2061,11 +2076,25 @@ def _member_access_view(db: Session, organization, membership, user, ctx, *, sel
         include_capabilities=True, capabilities=ctx.capabilities,
     )
     states = _capability_states(db, org_id, membership, ctx.capabilities)
+    role_block = _member_role_block(db, org_id, membership)
+    # `capability_states` is the source of truth, but the UI also renders three flat lists (the
+    # role's own baseline, what was added on top, what was blocked) and a role description. Derive
+    # them here rather than making every caller re-invert the map — and so the shape stays stable
+    # if the state vocabulary ever grows.
+    inherited = sorted(k for k, s in states.items() if s == "inherited")
+    added = sorted(k for k, s in states.items() if s == "granted")
+    blocked = sorted(k for k, s in states.items() if s == "blocked")
     return {
         "member": member,
         "capability_states": states,
         "capabilities": sorted(ctx.capabilities),
-        "role": _member_role_block(db, org_id, membership),
+        "role": role_block,
+        # Flat aliases the Team UI reads directly.
+        "role_capabilities": inherited,
+        "inherited": inherited,
+        "added": added,
+        "blocked": blocked,
+        "role_description": role_block.get("description"),
         "branches": [
             serialize_branch(b) for b in list_branches(db, org_id, include_archived=False)
             if int(b.id) in set(branch_ids)
@@ -2730,16 +2759,22 @@ def _current_owner_membership(db: Session, organization_id: int):
     )
 
 
-def transfer_ownership(
+def assert_transfer_ownership_allowed(
     db: Session,
     *,
     organization,
-    actor_user,
     actor_ctx,
     target_membership,
     target_user,
     confirm_email: str,
-) -> dict:
+):
+    """Everything that must hold before ownership can move. Returns the current owner row.
+
+    Run twice by design: once before the confirmation code is emailed — so a caller who could
+    never finish the transfer can't make Rilono send a security email about it — and again
+    inside `transfer_ownership()` minutes later, because the emailed code proves an inbox, not
+    a permission, and permissions can be revoked in between.
+    """
     org_id = int(organization.id)
 
     if str(confirm_email or "").strip().lower() != str(target_user.email or "").strip().lower():
@@ -2764,7 +2799,30 @@ def transfer_ownership(
             status_code=403,
             detail="Only the workspace owner can transfer ownership.",
         )
+    return current_owner
 
+
+def transfer_ownership(
+    db: Session,
+    *,
+    organization,
+    actor_user,
+    actor_ctx,
+    target_membership,
+    target_user,
+    confirm_email: str,
+) -> dict:
+    org_id = int(organization.id)
+
+    current_owner = assert_transfer_ownership_allowed(
+        db,
+        organization=organization,
+        actor_ctx=actor_ctx,
+        target_membership=target_membership,
+        target_user=target_user,
+        confirm_email=confirm_email,
+    )
+    is_owner = bool(getattr(actor_ctx, "is_owner", False))
     previous_owner_user_id = _int_or_none(getattr(current_owner, "user_id", None)) if current_owner else None
 
     # Demote every other owner row first, so "exactly one active owner per org" holds even

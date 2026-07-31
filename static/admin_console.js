@@ -888,6 +888,9 @@ function formatDateTime(value) {
     return date.toLocaleString(undefined, { timeZone: ADMIN_TIME_ZONE });
 }
 
+// `amount_usd` on the company-finance screens is a real USD major-unit float (the ledger
+// is kept in USD), so this stays a plain USD formatter. Everything that comes off a
+// payment row goes through formatMinor() below instead.
 function formatUsd(value) {
     const amount = Number(value) || 0;
     return new Intl.NumberFormat('en-US', {
@@ -896,6 +899,57 @@ function formatUsd(value) {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2
     }).format(amount);
+}
+
+/* ===================== Money rendering (mirrors app/money.py) =====================
+   A stored amount is an INTEGER IN THE MINOR UNIT OF ITS OWN CURRENCY: 1299 is $12.99 on
+   a USD row and ₹12.99 on an INR one. Nothing here may divide by 100 and prefix a rupee
+   sign, and amounts of different currencies are never added — anything the server summed
+   it summed as INR settlement (base_amount_paise) and labelled as such. */
+const CURRENCY_SYMBOLS = {
+    INR: '₹', USD: '$', GBP: '£', EUR: '€', CAD: 'C$', AUD: 'A$',
+    AED: 'AED ', SGD: 'S$', JPY: '¥', NZD: 'NZ$', CHF: 'CHF ', HKD: 'HK$'
+};
+// Zero-decimal currencies: ¥999 is stored as 999, so dividing by 100 would show ¥9.99.
+// Display-only — the server refuses to charge in these.
+const ZERO_DECIMAL_CURRENCIES = new Set(['JPY', 'KRW', 'VND', 'ISK', 'CLP']);
+
+function currencyCode(currency) {
+    const code = String(currency || 'INR').trim().toUpperCase();
+    return /^[A-Z]{3}$/.test(code) ? code : 'INR';
+}
+
+function currencySymbol(currency) {
+    const code = currencyCode(currency);
+    return CURRENCY_SYMBOLS[code] || (code + ' ');
+}
+
+function currencyExponent(currency) {
+    return ZERO_DECIMAL_CURRENCIES.has(currencyCode(currency)) ? 0 : 2;
+}
+
+// Integer minor units → display string: (1299,'USD') → '$12.99', (99900,'INR') → '₹999'.
+function formatMinor(minor, currency) {
+    const code = currencyCode(currency);
+    const exponent = currencyExponent(code);
+    const amount = Number(minor || 0) / Math.pow(10, exponent);
+    return currencySymbol(code) + amount.toLocaleString(code === 'INR' ? 'en-IN' : undefined, {
+        minimumFractionDigits: Number.isInteger(amount) ? 0 : exponent,
+        maximumFractionDigits: exponent
+    });
+}
+
+// Prefer the server's own display string; fall back to a zero in the RIGHT currency.
+// A literal '₹0' fallback is a rupee claim about money this screen cannot see.
+function moneyOr(display, currency) {
+    return display || formatMinor(0, currency);
+}
+
+// Label for an amount input, e.g. '$ USD', '₹ INR', 'AED' (no "AED AED").
+function currencyInputLabel(currency) {
+    const code = currencyCode(currency);
+    const symbol = currencySymbol(code).trim();
+    return symbol && symbol !== code ? `${symbol} ${code}` : code;
 }
 
 function formatPercent(value) {
@@ -974,7 +1028,17 @@ function renderFinanceMetrics(summary) {
     if (refs.financeMetricInvested) refs.financeMetricInvested.textContent = formatUsd(totalInvested);
     if (refs.financeMetricInvestedSub) refs.financeMetricInvestedSub.textContent = `${investmentCount} investment ${investmentCount === 1 ? 'entry' : 'entries'}`;
     if (refs.financeMetricReturns) refs.financeMetricReturns.textContent = formatUsd(totalReturns);
-    if (refs.financeMetricReturnsSub) refs.financeMetricReturnsSub.textContent = `${returnCount} return ${returnCount === 1 ? 'entry' : 'entries'}`;
+    // Every USD figure here was converted from INR at ONE rate; name it, and say how many
+    // foreign payments are missing from the total because their INR settlement figure
+    // hasn't landed — they are NOT counted, so this number is a known understatement.
+    if (refs.financeMetricReturnsSub) {
+        const fxRate = Number(summary?.usd_to_inr) || 0;
+        const uncounted = Number(summary?.estimated_settlement_count) || 0;
+        const bits = [`${returnCount} return ${returnCount === 1 ? 'entry' : 'entries'}`];
+        if (fxRate > 0) bits.push(`$1 = ₹${fxRate} (${summary?.fx_source || 'fallback'})`);
+        if (uncounted > 0) bits.push(`${uncounted} not counted (awaiting INR settlement)`);
+        refs.financeMetricReturnsSub.textContent = bits.join(' · ');
+    }
     if (refs.financeMetricNet) {
         refs.financeMetricNet.textContent = netLabel;
         refs.financeMetricNet.classList.toggle('negative', net < 0);
@@ -1112,6 +1176,15 @@ function renderFinanceLedger(ledger) {
             ? `<button type="button" class="table-btn" data-finance-edit="${escapeHtml(fid)}">Edit</button>
                <button type="button" class="table-btn danger" data-finance-delete="${escapeHtml(fid)}">Delete</button>`
             : '<span class="finance-source">Auto</span>';
+        // Payment rows carry what the customer was actually charged. A foreign row with no
+        // INR settlement figure is shown at zero and marked — never dropped (a missing row
+        // reads as no revenue) and never booked at its charged amount (cents are not paise).
+        const chargedNote = item.charged_display
+            ? `<div class="finance-source">charged ${escapeHtml(item.charged_display)}</div>`
+            : '';
+        const estimatedNote = item.settlement_estimated
+            ? '<div class="finance-source" title="Razorpay has not reported an INR settlement figure for this payment yet, so it is not counted in returns. Its charged amount is in a foreign currency and cannot be added to the INR books.">⚠ not counted</div>'
+            : '';
         return `
             <tr>
                 <td>${escapeHtml(item.occurred_on || '-')}</td>
@@ -1120,7 +1193,7 @@ function renderFinanceLedger(ledger) {
                 <td>${escapeHtml(item.category || '-')}</td>
                 <td><span class="finance-source">${escapeHtml(item.paid_by || '-')}</span></td>
                 <td>${escapeHtml(item.description || '-')}</td>
-                <td class="finance-amount ${isReturn ? 'positive' : 'negative'}">${escapeHtml(formatUsd(amount))}</td>
+                <td class="finance-amount ${isReturn ? 'positive' : 'negative'}">${escapeHtml(formatUsd(amount))}${chargedNote}${estimatedNote}</td>
                 <td><span class="finance-source">${escapeHtml(item.source || '-')}</span></td>
                 <td class="finance-actions">${actions}</td>
             </tr>
@@ -2098,7 +2171,9 @@ function renderOutcomes(data) {
 
 /* ===================== Account "Manage" full-screen view ===================== */
 function acctFmt(dt) { return dt ? formatDateTime(dt) : '—'; }
-function acctInr(paise) { return (paise == null) ? '—' : '₹' + (paise / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+// `minor` is in the row's OWN currency, so the currency has to travel with it — the old
+// acctInr() printed "₹12.99" for a $12.99 charge.
+function acctMoney(minor, currency) { return (minor == null) ? '—' : formatMinor(minor, currency); }
 
 async function openAccountDetail(userId) {
     const overlay = document.getElementById('adminAccountDetail');
@@ -2174,9 +2249,11 @@ function renderAccountDetail(userId, data) {
             <span style="color:#64748b">${escapeHtml(acctFmt(c.applied_at))}</span></div>`).join('')
         : '<div class="acct-empty">No coupon codes applied on this account.</div>';
 
+    // Show the charged amount in the currency it was charged in, plus Razorpay's INR
+    // settlement for a foreign card — the two are different numbers and both matter.
     const paymentsHtml = (data.payments || []).length
         ? data.payments.map((p) => `<div class="acct-line">
-            <span>${escapeHtml(acctInr(p.amount_paise))} <span class="acct-chip ${p.status === 'verified' ? 'green' : (p.status === 'failed' ? 'amber' : 'grey')}">${escapeHtml(p.status)}</span>${p.coupon_code ? ` · coupon <strong>${escapeHtml(p.coupon_code)}</strong>` : ''}</span>
+            <span>${escapeHtml(p.amount_display || acctMoney(p.amount_paise, p.currency))} <span class="acct-chip ${p.status === 'verified' ? 'green' : (p.status === 'failed' ? 'amber' : 'grey')}">${escapeHtml(p.status)}</span>${p.is_international ? '<span class="acct-chip purple">international</span>' : ''}${p.settled_inr_display ? ` · settled ${escapeHtml(p.settled_inr_display)}` : ''}${p.coupon_code ? ` · coupon <strong>${escapeHtml(p.coupon_code)}</strong>` : ''}</span>
             <span style="color:#64748b">${escapeHtml(acctFmt(p.verified_at || p.created_at))}</span></div>`).join('')
         : '<div class="acct-empty">No payments yet.</div>';
 
@@ -2423,13 +2500,22 @@ async function runAccountReco(userId) {
 
 function renderB2cRevenue(data) {
     const s = (data && data.summary) || {};
+    // This book is denominated in the currency the server reports (payments are booked at
+    // their INR settlement, then compared against Gemini cost in the same currency). The
+    // zero fallbacks follow that currency instead of hardcoding a rupee sign.
+    const bookCurrency = (data && data.currency) || 'INR';
     const setText = (el, v) => { if (el) el.textContent = v; };
-    setText(refs.b2cMarginHero, s.gross_margin_display || '₹0');
-    setText(refs.b2cRevenue, s.revenue_display || '₹0');
-    setText(refs.b2cRevenueSub, `${(s.passes_sold || 0).toLocaleString()} passes sold`);
+    setText(refs.b2cMarginHero, moneyOr(s.gross_margin_display, bookCurrency));
+    setText(refs.b2cRevenue, moneyOr(s.revenue_display, bookCurrency));
+    // build_revenue_analytics EXCLUDES foreign passes with no INR settlement figure rather
+    // than adding their cents as paise, so revenue is a known understatement while any
+    // exist. Say so next to the number instead of letting it read as complete.
+    const b2cUnsettled = Number(s.unsettled_payments || 0);
+    setText(refs.b2cRevenueSub, `${(s.passes_sold || 0).toLocaleString()} passes sold`
+        + (b2cUnsettled > 0 ? ` · ${b2cUnsettled} not counted (awaiting INR settlement)` : ''));
     setText(refs.b2cActive, (s.active_passes || 0).toLocaleString());
-    setText(refs.b2cCost, s.gemini_cost_display || '₹0');
-    setText(refs.b2cCostSub, `${s.avg_cost_per_pass_display || '₹0'} / pass`);
+    setText(refs.b2cCost, moneyOr(s.gemini_cost_display, bookCurrency));
+    setText(refs.b2cCostSub, `${moneyOr(s.avg_cost_per_pass_display, bookCurrency)} / pass`);
     setText(refs.b2cConversion, s.conversion_pct != null ? `${s.conversion_pct}%` : '—');
     setText(refs.b2cConversionSub, `${(s.free_users || 0).toLocaleString()} free users`);
 }
@@ -2487,23 +2573,31 @@ function fxNoteText(data) {
 
 function renderEnterpriseRevenue(data) {
     const s = (data && data.summary) || {};
+    // Credits are an INR-denominated unit of account and foreign payments are summed at
+    // their INR settlement, so this book is single-currency by construction — but read the
+    // currency off the payload rather than assuming it in fourteen separate string literals.
+    const bookCurrency = (data && data.currency) || 'INR';
     const setText = (el, val) => { if (el) el.textContent = val; };
-    setText(refs.revMarginHero, s.gross_margin_display || '₹0');
-    setText(refs.revTotal, s.total_revenue_display || '₹0');
-    setText(refs.revTotalSub, (s.refunds_paise || 0) > 0
-        ? `Net · ${s.gross_revenue_display || '₹0'} gross − ${s.refunds_display || '₹0'} refunds`
-        : 'Net of refunds · credits + infra fees');
-    setText(refs.revCredits, s.credit_revenue_display || '₹0');
+    setText(refs.revMarginHero, moneyOr(s.gross_margin_display, bookCurrency));
+    setText(refs.revTotal, moneyOr(s.total_revenue_display, bookCurrency));
+    // _kind_money EXCLUDES foreign payments with no INR settlement figure rather than
+    // adding their cents as paise, so any non-zero count means this total is short.
+    const revUnsettled = Number(s.unsettled_payments || 0);
+    setText(refs.revTotalSub, ((s.refunds_paise || 0) > 0
+        ? `Net · ${moneyOr(s.gross_revenue_display, bookCurrency)} gross − ${moneyOr(s.refunds_display, bookCurrency)} refunds`
+        : 'Net of refunds · credits + infra fees')
+        + (revUnsettled > 0 ? ` · ${revUnsettled} not counted (awaiting INR settlement)` : ''));
+    setText(refs.revCredits, moneyOr(s.credit_revenue_display, bookCurrency));
     setText(refs.revCreditsSub, `${(s.credit_payment_count || 0).toLocaleString()} payments`);
-    setText(refs.revInfra, s.infra_revenue_display || '₹0');
+    setText(refs.revInfra, moneyOr(s.infra_revenue_display, bookCurrency));
     setText(refs.revInfraSub, `${(s.infra_payment_count || 0).toLocaleString()} payments`);
-    setText(refs.revCost, s.gemini_cost_display || '₹0');
-    setText(refs.revMargin, s.gross_margin_display || '₹0');
+    setText(refs.revCost, moneyOr(s.gemini_cost_display, bookCurrency));
+    setText(refs.revMargin, moneyOr(s.gross_margin_display, bookCurrency));
     setText(refs.revMarginSub, s.margin_pct != null ? `${s.margin_pct}% margin` : 'Revenue − AI cost');
     setText(refs.revCreditsSold, (s.credits_sold || 0).toLocaleString());
     setText(refs.revCreditsSoldSub, `${(s.credits_spent || 0).toLocaleString()} spent`);
     setText(refs.revOutstanding, (s.credits_outstanding || 0).toLocaleString());
-    setText(refs.revOutstandingSub, `Liability ${s.credits_outstanding_display || '₹0'}`);
+    setText(refs.revOutstandingSub, `Liability ${moneyOr(s.credits_outstanding_display, bookCurrency)}`);
     if (refs.revFx) refs.revFx.textContent = `$1 = ₹${data && data.usd_to_inr != null ? data.usd_to_inr : 0}`;
     if (refs.revFxNote) refs.revFxNote.textContent = fxNoteText(data);
 
@@ -2517,8 +2611,8 @@ function renderEnterpriseRevenue(data) {
                     <td>${escapeHtml(r.label || r.key || '—')}</td>
                     <td>${escapeHtml(r.price_display || '—')} <span class="metric-subtext">(${escapeHtml(String(r.price_credits || 0))} cr)</span></td>
                     <td>${escapeHtml((r.units_sold || 0).toLocaleString())}</td>
-                    <td>${escapeHtml(r.revenue_display || '₹0')}</td>
-                    <td>${escapeHtml(r.avg_cost_per_unit_display || '₹0')}</td>
+                    <td>${escapeHtml(moneyOr(r.revenue_display, bookCurrency))}</td>
+                    <td>${escapeHtml(moneyOr(r.avg_cost_per_unit_display, bookCurrency))}</td>
                     <td><strong>${r.margin_pct != null ? escapeHtml(String(r.margin_pct)) + '%' : '—'}</strong></td>
                 </tr>`).join('');
         }
@@ -2745,6 +2839,28 @@ function renderAccountDetails(data) {
         ? `Active until ${formatDateTime(infra.paid_until)}`
         : (infra.over_free_limit ? 'Due (past free limit)' : 'Not required yet');
 
+    // The totals block is the INR SETTLEMENT of every payment (base_amount_paise), which is
+    // what makes it addable at all — so it is labelled with the currency the server states.
+    // When this org has non-INR refunds the server sends the refund-derived figures as null
+    // rather than a wrong number, and we say "mixed" instead of inventing one.
+    const totalsCurrency = totals.currency || 'INR';
+    const paymentCurrencies = Array.isArray(totals.payment_currencies) ? totals.payment_currencies : [];
+    const paymentCount = Number(totals.verified_payment_count || 0);
+    let totalPaidSub = `${paymentCount} payment${paymentCount === 1 ? '' : 's'}`;
+    if (paymentCurrencies.length > 1) {
+        totalPaidSub += ` · settled ${totalsCurrency} from ${paymentCurrencies.join(', ')}`;
+    }
+    const mixedRefundNote = totals.refunds_mixed_currency
+        ? `<p class="account-meta-line">⚠ Refunds on this account were issued in ${escapeHtml((totals.refund_currencies || []).join(', ') || 'more than one currency')}, so a net-paid total can't be stated in a single currency. See the refunds table below.</p>`
+        : '';
+    // A foreign payment with no Razorpay INR settlement figure is EXCLUDED from the totals
+    // above rather than having its cents added as paise. Silently dropping it would make
+    // "Total paid" read as though the money never arrived, so say it out loud.
+    const uncountedPayments = Number(totals.unsettled_payment_count || 0);
+    const uncountedNote = uncountedPayments > 0
+        ? `<p class="account-meta-line">⚠ ${uncountedPayments} foreign-currency payment${uncountedPayments === 1 ? ' is' : 's are'} not included in the totals above — Razorpay hasn't reported an INR settlement figure for ${uncountedPayments === 1 ? 'it' : 'them'} yet, and a foreign amount can't be added to an INR total. Total paid is an understatement until then; the purchases table below shows the charged amounts.</p>`
+        : '';
+
     const metrics = `
         <div class="account-metrics-grid">
             <article class="metric-card"><span>Credits remaining</span>
@@ -2757,10 +2873,11 @@ function renderAccountDetails(data) {
                 <strong>${Number(wallet.lifetime_spent_credits || 0).toLocaleString()}</strong>
                 <small>credits</small></article>
             <article class="metric-card"><span>Total paid</span>
-                <strong>${escapeHtml(totals.total_paid_display || '₹0')}</strong>
-                <small>${Number(totals.verified_payment_count || 0)} payment${Number(totals.verified_payment_count) === 1 ? '' : 's'}</small></article>
+                <strong>${escapeHtml(moneyOr(totals.total_paid_display, totalsCurrency))}</strong>
+                <small>${escapeHtml(totalPaidSub)}</small></article>
         </div>
-        <p class="account-meta-line">Infrastructure fee: ${escapeHtml(infraStatus)} · ${Number(infra.clients_used || 0)} / ${Number(infra.free_student_limit || 0)} free students used</p>`;
+        <p class="account-meta-line">Infrastructure fee: ${escapeHtml(infraStatus)} · ${Number(infra.clients_used || 0)} / ${Number(infra.free_student_limit || 0)} free students used</p>
+        ${uncountedNote}${mixedRefundNote}`;
 
     const purchaseRows = purchases.length
         ? purchases.map((p) => {
@@ -2777,13 +2894,29 @@ function renderAccountDetails(data) {
             const statusLabel = (p.status || '').replace(/_/g, ' ');
             const refundNote = (p.refunded_amount_paise > 0)
                 ? `<div class="enterprise-meta">refunded ${escapeHtml(p.refunded_amount_display)}</div>` : '';
+            // A foreign charge has two numbers: what the customer paid, and what Razorpay
+            // settled to us in INR. Show both — only the second is comparable to anything.
+            const settledNote = p.settled_inr_display
+                ? `<div class="enterprise-meta">settled ${escapeHtml(p.settled_inr_display)}</div>`
+                // Foreign charge with no settlement figure: it is excluded from the INR
+                // totals above, so mark the row rather than letting it look counted.
+                : ((currencyCode(p.currency) !== 'INR' && p.base_amount_paise == null)
+                    ? '<div class="enterprise-meta" title="Razorpay has not reported an INR settlement figure for this payment yet, so it is not included in the totals above.">⚠ not counted in totals</div>'
+                    : '');
+            const wasNote = p.original_amount_display
+                ? `<div class="enterprise-meta">was ${escapeHtml(p.original_amount_display)}</div>` : '';
+            const intlTag = p.is_international
+                ? '<span class="account-coupon-tag">international</span>' : '';
+            // Razorpay blocks refunds past 6 months; say so where the admin decides.
+            const windowNote = (p.refundable_paise > 0 && p.refund_window_open === false)
+                ? '<div class="enterprise-meta">refund window closed (6-month Razorpay limit)</div>' : '';
             return `<tr>
                 <td>${escapeHtml(formatDateTime(p.created_at))}</td>
                 <td>${escapeHtml(p.kind_label || p.kind)}${p.package_key ? `<div class="enterprise-meta">${escapeHtml(p.package_key)}</div>` : ''}</td>
                 <td>${credits}</td>
-                <td>${escapeHtml(p.amount_display || '')}${p.original_amount_display ? `<div class="enterprise-meta">was ${escapeHtml(p.original_amount_display)}</div>` : ''}</td>
+                <td>${escapeHtml(moneyOr(p.amount_display, p.currency))} ${intlTag}${wasNote}${settledNote}</td>
                 <td>${coupon}</td>
-                <td><span class="account-status-chip ${statusCls}">${escapeHtml(statusLabel)}</span>${refundNote}</td>
+                <td><span class="account-status-chip ${statusCls}">${escapeHtml(statusLabel)}</span>${refundNote}${windowNote}</td>
             </tr>`;
         }).join('')
         : '<tr><td colspan="6" class="table-empty">No purchases yet.</td></tr>';
@@ -2829,7 +2962,10 @@ function buildRefundsHistoryBlock(data) {
     if (!refunds.length) return '';
     const rows = refunds.map((r) => {
         const isMoney = r.kind === 'money';
-        const amount = isMoney ? escapeHtml(r.amount_display || '₹0') : '—';
+        // A refund is recorded in the ORIGINAL payment's currency, and the server's
+        // `amount_display` is still INR-formatted, so render from (amount_paise, currency)
+        // here — otherwise a $60 refund prints as ₹60.
+        const amount = isMoney ? escapeHtml(formatMinor(r.amount_paise, r.currency)) : '—';
         const cr = r.credits_delta ? `${r.credits_delta > 0 ? '+' : ''}${Number(r.credits_delta)} cr` : '—';
         const statusCls = ['processed', 'completed'].includes(r.status) ? 'verified' : (r.status === 'failed' ? 'failed' : 'created');
         const reason = r.reason ? `<div class="enterprise-meta">${escapeHtml(r.reason)}</div>` : '';
@@ -2852,23 +2988,28 @@ function buildRefundsHistoryBlock(data) {
 }
 
 function buildRefundFormBlock(data) {
+    // `is_refundable` already accounts for Razorpay's 6-month window, so a payment past it
+    // never reaches the picker; the purchases table above says why it's missing.
     const refundable = (data.purchases || []).filter((p) => p.is_refundable);
     const razorpayOn = !!data.razorpay_enabled;
+    // Each option shows its own currency, and the amount field is re-labelled from whichever
+    // payment is selected — a refund is issued in THAT payment's currency, not in rupees.
     const moneyOptions = refundable.map((p) =>
-        `<option value="${p.id}">${escapeHtml(p.kind_label)} · ${escapeHtml(p.amount_display)} · ${escapeHtml(formatDateTime(p.created_at))} (refundable ${escapeHtml(p.refundable_display)})</option>`
+        `<option value="${p.id}">${escapeHtml(p.kind_label)} · ${escapeHtml(moneyOr(p.amount_display, p.currency))} · ${escapeHtml(formatDateTime(p.created_at))} (refundable ${escapeHtml(moneyOr(p.refundable_display, p.currency))})</option>`
     ).join('');
 
     let moneyInner;
     if (!razorpayOn) {
         moneyInner = '<p class="account-details-status">Razorpay isn\'t configured, so money refunds are unavailable.</p>';
     } else if (!refundable.length) {
-        moneyInner = '<p class="account-details-status">No refundable Razorpay payments on this account.</p>';
+        moneyInner = '<p class="account-details-status">No refundable Razorpay payments on this account. Payments older than 6 months can no longer be refunded through Razorpay — use a goodwill credit refund instead.</p>';
     } else {
+        const firstCurrency = currencyCode(refundable[0].currency);
         moneyInner = `
             <div class="refund-grid">
                 <label class="coupon-field coupon-field-wide"><span>Payment to refund</span>
                     <select id="refundPaymentSelect">${moneyOptions}</select></label>
-                <label class="coupon-field"><span>Amount (₹)</span>
+                <label class="coupon-field"><span id="refundAmountLabel">Amount (${escapeHtml(currencyInputLabel(firstCurrency))})</span>
                     <input type="number" id="refundAmount" min="0.01" step="0.01" placeholder="0.00"></label>
                 <label class="coupon-field"><span>Claw back credits</span>
                     <input type="number" id="refundClawback" min="0" step="1" placeholder="0"></label>
@@ -2876,7 +3017,7 @@ function buildRefundFormBlock(data) {
                     <input type="text" id="refundMoneyReason" maxlength="200" placeholder="e.g. Customer requested partial refund"></label>
             </div>
             <button type="button" id="refundMoneyBtn" class="primary-btn small-btn refund-danger">Refund money via Razorpay</button>
-            <p class="account-meta-line" style="margin:0.4rem 0 0">⚠ This sends real money back to the customer and can't be undone.</p>`;
+            <p class="account-meta-line" style="margin:0.4rem 0 0">⚠ This sends real money back to the customer and can't be undone. Refunds go out in the currency the payment was charged in, and Razorpay only allows them within 6 months of the payment.</p>`;
     }
 
     return `
@@ -2925,23 +3066,38 @@ function wireRefundForm(data) {
     const purchaseById = {};
     (data.purchases || []).forEach((p) => { purchaseById[p.id] = p; });
 
+    const amountLabel = document.getElementById('refundAmountLabel');
+    const selectedPurchase = () => (paymentSelect ? purchaseById[Number(paymentSelect.value)] : null);
+    // The typed amount is in the SELECTED payment's major unit; everything sent to the
+    // server is minor units of that same currency. One conversion, in one place.
+    const toMinor = (major, currency) => Math.round(Number(major || 0) * Math.pow(10, currencyExponent(currency)));
+    const toMajor = (minor, currency) => Number(minor || 0) / Math.pow(10, currencyExponent(currency));
+
     const syncMoneyDefaults = (resetAmount) => {
-        if (!paymentSelect) return;
-        const p = purchaseById[Number(paymentSelect.value)];
+        const p = selectedPurchase();
         if (!p) return;
+        const code = currencyCode(p.currency);
+        const exponent = currencyExponent(code);
+        // Re-label the box for the payment being refunded — an unlabelled number box is
+        // how "5000" against a $60 charge became a $50.00 refund.
+        if (amountLabel) amountLabel.textContent = `Amount (${currencyInputLabel(code)})`;
         if (amountInput) {
-            amountInput.max = (p.refundable_paise / 100).toFixed(2);
-            if (resetAmount) amountInput.value = (p.refundable_paise / 100).toFixed(2);
+            const step = exponent === 0 ? '1' : (1 / Math.pow(10, exponent)).toFixed(exponent);
+            amountInput.step = step;
+            amountInput.min = step;
+            amountInput.max = toMajor(p.refundable_paise, code).toFixed(exponent);
+            if (resetAmount) amountInput.value = toMajor(p.refundable_paise, code).toFixed(exponent);
         }
         recomputeClawback();
     };
     const recomputeClawback = () => {
-        if (!paymentSelect || !clawbackInput || !amountInput) return;
-        const p = purchaseById[Number(paymentSelect.value)];
+        if (!clawbackInput || !amountInput) return;
+        const p = selectedPurchase();
         if (!p) return;
         if (p.kind !== 'credits' || !p.amount_paise) { clawbackInput.value = '0'; return; }
-        const amtPaise = Math.round(Number(amountInput.value || 0) * 100);
-        const suggested = Math.round((p.total_credits || 0) * (amtPaise / p.amount_paise));
+        // Ratio of two minor amounts in the SAME currency — dimensionless, so it is safe.
+        const amountMinor = toMinor(amountInput.value, p.currency);
+        const suggested = Math.round((p.total_credits || 0) * (amountMinor / p.amount_paise));
         clawbackInput.value = String(Math.max(0, suggested));
     };
     if (paymentSelect) { paymentSelect.addEventListener('change', () => syncMoneyDefaults(true)); syncMoneyDefaults(true); }
@@ -2965,9 +3121,27 @@ function wireRefundForm(data) {
         const reason = (document.getElementById('refundMoneyReason') || {}).value || '';
         if (!paymentId) { setRefundError('Select a payment to refund.'); return; }
         if (!Number.isFinite(amount) || amount <= 0) { setRefundError('Enter the amount to refund.'); return; }
+        const p = selectedPurchase();
+        if (!p) { setRefundError('Select a payment to refund.'); return; }
+        const code = currencyCode(p.currency);
+        const amountMinor = toMinor(amount, code);
+        if (amountMinor > Number(p.refundable_paise || 0)) {
+            setRefundError(`That's more than the ${moneyOr(p.refundable_display, code)} still refundable on this payment.`);
+            return;
+        }
+        // Confirm in the currency the money will actually leave in, and send the currency
+        // along so the server can reject a mismatch before anything moves.
+        const amountLabelText = formatMinor(amountMinor, code);
         const company = (state.couponOrg && state.couponOrg.company) || 'this account';
-        if (!(await confirmDialog(`Refund ₹${amount.toLocaleString()} to ${company} via Razorpay and claw back ${clawback} credits. This moves real money and cannot be undone.`, { title: 'Issue refund?', okText: `Refund ₹${amount.toLocaleString()}` }))) return;
-        await issueRefund(moneyBtn, { kind: 'money', payment_id: paymentId, amount_rupees: amount, clawback_credits: clawback, reason });
+        if (!(await confirmDialog(`Refund ${amountLabelText} (${code}) to ${company} via Razorpay and claw back ${clawback} credits. This moves real money and cannot be undone.`, { title: 'Issue refund?', okText: `Refund ${amountLabelText}` }))) return;
+        await issueRefund(moneyBtn, {
+            kind: 'money',
+            payment_id: paymentId,
+            amount_minor: amountMinor,
+            amount_currency: code,
+            clawback_credits: clawback,
+            reason
+        });
     });
 }
 

@@ -32,15 +32,41 @@ REFERRAL_REFEREE_DISCOUNT_PAISE = int(os.getenv("REFERRAL_REFEREE_DISCOUNT_PAISE
 REFERRAL_MAX_REWARDS_PER_REFERRER = int(os.getenv("REFERRAL_MAX_REWARDS_PER_REFERRER", "25") or "25")
 
 
-def referee_discount_display() -> str:
-    return f"₹{REFERRAL_REFEREE_DISCOUNT_PAISE // 100}"
+def referee_discount_percent() -> int:
+    """The reward as a PERCENTAGE of the INR list price.
+
+    The reward is configured as a flat ₹200 off ₹999, but checkout applies it as that
+    same proportion in whatever currency the friend buys in (a flat ₹200 subtracted from
+    a price stored as 1299 cents would go deeply negative and clamp to the floor — i.e.
+    give the Pass away). See app/routers/visa_pass.py::pass_checkout.
+    """
+    from app import money
+    inr_list = money.price_minor("visa_pass", "INR")
+    if inr_list <= 0:
+        return 0
+    return int(round(min(1.0, REFERRAL_REFEREE_DISCOUNT_PAISE / inr_list) * 100))
 
 
-def referral_reward_summary() -> str:
+def referee_discount_display(currency: str | None = None) -> str:
+    """The friend's discount, rendered in `currency`.
+
+    Defaults to INR for the existing callers. Quoting "₹200 off" to someone who will be
+    charged in dollars states a discount they will never see on their card.
+    """
+    from app import money
+    code = (currency or "INR").strip().upper()
+    if code == "INR" or not money.is_chargeable(code):
+        return money.format_money(REFERRAL_REFEREE_DISCOUNT_PAISE, "INR")
+    local_price = money.price_minor("visa_pass", code)
+    return money.format_money(int(round(local_price * referee_discount_percent() / 100)), code)
+
+
+def referral_reward_summary(currency: str | None = None) -> str:
     """One-line description of the current referral offer (used by API + UI)."""
     return (
-        f"Invite a friend: they get {referee_discount_display()} off their first Visa Success Pass, "
-        f"and you get a free {REFERRAL_BONUS_DAYS}-day Pass once they purchase it."
+        f"Invite a friend: they get {referee_discount_display(currency)} off their first "
+        f"Visa Success Pass, and you get a free {REFERRAL_BONUS_DAYS}-day Pass once they "
+        f"purchase it."
     )
 
 

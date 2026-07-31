@@ -27,11 +27,12 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app import models
 from app import fx
+from app import money
 from app import subscriptions as subs
 
 
@@ -39,7 +40,12 @@ from app import subscriptions as subs
 # Configuration (all overridable via environment variables)
 # ---------------------------------------------------------------------------
 
+# Default presentment currency when the buyer expresses no preference. The real price
+# for any currency comes from money.PRICE_BOOK["visa_pass"] — this is only the fallback.
 CURRENCY = (os.getenv("VISA_PASS_CURRENCY", "INR").strip().upper() or "INR")
+# The INR list price. Kept as a module constant because referral/marketing/admin copy
+# anchors on it, but it is NOT what the checkout charges a non-INR buyer — see
+# money.price_minor("visa_pass", currency).
 PASS_PRICE_PAISE = int(os.getenv("VISA_PASS_PRICE_PAISE", "99900") or "99900")     # ₹999
 PASS_DURATION_DAYS = int(os.getenv("VISA_PASS_DURATION_DAYS", "30") or "30")
 PASS_PRICING_MODEL = "visa_pass"  # stored on SubscriptionPayment.pricing_model
@@ -112,10 +118,10 @@ def paise_to_rupees(paise) -> float:
 
 
 def format_inr(paise) -> str:
-    rupees = float(paise or 0) / 100.0
-    if rupees == int(rupees):
-        return f"₹{int(rupees):,}"
-    return f"₹{rupees:,.2f}"
+    """INR-only formatter. Kept for the ~40 call sites that are genuinely INR (admin
+    economics, Gemini cost). Use money.format_money(minor, currency) for anything that
+    renders a customer's actual charge."""
+    return money.format_money(paise, "INR")
 
 
 def usd_to_inr_paise(usd) -> int:
@@ -202,21 +208,41 @@ def pass_benefits() -> list[str]:
     ]
 
 
-def entitlements_state(db: Session, subscription: models.Subscription) -> dict:
+def entitlements_state(
+    db: Session,
+    subscription: models.Subscription,
+    *,
+    currency: str | None = None,
+) -> dict:
+    """Entitlements + the price of the pass in the buyer's currency.
+
+    `currency` is the presentment currency to quote. It is only a display choice here —
+    the charge is re-resolved server-side at checkout — but the number shown MUST come
+    from the same price book the order will use, or the UI and the charge disagree.
+    """
     is_pass = has_active_pass(subscription)
+    try:
+        quote_currency = money.normalize_currency(currency or CURRENCY, strict=True)
+    except money.UnsupportedCurrency:
+        quote_currency = money.DEFAULT_CURRENCY
+    price_minor = money.price_minor("visa_pass", quote_currency)
     return {
         "has_pass": is_pass,
         "plan": "pass" if is_pass else "free",
         "enforced": ENFORCE,
-        "currency": CURRENCY,
+        "currency": quote_currency,
         "pass": {
             "active": is_pass,
-            "price_paise": PASS_PRICE_PAISE,
-            "price_display": format_inr(PASS_PRICE_PAISE),
+            "price_paise": price_minor,          # legacy field name; minor units of `currency`
+            "price_minor": price_minor,
+            "price_display": money.format_money(price_minor, quote_currency),
             "duration_days": PASS_DURATION_DAYS,
             "ends_at": subscription.ends_at if is_pass else None,
             "days_left": pass_days_left(subscription),
             "benefits": pass_benefits(),
+            # The full ladder, so the paywall can render a currency selector without a
+            # second round-trip and without the client ever computing a price.
+            "price_options": money.price_options("visa_pass"),
         },
         "features": {key: feature_entitlement(subscription, key) for key in FEATURES},
     }
@@ -227,6 +253,13 @@ def entitlements_state(db: Session, subscription: models.Subscription) -> dict:
 # ---------------------------------------------------------------------------
 
 def _paywall_detail(feature: dict, ent: dict) -> str:
+    """Copy for the 402. Deliberately quotes NO price.
+
+    This message has no way to know the caller's presentment currency, and quoting ₹999
+    to a buyer who will be charged $12.99 is worse than quoting nothing. The client
+    already holds the correct per-currency price from `entitlements_state` and renders
+    it next to the buy button.
+    """
     # Pass holder who exhausted a metered pass feature (voice interviews).
     if ent["tier"] == "pass":
         return (
@@ -234,13 +267,13 @@ def _paywall_detail(feature: dict, ent: dict) -> str:
         )
     if feature["free_limit"] <= 0:
         return (
-            f"{feature['label']}s are part of the Visa Success Pass ({format_inr(PASS_PRICE_PAISE)}, "
-            f"{PASS_DURATION_DAYS} days). Unlock the pass to continue."
+            f"{feature['label']}s are part of the Visa Success Pass "
+            f"({PASS_DURATION_DAYS} days). Unlock the pass to continue."
         )
     return (
         f"You've used your {feature['free_limit']} free {feature['label'].lower()}"
         f"{'s' if feature['free_limit'] != 1 else ''}. Unlock the Visa Success Pass "
-        f"({format_inr(PASS_PRICE_PAISE)}, {PASS_DURATION_DAYS} days) for unlimited access."
+        f"({PASS_DURATION_DAYS} days) for unlimited access."
     )
 
 
@@ -312,7 +345,33 @@ def build_revenue_analytics(db: Session) -> dict:
 
     pass_q = db.query(P).filter(P.status == "verified", P.pricing_model == PASS_PRICING_MODEL)
     passes_sold = int(pass_q.with_entities(func.count(P.id)).scalar() or 0)
-    revenue_paise = int(pass_q.with_entities(func.coalesce(func.sum(P.amount_paise), 0)).scalar() or 0)
+    # Revenue MUST sum the INR settlement figure, not the charged amount: a $12.99 row
+    # stores amount_paise=1299, and adding that to a ₹999 row's 99900 produces a number
+    # that is neither rupees nor dollars. base_amount_paise is Razorpay's own converted
+    # INR value.
+    #
+    # The fallback to amount_paise is allowed ONLY for INR rows, where charged == settled
+    # (Razorpay omits base_amount entirely on domestic payments, and every pre-migration
+    # row is genuinely rupees). A NON-INR row with no settlement figure yet — the entity
+    # was fetched before base_amount was populated — contributes 0 rather than having its
+    # cents added as though they were paise. Understating is recoverable once the webhook
+    # backfills it; silently mixing units is not. `unsettled_payments` reports the gap.
+    settled_inr = case(
+        (P.base_amount_paise.isnot(None), P.base_amount_paise),
+        (func.upper(func.coalesce(P.currency, "INR")) == "INR", P.amount_paise),
+        else_=0,
+    )
+    revenue_paise = int(
+        pass_q.with_entities(func.coalesce(func.sum(settled_inr), 0)).scalar() or 0
+    )
+    # How many verified passes are missing from the figure above, so the number is never
+    # quietly wrong on screen.
+    unsettled_payments = int(
+        pass_q.filter(
+            P.base_amount_paise.is_(None),
+            func.upper(func.coalesce(P.currency, "INR")) != "INR",
+        ).with_entities(func.count(P.id)).scalar() or 0
+    )
 
     # Active passes right now (Pro + active + not expired).
     now = datetime.utcnow()
@@ -375,6 +434,10 @@ def build_revenue_analytics(db: Session) -> dict:
             "conversion_pct": round((passes_sold / free_users) * 100, 1) if free_users > 0 else None,
             "revenue_paise": revenue_paise,
             "revenue_display": format_inr(revenue_paise),
+            # Non-INR passes not yet carrying a Razorpay settlement figure. They are
+            # EXCLUDED from revenue_paise above rather than counted in the wrong unit, so a
+            # non-zero value here means the revenue number is a known understatement.
+            "unsettled_payments": unsettled_payments,
             "gemini_cost_paise": gemini_cost_paise,
             "gemini_cost_display": format_inr(gemini_cost_paise),
             "gemini_cost_usd": round(gemini_cost_usd, 4),
@@ -410,7 +473,18 @@ def build_account_cost_profit(db: Session, *, limit: int = 100) -> dict:
     cost_by_user = {int(uid): {"cost_usd": float(c or 0), "calls": int(n or 0)} for uid, c, n in cost_rows}
 
     rev_rows = (
-        db.query(P.user_id, func.coalesce(func.sum(P.amount_paise), 0), func.count(P.id))
+        # INR settlement figure, not the charged amount — see build_revenue_analytics for
+        # why the amount_paise fallback is restricted to INR rows. This is compared against
+        # Gemini cost in INR, so both sides must be INR.
+        db.query(
+            P.user_id,
+            func.coalesce(func.sum(case(
+                (P.base_amount_paise.isnot(None), P.base_amount_paise),
+                (func.upper(func.coalesce(P.currency, "INR")) == "INR", P.amount_paise),
+                else_=0,
+            )), 0),
+            func.count(P.id),
+        )
         .filter(P.status == "verified", P.pricing_model == PASS_PRICING_MODEL, P.user_id.isnot(None))
         .group_by(P.user_id)
         .all()

@@ -199,7 +199,17 @@ def compute_candidates(db: Session, limit: int = GROWTH_AGENT_MAX_CANDIDATES) ->
 # --------------------------------------------------------------------------- #
 
 def _build_prompt(candidates: list[dict]) -> str:
-    price = f"₹{visa_pass.PASS_PRICE_PAISE // 100}"
+    # The Pass is sold in 8 currencies at owner-set prices (money.PRICE_BOOK), not one
+    # rupee price converted at checkout. Give the model the whole ladder so the outreach
+    # copy it drafts never quotes ₹999 to someone who will be charged $12.99.
+    from app import money, referrals
+    ladder = ", ".join(
+        f"{o['currency']} {o['display']}" for o in money.price_options("visa_pass")
+    )
+    price = money.format_money(money.price_minor("visa_pass", "INR"), "INR")
+    # The referral reward is a flat ₹200 in INR but applies as that same proportion in
+    # every other currency, so the percentage is the only figure true for all buyers.
+    referral_percent = referrals.referee_discount_percent()
     plays = "\n".join(f"  - {p['id']}: {p['desc']}" for p in PROMOTION_PLAYS)
     # Feed the model only the compact, pre-scored features (never raw DB rows).
     payload = [
@@ -212,11 +222,18 @@ def _build_prompt(candidates: list[dict]) -> str:
     ]
     return f"""You are Rilono's internal Growth Strategist AI, used only by Rilono's own admins.
 
-PRODUCT: the "Visa Success Pass" — a one-time {price} purchase granting 30 days of full
+PRODUCT: the "Visa Success Pass" — a one-time purchase granting 30 days of full
 access: unlimited Rilono AI chat, unlimited document uploads & red-flag audits, 3 AI voice
 mock interviews, and unlimited Rilono Copilot (Chrome extension). The free tier is
 capped (25 AI messages, 5 uploads, 3 interview-prep sessions, 2 mock interviews, 1 red-flag
-scan). A referred user's FIRST Pass is ₹200 off.
+scan). A referred user's FIRST Pass is {referral_percent}% off.
+
+PRICING: the Pass is sold in each buyer's own currency at a fixed local price — it is NOT
+{price} converted at checkout. The full ladder is: {ladder}.
+When you draft outreach copy, quote the price for the currency that matches the account's
+`destination`/location, or omit the price entirely if you are unsure. NEVER quote {price}
+to an account outside India — they will be charged their local price, and a mismatch
+between your copy and the checkout screen destroys trust at the exact moment of purchase.
 
 TASK: for EACH free-plan account below, decide the single best conversion move right now,
 based on their real usage. The intent_score (0-100, already computed) reflects how close

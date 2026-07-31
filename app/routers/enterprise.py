@@ -22,6 +22,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from app.database import get_db, SessionLocal
 from app import models
+from app import money
 from app import enterprise_catalog as catalog
 from app import enterprise_access as access
 from app import enterprise_team as team_svc
@@ -74,7 +75,12 @@ from app.email_service import send_enterprise_support_request_email, send_enterp
 from app.email_service import send_feature_request_confirmation
 from app.email_service import send_enterprise_welcome_email
 from app.email_service import send_email_otp
+from app.email_service import (
+    send_enterprise_owner_transfer_code_email,
+    send_enterprise_owner_transfer_notice_email,
+)
 from app.utils.token_security import hash_token, token_matches
+from app import enterprise_step_up as step_up
 
 RAZORPAY_API_BASE = os.getenv("RAZORPAY_API_BASE", "https://api.razorpay.com/v1").rstrip("/")
 
@@ -912,7 +918,7 @@ def _build_enterprise_context(
         except Exception:
             logger.exception("Failed to build subscription state for org_id=%s", organization.id)
         try:
-            credits_summary = credits.wallet_state(db, organization.id)
+            credits_summary = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
         except Exception:
             logger.exception("Failed to build credit wallet state for org_id=%s", organization.id)
 
@@ -1144,6 +1150,7 @@ def _list_organization_members(
     organization_id: int,
     *,
     include_inactive: bool = False,
+    ctx=None,
 ) -> list[dict]:
     """The team roster.
 
@@ -1155,7 +1162,9 @@ def _list_organization_members(
     from app import enterprise_team as team
 
     try:
-        return team.list_members(db, int(organization_id), include_inactive=include_inactive)
+        return team.list_members(
+            db, int(organization_id), include_inactive=include_inactive, ctx=ctx
+        )
     except Exception:
         # The roster backs the client-assignment dropdown as well as the Team screen, so fall
         # back to the original minimal shape rather than failing those pages outright.
@@ -1825,7 +1834,7 @@ def enterprise_team_members(
 
     # Deactivated members are only listed for someone who can actually do something about them.
     show_inactive = bool(include_inactive) and role.ctx.has("team.manage")
-    members = _list_organization_members(db, organization.id, include_inactive=show_inactive)
+    members = _list_organization_members(db, organization.id, include_inactive=show_inactive, ctx=role.ctx)
     _touch_member_last_active(membership.id)
     branches = [
         team.serialize_branch(b) for b in team.list_branches(db, organization.id)
@@ -2274,7 +2283,7 @@ def enterprise_team_add_user(
         "invite_email_sent": invite_email_sent,
         "invite_email_to": target_email,
         "organization_portal_url": portal_url,
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
     }
 
 
@@ -2286,7 +2295,7 @@ def enterprise_team_update_role(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, _ = _require_enterprise_membership(
+    _, organization, role = _require_enterprise_membership(
         db=db,
         user=current_user,
         request=request,
@@ -2347,7 +2356,7 @@ def enterprise_team_update_role(
     db.commit()
     return {
         "message": "Role updated successfully.",
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
     }
 
 
@@ -2403,7 +2412,7 @@ def enterprise_team_remove_user(
     db.commit()
     return {
         "message": "User removed from organization.",
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
         **result,
     }
 
@@ -2584,6 +2593,13 @@ class EnterpriseBillingVerifyRequest(BaseModel):
 class EnterpriseCreditTopupRequest(BaseModel):
     package: str = Field(..., min_length=2, max_length=30)
     coupon_code: Optional[str] = Field(default=None, max_length=40)
+    # Presentment currency HINT. The server maps it to a price from app/money.py; the
+    # client never sends an amount. See _resolve_charge_currency.
+    currency: Optional[str] = Field(default=None, max_length=3)
+
+
+class EnterpriseInfraCheckoutRequest(BaseModel):
+    currency: Optional[str] = Field(default=None, max_length=3)
 
 
 class EnterpriseCouponValidateRequest(BaseModel):
@@ -2942,7 +2958,10 @@ def scoped_client_ids_subq(db: Session, organization_id: int, ctx):
     query = db.query(models.EnterpriseClient.id).filter(
         models.EnterpriseClient.organization_id == int(organization_id)
     )
-    return scope_client_query(query, ctx).subquery()
+    # `.scalar_subquery()`, not `.subquery()`: the result is only ever used as the right-hand
+    # side of an IN(...), and passing a plain Subquery there makes SQLAlchemy coerce it with a
+    # deprecation warning.
+    return scope_client_query(query, ctx).scalar_subquery()
 
 
 def scope_child_query(query, child_model, ctx):
@@ -5463,6 +5482,42 @@ def _razorpay_enabled() -> bool:
     return bool(key_id and key_secret)
 
 
+def _resolve_charge_currency(hint: Optional[str], organization) -> str:
+    """Decide what currency to CHARGE an organization in.
+
+    Precedence: explicit hint from the buyer -> the currency they were last billed in
+    (organization.billing_currency, if set) -> the org's country -> INR.
+
+    The hint is validated strictly: an unrecognised or not-yet-enabled code is a 400,
+    never a silent coercion to INR. Coercing here would charge someone in a currency
+    they did not pick, which is exactly the class of bug this whole module exists to
+    prevent. Note this decides only the CURRENCY — the amount always comes from the
+    server-side price book.
+    """
+    raw = (hint or "").strip()
+    if raw:
+        try:
+            return money.normalize_currency(raw, strict=True)
+        except money.UnsupportedCurrency:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"We can't charge in {raw.upper()[:8]} yet. Supported: "
+                    + ", ".join(money.supported_charge_currencies()) + "."
+                ),
+            )
+    stored = (getattr(organization, "billing_currency", None) or "").strip()
+    if stored and money.is_chargeable(stored):
+        return money.normalize_currency(stored, strict=True)
+    country = (getattr(organization, "country_code", None) or "").strip().upper()
+    if country:
+        from app.routers import pricing as pricing_fx
+        guess = pricing_fx._COUNTRY_TO_CURRENCY.get(country)
+        if guess and money.is_chargeable(guess):
+            return money.normalize_currency(guess, strict=True)
+    return money.DEFAULT_CURRENCY
+
+
 def _razorpay_request(method: str, path: str, json_payload: dict | None = None) -> dict:
     key_id, key_secret = _razorpay_credentials()
     url = f"{RAZORPAY_API_BASE}/{path.lstrip('/')}"
@@ -5718,7 +5773,12 @@ def _send_payment_request_email_safe(payment, organization, client_email, pay_ur
         to_email=client_email,
         client_name=payment.client_name_snapshot or "there",
         organization_name=organization.company_name,
-        amount_rupees=f"{payment.amount_paise / 100:,.2f}",
+        # Hand over the stored integer and the row's own currency rather than a
+        # pre-divided string: `amount_paise` is minor units of `payment.currency`, and the
+        # /100 here was only ever right because Route happens to be INR-only. app.money
+        # owns the exponent and the symbol, so this email matches the pay page exactly.
+        amount_minor=int(payment.amount_paise or 0),
+        currency=(payment.currency or "INR"),
         description=payment.description or "Visa service payment",
         pay_url=pay_url,
         invoice_number=payment.invoice_number or "",
@@ -5804,6 +5864,10 @@ def enterprise_create_client_payment(
         created_by=current_user,
         pay_token_hash=hash_token(raw_token),
         payer_email=client_email,
+        # Sent to Razorpay Checkout as prefill.contact. Required for international cards:
+        # the gateway rejects the payment outright if the contact details look like
+        # placeholders, so a student abroad cannot pay without a real phone here.
+        payer_phone=(client.phone or "").strip() or None,
     )
     pay_url = _build_pay_link_url(organization.subdomain_slug, raw_token, request)
     sent, _mid, err = _send_payment_request_email_safe(payment, organization, client_email, pay_url)
@@ -6501,6 +6565,9 @@ def enterprise_public_pay_info(
         info["razorpay_key_id"] = os.getenv("RAZORPAY_KEY_ID", "").strip()
         info["razorpay_order_id"] = payment.razorpay_order_id
         info["payer_email"] = payment.payer_email_snapshot
+        # Prefilled into Checkout. Razorpay rejects international card payments sent with
+        # dummy contact details, so this is what makes a foreign card work on an INR invoice.
+        info["payer_phone"] = getattr(payment, "payer_phone_snapshot", None)
     return info
 
 
@@ -6598,6 +6665,121 @@ async def enterprise_route_webhook(request: Request, db: Session = Depends(get_d
     return {"status": "ok"}
 
 
+@router.post("/webhook/razorpay-credits")
+async def enterprise_credits_webhook(request: Request, db: Session = Depends(get_db)):
+    """Reconcile credit / infra-fee payments that the browser never confirmed.
+
+    Credit top-ups and infra fees are credited ONLY from the browser callback
+    (/credits/topup/verify). The row lock there prevents DOUBLE-crediting, but nothing
+    prevents ZERO-crediting: if the buyer closes the tab, loses connection, or abandons
+    the 3DS redirect after paying, the money is captured and the wallet is never topped up.
+
+    That failure is rare on domestic UPI/NetBanking and common on international cards,
+    which always round-trip through a 3DS/redirect step. Enabling international payments
+    without this endpoint produces a steady trickle of consultancies charged but not
+    credited — the worst possible support ticket.
+
+    Configure in the Razorpay dashboard as a SEPARATE webhook (its own secret) subscribed
+    to `payment.captured`. Idempotency is the same ledger-row check the verify route uses,
+    so a webhook and a browser callback racing each other credit exactly once.
+    """
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.credits_webhook", limit=300, window_seconds=60,
+    )
+    secret = (
+        os.getenv("RAZORPAY_CREDITS_WEBHOOK_SECRET", "").strip()
+        or os.getenv("RAZORPAY_WEBHOOK_SECRET", "").strip()
+    )
+    if not secret:
+        raise HTTPException(status_code=503, detail="Webhook not configured.")
+    body = await request.body()
+    signature = (request.headers.get("X-Razorpay-Signature") or "").strip()
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not signature or not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=400, detail="Invalid webhook signature.")
+
+    try:
+        event = json.loads(body.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid webhook payload.")
+    if str(event.get("event") or "").strip() != "payment.captured":
+        return {"status": "ignored"}
+
+    entity = (((event.get("payload") or {}).get("payment") or {}).get("entity")) or {}
+    order_id = str(entity.get("order_id") or "").strip()
+    if not order_id:
+        return {"status": "ignored"}
+
+    query = db.query(models.EnterpriseCreditPayment).filter(
+        models.EnterpriseCreditPayment.razorpay_order_id == order_id
+    )
+    if db.bind and db.bind.dialect.name != "sqlite":
+        query = query.with_for_update()
+    payment_row = query.first()
+    if not payment_row:
+        # Not one of ours (B2C pass, Route collection, …) — ack so Razorpay stops retrying.
+        return {"status": "ignored"}
+
+    # Trust the webhook entity for amount/currency only after checking it against what we
+    # stored: a mismatch means this order was not the one we priced, and crediting on it
+    # would hand out credits for a different (possibly smaller) payment.
+    stored_currency = money.normalize_currency(payment_row.currency, strict=False)
+    if money.normalize_currency(entity.get("currency"), strict=False) != stored_currency:
+        logger.error(
+            "credits-webhook: currency mismatch order=%s stored=%s got=%s",
+            order_id, stored_currency, entity.get("currency"),
+        )
+        return {"status": "mismatch"}
+    if int(entity.get("amount") or 0) != int(payment_row.amount_paise):
+        logger.error(
+            "credits-webhook: amount mismatch order=%s stored=%s got=%s",
+            order_id, payment_row.amount_paise, entity.get("amount"),
+        )
+        return {"status": "mismatch"}
+
+    if payment_row.status != "verified":
+        payment_row.razorpay_payment_id = str(entity.get("id") or "").strip() or None
+        base_minor, fx_rate = money.settled_inr_minor(entity)
+        if base_minor is not None:
+            payment_row.base_amount_paise = base_minor
+            payment_row.fx_rate_used = fx_rate
+        payment_row.base_currency = "INR"
+        payment_row.is_international = bool(entity.get("international"))
+        payment_row.status = "verified"
+        payment_row.verified_at = datetime.utcnow()
+        payment_row.error_message = None
+
+    if payment_row.kind == "infra_fee":
+        wallet = credits.get_or_create_wallet(db, payment_row.organization_id, commit=False)
+        paid_until = wallet.infra_fee_paid_until
+        # Only extend if the browser callback did not already do it for THIS payment.
+        if not paid_until or paid_until < datetime.utcnow():
+            credits.mark_infra_fee_paid(db, payment_row.organization_id, commit=False)
+    else:
+        total_credits = int(payment_row.credits) + int(payment_row.bonus_credits)
+        already = (
+            db.query(models.EnterpriseCreditTransaction)
+            .filter(
+                models.EnterpriseCreditTransaction.organization_id == payment_row.organization_id,
+                models.EnterpriseCreditTransaction.reference_type == "payment",
+                models.EnterpriseCreditTransaction.reference_id == payment_row.id,
+            )
+            .first()
+        )
+        if not already and total_credits > 0:
+            pkg = credits.get_package(payment_row.package_key)
+            label = pkg["label"] if pkg else "Credit top-up"
+            credits.add_credits(
+                db, payment_row.organization_id, total_credits,
+                txn_type="topup",
+                description=f"{label} (+{total_credits} credits)",
+                reference_type="payment", reference_id=payment_row.id,
+                commit=False,
+            )
+    db.commit()
+    return {"status": "ok"}
+
+
 def _send_dispute_alert_to_org_admins(
     db: Session, *, payment: "models.EnterpriseStudentPayment", event_type: str, entity: dict
 ) -> None:
@@ -6639,7 +6821,16 @@ def _send_dispute_alert_to_org_admins(
             to_email=admin.email,
             organization_name=organization.company_name,
             client_name=payment.client_name_snapshot or "a client",
-            amount_rupees=f"{(int(entity.get('amount') or payment.amount_paise or 0)) / 100:,.2f}",
+            # The dispute entity's `amount` is in the DISPUTED PAYMENT's own presentment
+            # currency, which is not necessarily INR — dividing it by 100 and letting the
+            # template prefix "₹" mislabelled every foreign chargeback in the one email an
+            # org uses to decide whether to fight it. Hand over the integer minor amount
+            # plus the currency it is denominated in and let app.money render both.
+            amount_minor=int(entity.get("amount") or payment.amount_paise or 0),
+            currency=(
+                str(entity.get("currency") or "").strip().upper()
+                or (payment.currency or "INR")
+            ),
             invoice_number=payment.invoice_number or "",
             dispute_state=suffix,
             reason_code=str(entity.get("reason_code") or "") or None,
@@ -7103,11 +7294,14 @@ def enterprise_credits_wallet(
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
         "usage": credits.usage_breakdown(
             db, organization.id, include_by_member=role.ctx.is_org_scope,
         ),
-        "packages": credits.packages_payload(),
+        # Priced in the org's billing currency, with the full ladder on each package so
+        # the top-up modal can offer a currency selector without a second round-trip.
+        "packages": credits.packages_payload(_resolve_charge_currency(None, organization)),
+        "charge_currencies": list(money.supported_charge_currencies()),
         "checkout_enabled": _razorpay_enabled(),
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip() or None,
     }
@@ -7243,7 +7437,7 @@ def enterprise_credits_analytics(
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
         "analytics": credits.spend_analytics(
             db, organization.id, days=days, include_by_member=role.ctx.is_org_scope,
             ctx=role.ctx,
@@ -7296,15 +7490,20 @@ def enterprise_credits_payments(
             buyer_names[uid] = full_name or email
 
     payments = []
-    collected_paise = 0
+    # Every *_paise column on these rows is minor units of THAT ROW's currency, so a
+    # running total can only be kept per currency — adding a $39 top-up's 3900 cents to a
+    # ₹2,999 row's 299900 paise yields a number that is neither. Keyed by currency, then
+    # rendered as one string per currency the org has actually paid in.
+    collected_by_currency: dict[str, int] = {}
     credits_bought = 0
     for p in rows:
         package = credits.get_package(p.package_key) if p.kind == "credits" else None
+        pay_currency = money.normalize_currency(p.currency, strict=False)
         refunded = int(p.refunded_amount_paise or 0)
         net = max(0, int(p.amount_paise or 0) - refunded)
         total_credits = int(p.credits or 0) + int(p.bonus_credits or 0)
         if p.status in credits.REVENUE_PAYMENT_STATUSES:
-            collected_paise += net
+            collected_by_currency[pay_currency] = collected_by_currency.get(pay_currency, 0) + net
             credits_bought += total_credits
         payments.append({
             "id": p.id,
@@ -7317,16 +7516,19 @@ def enterprise_credits_payments(
             "credits": int(p.credits or 0),
             "bonus_credits": int(p.bonus_credits or 0),
             "total_credits": total_credits,
+            # Legacy field name; minor units of `currency`, which now travels with it so
+            # the client never has to infer rupees from the key.
             "amount_paise": int(p.amount_paise or 0),
-            "amount_display": credits.format_inr(p.amount_paise),
+            "currency": pay_currency,
+            "amount_display": money.format_money(p.amount_paise, pay_currency),
             "original_amount_paise": p.original_amount_paise,
             "coupon_code": p.coupon_code,
             "coupon_percent_off": (float(p.coupon_percent_off) if p.coupon_percent_off is not None else None),
             "status": p.status,
             "refunded_amount_paise": refunded,
-            "refunded_display": credits.format_inr(refunded),
+            "refunded_display": money.format_money(refunded, pay_currency),
             "net_amount_paise": net,
-            "net_amount_display": credits.format_inr(net),
+            "net_amount_display": money.format_money(net, pay_currency),
             "payment_reference": p.razorpay_payment_id or p.razorpay_order_id,
             "created_by_name": buyer_names.get(p.created_by_user_id),
             "created_at": _iso(p.created_at),
@@ -7338,8 +7540,20 @@ def enterprise_credits_payments(
         "payments": payments,
         "summary": {
             "count": len(payments),
-            "collected_paise": collected_paise,
-            "collected_display": credits.format_inr(collected_paise),
+            # Kept for the deployed SPA, but it is ONLY the INR subtotal now — it is not a
+            # grand total and must never be presented as one on a mixed-currency account.
+            "collected_paise": int(collected_by_currency.get("INR", 0)),
+            "collected_by_currency": [
+                {"currency": code, "amount_minor": amt, "display": money.format_money(amt, code)}
+                for code, amt in sorted(collected_by_currency.items())
+            ],
+            "collected_display": (
+                " + ".join(
+                    money.format_money(amt, code)
+                    for code, amt in sorted(collected_by_currency.items())
+                )
+                or money.format_money(0, "INR")
+            ),
             "credits_purchased": credits_bought,
         },
     }
@@ -7362,12 +7576,20 @@ def enterprise_coupon_validate(
         package = credits.get_package(payload.package)
         if not package:
             raise HTTPException(status_code=400, detail="Please choose a valid credit package.")
-        base_amount = int(package["amount_paise"])
+        # This is a PREVIEW of a specific checkout, so it must price the item exactly the
+        # way that checkout will. Reading PACKAGES[...]["amount_paise"] quoted the INR list
+        # price to every org: a USD buyer saw "₹999 → ₹499" and was then charged
+        # $12.99 → $6.49. Same resolver, same price book, same currency as the order.
+        currency = _resolve_charge_currency(None, organization)
+        base_amount = credits.package_price_minor(package["key"], currency)
     else:
         plan = billing.get_plan(payload.plan)
         if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
             raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
         cycle = billing.normalize_billing_cycle(payload.billing_cycle)
+        # The SaaS plan book is still INR-only (billing.plan_amount_paise has no currency
+        # dimension), so this branch is genuinely rupees. Say so rather than inheriting it.
+        currency = "INR"
         base_amount = billing.plan_amount_paise(plan["key"], cycle)
     if base_amount <= 0:
         raise HTTPException(status_code=400, detail="This item is not available for checkout.")
@@ -7376,30 +7598,41 @@ def enterprise_coupon_validate(
         db, organization.id, payload.code, context=context
     )
     percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
-    # A fully-covering discount (e.g. 100% off) leaves a ₹0 amount. Don't block —
-    # report it as free; checkout will grant the credits without Razorpay.
+    # A fully-covering discount (e.g. 100% off) leaves a zero amount. Don't block — report
+    # it as free; checkout will grant the credits without Razorpay. The "is it free?"
+    # threshold is per-currency for the same reason the checkout floor is: the shared
+    # constant means ₹1, and reusing it on a USD order would mean $1.00 and call a
+    # 93%-off order free. Must stay identical to the test in the checkout handler.
     amount = enterprise_coupons.compute_discounted_amount_paise(base_amount, percent)
-    is_free = enterprise_coupons.is_free_checkout(amount)
+    is_free = amount < money.min_charge_minor(currency)
     return {
         "valid": True,
         "free": is_free,
         "code": enterprise_coupons.normalize_code(coupon.code),
         "percent_off": float(percent),
         "percent_display": enterprise_coupons.format_percent_off(percent) + "%",
+        # Minor units of `currency` below — paise only when that says INR.
+        "currency": currency,
         "base_amount_paise": base_amount,
         "amount_paise": amount,
         "discount_paise": base_amount - amount,
-        "base_amount_display": credits.format_inr(base_amount),
-        "amount_display": credits.format_inr(amount),
+        "base_amount_display": money.format_money(base_amount, currency),
+        "amount_display": money.format_money(amount, currency),
     }
 
 
 def _grant_free_credit_topup(
     db, organization, current_user, package, base_amount, amount, coupon_code, coupon_percent,
+    currency=None,
 ):
     """A discount covered the full amount (e.g. 100% off) → add the credits without
     Razorpay. Records a verified 'free' payment so the redemption is counted and the
-    purchase shows in history, then credits the wallet (idempotent ledger reference)."""
+    purchase shows in history, then credits the wallet (idempotent ledger reference).
+
+    `currency` is the currency the checkout was priced in — `amount` and `base_amount` are
+    minor units OF THAT CURRENCY. Stamping credits.CURRENCY here instead wrote a USD-priced
+    row (original_amount_paise=1299) labelled INR, which every downstream reader — purchase
+    history, the admin console, the revenue sums — would then render and add as rupees."""
     total_credits = int(package["credits"]) + int(package["bonus_credits"])
     payment = models.EnterpriseCreditPayment(
         organization_id=organization.id,
@@ -7413,7 +7646,12 @@ def _grant_free_credit_topup(
         original_amount_paise=int(base_amount),
         coupon_code=coupon_code,
         coupon_percent_off=coupon_percent,
-        currency=credits.CURRENCY,
+        currency=(currency or credits.CURRENCY),
+        # A fully-discounted order never reached a gateway, so there is no settlement to
+        # look up. It is worth 0 either way, and stating that explicitly keeps the revenue
+        # sums (which read base_amount_paise) from falling back to a non-INR amount_paise.
+        base_amount_paise=0,
+        base_currency="INR",
         razorpay_order_id=f"free_{secrets.token_hex(8)}",  # NOT NULL + unique column
         status="verified",
         verified_at=datetime.utcnow(),
@@ -7434,7 +7672,7 @@ def _grant_free_credit_topup(
         "message": f"{coupon_code} covered the full amount — {total_credits} credits added to your wallet.",
         "total_credits": total_credits,
         "coupon_code": coupon_code,
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
     }
 
 
@@ -7451,7 +7689,10 @@ def enterprise_credits_topup_checkout(
     package = credits.get_package(payload.package)
     if not package:
         raise HTTPException(status_code=400, detail="Please choose a valid credit package.")
-    base_amount = int(package["amount_paise"])
+    # Currency is a client HINT; the price is always resolved server-side from the shared
+    # price book. An unsupported code is a 400 rather than a silent fall back to INR.
+    currency = _resolve_charge_currency(payload.currency, organization)
+    base_amount = credits.package_price_minor(package["key"], currency)
     if base_amount <= 0:
         raise HTTPException(status_code=400, detail="This package is not available for checkout.")
 
@@ -7469,11 +7710,23 @@ def enterprise_credits_topup_checkout(
         amount = enterprise_coupons.compute_discounted_amount_paise(base_amount, coupon_percent)
 
     # Fully covered by the discount → grant the credits for free (no Razorpay order).
-    if coupon_code and enterprise_coupons.is_free_checkout(amount):
+    #
+    # The threshold has to be currency-aware for the same reason the floor below does.
+    # enterprise_coupons.is_free_checkout() hardcodes MIN_CHECKOUT_PAISE = 100, which means
+    # "₹1" — but `amount` is now minor units of `currency`, so on a USD order the same 100
+    # means "$1.00". A 93%-off coupon leaves $0.91 on a $12.99 package, which that helper
+    # would call "free" and hand the credits over for nothing, while the identical coupon
+    # on the INR list price still charges ₹69.93. Compare against the same per-currency
+    # floor the charge path uses so a discount can never buy the package outright.
+    checkout_floor = money.min_charge_minor(currency)
+    if coupon_code and amount < checkout_floor:
         return _grant_free_credit_topup(
-            db, organization, current_user, package, base_amount, amount, coupon_code, coupon_percent,
+            db, organization, current_user, package, base_amount, amount, coupon_code,
+            coupon_percent, currency,
         )
-    if amount < enterprise_coupons.MIN_CHECKOUT_PAISE:
+    # Currency-aware floor. The old constant was 100 = "₹1"; the same integer in USD
+    # would be $1.00, a 87× stricter floor applied by accident.
+    if amount < checkout_floor:
         raise HTTPException(status_code=400, detail="This amount is too low for online checkout.")
 
     if not _razorpay_enabled():
@@ -7482,10 +7735,10 @@ def enterprise_credits_topup_checkout(
             "message": "Online top-up is being enabled. Please contact us to add credits.",
         }
 
-    receipt = f"reln_cr_{organization.id}_{secrets.token_hex(5)}"[:40]
+    receipt = f"reln_cr_{organization.id}_{currency.lower()}_{secrets.token_hex(4)}"[:40]
     order = _razorpay_request("POST", "/orders", {
         "amount": amount,
-        "currency": credits.CURRENCY,
+        "currency": currency,
         "receipt": receipt,
         "notes": {
             "organization_id": str(organization.id),
@@ -7493,6 +7746,8 @@ def enterprise_credits_topup_checkout(
             "package": package["key"],
             "user_id": str(current_user.id),
             "coupon_code": coupon_code or "",
+            "currency": currency,
+            "price_book_version": money.PRICE_BOOK_VERSION,
         },
     })
     order_id = str(order.get("id") or "").strip()
@@ -7511,10 +7766,14 @@ def enterprise_credits_topup_checkout(
         original_amount_paise=base_amount,
         coupon_code=coupon_code,
         coupon_percent_off=coupon_percent,
-        currency=credits.CURRENCY,
+        currency=currency,
+        price_book_version=money.PRICE_BOOK_VERSION,
         razorpay_order_id=order_id,
         status="created",
     ))
+    # Make the currency choice sticky so the next top-up doesn't re-guess from country.
+    if getattr(organization, "billing_currency", None) != currency:
+        organization.billing_currency = currency
     db.commit()
 
     return {
@@ -7526,14 +7785,19 @@ def enterprise_credits_topup_checkout(
         "discount_paise": base_amount - amount,
         "coupon_code": coupon_code,
         "coupon_percent_off": float(coupon_percent) if coupon_percent is not None else None,
-        "currency": credits.CURRENCY,
+        "currency": currency,
+        "amount_display": money.format_money(amount, currency),
         "package": package["key"],
         "package_label": package["label"],
         "total_credits": int(package["credits"]) + int(package["bonus_credits"]),
         "organization_name": organization.company_name,
+        # International payments fail on placeholder contact data, so send the real
+        # values we hold and omit rather than invent.
+        # https://razorpay.com/docs/payments/international-payments/?preferred-country=IN
         "prefill": {
             "name": current_user.full_name or "",
             "email": current_user.email or "",
+            "contact": (getattr(current_user, "phone", None) or ""),
         },
     }
 
@@ -7577,20 +7841,22 @@ def enterprise_credits_topup_verify(
 
     return {
         "message": f"{total_credits} credits added to your wallet.",
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
     }
 
 
 @router.post("/credits/infra/checkout")
 def enterprise_infra_fee_checkout(
     request: Request,
+    payload: Optional[EnterpriseInfraCheckoutRequest] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, _ = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability="billing.manage"
     )
-    amount = int(credits.INFRA_FEE_PAISE)
+    currency = _resolve_charge_currency(payload.currency if payload else None, organization)
+    amount = money.price_minor("infra_fee", currency)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="The infrastructure fee is not configured.")
     if not _razorpay_enabled():
@@ -7599,15 +7865,17 @@ def enterprise_infra_fee_checkout(
             "message": "Online payment is being enabled. Please contact us to activate the infrastructure fee.",
         }
 
-    receipt = f"reln_infra_{organization.id}_{secrets.token_hex(5)}"[:40]
+    receipt = f"reln_infra_{organization.id}_{currency.lower()}_{secrets.token_hex(4)}"[:40]
     order = _razorpay_request("POST", "/orders", {
         "amount": amount,
-        "currency": credits.CURRENCY,
+        "currency": currency,
         "receipt": receipt,
         "notes": {
             "organization_id": str(organization.id),
             "kind": "infra_fee",
             "user_id": str(current_user.id),
+            "currency": currency,
+            "price_book_version": money.PRICE_BOOK_VERSION,
         },
     })
     order_id = str(order.get("id") or "").strip()
@@ -7623,10 +7891,13 @@ def enterprise_infra_fee_checkout(
         credits=0,
         bonus_credits=0,
         amount_paise=amount,
-        currency=credits.CURRENCY,
+        currency=currency,
+        price_book_version=money.PRICE_BOOK_VERSION,
         razorpay_order_id=order_id,
         status="created",
     ))
+    if getattr(organization, "billing_currency", None) != currency:
+        organization.billing_currency = currency
     db.commit()
 
     return {
@@ -7634,11 +7905,13 @@ def enterprise_infra_fee_checkout(
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
         "order_id": order_id,
         "amount": amount,
-        "currency": credits.CURRENCY,
+        "currency": currency,
+        "amount_display": money.format_money(amount, currency),
         "organization_name": organization.company_name,
         "prefill": {
             "name": current_user.full_name or "",
             "email": current_user.email or "",
+            "contact": (getattr(current_user, "phone", None) or ""),
         },
     }
 
@@ -7675,7 +7948,17 @@ def enterprise_infra_fee_verify(
             type="infra_fee",
             credits=0,
             balance_after=int(wallet.balance_credits),
-            description=f"Infrastructure server fee ({credits.format_inr(credits.INFRA_FEE_PAISE)}/mo)",
+            # Describe what THIS org was actually charged, from the payment row that just
+            # verified — the INR list constant printed "₹999/mo" into the ledger of an org
+            # that had paid $12.99.
+            description=(
+                "Infrastructure server fee ("
+                + money.format_money(
+                    payment_row.amount_paise,
+                    money.normalize_currency(payment_row.currency, strict=False),
+                )
+                + "/mo)"
+            ),
             reference_type="infra_payment",
             reference_id=payment_row.id,
             created_by_user_id=current_user.id,
@@ -7685,7 +7968,7 @@ def enterprise_infra_fee_verify(
 
     return {
         "message": "Infrastructure server fee activated.",
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
     }
 
 
@@ -7729,8 +8012,50 @@ def _verify_credit_payment_or_402(
         db.commit()
         raise HTTPException(status_code=400, detail="Invalid payment signature.")
 
+    # The signature proves only that "order_id|payment_id" came from Razorpay — it binds
+    # neither the amount nor the currency, and says nothing about whether the money was
+    # captured. Re-fetch both entities and assert against what we stored at checkout.
+    # These run INSIDE the with_for_update() lock above so the double-credit guard holds.
+    order_data = _razorpay_request("GET", f"/orders/{payload.razorpay_order_id.strip()}")
+    payment_data = _razorpay_request("GET", f"/payments/{payload.razorpay_payment_id.strip()}")
+
+    def _reject(detail: str):
+        payment_row.status = "failed"
+        payment_row.error_message = detail
+        db.commit()
+        raise HTTPException(status_code=400, detail=detail)
+
+    expected_currency = money.normalize_currency(payment_row.currency, strict=False)
+    if str(order_data.get("id") or "") != payment_row.razorpay_order_id:
+        _reject("Razorpay order mismatch.")
+    if str(order_data.get("status", "")).lower() != "paid":
+        _reject("This payment has not completed yet.")
+    if int(order_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
+        _reject("Payment amount mismatch.")
+    if money.normalize_currency(order_data.get("currency"), strict=False) != expected_currency:
+        _reject("Payment currency mismatch.")
+    if str(payment_data.get("order_id") or "") != payment_row.razorpay_order_id:
+        _reject("Payment does not belong to this order.")
+    if int(payment_data.get("amount", 0) or 0) != int(payment_row.amount_paise):
+        _reject("Payment amount mismatch.")
+    if money.normalize_currency(payment_data.get("currency"), strict=False) != expected_currency:
+        _reject("Payment currency mismatch.")
+    # Authorized-but-uncaptured still produces a valid checkout signature, and capture
+    # failure is materially more common on international cards. Crediting a wallet here
+    # would hand out credits for money that never arrives.
+    if not bool(payment_data.get("captured")):
+        _reject("This payment has not been captured yet.")
+
     if payment_row.status != "verified":
         payment_row.razorpay_payment_id = payload.razorpay_payment_id.strip()
+        # Razorpay's own INR settlement figure — the only amount that may be summed for
+        # revenue once rows carry mixed currencies.
+        base_minor, fx_rate = money.settled_inr_minor(payment_data)
+        if base_minor is not None:
+            payment_row.base_amount_paise = base_minor
+            payment_row.fx_rate_used = fx_rate
+        payment_row.base_currency = "INR"
+        payment_row.is_international = bool(payment_data.get("international"))
         payment_row.status = "verified"
         payment_row.verified_at = datetime.utcnow()
         payment_row.error_message = None
@@ -8069,7 +8394,7 @@ def enterprise_ai_chat(
 
     history = [turn.model_dump() for turn in (payload.history or [])]
     try:
-        answer = enterprise_ai.run_enterprise_ai_chat(
+        turn = enterprise_ai.run_enterprise_ai_chat(
             db=db,
             organization=organization,
             user=current_user,
@@ -8084,16 +8409,21 @@ def enterprise_ai_chat(
             status_code=502,
             detail="The AI assistant ran into a problem answering that. Please try again.",
         )
+    answer = turn.answer
 
-    # Answered successfully → record the message against the meter (may debit a credit).
-    meter = credits.record_copilot_message(db, organization.id, user=current_user)
+    # Answered successfully → record the turn against the meter (may debit a credit).
+    # The turn's REAL cost — summed across every tool round-trip, not just the last one —
+    # decides its message weight, so a six-tool answer can't be sold at a one-call price.
+    meter = credits.record_copilot_message(
+        db, organization.id, user=current_user, turn_cost_usd=turn.usage.cost_usd,
+    )
     response = {
         "answer": answer,
         "permissions": _enterprise_permissions_for_role(role),
         "credits_meter": meter,
     }
     if meter.get("credits_charged"):
-        response["wallet"] = credits.wallet_state(db, organization.id)
+        response["wallet"] = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
     return response
 
 
@@ -8268,7 +8598,7 @@ def enterprise_copilot_extension_chat(
     credits.copilot_precheck_or_402(db, organization.id)
 
     try:
-        answer = enterprise_copilot.run_enterprise_copilot_chat(
+        copilot_turn = enterprise_copilot.run_enterprise_copilot_chat(
             db,
             organization=organization,
             staff_user=current_user,
@@ -8278,6 +8608,7 @@ def enterprise_copilot_extension_chat(
             conversation_history=payload.conversation_history,
             session_attachments=payload.session_attachments,
         )
+        answer = copilot_turn.answer
     except Exception:
         logger.exception(
             "Enterprise extension copilot failed (org_id=%s client_id=%s)",
@@ -8297,10 +8628,13 @@ def enterprise_copilot_extension_chat(
         "client": {"id": client.id, "full_name": client.full_name},
     }
     try:
-        meter = credits.record_copilot_message(db, organization.id, user=current_user)
+        meter = credits.record_copilot_message(
+            db, organization.id, user=current_user,
+            turn_cost_usd=copilot_turn.usage.cost_usd,
+        )
         response["credits_meter"] = meter
         if meter.get("credits_charged"):
-            response["wallet"] = credits.wallet_state(db, organization.id)
+            response["wallet"] = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
     except Exception:
         logger.exception(
             "Copilot metering failed after successful generation (org_id=%s) — answer delivered unmetered",
@@ -8893,6 +9227,12 @@ def enterprise_accept_client_document(
     _, organization, role = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability="documents.accept"
     )
+    # Resolve the client FIRST, like the sibling document routes do. Resolving it after the
+    # document lookup turned this endpoint into an existence oracle: against a client outside the
+    # caller's scope, a real document id answered 400 ("only flagged documents…") and a made-up
+    # one answered 404 — which is enough to enumerate another office's documents and their
+    # validation state without ever being allowed to open the client.
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     doc = (
         db.query(models.EnterpriseClientDocument)
         .filter(
@@ -8906,7 +9246,6 @@ def enterprise_accept_client_document(
         raise HTTPException(status_code=404, detail="Document not found.")
     if doc.validation_status not in ("invalid", "error"):
         raise HTTPException(status_code=400, detail="Only documents Rilono AI flagged can be accepted manually.")
-    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     staff_name = (current_user.full_name or current_user.email or "staff").strip()
     prior_message = (doc.validation_message or "").strip()
@@ -9178,7 +9517,7 @@ def enterprise_client_deep_scan(
         "credits_charged": charged,
         "was_free": is_free,
         "pricing": _deep_scan_pricing(db, organization.id, client.id),
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
     }
 
 
@@ -9463,7 +9802,7 @@ def enterprise_client_writing_generate(
         "credits_charged": charged,
         "coverage": result.get("coverage") or {},
         "pricing": _writing_pricing(db, organization.id),
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
     }
 
 
@@ -9548,7 +9887,7 @@ def enterprise_client_writing_refine(
         "draft": enterprise_writing.serialize_draft(draft),
         "credits_charged": charged,
         "pricing": _writing_pricing(db, organization.id),
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
     }
 
 
@@ -9747,7 +10086,7 @@ def enterprise_interview_chat(
         response_payload["credits_charged"] = meter["charged"]
         response_payload["was_preview"] = meter["was_preview"]
         response_payload["previews_remaining"] = meter["previews_remaining"]
-        response_payload["wallet"] = credits.wallet_state(db, organization.id)
+        response_payload["wallet"] = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
     return response_payload
 
 
@@ -11115,7 +11454,7 @@ def enterprise_client_university_recommend(
         "destination_country": destination,
         "grounded": bool(result.get("grounded")),
         "credits_charged": credits.action_cost(UNIVERSITY_ACTION_KEY) if txn else 0,
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
     }
 
 
@@ -11912,7 +12251,7 @@ def enterprise_course_finder_recommend(
         "permissions": _enterprise_permissions_for_role(role),
         "rec": _serialize_course_finder_rec(rec_row),
         "credits_charged": charged,
-        "wallet": credits.wallet_state(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
     }
 
 
@@ -12160,6 +12499,14 @@ class EnterpriseTeamBulkRequest(BaseModel):
 
 
 class EnterpriseTransferOwnershipRequest(BaseModel):
+    target_user_id: int
+    confirm_email: str = Field(..., min_length=3, max_length=200)
+    # The 6-digit code from /organization/transfer-ownership/send-code. Required — see the
+    # endpoint docstring for why typing an email address is not, on its own, a confirmation.
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+class EnterpriseTransferOwnershipCodeRequest(BaseModel):
     target_user_id: int
     confirm_email: str = Field(..., min_length=3, max_length=200)
 
@@ -12505,7 +12852,7 @@ def enterprise_update_role(
         "message": f"{target.name} updated.",
         "role": team_svc.serialize_role(target),
         "custom_roles": team_svc.list_roles_payload(db, organization.id),
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
     }
 
 
@@ -12555,7 +12902,7 @@ def enterprise_archive_role(
     return {
         "message": f"{target.name} archived.",
         "custom_roles": team_svc.list_roles_payload(db, organization.id),
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
         **result,
     }
 
@@ -12611,7 +12958,7 @@ def enterprise_update_member_access(
         "message": "Access updated." if changed else "Nothing to change.",
         "member": result.get("member"),
         "changed": changed,
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
     }
 
 
@@ -12641,7 +12988,7 @@ def enterprise_update_member_profile(
     return {
         "message": "Details saved.",
         "member": result.get("member"),
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
     }
 
 
@@ -12674,7 +13021,7 @@ def enterprise_deactivate_member(
     db.commit()
     return {
         "message": f"{user.full_name or user.email} no longer has access.",
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
         **result,
     }
 
@@ -12717,7 +13064,7 @@ def enterprise_reactivate_member(
     db.commit()
     return {
         "message": f"{user.full_name or user.email} can sign in again.",
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
         **result,
     }
 
@@ -12876,8 +13223,143 @@ def enterprise_team_bulk(
         ),
         "applied": applied,
         "skipped": skipped,
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
     }
+
+
+def _person_label(user) -> str:
+    return (getattr(user, "full_name", None) or getattr(user, "email", None) or "A team member").strip()
+
+
+def _resolve_owner_transfer_target(db: Session, *, organization, role, target_user_id: int, confirm_email: str):
+    """Resolve and fully validate a pending ownership transfer.
+
+    Both steps of the flow run this — the same capability gate, the same typed-email check, the
+    same owner-or-recovery rule — so the emailed code can only ever confirm a transfer that was
+    already permitted at the moment it was requested AND at the moment it is used.
+    """
+    target_membership = team_svc.get_org_membership_or_404(db, organization.id, target_user_id)
+    target_user = db.query(models.User).filter(models.User.id == int(target_user_id)).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Organization member not found.")
+    if not (role.ctx.has("org.transfer_ownership") or role.ctx.has("team.manage")):
+        raise HTTPException(status_code=403, detail=access.denied_detail("org.transfer_ownership"))
+    team_svc.assert_transfer_ownership_allowed(
+        db, organization=organization, actor_ctx=role.ctx,
+        target_membership=target_membership, target_user=target_user,
+        confirm_email=confirm_email,
+    )
+    return target_membership, target_user
+
+
+def _send_owner_transfer_notices(db: Session, *, organization, actor_user, new_owner_user, previous_owner_user_id) -> None:
+    """Tell the incoming and outgoing owners by email, after the transfer has committed.
+
+    The in-app bell only reaches someone who signs in; an inbox reaches them tonight. Strictly
+    best-effort — the transfer is already durable, and a bounced notification must never turn a
+    completed handover into a 500 the caller can't interpret.
+    """
+    org_name = getattr(organization, "company_name", None) or "your workspace"
+    actor_label = _person_label(actor_user)
+    new_owner_label = _person_label(new_owner_user)
+
+    previous_owner = None
+    prev_id = int(previous_owner_user_id or 0)
+    if prev_id and prev_id != int(getattr(new_owner_user, "id", 0) or 0):
+        previous_owner = db.query(models.User).filter(models.User.id == prev_id).first()
+
+    for recipient, is_new_owner in ((new_owner_user, True), (previous_owner, False)):
+        email = (getattr(recipient, "email", "") or "").strip() if recipient else ""
+        if not email:
+            continue
+        try:
+            send_enterprise_owner_transfer_notice_email(
+                to_email=email,
+                recipient_name=getattr(recipient, "full_name", None),
+                organization_name=org_name,
+                new_owner_label=new_owner_label,
+                actor_label=actor_label,
+                is_new_owner=is_new_owner,
+            )
+        except Exception:
+            logger.exception("enterprise: ownership-transfer notice email failed (org=%s)", organization.id)
+
+
+@router.post("/organization/transfer-ownership/send-code")
+def enterprise_transfer_ownership_send_code(
+    payload: EnterpriseTransferOwnershipCodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Step 1 of a transfer: email the ACTOR a 6-digit code confirming this exact handover.
+
+    Typing the new owner's address proves only that the person at the keyboard can read the
+    members table. Ownership carries refunds and the payout bank account and cannot be taken
+    back, so the second factor is an inbox: a hijacked session has the cookie, not the mail.
+
+    The whole transfer is validated here first — capability, typed email, target still active —
+    so a caller who could never complete it can't make Rilono send a security email about it.
+    """
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.owner_transfer_code", limit=6, window_seconds=3600,
+        extra_key=str(getattr(current_user, "id", "") or ""),
+    )
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _membership, target_user = _resolve_owner_transfer_target(
+        db, organization=organization, role=role,
+        target_user_id=payload.target_user_id, confirm_email=payload.confirm_email,
+    )
+
+    actor_email = (current_user.email or "").strip().lower()
+    if not actor_email:
+        raise HTTPException(
+            status_code=400,
+            detail="Your account has no email address, so we can't send a confirmation code.",
+        )
+
+    code = step_up.issue_code(
+        db,
+        user_id=current_user.id,
+        organization_id=organization.id,
+        purpose=step_up.PURPOSE_OWNER_TRANSFER,
+        context_key=step_up.context_key_for_target_user(target_user.id),
+    )
+    access.audit(
+        db,
+        organization_id=organization.id,
+        actor=current_user,
+        action="owner_transfer_code_sent",
+        summary=f"Requested a confirmation code to transfer ownership to {_person_label(target_user)}",
+        target_user=target_user,
+        ip_address=extract_client_ip(request),
+    )
+    db.commit()
+
+    sent, _mid, err = send_enterprise_owner_transfer_code_email(
+        to_email=actor_email,
+        actor_name=current_user.full_name,
+        organization_name=getattr(organization, "company_name", None) or "your workspace",
+        new_owner_label=_person_label(target_user),
+        code=code,
+        expires_in_minutes=step_up.CODE_EXPIRES_MINUTES,
+    )
+    result = {
+        "message": f"We've emailed a 6-digit code to {_mask_email(actor_email)}.",
+        "masked_email": _mask_email(actor_email),
+        "expires_in_minutes": step_up.CODE_EXPIRES_MINUTES,
+    }
+    if not sent:
+        if _is_development_env():
+            # Local sandbox without an email provider — surface the code so the flow is testable.
+            result["dev_code"] = code
+        else:
+            logger.warning("enterprise: ownership-transfer code email failed (org=%s): %s", organization.id, err)
+            raise HTTPException(
+                status_code=502,
+                detail="We couldn't send the confirmation email right now. Please try again in a moment.",
+            )
+    return result
 
 
 @router.post("/organization/transfer-ownership")
@@ -12887,29 +13369,48 @@ def enterprise_transfer_ownership(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    """Hand the workspace to someone else.
+    """Hand the workspace to someone else. Step 2: the emailed code, then the handover.
 
     Gated on the owner-only capability OR — the recovery path — on a team.manage holder acting on
     an owner whose access has already been switched off. Without that second route, a workspace
     whose founder has left could never transfer ownership, accept a new DPA version or set a
     payout account again.
+
+    On top of that gate, the caller must present the code from /transfer-ownership/send-code. It
+    is bound to this target member, single-use, and spent only if the handover itself commits.
     """
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.owner_transfer", limit=12, window_seconds=3600,
+        extra_key=str(getattr(current_user, "id", "") or ""),
+    )
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    target_membership = team_svc.get_org_membership_or_404(db, organization.id, payload.target_user_id)
-    target_user = db.query(models.User).filter(models.User.id == int(payload.target_user_id)).first()
-    if not target_user:
-        raise HTTPException(status_code=404, detail="Organization member not found.")
-    if not (role.ctx.has("org.transfer_ownership") or role.ctx.has("team.manage")):
-        raise HTTPException(status_code=403, detail=access.denied_detail("org.transfer_ownership"))
+    target_membership, target_user = _resolve_owner_transfer_target(
+        db, organization=organization, role=role,
+        target_user_id=payload.target_user_id, confirm_email=payload.confirm_email,
+    )
+    # Second proof, before anything is written: the actor still holds the inbox they signed up
+    # with. A wrong code burns an attempt (and commits that counter) rather than failing free.
+    step_up.verify_code_or_400(
+        db,
+        user_id=current_user.id,
+        organization_id=organization.id,
+        purpose=step_up.PURPOSE_OWNER_TRANSFER,
+        context_key=step_up.context_key_for_target_user(target_user.id),
+        code=payload.code,
+    )
     result = team_svc.transfer_ownership(
         db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
         target_membership=target_membership, target_user=target_user,
         confirm_email=payload.confirm_email,
     )
     db.commit()
+    _send_owner_transfer_notices(
+        db, organization=organization, actor_user=current_user,
+        new_owner_user=target_user, previous_owner_user_id=result.get("previous_owner_user_id"),
+    )
     return {
         "message": f"{target_user.full_name or target_user.email} is now the workspace owner.",
-        "members": _list_organization_members(db, organization.id),
+        "members": _list_organization_members(db, organization.id, ctx=role.ctx),
         **result,
     }
 

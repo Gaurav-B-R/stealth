@@ -122,11 +122,19 @@ def _extract_tokens(response) -> tuple[int, int, int, int]:
         except (TypeError, ValueError):
             return 0
     pt = g("prompt_token_count")
-    # Thinking models (Gemini 2.5+) report reasoning tokens separately in
-    # thoughts_token_count, but Google BILLS them at the output rate — omitting
-    # them silently undercounts every thinking-model call's cost.
-    ot = g("candidates_token_count") + g("thoughts_token_count")
-    tt = g("total_token_count") or (pt + ot)
+    # Thinking models (Gemini 2.5+) spend reasoning tokens that Google BILLS at the
+    # OUTPUT rate. Newer SDKs surface them as thoughts_token_count, but the pinned
+    # google-ai-generativelanguage exposes only prompt/candidates/cached/total on
+    # UsageMetadata — so reading that attribute alone silently prices every thinking
+    # token at zero (on gemini-3.1-pro that is $12/M of real spend recorded as $0).
+    # total_token_count DOES include them, so anything the total can't account for is
+    # attributed to thinking. Both paths are kept: whichever is available wins, and when
+    # neither reports anything extra the derived value is 0 and nothing changes.
+    ot = g("candidates_token_count")
+    tt_reported = g("total_token_count")
+    thoughts = g("thoughts_token_count") or max(0, tt_reported - pt - ot)
+    ot += thoughts
+    tt = tt_reported or (pt + ot)
     ct = g("cached_content_token_count")  # cached input tokens (implicit or explicit)
     return pt, ot, tt, ct
 

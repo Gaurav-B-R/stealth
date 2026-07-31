@@ -1,3 +1,4 @@
+import calendar
 import os
 import logging
 import secrets
@@ -18,6 +19,8 @@ from app import enterprise_credits
 from app import enterprise_coupons
 from app import enterprise_refunds
 from app import email_service
+from app import fx
+from app import money
 from app import visa_pass
 from app import ai_guardrails
 from app.auth import (
@@ -68,10 +71,32 @@ ADMIN_ENDPOINT_RATE_WINDOW_SECONDS = max(
     10,
     int(os.getenv("ADMIN_ENDPOINT_RATE_WINDOW_SECONDS", "60") or "60"),
 )
-try:
-    ADMIN_ANALYTICS_INR_TO_USD = Decimal(os.getenv("ADMIN_ANALYTICS_INR_TO_USD", "0.012") or "0.012")
-except InvalidOperation:
-    ADMIN_ANALYTICS_INR_TO_USD = Decimal("0.012")
+# Last-resort INR → USD rate for the company-finance report (≈ ₹83.3/$). Used only when
+# the shared FX layer has no rate at all — see _inr_to_usd_rate().
+ADMIN_ANALYTICS_INR_TO_USD_FALLBACK = Decimal("0.012")
+
+
+def _inr_to_usd_rate(fx_state: dict | None = None) -> Decimal:
+    """INR → USD, inverted from the ONE live USD → INR rate in app/fx.py.
+
+    This used to be a hardcoded ADMIN_ANALYTICS_INR_TO_USD=0.012 constant, which meant the
+    company-finance screen converted rupees at ₹83.3/$ while the enterprise-revenue screen
+    (app/enterprise_credits.usd_to_inr_paise → fx.get_usd_to_inr) converted the same rupee
+    at the live rate — two admin screens quoting different numbers for the same money.
+    Routing both through app/fx.py is the point: it is cached, live, and falls back to the
+    static USD_TO_INR env value on its own, so this function never has to guess.
+
+    Pass the caller's already-read `fx_state` so a single report is built at a single rate
+    and reports the rate it actually used — see _payment_amount_usd.
+    """
+    raw = fx_state.get("rate") if isinstance(fx_state, dict) else fx.get_usd_to_inr()
+    try:
+        usd_to_inr = Decimal(str(raw or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        usd_to_inr = Decimal("0")
+    if usd_to_inr <= 0:
+        return ADMIN_ANALYTICS_INR_TO_USD_FALLBACK
+    return Decimal(1) / usd_to_inr
 
 
 def _assert_manageable_target(target_user: models.User, acting_user: models.User) -> None:
@@ -333,18 +358,49 @@ def _month_key(value) -> str:
     return f"{normalized.year:04d}-{normalized.month:02d}"
 
 
-def _payment_amount_usd(payment: models.SubscriptionPayment) -> Decimal:
-    amount_minor_units = _money_decimal(payment.amount_paise)
-    amount_major_units = amount_minor_units / Decimal("100")
+def _payment_settled_inr_paise(payment: models.SubscriptionPayment) -> tuple[Decimal, bool]:
+    """(INR paise settled, is_settled) for one payment.
+
+    `amount_paise` is an integer in the MINOR UNIT OF `payment.currency` — cents on a USD
+    row — so it is not a rupee figure and must never be summed across rows. Razorpay's own
+    converted INR settlement lands in `base_amount_paise`; that is the only summable
+    number. Falling back to `amount_paise` is valid in exactly two cases:
+
+      * INR payments, where charged == settled (Razorpay omits base_amount entirely), and
+      * pre-migration rows, where the column is NULL and every row is genuinely INR.
+
+    A NON-INR row with no settlement figure gets neither: it contributes 0 and comes back
+    `is_settled=False`. Reading its 1299 cents as ₹12.99 would book roughly 1% of a $12.99
+    sale into total_returns, ROI and break-even — a wrong number wearing a flag is still a
+    wrong number — and it would put this screen at odds with the identical rule already
+    enforced in visa_pass.build_revenue_analytics, enterprise_credits._kind_money and
+    _sum_collected below. Understating is recoverable the moment the webhook backfills
+    base_amount; silently mixing units is not. The caller keeps the row VISIBLE at zero
+    with the flag attached rather than dropping it, so it reads as "not counted yet"
+    instead of "no revenue".
+    """
+    base = payment.base_amount_paise
+    if base is not None:
+        return _money_decimal(base), True
     currency = str(payment.currency or "INR").strip().upper()
-
-    if currency == "USD":
-        return amount_major_units
     if currency == "INR":
-        return amount_major_units * ADMIN_ANALYTICS_INR_TO_USD
+        return _money_decimal(payment.amount_paise), True
+    return Decimal("0"), False
 
-    # Unknown currencies are kept visible as zero rather than guessing silently.
-    return Decimal("0")
+
+def _payment_amount_usd(
+    payment: models.SubscriptionPayment, inr_to_usd: Decimal
+) -> tuple[Decimal, bool]:
+    """(USD value of the INR settlement, is_settled). See _payment_settled_inr_paise.
+
+    The rate is passed IN rather than re-read per row: one report has to be built at one
+    rate. app/fx.py refreshes on a TTL, so a per-row lookup can straddle a refresh and
+    leave the `usd_to_inr` figure stamped on the summary — and on the CSV/XLSX export —
+    something other than the rate the USD column was actually computed with, which makes
+    the export impossible to reconcile against the INR books it came from.
+    """
+    settled_paise, is_settled = _payment_settled_inr_paise(payment)
+    return (settled_paise / Decimal("100")) * inr_to_usd, is_settled
 
 
 def _add_month_bucket(monthly_buckets: dict, when, *, investment: Decimal = Decimal("0"), returns: Decimal = Decimal("0")) -> None:
@@ -596,15 +652,30 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
             }
         )
 
+    # Read ONCE, before the loop, and reuse for every row and for the rate reported on the
+    # summary/export. app/fx.py refreshes on a TTL, so a per-row lookup could convert the
+    # first payments at one rate and the last at another, and stamp a third on the export.
+    fx_state = fx.get_state()
+    inr_to_usd = _inr_to_usd_rate(fx_state)
+
+    estimated_settlement_count = 0
     for payment in verified_payments:
-        amount_usd = _payment_amount_usd(payment)
-        if amount_usd <= 0:
-            continue
+        amount_usd, settlement_is_exact = _payment_amount_usd(payment, inr_to_usd)
+        # A zero-value row (100%-off coupon, or a payment with no INR settlement figure
+        # yet) used to be `continue`d here, which removed it from total_returns, ROI,
+        # monthly_series AND the ledger — the exact opposite of the "kept visible as zero"
+        # promise. Every verified payment is now emitted; a foreign row whose settlement
+        # has not landed contributes 0 and carries `settlement_estimated`, so it reads as
+        # "not counted yet" rather than either vanishing or booking cents as rupees.
+        if not settlement_is_exact:
+            estimated_settlement_count += 1
 
         payment_date = _coerce_date(payment.verified_at or payment.signature_verified_at or payment.created_at)
         total_returns += amount_usd
         return_entry_count += 1
         _add_month_bucket(monthly_buckets, payment_date, returns=amount_usd)
+        charged_currency = str(payment.currency or "INR").strip().upper()
+        charged_display = money.format_money(payment.amount_paise, charged_currency)
         ledger.append(
             {
                 "id": f"payment-{payment.id}",
@@ -612,10 +683,20 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
                 "category": "Subscriptions",
                 "vendor": (payment.provider or "Payment").title(),
                 "paid_by": "Customer Revenue",
-                "description": "Verified subscription revenue",
+                "description": (
+                    f"Verified subscription revenue · charged {charged_display}"
+                    + (
+                        ""
+                        if settlement_is_exact
+                        else " (not counted — no INR settlement figure on this row yet)"
+                    )
+                ),
                 "amount_usd": _money_float(amount_usd),
                 "occurred_on": payment_date.isoformat(),
                 "source": "subscription_payments",
+                "charged_currency": charged_currency,
+                "charged_display": charged_display,
+                "settlement_estimated": not settlement_is_exact,
             }
         )
 
@@ -665,6 +746,26 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
 
     ledger.sort(key=lambda item: (item["occurred_on"], item["id"]), reverse=True)
 
+    # `fx_state` was read before the payment loop; reuse it so the rate reported here is
+    # provably the rate every row above was converted at.
+    usd_to_inr = _money_float(_money_decimal(fx_state.get("rate") or 0))
+    notes = [
+        "Investment rows are stored in company_finance_entries.",
+        "Founder spend uses the paid_by column on each investment row.",
+        "Returns are calculated live from verified subscription payments.",
+        "Payments are booked at their INR settlement figure (base_amount_paise), never at "
+        "the charged amount — a $12.99 charge stores 1299 cents, not rupees.",
+        f"INR is converted to USD at the shared live rate ($1 = ₹{usd_to_inr}, "
+        f"source: {fx_state.get('source') or 'fallback'}).",
+    ]
+    if estimated_settlement_count:
+        notes.append(
+            f"{estimated_settlement_count} foreign-currency payment(s) have no INR "
+            "settlement figure yet and are NOT counted in returns — they are listed at "
+            "zero and flagged, never booked at their charged amount. Total returns is a "
+            "known understatement until Razorpay's base_amount lands on those rows."
+        )
+
     return {
         "summary": {
             "total_invested_usd": _money_float(total_invested),
@@ -674,17 +775,15 @@ def _compute_company_finance_analytics(db: Session, *, ledger_limit: int | None 
             "break_even_gap_usd": _money_float(max(total_invested - total_returns, Decimal("0"))),
             "investment_entry_count": investment_entry_count,
             "return_entry_count": return_entry_count,
+            "estimated_settlement_count": estimated_settlement_count,
+            "usd_to_inr": usd_to_inr,
+            "fx_source": fx_state.get("source") or "fallback",
         },
         "monthly_series": monthly_series,
         "expense_breakdown": breakdown_items,
         "contributor_breakdown": contributor_items,
         "ledger": ledger[:ledger_limit] if ledger_limit else ledger,
-        "notes": [
-            "Investment rows are stored in company_finance_entries.",
-            "Founder spend uses the paid_by column on each investment row.",
-            "Returns are calculated live from verified subscription payments.",
-            f"INR payments are converted using ADMIN_ANALYTICS_INR_TO_USD={ADMIN_ANALYTICS_INR_TO_USD}.",
-        ],
+        "notes": notes,
     }
 
 
@@ -701,8 +800,10 @@ def company_finance_analytics_admin(
     """
     Company-level finance analytics for the admin console.
 
-    Investment rows come from company_finance_entries. Returns are calculated live
-    from verified subscription payments, with INR converted using ADMIN_ANALYTICS_INR_TO_USD.
+    Investment rows come from company_finance_entries. Returns are calculated live from
+    verified subscription payments, booked at their INR settlement figure and converted to
+    USD at the shared live FX rate (app/fx.py) — the same rate the enterprise revenue
+    screen uses, so the two screens can't disagree.
     """
     _enforce_rate_limit_or_429(
         request=request,
@@ -716,8 +817,11 @@ def company_finance_analytics_admin(
 
 # --- Company finance spreadsheet export (Excel .xlsx, CSV fallback) ---
 
+# "Charged" and "Settlement" are appended (not inserted) so the existing column positions
+# — and the number-format/auto-filter indices below that hardcode them — stay put.
 FINANCE_EXPORT_LEDGER_HEADERS = [
     "Date (UTC)", "Type", "Vendor", "Category", "Paid By", "Description", "Amount (USD)", "Source",
+    "Charged", "Settlement",
 ]
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -735,6 +839,8 @@ def _finance_export_rows(payload: dict) -> list[list]:
             item.get("description") or "",
             float(item.get("amount_usd") or 0),
             item.get("source") or "",
+            item.get("charged_display") or "",
+            "not counted" if item.get("settlement_estimated") else "settled",
         ])
     return rows
 
@@ -764,6 +870,15 @@ def _build_finance_csv(payload: dict) -> bytes:
     writer.writerow(["Net (USD)", summary.get("net_usd", 0)])
     writer.writerow(["ROI (%)", summary.get("roi_percent", 0)])
     writer.writerow(["Break-even gap (USD)", summary.get("break_even_gap_usd", 0)])
+    # The rate the USD column was built with — without it the export can't be reconciled
+    # against the INR books it was derived from.
+    writer.writerow([f"USD -> INR rate ({summary.get('fx_source', 'fallback')})", summary.get("usd_to_inr", 0)])
+    # Foreign payments left OUT of "Total returns" because their INR settlement figure has
+    # not landed yet. Non-zero means the totals above are a known understatement, and the
+    # export is unreadable as a "complete book" without saying so.
+    writer.writerow(
+        ["Payments not counted (no INR settlement)", summary.get("estimated_settlement_count", 0)]
+    )
     writer.writerow([])
     writer.writerow(FINANCE_EXPORT_LEDGER_HEADERS)
     for row in _finance_export_rows(payload):
@@ -828,6 +943,12 @@ def _build_finance_xlsx(payload: dict) -> bytes | None:
         ("Break-even gap (USD)", summary.get("break_even_gap_usd", 0), USD_FORMAT),
         ("Investment entries", summary.get("investment_entry_count", 0), "0"),
         ("Return entries", summary.get("return_entry_count", 0), "0"),
+        # The rate the USD column was built with, so the export reconciles against the
+        # INR books it was derived from.
+        (f"USD → INR rate ({summary.get('fx_source', 'fallback')})", summary.get("usd_to_inr", 0), "0.00"),
+        # Foreign payments excluded from returns because Razorpay's INR settlement figure
+        # has not landed on the row yet. Non-zero means the total above understates.
+        ("Payments not counted (no INR settlement)", summary.get("estimated_settlement_count", 0), "0"),
     ]
     for offset, (label, value, number_format) in enumerate(metrics):
         row_index = 5 + offset
@@ -851,8 +972,8 @@ def _build_finance_xlsx(payload: dict) -> bytes | None:
         ledger_sheet.cell(row=row_index, column=7).number_format = USD_FORMAT
     ledger_sheet.freeze_panes = "A2"
     if ledger_sheet.max_row > 1:
-        ledger_sheet.auto_filter.ref = f"A1:H{ledger_sheet.max_row}"
-    set_widths(ledger_sheet, [13, 12, 18, 22, 16, 42, 15, 22])
+        ledger_sheet.auto_filter.ref = f"A1:J{ledger_sheet.max_row}"
+    set_widths(ledger_sheet, [13, 12, 18, 22, 16, 42, 15, 22, 14, 12])
 
     # --- Breakdowns ---
     def write_breakdown(title: str, label_header: str, items: list[dict]) -> None:
@@ -1280,8 +1401,15 @@ def admin_user_detail(
         .order_by(models.SubscriptionPayment.created_at.desc())
         .limit(50).all()
     )
+    # `amount_paise` is minor units of the row's OWN currency, so the display string has to
+    # be formatted here where the currency is in hand — the console can't assume rupees.
     payment_rows = [{
         "amount_paise": p.amount_paise, "currency": p.currency, "status": p.status,
+        "amount_display": money.format_money(p.amount_paise, p.currency or "INR"),
+        "settled_inr_display": (
+            money.format_money(p.base_amount_paise, "INR") if p.base_amount_paise is not None else None
+        ),
+        "is_international": bool(p.is_international),
         "coupon_code": p.coupon_code, "coupon_percent_off": float(p.coupon_percent_off) if p.coupon_percent_off is not None else None,
         "pricing_model": p.pricing_model, "created_at": _admin_iso(p.created_at), "verified_at": _admin_iso(p.verified_at),
     } for p in payments]
@@ -1289,7 +1417,9 @@ def admin_user_detail(
     coupons = [{
         "code": p.coupon_code, "percent_off": float(p.coupon_percent_off) if p.coupon_percent_off is not None else None,
         "applied_at": _admin_iso(p.verified_at or p.created_at), "status": p.status,
-        "amount_paise": p.amount_paise, "on": "Visa Success Pass" if p.pricing_model == "visa_pass" else (p.pricing_model or "subscription"),
+        "amount_paise": p.amount_paise, "currency": p.currency,
+        "amount_display": money.format_money(p.amount_paise, p.currency or "INR"),
+        "on": "Visa Success Pass" if p.pricing_model == "visa_pass" else (p.pricing_model or "subscription"),
     } for p in payments if p.coupon_code]
 
     feat = growth_agent_features_safe(db, user, sub)
@@ -1972,6 +2102,38 @@ def _admin_iso(value):
 
 _CREDIT_PAYMENT_KIND_LABELS = {"credits": "Credit top-up", "infra_fee": "Infrastructure fee"}
 
+# Razorpay will not process a refund more than 6 months after the payment was captured.
+# Checked here so the admin sees the deadline on the screen (and a clear message on the
+# POST) instead of typing an amount, clicking a button that moves real money, and getting
+# a raw gateway 502 back.
+# https://razorpay.com/docs/payments/refunds/?preferred-country=IN
+REFUND_WINDOW_MONTHS = 6
+
+
+def _refund_deadline(captured_at: datetime | None) -> datetime | None:
+    """Calendar 6-month deadline for refunding a payment captured at `captured_at`.
+
+    Calendar months, not 180 days — the two differ by up to 4 days, which is exactly the
+    window in which we'd tell an admin a refund is fine and Razorpay would reject it.
+    """
+    if not captured_at:
+        return None
+    month_index = captured_at.month - 1 + REFUND_WINDOW_MONTHS
+    year = captured_at.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(captured_at.day, calendar.monthrange(year, month)[1])
+    return captured_at.replace(year=year, month=month, day=day)
+
+
+def _refund_window_state(payment: models.EnterpriseCreditPayment) -> tuple[datetime | None, bool]:
+    """(deadline, is_open) for one payment. Unknown capture time is treated as open —
+    Razorpay stays the authority, we just avoid promising a refund we can't deliver."""
+    deadline = _refund_deadline(payment.verified_at or payment.created_at)
+    if deadline is None:
+        return None, True
+    now = datetime.now(deadline.tzinfo) if deadline.tzinfo else datetime.utcnow()
+    return deadline, now <= deadline
+
 
 @router.get("/enterprise/accounts/{organization_id}/details")
 def enterprise_account_details_admin(
@@ -2021,6 +2183,11 @@ def enterprise_account_details_admin(
     purchases = []
     for p in payment_rows:
         refundable_paise = enterprise_refunds.payment_refundable_paise(p)
+        # Every *_paise field on this row is minor units of THIS payment's currency, so it
+        # is formatted with that currency — format_inr() here printed "₹12.99" against a
+        # $12.99 charge. `refund_deadline` is Razorpay's 6-month window (see above).
+        pay_currency = money.normalize_currency(p.currency, strict=False)
+        refund_deadline, refund_window_open = _refund_window_state(p)
         purchases.append({
             "id": p.id,
             "kind": p.kind,
@@ -2030,21 +2197,32 @@ def enterprise_account_details_admin(
             "bonus_credits": int(p.bonus_credits or 0),
             "total_credits": int(p.credits or 0) + int(p.bonus_credits or 0),
             "amount_paise": int(p.amount_paise or 0),
-            "amount_display": enterprise_credits.format_inr(p.amount_paise),
-            "currency": p.currency,
+            "amount_display": money.format_money(p.amount_paise, pay_currency),
+            "currency": pay_currency,
+            "currency_symbol": money.symbol_for(pay_currency),
+            "currency_exponent": money.MINOR_UNIT_EXPONENT.get(pay_currency, 2),
+            # Razorpay's INR settlement for a foreign charge — the only figure that may be
+            # summed with other rows. NULL on pre-migration rows (all genuinely INR).
+            "base_amount_paise": int(p.base_amount_paise) if p.base_amount_paise is not None else None,
+            "settled_inr_display": (
+                enterprise_credits.format_inr(p.base_amount_paise) if p.base_amount_paise is not None else None
+            ),
+            "is_international": bool(p.is_international),
             "status": p.status,
             "provider": p.provider,
             "razorpay_payment_id": p.razorpay_payment_id,
             "coupon_code": p.coupon_code,
             "coupon_percent_off": float(p.coupon_percent_off) if p.coupon_percent_off is not None else None,
             "original_amount_display": (
-                enterprise_credits.format_inr(p.original_amount_paise) if p.original_amount_paise else None
+                money.format_money(p.original_amount_paise, pay_currency) if p.original_amount_paise else None
             ),
             "refunded_amount_paise": int(p.refunded_amount_paise or 0),
-            "refunded_amount_display": enterprise_credits.format_inr(p.refunded_amount_paise),
+            "refunded_amount_display": money.format_money(p.refunded_amount_paise, pay_currency),
             "refundable_paise": refundable_paise,
-            "refundable_display": enterprise_credits.format_inr(refundable_paise),
-            "is_refundable": bool(refundable_paise > 0 and p.razorpay_payment_id),
+            "refundable_display": money.format_money(refundable_paise, pay_currency),
+            "is_refundable": bool(refundable_paise > 0 and p.razorpay_payment_id and refund_window_open),
+            "refund_window_open": refund_window_open,
+            "refund_deadline": _admin_iso(refund_deadline),
             "suggested_clawback_credits": enterprise_refunds.proportional_credits(p, refundable_paise),
             "created_at": _admin_iso(p.created_at),
             "verified_at": _admin_iso(p.verified_at),
@@ -2052,9 +2230,23 @@ def enterprise_account_details_admin(
 
     # Gross collected per kind. A refund flips status to refunded/partially_refunded,
     # so include those and net out refunds separately (total refunded is computed below).
+    #
+    # Sums the INR SETTLEMENT figure, never the charged amount: adding a $39 top-up's
+    # amount_paise (3900 cents) to a ₹2,999 row's 299900 produces a number that is neither
+    # currency. The fallback to amount_paise is valid only where charged == settled, i.e.
+    # INR rows (Razorpay omits base_amount on domestic payments) and pre-migration rows.
+    # A foreign row whose settlement figure has not landed yet contributes 0 rather than
+    # having its cents added as paise — and `unsettled_payment_count` below reports how
+    # many, because a total that silently drops rows reads as "they never paid".
+    _settled_inr = case(
+        (P.base_amount_paise.isnot(None), P.base_amount_paise),
+        (func.upper(func.coalesce(P.currency, "INR")) == "INR", P.amount_paise),
+        else_=0,
+    )
+
     def _sum_collected(kind: str) -> int:
         return int(
-            db.query(func.coalesce(func.sum(P.amount_paise), 0))
+            db.query(func.coalesce(func.sum(_settled_inr), 0))
             .filter(
                 P.organization_id == org.id,
                 P.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
@@ -2112,6 +2304,42 @@ def enterprise_account_details_admin(
     refunded_paise = enterprise_refunds.total_refunded_paise(db, org.id)
     total_paid = credit_paid + infra_paid
 
+    # `enterprise_refunds.total_refunded_paise` sums EnterpriseRefund.amount_paise, and a
+    # refund is recorded in the ORIGINAL payment's currency — so the moment this org has a
+    # non-INR refund that total is a mix of paise and cents. `credit_paid`/`infra_paid` are
+    # settled INR, so subtracting a mixed total from them would print a confident wrong
+    # number. Flag it and let the console say "mixed" instead.
+    refund_currencies = {
+        str(row[0] or "INR").strip().upper()
+        for row in db.query(models.EnterpriseRefund.currency)
+        .filter(
+            models.EnterpriseRefund.organization_id == org.id,
+            models.EnterpriseRefund.kind == "money",
+            models.EnterpriseRefund.status != "failed",
+        )
+        .distinct()
+        .all()
+    }
+    refunds_mixed_currency = bool(refund_currencies - {"INR"})
+    payment_currencies = sorted({
+        money.normalize_currency(row[0], strict=False)
+        for row in db.query(P.currency).filter(P.organization_id == org.id).distinct().all()
+    })
+    # Revenue-status foreign payments that `_settled_inr` scored as 0 because Razorpay's
+    # INR settlement figure has not landed on the row. They are missing from
+    # credit_revenue/infra_revenue/total_paid, so the count has to travel with the totals
+    # — otherwise the screen shows a confident rupee number that is quietly short.
+    unsettled_payment_count = int(
+        db.query(func.count(P.id))
+        .filter(
+            P.organization_id == org.id,
+            P.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
+            P.base_amount_paise.is_(None),
+            func.upper(func.coalesce(P.currency, "INR")) != "INR",
+        )
+        .scalar() or 0
+    )
+
     return {
         "organization": {
             "id": int(org.id),
@@ -2125,17 +2353,31 @@ def enterprise_account_details_admin(
             "admins": admins,
         },
         "wallet": wallet,
+        # Every *_paise total here is INR SETTLEMENT (base_amount_paise), which is what
+        # makes it summable at all. `currency` says so explicitly so the console never has
+        # to infer it. The refund-derived figures go null when they can't be stated in one
+        # currency — see refunds_mixed_currency above.
         "totals": {
+            "currency": "INR",
             "credit_revenue_paise": credit_paid,
             "credit_revenue_display": enterprise_credits.format_inr(credit_paid),
             "infra_revenue_paise": infra_paid,
             "infra_revenue_display": enterprise_credits.format_inr(infra_paid),
             "total_paid_paise": total_paid,
             "total_paid_display": enterprise_credits.format_inr(total_paid),
-            "refunded_paise": refunded_paise,
-            "refunded_display": enterprise_credits.format_inr(refunded_paise),
-            "net_paid_paise": total_paid - refunded_paise,
-            "net_paid_display": enterprise_credits.format_inr(total_paid - refunded_paise),
+            "refunded_paise": None if refunds_mixed_currency else refunded_paise,
+            "refunded_display": None if refunds_mixed_currency else enterprise_credits.format_inr(refunded_paise),
+            "net_paid_paise": None if refunds_mixed_currency else total_paid - refunded_paise,
+            "net_paid_display": (
+                None if refunds_mixed_currency
+                else enterprise_credits.format_inr(total_paid - refunded_paise)
+            ),
+            "refunds_mixed_currency": refunds_mixed_currency,
+            "refund_currencies": sorted(refund_currencies),
+            "payment_currencies": payment_currencies,
+            # >0 means the INR totals above exclude that many foreign payments whose
+            # settlement figure hasn't arrived — a known understatement, not zero revenue.
+            "unsettled_payment_count": unsettled_payment_count,
             "verified_payment_count": verified_count,
         },
         "credit_value_inr": enterprise_credits.paise_to_rupees(enterprise_credits.PAISE_PER_CREDIT),
@@ -2187,16 +2429,63 @@ def issue_enterprise_account_refund_admin(
         )
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found for this account.")
-        amount_paise = int(round(float(payload.amount_rupees or 0) * 100))
+
+        # A Razorpay refund is issued in the ORIGINAL payment's currency and its `amount`
+        # is minor units OF THAT CURRENCY. The client therefore sends the minor amount plus
+        # the currency it believes it is refunding, and we assert the two agree BEFORE any
+        # money moves — a console left open across a currency change must fail loudly, not
+        # send $50.00 back against a ₹5,000 charge (which is what `amount_rupees * 100` did).
+        payment_currency = money.normalize_currency(payment.currency, strict=False)
+        requested_currency = str(payload.amount_currency or "").strip().upper()
+        if not requested_currency:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Refund currency is required; this payment was charged in {payment_currency}.",
+            )
+        if requested_currency != payment_currency:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"This payment was charged in {payment_currency}, so it can only be "
+                    f"refunded in {payment_currency} (you sent {requested_currency})."
+                ),
+            )
+        amount_minor = int(payload.amount_minor or 0)
+        if amount_minor <= 0:
+            raise HTTPException(status_code=400, detail="Refund amount must be greater than zero.")
+        # enterprise_refunds re-checks this, but its message formats the balance as INR, so
+        # the over-refund error on a USD payment reads "₹12.99". Same guard, right currency.
+        refundable_minor = enterprise_refunds.payment_refundable_paise(payment)
+        if amount_minor > refundable_minor:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Refund amount exceeds the refundable balance "
+                    f"({money.format_money(refundable_minor, payment_currency)})."
+                ),
+            )
+
+        # Razorpay's own 6-month cap. Checked here so the admin gets the deadline rather
+        # than a gateway rejection after clicking a button that moves real money.
+        deadline, window_open = _refund_window_state(payment)
+        if not window_open:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Razorpay only allows refunds within 6 months of the payment; this one "
+                    f"closed on {deadline.date().isoformat()}. Issue a goodwill credit refund instead."
+                ),
+            )
+
         refund = enterprise_refunds.issue_money_refund(
-            db, org.id, payment, amount_paise, int(payload.clawback_credits or 0), reason, current_user
+            db, org.id, payment, amount_minor, int(payload.clawback_credits or 0), reason, current_user
         )
     else:
         raise HTTPException(status_code=400, detail="Unknown refund type.")
 
     logger.info(
-        "Admin %s issued a %s refund for org %s (refund_id=%s, amount_paise=%s, credits_delta=%s)",
-        current_user.id, kind, org.id, refund.id, refund.amount_paise, refund.credits_delta,
+        "Admin %s issued a %s refund for org %s (refund_id=%s, amount_minor=%s %s, credits_delta=%s)",
+        current_user.id, kind, org.id, refund.id, refund.amount_paise, refund.currency, refund.credits_delta,
     )
     return {
         "refund": enterprise_refunds.serialize_refund(refund),

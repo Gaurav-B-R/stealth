@@ -27,15 +27,16 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app import models
 from app import fx
+from app import money
 
 
 # ---------------------------------------------------------------------------
@@ -180,9 +181,12 @@ ACTIONS = {
         "key": "ai_copilot",
         "label": "Rilono AI assistant",
         "description": (
-            f"Chat with your live portal. First {_int_env('ENTERPRISE_COPILOT_FREE_DAILY', 5)} "
-            f"messages/day are free, then {_int_env('ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE', 1)} "
-            f"credit per {_int_env('ENTERPRISE_COPILOT_MSGS_PER_CREDIT', 5)} messages."
+            f"Ask anything about your workspace — clients, documents, calendar, team, "
+            f"credits, your books and Rilono's university catalog. First "
+            f"{_int_env('ENTERPRISE_COPILOT_FREE_DAILY', 5)} messages/day are free, then "
+            f"{_int_env('ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE', 1)} credit per "
+            f"{_int_env('ENTERPRISE_COPILOT_MSGS_PER_CREDIT', 5)} messages. A question that "
+            f"needs several lookups counts as more than one message."
         ),
         # Cost is per BUNDLE of COPILOT_MSGS_PER_CREDIT messages (not per message).
         "credits": _int_env("ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE", 1),
@@ -195,6 +199,43 @@ ACTIONS = {
 COPILOT_ACTION_KEY = "ai_copilot"
 COPILOT_FREE_DAILY = _int_env("ENTERPRISE_COPILOT_FREE_DAILY", 5)          # free messages / org / day
 COPILOT_MSGS_PER_CREDIT = max(1, _int_env("ENTERPRISE_COPILOT_MSGS_PER_CREDIT", 5))  # billable msgs per credit
+
+# Cost-weighted metering — the guarantee that a message can never be sold below cost.
+#
+# The assistant is an agent: one "message" is 1..MAX_TOOL_ROUNDS model round-trips, each
+# re-sending the whole history plus every tool declaration. Counting turns instead of work
+# means a question that fans out over six tools is sold at the same price as "hi", and the
+# margin silently depends on which model the deployment happens to be pointed at.
+#
+# So a turn is weighted by what it actually cost: every COPILOT_TURN_COST_BUDGET_USD of
+# model spend counts as one message against the free allowance and the billing bundle.
+# Normal one- and two-lookup questions stay a single message; only genuinely heavy turns
+# (or an expensive model) cost more. At 1 credit / 5 messages a message earns ₹2 ≈ $0.021,
+# so a $0.007 budget floors the gross margin at ~3x by construction, whatever the model.
+COPILOT_TURN_COST_BUDGET_USD = Decimal(
+    os.getenv("ENTERPRISE_COPILOT_TURN_COST_BUDGET_USD", "0.007") or "0.007"
+)
+# A runaway turn must not empty a wallet in one message.
+COPILOT_MAX_MSG_WEIGHT = max(1, _int_env("ENTERPRISE_COPILOT_MAX_MSG_WEIGHT", 8))
+
+
+def copilot_message_weight(turn_cost_usd) -> int:
+    """How many metered "messages" one assistant turn counts as, from its real model cost.
+
+    Always at least 1 (so a cached/zero-cost turn still consumes an allowance slot) and
+    never more than COPILOT_MAX_MSG_WEIGHT. Returns 1 when cost is unknown — the meter
+    must never punish a turn whose usage we failed to read.
+    """
+    if COPILOT_TURN_COST_BUDGET_USD <= 0:
+        return 1
+    try:
+        cost = Decimal(str(turn_cost_usd or 0))
+    except (InvalidOperation, TypeError, ValueError):
+        return 1
+    if cost <= 0:
+        return 1
+    weight = int((cost / COPILOT_TURN_COST_BUDGET_USD).to_integral_value(rounding=ROUND_CEILING))
+    return max(1, min(COPILOT_MAX_MSG_WEIGHT, weight))
 
 # Free staff-run mock-interview "previews" per org. The self-serve link a student
 # takes is the real, billed product; staff can run a few in-browser test interviews
@@ -272,10 +313,9 @@ def paise_to_rupees(paise) -> float:
 
 
 def format_inr(paise) -> str:
-    rupees = float(paise or 0) / 100.0
-    if rupees == int(rupees):
-        return f"₹{int(rupees):,}"
-    return f"₹{rupees:,.2f}"
+    """INR-only formatter (credits are an INR-denominated unit of account). For a
+    customer's actual charge use money.format_money(minor, currency)."""
+    return money.format_money(paise, "INR")
 
 
 def usd_to_inr_paise(usd) -> int:
@@ -620,11 +660,18 @@ def record_copilot_message(
     organization_id: int,
     *,
     user: Optional[models.User] = None,
+    turn_cost_usd=None,
     commit: bool = True,
 ) -> dict:
-    """Record one copilot message: advance the daily counter, and (once past the free
+    """Record one copilot turn: advance the daily counter, and (once past the free
     allowance) accrue toward a bundle, debiting 1 credit each time a bundle completes.
-    Call AFTER the model answered successfully. Returns a compact meter for the UI."""
+    Call AFTER the model answered successfully. Returns a compact meter for the UI.
+
+    `turn_cost_usd` is the turn's REAL model cost summed over every round-trip
+    (enterprise_ai.TurnUsage.cost_usd). It converts the turn into a message weight so a
+    heavy multi-tool answer is metered as the several messages' worth of work it is.
+    Omitting it meters the turn as exactly one message — the pre-cost-weighting behavior.
+    """
     wallet = get_wallet_for_update(db, organization_id)
 
     # Roll the daily window if the date changed.
@@ -633,26 +680,36 @@ def record_copilot_message(
         wallet.copilot_usage_date = today
         wallet.copilot_msgs_today = 0
 
-    wallet.copilot_msgs_today = int(wallet.copilot_msgs_today or 0) + 1
-    is_free = int(wallet.copilot_msgs_today) <= COPILOT_FREE_DAILY
+    weight = copilot_message_weight(turn_cost_usd) if turn_cost_usd is not None else 1
+
+    # The free allowance is consumed one slot at a time so a heavy turn can straddle the
+    # boundary: the slots inside today's allowance stay free and only the overflow bills.
+    used_before = int(wallet.copilot_msgs_today or 0)
+    wallet.copilot_msgs_today = used_before + weight
+    free_slots = max(0, min(weight, COPILOT_FREE_DAILY - used_before))
+    billable = weight - free_slots
+    is_free = billable == 0
 
     charged = 0
     txn = None
     balance_before = int(wallet.balance_credits)
-    if not is_free:
-        # A billable message: accrue toward the next credit debit.
-        wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs or 0) + 1
-        if int(wallet.copilot_unbilled_msgs) >= COPILOT_MSGS_PER_CREDIT:
-            wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs) - COPILOT_MSGS_PER_CREDIT
-            cost = action_cost(COPILOT_ACTION_KEY) or 1
+    if billable:
+        # Billable slots accrue toward the next credit debit; a single heavy turn can
+        # complete more than one bundle, so this drains in a loop rather than once.
+        wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs or 0) + billable
+        bundles = int(wallet.copilot_unbilled_msgs) // COPILOT_MSGS_PER_CREDIT
+        if bundles:
+            wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs) - bundles * COPILOT_MSGS_PER_CREDIT
+            cost = (action_cost(COPILOT_ACTION_KEY) or 1) * bundles
             debit = min(cost, int(wallet.balance_credits))  # never overdraw below zero
             if debit > 0:
                 wallet.balance_credits = int(wallet.balance_credits) - debit
                 wallet.lifetime_spent_credits = int(wallet.lifetime_spent_credits) + debit
                 charged = debit
+                messages = bundles * COPILOT_MSGS_PER_CREDIT
                 txn = _record_transaction(
                     db, wallet=wallet, txn_type="debit", credits=-debit, action_key=COPILOT_ACTION_KEY,
-                    description=f"Rilono AI assistant — {COPILOT_MSGS_PER_CREDIT} messages", user=user,
+                    description=f"Rilono AI assistant — {messages} messages", user=user,
                 )
 
     if commit:
@@ -682,6 +739,9 @@ def record_copilot_message(
         "free_remaining_today": max(0, COPILOT_FREE_DAILY - used_today),
         "msgs_per_credit": COPILOT_MSGS_PER_CREDIT,
         "balance_credits": int(wallet.balance_credits),
+        # Surfaced so the UI can explain a turn that counted as more than one message
+        # instead of the allowance appearing to jump for no reason.
+        "message_weight": weight,
     }
 
 
@@ -741,7 +801,17 @@ def consume_staff_interview(
 # Infrastructure server fee (₹999/mo once past the free student limit)
 # ---------------------------------------------------------------------------
 
-def infra_fee_state(db: Session, organization_id: int) -> dict:
+def infra_fee_state(db: Session, organization_id: int, *, currency: str | None = None) -> dict:
+    """Infra-fee status, priced in `currency` (defaults to INR).
+
+    The fee is a real charge, so it must be quoted from the same price book the checkout
+    will use — quoting ₹999 to an org that will be charged $12.99 makes the UI lie.
+    """
+    try:
+        code = money.normalize_currency(currency or CURRENCY, strict=True)
+    except money.UnsupportedCurrency:
+        code = money.DEFAULT_CURRENCY
+    fee_minor = money.price_minor("infra_fee", code)
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     clients_used = active_client_count(db, organization_id)
     paid_until = _naive(wallet.infra_fee_paid_until)
@@ -754,13 +824,16 @@ def infra_fee_state(db: Session, organization_id: int) -> dict:
         "clients_used": clients_used,
         "clients_remaining_free": max(0, FREE_STUDENT_LIMIT - clients_used),
         "over_free_limit": over_free_limit,
-        "fee_paise": INFRA_FEE_PAISE,
-        "fee_display": format_inr(INFRA_FEE_PAISE),
+        # Minor units of `currency` — paise for INR, cents for USD.
+        "fee_paise": fee_minor,
+        "fee_minor": fee_minor,
+        "fee_display": money.format_money(fee_minor, code),
         "fee_period_days": INFRA_FEE_PERIOD_DAYS,
         "is_current": is_current,
         "fee_due": fee_due,
         "paid_until": wallet.infra_fee_paid_until,
-        "currency": CURRENCY,
+        "currency": code,
+        "price_options": money.price_options("infra_fee"),
     }
 
 
@@ -800,23 +873,50 @@ def mark_infra_fee_paid(
 # Payloads for the frontend
 # ---------------------------------------------------------------------------
 
-def packages_payload() -> list[dict]:
+def package_price_minor(package_key: str, currency: str) -> int:
+    """The charge for a top-up package in `currency`, from the shared price book.
+
+    PACKAGES[...]["amount_paise"] remains the INR list price (admin overrides and the
+    charm-pricing rule apply to it), but a non-INR buyer is charged an owner-chosen
+    price, never an FX conversion of it.
+    """
+    code = money.normalize_currency(currency, strict=True)
+    if code == "INR":
+        return int(PACKAGES[package_key]["amount_paise"])
+    return money.price_minor(f"credits_{package_key}", code)
+
+
+def packages_payload(currency: str | None = None) -> list[dict]:
+    """Top-up packages priced in `currency` (defaults to INR).
+
+    `amount_paise` is in the MINOR UNIT of `currency` — the legacy field name is kept so
+    the deployed SPA keeps working, but it is cents for a USD quote, not paise.
+    """
+    try:
+        code = money.normalize_currency(currency or CURRENCY, strict=True)
+    except money.UnsupportedCurrency:
+        code = money.DEFAULT_CURRENCY
     payload = []
     for key in PACKAGE_ORDER:
         pkg = PACKAGES[key]
         total = int(pkg["credits"]) + int(pkg["bonus_credits"])
+        amount = package_price_minor(key, code)
         payload.append({
             "key": pkg["key"],
             "label": pkg["label"],
             "tagline": pkg["tagline"],
-            "amount_paise": pkg["amount_paise"],
-            "amount_display": format_inr(pkg["amount_paise"]),
+            "amount_paise": amount,
+            "amount_minor": amount,
+            "amount_display": money.format_money(amount, code),
             "credits": pkg["credits"],
             "bonus_credits": pkg["bonus_credits"],
             "total_credits": total,
+            # Credits stay an INR-denominated unit of account (1 credit = ₹10) regardless
+            # of the currency they were bought in — a Deep Scan costs 20 credits either way.
             "value_inr": paise_to_rupees(credits_to_paise(total)),
             "is_popular": pkg["is_popular"],
-            "currency": CURRENCY,
+            "currency": code,
+            "price_options": money.price_options(f"credits_{key}"),
         })
     return payload
 
@@ -835,7 +935,18 @@ def actions_payload() -> list[dict]:
     return payload
 
 
-def wallet_state(db: Session, organization_id: int) -> dict:
+def wallet_state(db: Session, organization_id: int, *, currency: str | None = None) -> dict:
+    """Wallet + catalogue, with all real CHARGES priced in `currency`.
+
+    Credits themselves stay an INR-denominated unit of account (1 credit = ₹10) whatever
+    currency they were bought in — a Deep Scan costs 20 credits everywhere — so the
+    *_inr fields keep their INR meaning. Only the things an org actually pays for
+    (packages, infra fee) are re-priced.
+    """
+    try:
+        code = money.normalize_currency(currency or CURRENCY, strict=True)
+    except money.UnsupportedCurrency:
+        code = money.DEFAULT_CURRENCY
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     balance = int(wallet.balance_credits)
     return {
@@ -846,11 +957,13 @@ def wallet_state(db: Session, organization_id: int) -> dict:
         "lifetime_spent_credits": int(wallet.lifetime_spent_credits),
         "paise_per_credit": PAISE_PER_CREDIT,
         "credit_value_inr": paise_to_rupees(PAISE_PER_CREDIT),
-        "currency": CURRENCY,
+        # The org's CHARGE currency (what a top-up costs them). The *_inr fields above
+        # are the credit unit of account and stay INR regardless.
+        "currency": code,
         "enforced": ENFORCE,
         "low_balance": balance < (action_cost("mock_interview") or 1),
         "actions": actions_payload(),
-        "infra_fee": infra_fee_state(db, organization_id),
+        "infra_fee": infra_fee_state(db, organization_id, currency=code),
         "staff_interview_previews": {
             "free": INTERVIEW_FREE_STAFF_PREVIEWS,
             "remaining": staff_interview_preview_remaining(db, organization_id),
@@ -1386,14 +1499,32 @@ def _money_paise(value) -> int:
         return 0
 
 
+# Gemini sources the enterprise platform SHARES with the B2C student app. For these,
+# only rows carrying an organization_id are enterprise spend — counting the source
+# wholesale charges every student's own document extraction to the enterprise margin.
+# (Measured on production: 21 of 23 document_ai events, 91% of that source's spend.)
+SHARED_B2C_COST_SOURCES = frozenset({"document_ai"})
+
+
 def _gemini_cost_usd_by_source(db: Session) -> dict[str, float]:
     E = models.GeminiUsageEvent
     rows = (
-        db.query(E.source, func.coalesce(func.sum(E.estimated_cost_usd), 0), func.count(E.id))
-        .group_by(E.source)
+        db.query(E.source, E.organization_id.isnot(None),
+                 func.coalesce(func.sum(E.estimated_cost_usd), 0), func.count(E.id))
+        .group_by(E.source, E.organization_id.isnot(None))
         .all()
     )
-    return {src: {"cost_usd": float(cost or 0), "calls": int(calls or 0)} for src, cost, calls in rows}
+    out: dict[str, dict] = {}
+    for src, has_org, cost, calls in rows:
+        # A shared source only counts when the row names an organization; a
+        # dedicated enterprise source counts in full (its rows predate org
+        # attribution being passed, so requiring it would zero the history).
+        if src in SHARED_B2C_COST_SOURCES and not has_org:
+            continue
+        entry = out.setdefault(src, {"cost_usd": 0.0, "calls": 0})
+        entry["cost_usd"] += float(cost or 0)
+        entry["calls"] += int(calls or 0)
+    return out
 
 
 def build_revenue_analytics(db: Session) -> dict:
@@ -1408,12 +1539,38 @@ def build_revenue_analytics(db: Session) -> dict:
     # 'partially_refunded', so we count every payment that ever cleared and then
     # subtract what we refunded (P.refunded_amount_paise) to get true net revenue.
     def _kind_money(kind: str) -> tuple[int, int, int]:
+        # Sum the INR SETTLEMENT figure, never the charged amount: a $39 top-up stores
+        # amount_paise=3900 (cents), and adding that to a ₹2,999 row's 299900 produces a
+        # plausible-looking total that is neither currency. base_amount_paise is
+        # Razorpay's own converted INR value. This whole report is compared against Gemini
+        # cost in INR, so both sides must be INR.
+        #
+        # The amount_paise fallback is valid ONLY for INR rows, where charged == settled
+        # (Razorpay omits base_amount on domestic payments, and every pre-migration row is
+        # genuinely rupees). A non-INR row whose settlement figure has not landed yet
+        # contributes 0 instead of having its cents added as paise — `unsettled` below
+        # counts those so the total is never quietly wrong.
+        settled_inr = case(
+            (P.base_amount_paise.isnot(None), P.base_amount_paise),
+            (func.upper(func.coalesce(P.currency, "INR")) == "INR", P.amount_paise),
+            else_=0,
+        )
         gross = _money_paise(
-            db.query(func.coalesce(func.sum(P.amount_paise), 0))
+            db.query(func.coalesce(func.sum(settled_inr), 0))
             .filter(P.status.in_(REVENUE_PAYMENT_STATUSES), P.kind == kind).scalar()
         )
+        # Refunds are recorded in the ORIGINAL currency, so they need the same treatment.
+        # Scaling by the payment's own settlement rate keeps a partial refund of a USD
+        # payment from being subtracted as though it were rupees. A non-INR row with no
+        # rate yet is skipped on BOTH sides — its gross was excluded above, so subtracting
+        # its refund here would double-count the gap.
+        refunded_inr = case(
+            (func.upper(func.coalesce(P.currency, "INR")) == "INR", P.refunded_amount_paise),
+            (P.fx_rate_used.isnot(None), P.refunded_amount_paise * P.fx_rate_used),
+            else_=0,
+        )
         refunded = _money_paise(
-            db.query(func.coalesce(func.sum(P.refunded_amount_paise), 0))
+            db.query(func.coalesce(func.sum(refunded_inr), 0))
             .filter(P.status.in_(REVENUE_PAYMENT_STATUSES), P.kind == kind).scalar()
         )
         count = int(
@@ -1424,6 +1581,19 @@ def build_revenue_analytics(db: Session) -> dict:
 
     credit_gross_paise, credit_refunded_paise, credit_payment_count = _kind_money("credits")
     infra_gross_paise, infra_refunded_paise, infra_payment_count = _kind_money("infra_fee")
+    # The `unsettled` count promised in _kind_money above: revenue-status foreign payments
+    # that scored 0 because Razorpay's INR settlement figure has not landed on the row.
+    # Without it the totals below are a confident rupee number that quietly omits real
+    # money, which is the failure this whole settlement rule exists to prevent.
+    unsettled_payments = int(
+        db.query(func.count(P.id))
+        .filter(
+            P.status.in_(REVENUE_PAYMENT_STATUSES),
+            P.base_amount_paise.is_(None),
+            func.upper(func.coalesce(P.currency, "INR")) != "INR",
+        )
+        .scalar() or 0
+    )
     credit_revenue_paise = max(0, credit_gross_paise - credit_refunded_paise)
     infra_revenue_paise = max(0, infra_gross_paise - infra_refunded_paise)
     gross_revenue_paise = credit_gross_paise + infra_gross_paise
@@ -1533,6 +1703,9 @@ def build_revenue_analytics(db: Session) -> dict:
             "refunds_display": format_inr(refunds_paise),
             "total_revenue_paise": total_revenue_paise,
             "total_revenue_display": format_inr(total_revenue_paise),
+            # >0 means the revenue figures above EXCLUDE that many foreign payments whose
+            # INR settlement hasn't arrived — a known understatement, not zero revenue.
+            "unsettled_payments": unsettled_payments,
             "gemini_cost_paise": gemini_cost_paise,
             "gemini_cost_display": format_inr(gemini_cost_paise),
             "gemini_cost_usd": round(gemini_cost_usd, 4),

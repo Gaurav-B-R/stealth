@@ -223,6 +223,11 @@ def get_referral_summary(
         "pending_referrals": pending_referrals,
         "reward": referrals.referral_reward_summary(),
         "referee_discount_display": referrals.referee_discount_display(),
+        # The reward is a flat ₹200 off ₹999 that checkout applies as the same PROPORTION
+        # in whatever currency the friend buys in. The percentage is the only figure that
+        # is true in every currency, so the UI can render an accurate local amount from
+        # the price ladder instead of quoting rupees to a dollar buyer.
+        "referee_discount_percent": referrals.referee_discount_percent(),
         "referrer_bonus_days": referrals.REFERRAL_BONUS_DAYS,
     }
 

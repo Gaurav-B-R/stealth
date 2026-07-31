@@ -10,6 +10,12 @@ from dotenv import load_dotenv
 import secrets
 from jose import JWTError, jwt
 
+# Money formatting lives in exactly one place. An email is a receipt: if it renders a
+# payment differently from the screen the user paid on, the user is right to distrust
+# whichever one is wrong. app.money owns the symbol table, the minor-unit exponents and
+# the rounding, so this module never keeps a second copy of any of them.
+from app import money
+
 load_dotenv()
 
 # Initialize Resend
@@ -1364,20 +1370,46 @@ def _format_datetime_for_subscription_email(value: Optional[datetime]) -> str:
     return value.strftime("%b %d, %Y %I:%M %p UTC")
 
 
-def _format_amount_for_subscription_email(amount_paise: Optional[int], currency: str) -> str:
-    if amount_paise is None:
+def _format_money_for_email(amount_minor: Optional[int], currency: Optional[str]) -> str:
+    """The one money formatter for this module — delegates to app.money.format_money.
+
+    `amount_minor` is an integer in the MINOR UNIT OF ITS OWN CURRENCY: paise for an INR
+    row, cents for a USD one. The legacy `amount_paise` column and argument names lie for
+    every non-INR payment, so never divide this by 100 here — format_money() reads the
+    ISO-4217 exponent (JPY has none; a blanket /100 would print ¥9.99 for a ¥999 charge)
+    and picks the symbol from the same table the UI uses.
+    """
+    if amount_minor is None:
         return "N/A"
-    normalized_currency = (currency or "INR").upper()
-    amount = amount_paise / 100
-    symbols = {
-        "INR": "₹",
-        "USD": "$",
-        "EUR": "€",
-        "GBP": "£",
-        "JPY": "¥",
-    }
-    symbol = symbols.get(normalized_currency, f"{normalized_currency} ")
-    return f"{symbol}{amount:,.2f}"
+    code = (currency or "").strip().upper()
+    if not code:
+        # An amount with no currency is a caller bug, and INR is the one guess that looks
+        # plausible while being wrong: "₹12.99" on a $12.99 receipt, or a rupee figure on
+        # a dispute the org is about to contest. Print the raw minor integer instead —
+        # obviously broken, therefore reported, and it never claims a currency we do not
+        # know. format_money() must not see a blank code: it would default to ₹.
+        print(f"WARNING: email money amount {amount_minor} has no currency; refusing to guess one")
+        return f"{int(amount_minor)} (minor units, currency unknown)"
+    return money.format_money(amount_minor, code)
+
+
+def _cross_border_note(currency: Optional[str]) -> str:
+    """One honest sentence for any email that shows a charged amount.
+
+    Razorpay converts at the card issuer's rate, not ours, and the issuer may add its own
+    foreign-transaction fee — so the figure debited can differ from the figure we quoted.
+    Saying that before the statement arrives is cheaper than the "you overcharged me"
+    thread, and it is true in both directions: a foreign card paying our INR price, and an
+    Indian card paying one of the new non-INR prices.
+    """
+    code = (currency or "").strip().upper()
+    if not code:
+        return ""
+    return (
+        f"Charged in {code}. If your card is issued in another currency, your bank converts "
+        f"at its own rate and may add a foreign-transaction fee, so the amount debited can "
+        f"differ slightly. Rilono does not add any conversion charge."
+    )
 
 
 def _subscription_plan_label(plan: str, pricing_model: Optional[str] = None) -> str:
@@ -1401,7 +1433,13 @@ def send_subscription_change_email(
     access_until: Optional[datetime] = None,
     next_renewal_at: Optional[datetime] = None,
     payment_amount_paise: Optional[int] = None,
-    payment_currency: str = "INR",
+    # Keyword-only from here so `payment_currency` can be REQUIRED. It used to default to
+    # "INR", which turned "the caller forgot" into "the customer paid rupees" — silently
+    # wrong on every USD/GBP/EUR/CAD/AUD/AED/SGD pass. Pass None explicitly for the events
+    # that have no payment at all (downgrade, auto-renew off); the amount is None there
+    # too, so the row renders "N/A" and no currency is invented.
+    *,
+    payment_currency: Optional[str],
     payment_status: Optional[str] = None,
     pricing_model: Optional[str] = None,
     base_url: str = DEFAULT_PUBLIC_BASE_URL,
@@ -1495,7 +1533,12 @@ def send_subscription_change_email(
     safe_plan = escape(plan_label)
     safe_status = escape((status or "active").strip().title())
     safe_payment_status = escape((payment_status or "N/A").strip().title())
-    safe_payment_amount = escape(_format_amount_for_subscription_email(payment_amount_paise, payment_currency))
+    payment_amount_text = _format_money_for_email(payment_amount_paise, payment_currency)
+    safe_payment_amount = escape(payment_amount_text)
+    # Only worth saying when a card was actually charged: a downgrade notice has no amount,
+    # and a ₹0 order (referral grant, 100% coupon) never touched an issuer to convert.
+    fx_note = _cross_border_note(payment_currency) if (payment_amount_paise or 0) > 0 else ""
+    safe_fx_note = escape(fx_note)
     safe_access_until = escape(_format_datetime_for_subscription_email(access_until))
     # The Visa Success Pass is a one-time, 30-day purchase — there is no recurring billing or
     # renewal. (auto_renew_enabled is False/None for all current passes; the branch only differs
@@ -1556,6 +1599,7 @@ def send_subscription_change_email(
                                         <td colspan="2" style="padding:12px;border:1px solid #e2e8f0;border-radius:10px;background:#f8fafc;">
                                             <div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">Latest Payment</div>
                                             <div style="font-size:16px;font-weight:600;color:#0f172a;margin-top:4px;">{safe_payment_amount} • {safe_payment_status}</div>
+                                            {f'<div style="font-size:12px;color:#64748b;margin-top:6px;line-height:1.5;">{safe_fx_note}</div>' if safe_fx_note else ''}
                                         </td>
                                     </tr>
                                 </table>
@@ -1588,6 +1632,7 @@ def send_subscription_change_email(
         if unsubscribe_url
         else ""
     )
+    fx_note_text_line = f"{fx_note}\n\n" if fx_note else ""
 
     text_content = (
         f"{event_content['title']} - Rilono\n\n"
@@ -1597,7 +1642,8 @@ def send_subscription_change_email(
         f"Status: {(status or 'active').title()}\n"
         f"Billing: {billing_text}\n"
         f"Access Until: {_format_datetime_for_subscription_email(access_until)}\n"
-        f"Latest Payment: {_format_amount_for_subscription_email(payment_amount_paise, payment_currency)} • {(payment_status or 'N/A').title()}\n\n"
+        f"Latest Payment: {payment_amount_text} • {(payment_status or 'N/A').title()}\n\n"
+        f"{fx_note_text_line}"
         f"Go to Dashboard: {manage_url}\n\n"
         f"{unsubscribe_text_line}"
         "If this change wasn't made by you, contact contact@rilono.com.\n\n"
@@ -2438,7 +2484,15 @@ def send_enterprise_payment_request_email(
     to_email: str,
     client_name: Optional[str],
     organization_name: str,
-    amount_rupees: str,
+    amount_rupees: str = "",
+    amount_minor: Optional[int] = None,
+    # Razorpay ROUTE — the rails behind this pay link — settles into the consultancy's
+    # Indian bank account and is INR-ONLY, so INR is the correct value today and the only
+    # one a caller can legitimately mean. The parameter exists anyway because the rupee
+    # GLYPH must stop being welded into the subject line, the hero and the text part:
+    # this is the most-read money string in the product, and the day collection happens
+    # in anything else the template must not lie about it.
+    currency: str = "INR",
     description: str,
     pay_url: str,
     invoice_number: str = "",
@@ -2448,12 +2502,21 @@ def send_enterprise_payment_request_email(
     """Email a client a secure link to pay their consultancy online (Razorpay checkout).
 
     Honest framing: the CONSULTANCY is the payee — Rilono is the technology platform and
-    Razorpay processes the payment; funds settle to the consultancy's own bank account."""
+    Razorpay processes the payment; funds settle to the consultancy's own bank account.
+
+    Pass `amount_minor` (integer minor units) + `currency` and app.money renders it.
+    `amount_rupees` is the legacy pre-formatted major-unit string kept so existing callers
+    keep working; it is only prefixed with the currency symbol, never re-divided."""
     if not RESEND_API_KEY:
         return False, None, "Email service is not configured."
     recipient = (to_email or "").strip().lower()
     if not recipient:
         return False, None, "Recipient email is missing."
+    # `amount_rupees` lost its required-ness when `amount_minor` joined it, so an amountless
+    # call is now syntactically possible. Refuse it rather than emailing a bare currency
+    # symbol and a Pay button to someone's client.
+    if amount_minor is None and not str(amount_rupees).strip():
+        return False, None, "Payment amount is missing."
 
     org_label = (organization_name or "Your consultancy").strip()
     name = (client_name or "").strip() or "there"
@@ -2461,8 +2524,20 @@ def send_enterprise_payment_request_email(
     safe_name = escape(name)
     safe_url = escape(pay_url)
     safe_desc = escape((description or "Visa service payment").strip())
-    safe_amount = escape(str(amount_rupees))
+    currency_code = (currency or "").strip().upper() or "INR"
+    # Prefer the (amount_minor, currency) pair: app.money owns the exponent and the symbol,
+    # so this email and the pay page cannot disagree. The legacy string is already in major
+    # units — prefix the symbol only.
+    if amount_minor is not None:
+        amount_text = _format_money_for_email(amount_minor, currency_code)
+    else:
+        amount_text = f"{money.symbol_for(currency_code)}{str(amount_rupees).strip()}"
+    safe_amount = escape(amount_text)
     safe_invoice = escape((invoice_number or "").strip())
+    # Many of these students are already abroad on a foreign card while Route collects in
+    # INR — that conversion is their bank's, at their bank's rate, and we never see the
+    # markup. Say so next to the number rather than in a support reply afterwards.
+    safe_fx_note = escape(_cross_border_note(currency_code))
     logo_block = ""
     clean_logo = (logo_url or "").strip()
     if clean_logo.startswith(("http://", "https://")):
@@ -2473,7 +2548,7 @@ def send_enterprise_payment_request_email(
         due_block = (f'<div style="font-size:13px;color:#92400e;background:#fffbeb;padding:10px 12px;'
                      f'border-radius:10px;margin-bottom:18px;">Due by <strong>{escape(due_date_text)}</strong></div>')
 
-    subject = f"Payment request from {org_label} — ₹{amount_rupees}"
+    subject = f"Payment request from {org_label} — {amount_text}"
     html_content = f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
     <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
@@ -2491,14 +2566,15 @@ def send_enterprise_payment_request_email(
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;margin-bottom:18px;">
                 <tr><td style="padding:16px 18px;">
                   <div style="font-size:13px;color:#64748b;">{safe_desc}{f" · {safe_invoice}" if safe_invoice else ""}</div>
-                  <div style="font-size:30px;font-weight:800;color:#0f172a;margin-top:6px;">₹{safe_amount}</div>
+                  <div style="font-size:30px;font-weight:800;color:#0f172a;margin-top:6px;">{safe_amount}</div>
                 </td></tr>
               </table>
               {due_block}
               <div style="text-align:center;margin:8px 0 18px;">
                 <a href="{safe_url}" style="display:inline-block;padding:13px 28px;border-radius:10px;background:linear-gradient(135deg,#0f766e 0%,#0e7490 100%);color:#fff;font-size:15px;font-weight:700;text-decoration:none;">Pay securely →</a>
               </div>
-              <p style="margin:14px 0 0;font-size:13px;color:#64748b;">
+              <p style="margin:14px 0 0;font-size:13px;color:#64748b;">{safe_fx_note}</p>
+              <p style="margin:10px 0 0;font-size:13px;color:#64748b;">
                 Payments are processed securely by <strong>Razorpay</strong> and settle directly to {safe_org}'s bank account.
                 {safe_org} uses Rilono as its technology platform. This link is personal to you — please don't share it.
                 If you weren't expecting this request, contact {safe_org} directly.
@@ -2513,9 +2589,10 @@ def send_enterprise_payment_request_email(
         f"Hi {name},\n\n{org_label} has requested a payment from you.\n\n"
         f"{(description or 'Visa service payment').strip()}"
         f"{f' ({invoice_number})' if (invoice_number or '').strip() else ''}\n"
-        f"Amount: ₹{amount_rupees}\n"
+        f"Amount: {amount_text}\n"
         f"{f'Due by: {due_date_text}' if (due_date_text or '').strip() else ''}\n\n"
         f"Pay securely: {pay_url}\n\n"
+        f"{_cross_border_note(currency_code)}\n\n"
         f"Payments are processed by Razorpay and settle directly to {org_label}'s bank account. "
         "This link is personal to you. If you weren't expecting this request, contact the consultancy directly.\n"
     )
@@ -2541,7 +2618,14 @@ def send_enterprise_payment_dispute_alert_email(
     to_email: str,
     organization_name: str,
     client_name: str,
-    amount_rupees: str,
+    amount_rupees: str = "",
+    amount_minor: Optional[int] = None,
+    # The sole caller (_send_dispute_alert_to_org_admins in app/routers/enterprise.py) now
+    # passes this off the dispute entity, which carries the payment's own presentment
+    # currency. The default is kept ONLY as a last-resort fallback: that call sits inside a
+    # try/except that just logs, so a missing kwarg would silently drop a chargeback alert
+    # on a live evidence deadline. It is a fallback, never a statement of fact.
+    currency: str = "INR",
     invoice_number: str = "",
     dispute_state: str = "opened",
     reason_code: Optional[str] = None,
@@ -2550,18 +2634,31 @@ def send_enterprise_payment_dispute_alert_email(
     """Alert an org admin that a payment collected via Rilono Finance was disputed
     (chargeback) or that the dispute state changed. Disputes are the organization's
     responsibility (Terms — Payment Collection for Consultancies); evidence must be
-    submitted in the Razorpay dashboard before the deadline."""
+    submitted in the Razorpay dashboard before the deadline.
+
+    Pass `amount_minor` (integer minor units, in `currency`) — the dispute amount comes
+    straight off the gateway entity and is NOT necessarily paise. `amount_rupees` is the
+    legacy pre-formatted string and is only symbol-prefixed."""
     if not RESEND_API_KEY:
         return False, None, "Email service is not configured."
     recipient = (to_email or "").strip().lower()
     if not recipient:
         return False, None, "Recipient email is missing."
+    # Same reasoning as the payment-request email: no amount at all is a caller bug, and a
+    # chargeback alert with a blank figure is worse than none.
+    if amount_minor is None and not str(amount_rupees).strip():
+        return False, None, "Dispute amount is missing."
 
     org_label = (organization_name or "Your organization").strip()
     state_label = (dispute_state or "updated").strip()
     safe_org = escape(org_label)
     safe_client = escape((client_name or "a client").strip())
-    safe_amount = escape(str(amount_rupees))
+    currency_code = (currency or "").strip().upper() or "INR"
+    if amount_minor is not None:
+        amount_text = _format_money_for_email(amount_minor, currency_code)
+    else:
+        amount_text = f"{money.symbol_for(currency_code)}{str(amount_rupees).strip()}"
+    safe_amount = escape(amount_text)
     safe_state = escape(state_label)
     safe_invoice = escape((invoice_number or "").strip())
     reason_block = ""
@@ -2573,8 +2670,20 @@ def send_enterprise_payment_dispute_alert_email(
         deadline_block = (f'<div style="font-size:13px;color:#92400e;background:#fffbeb;padding:10px 12px;'
                           f'border-radius:10px;margin:14px 0 0;">Respond with evidence by '
                           f'<strong>{escape(respond_by_text)}</strong></div>')
+    # A cross-border chargeback is not recovered at the figure shown above: Razorpay claws
+    # it back out of the org's INR settlements at its own conversion rate. Staff comparing
+    # this alert against their bank statement need to know that before they open a ticket.
+    fx_line = ""
+    if currency_code != "INR":
+        fx_line = (f"This payment was collected in {currency_code}. A lost dispute is recovered from your "
+                   f"INR settlements at Razorpay's conversion rate, so the rupee amount deducted will not "
+                   f"match a straight conversion of the figure above.")
+    fx_block = ""
+    if fx_line:
+        fx_block = (f'<div style="font-size:13px;color:#64748b;margin-top:10px;line-height:1.6;">'
+                    f'{escape(fx_line)}</div>')
 
-    subject = f"⚠️ Payment dispute {state_label} — {client_name or 'client'} · ₹{amount_rupees}"
+    subject = f"⚠️ Payment dispute {state_label} — {client_name or 'client'} · {amount_text}"
     html_content = f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
     <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
@@ -2590,11 +2699,12 @@ def send_enterprise_payment_dispute_alert_email(
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc;margin-bottom:4px;">
                 <tr><td style="padding:16px 18px;">
                   <div style="font-size:13px;color:#64748b;">{safe_client}{f" · {safe_invoice}" if safe_invoice else ""}</div>
-                  <div style="font-size:28px;font-weight:800;color:#0f172a;margin-top:6px;">₹{safe_amount}</div>
+                  <div style="font-size:28px;font-weight:800;color:#0f172a;margin-top:6px;">{safe_amount}</div>
                   <div style="font-size:13px;color:#64748b;margin-top:6px;">Status: <strong>{safe_state}</strong></div>
                   {reason_block}
                 </td></tr>
               </table>
+              {fx_block}
               {deadline_block}
               <p style="margin:18px 0 0;font-size:14px;color:#334155;">
                 Disputed payments are your organization's responsibility under the Rilono Terms
@@ -2616,10 +2726,11 @@ def send_enterprise_payment_dispute_alert_email(
         f"Payment dispute {state_label}\n\n"
         f"Organization: {org_label}\n"
         f"Client: {client_name or 'a client'}{f' · {invoice_number}' if invoice_number else ''}\n"
-        f"Amount: ₹{amount_rupees}\n"
+        f"Amount: {amount_text}\n"
         f"Status: {state_label}\n"
         + (f"Reason code: {reason_code}\n" if (reason_code or '').strip() else "")
         + (f"Respond with evidence by: {respond_by_text}\n" if (respond_by_text or '').strip() else "")
+        + (f"\n{fx_line}\n" if fx_line else "")
         + "\nDisputed payments are your organization's responsibility under the Rilono Terms "
           "(\"Payment Collection for Consultancies\"). Review the dispute and submit evidence in "
           "your Razorpay dashboard before the deadline.\n\n"
@@ -3132,6 +3243,194 @@ def send_enterprise_portal_code_email(
         return False, None, str(e)[:500]
 
 
+def send_enterprise_owner_transfer_code_email(
+    *,
+    to_email: str,
+    actor_name: Optional[str],
+    organization_name: str,
+    new_owner_label: str,
+    code: str,
+    expires_in_minutes: int = 10,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email the actor a code to confirm handing their workspace to someone else.
+
+    Sent from the Rilono security address, not the org's branded one: this is the email that
+    is supposed to look wrong to someone whose account has been taken over, so it names the
+    workspace, names who would become owner, and says plainly what to do if it wasn't them.
+    """
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    code_clean = "".join(ch for ch in str(code or "") if ch.isdigit())
+    if not recipient or not code_clean:
+        return False, None, "Recipient email or code is missing."
+
+    minutes = max(1, int(expires_in_minutes or 10))
+    org_label = _sanitize_header_text(organization_name) or "your workspace"
+    safe_org = escape(org_label)
+    safe_target = escape((new_owner_label or "another member").strip())
+    safe_name = escape((actor_name or "").strip() or "there")
+    safe_code = escape(code_clean)
+    subject = f"{code_clean} — confirm transferring ownership of {org_label}"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:24px 28px;background:linear-gradient(135deg,#b45309 0%,#d97706 100%);color:#ffffff;">
+              <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">Rilono · Security</div>
+              <h1 style="margin:8px 0 0 0;font-size:22px;line-height:1.25;">Confirm workspace ownership transfer</h1>
+            </td></tr>
+            <tr><td style="padding:26px 28px;color:#0f172a;">
+              <p style="margin:0 0 14px 0;font-size:15px;line-height:1.6;">Hi {safe_name},</p>
+              <p style="margin:0 0 16px 0;font-size:15px;line-height:1.6;">
+                Someone signed in as you asked to make <strong>{safe_target}</strong> the owner of
+                <strong>{safe_org}</strong>. The new owner gets every permission — including refunds and the
+                payout bank account — and only they can transfer it back. Enter this code to confirm:
+              </p>
+              <div style="text-align:center;margin:8px 0 18px;">
+                <div style="display:inline-block;font-size:34px;font-weight:800;letter-spacing:10px;color:#0f172a;background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:14px 22px 14px 32px;">{safe_code}</div>
+              </div>
+              <p style="margin:0 0 6px 0;font-size:13px;color:#64748b;line-height:1.6;">
+                This code expires in <strong>{minutes} minutes</strong> and works only for this transfer.
+              </p>
+              <p style="margin:10px 0 0 0;font-size:13px;color:#b91c1c;line-height:1.6;">
+                If this wasn't you, do not share this code. Change your password right away and check
+                your workspace's access log — your account may be signed in somewhere else.
+              </p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        "Confirm workspace ownership transfer - Rilono\n\n"
+        f"Someone signed in as you asked to make {new_owner_label or 'another member'} the owner of "
+        f"{org_label}. The new owner gets every permission, including refunds and the payout bank "
+        "account, and only they can transfer it back.\n\n"
+        f"Your confirmation code is: {code_clean}\n"
+        f"It expires in {minutes} minutes and works only for this transfer.\n\n"
+        "If this wasn't you, do not share this code. Change your password right away and check your "
+        "workspace's access log.\n"
+    )
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def send_enterprise_owner_transfer_notice_email(
+    *,
+    to_email: str,
+    recipient_name: Optional[str],
+    organization_name: str,
+    new_owner_label: str,
+    actor_label: str,
+    is_new_owner: bool = False,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Tell the outgoing owner (or the new one) that ownership actually moved.
+
+    The in-app bell is only seen by someone who signs in. This is the copy that makes a quiet
+    takeover loud — it lands in the outgoing owner's inbox whether they open the app or not.
+    """
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = _sanitize_header_text(organization_name) or "your workspace"
+    safe_org = escape(org_label)
+    safe_new_owner = escape((new_owner_label or "another member").strip())
+    safe_actor = escape((actor_label or "An admin").strip())
+    safe_name = escape((recipient_name or "").strip() or "there")
+
+    if is_new_owner:
+        subject = f"You're now the owner of {org_label}"
+        heading = "You're now the workspace owner"
+        accent_a, accent_b = "#4338ca", "#7c3aed"
+        body_html = (
+            f"<p style=\"margin:0 0 14px 0;font-size:15px;line-height:1.6;\">Hi {safe_name},</p>"
+            f"<p style=\"margin:0 0 16px 0;font-size:15px;line-height:1.6;\">"
+            f"<strong>{safe_actor}</strong> transferred ownership of <strong>{safe_org}</strong> to you. "
+            "You now hold every permission in the workspace — billing, refunds, the payout bank account "
+            "and the team's access — and you're the only person who can transfer ownership again.</p>"
+        )
+        body_text = (
+            f"Hi {recipient_name or 'there'},\n\n{actor_label or 'An admin'} transferred ownership of "
+            f"{org_label} to you. You now hold every permission in the workspace, including billing, "
+            "refunds, the payout bank account and team access, and you're the only person who can "
+            "transfer ownership again.\n"
+        )
+    else:
+        subject = f"Ownership of {org_label} was transferred"
+        heading = "Workspace ownership was transferred"
+        accent_a, accent_b = "#b45309", "#d97706"
+        body_html = (
+            f"<p style=\"margin:0 0 14px 0;font-size:15px;line-height:1.6;\">Hi {safe_name},</p>"
+            f"<p style=\"margin:0 0 16px 0;font-size:15px;line-height:1.6;\">"
+            f"<strong>{safe_new_owner}</strong> is now the owner of <strong>{safe_org}</strong>. "
+            f"The transfer was confirmed by <strong>{safe_actor}</strong> with a one-time code emailed at the time. "
+            "You keep Admin access, but ownership-only powers — refunds and the payout bank account — now sit "
+            "with the new owner.</p>"
+            "<p style=\"margin:10px 0 0 0;font-size:13px;color:#b91c1c;line-height:1.6;\">"
+            "If you didn't expect this, contact the new owner immediately and review your workspace's "
+            "access log — every change is recorded there with who made it.</p>"
+        )
+        body_text = (
+            f"Hi {recipient_name or 'there'},\n\n{new_owner_label or 'Another member'} is now the owner of "
+            f"{org_label}. The transfer was confirmed by {actor_label or 'an admin'} with a one-time code "
+            "emailed at the time. You keep Admin access, but refunds and the payout bank account now sit "
+            "with the new owner.\n\nIf you didn't expect this, contact the new owner immediately and review "
+            "your workspace's access log.\n"
+        )
+
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f8fafc;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:24px 28px;background:linear-gradient(135deg,{accent_a} 0%,{accent_b} 100%);color:#ffffff;">
+              <div style="font-size:13px;letter-spacing:.06em;text-transform:uppercase;opacity:.95;">Rilono · Security</div>
+              <h1 style="margin:8px 0 0 0;font-size:22px;line-height:1.25;">{escape(heading)}</h1>
+            </td></tr>
+            <tr><td style="padding:26px 28px;color:#0f172a;">{body_html}</td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    try:
+        params = {
+            "from": f"{RESEND_FROM_NAME} <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": body_text,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
 def send_founder_new_verified_user_alert(
     *,
     user_id: int,
@@ -3212,7 +3511,10 @@ def send_founder_first_subscription_purchase_alert(
     university: Optional[str] = None,
     pricing_model: Optional[str] = None,
     payment_amount_paise: Optional[int] = None,
-    payment_currency: str = "INR",
+    # Required: this alert always fires off a real payment row, so the caller always has
+    # the currency. Defaulting it to "INR" made the first non-INR sale we ever take —
+    # the single email we would most want to be right about — report itself in rupees.
+    payment_currency: str,
     payment_provider: Optional[str] = None,
     payment_reference: Optional[str] = None,
     purchased_at: Optional[datetime] = None,
@@ -3234,8 +3536,16 @@ def send_founder_first_subscription_purchase_alert(
     safe_university = escape((university or "").strip() or "Not provided")
     safe_provider = escape((payment_provider or "").strip() or "Unknown")
     safe_reference = escape((payment_reference or "").strip() or "N/A")
-    safe_amount = escape(_format_amount_for_subscription_email(payment_amount_paise, payment_currency))
+    payment_amount_text = _format_money_for_email(payment_amount_paise, payment_currency)
+    safe_amount = escape(payment_amount_text)
     safe_purchased_at = escape(_format_datetime_for_subscription_email(purchased_at or datetime.utcnow()))
+    # Founders read this number as revenue. For a non-INR charge it is NOT the revenue —
+    # Razorpay settles to INR and only its own base_amount may be booked or summed.
+    settlement_note = ""
+    if (payment_currency or "").strip().upper() != "INR":
+        settlement_note = ("Charged in a non-INR currency — this is the presentment amount. Book revenue "
+                           "from Razorpay's INR settlement figure (base_amount), never from this number.")
+    safe_settlement_note = escape(settlement_note)
 
     subject = f"First Paid Subscription: {safe_plan} by {safe_email}"
     html_content = f"""
@@ -3254,6 +3564,7 @@ def send_founder_first_subscription_purchase_alert(
           <tr><td style="padding:4px 10px 4px 0;"><strong>Reference</strong></td><td>{safe_reference}</td></tr>
           <tr><td style="padding:4px 10px 4px 0;"><strong>Purchased At</strong></td><td>{safe_purchased_at}</td></tr>
         </table>
+        {f'<p style="margin:14px 0 0 0;font-size:13px;color:#64748b;">{safe_settlement_note}</p>' if safe_settlement_note else ''}
       </body>
     </html>
     """
@@ -3264,10 +3575,11 @@ def send_founder_first_subscription_purchase_alert(
         f"Full Name: {(full_name or '').strip() or 'Not provided'}\n"
         f"University: {(university or '').strip() or 'Not provided'}\n"
         f"Plan: {plan_label}\n"
-        f"Amount: {_format_amount_for_subscription_email(payment_amount_paise, payment_currency)}\n"
+        f"Amount: {payment_amount_text}\n"
         f"Provider: {(payment_provider or '').strip() or 'Unknown'}\n"
         f"Reference: {(payment_reference or '').strip() or 'N/A'}\n"
         f"Purchased At: {_format_datetime_for_subscription_email(purchased_at or datetime.utcnow())}\n"
+        + (f"\n{settlement_note}\n" if settlement_note else "")
     )
 
     try:

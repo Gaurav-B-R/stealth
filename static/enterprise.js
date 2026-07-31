@@ -312,26 +312,124 @@
     if (parts.length <= 2) return h;
     return parts.slice(-2).join(".");
   }
-  // ---- Display currency (from Settings → company country; live FX, billing stays INR) ----
+  /* ---- Money.  Mirrors app/money.py — read that first if you touch this. ----
+
+     Every amount the API hands us is an INTEGER IN THE MINOR UNIT OF ITS OWN CURRENCY.
+     Since we started charging in USD/GBP/EUR/… the legacy field name `amount_paise` is
+     cents on a USD row, so the currency is no longer implied by the field name and has
+     to travel with the number. Hence two functions and no default second argument:
+
+       fmtMoney(minor, currency)   render in the currency it is denominated in. No FX.
+       fmtDisplay(minor, currency) INR-denominated figures shown in the org's display
+                                   currency (Settings → company country).
+
+     The old fmtPaise() multiplied EVERY amount by display_currency.rate_from_inr. That
+     was right only while all money was INR: a $49.99 top-up stored as 4999 came out as
+     "$0.59" — no error, no NaN, just a wrong number that looks plausible. Never
+     reintroduce a formatter that infers the currency. */
+  const CUR_SYMBOLS = {
+    INR: "₹", USD: "$", GBP: "£", EUR: "€", CAD: "CA$", AUD: "A$", AED: "AED ",
+    SGD: "S$", JPY: "¥", NZD: "NZ$", CHF: "CHF ", HKD: "HK$",
+  };
+  // Only the currencies whose minor unit is NOT 1/100 — everything else defaults to 2.
+  // Mirrors MINOR_UNIT_EXPONENT in app/money.py. JPY is display-only (never charged),
+  // but ¥999 is stored as 999, so a blanket /100 would render it as ¥9.99.
+  const CUR_EXPONENTS = {
+    JPY: 0, KRW: 0, VND: 0, ISK: 0, CLP: 0, XAF: 0, XOF: 0, XPF: 0,
+    KWD: 3, BHD: 3, OMR: 3, JOD: 3, TND: 3,
+  };
+  // Mirrors _MIN_CHARGE_MINOR in app/money.py: the smallest amount the server will create
+  // a Razorpay order for, per currency. It is NOT a flat 100 — 100 minor units is ₹1 but
+  // $1.00, twice the $0.50 floor the server actually applies, and AED's floor is 200 fils.
+  // Anything comparing a discounted total against "can this be charged at all?" MUST use
+  // this, or the modal promises a free top-up for an order the server then charges for.
+  const MIN_CHARGE_MINOR = {
+    INR: 100, USD: 50, GBP: 50, EUR: 50, CAD: 50, AUD: 50, AED: 200, SGD: 50,
+  };
+  function curCode(currency) { return String(currency || "INR").trim().toUpperCase() || "INR"; }
+  function minChargeMinor(currency) {
+    const m = MIN_CHARGE_MINOR[curCode(currency)];
+    return m === undefined ? 100 : m;   // same fallback as money.min_charge_minor()
+  }
+  function curSymbol(currency) { const c = curCode(currency); return CUR_SYMBOLS[c] || c + " "; }
+  function curExponent(currency) {
+    const e = CUR_EXPONENTS[curCode(currency)];
+    return e === undefined ? 2 : e;
+  }
+  function minorToMajor(minor, currency) {
+    return Number(minor || 0) / Math.pow(10, curExponent(currency));
+  }
+  // Render an amount in the currency it is actually denominated in. Use this for
+  // anything that came off a payment/order row or a server price — those carry their
+  // own currency and must never be run through an exchange rate.
+  function fmtMoney(minor, currency) {
+    const code = curCode(currency);
+    const exp = curExponent(code);
+    const v = minorToMajor(minor, code);
+    // Mirrors money.format_money(): whole amounts drop the decimals (₹999, not ₹999.00),
+    // anything fractional shows the currency's full precision ($19.50, not $19.5). Client
+    // and server must render the same amount identically — several screens fall back from
+    // one to the other, and a mismatch there reads as two different prices.
+    const digits = (exp === 0 || Number.isInteger(v)) ? 0 : exp;
+    return curSymbol(code) + v.toLocaleString(code === "INR" ? "en-IN" : "en-US",
+      { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+  // The org's display currency, from Settings → company country. Presentation only.
   function orgCur() {
     const c = state.me && state.me.organization && state.me.organization.display_currency;
     return (c && c.code && c.code !== "INR" && Number(c.rate_from_inr) > 0) ? c : null;
   }
-  function fmtInr(amountInr) {
-    const n = Number(amountInr || 0);
+  // Show an amount in the org's display currency where that is actually expressible.
+  // `rate_from_inr` is the only rate we hold, so INR → display is the ONLY conversion
+  // available: a row already denominated in another currency is rendered as-is rather
+  // than multiplied by a rate that does not apply to it.
+  function fmtDisplay(minor, currency) {
+    const code = curCode(currency);
     const cur = orgCur();
-    if (!cur) return "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
-    const v = n * Number(cur.rate_from_inr);
+    if (!cur || code !== "INR") return fmtMoney(minor, code);
+    const v = minorToMajor(minor, "INR") * Number(cur.rate_from_inr);
     return cur.symbol + v.toLocaleString("en-US", { maximumFractionDigits: v >= 1000 ? 0 : 2 });
   }
-  function fmtPaise(p) {
-    return fmtInr(Number(p || 0) / 100);
+  // A handful of API fields are INR *major* units (plain rupees: credit_value_inr,
+  // value_inr, min_fee_rupees). Explicitly INR by definition of the field, not a guess.
+  function fmtInr(amountInr) {
+    return fmtDisplay(Math.round(Number(amountInr || 0) * 100), "INR");
   }
-  // Razorpay charges in INR — show the real billed amount wherever a payment starts.
-  function inrBilledNote(paise) {
-    if (!orgCur()) return "";
-    const inr = "₹" + (Number(paise || 0) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 });
-    return `<div style="font-size:11.5px;color:var(--muted);margin-top:2px">Billed in INR: ${inr} · shown in ${orgCur().code} at today's rate</div>`;
+  // Same fields, but where the figure must stay INR because the thing it describes is
+  // INR-only (the Razorpay Route fee on student collections). No display conversion.
+  function fmtInrExact(amountInr) {
+    return fmtMoney(Math.round(Number(amountInr || 0) * 100), "INR");
+  }
+  // Razorpay Checkout prefill, straight from the server — name/email/contact of the real
+  // signed-in buyer. Razorpay: "Your international payment will fail if you send us a
+  // dummy email id and phone number of the customer", so blanks are DROPPED (the buyer
+  // types them into Checkout) and never replaced with a placeholder.
+  // https://razorpay.com/docs/payments/international-payments/?preferred-country=IN
+  function checkoutPrefill(prefill) {
+    const out = {};
+    Object.keys(prefill || {}).forEach((k) => {
+      const v = String(prefill[k] == null ? "" : prefill[k]).trim();
+      if (v) out[k] = v;
+    });
+    return out;
+  }
+  // Shown under every checkout button. Replaces inrBilledNote(), which said "Billed in
+  // INR" — a misrepresentation now that we really do create the order in the buyer's
+  // currency. The only conversion left is the one we don't control: the buyer's own
+  // card network / bank, which is what the second sentence is about.
+  function chargeNote(minor, currency) {
+    const code = curCode(currency);
+    const cur = orgCur();
+    const display = cur ? cur.code : "INR";
+    // An Indian org paying in INR has nothing to disclose: domestic charge, same currency
+    // the whole portal is already showing. Everyone else gets both facts that could
+    // surprise them on a statement — which currency we charge, and that Rilono is an
+    // Indian merchant, so their bank may treat it as a cross-border transaction.
+    if (display === "INR" && code === "INR") return "";
+    return `<div style="font-size:11.5px;color:var(--muted);margin-top:2px">You'll be charged
+      <b>${esc(fmtMoney(minor, code))}</b> in ${esc(code)}.${display !== code
+        ? ` Amounts elsewhere in this portal display in ${esc(display)}.` : ""}
+      Your bank may add a foreign-transaction fee and, if it converts, uses its own rate.</div>`;
   }
   // Shared discount-code bar used on the credits top-up and billing pages.
   // `coupon` is null (show input) or { code, percent, percent_display } (show applied state).
@@ -1182,6 +1280,7 @@
     refreshCalendarBadge();  // keep the overdue-reminder badge correct without needing to open Calendar
     wireNotifications();
     refreshNotifications();  // bell badge correct from first paint
+    initAiDock();            // bottom-right assistant bubble — mounts on its own, don't block boot
   }
 
   function updatePlanChip() {
@@ -1403,6 +1502,7 @@
     // Team's sub-tab travels in ?tab= — read it BEFORE syncUrl rewrites the address bar.
     if (view === "team") teamConsumeTab();
     syncUrl(viewToPath(view), opts);
+    syncAiDockVisibility();
     const needCap = VIEW_CAPABILITY[view];
     if (needCap && !can(needCap)) {
       $("#content").innerHTML = deniedCard(VIEW_DENIED_COPY[view] ||
@@ -4471,7 +4571,14 @@
 
     /* ---- Payments tab: collected-from-this-client ledger + secure pay-link requests.
        Reads are member-visible; money actions (request / cancel / refund) are admin-only,
-       enforced server-side and mirrored in the UI. ---- */
+       enforced server-side and mirrored in the UI.
+
+       EVERY figure on this tab is INR and stays INR. Razorpay Route — the linked-account
+       split that lets a consultancy collect straight into its own bank — settles only in
+       INR, so there is no currency choice to offer here and no display conversion either:
+       an org raising a ₹25,000 invoice has to see ₹25,000, not an FX estimate of it, or
+       the refund dialog and the invoice disagree. Hence fmtMoney(x, "INR") throughout
+       rather than fmtDisplay. ---- */
     async function renderPayments() {
       const body = $("#cpBody");
       body.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
@@ -4491,13 +4598,19 @@
 
       const chipRow = `
         <div class="pay-chips">
-          <div class="pay-chip"><div class="k">Collected</div><div class="v ok">${fmtPaise(t.collected_paise || 0)}</div></div>
-          <div class="pay-chip"><div class="k">Pending</div><div class="v">${fmtPaise(t.pending_paise || 0)}</div></div>
-          <div class="pay-chip"><div class="k">Refunded</div><div class="v warn">${fmtPaise(t.refunded_paise || 0)}</div></div>
+          <div class="pay-chip"><div class="k">Collected</div><div class="v ok">${fmtMoney(t.collected_paise || 0, "INR")}</div></div>
+          <div class="pay-chip"><div class="k">Pending</div><div class="v">${fmtMoney(t.pending_paise || 0, "INR")}</div></div>
+          <div class="pay-chip"><div class="k">Refunded</div><div class="v warn">${fmtMoney(t.refunded_paise || 0, "INR")}</div></div>
         </div>`;
 
       let gateNote = "";
-      if (!d.collect_enabled) {
+      if (!d.collect_enabled && !orgIsIndian()) {
+        // Route can't onboard this org at all, so pointing them at "connect your bank"
+        // would send them to a dead end. See acctCountryBlockedCard in Finance.
+        gateNote = `<div class="pay-gate-note">Online collection runs on Razorpay Route, which onboards
+          India-registered businesses only — see <a href="#" id="payGoFinance">Finance</a> for the details.${
+          canManage ? " You can still <b>record payments you've collected yourself</b> below, and they book into your Income ledger." : " You can still browse this ledger."}</div>`;
+      } else if (!d.collect_enabled) {
         gateNote = `<div class="pay-gate-note">Online collection isn't live yet — connect your company bank account in
           <a href="#" id="payGoFinance">Finance</a> to charge clients online.${canManage ? " Meanwhile you can <b>record payments you've taken offline</b> below." : " You can still browse this ledger."}</div>`;
       } else if (!d.client_email) {
@@ -4513,14 +4626,18 @@
         <div class="card hidden" id="payReqForm"><div class="card-body">
           <div style="font-weight:800;font-size:14.5px;margin-bottom:12px">Request a payment from ${esc(cl.full_name)}</div>
           <div class="field-row">
-            <div class="field"><label>Amount (₹) *</label>
+            <div class="field"><label>Amount in INR (₹) *</label>
               <input id="payAmt" type="number" min="1" step="1" placeholder="e.g. 25000" autocomplete="off"></div>
             <div class="field"><label>Due date <span style="color:var(--muted);font-weight:500">(optional)</span></label>
               <input id="payDue" type="date"></div>
           </div>
           <div class="field"><label>What is this payment for? *</label>
             <input id="payDesc" type="text" maxlength="300" placeholder="e.g. University application service fee" autocomplete="off"></div>
-          <div class="pay-split-preview" id="paySplit">Rilono fee: ${Number(fee.percent)}% (min ₹${Number(fee.min_fee_rupees)}) — enter an amount to preview your payout.</div>
+          <div class="pay-split-preview" id="paySplit">Rilono fee: ${Number(fee.percent)}% (min ${esc(fmtInrExact(fee.min_fee_rupees))}) — enter an amount to preview your payout.</div>
+          <div style="font-size:12px;color:var(--muted);line-height:1.55;margin-top:8px">Invoices are raised in INR
+            and settle to your bank in INR. A student overseas can still pay one with an international card —
+            their bank converts at its own rate and may add a foreign-transaction fee, so what you receive
+            is unaffected.</div>
           <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
             <button class="btn btn-primary" id="payCreateBtn">Create &amp; email secure link</button>
             <span style="font-size:12px;color:var(--muted)">Sent to ${esc(d.client_email || "")} · paid via Razorpay · settles to your bank</span>
@@ -4534,9 +4651,9 @@
       const manualForm = canManage ? `
         <div class="card hidden" id="payManualForm"><div class="card-body">
           <div style="font-weight:800;font-size:14.5px;margin-bottom:4px">Record an off-platform payment</div>
-          <div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">For money already collected outside Rilono (cash, bank transfer, UPI…). This is a bookkeeping entry — it does not charge the client.</div>
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">For money already collected outside Rilono (cash, bank transfer, UPI…). This is a bookkeeping entry — it does not charge the client. Record it in INR; if you were paid in another currency, enter the INR amount that actually landed in your account.</div>
           <div class="field-row">
-            <div class="field"><label>Amount received (₹) *</label>
+            <div class="field"><label>Amount received in INR (₹) *</label>
               <input id="mpAmt" type="number" min="1" step="1" placeholder="e.g. 25000" autocomplete="off"></div>
             <div class="field"><label>How was it paid? *</label>
               <select id="mpMethod">${MANUAL_METHODS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div>
@@ -4574,7 +4691,7 @@
           acts.push(`<button class="btn btn-ghost btn-xs" data-act="cancel" data-id="${p.id}">Cancel</button>`);
         }
         if (canRefund && !isManual && ["paid", "transferred", "settled", "partially_refunded"].includes(p.status)) {
-          acts.push(`<button class="btn btn-ghost btn-xs danger" data-act="refund" data-id="${p.id}" data-amt="${fmtPaise(p.amount_paise - (p.refunded_amount_paise || 0))}">Refund</button>`);
+          acts.push(`<button class="btn btn-ghost btn-xs danger" data-act="refund" data-id="${p.id}" data-amt="${fmtMoney(p.amount_paise - (p.refunded_amount_paise || 0), "INR")}">Refund</button>`);
         }
         if (canManage && isManual) {
           acts.push(`<button class="btn btn-ghost btn-xs danger" data-act="delete-manual" data-id="${p.id}">Remove</button>`);
@@ -4587,7 +4704,7 @@
         return `<tr>
           <td>${dateStr(when)}</td>
           <td>${esc(p.description || (isManual ? "Offline payment" : "Payment"))}<div class="pay-sub">${sub}</div></td>
-          <td style="font-weight:700;white-space:nowrap">${fmtPaise(p.amount_paise)}</td>
+          <td style="font-weight:700;white-space:nowrap">${fmtMoney(p.amount_paise, "INR")}</td>
           <td>${statusCell}</td>
           <td class="pay-acts">${acts.join("")}</td>
         </tr>`;
@@ -4624,15 +4741,18 @@
         amtEl.oninput = () => {
           const rupees = parseFloat(amtEl.value || "0");
           if (!rupees || rupees <= 0) {
-            previewEl.textContent = `Rilono fee: ${Number(fee.percent)}% (min ₹${Number(fee.min_fee_rupees)}) — enter an amount to preview your payout.`;
+            previewEl.textContent = `Rilono fee: ${Number(fee.percent)}% (min ${fmtInrExact(fee.min_fee_rupees)}) — enter an amount to preview your payout.`;
             return;
           }
+          // The client-side `fee` fallback above is {percent: 2, min_fee_rupees: 49} — an
+          // INR figure by definition, and Route only ever charges in INR, so it is rendered
+          // with fmtInrExact/fmtMoney and never through the display-currency converter.
           const paise = Math.round(rupees * 100);
           const commission = Math.max(Math.round(paise * (Number(fee.percent) / 100)), Math.round(Number(fee.min_fee_rupees) * 100));
           const payout = paise - commission;
           previewEl.innerHTML = payout > 0
-            ? `Student pays <b>${fmtPaise(paise)}</b> · Rilono fee <b>${fmtPaise(commission)}</b> · You receive <b>${fmtPaise(payout)}</b> (settled to your bank by Razorpay)`
-            : `Amount is too small — after the minimum fee of ₹${Number(fee.min_fee_rupees)} there would be nothing left to pay out.`;
+            ? `Student pays <b>${fmtMoney(paise, "INR")}</b> · Rilono fee <b>${fmtMoney(commission, "INR")}</b> · You receive <b>${fmtMoney(payout, "INR")}</b> (settled to your bank by Razorpay)`
+            : `Amount is too small — after the minimum fee of ${fmtInrExact(fee.min_fee_rupees)} there would be nothing left to pay out.`;
         };
       }
 
@@ -7112,48 +7232,148 @@
     } catch (ex) { toast(errMessage(ex), "error"); }
   }
 
-  /* ---- transfer ownership (type the email to confirm) ---- */
+  /* ---- transfer ownership: type their email, then a code emailed to YOU ----
+     The address on screen is readable by anyone already holding the session, so typing it
+     back proves nothing on its own. Ownership carries refunds and the payout bank account
+     and only the new owner can hand it back, so step 2 asks for a 6-digit code sent to our
+     own inbox — which a stolen session can't open. */
   function tmOpenTransferOwnership(userId) {
     const m = tmMemberById(userId) || {};
     const email = m.email || "";
-    openModal(`<div class="modal-head"><h3>Transfer ownership</h3>
-      <button class="x" onclick="__ent.closeModal()">×</button></div>
-      <form id="tmTransferForm"><div class="modal-body">
-        <p class="tm-hint">${esc(m.full_name || email || "This member")} becomes the workspace owner and gets every permission, including refunds and the payout bank account. You keep Admin. <b>This can't be undone by you afterwards</b> — only the new owner can transfer it back.</p>
-        <div class="field"><label>Type <b>${esc(email)}</b> to confirm</label>
-          <input name="confirm_email" autocomplete="off" placeholder="${esc(email)}"/></div>
-        <div id="tmTransferError" class="auth-error hidden"></div>
-      </div><div class="modal-foot">
-        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-danger" id="tmTransferSubmit">Transfer ownership</button>
-      </div></form>`);
-    $("#tmTransferForm").onsubmit = async (e) => {
-      e.preventDefault();
-      const f = e.target; const btn = $("#tmTransferSubmit"); const err = $("#tmTransferError");
-      err.classList.add("hidden");
-      const typed = (f.confirm_email.value || "").trim();
-      if (typed.toLowerCase() !== String(email).toLowerCase()) {
-        err.textContent = "That doesn't match their email address.";
-        err.classList.remove("hidden");
-        return;
-      }
-      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-      try {
-        await api("/organization/transfer-ownership", { method: "POST", body: { target_user_id: userId, confirm_email: typed } });
-        toast("Ownership transferred", "success");
-        closeModal();
-        // OUR own capabilities just changed (owner → admin), so nothing cached is
-        // trustworthy: drop it all and re-boot, which re-reads /me and re-routes here.
-        teamUi.meta = null; teamUi.metaError = null;
-        teamUi.team = null; teamUi.teamError = null;
-        teamUi.mine = null; teamUi.mineError = null;
-        teamMembersCache = null;
-        await boot();
-      } catch (ex) {
-        err.textContent = errMessage(ex); err.classList.remove("hidden");
-        btn.disabled = false; btn.textContent = "Transfer ownership";
-      }
-    };
+    const who = m.full_name || email || "This member";
+    let resendTimer = null, resendUntil = 0;
+
+    function stopResendTimer() { if (resendTimer) { clearInterval(resendTimer); resendTimer = null; } }
+    function tickResend() {
+      const link = $("#tmTransferResend");
+      if (!link) { stopResendTimer(); return; }   // modal closed (overlay/Escape) — stop ticking
+      const left = Math.ceil((resendUntil - Date.now()) / 1000);
+      if (left > 0) { link.disabled = true; link.textContent = `Resend code in ${left}s`; }
+      else { link.disabled = false; link.textContent = "Resend code"; stopResendTimer(); }
+    }
+    function startResendCooldown(seconds) {
+      resendUntil = Date.now() + seconds * 1000;
+      stopResendTimer();
+      resendTimer = setInterval(tickResend, 1000);
+      tickResend();
+    }
+    async function requestCode(typed) {
+      return api("/organization/transfer-ownership/send-code", {
+        method: "POST", body: { target_user_id: userId, confirm_email: typed },
+      });
+    }
+
+    /* Step 1 — confirm WHO gets the workspace. */
+    function renderStep1(prefill) {
+      stopResendTimer();
+      openModal(`<div class="modal-head"><h3>Transfer ownership</h3>
+        <button class="x" onclick="__ent.closeModal()">×</button></div>
+        <form id="tmTransferForm"><div class="modal-body">
+          <p class="tm-hint">${esc(who)} becomes the workspace owner and gets every permission, including refunds and the payout bank account. You keep Admin. <b>This can't be undone by you afterwards</b> — only the new owner can transfer it back.</p>
+          <div class="field" style="margin-top:14px"><label>Type <b>${esc(email)}</b> to confirm</label>
+            <input name="confirm_email" autocomplete="off" placeholder="${esc(email)}" value="${esc(prefill || "")}"/></div>
+          <p class="tm-hint">🔒 Next we'll email a 6-digit code to your own address. Ownership doesn't move until you enter it.</p>
+          <div id="tmTransferError" class="auth-error hidden" style="margin-top:16px"></div>
+        </div><div class="modal-foot">
+          <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-danger" id="tmTransferSubmit">Email me a code</button>
+        </div></form>`);
+      $("#tmTransferForm").onsubmit = async (e) => {
+        e.preventDefault();
+        const f = e.target; const btn = $("#tmTransferSubmit"); const err = $("#tmTransferError");
+        err.classList.add("hidden");
+        const typed = (f.confirm_email.value || "").trim();
+        if (typed.toLowerCase() !== String(email).toLowerCase()) {
+          err.textContent = "That doesn't match their email address.";
+          err.classList.remove("hidden");
+          return;
+        }
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        try {
+          renderStep2(typed, (await requestCode(typed)) || {});
+        } catch (ex) {
+          err.textContent = errMessage(ex); err.classList.remove("hidden");
+          btn.disabled = false; btn.textContent = "Email me a code";
+        }
+      };
+    }
+
+    /* Step 2 — prove the inbox, then hand over. */
+    function renderStep2(typed, data) {
+      const masked = data.masked_email || "your email address";
+      const mins = data.expires_in_minutes || 10;
+      openModal(`<div class="modal-head"><h3>Confirm it's you</h3>
+        <button class="x" onclick="__ent.closeModal()">×</button></div>
+        <form id="tmTransferCodeForm"><div class="modal-body">
+          <div class="tm-otp-sent"><span>📬</span><div>We emailed a 6-digit code to <b>${esc(masked)}</b>. It expires in ${esc(String(mins))} minutes and only works for this transfer.</div></div>
+          <div class="field"><label>Enter the code to make <b>${esc(who)}</b> the owner</label>
+            <input name="code" class="tm-otp-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"/></div>
+          <div class="tm-otp-actions">
+            <button type="button" class="tm-otp-link" id="tmTransferResend">Resend code</button>
+            <button type="button" class="tm-otp-link" id="tmTransferBack">Back</button>
+          </div>
+          <div id="tmTransferError" class="auth-error hidden"></div>
+        </div><div class="modal-foot">
+          <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+          <button type="submit" class="btn btn-danger" id="tmTransferSubmit">Transfer ownership</button>
+        </div></form>`);
+      const codeInput = $("#tmTransferCodeForm").code;
+      if (data.dev_code) codeInput.value = data.dev_code;   // local sandbox without an email provider
+      codeInput.focus();
+      codeInput.addEventListener("input", () => {
+        codeInput.value = (codeInput.value || "").replace(/\D/g, "").slice(0, 6);
+      });
+      startResendCooldown(30);
+
+      $("#tmTransferBack").onclick = () => renderStep1(typed);
+      $("#tmTransferResend").onclick = async () => {
+        const link = $("#tmTransferResend"); const err = $("#tmTransferError");
+        err.classList.add("hidden");
+        link.disabled = true; link.textContent = "Sending…";
+        try {
+          const again = await requestCode(typed);
+          if (again && again.dev_code) codeInput.value = again.dev_code;
+          toast("New code sent", "success");
+          startResendCooldown(30);
+        } catch (ex) {
+          err.textContent = errMessage(ex); err.classList.remove("hidden");
+          link.disabled = false; link.textContent = "Resend code";
+        }
+      };
+
+      $("#tmTransferCodeForm").onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = $("#tmTransferSubmit"); const err = $("#tmTransferError");
+        err.classList.add("hidden");
+        const code = (codeInput.value || "").trim();
+        if (code.length !== 6) {
+          err.textContent = "Enter the 6-digit code we emailed you.";
+          err.classList.remove("hidden");
+          return;
+        }
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+        try {
+          await api("/organization/transfer-ownership", {
+            method: "POST", body: { target_user_id: userId, confirm_email: typed, code },
+          });
+          stopResendTimer();
+          toast("Ownership transferred", "success");
+          closeModal();
+          // OUR own capabilities just changed (owner → admin), so nothing cached is
+          // trustworthy: drop it all and re-boot, which re-reads /me and re-routes here.
+          teamUi.meta = null; teamUi.metaError = null;
+          teamUi.team = null; teamUi.teamError = null;
+          teamUi.mine = null; teamUi.mineError = null;
+          teamMembersCache = null;
+          await boot();
+        } catch (ex) {
+          err.textContent = errMessage(ex); err.classList.remove("hidden");
+          btn.disabled = false; btn.textContent = "Transfer ownership";
+        }
+      };
+    }
+
+    renderStep1("");
   }
 
   /* ============================ ROLES & PERMISSIONS ============================ */
@@ -7656,6 +7876,8 @@
     branch_created: ["🏢", "ok"], branch_updated: ["🏢", "info"], branch_archived: ["🗄️", "warn"],
     branch_reactivated: ["✅", "ok"], branch_default_changed: ["📌", "info"],
     clients_reassigned: ["🔀", "warn"], ownership_transferred: ["👑", "danger"],
+    // The audited action is `owner_transferred` (the notification type is the -ship one).
+    owner_transferred: ["👑", "danger"], owner_transfer_code_sent: ["🔑", "warn"],
   };
   function alValue(v) {
     if (v == null || v === "") return "—";
@@ -7862,8 +8084,12 @@
       const display = cycle === "yearly" ? p.yearly_display : p.monthly_display;
       const basePaise = cycle === "yearly" ? p.yearly_paise : p.monthly_paise;
       if (!bCoupon || !basePaise) return `<div class="price">${display}<small>/${cyclSuffix}</small></div>`;
+      // The plan list price comes back pre-formatted in the plan's own currency
+      // (billing.py quotes plans in INR only), so the discounted figure has to be
+      // rendered in that same currency — otherwise the struck-through "was" price and
+      // the new price would be in two different currencies.
       const discounted = Math.max(0, Math.round(basePaise * (100 - bCoupon.percent) / 100));
-      return `<div class="price">${fmtPaise(discounted)}<small>/${cyclSuffix}</small><span class="price-was">${display}</span></div>
+      return `<div class="price">${fmtMoney(discounted, p.currency || "INR")}<small>/${cyclSuffix}</small><span class="price-was">${display}</span></div>
         <div class="price-off">${esc(bCoupon.percent_display)} off applied</div>`;
     };
 
@@ -7937,7 +8163,7 @@
       name: res.organization_name || "Rilono",
       description: res.plan_label + " plan (" + res.billing_cycle + ")",
       order_id: res.order_id,
-      prefill: res.prefill,
+      prefill: checkoutPrefill(res.prefill),
       theme: { color: "#6366f1" },
       handler: async function (resp) {
         try {
@@ -8049,6 +8275,10 @@
     const canPayInfra = can("billing.manage");
     const canBuy = can("credits.purchase");
     const infra = w.infra_fee || {};
+    // The fee is quoted by the server in `infra.currency` and pre-formatted as
+    // `fee_display` — render that string rather than reformatting fee_paise, so the
+    // banner can never disagree with what the order is actually created in.
+    const infraPrice = infra.fee_display || fmtMoney(infra.fee_paise || 0, infra.currency || "INR");
 
     const infraBanner = (infra.over_free_limit || infra.fee_due)
       ? `<div class="card" style="margin-bottom:18px;border-left:4px solid ${infra.is_current ? "var(--success,#10b981)" : "var(--warning,#f59e0b)"}">
@@ -8059,11 +8289,11 @@
                 You have ${infra.clients_used} clients (free up to ${infra.free_student_limit}).
                 ${infra.is_current
                   ? `Active until ${infra.paid_until ? fmtDate(infra.paid_until) : "—"}.`
-                  : `Activate the ${fmtPaise(infra.fee_paise)}/month fee to keep adding clients.`}
+                  : `Activate the ${esc(infraPrice)}/month fee to keep adding clients.`}
               </div>
             </div>
             ${!infra.is_current && canPayInfra
-              ? `<button class="btn btn-primary" id="infraPayBtn">Activate ${esc(fmtPaise(infra.fee_paise))}/mo</button>`
+              ? `<button class="btn btn-primary" id="infraPayBtn">Activate ${esc(infraPrice)}/mo</button>`
               : (infra.is_current ? `<span class="plan-current-tag" style="color:var(--success,#10b981)">✓ Active</span>` : "")}
           </div>
         </div>`
@@ -8125,10 +8355,16 @@
     const freeTier = w.free_tier || {};
     const coupon = state.creditCoupon;
 
+    // `amount_paise` on a package is the minor unit of the package's OWN currency (the
+    // legacy field name survived the multi-currency migration), and `amount_display` is
+    // the server's rendering of it. Show the server's string; only the coupon preview is
+    // computed here, and it stays in the package's currency. Other currencies are offered
+    // at checkout, where the server quotes them — never converted client-side.
     const priceBlock = (p) => {
-      if (!coupon) return `<div class="price">${esc(fmtPaise(p.amount_paise))}</div>`;
+      const listed = p.amount_display || fmtMoney(p.amount_paise, p.currency || "INR");
+      if (!coupon) return `<div class="price">${esc(listed)}</div>`;
       const discounted = Math.max(0, Math.round(p.amount_paise * (100 - coupon.percent) / 100));
-      return `<div class="price">${fmtPaise(discounted)}<span class="price-was">${esc(fmtPaise(p.amount_paise))}</span></div>
+      return `<div class="price">${esc(fmtMoney(discounted, p.currency || "INR"))}<span class="price-was">${esc(listed)}</span></div>
         <div class="price-off">${esc(coupon.percent_display)} off applied</div>`;
     };
     const pkgCard = (p) => `<div class="plan-card ${p.is_popular ? "popular" : ""}">
@@ -8170,7 +8406,8 @@
       <h3 style="margin:0 0 12px">Top up your wallet</h3>
       ${canManage ? couponRow(coupon, "applyCreditCoupon", "removeCreditCoupon", "creditCouponInput", "top-ups") : ""}
       <div class="plan-grid">${packages.map(pkgCard).join("")}</div>
-      <p style="text-align:center;color:var(--muted);font-size:13px;margin:14px 0 28px">Secure top-ups via Razorpay (UPI, NetBanking). Credits never expire.</p>
+      <p style="text-align:center;color:var(--muted);font-size:13px;margin:14px 0 28px">Secure top-ups via Razorpay (UPI, cards, NetBanking).${
+        pkgCurrencies(packages).length > 1 ? " Pick your billing currency at checkout." : ""} Credits never expire.</p>
 
       <div class="card cr-free-card"><div class="card-body">
         <div class="cr-free-head">Included free ${infoTip(
@@ -8218,20 +8455,40 @@
       const [label, color] = map[s] || [s || "—", "#64748b"];
       return `<span class="status-pill" style="background:${color}1a;color:${color};white-space:nowrap"><span class="sd" style="background:${color}"></span>${esc(label)}</span>`;
     };
+    // A receipt row is denominated in the currency it was charged in, so render from
+    // `currency` + the minor-unit amounts whenever the row carries them. The `*_display`
+    // strings are only a fallback for rows served before the endpoint learned about
+    // currency — those are all genuinely INR, which is why the fallback is safe.
+    const rowMoney = (r, minor, display) => (r.currency ? fmtMoney(minor, r.currency) : (display || ""));
     const body = rows.length ? rows.map((r) => `<tr>
         <td style="white-space:nowrap">${fmtDate(r.verified_at || r.created_at)}</td>
         <td><b>${esc(r.label)}</b>${r.coupon_code ? `<div class="cr-sub">🎟 ${esc(r.coupon_code)}${r.coupon_percent_off ? ` · ${r.coupon_percent_off}% off` : ""}</div>` : ""}</td>
         <td style="text-align:right">${r.kind === "credits" ? `+${r.total_credits}${r.bonus_credits ? ` <span class="cr-sub-inline">(${r.bonus_credits} bonus)</span>` : ""}` : "—"}</td>
-        <td style="text-align:right;white-space:nowrap"><b>${esc(r.net_amount_display)}</b>${r.refunded_amount_paise ? `<div class="cr-sub">${esc(r.refunded_display)} refunded</div>` : ""}</td>
+        <td style="text-align:right;white-space:nowrap"><b>${esc(rowMoney(r, r.net_amount_paise, r.net_amount_display))}</b>${
+          r.refunded_amount_paise ? `<div class="cr-sub">${esc(rowMoney(r, r.refunded_amount_paise, r.refunded_display))} refunded</div>` : ""}</td>
         <td>${statusPill(r.status)}</td>
         <td class="cr-sub" style="white-space:nowrap">${esc(r.created_by_name || "—")}<div>${esc(r.payment_reference || "")}</div></td>
       </tr>`).join("")
       : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">No purchases yet — your first top-up will appear here.</td></tr>`;
-
+    // The header's "₹X paid" comes from the endpoint, which adds `collected_paise` across
+    // rows and formats the result as INR. That is a true statement only while every row is
+    // INR, so once the history is mixed — or single-currency but not INR — the money
+    // figure is DROPPED rather than relabelled: a cross-currency sum is money in no
+    // currency at all, and the revenue-status rules that decide what counts live on the
+    // server, so it can't honestly be re-derived here.
+    const rowCurrencies = rows.reduce((acc, r) => {
+      const code = r.currency || "INR";
+      if (acc.indexOf(code) === -1) acc.push(code);
+      return acc;
+    }, []);
     const sum = p.summary || {};
+    const onlyInr = rowCurrencies.every((code) => code === "INR");
+    const collectedNote = onlyInr ? ` · ${esc(sum.collected_display || "₹0")} paid` : "";
+
     mount.innerHTML = `
       <div class="card"><div class="card-head"><h3>Purchase history</h3>
-        <span class="cr-head-note">${sum.count || 0} ${sum.count === 1 ? "payment" : "payments"} · ${esc(sum.collected_display || "₹0")} paid · ${sum.credits_purchased || 0} credits bought</span></div>
+        <span class="cr-head-note">${sum.count || 0} ${sum.count === 1 ? "payment" : "payments"}${
+          rowCurrencies.length > 1 ? ` in ${rowCurrencies.length} currencies` : ""}${collectedNote} · ${sum.credits_purchased || 0} credits bought</span></div>
         <div class="card-body" style="padding:0;overflow-x:auto">
           <table class="client-table cr-table"><thead><tr>
             <th>Date</th><th>Item</th><th style="text-align:right">Credits</th>
@@ -8697,19 +8954,61 @@
   // ---- Credit top-up checkout (order-review modal with live coupon + breakdown) ----
   let checkoutCtx = null;
 
+  // The price ladder the server published for a package: one owner-chosen price per
+  // currency, each with the amount AND the server's own rendering of it. Nothing on this
+  // screen converts anything — picking a currency picks which quoted price to send back
+  // as a hint, and the server still decides the amount it charges.
+  function pkgOptions(pkg) {
+    const opts = ((pkg || {}).price_options || []).filter((o) => o && o.currency);
+    if (opts.length) return opts;
+    // Payload without a ladder (older build): the one currency the package was quoted in.
+    return [{
+      currency: (pkg || {}).currency || "INR",
+      amount_minor: Number((pkg || {}).amount_paise || 0),
+      display: (pkg || {}).amount_display || fmtMoney((pkg || {}).amount_paise, (pkg || {}).currency || "INR"),
+    }];
+  }
+  function pkgCurrencies(packages) {
+    const seen = [];
+    (packages || []).forEach((p) => pkgOptions(p).forEach((o) => {
+      if (seen.indexOf(o.currency) === -1) seen.push(o.currency);
+    }));
+    return seen;
+  }
+  function checkoutOption() {
+    const opts = pkgOptions(checkoutCtx.pkg);
+    return opts.find((o) => o.currency === checkoutCtx.currency) || opts[0];
+  }
+
   function openCreditCheckout(pkgKey) {
     const pkg = (state.creditPackages || []).find((p) => p.key === pkgKey);
     if (!pkg) { toast("Package unavailable.", "error"); return; }
-    checkoutCtx = { pkg, coupon: state.creditCoupon || null };
+    // Default to the currency the package was quoted in; the server applies the same
+    // precedence (last billed → org country → INR) when we send no hint at all.
+    checkoutCtx = {
+      pkg,
+      coupon: state.creditCoupon || null,
+      currency: pkg.currency || pkgOptions(pkg)[0].currency,
+    };
     renderCheckout();
   }
 
   function checkoutBreakdown() {
-    const base = Number(checkoutCtx.pkg.amount_paise || 0);
+    const opt = checkoutOption();
+    const currency = opt.currency;
+    // Server-quoted, never converted: `amount_minor` is already in this currency's minor
+    // unit. Only the coupon preview is arithmetic, and it stays inside one currency.
+    const base = Number(opt.amount_minor || 0);
     const c = checkoutCtx.coupon;
     const discount = c ? Math.max(0, base - Math.max(0, Math.round(base * (100 - c.percent) / 100))) : 0;
     const total = Math.max(0, base - discount);
-    return { base, discount, total, free: total < 100 };
+    // Mirrors /credits/topup/checkout exactly: it grants the top-up outright only when a
+    // COUPON takes the amount under money.min_charge_minor(currency), and otherwise
+    // creates a real order. enterprise_coupons.is_free_checkout()'s flat MIN_CHECKOUT_PAISE
+    // = 100 is "₹1", so reusing it here called a $0.60 order free — the modal said "Get 100
+    // credits — free", the server created a $0.60 order anyway and Razorpay opened asking
+    // for money. The floor is per-currency; so is this test.
+    return { base, discount, total, currency, free: !!c && total < minChargeMinor(currency) };
   }
 
   /* ============================================================
@@ -8753,6 +9052,8 @@
       <div style="font-size:13px;color:var(--text-2);margin-bottom:20px;line-height:1.55">
         Razorpay verifies your business (KYC) and settles collected payments directly to this account.
         We store only the last 4 digits — your full details stay with Razorpay.
+        <br><b>India-registered businesses only</b> — Razorpay Route needs an Indian bank account,
+        a business PAN and an IFSC code, and settles in INR.
       </div>
 
       <div class="cp-sub-label">Business details</div>
@@ -8870,7 +9171,7 @@
   // A net figure: minus sign OUTSIDE the currency symbol, and never "-₹0".
   function finNet(paise) {
     const n = Number(paise || 0);
-    return (n < 0 ? "−" : "") + fmtPaise(Math.abs(n));
+    return (n < 0 ? "−" : "") + fmtDisplay(Math.abs(n), "INR");
   }
   function finPct(value) {
     if (value == null) return "";
@@ -8957,14 +9258,16 @@
     if (!tabs.some((t) => t.key === finUi.tab)) finUi.tab = tabs[0].key;
 
     const needsBank = !connected || !la.is_payable;
-    const bankBanner = (needsBank && canPayout && finUi.tab !== "account")
+    // Don't nudge a non-Indian org towards a form Razorpay Route can never activate for
+    // them — the Payout account tab explains why instead (see acctCountryBlockedCard).
+    const bankBanner = (needsBank && canPayout && orgIsIndian() && finUi.tab !== "account")
       ? `<div class="fin-nudge">
           <div class="fin-nudge-ic">🏦</div>
           <div class="fin-nudge-txt">
             <b>${connected ? "Your payout account is still being verified" : "Connect your bank to collect student payments online"}</b>
             <span>${connected
               ? "Razorpay is checking your details. Until it clears, you can still record payments you collected offline."
-              : `Send students a secure pay link and have the money settle straight into your own account. Rilono keeps ${esc(String(fee.percent))}%, min ${esc(fmtInr(fee.min_fee_rupees))} — and never holds your funds.`}</span>
+              : `Send students a secure pay link and have the money settle straight into your own account. Rilono keeps ${esc(String(fee.percent))}%, min ${esc(fmtInrExact(fee.min_fee_rupees))} — and never holds your funds.`}</span>
           </div>
           <button class="btn btn-primary" id="finGoAccount">${connected ? "Check status" : "Connect bank"}</button>
         </div>`
@@ -9117,11 +9420,11 @@
       </div>`;
 
     const kpis = `<div class="kpi-grid">
-      ${kpi("↘", "linear-gradient(135deg,#10b981,#34d399)", "Money in", fmtPaise(t.income_paise),
+      ${kpi("↘", "linear-gradient(135deg,#10b981,#34d399)", "Money in", fmtDisplay(t.income_paise, "INR"),
         `${t.income_count} ${t.income_count === 1 ? "entry" : "entries"} ${prev
           ? delta(prev.income_change_pct) + (prev.label ? ` <span class="fin-vs">vs ${esc(prev.label)}</span>` : "")
           : "· " + esc(rangeLabel.toLowerCase())}`)}
-      ${kpi("↗", "linear-gradient(135deg,#f97316,#fb923c)", "Money out", fmtPaise(t.expense_paise),
+      ${kpi("↗", "linear-gradient(135deg,#f97316,#fb923c)", "Money out", fmtDisplay(t.expense_paise, "INR"),
         `${t.expense_count} ${t.expense_count === 1 ? "entry" : "entries"} ${prev ? delta(prev.expense_change_pct, true) : ""}`)}
       ${kpi(profit ? "📈" : "📉", profit ? "linear-gradient(135deg,#6366f1,#8b5cf6)" : "linear-gradient(135deg,#ef4444,#f87171)",
         profit ? "Net profit" : "Net loss",
@@ -9129,8 +9432,8 @@
         `${t.margin_is_meaningful === false ? "no income yet" : t.margin_pct + "% margin"} ${prev ? delta(prev.net_change_pct) : ""}`,
         "Margin is net profit as a share of money in, for this period only.")}
       ${kpi("⏳", Number(rec.overdue_paise || 0) > 0 ? "linear-gradient(135deg,#ef4444,#f87171)" : "linear-gradient(135deg,#0ea5e9,#22d3ee)",
-        "Still owed to you", fmtPaise(rec.total_paise),
-        rec.count ? `${rec.count} unpaid ${rec.count === 1 ? "request" : "requests"}${Number(rec.overdue_paise) ? ` · ${fmtPaise(rec.overdue_paise)} overdue` : ""}` : "Everything raised has been paid",
+        "Still owed to you", fmtDisplay(rec.total_paise, "INR"),
+        rec.count ? `${rec.count} unpaid ${rec.count === 1 ? "request" : "requests"}${Number(rec.overdue_paise) ? ` · ${fmtDisplay(rec.overdue_paise, "INR")} overdue` : ""}` : "Everything raised has been paid",
         "Payment requests raised on your clients that haven't been paid yet. Not affected by the period above — an old invoice is still owed today.")}
     </div>`;
 
@@ -9146,7 +9449,7 @@
       ? list.map((x) => `<div class="fin-split-row">
           <div class="fin-split-top">
             <div><b>${esc(x.label)}</b> <span class="fin-sub-inline">· ${x.count} ${x.count === 1 ? "entry" : "entries"}${x.auto ? " · automatic" : ""}</span></div>
-            <div class="fin-split-amt"><b>${fmtPaise(x.amount_paise)}</b><span> · ${x.share_pct}%</span></div>
+            <div class="fin-split-amt"><b>${fmtDisplay(x.amount_paise, "INR")}</b><span> · ${x.share_pct}%</span></div>
           </div>
           ${usageBar(x.share_pct, finCatColor(x.key))}
         </div>`).join("")
@@ -9161,7 +9464,7 @@
 
     // Cash + collections: the two "can I pay my bills" questions.
     const cashCard = `<div class="card"><div class="card-head"><h3>Cash position</h3>
-        <span class="fin-head-note">${cash.is_configured ? `opening ${fmtPaise(cash.opening_paise)}${cash.opening_on ? ` on ${fmtDate(cash.opening_on)}` : ""}` : "not set up"}</span></div>
+        <span class="fin-head-note">${cash.is_configured ? `opening ${fmtDisplay(cash.opening_paise, "INR")}${cash.opening_on ? ` on ${fmtDate(cash.opening_on)}` : ""}` : "not set up"}</span></div>
       <div class="card-body">
         ${cash.is_configured
           ? `<div class="fin-bignum ${Number(cash.balance_paise) < 0 ? "neg" : ""}">${esc(finNet(cash.balance_paise))}</div>
@@ -9172,12 +9475,12 @@
               <div style="margin-top:10px"><button class="btn btn-ghost btn-sm" id="finCashSetup">Set opening balance</button></div>
             </div>`}
         <div class="fin-facts">
-          <div><span>Collected this period</span><b>${fmtPaise(col.collected_paise)}</b></div>
+          <div><span>Collected this period</span><b>${fmtDisplay(col.collected_paise, "INR")}</b></div>
           <div><span>Collection rate</span><b>${col.collection_rate_pct}%</b></div>
           <div><span>Avg days to pay</span><b>${col.avg_days_to_pay == null ? "—" : col.avg_days_to_pay}</b></div>
-          <div><span>Avg payment size</span><b>${fmtPaise(col.avg_invoice_paise)}</b></div>
+          <div><span>Avg payment size</span><b>${fmtDisplay(col.avg_invoice_paise, "INR")}</b></div>
           <div><span>Online vs offline</span><b>${col.online_share_pct}% online</b></div>
-          <div><span>Refunded</span><b>${fmtPaise(col.refunded_paise)}</b></div>
+          <div><span>Refunded</span><b>${fmtDisplay(col.refunded_paise, "INR")}</b></div>
         </div>
       </div></div>`;
 
@@ -9188,9 +9491,9 @@
         ${save ? `
           <div class="fin-bignum">${esc(save.totals.hours_display)}<span> hours</span></div>
           <div class="fin-sub">≈ ${save.totals.workdays} working days of counsellor time, worth
-            <b>${fmtPaise(save.totals.value_paise)}</b> at ${fmtPaise(save.hourly_cost_paise)}/hour.</div>
+            <b>${fmtDisplay(save.totals.value_paise, "INR")}</b> at ${fmtDisplay(save.hourly_cost_paise, "INR")}/hour.</div>
           <div class="fin-facts">
-            <div><span>You paid Rilono</span><b>${fmtPaise(save.rilono_cost.total_paise)}</b></div>
+            <div><span>You paid Rilono</span><b>${fmtDisplay(save.rilono_cost.total_paise, "INR")}</b></div>
             <div><span>Net gain</span><b class="${save.is_net_positive ? "ok" : "warn"}">${esc(finNet(save.net_paise))}</b></div>
             <div><span>Return</span><b>${save.roi_multiple == null ? "—" : save.roi_multiple + "×"}</b></div>
           </div>
@@ -9202,7 +9505,7 @@
       <div class="fin-split-row">
         <div class="fin-split-top">
           <div><b>${esc(b.label)}</b> <span class="fin-sub-inline">· ${b.count} ${b.count === 1 ? "request" : "requests"}</span></div>
-          <div class="fin-split-amt"><b>${fmtPaise(b.amount_paise)}</b><span> · ${b.share_pct}%</span></div>
+          <div class="fin-split-amt"><b>${fmtDisplay(b.amount_paise, "INR")}</b><span> · ${b.share_pct}%</span></div>
         </div>
         ${usageBar(b.share_pct, b.key === "not_due" ? "#0ea5e9" : (b.key === "d60_plus" ? "#b91c1c" : "#f59e0b"))}
       </div>`).join("");
@@ -9212,7 +9515,7 @@
         <td><b>${esc(i.client_name)}</b>${i.invoice_number ? `<div class="fin-sub">${esc(i.invoice_number)}</div>` : ""}</td>
         <td class="hide-sm fin-sub">${i.raised_on ? fmtDate(i.raised_on) : "—"}</td>
         <td class="hide-sm fin-sub">${i.due_date ? fmtDate(i.due_date) : "—"}</td>
-        <td style="text-align:right"><b>${fmtPaise(i.amount_paise)}</b></td>
+        <td style="text-align:right"><b>${fmtDisplay(i.amount_paise, "INR")}</b></td>
         <td style="text-align:right">${i.days_late > 0
           ? `<span class="fin-status warn">${i.days_late}d late</span>`
           : `<span class="fin-status pend">Not due</span>`}</td>
@@ -9220,7 +9523,7 @@
 
     const receivablesCard = rec.count ? `
       <div class="card"><div class="card-head"><h3>Who owes you</h3>
-        <span class="fin-head-note">${rec.count} unpaid · ${fmtPaise(rec.total_paise)}</span></div>
+        <span class="fin-head-note">${rec.count} unpaid · ${fmtDisplay(rec.total_paise, "INR")}</span></div>
         <div class="card-body">${agingRows}</div>
         <div class="card-body" style="padding:0;overflow-x:auto;border-top:1px solid var(--border)">
           <table class="client-table fin-table"><thead><tr>
@@ -9236,8 +9539,8 @@
     const clientRows = clients.length ? clients.map((x) => `
       <tr${x.client_id && x.exists ? ` data-finclient="${x.client_id}" title="Open ${esc(x.name)}"` : ' style="cursor:default"'}>
         <td><b>${esc(x.name)}</b>${x.is_rollup || x.exists ? "" : ' <span class="fin-sub-inline">(removed)</span>'}</td>
-        <td style="text-align:right">${fmtPaise(x.income_paise)}</td>
-        <td style="text-align:right" class="hide-sm">${fmtPaise(x.expense_paise)}</td>
+        <td style="text-align:right">${fmtDisplay(x.income_paise, "INR")}</td>
+        <td style="text-align:right" class="hide-sm">${fmtDisplay(x.expense_paise, "INR")}</td>
         <td style="text-align:right"><b>${esc(finNet(x.net_paise))}</b></td>
         <td style="text-align:right" class="hide-sm">${x.margin_pct}%</td>
       </tr>`).join("")
@@ -9247,7 +9550,7 @@
     const clientCard = `<div class="card"><div class="card-head"><h3>Profit per client</h3>
         <span class="fin-head-note">fees in, direct costs out${
           Number(un.unassigned_income_paise) || Number(un.unassigned_expense_paise)
-            ? ` · ${fmtPaise(un.unassigned_income_paise)} in / ${fmtPaise(un.unassigned_expense_paise)} out not tied to a client` : ""}</span></div>
+            ? ` · ${fmtDisplay(un.unassigned_income_paise, "INR")} in / ${fmtDisplay(un.unassigned_expense_paise, "INR")} out not tied to a client` : ""}</span></div>
       <div class="card-body" style="padding:0;overflow-x:auto">
         <table class="client-table fin-table"><thead><tr>
           <th>Client</th><th style="text-align:right">Income</th>
@@ -9266,8 +9569,8 @@
         <div class="card-body">${(list && list.length) ? list.map((x, i) => `
           <div class="fin-split-row">
             <div class="fin-split-top">
-              <div><b>${esc(x.label)}</b> <span class="fin-sub-inline">· ${x.clients} ${x.clients === 1 ? "client" : "clients"} · avg ${fmtPaise(x.clients ? Math.round(x.amount_paise / x.clients) : 0)}</span></div>
-              <div class="fin-split-amt"><b>${fmtPaise(x.amount_paise)}</b><span> · ${x.share_pct}%</span></div>
+              <div><b>${esc(x.label)}</b> <span class="fin-sub-inline">· ${x.clients} ${x.clients === 1 ? "client" : "clients"} · avg ${fmtDisplay(x.clients ? Math.round(x.amount_paise / x.clients) : 0, "INR")}</span></div>
+              <div class="fin-split-amt"><b>${fmtDisplay(x.amount_paise, "INR")}</b><span> · ${x.share_pct}%</span></div>
             </div>
             ${usageBar(x.share_pct, ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"][i % 6])}
           </div>`).join("") : `<div class="fin-empty">${empty}</div>`}
@@ -9289,7 +9592,7 @@
               <div class="fin-member-name">${esc(m.name)}</div>
               <div class="fin-sub">${m.payments} ${m.payments === 1 ? "payment" : "payments"} collected</div>
             </div>
-            <div class="fin-split-amt"><b>${fmtPaise(m.amount_paise)}</b><div class="fin-sub">${m.share_pct}%</div></div>
+            <div class="fin-split-amt"><b>${fmtDisplay(m.amount_paise, "INR")}</b><div class="fin-sub">${m.share_pct}%</div></div>
           </div>`).join("") : `<div class="fin-empty">No payments collected in this period.</div>`}
         </div></div>
       ${branches.length
@@ -9299,7 +9602,7 @@
               <div class="fin-split-row">
                 <div class="fin-split-top">
                   <div><b>${esc(x.name)}</b> <span class="fin-sub-inline">· ${x.count} ${x.count === 1 ? "payment" : "payments"}</span></div>
-                  <div class="fin-split-amt"><b>${fmtPaise(x.amount_paise)}</b><span> · ${x.share_pct}%</span></div>
+                  <div class="fin-split-amt"><b>${fmtDisplay(x.amount_paise, "INR")}</b><span> · ${x.share_pct}%</span></div>
                 </div>
                 ${usageBar(x.share_pct, ["#f97316", "#ef4444", "#8b5cf6", "#ec4899", "#f59e0b", "#64748b"][i % 6])}
               </div>`).join("") : `<div class="fin-empty">No costs recorded in this period.</div>`}
@@ -9319,8 +9622,8 @@
           </tr></thead><tbody>
           ${series.map((p) => `<tr style="cursor:default">
             <td><b>${esc(p.label)}</b>${p.is_partial ? ' <span class="fin-sub-inline">so far</span>' : ""}</td>
-            <td style="text-align:right">${fmtPaise(p.income_paise)}</td>
-            <td style="text-align:right">${fmtPaise(p.expense_paise)}</td>
+            <td style="text-align:right">${fmtDisplay(p.income_paise, "INR")}</td>
+            <td style="text-align:right">${fmtDisplay(p.expense_paise, "INR")}</td>
             <td style="text-align:right"><b style="color:${p.net_paise >= 0 ? "var(--success,#10b981)" : "var(--danger,#ef4444)"}">${esc(finNet(p.net_paise))}</b></td>
             <td class="hide-sm"><div class="fin-mini">
               <div class="fin-mini-bar in" style="width:${Math.round((p.income_paise / trendPeak) * 100)}%"></div>
@@ -9331,7 +9634,7 @@
         </div>
         ${trend.projection ? `<div class="card-body fin-sub" style="border-top:1px solid var(--border)">
           At the average of your last ${trend.projection.months_used} complete months, <b>${esc(trend.projection.label)}</b>
-          lands near ${fmtPaise(trend.projection.income_paise)} in and ${fmtPaise(trend.projection.expense_paise)} out
+          lands near ${fmtDisplay(trend.projection.income_paise, "INR")} in and ${fmtDisplay(trend.projection.expense_paise, "INR")} out
           (${esc(finNet(trend.projection.net_paise))} net). An estimate from your own history, not a forecast model.
         </div>` : ""}
       </div>` : "";
@@ -9377,7 +9680,7 @@
     const bars = points.map((p) => {
       const ih = p.income_paise > 0 ? Math.max(4, Math.round((p.income_paise / peak) * 100)) : 0;
       const eh = p.expense_paise > 0 ? Math.max(4, Math.round((p.expense_paise / peak) * 100)) : 0;
-      const title = `${crBucketLabel(p.key, tl.bucket)} — in ${fmtPaise(p.income_paise)} · out ${fmtPaise(p.expense_paise)} · net ${finNet(p.net_paise)}`;
+      const title = `${crBucketLabel(p.key, tl.bucket)} — in ${fmtDisplay(p.income_paise, "INR")} · out ${fmtDisplay(p.expense_paise, "INR")} · net ${finNet(p.net_paise)}`;
       return `<div class="fin-bar-slot" title="${esc(title)}">
         ${ih ? `<div class="fin-bar in" style="height:${ih}%"></div>` : `<div class="fin-bar fin-bar-zero"></div>`}
         ${eh ? `<div class="fin-bar out" style="height:${eh}%"></div>` : `<div class="fin-bar fin-bar-zero"></div>`}
@@ -9386,7 +9689,7 @@
     const mid = points[Math.floor(points.length / 2)];
     return `
       <div class="fin-chart-wrap">
-        <div class="fin-chart-y"><span>${esc(fmtPaise(peak))}</span><span>0</span></div>
+        <div class="fin-chart-y"><span>${esc(fmtDisplay(peak, "INR"))}</span><span>0</span></div>
         <div class="fin-chart">${bars}</div>
       </div>
       <div class="fin-chart-x">
@@ -9471,7 +9774,7 @@
       // A projected month of a monthly series isn't editable in place — its template
       // usually sits outside the period on screen — so those rows act on the SERIES.
       const isSeries = !r.editable && r.recurring && r.entry_id;
-      const label = esc((r.description || r.category_label) + " · " + fmtPaise(r.amount_paise));
+      const label = esc((r.description || r.category_label) + " · " + fmtDisplay(r.amount_paise, "INR"));
       const acts = (r.editable || isSeries)
         ? `<button class="btn btn-ghost btn-xs" data-finact="edit" data-finid="${r.entry_id}" data-finrow="${esc(r.id)}">${isSeries ? "Edit series" : "Edit"}</button>
            <button class="btn btn-ghost btn-xs danger" data-finact="delete" data-finid="${r.entry_id}"
@@ -9492,8 +9795,8 @@
           ? (r.client_id ? `<span class="fin-link" data-finclient="${r.client_id}" role="button" tabindex="0">${esc(r.client_name)}</span>` : esc(r.client_name))
           : '<span class="fin-sub">—</span>'}</td>
         <td class="hide-sm fin-sub">${esc(r.method_label || r.source_label)}</td>
-        <td style="text-align:right;white-space:nowrap"><b>${fmtPaise(r.amount_paise)}</b>${
-          r.tax_paise ? `<div class="fin-sub">incl. tax ${fmtPaise(r.tax_paise)}</div>` : ""}</td>
+        <td style="text-align:right;white-space:nowrap"><b>${fmtDisplay(r.amount_paise, "INR")}</b>${
+          r.tax_paise ? `<div class="fin-sub">incl. tax ${fmtDisplay(r.tax_paise, "INR")}</div>` : ""}</td>
         <td style="text-align:right;white-space:nowrap">${acts}</td>
       </tr>`;
     }).join("");
@@ -9510,7 +9813,7 @@
       ${L.note ? `<div class="fin-notice">⚠ ${esc(L.note)}</div>` : ""}
       <div class="fin-chips">
         <div class="fin-moneychip"><span>${isIncome ? "Money in" : "Money out"}${filtered ? " (filtered)" : ""}</span>
-          <b class="${isIncome ? "ok" : ""}">${fmtPaise(shown)}</b></div>
+          <b class="${isIncome ? "ok" : ""}">${fmtDisplay(shown, "INR")}</b></div>
         <div class="fin-moneychip"><span>Entries</span><b>${L.total}</b></div>
         ${L.periodTotals ? `<div class="fin-moneychip"><span>Net for the period</span>
           <b class="${Number(L.periodTotals.net_paise) >= 0 ? "ok" : "warn"}">${esc(finNet(L.periodTotals.net_paise))}</b></div>` : ""}
@@ -9643,10 +9946,10 @@
         <div class="fin-eyebrow">Staff time Rilono took off your team · ${esc(rangeLabel)}</div>
         <div class="fin-hero-num">${esc(t.hours_display)} <span>hours</span></div>
         <div class="fin-sub">That's about <b>${t.workdays} working days</b> across ${t.units} pieces of work,
-          worth <b>${fmtPaise(t.value_paise)}</b> at your ${fmtPaise(s.hourly_cost_paise)}/hour cost.</div>
+          worth <b>${fmtDisplay(t.value_paise, "INR")}</b> at your ${fmtDisplay(s.hourly_cost_paise, "INR")}/hour cost.</div>
       </div>
       <div class="fin-hero-side">
-        <div class="fin-hero-stat"><span>You paid Rilono</span><b>${fmtPaise(cost.total_paise)}</b></div>
+        <div class="fin-hero-stat"><span>You paid Rilono</span><b>${fmtDisplay(cost.total_paise, "INR")}</b></div>
         <div class="fin-hero-stat"><span>${s.is_net_positive ? "Net gain" : "Net cost"}</span>
           <b class="${s.is_net_positive ? "ok" : "warn"}">${esc(finNet(s.net_paise))}</b></div>
         <div class="fin-hero-stat"><span>Return on spend</span>
@@ -9661,7 +9964,7 @@
         <td style="text-align:right">${a.units}</td>
         <td style="text-align:right;white-space:nowrap">${a.minutes_each} min${a.is_custom ? ' <span class="fin-sub-inline">yours</span>' : ""}</td>
         <td style="text-align:right"><b>${a.hours}h</b></td>
-        <td style="text-align:right;white-space:nowrap"><b>${fmtPaise(a.value_paise)}</b>
+        <td style="text-align:right;white-space:nowrap"><b>${fmtDisplay(a.value_paise, "INR")}</b>
           <div class="fin-sub">${a.share_pct}% of the time</div></td>
       </tr>`).join("");
 
@@ -9685,10 +9988,10 @@
         <span class="fin-head-note">${esc(rangeLabel)} · from your own expense ledger</span></div>
       <div class="card-body">
         <div class="fin-facts">
-          <div><span>AI credit top-ups</span><b>${fmtPaise(cost.credits_paise)}</b></div>
-          <div><span>Infrastructure fee</span><b>${fmtPaise(cost.infra_paise)}</b></div>
-          <div><span>Collection fee on payments</span><b>${fmtPaise(cost.platform_fee_paise)}</b></div>
-          <div><span>Total</span><b>${fmtPaise(cost.total_paise)}</b></div>
+          <div><span>AI credit top-ups</span><b>${fmtDisplay(cost.credits_paise, "INR")}</b></div>
+          <div><span>Infrastructure fee</span><b>${fmtDisplay(cost.infra_paise, "INR")}</b></div>
+          <div><span>Collection fee on payments</span><b>${fmtDisplay(cost.platform_fee_paise, "INR")}</b></div>
+          <div><span>Total</span><b>${fmtDisplay(cost.total_paise, "INR")}</b></div>
         </div>
         <div class="fin-sub" style="margin-top:12px">
           These are the same rows you'll find in <b>Costs</b> under the Rilono categories — the ROI above is
@@ -9716,9 +10019,14 @@
       <div style="font-size:13.5px;color:var(--text-2);line-height:1.6">
         Connect your company bank account, then raise a payment request for any student and collect it online.
         Payments are processed securely by <b>Razorpay</b> and settled straight to <b>your</b> bank —
-        Rilono connects you and keeps a small fee (<b>${esc(String(fee.percent))}%</b>, min ${esc(fmtInr(fee.min_fee_rupees))}) and
+        Rilono connects you and keeps a small fee (<b>${esc(String(fee.percent))}%</b>, min ${esc(fmtInrExact(fee.min_fee_rupees))}) and
         <b>never holds your money</b>. See the <a href="/terms" target="_blank" rel="noopener">Terms</a> &mdash;
         &ldquo;Payment Collection for Consultancies&rdquo;.
+      </div>
+      <div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-top:10px">
+        Student collection is <b>INR-only</b>: invoices are raised in INR and settle to your bank in INR.
+        Students abroad can still pay an INR invoice with a foreign card — their own bank does the
+        conversion and may add a fee.
       </div>
     </div></div>`;
 
@@ -9755,7 +10063,49 @@
       return;
     }
 
+    // Route onboarding is India-only, and the form is the proof: it asks for a business
+    // PAN, a GST number and an IFSC code, and the server strips every non-digit from the
+    // account number before sending it on — which quietly destroys an IBAN. A non-Indian
+    // org that filled this in would pass validation and then never be settlable, so the
+    // form is replaced by an explanation rather than hidden or left as a trap. The intro
+    // and "being activated" banner go with it: both promise a connection flow that will
+    // never open for this org.
+    if (!orgIsIndian()) {
+      panel.innerHTML = acctCountryBlockedCard();
+      const goSet = $("#acctGoSettings");
+      if (goSet) goSet.onclick = (e) => { e.preventDefault(); navigate("settings"); };
+      return;
+    }
     panel.innerHTML = intro + notEnabledBanner + acctOnboardingForm(la);
+  }
+
+  // The org's country from Settings. Unset counts as India: every org that predates the
+  // country field is Indian, and blocking them would break a live payout flow.
+  function orgIsIndian() {
+    const cc = ((state.me && state.me.organization && state.me.organization.country_code) || "").trim().toUpperCase();
+    return !cc || cc === "IN";
+  }
+
+  function acctCountryBlockedCard() {
+    const cc = ((state.me && state.me.organization && state.me.organization.country_code) || "").trim().toUpperCase();
+    return `<div class="card"><div class="card-body" style="max-width:860px">
+      <div style="font-weight:800;font-size:16px;margin-bottom:6px">Student collection isn't available in your country yet</div>
+      <div style="font-size:13.5px;color:var(--text-2);line-height:1.65">
+        Collecting student payments runs on Razorpay Route, which onboards <b>India-registered businesses only</b> —
+        it needs a business PAN, an IFSC code and an Indian bank account, and it settles in INR. Your organization is
+        set to <b>${esc(cc || "a country outside India")}</b> in Settings, so we can't connect a payout account for you:
+        you would be able to fill the form in, but Razorpay could never settle the money to you.
+      </div>
+      <div style="font-size:13px;color:var(--text-2);line-height:1.65;margin-top:12px">
+        Everything else works normally. You can still <b>record payments you collect yourself</b> on each client's
+        Payments tab, and they book into your Income ledger exactly like online collections do. Credit top-ups and
+        the infrastructure fee are unaffected — those <b>are</b> charged in your own currency.
+      </div>
+      <div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-top:12px">
+        If your business <i>is</i> registered in India, change the company country in
+        <a href="#" id="acctGoSettings">Settings</a> and this form will appear.
+      </div>
+    </div></div>`;
   }
 
   /* ---------------- Recording an entry ---------------- */
@@ -10041,6 +10391,12 @@
   }
 
   async function saveLinkedAccount() {
+    // Belt and braces: the form isn't rendered outside India, but a stale tab could still
+    // hold one. Submitting it would create a linked account that can never be settled.
+    if (!orgIsIndian()) {
+      toast("Payout accounts can only be connected for India-registered businesses.", "error");
+      return;
+    }
     const val = (id) => (($("#" + id) || {}).value || "").trim();
     const chk = (id) => !!(($("#" + id) || {}).checked);
     const body = {
@@ -10089,8 +10445,19 @@
     const pkg = checkoutCtx.pkg;
     const c = checkoutCtx.coupon;
     const b = checkoutBreakdown();
-    const totalCell = b.free ? `<span class="co-free">FREE</span>` : `<b>${fmtPaise(b.total)}</b>`;
-    const proceedLabel = b.free ? `Get ${pkg.total_credits} credits — free` : `Pay ${fmtPaise(b.total)} securely`;
+    const opts = pkgOptions(pkg);
+    const opt = checkoutOption();
+    const totalCell = b.free ? `<span class="co-free">FREE</span>` : `<b>${esc(fmtMoney(b.total, b.currency))}</b>`;
+    const proceedLabel = b.free ? `Get ${pkg.total_credits} credits — free` : `Pay ${esc(fmtMoney(b.total, b.currency))} securely`;
+    // Every option is a price the owner set for that currency, not an FX conversion of
+    // the INR one — so the label shows the server's own `display` string verbatim.
+    const currencyBlock = opts.length > 1
+      ? `<div class="field" style="margin:0">
+           <label for="coCurrency">Billing currency</label>
+           <select id="coCurrency">${opts.map((o) =>
+             `<option value="${esc(o.currency)}"${o.currency === b.currency ? " selected" : ""}>${esc(o.currency)} · ${esc(o.display)}</option>`).join("")}</select>
+         </div>`
+      : "";
     const couponBlock = c
       ? `<div class="co-coupon applied">
            <div class="co-coupon-info"><span class="co-coupon-tag">🎟 ${esc(c.code)}</span><span class="co-coupon-msg">${esc(c.percent_display)} off applied</span></div>
@@ -10110,19 +10477,20 @@
             <div class="co-item-title">${esc(pkg.label)}</div>
             <div class="co-item-sub">${pkg.total_credits} credits${pkg.bonus_credits ? ` <span class="co-bonus">incl. +${pkg.bonus_credits} bonus</span>` : ""} · worth ${fmtInr(pkg.value_inr)} of AI actions</div>
           </div>
-          <div class="co-item-price">${esc(fmtPaise(pkg.amount_paise))}</div>
+          <div class="co-item-price">${esc(opt.display || fmtMoney(opt.amount_minor, opt.currency))}</div>
         </div>
+        ${currencyBlock}
         ${couponBlock}
         <div id="coCouponErr" class="co-coupon-err hidden"></div>
         <div class="co-summary">
-          <div class="co-line"><span>Subtotal</span><span>${fmtPaise(b.base)}</span></div>
-          ${b.discount > 0 ? `<div class="co-line co-discount"><span>Discount · ${esc(c.code)} (${esc(c.percent_display)} off)</span><span>−${fmtPaise(b.discount)}</span></div>` : ""}
+          <div class="co-line"><span>Subtotal</span><span>${esc(fmtMoney(b.base, b.currency))}</span></div>
+          ${b.discount > 0 ? `<div class="co-line co-discount"><span>Discount · ${esc(c.code)} (${esc(c.percent_display)} off)</span><span>−${esc(fmtMoney(b.discount, b.currency))}</span></div>` : ""}
           <div class="co-line co-total"><span>Total payable</span><span>${totalCell}</span></div>
         </div>
         <div class="co-note">${b.free
           ? "✓ This order is fully covered by your discount — no payment needed."
           : "🔒 Secure payment via Razorpay · UPI, cards &amp; NetBanking"} · Credits never expire.</div>
-        ${b.free ? "" : inrBilledNote(b.total)}
+        ${b.free ? "" : chargeNote(b.total, b.currency)}
       </div>
       <div class="modal-foot">
         <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
@@ -10132,6 +10500,8 @@
     const ap = $("#coApply"); if (ap) ap.onclick = coApplyCheckoutCoupon;
     const rm = $("#coRemove"); if (rm) rm.onclick = coRemoveCheckoutCoupon;
     const ci = $("#coCouponInput"); if (ci) ci.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); coApplyCheckoutCoupon(); } };
+    const cs = $("#coCurrency");
+    if (cs) cs.onchange = () => { checkoutCtx.currency = cs.value; renderCheckout(); };
     $("#coProceed").onclick = creditCheckoutProceed;
   }
 
@@ -10164,7 +10534,15 @@
     const couponCode = checkoutCtx.coupon ? checkoutCtx.coupon.code : undefined;
     const btn = $("#coProceed"); if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>'; }
     let res;
-    try { res = await api("/credits/topup/checkout", { method: "POST", body: { package: pkg.key, coupon_code: couponCode } }); }
+    // `currency` is only a HINT — the server re-reads the price book and is the sole
+    // authority on the amount. We never send an amount.
+    //
+    // Send the currency of the price the buyer was actually SHOWN, not checkoutCtx's raw
+    // value: checkoutOption() falls back to the first quoted option when ctx holds a
+    // currency the package has no price for, so the two can disagree — and then the modal
+    // would show ₹999 while the order was created in USD.
+    const currency = checkoutBreakdown().currency;
+    try { res = await api("/credits/topup/checkout", { method: "POST", body: { package: pkg.key, coupon_code: couponCode, currency } }); }
     catch (ex) { toast(ex.message, "error"); renderCheckout(); return; }
 
     if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); renderCheckout(); return; }
@@ -10187,7 +10565,11 @@
       name: res.organization_name || "Rilono",
       description: res.package_label + " · " + res.total_credits + " credits",
       order_id: res.order_id,
-      prefill: res.prefill,
+      // Pass the server's prefill through untouched. Razorpay's docs are explicit that an
+      // international payment FAILS on a dummy email/phone, so the server omits fields it
+      // doesn't have rather than inventing them — do not fill in placeholders here.
+      // https://razorpay.com/docs/payments/international-payments/?preferred-country=IN
+      prefill: checkoutPrefill(res.prefill),
       theme: { color: "#6366f1" },
       handler: async function (resp) {
         try {
@@ -10206,9 +10588,95 @@
     rzp.open();
   }
 
+  // The infra fee's price ladder, same shape as a package's. `infra_fee_state` currently
+  // sends only the one currency it quoted (fee_paise + fee_display + currency); if it
+  // grows a `price_options` array this picks it up with no further change.
+  function infraOptions(infra) {
+    const opts = ((infra || {}).price_options || []).filter((o) => o && o.currency);
+    if (opts.length) return opts;
+    return [{
+      currency: (infra || {}).currency || "INR",
+      amount_minor: Number((infra || {}).fee_paise || 0),
+      display: (infra || {}).fee_display || fmtMoney((infra || {}).fee_paise, (infra || {}).currency || "INR"),
+    }];
+  }
+
+  // Currency picker for a charge that has no order-review screen of its own. Resolves to
+  // the chosen ISO code, or null if dismissed. Every price shown is the server's own
+  // `display` string for that currency — nothing is converted here.
+  //
+  // `cfg.selected` MUST be the currency the caller already quoted on screen. The options
+  // arrive in price-book order (INR first), so without it the picker opens on ₹999 for an
+  // org whose banner reads "$12.99/mo" — one click and they are charged in the wrong
+  // currency, at a price they were never shown.
+  function pickChargeCurrency(opts, cfg) {
+    cfg = cfg || {};
+    var selected = curCode(cfg.selected || (opts[0] || {}).currency);
+    return new Promise(function (resolve) {
+      var settled = false;
+      function finish(val) {
+        if (settled) return; settled = true;
+        document.removeEventListener("keydown", onKey, true);
+        $("#overlay").removeEventListener("click", onOverlay);
+        closeModal();
+        resolve(val);
+      }
+      function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); finish(null); } }
+      function onOverlay(e) { if (e.target === $("#overlay")) finish(null); }
+      openModal(
+        '<div class="modal-head"><h3>' + esc(cfg.title || "Choose a billing currency") + '</h3>' +
+        '<button class="x" id="curClose" aria-label="Close">×</button></div>' +
+        '<div class="modal-body">' +
+        (cfg.intro ? '<p style="margin:0 0 14px;color:var(--text-2);font-size:14px;line-height:1.6">' + esc(cfg.intro) + '</p>' : "") +
+        '<div class="field" style="margin:0"><label for="curPick">Billing currency</label>' +
+        '<select id="curPick">' + opts.map(function (o) {
+          return '<option value="' + esc(o.currency) + '"' +
+            (curCode(o.currency) === selected ? ' selected' : '') + '>' + esc(o.currency) + ' · ' +
+            esc(o.display || fmtMoney(o.amount_minor, o.currency)) + '</option>';
+        }).join("") + '</select></div>' +
+        '<div id="curNote"></div>' +
+        '</div>' +
+        '<div class="modal-foot"><button type="button" class="btn btn-ghost" id="curCancel">Cancel</button>' +
+        '<button type="button" class="btn btn-primary" id="curOk">Continue to payment</button></div>'
+      );
+      var sel = $("#curPick");
+      function paintNote() {
+        var picked = opts.filter(function (o) { return o.currency === sel.value; })[0] || opts[0];
+        $("#curNote").innerHTML = chargeNote(picked.amount_minor, picked.currency);
+      }
+      sel.onchange = paintNote;
+      paintNote();
+      $("#curClose").onclick = function () { finish(null); };
+      $("#curCancel").onclick = function () { finish(null); };
+      $("#curOk").onclick = function () { finish(sel.value); };
+      document.addEventListener("keydown", onKey, true);
+      $("#overlay").addEventListener("click", onOverlay);
+      sel.focus();
+    });
+  }
+
+  // Ask which currency to be billed in before creating the order — but only when there is
+  // a real choice. With a single quoted currency we send that currency EXPLICITLY rather
+  // than letting the server infer one from the org's country: the banner already showed a
+  // price, and the charge has to match the price the buyer was shown.
   async function activateInfraFee() {
+    const infra = ((creditsUi.wallet || {}).wallet || {}).infra_fee || {};
+    const opts = infraOptions(infra);
+    // The currency the banner already quoted (infra.fee_display is rendered in it). The
+    // ladder is ordered INR-first, so it is NOT opts[0] for a non-Indian org — defaulting
+    // to opts[0] would open the picker on ₹999 under a banner that reads "$12.99/mo".
+    const quoted = curCode(infra.currency || opts[0].currency);
+    let currency = quoted;
+    if (opts.length > 1) {
+      currency = await pickChargeCurrency(opts, {
+        title: "Activate the infrastructure fee",
+        intro: "Billed monthly. Choose the currency you'd like to be charged in.",
+        selected: quoted,
+      });
+      if (!currency) return;   // dismissed
+    }
     let res;
-    try { res = await api("/credits/infra/checkout", { method: "POST" }); }
+    try { res = await api("/credits/infra/checkout", { method: "POST", body: { currency } }); }
     catch (ex) { toast(ex.message, "error"); return; }
     if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); return; }
     if (res.action !== "checkout") { toast("Payment unavailable.", "error"); return; }
@@ -10221,7 +10689,7 @@
       name: res.organization_name || "Rilono",
       description: "Infrastructure server fee (monthly)",
       order_id: res.order_id,
-      prefill: res.prefill,
+      prefill: checkoutPrefill(res.prefill),
       theme: { color: "#6366f1" },
       handler: async function (resp) {
         try {
@@ -10282,11 +10750,18 @@
       : `${dc.code} · ₹1 ≈ ${dc.symbol}${Number(dc.rate_from_inr || 0).toFixed(4)} (live rate, refreshed daily)`;
     // A worked example beats quoting the raw rate — it shows what the conversion
     // actually does to a number the consultancy recognises.
+    //
+    // This setting is PRESENTATION ONLY and the copy has to say so, because the two real
+    // currencies now differ from it and from each other: what Rilono bills you (chosen at
+    // checkout, from a per-currency price list) and what you collect from students
+    // (INR — Razorpay Route settles in nothing else). Claiming "payments are charged in
+    // INR" here stopped being true the moment we started creating non-INR orders.
     const curNote = dc.code === "INR"
       ? "Amounts across this portal display in <b>INR (₹)</b>."
       : `Amounts display in <b>${esc(dc.code)}</b> — a ₹10,000 fee shows as ` +
         `<b>${esc(dc.symbol || "")}${(10000 * Number(dc.rate_from_inr || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</b> ` +
-        "at today's rate, refreshed daily. Payments themselves are still charged in INR.";
+        "at today's rate, refreshed daily. This is display only: credit top-ups and the infrastructure fee are " +
+        "charged in the currency you pick at checkout, and student payments you collect are always in INR.";
     const portalHost = (org.subdomain_slug || "") + "." + rootDomain();
     const membership = state.me.membership || {};
     const role = membership.role || "";
@@ -10474,9 +10949,38 @@
      ============================================================ */
   /* ============================================================
      AI ASSISTANT (Rilono AI Assistant)
+
+     ONE conversation, TWO surfaces: the full-page assistant view and the
+     dock that floats bottom-right on every other view. Nothing renders
+     into a single id any more — every paint fans out over
+     [data-ai-thread] / [data-ai-suggest] / [data-ai-input], so a question
+     asked from the dock is already in the thread when the member opens
+     the full view, and vice versa. `data-ai-compact` marks the dock's
+     copies, which get the shorter empty state and a trimmed chip list.
      ============================================================ */
-  function renderAIAssistant() {
+  const AI_SEND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const AI_SPARKLE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4L12 3z"/><path d="M19 14l.8 2 2 .8-2 .8L19 20l-.8-2.4-2-.8 2-.8L19 14z"/></svg>';
+  const AI_DISABLED_PLACEHOLDER = "AI assistant isn't configured on this server yet.";
+
+  function ensureAiHistory() {
     if (!state.aiHistory) state.aiHistory = [];
+    return state.aiHistory;
+  }
+
+  // Enter sends, Shift+Enter newlines, and the box grows with the draft.
+  function wireAiComposer(ta) {
+    if (!ta) return;
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAi(ta.value); }
+    });
+    ta.addEventListener("input", () => {
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, ta.dataset.aiMaxH ? Number(ta.dataset.aiMaxH) : 160) + "px";
+    });
+  }
+
+  function renderAIAssistant() {
+    ensureAiHistory();
     const c = $("#content");
     c.innerHTML = `
       <div class="ai-wrap">
@@ -10484,22 +10988,20 @@
           <div class="ai-orb">✨</div>
           <div><h2>Rilono AI Assistant</h2><p>Ask anything about your clients, visa statuses and activity — I read your live portal data to answer.</p></div>
         </div>
-        <div class="ai-thread" id="aiThread"></div>
-        <div class="ai-suggest" id="aiSuggest"></div>
+        <div class="ai-thread" id="aiThread" data-ai-thread></div>
+        <div class="ai-suggest" id="aiSuggest" data-ai-suggest></div>
         <form class="ai-input" id="aiForm">
-          <textarea id="aiInput" rows="1" placeholder="e.g. Which clients need my attention today?" maxlength="4000"></textarea>
-          <button type="submit" class="ai-send" id="aiSend" aria-label="Send">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
+          <textarea id="aiInput" data-ai-input data-ai-placeholder="e.g. Which clients need my attention today?"
+            rows="1" placeholder="e.g. Which clients need my attention today?" maxlength="4000"></textarea>
+          <button type="submit" class="ai-send" id="aiSend" data-ai-send aria-label="Send">${AI_SEND_ICON}</button>
         </form>
         <div class="ai-disclaimer">AI can make mistakes — verify important details against the client record.</div>
       </div>`;
     renderAiThread();
     loadAiMeta();
-    $("#aiForm").onsubmit = (e) => { e.preventDefault(); sendAi(); };
     const ta = $("#aiInput");
-    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAi(); } });
-    ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 160) + "px"; });
+    $("#aiForm").onsubmit = (e) => { e.preventDefault(); sendAi(ta.value); };
+    wireAiComposer(ta);
     ta.focus();
   }
 
@@ -10554,15 +11056,27 @@
     return html || "<p></p>";
   }
 
-  function renderAiThread() {
-    const thread = $("#aiThread"); if (!thread) return;
-    if (!state.aiHistory.length) {
-      thread.innerHTML = `<div class="ai-empty"><div class="ai-orb lg">✨</div>
-        <h3>How can I help?</h3>
-        <p>I can answer questions about your clients, their visa progress, who needs attention, recent activity and your team's workload.</p></div>`;
-      return;
+  // The empty thread. The dock gets a shorter version — its panel is a third
+  // the width of the full view, where the long paragraph reads as clutter.
+  function aiEmptyHtml(compact) {
+    if (state.aiMeta && !state.aiMeta.enabled) {
+      return `<div class="ai-empty"><div class="ai-orb lg">🔌</div><h3>AI assistant unavailable</h3>
+        <p>An administrator needs to enable Rilono AI on the server to use the Rilono AI Assistant.</p></div>`;
     }
-    thread.innerHTML = state.aiHistory.map((m) => {
+    if (compact) {
+      return `<div class="ai-empty"><div class="ai-orb lg">✨</div><h3>How can I help?</h3>
+        <p>Ask about a client's progress, who needs attention today, or what changed this week.</p></div>`;
+    }
+    return `<div class="ai-empty"><div class="ai-orb lg">✨</div>
+      <h3>How can I help?</h3>
+      <p>I can answer questions about your clients, their visa progress, who needs attention, recent activity and your team's workload.</p></div>`;
+  }
+
+  function renderAiThread() {
+    const hosts = $$("[data-ai-thread]");
+    if (!hosts.length) return;
+    ensureAiHistory();
+    const body = !state.aiHistory.length ? null : state.aiHistory.map((m) => {
       if (m.role === "user") {
         return `<div class="ai-msg user"><div class="ai-bubble">${esc(m.content).replace(/\n/g, "<br>")}</div></div>`;
       }
@@ -10571,46 +11085,64 @@
       }
       return `<div class="ai-msg bot"><div class="ai-av">✨</div><div class="ai-bubble">${aiFormat(m.content)}</div></div>`;
     }).join("");
-    thread.scrollTop = thread.scrollHeight;
+    hosts.forEach((h) => {
+      h.innerHTML = body == null ? aiEmptyHtml(h.hasAttribute("data-ai-compact")) : body;
+      h.scrollTop = h.scrollHeight;
+    });
   }
 
   function renderAiSuggestions() {
-    const box = $("#aiSuggest"); if (!box) return;
+    const boxes = $$("[data-ai-suggest]");
+    if (!boxes.length) return;
     const meta = state.aiMeta;
-    if (!meta || !meta.enabled || state.aiHistory.length) { box.innerHTML = ""; return; }
-    box.innerHTML = (meta.suggestions || []).map((s) => `<button class="ai-chip" type="button">${esc(s)}</button>`).join("");
-    $$(".ai-chip", box).forEach((ch) => ch.onclick = () => { $("#aiInput").value = ch.textContent; sendAi(); });
+    const list = (meta && meta.enabled && !ensureAiHistory().length) ? (meta.suggestions || []) : [];
+    boxes.forEach((box) => {
+      // The dock only has room for a couple of chips above the composer.
+      const use = box.hasAttribute("data-ai-compact") ? list.slice(0, 3) : list;
+      box.innerHTML = use.map((s) => `<button class="ai-chip" type="button">${esc(s)}</button>`).join("");
+      $$(".ai-chip", box).forEach((ch) => ch.onclick = () => sendAi(ch.textContent));
+    });
   }
 
   async function loadAiMeta() {
-    if (state.aiMeta) { applyAiMeta(); return; }
+    if (state.aiMeta) { applyAiMeta(); return state.aiMeta; }
     try { state.aiMeta = await api("/ai/meta"); } catch (ex) { state.aiMeta = { enabled: false, suggestions: [] }; }
     applyAiMeta();
+    return state.aiMeta;
   }
   function applyAiMeta() {
-    const meta = state.aiMeta || {};
-    const ta = $("#aiInput"), send = $("#aiSend");
-    if (!meta.enabled) {
-      if (ta) { ta.disabled = true; ta.placeholder = "AI assistant isn't configured on this server yet."; }
-      if (send) send.disabled = true;
-      const thread = $("#aiThread");
-      if (thread && !state.aiHistory.length) {
-        thread.innerHTML = `<div class="ai-empty"><div class="ai-orb lg">🔌</div><h3>AI assistant unavailable</h3><p>An administrator needs to enable Rilono AI on the server to use the Rilono AI Assistant.</p></div>`;
-      }
-    }
+    const off = !!(state.aiMeta && !state.aiMeta.enabled);
+    $$("[data-ai-input]").forEach((ta) => {
+      ta.disabled = off;
+      ta.placeholder = off ? AI_DISABLED_PLACEHOLDER : (ta.dataset.aiPlaceholder || ta.placeholder);
+    });
+    setAiBusy(!!state.aiBusy);
+    if (off) renderAiThread();   // paints the "unavailable" card on every surface
     renderAiSuggestions();
   }
 
-  async function sendAi() {
+  // A send in flight (or a server without AI) locks the send buttons on both surfaces.
+  function setAiBusy(on) {
+    state.aiBusy = !!on;
+    const off = !!(state.aiMeta && !state.aiMeta.enabled);
+    $$("[data-ai-send]").forEach((b) => { b.disabled = state.aiBusy || off; });
+  }
+
+  async function sendAi(text) {
     if (state.aiBusy) return;
-    const ta = $("#aiInput"); if (!ta || ta.disabled) return;
-    const msg = (ta.value || "").trim();
+    if (state.aiMeta && !state.aiMeta.enabled) return;
+    const inputs = $$("[data-ai-input]");
+    let msg = String(text == null ? "" : text).trim();
+    // Called with no text (a form submit): take whichever composer has a draft.
+    if (!msg) { for (const el of inputs) { const v = (el.value || "").trim(); if (v) { msg = v; break; } } }
     if (!msg) return;
+    ensureAiHistory();
     const priorHistory = state.aiHistory.filter((m) => m.role === "user" || m.role === "model").slice(-12);
     state.aiHistory.push({ role: "user", content: msg });
     state.aiHistory.push({ role: "typing", content: "" });
-    ta.value = ""; ta.style.height = "auto";
-    state.aiBusy = true;
+    // Both composers hold the same conversation, so both drafts clear on send.
+    inputs.forEach((el) => { el.value = ""; el.style.height = "auto"; });
+    setAiBusy(true);
     renderAiThread(); renderAiSuggestions();
     try {
       const data = await api("/ai/chat", { method: "POST", body: { message: msg, history: priorHistory }, timeout: AI_API_TIMEOUT_MS });
@@ -10618,13 +11150,15 @@
       state.aiHistory.push({ role: "model", content: data.answer || "(no answer)" });
       // Keep the credits chip in sync when a message debited the wallet.
       if (data.wallet) { state.credits = data.wallet; updatePlanChip(); }
+      if (data.credits_meter) setAiMeter(data.credits_meter);
+      markAiAnswerArrived();
     } catch (ex) {
       state.aiHistory = state.aiHistory.filter((m) => m.role !== "typing");
       // Out of credits for the assistant → explain in-thread and point to top-up.
       if (ex.status === 402) {
         state.aiHistory.push({ role: "model", content: ex.message || "You're out of Rilono Credits for the AI assistant. Top up to keep chatting." });
         toast(ex.message, "error");
-        state.aiBusy = false; renderAiThread();
+        setAiBusy(false); renderAiThread(); markAiAnswerArrived();
         navigate("credits");
         return;
       }
@@ -10633,10 +11167,167 @@
         content: "Sorry, I encountered an error. We are working on it, and this issue has been raised for review."
       });
       toast("AI assistant ran into a problem. Please try again.", "error");
+      markAiAnswerArrived();
     } finally {
-      state.aiBusy = false;
+      setAiBusy(false);
       renderAiThread();
     }
+  }
+
+  /* ------------------------------------------------------------------
+     DOCKED ASSISTANT — the bubble that sits bottom-right on every view
+     except the assistant's own page (where it would only duplicate what
+     is already on screen). The member's open/closed choice is remembered
+     across page loads; the thread itself is the shared state.aiHistory.
+     ------------------------------------------------------------------ */
+  const AI_DOCK_OPEN_KEY = "rilono.ent.aiDockOpen";
+  const aiDock = { mounted: false, open: false, root: null };
+
+  function aiDockPref() {
+    try { return localStorage.getItem(AI_DOCK_OPEN_KEY) === "1"; } catch (e) { return false; }
+  }
+  function setAiDockPref(open) {
+    try { open ? localStorage.setItem(AI_DOCK_OPEN_KEY, "1") : localStorage.removeItem(AI_DOCK_OPEN_KEY); }
+    catch (e) { /* private mode — the dock just won't be remembered */ }
+  }
+
+  // Answered while the panel is closed → put a dot on the bubble so the reply
+  // isn't sitting there unseen.
+  function markAiAnswerArrived() {
+    if (!aiDock.mounted || aiDock.open) return;
+    const dot = $("#aiDockDot", aiDock.root);
+    if (dot) dot.classList.add("on");
+  }
+  function clearAiDockDot() {
+    if (!aiDock.mounted) return;
+    const dot = $("#aiDockDot", aiDock.root);
+    if (dot) dot.classList.remove("on");
+  }
+
+  // The copilot meter that comes back with every answer: free daily messages
+  // first, then one credit per bundle. Shown in the dock header so the cost of
+  // the next question is never a surprise.
+  function setAiMeter(meter) {
+    if (meter) state.aiMeter = meter;
+    const sub = aiDock.mounted ? $("#aiDockSub", aiDock.root) : null;
+    const m = state.aiMeter;
+    if (!sub || !m) return;
+    const free = Number(m.free_remaining_today || 0);
+    const per = Number(m.msgs_per_credit || 0);
+    // A question that needed several lookups is metered as the several messages' worth
+    // of work it was, so say so — otherwise the allowance appears to jump for no reason.
+    const weight = Number(m.message_weight || 1);
+    const weightNote = weight > 1 ? ` · last answer counted as ${weight}` : "";
+    sub.textContent = (free > 0
+      ? `${free} free message${free === 1 ? "" : "s"} left today`
+      : (per ? `${per} messages per credit` : "Answers from your live portal data")) + weightNote;
+  }
+
+  function mountAiDock() {
+    if (aiDock.mounted || !state.me || !can("ai.assistant")) return;
+    const root = document.createElement("div");
+    root.className = "aidock";
+    root.id = "aiDock";
+    root.innerHTML = `
+      <section class="aidock-panel" id="aiDockPanel" role="dialog" aria-label="Rilono AI Assistant">
+        <header class="aidock-head">
+          <span class="aidock-orb" aria-hidden="true">${AI_SPARKLE_ICON}</span>
+          <span class="aidock-id"><b>Rilono AI</b><small id="aiDockSub">Answers from your live portal data</small></span>
+          <span class="aidock-acts">
+            <button type="button" class="aidock-act" id="aiDockExpand" title="Open the full assistant" aria-label="Open the full assistant">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+            </button>
+            <button type="button" class="aidock-act" id="aiDockMin" title="Minimize" aria-label="Minimize the assistant">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 12h12"/></svg>
+            </button>
+          </span>
+        </header>
+        <div class="aidock-thread ai-thread" data-ai-thread data-ai-compact></div>
+        <div class="aidock-suggest ai-suggest" data-ai-suggest data-ai-compact></div>
+        <form class="aidock-form ai-input" id="aiDockForm">
+          <textarea id="aiDockInput" data-ai-input data-ai-max-h="110" data-ai-placeholder="Ask about a client, stage or task…"
+            rows="1" placeholder="Ask about a client, stage or task…" maxlength="4000"></textarea>
+          <button type="submit" class="ai-send" data-ai-send aria-label="Send">${AI_SEND_ICON}</button>
+        </form>
+        <div class="aidock-foot">AI can make mistakes — verify against the client record.</div>
+      </section>
+      <button type="button" class="aidock-fab" id="aiDockFab" aria-expanded="false" aria-controls="aiDockPanel" aria-label="Ask Rilono AI">
+        <span class="aidock-fab-ring" aria-hidden="true"></span>
+        <span class="aidock-ic aidock-ic-ai" aria-hidden="true">${AI_SPARKLE_ICON}</span>
+        <span class="aidock-ic aidock-ic-down" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+        <span class="aidock-dot" id="aiDockDot" aria-hidden="true"></span>
+      </button>
+      <span class="aidock-tip" aria-hidden="true">Ask Rilono AI</span>`;
+    document.body.appendChild(root);
+    aiDock.root = root;
+    aiDock.mounted = true;
+    document.body.classList.add("has-ai-dock");
+
+    $("#aiDockFab", root).onclick = () => (aiDock.open ? closeAiDock() : openAiDock());
+    $("#aiDockMin", root).onclick = () => closeAiDock();
+    $("#aiDockExpand", root).onclick = () => navigate("ai");   // syncAiDockVisibility tucks the dock away
+    const ta = $("#aiDockInput", root);
+    $("#aiDockForm", root).onsubmit = (e) => { e.preventDefault(); sendAi(ta.value); };
+    wireAiComposer(ta);
+    // Escape closes the dock — but only when it's the top-most thing on screen.
+    // Capture phase on purpose: the app's own Escape handler is a bubble-phase
+    // listener on document that strips .show, so reading the modal/drawer state
+    // afterwards would always say "nothing open" and close both at once.
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !aiDock.open) return;
+      if ($("#modal").classList.contains("show") || $("#drawer").classList.contains("show")) return;
+      closeAiDock();
+    }, true);
+
+    applyAiMeta();
+    setAiMeter(null);
+    syncAiDockVisibility();
+  }
+
+  function openAiDock(opts) {
+    if (!aiDock.mounted) return;
+    aiDock.open = true;
+    aiDock.root.classList.add("is-open");
+    document.body.classList.add("ai-dock-open");
+    const fab = $("#aiDockFab", aiDock.root);
+    if (fab) { fab.setAttribute("aria-expanded", "true"); fab.setAttribute("aria-label", "Minimize Rilono AI"); }
+    clearAiDockDot();
+    renderAiThread(); renderAiSuggestions(); applyAiMeta();
+    if (!(opts && opts.restore)) { const ta = $("#aiDockInput", aiDock.root); if (ta && !ta.disabled) ta.focus(); }
+    if (!(opts && opts.keepPref)) setAiDockPref(true);
+  }
+
+  function closeAiDock(opts) {
+    if (!aiDock.mounted) return;
+    aiDock.open = false;
+    aiDock.root.classList.remove("is-open");
+    document.body.classList.remove("ai-dock-open");
+    const fab = $("#aiDockFab", aiDock.root);
+    if (fab) {
+      fab.setAttribute("aria-expanded", "false");
+      fab.setAttribute("aria-label", "Ask Rilono AI");
+      if (!(opts && opts.silent)) fab.focus();
+    }
+    if (!(opts && opts.keepPref)) setAiDockPref(false);
+  }
+
+  // Called on every navigation. The dock disappears on the assistant's own page
+  // and comes back — still open, if that's how it was left — on the way out.
+  function syncAiDockVisibility() {
+    if (!aiDock.mounted) return;
+    const hide = state.view === "ai";
+    aiDock.root.classList.toggle("aidock-off", hide);
+    if (hide) { if (aiDock.open) closeAiDock({ silent: true, keepPref: true }); return; }
+    if (!aiDock.open && aiDockPref()) openAiDock({ restore: true, keepPref: true });
+  }
+
+  // Mount at boot, but only for members who may use the assistant and only when
+  // the server actually has AI configured — a bubble that can only ever refuse
+  // isn't worth the corner it occupies.
+  async function initAiDock() {
+    if (!state.me || !can("ai.assistant") || aiDock.mounted) return;
+    const meta = await loadAiMeta();
+    if (meta && meta.enabled) mountAiDock();
   }
 
   async function viewInterviewSession(clientId, sessionId) {
