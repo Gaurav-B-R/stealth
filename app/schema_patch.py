@@ -584,6 +584,109 @@ def ensure_rilono_ai_chat_upload_events_table():
             ))
 
 
+# The client intake record — (column, DDL type). "TS" resolves to the dialect's timestamp
+# type. Kept as data so the CREATE TABLE and the ALTER path can never disagree.
+_ENTERPRISE_CLIENT_INTAKE_COLUMNS: list[tuple[str, str]] = [
+    # contact & identity
+    ("whatsapp_number", "VARCHAR"),
+    ("current_city", "VARCHAR"),
+    ("gender", "VARCHAR"),
+    ("guardian_name", "VARCHAR"),
+    ("guardian_relation", "VARCHAR"),
+    ("guardian_phone", "VARCHAR"),
+    # study plan & risk
+    ("study_level", "VARCHAR"),
+    ("field_of_study", "VARCHAR"),
+    ("admission_stage", "VARCHAR"),
+    ("prior_refusal_history", "VARCHAR"),
+    ("prior_refusal_notes", "TEXT"),
+    # academic profile & tests
+    ("highest_qualification", "VARCHAR"),
+    ("qualification_score", "VARCHAR"),
+    ("qualification_scale", "VARCHAR"),
+    ("year_of_passing", "INTEGER"),
+    ("backlogs_count", "INTEGER"),
+    ("work_experience_band", "VARCHAR"),
+    ("english_test_status", "VARCHAR"),
+    ("english_test_type", "VARCHAR"),
+    ("english_test_score", "VARCHAR"),
+    ("english_test_date", "DATE"),
+    ("aptitude_test_type", "VARCHAR"),
+    ("aptitude_test_score", "VARCHAR"),
+    # funding
+    ("budget_band", "VARCHAR"),
+    ("funding_source", "VARCHAR"),
+    # acquisition & ownership
+    ("lead_source", "VARCHAR"),
+    ("lead_source_detail", "VARCHAR"),
+    ("branch_name", "VARCHAR"),
+    ("next_followup_date", "DATE"),
+    # purpose-specific consents
+    ("marketing_consent_channels", "VARCHAR"),
+    ("marketing_consent_at", "TS"),
+    ("institution_share_consent_at", "TS"),
+]
+
+
+def _backfill_client_intake_from_stage_data(conn):
+    """One-time move of the retired `new_lead` case-record answers into the intake columns.
+
+    Those six questions (enquiry source, prior refusal history, admission stage, funding
+    source, English/language test status) were destination-specific stage fields storing
+    display labels; they are generic columns now. The original stage_data JSON is left
+    untouched, so a label this map doesn't recognise costs nothing.
+    """
+    import json
+
+    from app.enterprise_client_fields import RETIRED_STAGE_FIELD_BACKFILL
+
+    targets = sorted({
+        column
+        for spec in RETIRED_STAGE_FIELD_BACKFILL.values()
+        for mapping in spec["values"].values()
+        for column in mapping
+    } | {spec["fallback"] for spec in RETIRED_STAGE_FIELD_BACKFILL.values() if spec["fallback"]})
+
+    rows = conn.execute(text(
+        f"SELECT id, stage_data, {', '.join(targets)} FROM enterprise_clients "
+        "WHERE stage_data IS NOT NULL AND stage_data <> ''"
+    )).mappings().all()
+
+    migrated = 0
+    for row in rows:
+        try:
+            recorded = (json.loads(row["stage_data"]) or {}).get("new_lead") or {}
+        except Exception:
+            continue
+        if not isinstance(recorded, dict):
+            continue
+        updates: dict[str, str] = {}
+        for stage_key, spec in RETIRED_STAGE_FIELD_BACKFILL.items():
+            value = str(recorded.get(stage_key) or "").strip()
+            if not value:
+                continue
+            mapped = spec["values"].get(value)
+            if mapped is None:
+                if spec["fallback"]:
+                    mapped = {spec["fallback"]: value}
+                else:
+                    continue
+            for column, new_value in mapped.items():
+                # Never overwrite something a counselor has already typed into the column.
+                if row[column] is None and column not in updates:
+                    updates[column] = new_value
+        if not updates:
+            continue
+        assignments = ", ".join(f"{col} = :{col}" for col in updates)
+        conn.execute(
+            text(f"UPDATE enterprise_clients SET {assignments} WHERE id = :row_id"),
+            {**updates, "row_id": row["id"]},
+        )
+        migrated += 1
+    if migrated:
+        print(f"[schema_patch] migrated lead-intake fields for {migrated} client(s)")
+
+
 def ensure_enterprise_crm_tables():
     """
     Create the enterprise CRM tables (clients, notes, client emails, org
@@ -665,6 +768,25 @@ def ensure_enterprise_crm_tables():
         # Additive: per-stage, country-aware case record (JSON text).
         if "stage_data" not in client_cols:
             conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN stage_data TEXT"))
+
+        # Additive: the lead-intake record a consultancy keeps on every client — contact,
+        # guardian, study plan, academic profile, tests, funding, lead source and the
+        # purpose-specific consents. All nullable; nothing here is ever required.
+        added_intake_cols = []
+        for column, ddl_type in _ENTERPRISE_CLIENT_INTAKE_COLUMNS:
+            if column in client_cols:
+                continue
+            sql_type = ts if ddl_type == "TS" else ddl_type
+            conn.execute(text(f"ALTER TABLE enterprise_clients ADD COLUMN {column} {sql_type}"))
+            added_intake_cols.append(column)
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_ent_clients_org_followup "
+            "ON enterprise_clients(organization_id, next_followup_date)"
+        ))
+        # Six of these questions used to be per-stage case-record fields. They are columns
+        # now, so move anything already recorded across — once, on the deploy that adds them.
+        if "lead_source" in added_intake_cols:
+            _backfill_client_intake_from_stage_data(conn)
 
         # --- enterprise_client_notes ------------------------------------------
         if not _table_exists(conn, "enterprise_client_notes"):
@@ -868,6 +990,442 @@ def ensure_enterprise_crm_tables():
                 conn.execute(text(stmt))
 
 
+# The 14 access-control columns added to enterprise_organization_members. "TS" is replaced by
+# the dialect's timestamp type. Every NOT NULL entry carries a CONSTANT default (SQLite refuses
+# a non-constant one on ADD COLUMN); every timestamp is plain nullable for the same reason.
+# data_scope is intentionally nullable WITH NO DEFAULT — NULL means "inherit the role's scope",
+# and a DEFAULT 'all' here would silently give every member workspace-wide access.
+_ENTERPRISE_MEMBER_ACCESS_COLUMNS: list[tuple[str, str]] = [
+    ("role_key", "VARCHAR NOT NULL DEFAULT 'viewer'"),
+    ("custom_role_id", "INTEGER"),
+    ("data_scope", "VARCHAR"),
+    ("capability_grants_json", "TEXT"),
+    ("capability_denies_json", "TEXT"),
+    ("primary_branch_id", "INTEGER"),
+    ("job_title", "VARCHAR"),
+    ("phone", "VARCHAR"),
+    ("status", "VARCHAR NOT NULL DEFAULT 'active'"),
+    ("deactivated_at", "TS"),
+    ("deactivated_by_user_id", "INTEGER"),
+    ("invited_at", "TS"),
+    ("invite_accepted_at", "TS"),
+    ("last_active_at", "TS"),
+]
+
+
+def ensure_enterprise_access_control_tables():
+    """Create the enterprise access-control schema — offices, custom roles, the member↔office
+    link and the access audit log — and add the per-member access columns plus
+    enterprise_clients.branch_id. Idempotent and additive; safe on every startup.
+
+    Deliberately THREE separate transactions. On Postgres, an error caught inside a single
+    `engine.begin()` turns the COMMIT into a silent ROLLBACK, so a hiccup in the data backfill
+    would discard every CREATE/ALTER without raising — and the app would then 500 on every
+    enterprise request, because the models map columns the database no longer has. The DDL
+    therefore commits on its own and stays UNGUARDED (a failure must be loud and abort startup),
+    while only the backfill is wrapped, outside its own `with`.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_true = "1" if is_sqlite else "TRUE"
+    bool_false = "0" if is_sqlite else "FALSE"
+
+    # --- transaction 1: the new tables -------------------------------------
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_branches"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_branches (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    name VARCHAR NOT NULL,
+                    code VARCHAR,
+                    city VARCHAR,
+                    state_region VARCHAR,
+                    country_code VARCHAR,
+                    address_line VARCHAR,
+                    phone VARCHAR,
+                    email VARCHAR,
+                    timezone VARCHAR,
+                    is_default BOOLEAN NOT NULL DEFAULT {bool_false},
+                    is_active BOOLEAN NOT NULL DEFAULT {bool_true},
+                    archived_at {ts},
+                    created_by_user_id INTEGER,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+
+        if not _table_exists(conn, "enterprise_member_branches"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_member_branches (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    member_id INTEGER NOT NULL,
+                    branch_id INTEGER NOT NULL,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+
+        if not _table_exists(conn, "enterprise_roles"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_roles (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    name VARCHAR NOT NULL,
+                    slug VARCHAR NOT NULL,
+                    description VARCHAR,
+                    capabilities_json TEXT,
+                    data_scope VARCHAR,
+                    based_on_role_key VARCHAR,
+                    is_active BOOLEAN NOT NULL DEFAULT {bool_true},
+                    created_by_user_id INTEGER,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+
+        if not _table_exists(conn, "enterprise_access_audit"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_access_audit (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    action VARCHAR NOT NULL,
+                    actor_user_id INTEGER,
+                    actor_name VARCHAR,
+                    target_user_id INTEGER,
+                    target_name VARCHAR,
+                    target_role_id INTEGER,
+                    target_branch_id INTEGER,
+                    summary VARCHAR NOT NULL,
+                    detail_json TEXT,
+                    ip_address VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+
+        # Unconditional: create_all(checkfirst=True) never builds __table_args__ indexes on a
+        # table that already exists, and an index added in a later release would otherwise
+        # never reach a database created by an earlier one.
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_branches_organization_id ON enterprise_branches(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_branches_is_default ON enterprise_branches(is_default)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_branches_is_active ON enterprise_branches(is_active)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_branches_created_by_user_id ON enterprise_branches(created_by_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_branch_org_active ON enterprise_branches(organization_id, is_active)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_member_branches_organization_id ON enterprise_member_branches(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_member_branches_member_id ON enterprise_member_branches(member_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_member_branches_branch_id ON enterprise_member_branches(branch_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_ent_member_branch_unique ON enterprise_member_branches(member_id, branch_id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_member_branch_org ON enterprise_member_branches(organization_id, branch_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_roles_organization_id ON enterprise_roles(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_roles_is_active ON enterprise_roles(is_active)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_roles_created_by_user_id ON enterprise_roles(created_by_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_role_org_active ON enterprise_roles(organization_id, is_active)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_role_org_slug ON enterprise_roles(organization_id, slug)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_access_audit_organization_id ON enterprise_access_audit(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_access_audit_action ON enterprise_access_audit(action)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_access_audit_actor_user_id ON enterprise_access_audit(actor_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_access_audit_target_user_id ON enterprise_access_audit(target_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_access_audit_org_created ON enterprise_access_audit(organization_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_access_audit_org_action ON enterprise_access_audit(organization_id, action)",
+        ):
+            conn.execute(text(stmt))
+
+    # --- transaction 2: new columns on the existing tables -----------------
+    with engine.begin() as conn:
+        if _table_exists(conn, "enterprise_organization_members"):
+            member_cols = _get_table_columns(conn, "enterprise_organization_members")
+            for column, ddl_type in _ENTERPRISE_MEMBER_ACCESS_COLUMNS:
+                if column in member_cols:
+                    continue
+                sql_type = ts if ddl_type == "TS" else ddl_type
+                conn.execute(text(
+                    f"ALTER TABLE enterprise_organization_members ADD COLUMN {column} {sql_type}"
+                ))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_organization_members_role_key ON enterprise_organization_members(role_key)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_organization_members_custom_role_id ON enterprise_organization_members(custom_role_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_organization_members_primary_branch_id ON enterprise_organization_members(primary_branch_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_organization_members_status ON enterprise_organization_members(status)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_member_org_role_key ON enterprise_organization_members(organization_id, role_key)",
+            ):
+                conn.execute(text(stmt))
+
+        if _table_exists(conn, "enterprise_clients"):
+            client_cols = _get_table_columns(conn, "enterprise_clients")
+            if "branch_id" not in client_cols:
+                conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN branch_id INTEGER"))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_clients_branch_id ON enterprise_clients(branch_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_clients_created_by_user_id ON enterprise_clients(created_by_user_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_clients_org_branch ON enterprise_clients(organization_id, branch_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_clients_org_assigned ON enterprise_clients(organization_id, assigned_to_user_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_clients_org_creator ON enterprise_clients(organization_id, created_by_user_id)",
+            ):
+                conn.execute(text(stmt))
+
+    # --- transaction 3: the data backfill (guarded) ------------------------
+    # try/except sits OUTSIDE the `with`, so the DDL above is already committed and a backfill
+    # failure only rolls back the backfill. It must never abort startup: this whole block runs
+    # inside main.startup_backfill_subscriptions(), where an exception takes the app down.
+    try:
+        with engine.begin() as conn:
+            _backfill_enterprise_access_control(conn)
+    except Exception as exc:  # noqa: BLE001 - never block startup on a data backfill
+        print(f"[schema_patch] enterprise access-control backfill skipped: {exc}")
+
+
+def _backfill_enterprise_access_control(conn):
+    """One-time upgrade of every existing organization to the access-control model.
+
+    Runs once per database (app_data_migrations marker) and every statement is additionally
+    written to be non-clobbering — guarded on "the value is still NULL / still the ADD COLUMN
+    default" — so re-running it after the marker is cleared cannot undo an admin's later edits.
+
+    What it guarantees, because the feature fails closed: without an office every client would
+    be invisible to a branch-scoped member, and without an explicit data_scope every existing
+    member would inherit their role's default (assigned) and lose sight of the caseload they
+    had yesterday. So existing members get data_scope='all' explicitly; only members created
+    from here on get NULL (= inherit).
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    bool_false = "0" if is_sqlite else "FALSE"
+    bool_true = "1" if is_sqlite else "TRUE"
+    MIGRATION_KEY = "enterprise_access_control_v1"
+
+    if not _table_exists(conn, "enterprise_organizations"):
+        return
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS app_data_migrations ("
+        "migration_key VARCHAR PRIMARY KEY, "
+        "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
+    ))
+    if conn.execute(
+        text("SELECT 1 FROM app_data_migrations WHERE migration_key = :k"),
+        {"k": MIGRATION_KEY},
+    ).fetchone():
+        return
+
+    has_clients = _table_exists(conn, "enterprise_clients")
+    has_branch_name = has_clients and "branch_name" in _get_table_columns(conn, "enterprise_clients")
+
+    orgs = conn.execute(text(
+        "SELECT id, created_by_user_id FROM enterprise_organizations ORDER BY id"
+    )).fetchall()
+
+    branches_created = 0
+    clients_placed = 0
+    members_touched = 0
+    owners_set = 0
+
+    for org_id, created_by_user_id in orgs:
+        # 1. The org's offices, keyed on lower(trim(name)); the lowest id wins a tie so the
+        #    mapping is stable across runs. Archived offices count — reusing one is right, and
+        #    creating a second office with the same name is exactly what we must not do.
+        by_lname: dict[str, int] = {}
+        default_branch_id = None
+        for bid, bname, is_default in conn.execute(
+            text("SELECT id, name, is_default FROM enterprise_branches "
+                 "WHERE organization_id = :org ORDER BY id"),
+            {"org": org_id},
+        ).fetchall():
+            by_lname.setdefault((bname or "").strip().lower(), bid)
+            if is_default and default_branch_id is None:
+                default_branch_id = bid
+
+        if default_branch_id is None:
+            default_branch_id = by_lname.get("head office")
+            if default_branch_id is not None:
+                conn.execute(
+                    text(f"UPDATE enterprise_branches SET is_default = {bool_true} WHERE id = :bid"),
+                    {"bid": default_branch_id},
+                )
+            else:
+                conn.execute(
+                    text("INSERT INTO enterprise_branches "
+                         "(organization_id, name, is_default, is_active, created_by_user_id) "
+                         f"VALUES (:org, 'Head Office', {bool_true}, {bool_true}, :uid)"),
+                    {"org": org_id, "uid": created_by_user_id},
+                )
+                default_branch_id = conn.execute(
+                    text("SELECT id FROM enterprise_branches WHERE organization_id = :org "
+                         "AND lower(trim(name)) = 'head office' ORDER BY id"),
+                    {"org": org_id},
+                ).scalar()
+                by_lname["head office"] = default_branch_id
+                branches_created += 1
+
+        # 2. One office per distinct free-text branch_name already on this org's clients.
+        #    Deduped in Python on lower(trim(...)) — "Banjara Hills", " banjara hills " and
+        #    "BANJARA HILLS" are one office, and the first spelling seen becomes its name.
+        if has_branch_name:
+            seen_order: list[tuple[str, str]] = []
+            for (raw_name,) in conn.execute(
+                text("SELECT branch_name FROM enterprise_clients WHERE organization_id = :org "
+                     "AND branch_name IS NOT NULL AND trim(branch_name) <> '' ORDER BY id"),
+                {"org": org_id},
+            ).fetchall():
+                label = (raw_name or "").strip()
+                lname = label.lower()
+                if not lname or any(lname == existing for existing, _ in seen_order):
+                    continue
+                seen_order.append((lname, label))
+
+            for lname, label in seen_order:
+                if lname not in by_lname:
+                    conn.execute(
+                        text("INSERT INTO enterprise_branches "
+                             "(organization_id, name, is_default, is_active, created_by_user_id) "
+                             f"VALUES (:org, :name, {bool_false}, {bool_true}, :uid)"),
+                        {"org": org_id, "name": label, "uid": created_by_user_id},
+                    )
+                    by_lname[lname] = conn.execute(
+                        text("SELECT id FROM enterprise_branches WHERE organization_id = :org "
+                             "AND lower(trim(name)) = :lname ORDER BY id"),
+                        {"org": org_id, "lname": lname},
+                    ).scalar()
+                    branches_created += 1
+
+                # 3. Place the clients. `branch_id IS NULL` is what makes this idempotent AND
+                #    non-clobbering: a client an admin has since moved to another office keeps
+                #    the office they moved it to.
+                clients_placed += conn.execute(
+                    text("UPDATE enterprise_clients SET branch_id = :bid "
+                         "WHERE organization_id = :org AND branch_id IS NULL "
+                         "AND lower(trim(branch_name)) = :lname"),
+                    {"bid": by_lname[lname], "org": org_id, "lname": lname},
+                ).rowcount or 0
+
+        if has_clients:
+            # Everything with no usable branch_name goes to the default office — a NULL
+            # branch_id is only visible at workspace scope, so leaving any behind would hide
+            # them from their own counsellor.
+            clients_placed += conn.execute(
+                text("UPDATE enterprise_clients SET branch_id = :bid "
+                     "WHERE organization_id = :org AND branch_id IS NULL"),
+                {"bid": default_branch_id, "org": org_id},
+            ).rowcount or 0
+            if has_branch_name:
+                # branch_name is the server-written display copy of branch_id from now on, so
+                # fill in the blanks. Never overwrites a spelling a consultancy already typed.
+                conn.execute(
+                    text("UPDATE enterprise_clients SET branch_name = ("
+                         "  SELECT name FROM enterprise_branches WHERE id = enterprise_clients.branch_id) "
+                         "WHERE organization_id = :org AND branch_id IS NOT NULL "
+                         "AND (branch_name IS NULL OR trim(branch_name) = '')"),
+                    {"org": org_id},
+                )
+
+        if not _table_exists(conn, "enterprise_organization_members"):
+            continue
+
+        # 4. role_key from the legacy role string — only where role_key is still the ADD COLUMN
+        #    default, so a role already set through the new UI is never rewritten.
+        members_touched += conn.execute(
+            text("UPDATE enterprise_organization_members SET role_key = CASE "
+                 "WHEN role = 'admin' THEN 'admin' "
+                 "WHEN role = 'editor' THEN 'counsellor' ELSE 'viewer' END "
+                 "WHERE organization_id = :org "
+                 "AND (role_key IS NULL OR role_key = '' OR role_key = 'viewer')"),
+            {"org": org_id},
+        ).rowcount or 0
+
+        # 5. Existing members keep the access they have today: an explicit 'all'. New members
+        #    get NULL and inherit their role's scope.
+        conn.execute(
+            text("UPDATE enterprise_organization_members SET data_scope = 'all' "
+                 "WHERE organization_id = :org AND data_scope IS NULL"),
+            {"org": org_id},
+        )
+
+        # 6. Home office + one member↔office link each. NOT EXISTS keeps the unique index happy
+        #    and makes a re-run a no-op; a member reassigned to another office is left alone.
+        conn.execute(
+            text("UPDATE enterprise_organization_members SET primary_branch_id = :bid "
+                 "WHERE organization_id = :org AND primary_branch_id IS NULL"),
+            {"bid": default_branch_id, "org": org_id},
+        )
+        conn.execute(
+            text("INSERT INTO enterprise_member_branches (organization_id, member_id, branch_id) "
+                 "SELECT m.organization_id, m.id, m.primary_branch_id "
+                 "FROM enterprise_organization_members m "
+                 "WHERE m.organization_id = :org AND m.primary_branch_id IS NOT NULL "
+                 "AND NOT EXISTS (SELECT 1 FROM enterprise_member_branches mb "
+                 "                WHERE mb.member_id = m.id AND mb.branch_id = m.primary_branch_id)"),
+            {"org": org_id},
+        )
+
+        # 7. Exactly one owner per org — the person who created the workspace, then the
+        #    longest-standing admin, then just the longest-standing member. `role` is the
+        #    legacy mirror and owner maps to 'admin' there (see legacy_role_for).
+        owner_member_id = conn.execute(
+            text("SELECT id FROM enterprise_organization_members "
+                 f"WHERE organization_id = :org AND user_id = :uid AND is_active = {bool_true} "
+                 "ORDER BY id LIMIT 1"),
+            {"org": org_id, "uid": created_by_user_id},
+        ).scalar()
+        if owner_member_id is None:
+            owner_member_id = conn.execute(
+                text("SELECT id FROM enterprise_organization_members "
+                     f"WHERE organization_id = :org AND is_active = {bool_true} AND role = 'admin' "
+                     "ORDER BY id LIMIT 1"),
+                {"org": org_id},
+            ).scalar()
+        if owner_member_id is None:
+            owner_member_id = conn.execute(
+                text("SELECT id FROM enterprise_organization_members "
+                     f"WHERE organization_id = :org AND is_active = {bool_true} ORDER BY id LIMIT 1"),
+                {"org": org_id},
+            ).scalar()
+        if owner_member_id is not None:
+            conn.execute(
+                text("UPDATE enterprise_organization_members "
+                     "SET role_key = 'owner', role = 'admin' WHERE id = :mid"),
+                {"mid": owner_member_id},
+            )
+            owners_set += 1
+            # A second owner would make the "exactly one" invariant unenforceable from day one.
+            conn.execute(
+                text("UPDATE enterprise_organization_members SET role_key = 'admin' "
+                     "WHERE organization_id = :org AND role_key = 'owner' AND id <> :mid"),
+                {"org": org_id, "mid": owner_member_id},
+            )
+
+        # 8. Lifecycle timestamps derived from what the old schema recorded.
+        conn.execute(
+            text("UPDATE enterprise_organization_members SET status = 'suspended' "
+                 f"WHERE organization_id = :org AND is_active = {bool_false} "
+                 "AND (status IS NULL OR status = 'active')"),
+            {"org": org_id},
+        )
+        conn.execute(
+            text("UPDATE enterprise_organization_members SET invited_at = created_at "
+                 "WHERE organization_id = :org AND invited_at IS NULL AND created_at IS NOT NULL"),
+            {"org": org_id},
+        )
+        conn.execute(
+            text("UPDATE enterprise_organization_members "
+                 "SET deactivated_at = COALESCE(updated_at, created_at) "
+                 f"WHERE organization_id = :org AND is_active = {bool_false} "
+                 "AND deactivated_at IS NULL"),
+            {"org": org_id},
+        )
+
+    # 9. Marker last, inside the same transaction as the work it describes.
+    conn.execute(
+        text("INSERT INTO app_data_migrations (migration_key) VALUES (:k)"),
+        {"k": MIGRATION_KEY},
+    )
+    print(
+        "[schema_patch] enterprise access control backfilled: "
+        f"{len(orgs)} org(s), {branches_created} office(s) created, "
+        f"{clients_placed} client(s) placed, {members_touched} member role(s) mapped, "
+        f"{owners_set} owner(s) set"
+    )
+
+
 def ensure_enterprise_interview_invite_columns():
     """Add interview completion-tracking columns for older DBs (in-place, idempotent)."""
     is_sqlite = engine.dialect.name == "sqlite"
@@ -1018,6 +1576,9 @@ def ensure_enterprise_support_requests_table():
     pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
     with engine.begin() as conn:
         if _table_exists(conn, "enterprise_support_requests"):
+            # Additive: attachments_json (manifest of files forwarded to the support inbox).
+            if "attachments_json" not in _get_table_columns(conn, "enterprise_support_requests"):
+                conn.execute(text("ALTER TABLE enterprise_support_requests ADD COLUMN attachments_json TEXT"))
             return
         conn.execute(text(f"""
             CREATE TABLE enterprise_support_requests (
@@ -1030,6 +1591,7 @@ def ensure_enterprise_support_requests_table():
                 subject VARCHAR NOT NULL,
                 message TEXT NOT NULL,
                 status VARCHAR NOT NULL DEFAULT 'open',
+                attachments_json TEXT,
                 created_at {ts} DEFAULT {now_default} NOT NULL,
                 updated_at {ts}
             )
@@ -1188,6 +1750,64 @@ def ensure_enterprise_deep_scan_table():
                 conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN deep_scan_free_month VARCHAR"))
             if "deep_scan_free_used" not in wallet_cols:
                 conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN deep_scan_free_used INTEGER NOT NULL DEFAULT 0"))
+
+
+def ensure_enterprise_writing_studio_table():
+    """Create the enterprise Writing Studio drafts table (AI-written SOPs and LORs for
+    a client, stored as an immutable version chain). Idempotent and additive — safe to
+    run on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_client_writing_drafts"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_client_writing_drafts (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    doc_type VARCHAR NOT NULL DEFAULT 'sop',
+                    root_id INTEGER,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    country_code VARCHAR,
+                    university VARCHAR,
+                    program VARCHAR,
+                    study_level VARCHAR,
+                    intake VARCHAR,
+                    recommender_type VARCHAR,
+                    recommender_name VARCHAR,
+                    recommender_title VARCHAR,
+                    recommender_org VARCHAR,
+                    recommender_email VARCHAR,
+                    relationship_context TEXT,
+                    brief TEXT,
+                    instruction TEXT,
+                    title VARCHAR,
+                    content_md TEXT NOT NULL,
+                    notes_md TEXT,
+                    word_count INTEGER NOT NULL DEFAULT 0,
+                    model_used VARCHAR,
+                    credits_charged INTEGER NOT NULL DEFAULT 0,
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_writing_drafts_organization_id ON enterprise_client_writing_drafts(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_writing_drafts_client_id ON enterprise_client_writing_drafts(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_writing_drafts_root_id ON enterprise_client_writing_drafts(root_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_client_writing_drafts_created_at ON enterprise_client_writing_drafts(created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_writing_drafts_client_created ON enterprise_client_writing_drafts(client_id, created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_writing_drafts_root_version ON enterprise_client_writing_drafts(root_id, version)",
+            ):
+                conn.execute(text(stmt))
+        else:
+            # Additive follow-ups for installs created before a column existed.
+            cols = _get_table_columns(conn, "enterprise_client_writing_drafts")
+            if "notes_md" not in cols:
+                conn.execute(text("ALTER TABLE enterprise_client_writing_drafts ADD COLUMN notes_md TEXT"))
 
 
 def ensure_enterprise_refunds_table():
@@ -1440,6 +2060,124 @@ def ensure_enterprise_payments_tables():
                 conn.execute(text(stmt))
 
 
+def ensure_enterprise_finance_tables():
+    """Create the org-scoped finance books tables: the hand-recorded income/expense
+    ledger and the per-org finance settings (hourly cost, opening balance, FY start,
+    savings baselines).
+
+    Only money the platform cannot already see is stored here — collected payments,
+    Rilono fees, credit top-ups, refunds and chargebacks are derived at read time from
+    their own tables (app/enterprise_finance.py). Idempotent and additive.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_false = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        # --- enterprise_finance_entries (the manual books) ---
+        if not _table_exists(conn, "enterprise_finance_entries"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_finance_entries (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    kind VARCHAR NOT NULL DEFAULT 'expense',
+                    category VARCHAR NOT NULL DEFAULT 'other_expense',
+                    amount_paise INTEGER NOT NULL DEFAULT 0,
+                    tax_paise INTEGER NOT NULL DEFAULT 0,
+                    currency VARCHAR NOT NULL DEFAULT 'INR',
+                    occurred_on DATE NOT NULL,
+                    description VARCHAR,
+                    counterparty VARCHAR,
+                    payment_method VARCHAR,
+                    reference VARCHAR,
+                    notes TEXT,
+                    client_id INTEGER,
+                    client_name_snapshot VARCHAR,
+                    repeat_monthly BOOLEAN NOT NULL DEFAULT {bool_false},
+                    repeat_until DATE,
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+
+        # --- enterprise_finance_settings (one row per org) ---
+        if not _table_exists(conn, "enterprise_finance_settings"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_finance_settings (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    hourly_cost_paise INTEGER NOT NULL DEFAULT 40000,
+                    -- BIGINT: a bank balance can exceed int4's ~₹2.1 crore ceiling in paise.
+                    opening_balance_paise BIGINT NOT NULL DEFAULT 0,
+                    opening_balance_on DATE,
+                    fy_start_month INTEGER NOT NULL DEFAULT 4,
+                    savings_overrides_json TEXT,
+                    updated_by_user_id INTEGER,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+
+        # Additive self-heal, outside the create branch so it reaches an ALREADY-EXISTING
+        # table too (a table created by an earlier build, or by Base.metadata.create_all
+        # before a column was added). Every NOT NULL addition carries a DEFAULT.
+        entry_cols = _get_table_columns(conn, "enterprise_finance_entries")
+        for col, ddl in (
+            ("kind", "VARCHAR NOT NULL DEFAULT 'expense'"),
+            ("category", "VARCHAR NOT NULL DEFAULT 'other_expense'"),
+            ("amount_paise", "INTEGER NOT NULL DEFAULT 0"),
+            ("tax_paise", "INTEGER NOT NULL DEFAULT 0"),
+            ("currency", "VARCHAR NOT NULL DEFAULT 'INR'"),
+            ("description", "VARCHAR"),
+            ("counterparty", "VARCHAR"),
+            ("payment_method", "VARCHAR"),
+            ("reference", "VARCHAR"),
+            ("notes", "TEXT"),
+            ("client_id", "INTEGER"),
+            ("client_name_snapshot", "VARCHAR"),
+            ("repeat_monthly", f"BOOLEAN NOT NULL DEFAULT {bool_false}"),
+            ("repeat_until", "DATE"),
+            ("created_by_user_id", "INTEGER"),
+            ("created_by_name", "VARCHAR"),
+            ("updated_at", ts),
+        ):
+            if col not in entry_cols:
+                conn.execute(text(f"ALTER TABLE enterprise_finance_entries ADD COLUMN {col} {ddl}"))
+
+        settings_cols = _get_table_columns(conn, "enterprise_finance_settings")
+        for col, ddl in (
+            ("hourly_cost_paise", "INTEGER NOT NULL DEFAULT 40000"),
+            ("opening_balance_paise", "BIGINT NOT NULL DEFAULT 0"),
+            ("opening_balance_on", "DATE"),
+            ("fy_start_month", "INTEGER NOT NULL DEFAULT 4"),
+            ("savings_overrides_json", "TEXT"),
+            ("updated_by_user_id", "INTEGER"),
+            ("updated_at", ts),
+        ):
+            if col not in settings_cols:
+                conn.execute(text(f"ALTER TABLE enterprise_finance_settings ADD COLUMN {col} {ddl}"))
+
+        # Indexes also run on BOTH paths — an index created only inside the `if not
+        # _table_exists` branch never reaches a database that already has the table.
+        for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_finance_entries_organization_id ON enterprise_finance_entries(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_finance_entries_client_id ON enterprise_finance_entries(client_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_finance_entries_occurred_on ON enterprise_finance_entries(occurred_on)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_finance_entries_category ON enterprise_finance_entries(category)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_finance_entries_counterparty ON enterprise_finance_entries(counterparty)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_finance_entries_kind ON enterprise_finance_entries(kind)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_finance_entries_created_by ON enterprise_finance_entries(created_by_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_fin_entries_org_date ON enterprise_finance_entries(organization_id, occurred_on)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_fin_entries_org_kind ON enterprise_finance_entries(organization_id, kind)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_fin_settings_org ON enterprise_finance_settings(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_finance_settings_updated_by ON enterprise_finance_settings(updated_by_user_id)",
+        ):
+            conn.execute(text(stmt))
+
+
 def ensure_enterprise_calendar_reminder_runs_table():
     """Create the run-log table that makes the daily calendar-reminder email job idempotent."""
     is_sqlite = engine.dialect.name == "sqlite"
@@ -1510,6 +2248,49 @@ def ensure_enterprise_calendar_table():
             conn.execute(text(f"ALTER TABLE enterprise_calendar_events ADD COLUMN notify_client BOOLEAN NOT NULL DEFAULT {bool_false}"))
         if "client_notified_at" not in cols:
             conn.execute(text(f"ALTER TABLE enterprise_calendar_events ADD COLUMN client_notified_at {ts}"))
+
+
+def ensure_enterprise_calendar_attachment_table():
+    """Create enterprise_calendar_event_attachments (reference files pinned to an event).
+
+    A row with a NULL event_id and a draft_token is still a draft: uploaded while a brand-new
+    reminder was being filled in, and bound to the event when it saves. Idempotent.
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_calendar_event_attachments"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_calendar_event_attachments (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    event_id INTEGER REFERENCES enterprise_calendar_events(id) ON DELETE CASCADE,
+                    draft_token VARCHAR,
+                    original_filename VARCHAR NOT NULL,
+                    storage_key VARCHAR NOT NULL,
+                    file_size INTEGER,
+                    mime_type VARCHAR,
+                    uploaded_by_user_id INTEGER,
+                    uploaded_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_ent_cal_att_organization_id "
+                "ON enterprise_calendar_event_attachments(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_cal_att_event_id "
+                "ON enterprise_calendar_event_attachments(event_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_cal_att_uploaded_by "
+                "ON enterprise_calendar_event_attachments(uploaded_by_user_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_cal_att_created_at "
+                "ON enterprise_calendar_event_attachments(created_at)",
+                # The upload path's own lookup: this uploader's unbound drafts for one modal.
+                "CREATE INDEX IF NOT EXISTS ix_ent_cal_att_draft "
+                "ON enterprise_calendar_event_attachments(organization_id, draft_token, event_id)",
+            ):
+                conn.execute(text(stmt))
 
 
 def ensure_enterprise_credit_tables():
@@ -2212,6 +2993,7 @@ def ensure_course_catalog_tables():
                     domain_key VARCHAR,
                     city VARCHAR,
                     qs_world_rank VARCHAR,
+                    qs_rank_numeric INTEGER,
                     national_rank VARCHAR,
                     university_type VARCHAR,
                     website_url VARCHAR,
@@ -2251,7 +3033,14 @@ def ensure_course_catalog_tables():
             conn.execute(text(
                 "ALTER TABLE course_catalog_universities ADD COLUMN domain_key VARCHAR"
             ))
+        # Added 2026-07-29: numeric rank behind the "within the top N" advanced filter
+        # (qs_world_rank is a display string and can be a band like "301-350").
+        if "qs_rank_numeric" not in uni_columns:
+            conn.execute(text(
+                "ALTER TABLE course_catalog_universities ADD COLUMN qs_rank_numeric INTEGER"
+            ))
         for stmt in (
+            "CREATE INDEX IF NOT EXISTS ix_course_catalog_universities_qs_rank_numeric ON course_catalog_universities(qs_rank_numeric)",
             "CREATE INDEX IF NOT EXISTS ix_course_catalog_universities_domain_key ON course_catalog_universities(domain_key)",
             # Partial unique: one row per (country, domain) once a domain is known,
             # while rows with an unknown domain stay exempt.
@@ -2280,6 +3069,10 @@ def ensure_course_catalog_tables():
                     ielts_requirement VARCHAR,
                     toefl_requirement VARCHAR,
                     gre_gmat_requirement VARCHAR,
+                    ielts_score FLOAT,
+                    toefl_score INTEGER,
+                    gre_gmat_required INTEGER,
+                    duration_months INTEGER,
                     entry_requirements TEXT,
                     course_url VARCHAR,
                     is_active BOOLEAN NOT NULL DEFAULT {bool_true},
@@ -2297,6 +3090,20 @@ def ensure_course_catalog_tables():
                 "CREATE INDEX IF NOT EXISTS ix_course_catalog_course_country_level ON course_catalog_courses(country_code, degree_level)",
             ):
                 conn.execute(text(stmt))
+
+        # Added 2026-07-29: numeric columns behind the advanced browse filters. The
+        # figures are published as free text ("6.5 overall (6.0 in each band)", "2 years",
+        # "GRE optional"), and browse pages in SQL — so each one is parsed once on write
+        # (course_catalog.apply_course_derived_fields) into something SQL can compare.
+        course_columns = _get_table_columns(conn, "course_catalog_courses")
+        for column, ddl_type in (
+            ("ielts_score", "FLOAT"),
+            ("toefl_score", "INTEGER"),
+            ("gre_gmat_required", "INTEGER"),
+            ("duration_months", "INTEGER"),
+        ):
+            if column not in course_columns:
+                conn.execute(text(f"ALTER TABLE course_catalog_courses ADD COLUMN {column} {ddl_type}"))
 
         if not _table_exists(conn, "course_catalog_refresh_runs"):
             conn.execute(text(f"""
@@ -2346,3 +3153,69 @@ def ensure_course_catalog_tables():
                 "CREATE INDEX IF NOT EXISTS ix_ent_course_finder_recs_org_created ON enterprise_course_finder_recs(organization_id, created_at)",
             ):
                 conn.execute(text(stmt))
+
+        _backfill_course_catalog_derived_filters(conn)
+
+
+def _backfill_course_catalog_derived_filters(conn):
+    """One-time fill of the derived filter columns for catalog rows written before those
+    columns existed.
+
+    Every later write keeps itself in sync (the agent calls
+    course_catalog.apply_course_derived_fields / parse_rank_number on each upsert), so
+    this is guarded by an app_data_migrations marker and runs exactly once per database —
+    a re-run on every boot would re-parse the whole catalog for no gain.
+    """
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS app_data_migrations ("
+        "migration_key VARCHAR PRIMARY KEY, "
+        "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
+    ))
+    marker = "course_catalog_derived_filters_v1"
+    if conn.execute(
+        text("SELECT 1 FROM app_data_migrations WHERE migration_key = :k"),
+        {"k": marker},
+    ).fetchone():
+        return
+
+    # Local import: the parsers live with the agent that writes these columns, so the
+    # backfill and every future write can never drift apart.
+    from app import course_catalog
+
+    course_rows = conn.execute(text(
+        "SELECT id, ielts_requirement, toefl_requirement, gre_gmat_requirement, duration "
+        "FROM course_catalog_courses"
+    )).fetchall()
+    for row in course_rows:
+        values = {
+            "i": course_catalog.parse_ielts_band(row[1]),
+            "t": course_catalog.parse_toefl_score(row[2]),
+            "g": course_catalog.parse_gre_requirement(row[3]),
+            "d": course_catalog.parse_duration_months(row[4]),
+        }
+        if all(v is None for v in values.values()):
+            continue  # nothing parseable — leave the row's columns NULL
+        conn.execute(
+            text(
+                "UPDATE course_catalog_courses SET ielts_score = :i, toefl_score = :t, "
+                "gre_gmat_required = :g, duration_months = :d WHERE id = :id"
+            ),
+            {**values, "id": row[0]},
+        )
+
+    uni_rows = conn.execute(text(
+        "SELECT id, qs_world_rank FROM course_catalog_universities WHERE qs_world_rank IS NOT NULL"
+    )).fetchall()
+    for row in uni_rows:
+        rank = course_catalog.parse_rank_number(row[1])
+        if rank is None:
+            continue
+        conn.execute(
+            text("UPDATE course_catalog_universities SET qs_rank_numeric = :r WHERE id = :id"),
+            {"r": rank, "id": row[0]},
+        )
+
+    conn.execute(
+        text("INSERT INTO app_data_migrations (migration_key) VALUES (:k)"),
+        {"k": marker},
+    )

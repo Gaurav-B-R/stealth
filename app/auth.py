@@ -61,6 +61,10 @@ def _is_local_hostname(hostname: str) -> bool:
     host = (hostname or "").strip().lower()
     return (
         host in {"localhost", "127.0.0.1", "::1", "localtest.me", "lvh.me"}
+        # `*.localhost` is reserved by RFC 6761 and can never resolve publicly. The
+        # enterprise portal is ALWAYS on a subdomain (acme.localhost), so without this
+        # a local enterprise login gets a Secure cookie the browser drops over http.
+        or host.endswith(".localhost")
         or host.endswith(".localtest.me")
         or host.endswith(".lvh.me")
     )

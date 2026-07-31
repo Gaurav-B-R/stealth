@@ -7,14 +7,14 @@ import secrets
 import logging
 import hashlib
 import threading
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote, urlparse
 
 import requests
 from jose import jwt as jose_jwt, JWTError
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import timedelta, datetime, date, timezone as dt_timezone
@@ -23,16 +23,22 @@ from pydantic import BaseModel, EmailStr, Field
 from app.database import get_db, SessionLocal
 from app import models
 from app import enterprise_catalog as catalog
+from app import enterprise_access as access
+from app import enterprise_team as team_svc
+from app import enterprise_client_fields as client_fields
 from app import enterprise_billing as billing
 from app import enterprise_credits as credits
 from app import enterprise_coupons
 from app import enterprise_payments
+from app import enterprise_finance as finance
 from app import enterprise_ai
+from app import enterprise_writing
 from app import enterprise_copilot
 from app import enterprise_interview
 from app import ai_guardrails
 from app import ai_usage
 from app import enterprise_storage
+from app import enterprise_calendar_files as cal_files
 from app import enterprise_notifications as notif
 from app.utils import gemini_service
 from app.routers.ai_chat import ChatSessionAttachment
@@ -221,10 +227,16 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
         "flag_emoji": "🇫🇷",
         "iconic_place": "Eiffel Tower",
         "visa_types": [
-            "Long-Stay Student Visa (VLS-TS)",
+            "Long-Stay Student Visa (VLS-TS « Étudiant »)",
+            "Temporary Long-Stay Student Visa (VLS-T)",
+            "Entrance-Exam Visa (Court Séjour « Étudiant-Concours »)",
+            "Short-Stay Study Visa (Schengen Type C)",
         ],
         "intakes_by_visa": {
-            "Long-Stay Student Visa (VLS-TS)": ["September", "January"],
+            "Long-Stay Student Visa (VLS-TS « Étudiant »)": ["January", "September"],
+            "Temporary Long-Stay Student Visa (VLS-T)": ["January", "September"],
+            "Entrance-Exam Visa (Court Séjour « Étudiant-Concours »)": ["January", "September"],
+            "Short-Stay Study Visa (Schengen Type C)": ["January", "September"],
         },
     },
     {
@@ -249,6 +261,60 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
         ],
         "intakes_by_visa": {
             "Fee Paying Student Visa": ["February", "July"],
+        },
+    },
+    {
+        "code": "ES",
+        "name": "Spain",
+        "flag_emoji": "🇪🇸",
+        "iconic_place": "Sagrada Família",
+        "visa_types": [
+            "Long-Stay Study Visa (Type D) – Higher Education",
+            "Long-Stay Study Visa (Type D) – Language / Training Activity",
+            "Long-Stay Study Visa (Type D) – Secondary / Student Mobility",
+            "Short-Stay Study Visa (Schengen Type C)",
+        ],
+        "intakes_by_visa": {
+            "Long-Stay Study Visa (Type D) – Higher Education": ["February", "September", "October"],
+            "Long-Stay Study Visa (Type D) – Language / Training Activity": ["January", "February", "September", "October"],
+            "Long-Stay Study Visa (Type D) – Secondary / Student Mobility": ["January", "September"],
+            "Short-Stay Study Visa (Schengen Type C)": ["January", "September"],
+        },
+    },
+    {
+        "code": "NL",
+        "name": "Netherlands",
+        "flag_emoji": "🇳🇱",
+        "iconic_place": "Kinderdijk Windmills",
+        "visa_types": [
+            "Study Residence Permit (MVV/TEV) – Higher Education",
+            "Study Residence Permit – Secondary / MBO",
+            "Exchange Student Residence Permit",
+            "Orientation Year (Zoekjaar) Permit",
+        ],
+        "intakes_by_visa": {
+            "Study Residence Permit (MVV/TEV) – Higher Education": ["September", "February"],
+            "Study Residence Permit – Secondary / MBO": ["September", "February"],
+            "Exchange Student Residence Permit": ["September", "February"],
+            "Orientation Year (Zoekjaar) Permit": [],
+        },
+    },
+    {
+        "code": "AE",
+        "name": "United Arab Emirates",
+        "flag_emoji": "🇦🇪",
+        "iconic_place": "Burj Khalifa",
+        "visa_types": [
+            "Student Residence Visa",
+            "Study / Training Visit Visa",
+            "Golden Residence – Outstanding Student",
+            "Parent-Sponsored Student Residence",
+        ],
+        "intakes_by_visa": {
+            "Student Residence Visa": ["January", "May", "September"],
+            "Study / Training Visit Visa": ["January", "May", "September"],
+            "Golden Residence – Outstanding Student": ["January", "May", "September"],
+            "Parent-Sponsored Student Residence": ["January", "May", "September"],
         },
     },
 ]
@@ -294,12 +360,21 @@ class EnterpriseOnboardingRequest(BaseModel):
 
 class EnterpriseTeamAddUserRequest(BaseModel):
     email: EmailStr
-    role: str = Field(default=ENTERPRISE_ROLE_VIEWER, min_length=3, max_length=16)
+    # `role` stays for older clients (admin|editor|viewer). `role_key` is the richer field:
+    # a system preset key, or "custom:<id>" for one of the workspace's own roles.
+    role: str = Field(default=ENTERPRISE_ROLE_VIEWER, min_length=2, max_length=40)
+    role_key: Optional[str] = Field(default=None, max_length=40)
+    custom_role_id: Optional[int] = None
+    data_scope: Optional[str] = Field(default=None, max_length=12)
+    branch_ids: Optional[List[int]] = None
+    primary_branch_id: Optional[int] = None
+    job_title: Optional[str] = Field(default=None, max_length=120)
+    phone: Optional[str] = Field(default=None, max_length=40)
     full_name: Optional[str] = Field(default=None, max_length=120)
 
 
 class EnterpriseTeamRoleUpdateRequest(BaseModel):
-    role: str = Field(..., min_length=3, max_length=16)
+    role: str = Field(..., min_length=2, max_length=40)
 
 
 class EnterpriseBrandingUpdateRequest(BaseModel):
@@ -492,6 +567,20 @@ def _parse_enterprise_role_or_400(raw_role: str | None) -> str:
 
 
 def _enterprise_permissions_for_role(role: str) -> dict[str, bool]:
+    """The three legacy booleans the deployed SPA reads, resolved from the caller's real access.
+
+    Kept at this name and signature on purpose: ~80 endpoints emit `"permissions":
+    _enterprise_permissions_for_role(role)`, and `role` at every one of them is the
+    EnterpriseRoleContext the gate returns. Answering from the attached AccessContext therefore
+    upgrades all of them at once — and, more importantly, stops two different producers of the
+    same key from disagreeing (a granular capability set collapsed one way here and another way
+    in /me would flip admin-only panels on for someone who shouldn't see them).
+
+    A plain string still works, for the handful of callers that pass a stored role directly.
+    """
+    ctx = getattr(role, "ctx", None)
+    if ctx is not None:
+        return access.legacy_permissions(ctx)
     normalized = _normalize_enterprise_role(role)
     return {
         "can_view_data": True,
@@ -795,6 +884,8 @@ def _build_enterprise_context(
             "organization": None,
             "membership": None,
             "permissions": _blocked_enterprise_permissions(),
+            "access": access.blocked_access_payload(),
+            "branches": [],
             "dpa": {
                 "current_version": LEGAL_DPA_VERSION,
                 "accepted_version": None,
@@ -805,6 +896,7 @@ def _build_enterprise_context(
         }
 
     normalized_role = _normalize_enterprise_role(membership.role)
+    ctx = access.resolve_access_context(db, membership, organization)
     company_name = (organization.company_name or "").strip()
     subdomain_slug = (organization.subdomain_slug or "").strip().lower()
     logo_url = _resolve_enterprise_logo_url(organization)
@@ -838,19 +930,79 @@ def _build_enterprise_context(
             "display_currency": _org_display_currency(organization),
         },
         "membership": {
+            # Still the legacy admin|editor|viewer string: the deployed SPA prints it, and a
+            # mid-deploy tab must not suddenly render "branch_manager". The UI reads the real
+            # label from access.role_label.
             "role": normalized_role,
             "is_active": bool(membership.is_active),
             "joined_at": membership.created_at,
+            "job_title": getattr(membership, "job_title", None),
         },
         "subscription": subscription_summary,
         "credits": credits_summary,
         "permissions": (
-            _enterprise_permissions_for_role(normalized_role)
+            access.legacy_permissions(ctx)
             if not onboarding_required
             else _blocked_enterprise_permissions()
         ),
+        "access": (
+            access.access_payload(ctx)
+            if not onboarding_required
+            else access.blocked_access_payload()
+        ),
+        # Offices ride along on /me so the Add-client modal — which opens from any view — can
+        # populate its office picker without every screen having to fetch the team endpoint.
+        "branches": _org_branch_options(db, organization, ctx) if not onboarding_required else [],
         "dpa": _build_dpa_consent_state(organization),
     }
+
+
+def _org_branch_options(db: Session, organization, ctx) -> list[dict]:
+    """Active offices this member may file a client under: the whole org, or just their own."""
+    try:
+        from app import enterprise_team as team
+
+        rows = team.list_branches(db, organization.id)
+        if ctx is not None and ctx.scope_kind == "branch":
+            rows = [b for b in rows if int(b.id) in ctx.branch_ids]
+        return [
+            {
+                "id": b.id,
+                "name": b.name,
+                "code": b.code,
+                "city": b.city,
+                "is_default": bool(b.is_default),
+            }
+            for b in rows
+        ]
+    except Exception:
+        logger.exception("Failed to list offices for org_id=%s", getattr(organization, "id", None))
+        return []
+
+
+class EnterpriseRoleContext(str):
+    """The legacy role string, with the caller's resolved AccessContext riding along.
+
+    Subclasses `str` deliberately. Every one of the ~100 existing call sites does
+    `_, organization, role = _require_enterprise_membership(...)` and then uses `role` as a
+    string — `role == ENTERPRISE_ROLE_ADMIN`, `role in {...}`, `"role": role` in a JSON payload.
+    All of that keeps working untouched, while new code reads `role.ctx` for granular
+    capabilities and record scope. That is what makes granular access controls landable on a
+    live app without rewriting a hundred handlers in one commit.
+
+    `ctx` is optional and `__reduce__` is defined so `copy`/`deepcopy`/`pickle` of a response
+    payload can't blow up on the custom `__new__`.
+    """
+
+    ctx: "access.AccessContext | None"
+
+    def __new__(cls, legacy_role: str, ctx=None):
+        obj = super().__new__(cls, legacy_role)
+        obj.ctx = ctx
+        return obj
+
+    def __reduce__(self):
+        return (EnterpriseRoleContext, (str(self), self.ctx))
 
 
 def _require_enterprise_membership(
@@ -860,15 +1012,38 @@ def _require_enterprise_membership(
     request: Request | None = None,
     require_manage_users: bool = False,
     require_edit_data: bool = False,
-) -> tuple[models.EnterpriseOrganizationMember, models.EnterpriseOrganization, str]:
+    require_capability: "str | tuple[str, ...] | None" = None,
+    require_any: "tuple[str, ...] | None" = None,
+) -> tuple[models.EnterpriseOrganizationMember, models.EnterpriseOrganization, EnterpriseRoleContext]:
+    """Resolve the caller's membership, organization and access context, or 403.
+
+    `require_manage_users` and `require_edit_data` are the two legacy flags. They keep their old
+    meaning on purpose:
+
+      * `require_manage_users` maps to "is genuinely an owner or admin of this workspace" — NOT
+        to holding the `team.manage` capability. Those two are different things now: an owner can
+        delegate `team.manage` to an office coordinator so they can invite staff, and that person
+        must not thereby be able to issue a refund, repoint the payout bank account or rename the
+        workspace URL. Endpoints that SHOULD be delegable carry an explicit `require_capability`
+        instead.
+      * `require_edit_data` maps to `clients.edit`, which is what it always meant.
+
+    `require_capability` requires every listed capability; `require_any` requires at least one.
+    """
     membership, organization = _get_active_enterprise_membership(db, user.id)
     if not membership or not organization:
+        # Distinguish "never onboarded" from "your access was switched off", so an offboarded
+        # teammate isn't told to complete a setup step they can't reach.
+        if _has_deactivated_enterprise_membership(db, user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your access to this workspace has been turned off. Ask a workspace admin to restore it.",
+            )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Enterprise onboarding is required before accessing this feature.",
         )
 
-    role = _normalize_enterprise_role(membership.role)
     subdomain_slug = (organization.subdomain_slug or "").strip().lower()
     if not subdomain_slug:
         raise HTTPException(
@@ -876,17 +1051,77 @@ def _require_enterprise_membership(
             detail="Complete enterprise onboarding by setting your organization URL first.",
         )
     _enforce_request_subdomain_matches_org(request, organization)
-    if require_manage_users and role != ENTERPRISE_ROLE_ADMIN:
+
+    ctx = access.resolve_access_context(db, membership, organization)
+    role = EnterpriseRoleContext(access.legacy_role_for(ctx.role_key, ctx.capabilities), ctx)
+
+    if require_manage_users and not ctx.is_admin_like:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only organization admins can manage users.",
         )
-    if require_edit_data and role not in {ENTERPRISE_ROLE_ADMIN, ENTERPRISE_ROLE_EDITOR}:
+    if require_edit_data and not ctx.has("clients.edit"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins or editors can modify student records.",
         )
+
+    needed = (require_capability,) if isinstance(require_capability, str) else tuple(require_capability or ())
+    for capability in needed:
+        if not ctx.has(capability):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=access.denied_detail(capability),
+            )
+    if require_any and not any(ctx.has(capability) for capability in require_any):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=access.denied_detail(require_any[0]),
+        )
+
     return membership, organization, role
+
+
+def _has_deactivated_enterprise_membership(db: Session, user_id: int) -> bool:
+    if not user_id:
+        return False
+    return bool(
+        db.query(models.EnterpriseOrganizationMember.id)
+        .filter(
+            models.EnterpriseOrganizationMember.user_id == int(user_id),
+            models.EnterpriseOrganizationMember.is_active.is_(False),
+        )
+        .first()
+    )
+
+
+def _touch_member_last_active(membership_id: int) -> None:
+    """Stamp `last_active_at` at most once every few minutes, on its own connection.
+
+    Managers need "is this seat actually being used" — `users.last_login_at` only moves on
+    sign-in. Two deliberate choices: this runs on a SEPARATE short-lived connection rather than
+    the request session (a `commit()` mid-gate would expire `membership`/`organization` and force
+    a re-SELECT in every handler, and would open a transaction boundary before handlers that take
+    row locks), and it is called only from the couple of endpoints the SPA hits on boot rather
+    than from the gate, so it never contends on a hot path. Telemetry must never fail a request.
+    """
+    if not membership_id:
+        return
+    try:
+        cutoff = datetime.utcnow() - timedelta(minutes=5)
+        from app.database import engine as _engine
+        from sqlalchemy import text as _sql_text
+
+        with _engine.begin() as conn:
+            conn.execute(
+                _sql_text(
+                    "UPDATE enterprise_organization_members SET last_active_at = :now "
+                    "WHERE id = :id AND (last_active_at IS NULL OR last_active_at < :cutoff)"
+                ),
+                {"now": datetime.utcnow(), "id": int(membership_id), "cutoff": cutoff},
+            )
+    except Exception:
+        logger.debug("last_active_at stamp skipped (member_id=%s)", membership_id, exc_info=True)
 
 
 def _serialize_team_member(
@@ -907,30 +1142,55 @@ def _serialize_team_member(
 def _list_organization_members(
     db: Session,
     organization_id: int,
+    *,
+    include_inactive: bool = False,
 ) -> list[dict]:
-    rows = (
-        db.query(models.EnterpriseOrganizationMember, models.User)
-        .join(
-            models.User,
-            models.User.id == models.EnterpriseOrganizationMember.user_id,
+    """The team roster.
+
+    Delegates to enterprise_team, which resolves roles, offices and caseload counts for every
+    member in a handful of bulk queries. The rows are a strict SUPERSET of what
+    `_serialize_team_member` used to return — the legacy `role` string is still there, so the
+    currently-deployed frontend keeps working while the new Team screen reads the richer fields.
+    """
+    from app import enterprise_team as team
+
+    try:
+        return team.list_members(db, int(organization_id), include_inactive=include_inactive)
+    except Exception:
+        # The roster backs the client-assignment dropdown as well as the Team screen, so fall
+        # back to the original minimal shape rather than failing those pages outright.
+        logger.exception("Falling back to basic member list for org_id=%s", organization_id)
+        rows = (
+            db.query(models.EnterpriseOrganizationMember, models.User)
+            .join(
+                models.User,
+                models.User.id == models.EnterpriseOrganizationMember.user_id,
+            )
+            .filter(
+                models.EnterpriseOrganizationMember.organization_id == int(organization_id),
+                models.EnterpriseOrganizationMember.is_active.is_(True),
+            )
+            .order_by(models.EnterpriseOrganizationMember.created_at.asc())
+            .all()
         )
-        .filter(
-            models.EnterpriseOrganizationMember.organization_id == int(organization_id),
-            models.EnterpriseOrganizationMember.is_active.is_(True),
-        )
-        .order_by(models.EnterpriseOrganizationMember.created_at.asc())
-        .all()
-    )
-    return [_serialize_team_member(member, user) for member, user in rows]
+        return [_serialize_team_member(member, user) for member, user in rows]
 
 
 def _active_admin_count(db: Session, organization_id: int) -> int:
+    """Active members with workspace-administration powers.
+
+    Counted from `role_key` rather than the legacy `role` mirror: the mirror is maintained, but
+    the guard that stops an org locking itself out should not depend on a denormalized column
+    being in step. Owner counts as an admin — there is always exactly one.
+    """
     return int(
         db.query(models.EnterpriseOrganizationMember)
         .filter(
             models.EnterpriseOrganizationMember.organization_id == int(organization_id),
             models.EnterpriseOrganizationMember.is_active.is_(True),
-            models.EnterpriseOrganizationMember.role == ENTERPRISE_ROLE_ADMIN,
+            models.EnterpriseOrganizationMember.role_key.in_(
+                (access.ROLE_OWNER, access.ROLE_ADMIN)
+            ),
         )
         .count()
     )
@@ -1338,7 +1598,7 @@ def enterprise_accept_dpa(
         db=db,
         user=current_user,
         request=request,
-        require_manage_users=True,
+        require_capability="org.legal_accept",
     )
 
     already_current = (
@@ -1410,7 +1670,7 @@ def enterprise_student_options(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="catalog.view")
     return {
         "organization_id": organization.id,
         "permissions": _enterprise_permissions_for_role(role),
@@ -1424,7 +1684,7 @@ def enterprise_students(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="clients.view")
     students = _list_enterprise_students(db, organization.id)
     return {
         "organization_id": organization.id,
@@ -1445,7 +1705,7 @@ def enterprise_add_student(
         db=db,
         user=current_user,
         request=request,
-        require_edit_data=True,
+        require_capability="clients.create",
     )
     student_name, study_country_code, study_country_name, visa_type, intake = _parse_enterprise_student_payload_or_400(payload)
 
@@ -1554,11 +1814,22 @@ def enterprise_onboarding(
 @router.get("/team")
 def enterprise_team_members(
     request: Request,
+    include_inactive: bool = False,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    members = _list_organization_members(db, organization.id)
+    membership, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.view"
+    )
+    from app import enterprise_team as team
+
+    # Deactivated members are only listed for someone who can actually do something about them.
+    show_inactive = bool(include_inactive) and role.ctx.has("team.manage")
+    members = _list_organization_members(db, organization.id, include_inactive=show_inactive)
+    _touch_member_last_active(membership.id)
+    branches = [
+        team.serialize_branch(b) for b in team.list_branches(db, organization.id)
+    ]
     return {
         "organization": {
             "id": organization.id,
@@ -1567,9 +1838,14 @@ def enterprise_team_members(
             "logo_url": _resolve_enterprise_logo_url(organization),
             "portal_url": _build_enterprise_portal_url(organization.subdomain_slug, request),
         },
+        # `current_role` and `permissions` keep their legacy shape — the deployed SPA reads
+        # `d.permissions.can_manage_users` directly and a missing key would blank the page.
         "current_role": role,
         "permissions": _enterprise_permissions_for_role(role),
+        "access": access.access_payload(role.ctx),
         "members": members,
+        "branches": branches,
+        "role_presets": access.capability_registry_payload().get("role_presets", []),
     }
 
 
@@ -1584,7 +1860,7 @@ def enterprise_update_branding(
         db=db,
         user=current_user,
         request=request,
-        require_manage_users=True,
+        require_capability="settings.manage",
     )
 
     has_update = False
@@ -1676,7 +1952,7 @@ async def enterprise_upload_org_logo(
     """Upload a custom organization logo. Stored encrypted like other enterprise assets and
     served back through the unguessable public logo route below."""
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="settings.manage"
     )
     if not enterprise_storage.is_configured():
         raise HTTPException(status_code=503, detail="Logo storage is not configured.")
@@ -1747,7 +2023,7 @@ def enterprise_notifications_list(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """The signed-in member's notifications (newest first) + unread count."""
-    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="notifications.view")
     take = max(1, min(int(limit or 30), 50))
     rows = (
         db.query(models.EnterpriseNotification)
@@ -1796,7 +2072,7 @@ def enterprise_notifications_mark_read(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Mark the given notifications (or all of them) as read for this member."""
-    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="notifications.view")
     q = db.query(models.EnterpriseNotification).filter(
         models.EnterpriseNotification.organization_id == organization.id,
         models.EnterpriseNotification.recipient_user_id == current_user.id,
@@ -1819,11 +2095,11 @@ def enterprise_team_add_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, _ = _require_enterprise_membership(
+    _, organization, role = _require_enterprise_membership(
         db=db,
         user=current_user,
         request=request,
-        require_manage_users=True,
+        require_capability="team.manage",
     )
     _enforce_rate_limit_or_429(
         request=request,
@@ -1887,16 +2163,56 @@ def enterprise_team_add_user(
         existing_membership.is_active = True
         existing_membership.role = target_role
         existing_membership.invited_by_user_id = current_user.id
+        existing_membership.status = team_svc.MEMBER_STATUS_ACTIVE
+        existing_membership.deactivated_at = None
+        existing_membership.invited_at = existing_membership.invited_at or datetime.utcnow()
+        membership_row = existing_membership
     else:
-        db.add(
-            models.EnterpriseOrganizationMember(
-                organization_id=organization.id,
-                user_id=user.id,
-                role=target_role,
-                is_active=True,
-                invited_by_user_id=current_user.id,
-            )
+        membership_row = models.EnterpriseOrganizationMember(
+            organization_id=organization.id,
+            user_id=user.id,
+            role=target_role,
+            is_active=True,
+            invited_by_user_id=current_user.id,
+            status=team_svc.MEMBER_STATUS_ACTIVE,
+            invited_at=datetime.utcnow(),
         )
+        db.add(membership_row)
+    db.flush()
+
+    # Role, record scope and offices, all validated against what the INVITER may hand out (they
+    # can't grant a capability they lack, or widen someone's scope past their own — otherwise an
+    # invite is a way to mint a second, more powerful identity for yourself).
+    invite_access = {
+        k: v for k, v in {
+            "role_key": payload.role_key,
+            "custom_role_id": payload.custom_role_id,
+            "data_scope": payload.data_scope,
+            "branch_ids": payload.branch_ids,
+            "primary_branch_id": payload.primary_branch_id,
+        }.items() if v is not None
+    }
+    if not invite_access.get("role_key") and not invite_access.get("custom_role_id"):
+        invite_access["role_key"] = access.LEGACY_ROLE_TO_ROLE_KEY.get(target_role, access.ROLE_VIEWER)
+    try:
+        team_svc.update_member_access(
+            db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+            membership=membership_row, data=invite_access,
+        )
+    except HTTPException:
+        db.rollback()
+        raise
+    if payload.job_title or payload.phone:
+        team_svc.update_member_profile(
+            db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+            membership=membership_row, user=user,
+            data={"job_title": payload.job_title, "phone": payload.phone},
+        )
+    if not membership_row.primary_branch_id:
+        membership_row.primary_branch_id = team_svc.ensure_default_branch(
+            db, organization.id, actor_user_id=current_user.id,
+            company_name=organization.company_name,
+        ).id
 
     # Every invite issues a fresh one-time password setup link for this recipient.
     password_setup_token = generate_verification_token()
@@ -1974,7 +2290,7 @@ def enterprise_team_update_role(
         db=db,
         user=current_user,
         request=request,
-        require_manage_users=True,
+        require_capability="team.manage",
     )
 
     target_role = _parse_enterprise_role_or_400(payload.role)
@@ -1990,6 +2306,23 @@ def enterprise_team_update_role(
     if not membership:
         raise HTTPException(status_code=404, detail="Organization member not found.")
 
+    # This is the LEGACY three-option control. It can only express admin / editor / viewer, so it
+    # refuses to touch anyone on a richer role — otherwise an admin looking at the old dropdown
+    # would see a Finance member rendered as "Viewer", pick "Editor" to "fix" it, and silently
+    # convert them to a Counsellor, wiping their finance access and any per-person overrides. A
+    # stray scroll-wheel over a focused <select> is enough to fire it.
+    current_role_key = access.normalize_role_key(
+        getattr(membership, "role_key", None), getattr(membership, "role", None)
+    )
+    if current_role_key not in set(access.LEGACY_ROLE_TO_ROLE_KEY.values()):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{(target_user_name(db, member_user_id) or 'This member')} is on an advanced role. "
+                "Use Edit access to change what they can do."
+            ),
+        )
+
     current_target_role = _normalize_enterprise_role(membership.role)
     if current_target_role == ENTERPRISE_ROLE_ADMIN and target_role != ENTERPRISE_ROLE_ADMIN:
         if _active_admin_count(db, organization.id) <= 1:
@@ -2003,12 +2336,26 @@ def enterprise_team_update_role(
             detail="You cannot demote your own account from admin.",
         )
 
+    # Write role_key as well, not just the mirror. If only `role` moved, the gate — which reads
+    # role_key — would keep granting the OLD capabilities while every screen, the roster and the
+    # internal admin console all reported the new role. A demotion has to actually demote.
+    new_role_key = access.LEGACY_ROLE_TO_ROLE_KEY.get(target_role, access.ROLE_VIEWER)
+    membership.role_key = new_role_key
+    membership.custom_role_id = None
+    membership.data_scope = None            # back to the new role's own default
     membership.role = target_role
     db.commit()
     return {
         "message": "Role updated successfully.",
         "members": _list_organization_members(db, organization.id),
     }
+
+
+def target_user_name(db: Session, user_id: int) -> str | None:
+    row = db.query(models.User.full_name, models.User.email).filter(models.User.id == int(user_id)).first()
+    if not row:
+        return None
+    return (row[0] or row[1] or None)
 
 
 @router.delete("/team/users/{member_user_id}")
@@ -2018,11 +2365,11 @@ def enterprise_team_remove_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, _ = _require_enterprise_membership(
+    _, organization, role = _require_enterprise_membership(
         db=db,
         user=current_user,
         request=request,
-        require_manage_users=True,
+        require_capability="team.manage",
     )
 
     if int(member_user_id) == current_user.id:
@@ -2039,19 +2386,25 @@ def enterprise_team_remove_user(
     )
     if not membership:
         raise HTTPException(status_code=404, detail="Organization member not found.")
+    user = db.query(models.User).filter(models.User.id == int(member_user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Organization member not found.")
 
-    if _normalize_enterprise_role(membership.role) == ENTERPRISE_ROLE_ADMIN:
-        if _active_admin_count(db, organization.id) <= 1:
-            raise HTTPException(
-                status_code=400,
-                detail="At least one active admin is required for the organization.",
-            )
-
-    membership.is_active = False
+    # Delegates to the same offboarding path as the newer /deactivate endpoint rather than just
+    # flipping is_active. That flip on its own left the owner removable, the removed person's
+    # session live, their caseload silently orphaned and nothing in the audit trail. This route
+    # cannot pass a successor, so it will 409 with the counts when the member still owns records —
+    # the old client surfaces that message in a toast, which is a far better outcome than quietly
+    # detaching thirty clients from the only person who knew about them.
+    result = team_svc.deactivate_member(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        membership=membership, user=user,
+    )
     db.commit()
     return {
         "message": "User removed from organization.",
         "members": _list_organization_members(db, organization.id),
+        **result,
     }
 
 
@@ -2105,7 +2458,46 @@ class EnterpriseSignupRequest(BaseModel):
     email_otp: Optional[str] = Field(default=None, max_length=10)
 
 
-class EnterpriseClientCreateRequest(BaseModel):
+class EnterpriseClientIntakeFields(BaseModel):
+    """The lead-intake record a consultancy keeps on every client — shared verbatim by the
+    create and update payloads so the two can never drift. Every field is optional: only
+    name, destination and visa type are ever required."""
+    whatsapp_number: Optional[str] = Field(default=None, max_length=40)
+    current_city: Optional[str] = Field(default=None, max_length=80)
+    gender: Optional[str] = Field(default=None, max_length=30)
+    guardian_name: Optional[str] = Field(default=None, max_length=120)
+    guardian_relation: Optional[str] = Field(default=None, max_length=30)
+    guardian_phone: Optional[str] = Field(default=None, max_length=40)
+    study_level: Optional[str] = Field(default=None, max_length=40)
+    field_of_study: Optional[str] = Field(default=None, max_length=120)
+    admission_stage: Optional[str] = Field(default=None, max_length=40)
+    prior_refusal_history: Optional[str] = Field(default=None, max_length=40)
+    prior_refusal_notes: Optional[str] = Field(default=None, max_length=2000)
+    highest_qualification: Optional[str] = Field(default=None, max_length=40)
+    qualification_score: Optional[str] = Field(default=None, max_length=20)
+    qualification_scale: Optional[str] = Field(default=None, max_length=30)
+    year_of_passing: Optional[str] = Field(default=None, max_length=8)
+    backlogs_count: Optional[str] = Field(default=None, max_length=4)
+    work_experience_band: Optional[str] = Field(default=None, max_length=20)
+    english_test_status: Optional[str] = Field(default=None, max_length=30)
+    english_test_type: Optional[str] = Field(default=None, max_length=30)
+    english_test_score: Optional[str] = Field(default=None, max_length=20)
+    english_test_date: Optional[str] = Field(default=None, max_length=20)
+    aptitude_test_type: Optional[str] = Field(default=None, max_length=20)
+    aptitude_test_score: Optional[str] = Field(default=None, max_length=20)
+    budget_band: Optional[str] = Field(default=None, max_length=30)
+    funding_source: Optional[str] = Field(default=None, max_length=30)
+    lead_source: Optional[str] = Field(default=None, max_length=40)
+    lead_source_detail: Optional[str] = Field(default=None, max_length=120)
+    branch_name: Optional[str] = Field(default=None, max_length=80)
+    next_followup_date: Optional[str] = Field(default=None, max_length=20)
+    # Promotional-contact opt-in, per channel. Sent as a list of channel keys.
+    marketing_consent_channels: Optional[List[str]] = None
+    # Consent to share the profile with universities / partner institutions abroad.
+    institution_share_consent: Optional[bool] = None
+
+
+class EnterpriseClientCreateRequest(EnterpriseClientIntakeFields):
     full_name: str = Field(..., min_length=2, max_length=ENTERPRISE_CLIENT_NAME_MAX)
     visa_category: Optional[str] = Field(default="student", max_length=40)
     destination_country_code: str = Field(..., min_length=2, max_length=12)
@@ -2122,13 +2514,16 @@ class EnterpriseClientCreateRequest(BaseModel):
     target_date: Optional[str] = Field(default=None, max_length=20)
     application_reference: Optional[str] = Field(default=None, max_length=120)
     assigned_to_user_id: Optional[int] = None
+    # Which office owns this case. Offices are real records now; `branch_name` above is the
+    # server-written display snapshot and is ignored on the way in.
+    branch_id: Optional[int] = None
     initial_note: Optional[str] = Field(default=None, max_length=ENTERPRISE_NOTE_MAX)
     # Staff attestation that the client consented to having their data processed
     # through Rilono. Enforced in the UI; recorded here as proof-of-consent.
     client_consent_confirmed: bool = False
 
 
-class EnterpriseClientUpdateRequest(BaseModel):
+class EnterpriseClientUpdateRequest(EnterpriseClientIntakeFields):
     full_name: Optional[str] = Field(default=None, min_length=2, max_length=ENTERPRISE_CLIENT_NAME_MAX)
     visa_category: Optional[str] = Field(default=None, max_length=40)
     destination_country_code: Optional[str] = Field(default=None, max_length=12)
@@ -2145,6 +2540,7 @@ class EnterpriseClientUpdateRequest(BaseModel):
     target_date: Optional[str] = Field(default=None, max_length=20)
     application_reference: Optional[str] = Field(default=None, max_length=120)
     assigned_to_user_id: Optional[int] = None
+    branch_id: Optional[int] = None
 
 
 class EnterpriseClientStatusRequest(BaseModel):
@@ -2258,8 +2654,11 @@ def _country_brief(country_code: str | None) -> dict:
     }
 
 
-def _stage_brief(status_key: str | None) -> dict:
-    stage = catalog.CLIENT_STAGE_MAP.get(catalog.normalize_stage(status_key))
+def _stage_brief(status_key: str | None, country_code: str | None = None) -> dict:
+    # Worded for the client's own destination — a UAE case's stage 3 reads "Entry Permit
+    # Filed", not "Application Submitted". Falls back to the generic wording.
+    stage = (catalog.stage_brief(country_code, status_key)
+             or catalog.CLIENT_STAGE_MAP.get(catalog.normalize_stage(status_key)))
     return {
         "key": stage["key"],
         "label": stage["label"],
@@ -2336,11 +2735,71 @@ def _load_stage_data(client: models.EnterpriseClient) -> dict:
     return {k: v for k, v in parsed.items() if isinstance(v, dict)}
 
 
-def _serialize_client(client: models.EnterpriseClient, member_names: dict[int, str] | None = None) -> dict:
+# The intake record, grouped the way it is captured and displayed. Text/date/int fields
+# are echoed verbatim; CHOICE fields store an option key from enterprise_client_fields and
+# are echoed with a *_label alongside so the UI never has to own the wording.
+_CLIENT_INTAKE_TEXT_FIELDS = (
+    "whatsapp_number", "current_city", "guardian_name", "guardian_phone",
+    "field_of_study", "prior_refusal_notes", "qualification_score",
+    "english_test_score", "aptitude_test_score", "lead_source_detail", "branch_name",
+)
+_CLIENT_INTAKE_CHOICE_FIELDS = (
+    "gender", "guardian_relation", "study_level", "admission_stage",
+    "prior_refusal_history", "highest_qualification", "qualification_scale",
+    "work_experience_band", "english_test_status", "english_test_type",
+    "aptitude_test_type", "budget_band", "funding_source", "lead_source",
+)
+_CLIENT_INTAKE_DATE_FIELDS = (
+    ("english_test_date", "English test date"),
+    ("next_followup_date", "Next follow-up date"),
+)
+# (field, label, min, max) — a plain year / count, validated so a typo can't be stored.
+_CLIENT_INTAKE_INT_FIELDS = (
+    ("year_of_passing", "Year of passing", 1950, 2100),
+    ("backlogs_count", "Backlogs / arrears", 0, 99),
+)
+
+
+def _serialize_client_intake(client: models.EnterpriseClient) -> dict:
+    data: dict = {}
+    for field in _CLIENT_INTAKE_TEXT_FIELDS:
+        data[field] = getattr(client, field, None)
+    for field in _CLIENT_INTAKE_CHOICE_FIELDS:
+        value = getattr(client, field, None)
+        data[field] = value
+        data[f"{field}_label"] = client_fields.choice_label(field, value)
+    for field, _label in _CLIENT_INTAKE_DATE_FIELDS:
+        data[field] = _iso(getattr(client, field, None))
+    for field, _label, _lo, _hi in _CLIENT_INTAKE_INT_FIELDS:
+        data[field] = getattr(client, field, None)
+    channels = getattr(client, "marketing_consent_channels", None)
+    data["marketing_consent_channels"] = [c for c in str(channels or "").split(",") if c]
+    data["marketing_consent_channel_labels"] = client_fields.marketing_channel_labels(channels)
+    data["marketing_consent_at"] = _iso(getattr(client, "marketing_consent_at", None))
+    data["institution_share_consent"] = bool(getattr(client, "institution_share_consent_at", None))
+    data["institution_share_consent_at"] = _iso(getattr(client, "institution_share_consent_at", None))
+    return data
+
+
+def _serialize_client(
+    client: models.EnterpriseClient,
+    member_names: dict[int, str] | None = None,
+    *,
+    include_sensitive: bool = True,
+) -> dict:
+    """Serialize a client for the API.
+
+    `include_sensitive=False` OMITS the passport number instead of masking it. That distinction
+    matters: the client edit form round-trips every field it is given, so a masked placeholder
+    would be written straight back over an encrypted column the next time anyone saved an
+    unrelated change. Omitting the key is safe because a PATCH only applies the fields it receives.
+    Callers pass False on list-shaped payloads, where the number is never rendered anyway.
+    """
     assigned_name = None
     if client.assigned_to_user_id and member_names is not None:
         assigned_name = member_names.get(int(client.assigned_to_user_id))
-    return {
+    payload = {
+        **_serialize_client_intake(client),
         "id": client.id,
         "full_name": client.full_name,
         "email": client.email,
@@ -2358,9 +2817,9 @@ def _serialize_client(client: models.EnterpriseClient, member_names: dict[int, s
         "intake": client.intake,
         "application_reference": client.application_reference,
         "status": client.status,
-        "stage": _stage_brief(client.status),
+        "stage": _stage_brief(client.status, client.destination_country_code),
         "held_from_status": getattr(client, "held_from_status", None),
-        "held_from_stage": _stage_brief(client.held_from_status) if getattr(client, "held_from_status", None) else None,
+        "held_from_stage": _stage_brief(client.held_from_status, client.destination_country_code) if getattr(client, "held_from_status", None) else None,
         "priority": client.priority,
         "target_date": _iso(client.target_date),
         # Per-stage case record: {"<stage_key>": {"<field_key>": value}}. Field definitions
@@ -2368,9 +2827,14 @@ def _serialize_client(client: models.EnterpriseClient, member_names: dict[int, s
         "stage_data": _load_stage_data(client),
         "assigned_to_user_id": client.assigned_to_user_id,
         "assigned_to_name": assigned_name,
+        "branch_id": getattr(client, "branch_id", None),
         "created_at": _iso(client.created_at),
         "updated_at": _iso(client.updated_at),
     }
+    if not include_sensitive:
+        payload.pop("passport_number", None)
+        payload["passport_hidden"] = True
+    return payload
 
 
 def _serialize_note(note: models.EnterpriseClientNote) -> dict:
@@ -2425,7 +2889,85 @@ def _serialize_client_email(row: models.EnterpriseClientEmail) -> dict:
     }
 
 
-def _get_org_client_or_404(db: Session, organization_id: int, client_id: int) -> models.EnterpriseClient:
+# ---------------------------------------------------------------------------
+# RECORD-LEVEL SCOPE
+#
+# Capabilities answer "what may this person do"; scope answers "to which records". A member is
+# either workspace-wide ("all"), limited to the offices they staff ("branch"), or limited to their
+# own caseload ("assigned"). Two rules make this safe rather than decorative:
+#
+#   1. Scope is applied to the BASE query, before any caller-supplied filter, so a query
+#      parameter can only ever narrow the result set — never widen it.
+#   2. Out-of-scope records raise 404, not 403. A 403 would confirm that a record exists, which
+#      is exactly what the office partition is meant to hide.
+# ---------------------------------------------------------------------------
+
+_SCOPE_UNSET = object()
+
+
+def _scope_ctx(ctx):
+    """Normalize the `ctx` argument, and refuse to silently run unscoped.
+
+    Passing nothing is a programming error, not a licence to return the whole workspace: an
+    endpoint that forgets `ctx=` would otherwise leak every office's clients with no symptom.
+    This raises loudly instead — and, unlike a keyword-required parameter, it names the caller.
+    """
+    if ctx is _SCOPE_UNSET:
+        import inspect
+
+        caller = "unknown"
+        try:
+            frame = inspect.currentframe()
+            caller = frame.f_back.f_back.f_code.co_name if frame and frame.f_back else "unknown"
+        except Exception:
+            pass
+        logger.error("Enterprise client lookup ran without an access context (caller=%s)", caller)
+        raise RuntimeError(
+            f"_get_org_client_or_404 called without ctx= from {caller}; pass ctx=role.ctx"
+        )
+    return ctx
+
+
+# The scope predicates themselves live in enterprise_access, next to the scope resolution they
+# belong to: the router, the AI tool surface and the notification fan-out all have to apply the
+# identical rule, and three copies of "which clients can this person see" is exactly the kind of
+# drift that becomes a data leak the first time one of them is edited.
+scope_client_query = access.scope_client_query
+client_in_scope = access.client_in_scope
+
+
+def scoped_client_ids_subq(db: Session, organization_id: int, ctx):
+    """Scoped client ids, for the two tables that reference a client by loose `reference_id`
+    (notifications, credit transactions) and so have nothing to join on."""
+    query = db.query(models.EnterpriseClient.id).filter(
+        models.EnterpriseClient.organization_id == int(organization_id)
+    )
+    return scope_client_query(query, ctx).subquery()
+
+
+def scope_child_query(query, child_model, ctx):
+    """One join covers every client-keyed child table (notes, emails, documents, scans, …)."""
+    if ctx is None or ctx.scope_kind == "all":
+        return query
+    return scope_client_query(
+        query.join(models.EnterpriseClient, models.EnterpriseClient.id == child_model.client_id),
+        ctx,
+    )
+
+
+def assert_client_in_scope(client, ctx) -> None:
+    if not client_in_scope(client, ctx):
+        raise HTTPException(status_code=404, detail="Client not found.")
+
+
+def _get_org_client_or_404(
+    db: Session,
+    organization_id: int,
+    client_id: int,
+    *,
+    ctx=_SCOPE_UNSET,
+) -> models.EnterpriseClient:
+    ctx = _scope_ctx(ctx)
     client = (
         db.query(models.EnterpriseClient)
         .filter(
@@ -2436,6 +2978,7 @@ def _get_org_client_or_404(db: Session, organization_id: int, client_id: int) ->
     )
     if not client:
         raise HTTPException(status_code=404, detail="Client not found.")
+    assert_client_in_scope(client, ctx)
     return client
 
 
@@ -2445,7 +2988,7 @@ def enterprise_catalog(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _require_enterprise_membership(db=db, user=current_user, request=request)
+    _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="catalog.view")
     return catalog.build_catalog_payload(db=db)
 
 
@@ -2456,15 +2999,27 @@ def enterprise_list_clients(
     category: Optional[str] = None,
     country: Optional[str] = None,
     assigned_to: Optional[int] = None,
+    branch_id: Optional[int] = None,
     q: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-
-    base = db.query(models.EnterpriseClient).filter(
-        models.EnterpriseClient.organization_id == organization.id
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="clients.view"
     )
+
+    # Record scope is applied to the BASE query, before any of the caller's filters below, so a
+    # query parameter can only ever narrow what comes back — never widen it.
+    base = scope_client_query(
+        db.query(models.EnterpriseClient).filter(
+            models.EnterpriseClient.organization_id == organization.id
+        ),
+        role.ctx,
+    )
+    if branch_id:
+        # An office filter on top of scope: intersects, so a branch-scoped member asking for
+        # someone else's office simply gets nothing.
+        base = base.filter(models.EnterpriseClient.branch_id == int(branch_id))
 
     query = base
     if status_filter and status_filter in catalog.CLIENT_STAGE_KEYS:
@@ -2523,6 +3078,13 @@ def enterprise_list_clients(
             func.lower(models.EnterpriseClient.nationality).like(like),
             # passport_number is encrypted at rest and therefore not substring-searchable.
             func.lower(models.EnterpriseClient.application_reference).like(like),
+            # Intake record — the plain-text bits a counselor would actually type in.
+            func.lower(models.EnterpriseClient.whatsapp_number).like(like),
+            func.lower(models.EnterpriseClient.current_city).like(like),
+            func.lower(models.EnterpriseClient.field_of_study).like(like),
+            func.lower(models.EnterpriseClient.branch_name).like(like),
+            func.lower(models.EnterpriseClient.lead_source_detail).like(like),
+            func.lower(models.EnterpriseClient.guardian_name).like(like),
             func.lower(models.EnterpriseClient.visa_type).like(like),
             func.lower(models.EnterpriseClient.intake).like(like),
             func.lower(models.EnterpriseClient.destination_country_code).like(like),
@@ -2539,6 +3101,20 @@ def enterprise_list_clients(
         if matching_assignee_ids:
             search_clauses.append(models.EnterpriseClient.assigned_to_user_id.in_(matching_assignee_ids))
 
+        # Intake selects store an option key, so match on the LABEL the counselor saw
+        # ("walk-in", "education loan", "master's") and translate it back to keys.
+        for choice_field in (
+            "lead_source", "study_level", "admission_stage", "prior_refusal_history",
+            "english_test_type", "funding_source", "highest_qualification", "budget_band",
+        ):
+            matching_option_keys = [
+                option["key"]
+                for option in client_fields.CLIENT_PROFILE_OPTIONS.get(choice_field, [])
+                if q_norm in option["label"].lower() or q_norm in option["key"].replace("_", " ")
+            ]
+            if matching_option_keys:
+                search_clauses.append(getattr(models.EnterpriseClient, choice_field).in_(matching_option_keys))
+
         query = query.filter(or_(*search_clauses))
 
     clients = query.order_by(
@@ -2546,11 +3122,18 @@ def enterprise_list_clients(
     ).all()
 
     member_names = _org_member_name_map(db, organization.id)
+    _sensitive = role.ctx.has("clients.view_sensitive")
 
+    # Separate query from `base`, so it needs the scope filter of its own — otherwise the stage
+    # tallies above the list would quietly report the whole workspace's pipeline to someone who
+    # can only see one office's clients.
     status_counts = {stage["key"]: 0 for stage in catalog.CLIENT_STAGES}
     for status_key, count in (
-        db.query(models.EnterpriseClient.status, func.count(models.EnterpriseClient.id))
-        .filter(models.EnterpriseClient.organization_id == organization.id)
+        scope_client_query(
+            db.query(models.EnterpriseClient.status, func.count(models.EnterpriseClient.id))
+            .filter(models.EnterpriseClient.organization_id == organization.id),
+            role.ctx,
+        )
         .group_by(models.EnterpriseClient.status)
         .all()
     ):
@@ -2565,7 +3148,12 @@ def enterprise_list_clients(
         "total_clients": total_clients,
         "filtered_count": len(clients),
         "status_counts": status_counts,
-        "clients": [_serialize_client(c, member_names) for c in clients],
+        # List payloads never render the passport number, so it is omitted for anyone without
+        # the capability rather than shipped to every screen that shows a client table.
+        "clients": [
+            _serialize_client(c, member_names, include_sensitive=_sensitive)
+            for c in clients
+        ],
     }
 
 
@@ -2586,6 +3174,161 @@ def _apply_client_case_fields(target: models.EnterpriseClient, *, category, coun
     target.intake = resolved["intake"]
 
 
+
+def _apply_client_branch(
+    db: Session,
+    target: models.EnterpriseClient,
+    *,
+    organization,
+    ctx,
+    data: dict,
+    creating: bool,
+) -> None:
+    """Attach a client to an office, and keep the denormalized name snapshot in step.
+
+    Rules, in order:
+      * key absent on update  -> leave the office alone.
+      * key absent on create  -> file it under the member's own office, else the workspace default,
+        so nothing lands unfiled (an unfiled client is invisible to office-scoped members).
+      * moving an already-filed client needs `clients.set_branch`.
+      * an office-scoped member may only target one of their own offices.
+    """
+    from app import enterprise_team as team
+
+    has_key = "branch_id" in data
+    raw = data.get("branch_id")
+
+    if not has_key or raw in ("", None):
+        if not creating:
+            return
+        fallback = ctx.primary_branch_id if ctx is not None else None
+        branch = None
+        if fallback:
+            branch = (
+                db.query(models.EnterpriseBranch)
+                .filter(
+                    models.EnterpriseBranch.id == int(fallback),
+                    models.EnterpriseBranch.organization_id == organization.id,
+                    models.EnterpriseBranch.is_active.is_(True),
+                )
+                .first()
+            )
+        if branch is None:
+            branch = team.ensure_default_branch(
+                db, organization.id,
+                actor_user_id=getattr(target, "created_by_user_id", None),
+                company_name=organization.company_name,
+            )
+        if branch is not None:
+            target.branch_id = branch.id
+            target.branch_name = branch.name
+        return
+
+    branch = team.get_org_branch_or_404(db, organization.id, raw)
+    if not branch.is_active:
+        raise HTTPException(status_code=422, detail="That office has been archived.")
+
+    moving = (not creating) and target.branch_id and int(target.branch_id) != int(branch.id)
+    if moving and ctx is not None and not ctx.has("clients.set_branch"):
+        raise HTTPException(status_code=403, detail=access.denied_detail("clients.set_branch"))
+    if ctx is not None and ctx.scope_kind == "branch" and int(branch.id) not in ctx.branch_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="You can only file a client under an office you work in.",
+        )
+
+    target.branch_id = branch.id
+    target.branch_name = branch.name
+
+
+def _assert_can_assign(db: Session, organization, ctx, assigned_to_user_id, *, current_value=None) -> None:
+    """Guard `assigned_to_user_id`: who may hand a case to someone else."""
+    if assigned_to_user_id is None or int(assigned_to_user_id or 0) == int(current_value or 0):
+        return
+    if not _is_active_org_member(db, organization.id, assigned_to_user_id):
+        raise HTTPException(status_code=400, detail="Assigned team member is not part of this organization.")
+    if ctx is None:
+        return
+    # Someone limited to their own caseload may take a case, but not push one onto a colleague —
+    # and crucially not assign one AWAY, which would make it disappear from their own scope.
+    if ctx.scope_kind == "assigned" and int(assigned_to_user_id) != ctx.user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only assign clients to yourself. Ask a manager to reassign a case.",
+        )
+    if not ctx.has("clients.assign") and int(assigned_to_user_id) != ctx.user_id:
+        raise HTTPException(status_code=403, detail=access.denied_detail("clients.assign"))
+
+
+def _apply_client_intake_fields(target: models.EnterpriseClient, data: dict) -> None:
+    """Write the lead-intake record onto a client.
+
+    `data` holds only the keys the caller sent (PATCH semantics on update, everything on
+    create), so an absent key is left alone and an explicitly empty one clears the column.
+    Select values are validated against the shared catalog, so a stale or tampered payload
+    can't write an option that doesn't exist.
+    """
+    for field in _CLIENT_INTAKE_TEXT_FIELDS:
+        # `branch_name` is in this tuple because it is also the READ loop (see
+        # _serialize_client_intake) — removing it there would blank the office on every client
+        # payload. It is skipped only on the way IN: offices are real records now, so the name is
+        # written from the chosen branch. Letting a caller retype it would let a branch-scoped
+        # member move a client out of their own scope with a text edit.
+        if field == "branch_name":
+            continue
+        if field in data:
+            setattr(target, field, (data[field] or "").strip() or None)
+
+    for field in _CLIENT_INTAKE_CHOICE_FIELDS:
+        if field not in data:
+            continue
+        try:
+            setattr(target, field, client_fields.normalize_choice(field, data[field]))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    for field, label in _CLIENT_INTAKE_DATE_FIELDS:
+        if field in data:
+            setattr(target, field, _parse_iso_date_or_400(data[field], label))
+
+    for field, label, low, high in _CLIENT_INTAKE_INT_FIELDS:
+        if field not in data:
+            continue
+        raw = ("" if data[field] is None else str(data[field])).strip()
+        if not raw:
+            setattr(target, field, None)
+            continue
+        try:
+            # OverflowError (not a ValueError) is what "inf"/"1e999" raises here.
+            number = int(float(raw))
+        except (TypeError, ValueError, OverflowError):
+            raise HTTPException(status_code=400, detail=f"{label} must be a number.")
+        if not low <= number <= high:
+            raise HTTPException(status_code=400, detail=f"{label} must be between {low} and {high}.")
+        setattr(target, field, number)
+
+    # Consent is evidence, so each purpose carries its own timestamp: stamped when it is
+    # first given, cleared the moment it is withdrawn.
+    if "marketing_consent_channels" in data:
+        try:
+            channels = client_fields.normalize_marketing_channels(data["marketing_consent_channels"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        target.marketing_consent_channels = channels
+        if channels:
+            if not target.marketing_consent_at:
+                target.marketing_consent_at = datetime.utcnow()
+        else:
+            target.marketing_consent_at = None
+
+    if "institution_share_consent" in data and data["institution_share_consent"] is not None:
+        if data["institution_share_consent"]:
+            if not target.institution_share_consent_at:
+                target.institution_share_consent_at = datetime.utcnow()
+        else:
+            target.institution_share_consent_at = None
+
+
 @router.post("/clients")
 def enterprise_create_client(
     payload: EnterpriseClientCreateRequest,
@@ -2594,7 +3337,7 @@ def enterprise_create_client(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="clients.create"
     )
     billing.enforce_client_limit_or_402(db, organization.id)
     # Free CRM up to the student limit; beyond it the monthly infra fee must be active.
@@ -2613,8 +3356,7 @@ def enterprise_create_client(
             detail="Please confirm this client has consented to having their data processed through Rilono before adding them.",
         )
 
-    if payload.assigned_to_user_id and not _is_active_org_member(db, organization.id, payload.assigned_to_user_id):
-        raise HTTPException(status_code=400, detail="Assigned team member is not part of this organization.")
+    _assert_can_assign(db, organization, role.ctx, payload.assigned_to_user_id)
 
     client = models.EnterpriseClient(
         organization_id=organization.id,
@@ -2640,6 +3382,11 @@ def enterprise_create_client(
         country_code=payload.destination_country_code,
         visa_type=payload.visa_type,
         intake=payload.intake,
+    )
+    _apply_client_intake_fields(client, payload.model_dump())
+    _apply_client_branch(
+        db, client, organization=organization, ctx=role.ctx,
+        data=payload.model_dump(exclude_unset=True), creating=True,
     )
     db.add(client)
     db.flush()
@@ -2680,8 +3427,8 @@ def enterprise_get_client(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="clients.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     member_names = _org_member_name_map(db, organization.id)
 
     notes = (
@@ -2720,9 +3467,9 @@ def enterprise_update_client(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="clients.edit"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     data = payload.model_dump(exclude_unset=True)
     status_before_edit = client.status
@@ -2766,9 +3513,15 @@ def enterprise_update_client(
         _apply_status_change(client, catalog.normalize_stage(data["status"]))
     if "assigned_to_user_id" in data:
         new_assignee = data["assigned_to_user_id"]
-        if new_assignee and not _is_active_org_member(db, organization.id, new_assignee):
-            raise HTTPException(status_code=400, detail="Assigned team member is not part of this organization.")
+        _assert_can_assign(
+            db, organization, role.ctx, new_assignee,
+            current_value=client.assigned_to_user_id,
+        )
         client.assigned_to_user_id = new_assignee
+    _apply_client_intake_fields(client, data)
+    _apply_client_branch(
+        db, client, organization=organization, ctx=role.ctx, data=data, creating=False,
+    )
 
     db.commit()
     db.refresh(client)
@@ -2796,9 +3549,9 @@ def enterprise_update_client_status(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="clients.edit"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     new_status = payload.status.strip().lower()
     if new_status not in catalog.CLIENT_STAGE_KEYS:
         raise HTTPException(status_code=400, detail="Invalid status.")
@@ -2839,9 +3592,9 @@ def enterprise_update_client_stage_data(
     """Record the destination-specific case details a counselor captures at a pipeline stage
     (e.g. US: SEVIS ID / DS-160 confirmation; UK: CAS number / IHS reference)."""
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="clients.edit"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     stage_key = str(payload.stage_key or "").strip().lower()
     if stage_key not in catalog.CLIENT_STAGE_KEYS:
@@ -2890,9 +3643,9 @@ def enterprise_delete_client(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="clients.delete"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     # Purge the stored bytes BEFORE the rows go. The child rows cascade at the DB level
     # (passive_deletes), so no Python-side hook ever runs for them — without this the R2
@@ -2919,6 +3672,11 @@ def enterprise_delete_client(
         .all()
         if key
     ]
+    # Reference files on this client's calendar events, reached through the event because the
+    # attachment carries no client_id of its own.
+    storage_keys += cal_files.keys_for_client(
+        db, organization_id=organization.id, client_id=client.id
+    )
     for key in storage_keys:
         enterprise_storage.delete_document(key)
 
@@ -2939,9 +3697,9 @@ def enterprise_add_client_note(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="notes.write"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     body = (payload.body or "").strip()
     if not body:
         raise HTTPException(status_code=400, detail="Note cannot be empty.")
@@ -2974,9 +3732,9 @@ def enterprise_delete_client_note(
     """Delete a client note. Admins can delete any note (including AI-generated ones);
     editors can only delete notes they authored."""
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="notes.write"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     note = (
         db.query(models.EnterpriseClientNote)
         .filter(
@@ -2988,7 +3746,9 @@ def enterprise_delete_client_note(
     )
     if not note:
         raise HTTPException(status_code=404, detail="Note not found.")
-    if role != ENTERPRISE_ROLE_ADMIN and note.author_user_id != current_user.id:
+    # Removing a colleague's note is its own permission now, so a branch manager can tidy their
+    # office's timeline without being made a workspace admin.
+    if not role.ctx.has("notes.moderate") and note.author_user_id != current_user.id:
         raise HTTPException(
             status_code=403,
             detail="You can only delete your own notes. Ask an organization admin to remove this one.",
@@ -3095,7 +3855,7 @@ def enterprise_email_client(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="emails.send"
     )
     _enforce_rate_limit_or_429(
         request=request,
@@ -3104,7 +3864,7 @@ def enterprise_email_client(
         window_seconds=ENTERPRISE_CLIENT_EMAIL_RATE_WINDOW_SECONDS,
         extra_key=f"org:{organization.id}:user:{current_user.id}",
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     if not (client.email or "").strip():
         raise HTTPException(status_code=400, detail="This client has no email address on file.")
 
@@ -3150,7 +3910,8 @@ def enterprise_email_client(
 # ---------------------------------------------------------------------------
 
 def _email_attachment_or_404(
-    db: Session, *, organization_id: int, client_id: int, attachment_id: int
+    db: Session, *, organization_id: int, client_id: int, attachment_id: int,
+    require_uploader_user_id: int | None = None,
 ) -> models.EnterpriseClientEmailAttachment:
     row = (
         db.query(models.EnterpriseClientEmailAttachment)
@@ -3162,6 +3923,15 @@ def _email_attachment_or_404(
         .first()
     )
     if not row:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    # A file attached to a message that hasn't been sent yet is a private draft. The list endpoint
+    # already scopes drafts to their uploader; download and delete must apply the same rule, or a
+    # colleague can pull or bin a half-written message's attachments.
+    if (
+        require_uploader_user_id is not None
+        and not getattr(row, "email_id", None)
+        and int(getattr(row, "uploaded_by_user_id", 0) or 0) != int(require_uploader_user_id)
+    ):
         raise HTTPException(status_code=404, detail="Attachment not found.")
     return row
 
@@ -3320,8 +4090,8 @@ def enterprise_list_draft_email_attachments(
 ):
     """This user's not-yet-sent attachments for this client, so a refreshed or
     reopened composer picks the files back up instead of orphaning them."""
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="emails.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     rows = (
         db.query(models.EnterpriseClientEmailAttachment)
         .filter(
@@ -3349,7 +4119,7 @@ async def enterprise_upload_email_attachment(
 ):
     """Upload one file for the message currently being composed (a draft attachment)."""
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="emails.send"
     )
     # Uploads are cheap to trigger and expensive to store, so cap them the same way
     # sends are capped — otherwise a compromised editor account could fill the bucket.
@@ -3360,7 +4130,7 @@ async def enterprise_upload_email_attachment(
         window_seconds=ENTERPRISE_EMAIL_ATTACH_RATE_WINDOW_SECONDS,
         extra_key=f"org:{organization.id}:user:{current_user.id}",
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     if not enterprise_storage.is_configured():
         raise HTTPException(status_code=503, detail="File storage is not configured.")
@@ -3442,10 +4212,12 @@ def enterprise_delete_email_attachment(
 ):
     """Remove a draft attachment. Files already sent are part of the record and stay."""
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="emails.send"
     )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     row = _email_attachment_or_404(
-        db, organization_id=organization.id, client_id=client_id, attachment_id=attachment_id
+        db, organization_id=organization.id, client_id=client.id, attachment_id=attachment_id,
+        require_uploader_user_id=current_user.id,
     )
     if row.email_id is not None:
         raise HTTPException(status_code=400, detail="This file was already sent and can't be removed.")
@@ -3466,9 +4238,13 @@ def enterprise_download_email_attachment(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="emails.view"
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     row = _email_attachment_or_404(
-        db, organization_id=organization.id, client_id=client_id, attachment_id=attachment_id
+        db, organization_id=organization.id, client_id=client.id, attachment_id=attachment_id,
+        require_uploader_user_id=current_user.id,
     )
     try:
         data = enterprise_storage.fetch_document(row.storage_key)
@@ -3505,7 +4281,7 @@ def enterprise_email_clients_bulk(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="emails.send_bulk"
     )
     _enforce_rate_limit_or_429(
         request=request,
@@ -3518,11 +4294,17 @@ def enterprise_email_clients_bulk(
     subject = payload.subject.strip()
     body = payload.body.strip()
 
+    # The recipient list arrives as caller-supplied ids, which makes this the one place where an
+    # unscoped query would let someone email a client they aren't allowed to open. Out-of-scope
+    # ids are dropped silently rather than rejected — the same 404-not-403 reasoning: refusing the
+    # whole request would confirm those clients exist.
     clients = (
-        db.query(models.EnterpriseClient)
-        .filter(
-            models.EnterpriseClient.organization_id == organization.id,
-            models.EnterpriseClient.id.in_(client_ids),
+        scope_client_query(
+            db.query(models.EnterpriseClient).filter(
+                models.EnterpriseClient.organization_id == organization.id,
+                models.EnterpriseClient.id.in_(client_ids),
+            ),
+            role.ctx,
         )
         .all()
     )
@@ -3552,23 +4334,52 @@ def enterprise_email_clients_bulk(
     }
 
 
+def _dash_scope(query, branch_id):
+    """Apply the dashboard's optional office filter to an already scope-filtered aggregate."""
+    if branch_id:
+        return query.filter(models.EnterpriseClient.branch_id == int(branch_id))
+    return query
+
+
 @router.get("/dashboard")
 def enterprise_dashboard(
     request: Request,
+    branch_id: Optional[int] = None,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="dashboard.view"
+    )
     org_id = organization.id
+    ctx = role.ctx
 
-    base = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.organization_id == org_id)
+    # Every roll-up on this screen is built from its OWN query, so each one needs the scope filter
+    # separately — a single missed aggregate would report whole-workspace numbers to someone who
+    # can only see one office.
+    def _scoped_clients():
+        return scope_client_query(
+            db.query(models.EnterpriseClient).filter(
+                models.EnterpriseClient.organization_id == org_id
+            ),
+            ctx,
+        )
+
+    def _scoped_agg(*columns):
+        return scope_client_query(
+            db.query(*columns).filter(models.EnterpriseClient.organization_id == org_id),
+            ctx,
+        )
+
+    base = _scoped_clients()
+    if branch_id:
+        base = base.filter(models.EnterpriseClient.branch_id == int(branch_id))
     total_clients = base.count()
 
     # Counts by status
     status_counts = {stage["key"]: 0 for stage in catalog.CLIENT_STAGES}
     for status_key, count in (
-        db.query(models.EnterpriseClient.status, func.count(models.EnterpriseClient.id))
-        .filter(models.EnterpriseClient.organization_id == org_id)
+        _dash_scope(_scoped_agg(models.EnterpriseClient.status, func.count(models.EnterpriseClient.id)), branch_id)
         .group_by(models.EnterpriseClient.status)
         .all()
     ):
@@ -3585,8 +4396,7 @@ def enterprise_dashboard(
     # Counts by category
     category_counts = []
     cat_raw = dict(
-        db.query(models.EnterpriseClient.visa_category, func.count(models.EnterpriseClient.id))
-        .filter(models.EnterpriseClient.organization_id == org_id)
+        _dash_scope(_scoped_agg(models.EnterpriseClient.visa_category, func.count(models.EnterpriseClient.id)), branch_id)
         .group_by(models.EnterpriseClient.visa_category)
         .all()
     )
@@ -3600,8 +4410,7 @@ def enterprise_dashboard(
 
     # Counts by specific visa type (top 6)
     visa_type_rows = (
-        db.query(models.EnterpriseClient.visa_type, func.count(models.EnterpriseClient.id))
-        .filter(models.EnterpriseClient.organization_id == org_id)
+        _dash_scope(_scoped_agg(models.EnterpriseClient.visa_type, func.count(models.EnterpriseClient.id)), branch_id)
         .group_by(models.EnterpriseClient.visa_type)
         .order_by(func.count(models.EnterpriseClient.id).desc())
         .limit(6)
@@ -3613,11 +4422,13 @@ def enterprise_dashboard(
 
     # Top destination countries
     country_rows = (
-        db.query(
-            models.EnterpriseClient.destination_country_code,
-            func.count(models.EnterpriseClient.id),
+        _dash_scope(
+            _scoped_agg(
+                models.EnterpriseClient.destination_country_code,
+                func.count(models.EnterpriseClient.id),
+            ),
+            branch_id,
         )
-        .filter(models.EnterpriseClient.organization_id == org_id)
         .group_by(models.EnterpriseClient.destination_country_code)
         .order_by(func.count(models.EnterpriseClient.id).desc())
         .limit(8)
@@ -3637,13 +4448,13 @@ def enterprise_dashboard(
     )
 
     member_names = _org_member_name_map(db, org_id)
+    _sensitive = ctx.has("clients.view_sensitive")
 
     # Upcoming deadlines (target_date today or later), nearest first
     today = date.today()
     upcoming = (
-        db.query(models.EnterpriseClient)
+        base
         .filter(
-            models.EnterpriseClient.organization_id == org_id,
             models.EnterpriseClient.target_date.isnot(None),
             models.EnterpriseClient.target_date >= today,
             models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
@@ -3688,8 +4499,12 @@ def enterprise_dashboard(
         "category_counts": category_counts,
         "visa_type_counts": visa_type_counts,
         "top_countries": top_countries,
-        "upcoming_deadlines": [_serialize_client(c, member_names) for c in upcoming],
-        "recent_clients": [_serialize_client(c, member_names) for c in recent],
+        "upcoming_deadlines": [
+            _serialize_client(c, member_names, include_sensitive=_sensitive) for c in upcoming
+        ],
+        "recent_clients": [
+            _serialize_client(c, member_names, include_sensitive=_sensitive) for c in recent
+        ],
         "subscription": _serialize_subscription_state(billing.build_subscription_state(db, org_id)),
     }
 
@@ -3733,11 +4548,21 @@ def _parse_calendar_time_or_400(raw: str | None) -> Optional[str]:
     return f"{int(hh):02d}:{mm}"
 
 
-def _serialize_calendar_manual_event(ev: models.EnterpriseCalendarEvent, client_name: str | None) -> dict:
+def _serialize_calendar_manual_event(
+    ev: models.EnterpriseCalendarEvent,
+    client_name: str | None,
+    attachments: list[dict] | None = None,
+) -> dict:
     cfg = CALENDAR_EVENT_TYPES.get(ev.event_type, CALENDAR_EVENT_TYPES[DEFAULT_CALENDAR_EVENT_TYPE])
     ev_date = ev.event_date
     overdue = bool(ev_date and ev_date < date.today() and not ev.is_done)
+    # Reference files ride along on the event so the edit modal can render them with no extra
+    # round-trip. `attachments` is passed in already batch-loaded — never looked up per event,
+    # which on a 100-day month view would be a guaranteed N+1 (see cal_files.lists_by_event).
+    files = attachments or []
     return {
+        "attachments": files,
+        "attachment_count": len(files),
         "id": f"manual-{ev.id}",
         "event_id": ev.id,
         "source": "manual",
@@ -3774,7 +4599,7 @@ def _serialize_calendar_derived_event(kind: str, client: models.EnterpriseClient
         "notes": None,
         "client_id": client.id,
         "client_name": client.full_name,
-        "stage": _stage_brief(client.status),
+        "stage": _stage_brief(client.status, client.destination_country_code),
         "is_done": False,
         "editable": False,
         "overdue": overdue,
@@ -3783,11 +4608,25 @@ def _serialize_calendar_derived_event(kind: str, client: models.EnterpriseClient
 
 def _collect_calendar_events(
     db: Session, organization_id: int, start: date, end: date,
-    *, include_done: bool = True,
+    *, include_done: bool = True, ctx=None,
 ) -> list[dict]:
     member_names = _org_member_name_map(db, organization_id)
 
-    # Manual events
+    # The calendar is three separate sources — manual events, client key dates and passport
+    # expiries — so each is scoped in turn. A manual event tied to a client inherits that client's
+    # scope; a standalone one belongs to whoever created it once scope is narrowed.
+    scoped_ids: set[int] | None = None
+    if ctx is not None and ctx.scope_kind != "all":
+        scoped_ids = {
+            int(row[0])
+            for row in scope_client_query(
+                db.query(models.EnterpriseClient.id).filter(
+                    models.EnterpriseClient.organization_id == organization_id
+                ),
+                ctx,
+            ).all()
+        }
+
     manual_q = (
         db.query(models.EnterpriseCalendarEvent)
         .filter(
@@ -3798,6 +4637,16 @@ def _collect_calendar_events(
     )
     if not include_done:
         manual_q = manual_q.filter(models.EnterpriseCalendarEvent.is_done.is_(False))
+    if scoped_ids is not None:
+        manual_q = manual_q.filter(
+            or_(
+                models.EnterpriseCalendarEvent.client_id.in_(scoped_ids or {-1}),
+                and_(
+                    models.EnterpriseCalendarEvent.client_id.is_(None),
+                    models.EnterpriseCalendarEvent.created_by_user_id == ctx.user_id,
+                ),
+            )
+        )
 
     client_name_cache: dict[int, str] = {}
 
@@ -3816,17 +4665,29 @@ def _collect_calendar_events(
             client_name_cache[cid] = row[0] if row else None
         return client_name_cache[cid]
 
-    events = [_serialize_calendar_manual_event(ev, _client_name(ev.client_id)) for ev in manual_q.all()]
+    manual_events = manual_q.all()
+    # One query for every event's reference files, before the serializer loop.
+    attachments_by_event = cal_files.lists_by_event(
+        db, organization_id, [ev.id for ev in manual_events]
+    )
+    events = [
+        _serialize_calendar_manual_event(
+            ev, _client_name(ev.client_id), attachments_by_event.get(ev.id)
+        )
+        for ev in manual_events
+    ]
 
     # Derived: client key dates (target_date) — skip terminal cases
     for client in (
-        db.query(models.EnterpriseClient)
-        .filter(
-            models.EnterpriseClient.organization_id == organization_id,
-            models.EnterpriseClient.target_date.isnot(None),
-            models.EnterpriseClient.target_date >= start,
-            models.EnterpriseClient.target_date <= end,
-            models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+        scope_client_query(
+            db.query(models.EnterpriseClient).filter(
+                models.EnterpriseClient.organization_id == organization_id,
+                models.EnterpriseClient.target_date.isnot(None),
+                models.EnterpriseClient.target_date >= start,
+                models.EnterpriseClient.target_date <= end,
+                models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+            ),
+            ctx,
         )
         .all()
     ):
@@ -3834,12 +4695,14 @@ def _collect_calendar_events(
 
     # Derived: passport expiries in range (any active client)
     for client in (
-        db.query(models.EnterpriseClient)
-        .filter(
-            models.EnterpriseClient.organization_id == organization_id,
-            models.EnterpriseClient.passport_expiry.isnot(None),
-            models.EnterpriseClient.passport_expiry >= start,
-            models.EnterpriseClient.passport_expiry <= end,
+        scope_client_query(
+            db.query(models.EnterpriseClient).filter(
+                models.EnterpriseClient.organization_id == organization_id,
+                models.EnterpriseClient.passport_expiry.isnot(None),
+                models.EnterpriseClient.passport_expiry >= start,
+                models.EnterpriseClient.passport_expiry <= end,
+            ),
+            ctx,
         )
         .all()
     ):
@@ -3857,6 +4720,11 @@ class EnterpriseCalendarEventCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=2000)
     client_id: Optional[int] = None
     notify_client: Optional[bool] = None
+    # Reference files uploaded while this reminder was still being composed are held under
+    # this per-modal token; creating the event binds them to it.
+    attachment_draft_token: Optional[str] = Field(
+        default=None, max_length=cal_files.DRAFT_TOKEN_MAX_LEN
+    )
 
 
 class EnterpriseCalendarEventUpdate(BaseModel):
@@ -3878,7 +4746,7 @@ def enterprise_calendar(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="calendar.view")
 
     today = date.today()
     if start:
@@ -3896,7 +4764,7 @@ def enterprise_calendar(
     if (end_date - start_date).days > CALENDAR_MAX_RANGE_DAYS:
         raise HTTPException(status_code=400, detail=f"Date range too large (max {CALENDAR_MAX_RANGE_DAYS} days).")
 
-    events = _collect_calendar_events(db, organization.id, start_date, end_date)
+    events = _collect_calendar_events(db, organization.id, start_date, end_date, ctx=role.ctx)
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "start": start_date.isoformat(),
@@ -3915,12 +4783,13 @@ def enterprise_calendar_upcoming(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """The 'what's next' feed: overdue + the next N days of deadlines and reminders."""
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="calendar.view")
     days = max(1, min(int(days or 14), 90))
     today = date.today()
     # Look back 30 days so overdue items still surface, forward `days`.
     window = _collect_calendar_events(
-        db, organization.id, today - timedelta(days=30), today + timedelta(days=days), include_done=False,
+        db, organization.id, today - timedelta(days=30), today + timedelta(days=days),
+        include_done=False, ctx=role.ctx,
     )
     overdue = [e for e in window if e.get("overdue")]
     upcoming = [e for e in window if not e.get("overdue") and (e["date"] or "") >= today.isoformat()]
@@ -3940,15 +4809,20 @@ def enterprise_calendar_clients(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Lightweight client list for the @-mention autocomplete in the reminder form.
-    Returns every client in the org (id, name, email) sourced from the SQL DB."""
-    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    Scoped to the clients this member may actually open — an unscoped picker would hand over
+    every name and email address in the workspace."""
+    _, organization, _role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="calendar.view"
+    )
     rows = (
-        db.query(
-            models.EnterpriseClient.id,
-            models.EnterpriseClient.full_name,
-            models.EnterpriseClient.email,
+        scope_client_query(
+            db.query(
+                models.EnterpriseClient.id,
+                models.EnterpriseClient.full_name,
+                models.EnterpriseClient.email,
+            ).filter(models.EnterpriseClient.organization_id == organization.id),
+            _role.ctx,
         )
-        .filter(models.EnterpriseClient.organization_id == organization.id)
         .order_by(models.EnterpriseClient.full_name.asc())
         .all()
     )
@@ -3968,7 +4842,7 @@ def enterprise_calendar_create_event(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="calendar.manage"
     )
     title = (payload.title or "").strip()
     if not title:
@@ -3976,7 +4850,7 @@ def enterprise_calendar_create_event(
     event_date = _parse_iso_date_or_400(payload.event_date, "event_date")
     event_time = _parse_calendar_time_or_400(payload.event_time)
     if payload.client_id is not None:
-        _get_org_client_or_404(db, organization.id, payload.client_id)
+        _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
 
     ev = models.EnterpriseCalendarEvent(
         organization_id=organization.id,
@@ -3993,20 +4867,34 @@ def enterprise_calendar_create_event(
         created_by_name=current_user.full_name or current_user.email,
     )
     db.add(ev)
+    # flush, not commit: binding the draft uploads needs ev.id while still inside this
+    # transaction, so a failed bind rolls the event back with it rather than leaving a
+    # reminder whose files silently went missing.
+    db.flush()
+    bound = cal_files.bind_draft_to_event(
+        db,
+        organization_id=organization.id,
+        user_id=current_user.id,
+        token=payload.attachment_draft_token,
+        event_id=ev.id,
+    )
+    attachments = [cal_files.serialize(row) for row in bound]
     db.commit()
     db.refresh(ev)
     client_name = None
     if ev.client_id:
-        c = _get_org_client_or_404(db, organization.id, ev.client_id)
+        c = _get_org_client_or_404(db, organization.id, ev.client_id, ctx=role.ctx)
         client_name = c.full_name
     return {
         "message": "Event added.",
         "permissions": _enterprise_permissions_for_role(role),
-        "event": _serialize_calendar_manual_event(ev, client_name),
+        "event": _serialize_calendar_manual_event(ev, client_name, attachments),
     }
 
 
-def _get_org_calendar_event_or_404(db: Session, organization_id: int, event_id: int) -> models.EnterpriseCalendarEvent:
+def _get_org_calendar_event_or_404(
+    db: Session, organization_id: int, event_id: int, *, ctx=None
+) -> models.EnterpriseCalendarEvent:
     ev = (
         db.query(models.EnterpriseCalendarEvent)
         .filter(
@@ -4017,6 +4905,23 @@ def _get_org_calendar_event_or_404(db: Session, organization_id: int, event_id: 
     )
     if not ev:
         raise HTTPException(status_code=404, detail="Calendar event not found.")
+    # An event that hangs off a client inherits that client's scope — otherwise a scope-restricted
+    # member could read, re-point or delete a colleague's appointment for a case they can't see.
+    # A standalone event (no client) belongs to whoever created it once scope is narrowed.
+    if ctx is not None and ctx.scope_kind != "all":
+        if ev.client_id:
+            linked = (
+                db.query(models.EnterpriseClient)
+                .filter(
+                    models.EnterpriseClient.id == int(ev.client_id),
+                    models.EnterpriseClient.organization_id == int(organization_id),
+                )
+                .first()
+            )
+            if not client_in_scope(linked, ctx):
+                raise HTTPException(status_code=404, detail="Calendar event not found.")
+        elif int(getattr(ev, "created_by_user_id", 0) or 0) != ctx.user_id:
+            raise HTTPException(status_code=404, detail="Calendar event not found.")
     return ev
 
 
@@ -4029,9 +4934,9 @@ def enterprise_calendar_update_event(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="calendar.manage"
     )
-    ev = _get_org_calendar_event_or_404(db, organization.id, event_id)
+    ev = _get_org_calendar_event_or_404(db, organization.id, event_id, ctx=role.ctx)
 
     if payload.title is not None:
         t = payload.title.strip()
@@ -4049,7 +4954,7 @@ def enterprise_calendar_update_event(
     if payload.client_id is not None:
         new_cid = None if payload.client_id == 0 else payload.client_id
         if new_cid is not None:
-            _get_org_client_or_404(db, organization.id, new_cid)
+            _get_org_client_or_404(db, organization.id, new_cid, ctx=role.ctx)
         if new_cid != ev.client_id:
             # Re-link → allow the new client to be notified afresh.
             ev.client_notified_at = None
@@ -4065,12 +4970,17 @@ def enterprise_calendar_update_event(
     db.refresh(ev)
     client_name = None
     if ev.client_id:
-        c = _get_org_client_or_404(db, organization.id, ev.client_id)
+        c = _get_org_client_or_404(db, organization.id, ev.client_id, ctx=role.ctx)
         client_name = c.full_name
     return {
         "message": "Event updated.",
         "permissions": _enterprise_permissions_for_role(role),
-        "event": _serialize_calendar_manual_event(ev, client_name),
+        # Re-read the files rather than defaulting to []: the client replaces its copy of the
+        # event with whatever comes back, so an empty list here would blank the tray.
+        "event": _serialize_calendar_manual_event(
+            ev, client_name,
+            [cal_files.serialize(r) for r in cal_files.for_event(db, organization.id, ev.id)],
+        ),
     }
 
 
@@ -4082,12 +4992,241 @@ def enterprise_calendar_delete_event(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="calendar.manage"
     )
-    ev = _get_org_calendar_event_or_404(db, organization.id, event_id)
+    ev = _get_org_calendar_event_or_404(db, organization.id, event_id, ctx=role.ctx)
+    # Collect the blob keys BEFORE the delete: the attachment rows go away with the event
+    # (cascade), but nothing tells R2, and an orphaned ciphertext blob is a bill forever.
+    storage_keys = cal_files.purge_for_events(
+        db, organization_id=organization.id, event_ids=[ev.id]
+    )
     db.delete(ev)
     db.commit()
+    # Rows first, bytes second — a rolled-back commit must never leave a live row pointing
+    # at files that are already gone.
+    cal_files.drop_blobs(storage_keys)
     return {"message": "Event deleted.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ---------------------------------------------------------------------------
+# Calendar reference files (private R2 storage, authenticated streaming).
+#
+# Uploads are immediate rather than deferred to the form submit, because the calendar form
+# posts JSON — a file input inside it would be silently dropped. An event that already
+# exists takes the file straight away; a reminder still being composed parks it under a
+# per-modal draft token that POST /calendar/events binds.
+# ---------------------------------------------------------------------------
+
+ENTERPRISE_CAL_ATTACH_RATE_LIMIT = int(os.getenv("ENTERPRISE_CAL_ATTACH_RATE_LIMIT", "120"))
+ENTERPRISE_CAL_ATTACH_RATE_WINDOW_SECONDS = int(
+    os.getenv("ENTERPRISE_CAL_ATTACH_RATE_WINDOW_SECONDS", "3600")
+)
+
+
+def _calendar_attachment_or_404(
+    db: Session,
+    *,
+    organization_id: int,
+    attachment_id: int,
+    user_id: int,
+    ctx=None,
+) -> models.EnterpriseCalendarEventAttachment:
+    """Resolve one attachment, or 404.
+
+    A bound file inherits its event's record scope — routed through
+    _get_org_calendar_event_or_404 so a branch- or assigned-scoped member can never reach a
+    colleague's file. An unbound draft has no event to inherit from, so it belongs to its
+    uploader alone.
+    """
+    row = (
+        db.query(models.EnterpriseCalendarEventAttachment)
+        .filter(
+            models.EnterpriseCalendarEventAttachment.id == int(attachment_id),
+            models.EnterpriseCalendarEventAttachment.organization_id == int(organization_id),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    if row.event_id:
+        _get_org_calendar_event_or_404(db, organization_id, row.event_id, ctx=ctx)
+    elif int(row.uploaded_by_user_id or 0) != int(user_id):
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    return row
+
+
+@router.post("/calendar/attachments")
+async def enterprise_upload_calendar_attachment(
+    request: Request,
+    file: UploadFile = File(...),
+    event_id: Optional[int] = Form(None),
+    draft_token: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="calendar.manage"
+    )
+    # Uploads are cheap to trigger and expensive to store, and there is no per-org storage
+    # quota anywhere in this app — so the rate limit is a real ceiling, not a formality.
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="enterprise.calendar_attachment",
+        limit=ENTERPRISE_CAL_ATTACH_RATE_LIMIT,
+        window_seconds=ENTERPRISE_CAL_ATTACH_RATE_WINDOW_SECONDS,
+        extra_key=f"org:{organization.id}:user:{current_user.id}",
+    )
+    if not enterprise_storage.is_configured():
+        raise HTTPException(status_code=503, detail="File storage is not configured.")
+
+    token = cal_files.normalize_draft_token(draft_token)
+    ev = None
+    if event_id:
+        # Scope-checked: attaching to an event you cannot see must 404 like everything else.
+        ev = _get_org_calendar_event_or_404(db, organization.id, int(event_id), ctx=role.ctx)
+        used_count, used_bytes = cal_files.usage_for_event(db, organization.id, ev.id)
+    elif token:
+        used_count, used_bytes = cal_files.usage_for_draft(db, organization.id, token, current_user.id)
+    else:
+        raise HTTPException(status_code=400, detail="Nothing to attach this file to.")
+
+    data = await file.read()
+    try:
+        ext = cal_files.validate_new_file(
+            filename=file.filename,
+            size=len(data),
+            existing_count=used_count,
+            existing_bytes=used_bytes,
+        )
+    except cal_files.CalendarFileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    try:
+        row = cal_files.store(
+            db,
+            organization_id=organization.id,
+            event_id=(ev.id if ev else None),
+            draft_token=(None if ev else token),
+            filename=file.filename,
+            data=data,
+            content_type=file.content_type,
+            uploaded_by_user_id=current_user.id,
+            uploaded_by_name=(current_user.full_name or current_user.email),
+            ext=ext,
+        )
+    except Exception:
+        logger.exception("Failed to store calendar attachment (org_id=%s)", organization.id)
+        raise HTTPException(status_code=502, detail="Could not upload that file right now. Please try again.")
+
+    # Reclaim uploads abandoned by modals this user closed without saving.
+    swept = cal_files.sweep_stale_drafts(db, organization_id=organization.id, user_id=current_user.id)
+    try:
+        db.commit()
+    except Exception:
+        # The bytes are already in the bucket but no row will point at them, and nothing else
+        # sweeps orphans — so drop them here rather than pay for them forever.
+        db.rollback()
+        logger.exception("Calendar attachment commit failed (org_id=%s)", organization.id)
+        cal_files.drop_blobs([row.storage_key])
+        raise HTTPException(status_code=502, detail="Could not attach that file right now. Please try again.")
+    db.refresh(row)
+    cal_files.drop_blobs(swept)
+    return {
+        "message": "File attached.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "attachment": cal_files.serialize(row),
+    }
+
+
+@router.delete("/calendar/attachments/drafts/{draft_token}")
+def enterprise_discard_calendar_draft_attachments(
+    draft_token: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Drop a cancelled modal's uploads now instead of waiting for the TTL sweep.
+
+    A courtesy, never the only cleanup: Escape and overlay-click close the modal with no hook
+    to call this at all, which is exactly what the sweep is for.
+    """
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="calendar.manage"
+    )
+    keys = cal_files.discard_draft(
+        db, organization_id=organization.id, user_id=current_user.id, token=draft_token
+    )
+    db.commit()
+    cal_files.drop_blobs(keys)
+    return {
+        "message": "Draft attachments discarded.",
+        "discarded": len(keys),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.delete("/calendar/attachments/{attachment_id}")
+def enterprise_delete_calendar_attachment(
+    attachment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="calendar.manage"
+    )
+    row = _calendar_attachment_or_404(
+        db,
+        organization_id=organization.id,
+        attachment_id=attachment_id,
+        user_id=current_user.id,
+        ctx=role.ctx,
+    )
+    storage_key = row.storage_key
+    db.delete(row)
+    # Row first, blob second: a failed commit must never leave a surviving row pointing at
+    # bytes that are already gone.
+    db.commit()
+    cal_files.drop_blobs([storage_key])
+    return {"message": "Attachment removed.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+@router.get("/calendar/attachments/{attachment_id}/download")
+def enterprise_download_calendar_attachment(
+    attachment_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="calendar.view"
+    )
+    row = _calendar_attachment_or_404(
+        db,
+        organization_id=organization.id,
+        attachment_id=attachment_id,
+        user_id=current_user.id,
+        ctx=role.ctx,
+    )
+    try:
+        data = enterprise_storage.fetch_document(row.storage_key)
+    except Exception:
+        logger.exception("Failed to fetch calendar attachment id=%s", row.id)
+        raise HTTPException(status_code=502, detail="Could not retrieve that file right now.")
+
+    # The served Content-Type is derived from the validated extension, never from the stored
+    # mime_type: a *.pdf can arrive claiming text/html with a <script> body, and served inline
+    # under this app's 'unsafe-inline' CSP that would execute on the workspace origin.
+    media_type, disposition = cal_files.download_headers_for(row.original_filename)
+    filename = cal_files.safe_filename(row.original_filename)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # ===========================================================================
@@ -4097,12 +5236,12 @@ def enterprise_calendar_delete_event(
 ENTERPRISE_SUPPORT_RATE_LIMIT = int(os.getenv("ENTERPRISE_SUPPORT_RATE_LIMIT", "8"))
 ENTERPRISE_SUPPORT_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_SUPPORT_RATE_WINDOW_SECONDS", "3600"))
 SUPPORT_REQUEST_TYPES = {"support", "feature_request"}
-
-
-class EnterpriseSupportRequestCreate(BaseModel):
-    request_type: str = Field(default="support", max_length=24)
-    subject: str = Field(..., min_length=3, max_length=160)
-    message: str = Field(..., min_length=5, max_length=4000)
+# Screenshots and sample files ride along as email attachments to the support inbox — they
+# are never written to our bucket, so the only ceiling that matters is what an email can carry.
+ENTERPRISE_SUPPORT_ATTACH_MAX_FILES = int(os.getenv("ENTERPRISE_SUPPORT_ATTACH_MAX_FILES", "5"))
+ENTERPRISE_SUPPORT_ATTACH_MAX_TOTAL_BYTES = int(
+    os.getenv("ENTERPRISE_SUPPORT_ATTACH_MAX_TOTAL_BYTES", str(10 * 1024 * 1024))
+)
 
 
 def _normalize_support_type(raw: str | None) -> str:
@@ -4112,7 +5251,33 @@ def _normalize_support_type(raw: str | None) -> str:
     return "support"
 
 
+def _support_attachment_manifest(r: models.EnterpriseSupportRequest) -> list[dict]:
+    """The [{filename, size}] manifest of what the requester attached (best-effort — rows
+    written before this column existed simply have none)."""
+    raw = getattr(r, "attachments_json", None)
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return []
+    out = []
+    for item in parsed if isinstance(parsed, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("filename") or "").strip()
+        if not name:
+            continue
+        try:
+            size = int(item.get("size") or 0)
+        except Exception:
+            size = 0
+        out.append({"filename": name[:160], "size": max(0, size)})
+    return out
+
+
 def _serialize_support_request(r: models.EnterpriseSupportRequest) -> dict:
+    attachments = _support_attachment_manifest(r)
     return {
         "id": r.id,
         "request_type": r.request_type,
@@ -4121,6 +5286,8 @@ def _serialize_support_request(r: models.EnterpriseSupportRequest) -> dict:
         "message": r.message,
         "status": r.status,
         "requester_name": r.requester_name,
+        "attachments": attachments,
+        "attachment_count": len(attachments),
         "created_at": _iso(r.created_at),
     }
 
@@ -4131,7 +5298,7 @@ def enterprise_support_list(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="support.manage")
     rows = (
         db.query(models.EnterpriseSupportRequest)
         .filter(models.EnterpriseSupportRequest.organization_id == organization.id)
@@ -4142,18 +5309,62 @@ def enterprise_support_list(
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "support_email": os.getenv("ENTERPRISE_SUPPORT_INBOX", "contact@rilono.com").strip() or "contact@rilono.com",
+        "attach_max_files": ENTERPRISE_SUPPORT_ATTACH_MAX_FILES,
+        "attach_max_total_bytes": ENTERPRISE_SUPPORT_ATTACH_MAX_TOTAL_BYTES,
         "requests": [_serialize_support_request(r) for r in rows],
     }
 
 
+async def _read_support_attachments(uploads: list[UploadFile]) -> list[dict]:
+    """Validate and read the files a requester attached, returning email-attachment dicts of
+    {filename, content, content_type}. Extension allow-list + a total-size cap only; nothing
+    is stored, so the derived content type is what the inbox sees (never the client's)."""
+    picked: list[dict] = []
+    total = 0
+    for upload in uploads:
+        if upload is None or not (upload.filename or "").strip():
+            continue
+        if len(picked) >= ENTERPRISE_SUPPORT_ATTACH_MAX_FILES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"You can attach up to {ENTERPRISE_SUPPORT_ATTACH_MAX_FILES} files.",
+            )
+        original = _safe_filename(upload.filename)
+        ext = os.path.splitext(original)[1].lower()
+        if ext not in ENTERPRISE_DOC_ALLOWED_EXT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"“{original}” isn't a supported file type. Allowed: PDF, images, Word/Excel, CSV, or text.",
+            )
+        data = await upload.read()
+        if not data:
+            raise HTTPException(status_code=400, detail=f"“{original}” is empty.")
+        total += len(data)
+        if total > ENTERPRISE_SUPPORT_ATTACH_MAX_TOTAL_BYTES:
+            limit_mb = ENTERPRISE_SUPPORT_ATTACH_MAX_TOTAL_BYTES // (1024 * 1024)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Attachments add up to more than {limit_mb} MB. Send the largest one separately.",
+            )
+        picked.append({
+            "filename": original,
+            "content": data,
+            "content_type": ENTERPRISE_DOC_EXT_MIME.get(ext, "application/octet-stream"),
+        })
+    return picked
+
+
 @router.post("/support")
-def enterprise_support_create(
-    payload: EnterpriseSupportRequestCreate,
+async def enterprise_support_create(
     request: Request,
+    request_type: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    message: Optional[str] = Form(None),
+    files: Optional[list[UploadFile]] = File(None),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="support.request")
     _enforce_rate_limit_or_429(
         request=request,
         scope="enterprise.support",
@@ -4161,13 +5372,29 @@ def enterprise_support_create(
         window_seconds=ENTERPRISE_SUPPORT_RATE_WINDOW_SECONDS,
         extra_key=str(current_user.id),
     )
-    request_type = _normalize_support_type(payload.request_type)
-    subject = (payload.subject or "").strip()
-    message = (payload.message or "").strip()
+    # The portal posts multipart (so files can ride along), but a tab still running the
+    # pre-attachments enterprise.js posts JSON — accept both so a mid-session deploy never
+    # swallows someone's support request.
+    if subject is None and message is None:
+        body = {}
+        try:
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                body = parsed
+        except Exception:
+            body = {}
+        request_type = request_type or body.get("request_type")
+        subject = body.get("subject")
+        message = body.get("message")
+
+    request_type = _normalize_support_type(request_type)
+    subject = str(subject or "").strip()
+    message = str(message or "").strip()
     if len(subject) < 3:
         raise HTTPException(status_code=400, detail="Please add a short subject.")
     if len(message) < 5:
         raise HTTPException(status_code=400, detail="Please describe your request.")
+    attachments = await _read_support_attachments(files or [])
 
     requester_name = current_user.full_name or current_user.email
     row = models.EnterpriseSupportRequest(
@@ -4179,6 +5406,9 @@ def enterprise_support_create(
         subject=subject[:160],
         message=message[:4000],
         status="open",
+        attachments_json=json.dumps(
+            [{"filename": a["filename"], "size": len(a["content"])} for a in attachments]
+        ) if attachments else None,
     )
     db.add(row)
     db.commit()
@@ -4193,6 +5423,7 @@ def enterprise_support_create(
             org_name=organization.company_name or "Unknown organization",
             requester_name=requester_name,
             requester_email=current_user.email or "",
+            attachments=attachments,
         )
     except Exception:
         logger.exception("Failed to email enterprise support request (org_id=%s)", organization.id)
@@ -4283,11 +5514,14 @@ def enterprise_finance_summary(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="finance.view"
+    )
     la = enterprise_payments.get_linked_account(db, organization.id)
-    # Only admins may see the settlement identity fields (bank IFSC/last4, beneficiary, GST,
-    # Razorpay account id). Viewers/editors get the non-sensitive status only (least privilege).
-    is_admin = role == ENTERPRISE_ROLE_ADMIN
+    # The settlement identity fields (bank IFSC/last 4, beneficiary name, GST, Razorpay account
+    # id) are keyed to the capability that can CHANGE them, which is owner-only. Anyone else —
+    # including a member who can invoice and refund nothing — sees the status and nothing more.
+    is_admin = role.ctx.has("finance.payout_account")
     return {
         "payments_enabled": enterprise_payments.razorpay_enabled(),
         "linked_account": enterprise_payments.serialize_linked_account(la, include_sensitive=is_admin),
@@ -4312,7 +5546,7 @@ def enterprise_finance_connect_bank(
     activation status; otherwise it saves the local record so activation can begin later.
     """
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="finance.payout_account"
     )
     if not (payload.attested_service_delivery and payload.attested_turnover_ok):
         raise HTTPException(
@@ -4390,7 +5624,7 @@ def enterprise_finance_refresh(
 ):
     """Re-sync the linked account's activation status + requirements from Razorpay."""
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="finance.payout_account"
     )
     la = enterprise_payments.get_linked_account(db, organization.id)
     if la is None or not la.razorpay_account_id:
@@ -4446,7 +5680,9 @@ def _build_pay_link_url(subdomain_slug, token: str, request: Request | None) -> 
     return f"{base.rstrip('/')}/pay/{token}"
 
 
-def _get_org_payment_or_404(db: Session, organization_id: int, payment_id: int) -> models.EnterpriseStudentPayment:
+def _get_org_payment_or_404(
+    db: Session, organization_id: int, payment_id: int, *, ctx=None
+) -> models.EnterpriseStudentPayment:
     row = (
         db.query(models.EnterpriseStudentPayment)
         .filter(
@@ -4457,6 +5693,22 @@ def _get_org_payment_or_404(db: Session, organization_id: int, payment_id: int) 
     )
     if not row:
         raise HTTPException(status_code=404, detail="Payment not found.")
+    # Payment rows are RETAINED when a client is deleted (client_id goes NULL), so an orphaned row
+    # has no client to inherit scope from — those stay workspace-scope only rather than falling
+    # into everyone's view.
+    if ctx is not None and ctx.scope_kind != "all":
+        if not row.client_id:
+            raise HTTPException(status_code=404, detail="Payment not found.")
+        linked = (
+            db.query(models.EnterpriseClient)
+            .filter(
+                models.EnterpriseClient.id == int(row.client_id),
+                models.EnterpriseClient.organization_id == int(organization_id),
+            )
+            .first()
+        )
+        if not client_in_scope(linked, ctx):
+            raise HTTPException(status_code=404, detail="Payment not found.")
     return row
 
 
@@ -4483,8 +5735,8 @@ def enterprise_client_payments(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """The client dossier's Payments tab: totals + the request ledger for this client."""
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="finance.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     rows = (
         db.query(models.EnterpriseStudentPayment)
         .filter(
@@ -4520,14 +5772,16 @@ def enterprise_create_client_payment(
 
     Hard compliance gates: Razorpay live + the org's linked account activated
     (a marketplace must never collect for a non-onboarded payee)."""
-    _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+    # Collecting a student fee is day-to-day work for a branch manager or a finance member, so
+    # this is capability-gated rather than pinned to workspace admins.
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="finance.manage"
     )
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.payment_request",
         limit=30, window_seconds=3600, extra_key=str(organization.id),
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     client_email = (client.email or "").strip().lower()
     if not client_email:
         raise HTTPException(status_code=400, detail="Add an email to this client before requesting a payment.")
@@ -4583,14 +5837,14 @@ def enterprise_record_manual_payment(
 
     Bookkeeping only — no money moves through the platform, so it needs no linked account and works
     even when online collection isn't live. Lands as a 'paid' row in this client's ledger."""
-    _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="finance.manage"
     )
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.payment_manual",
         limit=120, window_seconds=3600, extra_key=str(organization.id),
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     payment = enterprise_payments.record_manual_payment(
         db=db,
         organization=organization,
@@ -4620,10 +5874,10 @@ def enterprise_delete_manual_payment(
 ):
     """Remove a manually-recorded (off-platform) payment — e.g. to correct a mistake. Only manual
     rows can be removed; real Razorpay payments are immutable financial records."""
-    _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="finance.manage"
     )
-    payment = _get_org_payment_or_404(db, organization.id, payment_id)
+    payment = _get_org_payment_or_404(db, organization.id, payment_id, ctx=role.ctx)
     if (payment.provider or "") != "manual":
         raise HTTPException(status_code=409, detail="Only manually-recorded payments can be removed.")
     client_id = payment.client_id
@@ -4644,14 +5898,14 @@ def enterprise_resend_payment_email(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Rotate the secure token and re-send the pay-link (also returns it for copying)."""
-    _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="finance.manage"
     )
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.payment_resend",
         limit=10, window_seconds=3600, extra_key=str(payment_id),
     )
-    payment = _get_org_payment_or_404(db, organization.id, payment_id)
+    payment = _get_org_payment_or_404(db, organization.id, payment_id, ctx=role.ctx)
     if payment.status != "created":
         raise HTTPException(status_code=409, detail="Only an unpaid request's link can be re-sent.")
     to_email = payment.payer_email_snapshot
@@ -4681,10 +5935,10 @@ def enterprise_cancel_payment_request(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="finance.manage"
     )
-    payment = _get_org_payment_or_404(db, organization.id, payment_id)
+    payment = _get_org_payment_or_404(db, organization.id, payment_id, ctx=role.ctx)
     if payment.status not in ("created", "failed"):
         raise HTTPException(status_code=409, detail="Only an unpaid request can be cancelled.")
     payment.status = "cancelled"
@@ -4703,10 +5957,10 @@ def enterprise_refund_payment(
 ):
     """Refund the student in full (original instrument). Gateway-first: if Razorpay rejects
     it (e.g. the payout already settled), nothing is persisted and the reason is surfaced."""
-    _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="finance.refund"
     )
-    payment = _get_org_payment_or_404(db, organization.id, payment_id)
+    payment = _get_org_payment_or_404(db, organization.id, payment_id, ctx=role.ctx)
     audit = enterprise_payments.issue_full_refund(
         db=db, payment=payment, by_user=current_user, reason=(payload.reason or None),
     )
@@ -4715,6 +5969,482 @@ def enterprise_refund_payment(
         "message": f"Refund of ₹{audit.amount_paise / 100:,.2f} initiated to the student's original payment method.",
         "payment": enterprise_payments.serialize_payment(payment),
     }
+
+
+# ---- Phase 3 · Finance books: the consultancy's own income, costs and ROI ----
+#
+# Everything below reads through app/enterprise_finance.py, which builds ONE ledger per
+# request from (a) the org's hand-recorded entries and (b) money the platform already
+# knows about (collected payments, the Rilono fee on them, credit top-ups, refunds,
+# lost chargebacks). Analytics, the ledger and the export all consume that same list, so
+# they cannot disagree. Company-level money is admin-only — an editor manages students,
+# not payroll — so every route here gates on require_manage_users.
+
+ENTERPRISE_FINANCE_RATE_LIMIT = int(os.getenv("ENTERPRISE_FINANCE_RATE_LIMIT", "120"))
+ENTERPRISE_FINANCE_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_FINANCE_RATE_WINDOW_SECONDS", "60"))
+ENTERPRISE_FINANCE_EXPORT_RATE_LIMIT = int(os.getenv("ENTERPRISE_FINANCE_EXPORT_RATE_LIMIT", "12"))
+ENTERPRISE_FINANCE_EXPORT_RATE_WINDOW_SECONDS = int(
+    os.getenv("ENTERPRISE_FINANCE_EXPORT_RATE_WINDOW_SECONDS", "300")
+)
+FINANCE_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+class EnterpriseFinanceEntryRequest(BaseModel):
+    """One hand-recorded income or expense. `amount_paise` is a positive magnitude —
+    `kind` decides which side of the books it lands on (mirrors the admin console)."""
+    kind: str = Field("expense", max_length=10)
+    category: str | None = Field(None, max_length=60)
+    amount_paise: int = Field(..., gt=0)
+    tax_paise: int | None = Field(None, ge=0)
+    occurred_on: Optional[date] = None
+    description: str | None = Field(None, max_length=300)
+    counterparty: str | None = Field(None, max_length=160)
+    payment_method: str | None = Field(None, max_length=30)
+    reference: str | None = Field(None, max_length=120)
+    notes: str | None = Field(None, max_length=2000)
+    client_id: int | None = None
+    repeat_monthly: bool = False
+    repeat_until: Optional[date] = None
+
+
+class EnterpriseFinanceSettingsRequest(BaseModel):
+    hourly_cost_paise: int | None = Field(None, ge=0)
+    opening_balance_paise: int | None = Field(None, ge=0)
+    opening_balance_on: Optional[date] = None
+    fy_start_month: int | None = Field(None, ge=1, le=12)
+    # {"deep_scan": 30, …} — the org's own minutes-per-task baselines.
+    savings_minutes: dict[str, int] | None = None
+
+
+def _require_finance_admin(
+    *, db: Session, user: models.User, request: Request, capability: str = "finance.books"
+):
+    """Gate for the company's own books, with the finance settings row attached.
+
+    Gated in-body rather than via the generic flags so the 403 explains itself — "Only
+    organization admins can manage users" makes no sense on a P&L endpoint.
+
+    Two rules here, both deliberate:
+
+      * It is capability-based (`finance.books` / `finance.books_manage`), not admin-only, which is
+        the entire point of having a Finance role: the person who keeps the books needs the books,
+        and shouldn't have to be handed workspace administration to get them.
+      * It additionally requires workspace-wide record scope. Every figure behind these endpoints
+        is a whole-company roll-up — profit, receivables, revenue split by office and by staff
+        member — so there is no meaningful "branch-scoped P&L" to serve. A member limited to one
+        office is refused rather than shown numbers that include offices they can't see.
+    """
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=user, request=request, require_capability=capability
+    )
+    if not role.ctx.is_org_scope:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The company's books cover the whole workspace, so they're only available to "
+                "people with workspace-wide access."
+            ),
+        )
+    settings = finance.get_or_create_settings(db, organization.id)
+    return organization, role, settings
+
+
+def _finance_range(range_key: str | None, start: str | None, end: str | None, settings) -> dict:
+    return finance.resolve_range(
+        range_key,
+        start=start,
+        end=end,
+        fy_start_month=int(getattr(settings, "fy_start_month", 4) or 4),
+    )
+
+
+def _get_org_finance_entry_or_404(db: Session, organization_id: int, entry_id: int):
+    row = (
+        db.query(models.EnterpriseFinanceEntry)
+        .filter(
+            models.EnterpriseFinanceEntry.id == int(entry_id),
+            models.EnterpriseFinanceEntry.organization_id == int(organization_id),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="That finance entry no longer exists.")
+    return row
+
+
+def _finance_client_for_entry(db: Session, organization_id: int, client_id, *, ctx=None):
+    """Resolve an optional client attribution, scoped to the org (never by id alone)."""
+    if not client_id:
+        return None
+    return _get_org_client_or_404(db, organization_id, int(client_id), ctx=ctx)
+
+
+@router.get("/finance/books")
+def enterprise_finance_books(
+    request: Request,
+    range_key: str = "this_month",
+    start: str | None = None,
+    end: str | None = None,
+    kind: str | None = None,
+    category: str | None = None,
+    source: str | None = None,
+    client_id: int | None = None,
+    q: str | None = None,
+    limit: int = finance.LEDGER_PAGE_SIZE,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """The books for a period: filtered ledger page + totals for the whole filtered set."""
+    organization, role, settings = _require_finance_admin(db=db, user=current_user, request=request)
+    _enforce_rate_limit_or_429(
+        request, "enterprise.finance_books",
+        ENTERPRISE_FINANCE_RATE_LIMIT, ENTERPRISE_FINANCE_RATE_WINDOW_SECONDS,
+        extra_key=str(organization.id),
+    )
+    rng = _finance_range(range_key, start, end, settings)
+    book = finance.build_book(db, organization.id, rng, cache=finance.new_cache())
+    rows = finance.filter_rows(
+        book["rows"],
+        kind=(kind or "").strip().lower() or None,
+        category=(category or "").strip() or None,
+        source=(source or "").strip() or None,
+        client_id=int(client_id) if client_id else None,
+        q=(q or "")[:120],
+    )
+    page = finance.ledger_page(rows, offset=offset, limit=limit)
+    return {
+        "range": finance.range_payload(rng),
+        "ledger": page,
+        "totals": finance.summarize(rows),
+        "period_totals": finance.summarize(book["rows"]),
+        "categories": finance.categories_payload(),
+        "settings": finance.settings_payload(settings),
+        "truncated": book["truncated"],
+        "truncated_note": book["truncated_note"],
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.get("/finance/analytics")
+def enterprise_finance_analytics(
+    request: Request,
+    range_key: str = "this_month",
+    start: str | None = None,
+    end: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """P&L, cash, receivables, collections and per-client/destination profitability."""
+    organization, role, settings = _require_finance_admin(db=db, user=current_user, request=request)
+    _enforce_rate_limit_or_429(
+        request, "enterprise.finance_analytics",
+        ENTERPRISE_FINANCE_RATE_LIMIT, ENTERPRISE_FINANCE_RATE_WINDOW_SECONDS,
+        extra_key=str(organization.id),
+    )
+    rng = _finance_range(range_key, start, end, settings)
+    payload = finance.analytics(db, organization.id, rng, settings=settings, cache=finance.new_cache())
+    payload["settings"] = finance.settings_payload(settings)
+    payload["fee"] = enterprise_payments.fee_config_public()
+    payload["permissions"] = _enterprise_permissions_for_role(role)
+    return payload
+
+
+@router.get("/finance/savings")
+def enterprise_finance_savings(
+    request: Request,
+    range_key: str = "this_month",
+    start: str | None = None,
+    end: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Staff time and money the platform saved this org, net of what they paid Rilono."""
+    organization, role, settings = _require_finance_admin(db=db, user=current_user, request=request)
+    _enforce_rate_limit_or_429(
+        request, "enterprise.finance_savings",
+        ENTERPRISE_FINANCE_RATE_LIMIT, ENTERPRISE_FINANCE_RATE_WINDOW_SECONDS,
+        extra_key=str(organization.id),
+    )
+    rng = _finance_range(range_key, start, end, settings)
+    payload = finance.savings(db, organization.id, rng, settings=settings, cache=finance.new_cache())
+    payload["settings"] = finance.settings_payload(settings)
+    payload["permissions"] = _enterprise_permissions_for_role(role)
+    return payload
+
+
+@router.post("/finance/entries")
+def enterprise_finance_create_entry(
+    payload: EnterpriseFinanceEntryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Record income or a cost the platform can't see (cash fees, salaries, rent, ads…)."""
+    organization, role, _settings = _require_finance_admin(db=db, user=current_user, request=request, capability="finance.books_manage")
+    _enforce_rate_limit_or_429(
+        request, "enterprise.finance_entry_write",
+        ENTERPRISE_FINANCE_RATE_LIMIT, ENTERPRISE_FINANCE_RATE_WINDOW_SECONDS,
+        extra_key=str(organization.id),
+    )
+    if int(payload.amount_paise) > finance.MAX_AMOUNT_PAISE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Amount exceeds the per-entry limit of ₹{finance.MAX_AMOUNT_PAISE / 100:,.0f}.",
+        )
+    client = _finance_client_for_entry(db, organization.id, payload.client_id, ctx=role.ctx)
+    entry = models.EnterpriseFinanceEntry(
+        organization_id=organization.id,
+        created_by_user_id=current_user.id,
+        created_by_name=(current_user.full_name or current_user.email or None),
+    )
+    finance.apply_entry_fields(entry, payload, client=client)
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return {
+        "message": ("Income recorded." if entry.kind == "income" else "Expense recorded."),
+        "entry": finance.serialize_entry(entry),
+    }
+
+
+@router.patch("/finance/entries/{entry_id}")
+def enterprise_finance_update_entry(
+    entry_id: int,
+    payload: EnterpriseFinanceEntryRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Edit a hand-recorded entry. Platform-derived rows have no entry id and can't reach here."""
+    organization, role, _settings = _require_finance_admin(db=db, user=current_user, request=request, capability="finance.books_manage")
+    _enforce_rate_limit_or_429(
+        request, "enterprise.finance_entry_write",
+        ENTERPRISE_FINANCE_RATE_LIMIT, ENTERPRISE_FINANCE_RATE_WINDOW_SECONDS,
+        extra_key=str(organization.id),
+    )
+    if int(payload.amount_paise) > finance.MAX_AMOUNT_PAISE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Amount exceeds the per-entry limit of ₹{finance.MAX_AMOUNT_PAISE / 100:,.0f}.",
+        )
+    entry = _get_org_finance_entry_or_404(db, organization.id, entry_id)
+    client = _finance_client_for_entry(db, organization.id, payload.client_id, ctx=role.ctx)
+    # The form always submits every field, so an empty client_id means "detach".
+    finance.apply_entry_fields(entry, payload, client=client, clear_client=(client is None))
+    db.commit()
+    db.refresh(entry)
+    return {"message": "Entry updated.", "entry": finance.serialize_entry(entry)}
+
+
+@router.delete("/finance/entries/{entry_id}")
+def enterprise_finance_delete_entry(
+    entry_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    organization, _, _settings = _require_finance_admin(db=db, user=current_user, request=request, capability="finance.books_manage")
+    entry = _get_org_finance_entry_or_404(db, organization.id, entry_id)
+    db.delete(entry)
+    db.commit()
+    return {"message": "Entry deleted."}
+
+
+@router.put("/finance/settings")
+def enterprise_finance_update_settings(
+    payload: EnterpriseFinanceSettingsRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Update the org's hourly cost, opening balance, financial-year start and the
+    minutes-per-task baselines the savings panel values time with."""
+    organization, role, settings = _require_finance_admin(db=db, user=current_user, request=request, capability="finance.books_manage")
+    _enforce_rate_limit_or_429(
+        request, "enterprise.finance_settings",
+        ENTERPRISE_FINANCE_RATE_LIMIT, ENTERPRISE_FINANCE_RATE_WINDOW_SECONDS,
+        extra_key=str(organization.id),
+    )
+    if payload.hourly_cost_paise is not None:
+        hourly = int(payload.hourly_cost_paise)
+        if hourly > finance.MAX_HOURLY_COST_PAISE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Hourly cost looks too high — the limit is ₹{finance.MAX_HOURLY_COST_PAISE / 100:,.0f}/hour.",
+            )
+        settings.hourly_cost_paise = hourly or finance.DEFAULT_HOURLY_COST_PAISE
+    if payload.opening_balance_paise is not None:
+        opening = int(payload.opening_balance_paise)
+        if opening > finance.MAX_OPENING_BALANCE_PAISE:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "That opening balance looks like a typo — the limit is "
+                    f"₹{finance.MAX_OPENING_BALANCE_PAISE // 100:,}."
+                ),
+            )
+        settings.opening_balance_paise = opening
+    if payload.opening_balance_on is not None:
+        settings.opening_balance_on = payload.opening_balance_on
+    if payload.fy_start_month is not None:
+        settings.fy_start_month = int(payload.fy_start_month)
+    if payload.savings_minutes is not None:
+        merged = finance.savings_minutes(settings)
+        for key, value in payload.savings_minutes.items():
+            if key in merged:
+                merged[key] = max(0, min(600, int(value)))
+        settings.savings_overrides_json = json.dumps(merged)
+    settings.updated_by_user_id = current_user.id
+    db.commit()
+    db.refresh(settings)
+    return {
+        "message": "Finance settings saved.",
+        "settings": finance.settings_payload(settings),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+def _finance_csv_safe(value):
+    """Defuse spreadsheet formula injection: a cell a user typed (a vendor called
+    "=cmd|..." or a description starting with @) must never be evaluated when the export
+    is opened. Same guard the credit-ledger export uses."""
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
+def _finance_export_csv(sections: list[dict]) -> bytes:
+    """CSV fallback (and the explicit ?fmt=csv output): sections stacked into one sheet.
+    BOM first so Excel opens it as UTF-8."""
+    import csv
+    import io as _io
+
+    buffer = _io.StringIO()
+    writer = csv.writer(buffer)
+    for index, section in enumerate(sections):
+        if index:
+            writer.writerow([])
+        writer.writerow([section["title"].upper()])
+        for row in section["rows"]:
+            writer.writerow([_finance_csv_safe(value) for value in row])
+    return b"\xef\xbb\xbf" + buffer.getvalue().encode("utf-8")
+
+
+def _finance_export_xlsx(sections: list[dict]) -> bytes | None:
+    """One worksheet per section. Returns None when openpyxl isn't installed on the
+    host so the caller falls back to CSV (never import it at module level)."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+    except Exception:  # pragma: no cover - depends on the deployed environment
+        logger.warning("openpyxl unavailable; falling back to CSV for the finance export")
+        return None
+
+    from io import BytesIO
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="4338CA")
+    money_format = '"₹"#,##0.00'
+    date_format = "yyyy-mm-dd"
+
+    percent_format = '0.0"%"'
+
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    for section in sections:
+        sheet = workbook.create_sheet(section["title"][:31] or "Sheet")
+        rows = section["rows"]
+        # The section declares its own shape and column types — inferring a format from
+        # the Python type would render a 55.5% share as ₹55.50.
+        is_table = bool(section.get("is_table"))
+        money_columns = set(section.get("money") or ())
+        percent_columns = set(section.get("percent") or ())
+        date_columns = set(section.get("date") or ())
+        money_rows = set(section.get("money_rows") or ())   # key/value blocks: money by ROW
+        widths: dict[int, int] = {}
+        for row in rows:
+            # Same formula-injection guard as the CSV path: openpyxl writes a leading "="
+            # as a live formula.
+            sheet.append([_finance_csv_safe(value) for value in row])
+            for column_index, value in enumerate(row, start=1):
+                widths[column_index] = max(widths.get(column_index, 12), min(46, len(str(value)) + 3))
+        if is_table and rows:
+            for column_index in range(1, len(rows[0]) + 1):
+                cell = sheet.cell(row=1, column=column_index)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            sheet.freeze_panes = "A2"
+            if sheet.max_row > 1:
+                sheet.auto_filter.ref = f"A1:{get_column_letter(len(rows[0]))}{sheet.max_row}"
+        for row_index, row_cells in enumerate(sheet.iter_rows(min_row=1, max_row=sheet.max_row), start=1):
+            for column_index, cell in enumerate(row_cells, start=1):
+                if cell.value is None or isinstance(cell.value, str):
+                    continue
+                if column_index in date_columns or isinstance(cell.value, date):
+                    if not isinstance(cell.value, datetime) or column_index in date_columns:
+                        cell.number_format = date_format
+                elif column_index in percent_columns:
+                    cell.number_format = percent_format
+                elif column_index in money_columns and (not money_rows or row_index in money_rows):
+                    cell.number_format = money_format
+        for column_index, width in widths.items():
+            sheet.column_dimensions[get_column_letter(column_index)].width = width
+
+    stream = BytesIO()
+    workbook.save(stream)
+    return stream.getvalue()
+
+
+@router.get("/finance/export")
+def enterprise_finance_export(
+    request: Request,
+    range_key: str = "this_month",
+    start: str | None = None,
+    end: str | None = None,
+    fmt: str = "xlsx",
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Download the complete book for a period — ledger, P&L, categories, clients,
+    receivables and the Rilono savings summary — as .xlsx (CSV fallback)."""
+    organization, _, settings = _require_finance_admin(db=db, user=current_user, request=request, capability="finance.export")
+    _enforce_rate_limit_or_429(
+        request, "enterprise.finance_export",
+        ENTERPRISE_FINANCE_EXPORT_RATE_LIMIT, ENTERPRISE_FINANCE_EXPORT_RATE_WINDOW_SECONDS,
+        extra_key=str(organization.id),
+    )
+    rng = _finance_range(range_key, start, end, settings)
+    cache = finance.new_cache()
+    sections = finance.export_sections(
+        rng=rng,
+        book=finance.build_book(db, organization.id, rng, cache=cache),
+        ana=finance.analytics(db, organization.id, rng, settings=settings, cache=cache),
+        save=finance.savings(db, organization.id, rng, settings=settings, cache=cache),
+    )
+    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M")
+    wants_csv = (fmt or "").strip().lower() == "csv"
+    content = None if wants_csv else _finance_export_xlsx(sections)
+    if content is None:
+        content = _finance_export_csv(sections)
+        filename = f"rilono-finance-{stamp}.csv"
+        media_type = "text/csv; charset=utf-8"
+    else:
+        filename = f"rilono-finance-{stamp}.xlsx"
+        media_type = FINANCE_XLSX_MEDIA_TYPE
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{_safe_filename(filename)}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # ---- Public pay page (no auth; token = capability) -------------------------
@@ -5183,7 +6913,7 @@ def enterprise_billing_checkout(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="billing.manage"
     )
     if billing.ENTERPRISE_FREE:
         return {"action": "free", "message": "Rilono Enterprise is free — no billing required."}
@@ -5276,7 +7006,7 @@ def enterprise_billing_verify(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="billing.manage"
     )
     key_id, key_secret = _razorpay_credentials()
     if not key_id or not key_secret:
@@ -5370,11 +7100,13 @@ def enterprise_credits_wallet(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "wallet": credits.wallet_state(db, organization.id),
-        "usage": credits.usage_breakdown(db, organization.id),
+        "usage": credits.usage_breakdown(
+            db, organization.id, include_by_member=role.ctx.is_org_scope,
+        ),
         "packages": credits.packages_payload(),
         "checkout_enabled": _razorpay_enabled(),
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip() or None,
@@ -5385,20 +7117,88 @@ def enterprise_credits_wallet(
 def enterprise_credits_transactions(
     request: Request,
     limit: int = 25,
+    offset: int = 0,
+    kind: str = "",
+    action: str = "",
+    member_id: Optional[int] = None,
+    client_id: Optional[int] = None,
+    days: int = 0,
+    q: str = "",
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    limit = max(1, min(int(limit or 25), 100))
-    rows = (
-        db.query(models.EnterpriseCreditTransaction)
-        .filter(models.EnterpriseCreditTransaction.organization_id == organization.id)
-        .order_by(
-            models.EnterpriseCreditTransaction.created_at.desc(),
-            models.EnterpriseCreditTransaction.id.desc(),
+    """The credit ledger, filterable — this is the 'who / when / what / why' log
+    behind the Credits → Analytics tab. Every filter is optional, so the plain
+    `?limit=N` call the wallet page has always made keeps working unchanged."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
+    # The ceiling is high because the Analytics tab's CSV export pulls the whole
+    # filtered ledger in one request rather than paging through it.
+    limit = max(1, min(int(limit or 25), 2000))
+    offset = max(0, int(offset or 0))
+
+    T = models.EnterpriseCreditTransaction
+    query = db.query(T).filter(T.organization_id == organization.id)
+    # Every per-client charge bakes the client's full name into `description` ("Deep Scan —
+    # Priya Menon"), so scoping only the name-resolution map below would still hand a
+    # scope-limited member the names of clients in other offices. Applied here, before the
+    # caller's `client_id` and `q` filters, so neither can widen it.
+    if not role.ctx.is_org_scope:
+        query = query.filter(
+            or_(
+                T.reference_type != "client",
+                T.reference_id.is_(None),
+                T.reference_id.in_(scoped_client_ids_subq(db, organization.id, role.ctx)),
+            )
         )
-        .limit(limit)
-        .all()
+
+    kind = (kind or "").strip().lower()
+    if kind in {"debit", "topup", "bonus", "adjustment"}:
+        query = query.filter(T.type == kind)
+
+    action = (action or "").strip().lower()
+    if action:
+        if action == "other":
+            # Legacy / unmapped debits: anything whose action key we no longer price.
+            query = query.filter(
+                T.type == "debit",
+                or_(T.action_key.is_(None), T.action_key.notin_(list(credits.ACTIONS.keys()))),
+            )
+        elif action in credits.ACTIONS:
+            query = query.filter(T.action_key == action)
+
+    if member_id is not None:
+        query = query.filter(T.created_by_user_id == int(member_id))
+    if client_id is not None:
+        query = query.filter(T.reference_type == "client", T.reference_id == int(client_id))
+
+    days = credits.normalize_analytics_days(days)
+    if days > 0:
+        query = query.filter(T.created_at >= datetime.utcnow() - timedelta(days=days))
+
+    q = (q or "").strip()
+    if q:
+        # Free-text search spans the ledger's own text AND the client the action
+        # was run on, because "show me everything we spent on Priya" is the
+        # question people actually type into this box.
+        needle = f"%{q}%"
+        matching_clients = [
+            row[0] for row in scope_client_query(
+                db.query(models.EnterpriseClient.id).filter(
+                    models.EnterpriseClient.organization_id == organization.id,
+                    models.EnterpriseClient.full_name.ilike(needle),
+                ),
+                role.ctx,
+            ).limit(500).all()
+        ]
+        clauses = [T.description.ilike(needle), T.created_by_name.ilike(needle)]
+        if matching_clients:
+            clauses.append(and_(T.reference_type == "client", T.reference_id.in_(matching_clients)))
+        query = query.filter(or_(*clauses))
+
+    total = int(query.count())
+    rows = (
+        query.order_by(T.created_at.desc(), T.id.desc())
+        .offset(offset).limit(limit).all()
     )
     # Batch-resolve client names for per-client actions so each ledger row can
     # show which client the credits were spent on.
@@ -5408,11 +7208,15 @@ def enterprise_credits_transactions(
     }
     client_names: dict = {}
     if client_ids:
+        # Scoped: the ledger row itself is a workspace record, but the client NAME attached to it
+        # must not become a way to learn who another office is working with.
         for cid, name in (
-            db.query(models.EnterpriseClient.id, models.EnterpriseClient.full_name)
-            .filter(
-                models.EnterpriseClient.organization_id == organization.id,
-                models.EnterpriseClient.id.in_(client_ids),
+            scope_client_query(
+                db.query(models.EnterpriseClient.id, models.EnterpriseClient.full_name).filter(
+                    models.EnterpriseClient.organization_id == organization.id,
+                    models.EnterpriseClient.id.in_(client_ids),
+                ),
+                role.ctx,
             )
             .all()
         ):
@@ -5420,6 +7224,124 @@ def enterprise_credits_transactions(
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "transactions": [_serialize_credit_txn(t, client_names) for t in rows],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": (offset + len(rows)) < total,
+    }
+
+
+@router.get("/credits/analytics")
+def enterprise_credits_analytics(
+    request: Request,
+    days: int = credits.DEFAULT_ANALYTICS_DAYS,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Spend analytics for the org's own wallet: where credits went, on which
+    clients, by whom, over time — plus burn rate, runway and free allowances."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "wallet": credits.wallet_state(db, organization.id),
+        "analytics": credits.spend_analytics(
+            db, organization.id, days=days, include_by_member=role.ctx.is_org_scope,
+            ctx=role.ctx,
+        ),
+    }
+
+
+@router.get("/credits/payments")
+def enterprise_credits_payments(
+    request: Request,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Purchase history: every top-up and infra-fee charge this org has made,
+    with what was bought, what was actually paid and what was refunded.
+
+    Admin-only — these rows carry payment amounts and processor references,
+    which the rest of the team has no reason to see."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.purchase")
+    perms = _enterprise_permissions_for_role(role)
+    if not perms["can_manage_users"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Only an organization admin can view purchase history and receipts.",
+        )
+    limit = max(1, min(int(limit or 50), 200))
+
+    P = models.EnterpriseCreditPayment
+    rows = (
+        db.query(P)
+        .filter(
+            P.organization_id == organization.id,
+            # 'created' rows are abandoned checkouts — an order was opened and
+            # never paid. Showing them as "history" would be misleading.
+            P.status != "created",
+        )
+        .order_by(P.verified_at.desc().nullslast(), P.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    buyer_names: dict = {}
+    buyer_ids = {p.created_by_user_id for p in rows if p.created_by_user_id}
+    if buyer_ids:
+        for uid, full_name, email in (
+            db.query(models.User.id, models.User.full_name, models.User.email)
+            .filter(models.User.id.in_(buyer_ids)).all()
+        ):
+            buyer_names[uid] = full_name or email
+
+    payments = []
+    collected_paise = 0
+    credits_bought = 0
+    for p in rows:
+        package = credits.get_package(p.package_key) if p.kind == "credits" else None
+        refunded = int(p.refunded_amount_paise or 0)
+        net = max(0, int(p.amount_paise or 0) - refunded)
+        total_credits = int(p.credits or 0) + int(p.bonus_credits or 0)
+        if p.status in credits.REVENUE_PAYMENT_STATUSES:
+            collected_paise += net
+            credits_bought += total_credits
+        payments.append({
+            "id": p.id,
+            "kind": p.kind,
+            "package_key": p.package_key,
+            "label": (
+                (package or {}).get("label")
+                or ("Infrastructure server fee" if p.kind == "infra_fee" else (p.package_key or "Top-up"))
+            ),
+            "credits": int(p.credits or 0),
+            "bonus_credits": int(p.bonus_credits or 0),
+            "total_credits": total_credits,
+            "amount_paise": int(p.amount_paise or 0),
+            "amount_display": credits.format_inr(p.amount_paise),
+            "original_amount_paise": p.original_amount_paise,
+            "coupon_code": p.coupon_code,
+            "coupon_percent_off": (float(p.coupon_percent_off) if p.coupon_percent_off is not None else None),
+            "status": p.status,
+            "refunded_amount_paise": refunded,
+            "refunded_display": credits.format_inr(refunded),
+            "net_amount_paise": net,
+            "net_amount_display": credits.format_inr(net),
+            "payment_reference": p.razorpay_payment_id or p.razorpay_order_id,
+            "created_by_name": buyer_names.get(p.created_by_user_id),
+            "created_at": _iso(p.created_at),
+            "verified_at": _iso(p.verified_at),
+        })
+
+    return {
+        "permissions": perms,
+        "payments": payments,
+        "summary": {
+            "count": len(payments),
+            "collected_paise": collected_paise,
+            "collected_display": credits.format_inr(collected_paise),
+            "credits_purchased": credits_bought,
+        },
     }
 
 
@@ -5431,7 +7353,7 @@ def enterprise_coupon_validate(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Preview a per-account discount code for a given purchase before checkout."""
-    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.purchase")
     context = (payload.context or "credits").strip().lower()
     if context not in ("credits", "billing"):
         raise HTTPException(status_code=400, detail="Unknown checkout context.")
@@ -5524,7 +7446,7 @@ def enterprise_credits_topup_checkout(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="credits.purchase"
     )
     package = credits.get_package(payload.package)
     if not package:
@@ -5624,7 +7546,7 @@ def enterprise_credits_topup_verify(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="credits.purchase"
     )
     payment_row = _verify_credit_payment_or_402(
         db=db, organization=organization, payload=payload, expected_kind="credits"
@@ -5666,7 +7588,7 @@ def enterprise_infra_fee_checkout(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="billing.manage"
     )
     amount = int(credits.INFRA_FEE_PAISE)
     if amount <= 0:
@@ -5729,7 +7651,7 @@ def enterprise_infra_fee_verify(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, _ = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_manage_users=True
+        db=db, user=current_user, request=request, require_capability="billing.manage"
     )
     payment_row = _verify_credit_payment_or_402(
         db=db, organization=organization, payload=payload, expected_kind="infra_fee"
@@ -6120,7 +8042,7 @@ def enterprise_ai_chat(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability=("ai.assistant", "credits.spend"))
     _enforce_rate_limit_or_429(
         request=request,
         scope="enterprise.ai",
@@ -6154,6 +8076,7 @@ def enterprise_ai_chat(
             role=role,
             message=payload.message,
             history=history,
+            ctx=role.ctx,
         )
     except Exception:
         logger.exception("Enterprise AI chat failed (org_id=%s)", organization.id)
@@ -6207,11 +8130,19 @@ def enterprise_copilot_extension_context(
     if not membership or not organization or not (organization.subdomain_slug or "").strip():
         return {"enterprise": False}
     _enforce_request_subdomain_matches_org(request, organization)
-    role = _normalize_enterprise_role(membership.role)
+    # Resolve the real access context rather than reading the legacy `role` string: answering
+    # `permissions` from the mirror made this the one endpoint that could disagree with the rest
+    # of the app (a branch manager reported as "viewer"), and the count below has to be scoped
+    # like every other client count.
+    ctx = access.resolve_access_context(db, membership, organization)
+    role = EnterpriseRoleContext(access.legacy_role_for(ctx.role_key, ctx.capabilities), ctx)
     client_count = (
-        db.query(func.count(models.EnterpriseClient.id))
-        .filter(models.EnterpriseClient.organization_id == organization.id)
-        .scalar()
+        scope_client_query(
+            db.query(models.EnterpriseClient).filter(
+                models.EnterpriseClient.organization_id == organization.id
+            ),
+            ctx,
+        ).count()
     )
     return {
         "enterprise": True,
@@ -6223,6 +8154,7 @@ def enterprise_copilot_extension_context(
         },
         "role": role,
         "permissions": _enterprise_permissions_for_role(role),
+        "access": access.access_payload(ctx),
         "copilot_enabled": enterprise_copilot.is_provider_available(),
         "client_count": int(client_count or 0),
     }
@@ -6237,9 +8169,14 @@ def enterprise_copilot_extension_clients(
     """Compact client list for the extension's on-behalf-of picker (view-level).
     Deliberately excludes sensitive fields like passport numbers — the chat
     context is assembled server-side, so the extension never needs them."""
-    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request)
-    base = db.query(models.EnterpriseClient).filter(
-        models.EnterpriseClient.organization_id == organization.id
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="clients.view"
+    )
+    base = scope_client_query(
+        db.query(models.EnterpriseClient).filter(
+            models.EnterpriseClient.organization_id == organization.id
+        ),
+        role.ctx,
     )
     total = base.count()
     rows = (
@@ -6264,7 +8201,7 @@ def enterprise_copilot_extension_clients(
             "visa_type": client.visa_type,
             "intake": client.intake,
             "status": client.status,
-            "stage": _stage_brief(client.status),
+            "stage": _stage_brief(client.status, client.destination_country_code),
             "priority": client.priority,
             "assigned_to_name": assigned_name,
             "updated_at": _iso(client.updated_at),
@@ -6286,7 +8223,7 @@ def enterprise_copilot_extension_chat(
     """One staff-mode Copilot turn about a specific client. Mirrors /ai/chat's
     guardrail → precheck → generate → meter flow; the response field is named
     `response` to match the extension's B2C chat contract."""
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability=("ai.assistant", "credits.spend"))
     _enforce_rate_limit_or_429(
         request=request,
         scope="enterprise.copilot",
@@ -6301,7 +8238,7 @@ def enterprise_copilot_extension_chat(
             detail="Rilono Copilot isn't available right now. Please try again later.",
         )
 
-    client = _get_org_client_or_404(db, organization.id, payload.client_id)
+    client = _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
 
     if len(payload.session_attachments or []) > ENTERPRISE_COPILOT_MAX_ATTACHMENTS:
         raise HTTPException(
@@ -6450,8 +8387,8 @@ def enterprise_list_client_documents(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="documents.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     rows = (
         db.query(models.EnterpriseClientDocument)
         .filter(models.EnterpriseClientDocument.client_id == client.id)
@@ -6475,9 +8412,9 @@ async def enterprise_upload_client_document(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="documents.upload"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     if not enterprise_storage.is_configured():
         raise HTTPException(status_code=503, detail="Document storage is not configured.")
@@ -6862,12 +8799,19 @@ def enterprise_download_client_document(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, _ = _require_enterprise_membership(db=db, user=current_user, request=request)
+    # Downloading the raw file means a passport scan, a bank letter or a transcript, so it needs
+    # its own capability — read-only members deliberately don't get it. Resolving the CLIENT first
+    # is what applies record scope: filtering the document by (id, client_id, organization_id)
+    # alone let anyone walk sequential document ids against any client id in the workspace.
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="documents.download"
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     doc = (
         db.query(models.EnterpriseClientDocument)
         .filter(
             models.EnterpriseClientDocument.id == int(document_id),
-            models.EnterpriseClientDocument.client_id == int(client_id),
+            models.EnterpriseClientDocument.client_id == client.id,
             models.EnterpriseClientDocument.organization_id == organization.id,
         )
         .first()
@@ -6912,13 +8856,16 @@ def enterprise_delete_client_document(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="documents.delete"
     )
+    # Same reasoning as the download route: resolve the client so record scope applies before the
+    # document is touched at all.
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     doc = (
         db.query(models.EnterpriseClientDocument)
         .filter(
             models.EnterpriseClientDocument.id == int(document_id),
-            models.EnterpriseClientDocument.client_id == int(client_id),
+            models.EnterpriseClientDocument.client_id == client.id,
             models.EnterpriseClientDocument.organization_id == organization.id,
         )
         .first()
@@ -6944,7 +8891,7 @@ def enterprise_accept_client_document(
     the normal profile auto-fill. The AI stays the default gatekeeper; this is the escape
     hatch for its false alarms."""
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="documents.accept"
     )
     doc = (
         db.query(models.EnterpriseClientDocument)
@@ -6959,7 +8906,7 @@ def enterprise_accept_client_document(
         raise HTTPException(status_code=404, detail="Document not found.")
     if doc.validation_status not in ("invalid", "error"):
         raise HTTPException(status_code=400, detail="Only documents Rilono AI flagged can be accepted manually.")
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     staff_name = (current_user.full_name or current_user.email or "staff").strip()
     prior_message = (doc.validation_message or "").strip()
@@ -7077,8 +9024,8 @@ def enterprise_client_deep_scan_history(
 ):
     """Stored Deep Scan history for a client (newest first, summaries only) plus the
     pricing state for the next run. Viewers can read history; running one needs edit."""
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="clients.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     scans = (
         db.query(models.EnterpriseClientDeepScan)
         .filter(
@@ -7105,8 +9052,8 @@ def enterprise_client_deep_scan_detail(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="clients.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     scan = (
         db.query(models.EnterpriseClientDeepScan)
         .filter(
@@ -7136,9 +9083,9 @@ def enterprise_client_deep_scan(
     interview results and payments — and stores the structured result as history.
     Each client's first scan is free; after that it's credit-billed."""
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability=("ai.deepscan", "credits.spend")
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     _enforce_rate_limit_or_429(
         request, scope="enterprise.deep_scan",
         limit=ENTERPRISE_DEEP_SCAN_RATE_LIMIT,
@@ -7236,6 +9183,449 @@ def enterprise_client_deep_scan(
 
 
 # ===========================================================================
+# Writing Studio — AI-drafted SOPs and Letters of Recommendation (credit-billed)
+#
+# Two things make this different from the B2C SOP generator: the draft is grounded in a
+# CONSULTANCY's dossier for the client (case records, documents, shortlist, notes), and
+# the deliverable is a formatted Word file the office actually hands over. Generation and
+# refinement each cost one credit; re-downloading a stored draft is free (no model call).
+# ===========================================================================
+
+WRITING_STUDIO_ACTION_KEY = "writing_studio"
+ENTERPRISE_WRITING_RATE_LIMIT = int(os.getenv("ENTERPRISE_WRITING_RATE_LIMIT", "20"))
+ENTERPRISE_WRITING_RATE_WINDOW_SECONDS = int(os.getenv("ENTERPRISE_WRITING_RATE_WINDOW_SECONDS", "600"))
+
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+
+class EnterpriseWritingGenerateRequest(BaseModel):
+    doc_type: str = Field("sop", max_length=8)
+    university: Optional[str] = Field(None, max_length=200)
+    program: Optional[str] = Field(None, max_length=200)
+    study_level: Optional[str] = Field(None, max_length=60)
+    intake: Optional[str] = Field(None, max_length=60)
+    brief: Optional[str] = Field(None, max_length=4000)
+    # LOR only — whose voice the letter is written in.
+    recommender_type: Optional[str] = Field(None, max_length=32)
+    recommender_name: Optional[str] = Field(None, max_length=160)
+    recommender_title: Optional[str] = Field(None, max_length=160)
+    recommender_org: Optional[str] = Field(None, max_length=200)
+    recommender_email: Optional[str] = Field(None, max_length=254)
+    relationship_context: Optional[str] = Field(None, max_length=2000)
+
+
+class EnterpriseWritingRefineRequest(BaseModel):
+    instruction: str = Field(..., min_length=3, max_length=1000)
+
+
+def _writing_pricing(db: Session, organization_id: int) -> dict:
+    cost = credits.action_cost(WRITING_STUDIO_ACTION_KEY)
+    return {
+        "cost_credits": cost,
+        "can_afford": credits.can_afford(db, organization_id, WRITING_STUDIO_ACTION_KEY),
+    }
+
+
+def _writing_drafts_for_client(db: Session, organization_id: int, client_id: int) -> list:
+    """Latest version of each document chain, newest chain first."""
+    rows = (
+        db.query(models.EnterpriseClientWritingDraft)
+        .filter(
+            models.EnterpriseClientWritingDraft.organization_id == int(organization_id),
+            models.EnterpriseClientWritingDraft.client_id == int(client_id),
+        )
+        .order_by(models.EnterpriseClientWritingDraft.id.desc())
+        .all()
+    )
+    latest: dict[int, models.EnterpriseClientWritingDraft] = {}
+    for row in rows:
+        key = row.root_id or row.id
+        if key not in latest or int(row.version or 1) > int(latest[key].version or 1):
+            latest[key] = row
+    return sorted(latest.values(), key=lambda r: (r.root_id or r.id), reverse=True)
+
+
+def _writing_latest_of_root(
+    db: Session, organization_id: int, client_id: int, root_id: int
+) -> Optional[models.EnterpriseClientWritingDraft]:
+    return (
+        db.query(models.EnterpriseClientWritingDraft)
+        .filter(
+            models.EnterpriseClientWritingDraft.organization_id == int(organization_id),
+            models.EnterpriseClientWritingDraft.client_id == int(client_id),
+            models.EnterpriseClientWritingDraft.root_id == int(root_id),
+        )
+        .order_by(models.EnterpriseClientWritingDraft.version.desc())
+        .first()
+    )
+
+
+def _writing_defaults(db: Session, client: models.EnterpriseClient) -> dict:
+    """Prefill for the composer: the shortlist entries a counselor would actually write
+    for, with any admitted/applied university offered first."""
+    rows = (
+        db.query(models.EnterpriseClientUniversity)
+        .filter(models.EnterpriseClientUniversity.client_id == client.id)
+        .order_by(models.EnterpriseClientUniversity.created_at.desc())
+        .limit(30)
+        .all()
+    )
+    rank = {"admitted": 0, "applied": 1, "considering": 2, "rejected": 3}
+    rows.sort(key=lambda u: rank.get((u.status or "").lower(), 2))
+    return {
+        "intake": client.intake,
+        "country_code": client.destination_country_code,
+        "universities": [
+            {"id": u.id, "university_name": u.university_name, "program": u.program, "status": u.status}
+            for u in rows
+        ],
+    }
+
+
+@router.get("/clients/{client_id}/writing")
+def enterprise_client_writing_list(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Everything the Writing Studio tab needs on open: stored drafts (latest version of
+    each chain), the composer's reference data and prefill, and the credit price."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="clients.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    drafts = _writing_drafts_for_client(db, organization.id, client.id)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "ai_available": enterprise_writing.is_ai_configured(),
+        "catalog": enterprise_writing.catalog_payload(),
+        "defaults": _writing_defaults(db, client),
+        "pricing": _writing_pricing(db, organization.id),
+        "drafts": [enterprise_writing.serialize_draft(d, include_content=False) for d in drafts],
+        "active": enterprise_writing.serialize_draft(drafts[0]) if drafts else None,
+    }
+
+
+@router.get("/clients/{client_id}/writing/{root_id}/versions")
+def enterprise_client_writing_versions(
+    client_id: int,
+    root_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Every stored version of one document chain, oldest first."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="clients.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    rows = (
+        db.query(models.EnterpriseClientWritingDraft)
+        .filter(
+            models.EnterpriseClientWritingDraft.organization_id == organization.id,
+            models.EnterpriseClientWritingDraft.client_id == client.id,
+            models.EnterpriseClientWritingDraft.root_id == int(root_id),
+        )
+        .order_by(models.EnterpriseClientWritingDraft.version.asc())
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="That document could not be found.")
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "versions": [enterprise_writing.serialize_draft(r) for r in rows],
+    }
+
+
+def _writing_generate_or_502(runner, *, organization_id: int, client_id: int, what: str) -> dict:
+    """Run a Writing Studio model call, attributing token cost to the org and turning any
+    failure into a 502 BEFORE a credit is charged (the debit only happens on success)."""
+    usage_token = ai_usage.set_usage_account(organization_id=organization_id)
+    try:
+        return runner()
+    except Exception:
+        logger.exception("Writing Studio %s failed (org_id=%s, client_id=%s)",
+                         what, organization_id, client_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Rilono AI couldn't finish this draft. No credits were used — please try again.",
+        )
+    finally:
+        ai_usage.reset_usage_account(usage_token)
+
+
+@router.post("/clients/{client_id}/writing/generate")
+def enterprise_client_writing_generate(
+    client_id: int,
+    payload: EnterpriseWritingGenerateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Premium AI action: draft a new SOP or LOR for this client from their real dossier."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability=("ai.writing", "credits.spend")
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    _enforce_rate_limit_or_429(
+        request, scope="enterprise.writing_studio",
+        limit=ENTERPRISE_WRITING_RATE_LIMIT,
+        window_seconds=ENTERPRISE_WRITING_RATE_WINDOW_SECONDS,
+        extra_key=str(current_user.id),
+    )
+    # Validate the brief BEFORE checking service availability, so a missing recommender
+    # name always reports the fixable problem rather than being masked by a 503.
+    doc_type = enterprise_writing.normalize_doc_type(payload.doc_type)
+    university = (payload.university or "").strip() or None
+    program = (payload.program or "").strip() or None
+    recommender_name = (payload.recommender_name or "").strip() or None
+    if doc_type == "lor" and not recommender_name:
+        # Without a named recommender there is no letterhead and no signature block —
+        # the output would be an unusable letter, so this is rejected up front.
+        raise HTTPException(
+            status_code=400,
+            detail="Add the recommender's name — a letter of recommendation is written in their voice and signed by them.",
+        )
+    if doc_type == "sop" and not (university or program):
+        raise HTTPException(
+            status_code=400,
+            detail="Add the target university or program so the statement can be written for a specific course.",
+        )
+
+    if not enterprise_writing.is_ai_configured():
+        raise HTTPException(status_code=503, detail="The Writing Studio isn't available right now.")
+
+    # Hard-block an unaffordable run before spending any Gemini tokens.
+    credits.enforce_action_or_402(db, organization.id, WRITING_STUDIO_ACTION_KEY)
+
+    result = _writing_generate_or_502(
+        lambda: enterprise_writing.generate_draft(
+            db,
+            client=client,
+            doc_type=doc_type,
+            university=university,
+            program=program,
+            study_level=(payload.study_level or "").strip() or None,
+            intake=(payload.intake or "").strip() or None,
+            brief=(payload.brief or "").strip() or None,
+            recommender_type=payload.recommender_type,
+            recommender_name=recommender_name,
+            recommender_title=(payload.recommender_title or "").strip() or None,
+            recommender_org=(payload.recommender_org or "").strip() or None,
+            relationship_context=(payload.relationship_context or "").strip() or None,
+        ),
+        organization_id=organization.id, client_id=client.id, what="generation",
+    )
+
+    staff_name = current_user.full_name or current_user.email
+    charged = credits.action_cost(WRITING_STUDIO_ACTION_KEY)
+    draft = models.EnterpriseClientWritingDraft(
+        organization_id=organization.id,
+        client_id=client.id,
+        doc_type=doc_type,
+        version=1,
+        country_code=client.destination_country_code,
+        university=university,
+        program=program,
+        study_level=(payload.study_level or "").strip() or None,
+        intake=(payload.intake or "").strip() or client.intake,
+        recommender_type=(enterprise_writing.normalize_recommender_type(payload.recommender_type)
+                          if doc_type == "lor" else None),
+        recommender_name=recommender_name if doc_type == "lor" else None,
+        recommender_title=((payload.recommender_title or "").strip() or None) if doc_type == "lor" else None,
+        recommender_org=((payload.recommender_org or "").strip() or None) if doc_type == "lor" else None,
+        recommender_email=((payload.recommender_email or "").strip() or None) if doc_type == "lor" else None,
+        relationship_context=((payload.relationship_context or "").strip() or None) if doc_type == "lor" else None,
+        brief=(payload.brief or "").strip() or None,
+        instruction=None,
+        title=result["title"],
+        content_md=result["content_md"],
+        notes_md=result["notes_md"] or None,
+        word_count=result["word_count"],
+        model_used=result["model_used"],
+        credits_charged=charged,
+        created_by_user_id=current_user.id,
+        created_by_name=staff_name,
+    )
+    db.add(draft)
+    db.flush()
+    draft.root_id = draft.id  # version 1 roots its own chain
+    # Charge only after a successful draft — the row and the wallet commit together.
+    credits.charge_action(
+        db, organization.id, WRITING_STUDIO_ACTION_KEY,
+        user=current_user, reference_type="client", reference_id=client.id,
+        description=f"{'LOR' if doc_type == 'lor' else 'SOP'} draft — {client.full_name}",
+        commit=False,
+    )
+    db.commit()
+    db.refresh(draft)
+
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "draft": enterprise_writing.serialize_draft(draft),
+        "credits_charged": charged,
+        "coverage": result.get("coverage") or {},
+        "pricing": _writing_pricing(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id),
+    }
+
+
+@router.post("/clients/{client_id}/writing/{root_id}/refine")
+def enterprise_client_writing_refine(
+    client_id: int,
+    root_id: int,
+    payload: EnterpriseWritingRefineRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Premium AI action: revise a stored draft per the counselor's instruction, storing
+    the result as the next immutable version of the same chain."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability=("ai.writing", "credits.spend")
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    _enforce_rate_limit_or_429(
+        request, scope="enterprise.writing_studio",
+        limit=ENTERPRISE_WRITING_RATE_LIMIT,
+        window_seconds=ENTERPRISE_WRITING_RATE_WINDOW_SECONDS,
+        extra_key=str(current_user.id),
+    )
+    if not enterprise_writing.is_ai_configured():
+        raise HTTPException(status_code=503, detail="The Writing Studio isn't available right now.")
+
+    latest = _writing_latest_of_root(db, organization.id, client.id, root_id)
+    if not latest:
+        raise HTTPException(status_code=404, detail="That document could not be found.")
+
+    instruction = payload.instruction.strip()
+    credits.enforce_action_or_402(db, organization.id, WRITING_STUDIO_ACTION_KEY)
+
+    result = _writing_generate_or_502(
+        lambda: enterprise_writing.refine_draft(
+            db, client=client, latest=latest, instruction=instruction),
+        organization_id=organization.id, client_id=client.id, what="refinement",
+    )
+
+    charged = credits.action_cost(WRITING_STUDIO_ACTION_KEY)
+    draft = models.EnterpriseClientWritingDraft(
+        organization_id=organization.id,
+        client_id=client.id,
+        doc_type=latest.doc_type,
+        root_id=latest.root_id or latest.id,
+        version=int(latest.version or 1) + 1,
+        country_code=latest.country_code,
+        university=latest.university,
+        program=latest.program,
+        study_level=latest.study_level,
+        intake=latest.intake,
+        recommender_type=latest.recommender_type,
+        recommender_name=latest.recommender_name,
+        recommender_title=latest.recommender_title,
+        recommender_org=latest.recommender_org,
+        recommender_email=latest.recommender_email,
+        relationship_context=latest.relationship_context,
+        brief=latest.brief,
+        instruction=instruction,
+        title=result["title"],
+        content_md=result["content_md"],
+        notes_md=result["notes_md"] or None,
+        word_count=result["word_count"],
+        model_used=result["model_used"],
+        credits_charged=charged,
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(draft)
+    credits.charge_action(
+        db, organization.id, WRITING_STUDIO_ACTION_KEY,
+        user=current_user, reference_type="client", reference_id=client.id,
+        description=f"{'LOR' if latest.doc_type == 'lor' else 'SOP'} revision — {client.full_name}",
+        commit=False,
+    )
+    db.commit()
+    db.refresh(draft)
+
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "draft": enterprise_writing.serialize_draft(draft),
+        "credits_charged": charged,
+        "pricing": _writing_pricing(db, organization.id),
+        "wallet": credits.wallet_state(db, organization.id),
+    }
+
+
+@router.get("/clients/{client_id}/writing/{draft_id}/docx")
+def enterprise_client_writing_docx(
+    client_id: int,
+    draft_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Download one stored version as a formatted Word document. Free — the draft is
+    already paid for, so re-exporting it never calls the model or charges again."""
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="ai.writing")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=_role.ctx)
+    draft = (
+        db.query(models.EnterpriseClientWritingDraft)
+        .filter(
+            models.EnterpriseClientWritingDraft.id == int(draft_id),
+            models.EnterpriseClientWritingDraft.organization_id == organization.id,
+            models.EnterpriseClientWritingDraft.client_id == client.id,
+        )
+        .first()
+    )
+    if not draft:
+        raise HTTPException(status_code=404, detail="That document could not be found.")
+
+    try:
+        data = enterprise_writing.build_docx(
+            draft, client=client, organization_name=(organization.company_name or "").strip() or "Rilono")
+    except Exception:
+        logger.exception("Writing Studio Word export failed (draft_id=%s)", draft.id)
+        raise HTTPException(status_code=502, detail="Could not build the Word file. Please try again.")
+
+    filename = _safe_filename(enterprise_writing.docx_filename(draft, client))
+    return Response(
+        content=data,
+        media_type=DOCX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.delete("/clients/{client_id}/writing/{root_id}")
+def enterprise_client_writing_delete(
+    client_id: int,
+    root_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Delete a document and all its versions. Credits already spent are not refunded."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="ai.writing"
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    deleted = (
+        db.query(models.EnterpriseClientWritingDraft)
+        .filter(
+            models.EnterpriseClientWritingDraft.organization_id == organization.id,
+            models.EnterpriseClientWritingDraft.client_id == client.id,
+            models.EnterpriseClientWritingDraft.root_id == int(root_id),
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="That document could not be found.")
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "deleted_versions": deleted,
+    }
+
+
+# ===========================================================================
 # Mock visa interview (Gemini role-plays the visa officer)
 # ===========================================================================
 
@@ -7311,8 +9701,8 @@ def enterprise_interview_chat(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability=("interviews.run", "credits.spend"))
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.interview", limit=ENTERPRISE_INTERVIEW_RATE_LIMIT,
         window_seconds=ENTERPRISE_INTERVIEW_RATE_WINDOW_SECONDS, extra_key=str(current_user.id),
@@ -7369,8 +9759,8 @@ def enterprise_interview_feedback(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability=("interviews.run", "credits.spend"))
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.interview", limit=ENTERPRISE_INTERVIEW_RATE_LIMIT,
         window_seconds=ENTERPRISE_INTERVIEW_RATE_WINDOW_SECONDS, extra_key=str(current_user.id),
@@ -7418,8 +9808,8 @@ def enterprise_interview_sessions(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="interviews.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     rows = (
         db.query(models.EnterpriseInterviewSession)
         .filter(models.EnterpriseInterviewSession.client_id == client.id)
@@ -7441,8 +9831,8 @@ def enterprise_interview_session_detail(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="interviews.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     s = (
         db.query(models.EnterpriseInterviewSession)
         .filter(
@@ -7610,9 +10000,9 @@ def enterprise_create_interview_invite(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="interviews.invite"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     email = (client.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Add an email to this client before sending an interview link.")
@@ -7672,8 +10062,8 @@ def enterprise_get_interview_invite(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="interviews.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     invite = _latest_client_invite(db, organization.id, client.id)
     return {
         "permissions": _enterprise_permissions_for_role(role),
@@ -7689,9 +10079,9 @@ def enterprise_revoke_interview_invite(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="interviews.invite"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     db.query(models.EnterpriseInterviewInvite).filter(
         models.EnterpriseInterviewInvite.client_id == client.id,
         models.EnterpriseInterviewInvite.revoked.is_(False),
@@ -8081,9 +10471,9 @@ def enterprise_create_document_request(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="documents.request"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     email = (client.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Add an email to this client before requesting documents.")
@@ -8156,8 +10546,8 @@ def enterprise_get_document_request(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="documents.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     req = _latest_client_docreq(db, organization.id, client.id)
     return {
         "permissions": _enterprise_permissions_for_role(role),
@@ -8174,9 +10564,9 @@ def enterprise_revoke_document_request(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="documents.request"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     db.query(models.EnterpriseDocumentRequest).filter(
         models.EnterpriseDocumentRequest.client_id == client.id,
         models.EnterpriseDocumentRequest.revoked.is_(False),
@@ -8472,8 +10862,8 @@ def enterprise_client_universities_list(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """The client's shortlist + the destination context the UI tailors itself to."""
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="universities.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     rows = _client_universities_query(db, organization.id, client.id).all()
     from app import university_shortlist
 
@@ -8499,8 +10889,8 @@ def enterprise_client_universities_search(
 ):
     """Typeahead over the shared registry, scoped to THIS client's destination country,
     so a UK applicant never sees US-only schools."""
-    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, _role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="universities.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=_role.ctx)
 
     term = (q or "").strip()
     if len(term) < 2:
@@ -8541,9 +10931,9 @@ def enterprise_client_university_add(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="universities.manage"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     name = (payload.university_name or "").strip()
     if not name:
@@ -8596,9 +10986,9 @@ def enterprise_client_university_update(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="universities.manage"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     row = (
         db.query(models.EnterpriseClientUniversity)
         .filter(
@@ -8634,9 +11024,9 @@ def enterprise_client_university_delete(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="universities.manage"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     deleted = (
         db.query(models.EnterpriseClientUniversity)
         .filter(
@@ -8666,9 +11056,9 @@ def enterprise_client_university_recommend(
     pre-check → generate → fail without charging → charge ONLY on a usable result.
     """
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability=("ai.shortlist", "credits.spend")
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     _enforce_rate_limit_or_429(
         request=request,
@@ -8970,9 +11360,9 @@ def _build_client_portal_payload(db: Session, share: models.EnterpriseClientPort
             "updated_at": _iso(client.updated_at or client.created_at),
         },
         "status": client.status,
-        "stage": _stage_brief(client.status),
+        "stage": _stage_brief(client.status, client.destination_country_code),
         "held_from_status": getattr(client, "held_from_status", None),
-        "held_from_stage": _stage_brief(client.held_from_status) if getattr(client, "held_from_status", None) else None,
+        "held_from_stage": _stage_brief(client.held_from_status, client.destination_country_code) if getattr(client, "held_from_status", None) else None,
         "stages": [
             {k: s[k] for k in ("key", "label", "description", "order", "color")}
             for s in catalog.CLIENT_STAGES
@@ -9021,9 +11411,9 @@ def enterprise_create_portal_share(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="portal.share"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     email = (client.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Add an email to this client before sharing their portal.")
@@ -9078,8 +11468,8 @@ def enterprise_get_portal_share(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="clients.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     share = _latest_client_portal_share(db, organization.id, client.id)
     return {
         "permissions": _enterprise_permissions_for_role(role),
@@ -9095,9 +11485,9 @@ def enterprise_revoke_portal_share(
     current_user: models.User = Depends(get_current_active_user),
 ):
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="portal.share"
     )
-    client = _get_org_client_or_404(db, organization.id, client_id)
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     db.query(models.EnterpriseClientPortalShare).filter(
         models.EnterpriseClientPortalShare.client_id == client.id,
         models.EnterpriseClientPortalShare.revoked.is_(False),
@@ -9257,7 +11647,7 @@ def enterprise_course_catalog_meta(
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Filter options + per-country catalog stats for the Course Finder section."""
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="coursefinder.view")
     from app import course_catalog
 
     stats = course_catalog.catalog_stats(db)
@@ -9266,6 +11656,12 @@ def enterprise_course_catalog_meta(
         "countries": stats["countries"],
         "disciplines": course_catalog.DISCIPLINES,
         "degree_levels": course_catalog.DEGREE_LEVELS,
+        # Advanced-filter vocabularies. Served rather than duplicated in the frontend so
+        # every option the UI offers is an option the browse query is known to accept.
+        "intakes": course_catalog.INTAKE_BUCKETS,
+        "sorts": course_catalog.CATALOG_SORTS,
+        "university_types": course_catalog.UNIVERSITY_TYPES,
+        "gre_filters": course_catalog.GRE_FILTERS,
         "cost_credits": credits.action_cost(COURSE_FINDER_ACTION_KEY),
         "ai_available": course_catalog.ai_available(),
     }
@@ -9279,12 +11675,29 @@ def enterprise_course_catalog_browse(
     discipline: Optional[str] = None,
     q: Optional[str] = None,
     max_tuition: Optional[int] = None,
+    # --- advanced filters (all optional; validated + clamped by course_catalog) ---
+    min_tuition: Optional[int] = None,
+    require_tuition: Optional[bool] = None,
+    max_ielts: Optional[float] = None,
+    max_toefl: Optional[int] = None,
+    tests_include_unknown: Optional[bool] = None,
+    gre: Optional[str] = None,
+    intake: Optional[str] = None,
+    max_duration: Optional[int] = None,
+    no_app_fee: Optional[bool] = None,
+    has_deadline: Optional[bool] = None,
+    max_qs_rank: Optional[int] = None,
+    uni_type: Optional[str] = None,
+    city: Optional[str] = None,
+    verified_only: Optional[bool] = None,
+    scholarships_only: Optional[bool] = None,
+    sort: Optional[str] = None,
     offset: int = 0,
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
     """FREE catalog browse — universities with their matching courses (paged)."""
-    _require_enterprise_membership(db=db, user=current_user, request=request)
+    _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="coursefinder.view")
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.course_catalog_browse",
         limit=120, window_seconds=600, extra_key=str(current_user.id),
@@ -9305,6 +11718,26 @@ def enterprise_course_catalog_browse(
     # would put the entire country in one response.
     page_size = COURSE_CATALOG_BROWSE_PAGE_SIZE
     safe_offset = max(0, min(int(offset or 0), 100_000))
+    # One validation gate for the deep filters: unknown enum values and out-of-range
+    # numbers are dropped (broader search) instead of 400-ing a stale bookmark.
+    advanced = course_catalog.normalize_catalog_filters({
+        "min_tuition": min_tuition,
+        "require_tuition": require_tuition,
+        "max_ielts": max_ielts,
+        "max_toefl": max_toefl,
+        "tests_include_unknown": tests_include_unknown,
+        "gre": gre,
+        "intake": intake,
+        "max_duration_months": max_duration,
+        "no_app_fee": no_app_fee,
+        "has_deadline": has_deadline,
+        "max_qs_rank": max_qs_rank,
+        "university_type": uni_type,
+        "city": city,
+        "verified_only": verified_only,
+        "scholarships_only": scholarships_only,
+        "sort": sort,
+    })
 
     rows, total = course_catalog.query_catalog(
         db,
@@ -9313,6 +11746,7 @@ def enterprise_course_catalog_browse(
         discipline=(discipline or "").strip() or None,
         q=(q or "").strip() or None,
         max_tuition=safe_max_tuition,
+        advanced=advanced,
         limit_universities=page_size,
         offset_universities=safe_offset,
     )
@@ -9324,6 +11758,10 @@ def enterprise_course_catalog_browse(
         "offset": safe_offset,
         "page_size": page_size,
         "has_more": (safe_offset + len(rows)) < total,
+        # Echo of the filters as the server understood them (post validation/clamping) —
+        # the one place to look when a result set doesn't match what the UI is showing.
+        "applied_filters": advanced,
+        "sort": advanced.get("sort") or "rank",
     }
 
 
@@ -9350,11 +11788,11 @@ def enterprise_course_finder_recommend(
     Deep Scan: rate-limit → wallet pre-check → generate → fail WITHOUT charging →
     persist result + debit atomically."""
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability=("ai.coursefinder", "credits.spend")
     )
     client = None
     if payload.client_id:
-        client = _get_org_client_or_404(db, organization.id, payload.client_id)
+        client = _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
 
     _enforce_rate_limit_or_429(
         request=request, scope="enterprise.course_finder",
@@ -9486,11 +11924,23 @@ def enterprise_course_finder_recs_list(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="coursefinder.view")
     query = (
         db.query(models.EnterpriseCourseFinderRec)
         .filter(models.EnterpriseCourseFinderRec.organization_id == organization.id)
     )
+    # Stored shortlists carry the client's name and who ran them, and `?client_id=` is a
+    # caller-supplied probe — so scope before that filter is applied. Shortlists run without a
+    # client attached are workspace-level and stay visible to everyone.
+    if not role.ctx.is_org_scope:
+        query = query.filter(
+            or_(
+                models.EnterpriseCourseFinderRec.client_id.is_(None),
+                models.EnterpriseCourseFinderRec.client_id.in_(
+                    scoped_client_ids_subq(db, organization.id, role.ctx)
+                ),
+            )
+        )
     if client_id:
         query = query.filter(models.EnterpriseCourseFinderRec.client_id == int(client_id))
     rows = (
@@ -9511,7 +11961,7 @@ def enterprise_course_finder_rec_detail(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="coursefinder.view")
     row = (
         db.query(models.EnterpriseCourseFinderRec)
         .filter(
@@ -9522,6 +11972,10 @@ def enterprise_course_finder_rec_detail(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Shortlist not found.")
+    # Re-resolve the client this shortlist belongs to, so a scope-limited member cannot read a
+    # colleague's shortlist (and copy it onto their own client) by walking rec ids.
+    if row.client_id:
+        _get_org_client_or_404(db, organization.id, row.client_id, ctx=role.ctx)
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "rec": _serialize_course_finder_rec(row),
@@ -9543,7 +11997,7 @@ def enterprise_course_finder_save_to_client(
 ):
     """Copy one recommendation onto a client's Universities shortlist (free)."""
     _, organization, role = _require_enterprise_membership(
-        db=db, user=current_user, request=request, require_edit_data=True
+        db=db, user=current_user, request=request, require_capability="universities.manage"
     )
     row = (
         db.query(models.EnterpriseCourseFinderRec)
@@ -9558,7 +12012,7 @@ def enterprise_course_finder_save_to_client(
     target_client_id = payload.client_id or row.client_id
     if not target_client_id:
         raise HTTPException(status_code=400, detail="Pick a client to save this recommendation to.")
-    client = _get_org_client_or_404(db, organization.id, int(target_client_id))
+    client = _get_org_client_or_404(db, organization.id, int(target_client_id), ctx=role.ctx)
 
     try:
         items = json.loads(row.recommendations) if row.recommendations else []
@@ -9615,3 +12069,867 @@ def enterprise_course_finder_save_to_client(
         "entry": _serialize_client_university(entry),
         "client_id": client.id,
     }
+
+
+# ============================================================================
+# ACCESS CONTROL: offices, roles, member access, audit log
+#
+# Thin endpoint wrappers only. Every rule — validation, privilege-escalation checks, scope
+# clamping, the owner and last-admin guards, audit writes and notifications — lives in
+# app/enterprise_team.py, so there is exactly one place to read (and one place to fix) the
+# question "who is allowed to change whose access".
+#
+# One transaction per request: the service functions never commit, the endpoint does.
+# ============================================================================
+
+
+class EnterpriseBranchWriteRequest(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=120)
+    code: Optional[str] = Field(default=None, max_length=16)
+    city: Optional[str] = Field(default=None, max_length=80)
+    state_region: Optional[str] = Field(default=None, max_length=80)
+    country_code: Optional[str] = Field(default=None, max_length=4)
+    address_line: Optional[str] = Field(default=None, max_length=240)
+    phone: Optional[str] = Field(default=None, max_length=40)
+    email: Optional[str] = Field(default=None, max_length=200)
+    timezone: Optional[str] = Field(default=None, max_length=60)
+
+
+class EnterpriseBranchArchiveRequest(BaseModel):
+    reassign_clients_to_branch_id: Optional[int] = None
+    reassign_members_to_branch_id: Optional[int] = None
+
+
+class EnterpriseBranchReassignRequest(BaseModel):
+    target_branch_id: int
+    client_ids: Optional[List[int]] = None
+
+
+class EnterpriseRoleWriteRequest(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=80)
+    description: Optional[str] = Field(default=None, max_length=240)
+    capabilities: Optional[List[str]] = None
+    data_scope: Optional[str] = Field(default=None, max_length=12)
+    based_on_role_key: Optional[str] = Field(default=None, max_length=40)
+
+
+class EnterpriseRoleArchiveRequest(BaseModel):
+    move_members_to: Optional[str] = Field(default=None, max_length=40)
+
+
+class EnterpriseRoleDuplicateRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=80)
+
+
+class EnterpriseMemberAccessRequest(BaseModel):
+    role_key: Optional[str] = Field(default=None, max_length=40)
+    custom_role_id: Optional[int] = None
+    data_scope: Optional[str] = Field(default=None, max_length=12)
+    capability_grants: Optional[List[str]] = None
+    capability_denies: Optional[List[str]] = None
+    branch_ids: Optional[List[int]] = None
+    primary_branch_id: Optional[int] = None
+
+
+class EnterpriseMemberProfileRequest(BaseModel):
+    full_name: Optional[str] = Field(default=None, max_length=120)
+    job_title: Optional[str] = Field(default=None, max_length=120)
+    phone: Optional[str] = Field(default=None, max_length=40)
+
+
+class EnterpriseMemberDeactivateRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=240)
+    reassign_clients_to_user_id: Optional[int] = None
+    reassign_events_to_user_id: Optional[int] = None
+
+
+class EnterpriseMemberReactivateRequest(BaseModel):
+    role_key: Optional[str] = Field(default=None, max_length=40)
+    custom_role_id: Optional[int] = None
+    data_scope: Optional[str] = Field(default=None, max_length=12)
+    branch_ids: Optional[List[int]] = None
+
+
+class EnterpriseTeamBulkRequest(BaseModel):
+    user_ids: List[int] = Field(..., min_length=1, max_length=100)
+    action: str = Field(..., min_length=3, max_length=24)
+    role_key: Optional[str] = Field(default=None, max_length=40)
+    custom_role_id: Optional[int] = None
+    data_scope: Optional[str] = Field(default=None, max_length=12)
+    branch_ids: Optional[List[int]] = None
+
+
+class EnterpriseTransferOwnershipRequest(BaseModel):
+    target_user_id: int
+    confirm_email: str = Field(..., min_length=3, max_length=200)
+
+
+def _branches_payload(db: Session, organization, ctx, *, include_archived: bool = False) -> list[dict]:
+    """Offices with their member and client counts.
+
+    The counts are withheld for offices outside a scope-limited member's own set: exact client
+    volumes per office are precisely what the office partition exists to keep separate.
+    """
+    rows = team_svc.list_branches(db, organization.id, include_archived=include_archived)
+    client_counts = team_svc.branch_client_counts(db, organization.id)
+    member_counts = team_svc.branch_member_counts(db, organization.id)
+    visible_counts = ctx is None or ctx.is_org_scope
+    out = []
+    for branch in rows:
+        own = visible_counts or (ctx is not None and int(branch.id) in ctx.branch_ids)
+        out.append(team_svc.serialize_branch(
+            branch,
+            member_count=member_counts.get(int(branch.id), 0) if own else 0,
+            client_count=client_counts.get(int(branch.id), 0) if own else 0,
+        ))
+    return out
+
+
+def _with_capability_aliases(payload: dict) -> dict:
+    """Add flat capability lists alongside `capability_states`.
+
+    `capability_states` is the authoritative shape — one state per capability key
+    (inherited / granted / blocked / off) — but the UI also wants the three lists directly to
+    render "from your role", "added for you" and "switched off for you" without walking the map on
+    every paint. Derived here rather than duplicated in the service layer, so the two can never
+    disagree.
+    """
+    states = payload.get("capability_states") or {}
+    inherited = sorted(k for k, v in states.items() if v == "inherited")
+    granted = sorted(k for k, v in states.items() if v == "granted")
+    blocked = sorted(k for k, v in states.items() if v == "blocked")
+    payload["role_capabilities"] = inherited
+    payload["inherited"] = inherited
+    payload["added"] = granted
+    payload["capability_grants"] = granted
+    payload["blocked"] = blocked
+    payload["capability_denies"] = blocked
+    role = payload.get("role") or {}
+    payload["role_description"] = role.get("description")
+    payload["role_label"] = role.get("label")
+    return payload
+
+
+@router.get("/team/meta")
+def enterprise_team_meta(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Everything the access-control UI is built from: the capability registry, the role presets,
+    the workspace's own roles, its offices, and what the CALLER is allowed to hand out."""
+    membership, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.view"
+    )
+    return team_svc.team_meta_payload(
+        db, organization=organization, membership=membership, ctx=role.ctx
+    )
+
+
+@router.get("/team/my-access")
+def enterprise_team_my_access(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """What the signed-in member's own access actually is.
+
+    Deliberately available to EVERY member, with no capability gate: telling someone "ask an
+    admin for access" is useless if they can't see what they already have, which permissions were
+    switched off for them individually, or which clients they're limited to.
+    """
+    membership, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request
+    )
+    payload = _with_capability_aliases(team_svc.my_access_payload(
+        db, organization=organization, membership=membership, user=current_user, ctx=role.ctx
+    ))
+    payload["access"] = access.access_payload(role.ctx)
+    return payload
+
+
+# ---- Offices ---------------------------------------------------------------
+
+
+@router.get("/branches")
+def enterprise_list_branches(
+    request: Request,
+    include_archived: bool = False,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="branches.view"
+    )
+    show_archived = bool(include_archived) and role.ctx.has("branches.manage")
+    return {
+        "branches": _branches_payload(db, organization, role.ctx, include_archived=show_archived),
+        "permissions": _enterprise_permissions_for_role(role),
+        "access": access.access_payload(role.ctx),
+        "limits": {"max_branches": access.MAX_BRANCHES},
+    }
+
+
+@router.post("/branches")
+def enterprise_create_branch(
+    payload: EnterpriseBranchWriteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="branches.manage"
+    )
+    branch = team_svc.create_branch(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        data=payload.model_dump(exclude_unset=True),
+    )
+    db.commit()
+    return {
+        "message": f"{branch.name} added.",
+        "branch": team_svc.serialize_branch(branch),
+        "branches": _branches_payload(db, organization, role.ctx),
+    }
+
+
+@router.patch("/branches/{branch_id}")
+def enterprise_update_branch(
+    branch_id: int,
+    payload: EnterpriseBranchWriteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="branches.manage"
+    )
+    branch = team_svc.get_org_branch_or_404(db, organization.id, branch_id)
+    branch = team_svc.update_branch(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        branch=branch, data=payload.model_dump(exclude_unset=True),
+    )
+    db.commit()
+    return {
+        "message": "Office updated.",
+        "branch": team_svc.serialize_branch(branch),
+        "branches": _branches_payload(db, organization, role.ctx),
+    }
+
+
+@router.post("/branches/{branch_id}/set-default")
+def enterprise_set_default_branch(
+    branch_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="branches.manage"
+    )
+    branch = team_svc.get_org_branch_or_404(db, organization.id, branch_id)
+    team_svc.set_default_branch(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx, branch=branch,
+    )
+    db.commit()
+    return {
+        "message": f"{branch.name} is now the default office.",
+        "branches": _branches_payload(db, organization, role.ctx),
+    }
+
+
+@router.post("/branches/{branch_id}/archive")
+def enterprise_archive_branch(
+    branch_id: int,
+    payload: EnterpriseBranchArchiveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Archive an office. Refuses with a 409 carrying the counts when it still holds clients or
+    staff and no destination was chosen, so the UI can offer a picker instead of orphaning them."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="branches.manage"
+    )
+    branch = team_svc.get_org_branch_or_404(db, organization.id, branch_id)
+    result = team_svc.archive_branch(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx, branch=branch,
+        reassign_clients_to_branch_id=payload.reassign_clients_to_branch_id,
+        reassign_members_to_branch_id=payload.reassign_members_to_branch_id,
+    )
+    db.commit()
+    return {
+        "message": f"{branch.name} archived.",
+        "branches": _branches_payload(db, organization, role.ctx, include_archived=True),
+        **result,
+    }
+
+
+@router.post("/branches/{branch_id}/reactivate")
+def enterprise_reactivate_branch(
+    branch_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="branches.manage"
+    )
+    branch = team_svc.get_org_branch_or_404(db, organization.id, branch_id)
+    branch = team_svc.reactivate_branch(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx, branch=branch,
+    )
+    db.commit()
+    return {
+        "message": f"{branch.name} reopened.",
+        "branches": _branches_payload(db, organization, role.ctx, include_archived=True),
+    }
+
+
+@router.post("/branches/{branch_id}/reassign-clients")
+def enterprise_reassign_branch_clients(
+    branch_id: int,
+    payload: EnterpriseBranchReassignRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Move clients between offices. Also the merge operation: move everything, then archive."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request,
+        require_capability=("branches.manage", "clients.set_branch"),
+    )
+    branch = team_svc.get_org_branch_or_404(db, organization.id, branch_id)
+    target = team_svc.get_org_branch_or_404(db, organization.id, payload.target_branch_id)
+    moved = team_svc.reassign_branch_clients(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        branch=branch, target_branch=target, client_ids=payload.client_ids,
+        # A scope-limited actor may only move clients they can actually see.
+        scope_filter=(lambda q: scope_client_query(q, role.ctx)),
+    )
+    db.commit()
+    return {
+        "message": (f"{moved} client{'s' if moved != 1 else ''} moved to {target.name}."
+                    if moved else "No clients needed moving."),
+        "moved": moved,
+        "branches": _branches_payload(db, organization, role.ctx),
+    }
+
+
+@router.get("/branches/{branch_id}/members")
+def enterprise_branch_members(
+    branch_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="branches.view"
+    )
+    branch = team_svc.get_org_branch_or_404(db, organization.id, branch_id)
+    return {
+        "branch": team_svc.serialize_branch(branch),
+        "members": team_svc.branch_members(db, organization.id, branch),
+    }
+
+
+# ---- Roles ----------------------------------------------------------------
+
+
+@router.get("/roles")
+def enterprise_list_roles(
+    request: Request,
+    include_archived: bool = False,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.view"
+    )
+    show_archived = bool(include_archived) and role.ctx.has("roles.manage")
+    registry = access.capability_registry_payload()
+    return {
+        "presets": registry.get("role_presets", []),
+        "custom_roles": team_svc.list_roles_payload(
+            db, organization.id, include_archived=show_archived
+        ),
+        "capabilities": registry.get("capabilities", []),
+        "sections": registry.get("sections", []),
+        "limits": {"max_custom_roles": access.MAX_CUSTOM_ROLES},
+        "actor_capabilities": sorted(
+            access.CAPABILITY_KEYS if role.ctx.is_owner else role.ctx.capabilities
+        ),
+        "access": access.access_payload(role.ctx),
+    }
+
+
+@router.post("/roles")
+def enterprise_create_role(
+    payload: EnterpriseRoleWriteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="roles.manage"
+    )
+    created = team_svc.create_role(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        data=payload.model_dump(exclude_unset=True),
+    )
+    db.commit()
+    return {
+        "message": f"{created.name} created.",
+        "role": team_svc.serialize_role(created),
+        "custom_roles": team_svc.list_roles_payload(db, organization.id),
+    }
+
+
+@router.patch("/roles/{role_id}")
+def enterprise_update_role(
+    role_id: int,
+    payload: EnterpriseRoleWriteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="roles.manage"
+    )
+    target = team_svc.get_org_role_or_404(db, organization.id, role_id)
+    target = team_svc.update_role(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        role=target, data=payload.model_dump(exclude_unset=True),
+    )
+    db.commit()
+    return {
+        "message": f"{target.name} updated.",
+        "role": team_svc.serialize_role(target),
+        "custom_roles": team_svc.list_roles_payload(db, organization.id),
+        "members": _list_organization_members(db, organization.id),
+    }
+
+
+@router.post("/roles/{role_id}/duplicate")
+def enterprise_duplicate_role(
+    role_id: int,
+    payload: EnterpriseRoleDuplicateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="roles.manage"
+    )
+    source = team_svc.get_org_role_or_404(db, organization.id, role_id)
+    created = team_svc.duplicate_role(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        role=source, name=payload.name,
+    )
+    db.commit()
+    return {
+        "message": f"{created.name} created.",
+        "role": team_svc.serialize_role(created),
+        "custom_roles": team_svc.list_roles_payload(db, organization.id),
+    }
+
+
+@router.post("/roles/{role_id}/archive")
+def enterprise_archive_role(
+    role_id: int,
+    payload: EnterpriseRoleArchiveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Archive a role. 409s with the member count while anyone is still on it, unless a
+    destination role is supplied — a role is never hard-deleted, so history stays readable."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="roles.manage"
+    )
+    target = team_svc.get_org_role_or_404(db, organization.id, role_id)
+    result = team_svc.archive_role(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        role=target, move_members_to=payload.move_members_to,
+    )
+    db.commit()
+    return {
+        "message": f"{target.name} archived.",
+        "custom_roles": team_svc.list_roles_payload(db, organization.id),
+        "members": _list_organization_members(db, organization.id),
+        **result,
+    }
+
+
+# ---- Member access --------------------------------------------------------
+
+
+@router.get("/team/users/{member_user_id}/access")
+def enterprise_member_access(
+    member_user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """One member's full effective access, with each permission marked inherited / added / blocked.
+    This is where the heavy capability list lives, so /team can stay light."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.view"
+    )
+    membership = team_svc.get_org_membership_or_404(db, organization.id, member_user_id)
+    user = db.query(models.User).filter(models.User.id == int(member_user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Organization member not found.")
+    payload = _with_capability_aliases(team_svc.member_access_payload(
+        db, organization=organization, membership=membership, user=user
+    ))
+    payload["actor_capabilities"] = sorted(
+        access.CAPABILITY_KEYS if role.ctx.is_owner else role.ctx.capabilities
+    )
+    payload["can_edit"] = role.ctx.has("roles.manage")
+    return payload
+
+
+@router.patch("/team/users/{member_user_id}/access")
+def enterprise_update_member_access(
+    member_user_id: int,
+    payload: EnterpriseMemberAccessRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="roles.manage"
+    )
+    membership = team_svc.get_org_membership_or_404(db, organization.id, member_user_id)
+    result = team_svc.update_member_access(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        membership=membership, data=payload.model_dump(exclude_unset=True),
+    )
+    db.commit()
+    changed = result.get("changed") or []
+    return {
+        "message": "Access updated." if changed else "Nothing to change.",
+        "member": result.get("member"),
+        "changed": changed,
+        "members": _list_organization_members(db, organization.id),
+    }
+
+
+@router.patch("/team/users/{member_user_id}/profile")
+def enterprise_update_member_profile(
+    member_user_id: int,
+    payload: EnterpriseMemberProfileRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Name, job title and phone. Anyone may edit their OWN entry; editing a colleague's needs
+    team.manage."""
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    is_self = int(member_user_id) == int(current_user.id)
+    if not is_self and not role.ctx.has("team.manage"):
+        raise HTTPException(status_code=403, detail=access.denied_detail("team.manage"))
+    membership = team_svc.get_org_membership_or_404(db, organization.id, member_user_id)
+    user = db.query(models.User).filter(models.User.id == int(member_user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Organization member not found.")
+    result = team_svc.update_member_profile(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        membership=membership, user=user, data=payload.model_dump(exclude_unset=True),
+    )
+    db.commit()
+    return {
+        "message": "Details saved.",
+        "member": result.get("member"),
+        "members": _list_organization_members(db, organization.id),
+    }
+
+
+@router.post("/team/users/{member_user_id}/deactivate")
+def enterprise_deactivate_member(
+    member_user_id: int,
+    payload: EnterpriseMemberDeactivateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Turn off someone's access and sign them out.
+
+    409s with their open record counts when they still own clients or reminders and no successor
+    was named — offboarding must not silently orphan a caseload.
+    """
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.manage"
+    )
+    membership = team_svc.get_org_membership_or_404(db, organization.id, member_user_id)
+    user = db.query(models.User).filter(models.User.id == int(member_user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Organization member not found.")
+    result = team_svc.deactivate_member(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        membership=membership, user=user, reason=payload.reason,
+        reassign_clients_to_user_id=payload.reassign_clients_to_user_id,
+        reassign_events_to_user_id=payload.reassign_events_to_user_id,
+    )
+    db.commit()
+    return {
+        "message": f"{user.full_name or user.email} no longer has access.",
+        "members": _list_organization_members(db, organization.id),
+        **result,
+    }
+
+
+@router.get("/team/users/{member_user_id}/offboard-preview")
+def enterprise_member_offboard_preview(
+    member_user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """What this person still owns, so the deactivate dialog can ask about it up front rather
+    than after a failed attempt."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.manage"
+    )
+    team_svc.get_org_membership_or_404(db, organization.id, member_user_id)
+    return team_svc.member_offboard_counts(db, organization.id, member_user_id)
+
+
+@router.post("/team/users/{member_user_id}/reactivate")
+def enterprise_reactivate_member(
+    member_user_id: int,
+    payload: EnterpriseMemberReactivateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.manage"
+    )
+    membership = team_svc.get_org_membership_or_404(db, organization.id, member_user_id)
+    user = db.query(models.User).filter(models.User.id == int(member_user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Organization member not found.")
+    result = team_svc.reactivate_member(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        membership=membership, user=user, data=payload.model_dump(exclude_unset=True),
+    )
+    db.commit()
+    return {
+        "message": f"{user.full_name or user.email} can sign in again.",
+        "members": _list_organization_members(db, organization.id),
+        **result,
+    }
+
+
+@router.post("/team/users/{member_user_id}/resend-invite")
+def enterprise_resend_member_invite(
+    member_user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Mint a fresh password-setup link and email the invitation again."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.manage"
+    )
+    _enforce_rate_limit_or_429(
+        request=request,
+        scope="enterprise.team_invite",
+        limit=ENTERPRISE_TEAM_INVITE_RATE_LIMIT,
+        window_seconds=ENTERPRISE_TEAM_INVITE_RATE_WINDOW_SECONDS,
+        extra_key=f"org:{organization.id}:user:{current_user.id}",
+    )
+    membership = team_svc.get_org_membership_or_404(db, organization.id, member_user_id)
+    user = db.query(models.User).filter(models.User.id == int(member_user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Organization member not found.")
+    if not membership.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail="Restore their access first, then resend the invitation.",
+        )
+
+    password_setup_token = generate_verification_token()
+    user.password_reset_token = hash_token(password_setup_token)
+    user.password_reset_token_expires = datetime.utcnow() + timedelta(
+        hours=ENTERPRISE_INVITE_PASSWORD_SETUP_EXPIRES_HOURS
+    )
+    db.commit()
+
+    portal_url = _build_enterprise_portal_url(organization.subdomain_slug, request)
+    password_setup_url = (
+        f"{ENTERPRISE_PASSWORD_SETUP_BASE_URL}/reset-password"
+        f"?token={quote(password_setup_token, safe='')}"
+    )
+    sent = False
+    try:
+        sent = send_enterprise_team_invite_email(
+            invitee_email=user.email,
+            invitee_name=user.full_name,
+            organization_name=organization.company_name,
+            role=access.role_label_for(
+                access.normalize_role_key(
+                    getattr(membership, "role_key", None), getattr(membership, "role", None)
+                )
+            ),
+            portal_url=portal_url,
+            set_password_url=password_setup_url,
+            password_setup_expires_hours=ENTERPRISE_INVITE_PASSWORD_SETUP_EXPIRES_HOURS,
+            invited_by_name=current_user.full_name,
+            invited_by_email=current_user.email,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to resend enterprise invite (org_id=%s, user_id=%s)", organization.id, user.id
+        )
+    return {
+        "message": (
+            f"Invitation resent to {user.email}."
+            if sent
+            else "Couldn't send the email just now. They can request a password link from the sign-in screen."
+        ),
+        "invite_email_sent": sent,
+    }
+
+
+@router.post("/team/bulk")
+def enterprise_team_bulk(
+    payload: EnterpriseTeamBulkRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Apply one change to several members.
+
+    Every per-member guard from the single-member endpoints runs again for each id, and anything
+    that fails is reported in `skipped` with a reason rather than failing the whole batch or —
+    worse — succeeding silently for some and not others.
+    """
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="team.manage"
+    )
+    action = (payload.action or "").strip().lower()
+    if action in {"set_role", "set_scope"} and not role.ctx.has("roles.manage"):
+        raise HTTPException(status_code=403, detail=access.denied_detail("roles.manage"))
+    if action in {"set_branches", "add_branch"} and not role.ctx.has("branches.manage"):
+        raise HTTPException(status_code=403, detail=access.denied_detail("branches.manage"))
+    if action not in {"set_role", "set_scope", "set_branches", "add_branch", "deactivate"}:
+        raise HTTPException(status_code=400, detail="Unknown bulk action.")
+
+    applied: list[int] = []
+    skipped: list[dict] = []
+    for user_id in list(dict.fromkeys(payload.user_ids)):
+        try:
+            membership = team_svc.get_org_membership_or_404(db, organization.id, user_id)
+            if action == "deactivate":
+                user = db.query(models.User).filter(models.User.id == int(user_id)).first()
+                if not user:
+                    raise HTTPException(status_code=404, detail="Member not found.")
+                team_svc.deactivate_member(
+                    db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+                    membership=membership, user=user,
+                )
+            else:
+                data: dict = {}
+                if action == "set_role":
+                    data["role_key"] = payload.role_key
+                    if payload.custom_role_id is not None:
+                        data["custom_role_id"] = payload.custom_role_id
+                elif action == "set_scope":
+                    data["data_scope"] = payload.data_scope
+                    if payload.branch_ids is not None:
+                        data["branch_ids"] = payload.branch_ids
+                elif action == "set_branches":
+                    data["branch_ids"] = payload.branch_ids or []
+                elif action == "add_branch":
+                    existing = team_svc.member_branch_ids(db, organization.id).get(
+                        int(membership.id), []
+                    )
+                    data["branch_ids"] = sorted(set(existing) | set(payload.branch_ids or []))
+                team_svc.update_member_access(
+                    db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+                    membership=membership, data={k: v for k, v in data.items() if v is not None},
+                )
+            # Flush per member: the service layer runs bulk UPDATE statements, and this session
+            # has autoflush off — a later statement would otherwise not see this member's
+            # pending writes and could undo them.
+            db.flush()
+            applied.append(int(user_id))
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                detail = detail.get("message") or "Couldn't apply this change."
+            skipped.append({"user_id": int(user_id), "reason": str(detail)})
+        except Exception:
+            logger.exception("Bulk team action failed (org=%s, user=%s)", organization.id, user_id)
+            skipped.append({"user_id": int(user_id), "reason": "Something went wrong for this member."})
+
+    if applied:
+        db.commit()
+    else:
+        db.rollback()
+    return {
+        "message": (
+            f"Updated {len(applied)} member{'s' if len(applied) != 1 else ''}."
+            + (f" {len(skipped)} skipped." if skipped else "")
+        ),
+        "applied": applied,
+        "skipped": skipped,
+        "members": _list_organization_members(db, organization.id),
+    }
+
+
+@router.post("/organization/transfer-ownership")
+def enterprise_transfer_ownership(
+    payload: EnterpriseTransferOwnershipRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Hand the workspace to someone else.
+
+    Gated on the owner-only capability OR — the recovery path — on a team.manage holder acting on
+    an owner whose access has already been switched off. Without that second route, a workspace
+    whose founder has left could never transfer ownership, accept a new DPA version or set a
+    payout account again.
+    """
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request)
+    target_membership = team_svc.get_org_membership_or_404(db, organization.id, payload.target_user_id)
+    target_user = db.query(models.User).filter(models.User.id == int(payload.target_user_id)).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Organization member not found.")
+    if not (role.ctx.has("org.transfer_ownership") or role.ctx.has("team.manage")):
+        raise HTTPException(status_code=403, detail=access.denied_detail("org.transfer_ownership"))
+    result = team_svc.transfer_ownership(
+        db, organization=organization, actor_user=current_user, actor_ctx=role.ctx,
+        target_membership=target_membership, target_user=target_user,
+        confirm_email=payload.confirm_email,
+    )
+    db.commit()
+    return {
+        "message": f"{target_user.full_name or target_user.email} is now the workspace owner.",
+        "members": _list_organization_members(db, organization.id),
+        **result,
+    }
+
+
+@router.get("/team/access-log")
+def enterprise_access_log(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    action: Optional[str] = None,
+    target_user_id: Optional[int] = None,
+    days: int = 90,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Who changed whose access, and what it was before."""
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="audit.view"
+    )
+    return team_svc.access_log_payload(
+        db, organization=organization, ctx=role.ctx, limit=limit, offset=offset,
+        action=action, target_user_id=target_user_id, days=days,
+    )

@@ -166,6 +166,16 @@ ACTIONS = {
         ),
         "credits": _int_env("ENTERPRISE_CREDIT_COST_COURSE_FINDER", 5),
     },
+    "writing_studio": {
+        "key": "writing_studio",
+        "label": "SOP / LOR draft",
+        "description": (
+            "Rilono AI writes a personalized, submission-ready Statement of Purpose or "
+            "Letter of Recommendation for the selected client — grounded in their real "
+            "dossier and exported as a formatted Word document. Refinements cost the same."
+        ),
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_WRITING_STUDIO", 1),
+    },
     "ai_copilot": {
         "key": "ai_copilot",
         "label": "Rilono AI assistant",
@@ -233,6 +243,7 @@ ACTION_SOURCE_MAP = {
     "ai_copilot": ["enterprise_copilot", "enterprise_copilot_extension"],
     "university_match": ["enterprise_university_shortlist"],
     "course_finder": ["enterprise_course_finder"],
+    "writing_studio": ["enterprise_writing_studio"],
 }
 
 # Every Gemini source the enterprise platform incurs cost on (billed or not).
@@ -244,6 +255,7 @@ ENTERPRISE_COST_SOURCES = [
     "enterprise_copilot", "enterprise_copilot_extension",
     "enterprise_university_shortlist",
     "enterprise_course_finder", "course_catalog_refresh",
+    "enterprise_writing_studio",
 ]
 
 
@@ -843,10 +855,24 @@ def wallet_state(db: Session, organization_id: int) -> dict:
             "free": INTERVIEW_FREE_STAFF_PREVIEWS,
             "remaining": staff_interview_preview_remaining(db, organization_id),
         },
+        # What an agency gets without spending a credit. Surfaced on the pricing
+        # tab so the free tier is visible next to the prices, not buried in the
+        # per-action descriptions.
+        "free_tier": {
+            "deep_scans_per_client": DEEP_SCAN_FREE_SCANS_PER_CLIENT,
+            "deep_scans_monthly_cap": DEEP_SCAN_FREE_MONTHLY_ORG_CAP,
+            "interview_previews": INTERVIEW_FREE_STAFF_PREVIEWS,
+            "interview_previews_left": staff_interview_preview_remaining(db, organization_id),
+            "copilot_msgs_daily": COPILOT_FREE_DAILY,
+            "copilot_msgs_left_today": max(0, COPILOT_FREE_DAILY - _copilot_used_today(wallet)),
+            "copilot_msgs_per_credit": COPILOT_MSGS_PER_CREDIT,
+            "free_clients": FREE_STUDENT_LIMIT,
+        },
     }
 
 
-def usage_breakdown(db: Session, organization_id: int, *, member_limit: int = 12) -> dict:
+def usage_breakdown(db: Session, organization_id: int, *, member_limit: int = 12,
+                    include_by_member: bool = True) -> dict:
     """How an org's credits have actually been spent — the in-app usage tracker.
 
     Aggregates the debit ledger so consultancies can see *where* credits went
@@ -922,6 +948,10 @@ def usage_breakdown(db: Session, organization_id: int, *, member_limit: int = 12
     by_member.sort(key=lambda r: r["credits_spent"], reverse=True)
     if member_limit and len(by_member) > member_limit:
         by_member = by_member[:member_limit]
+    # Same reasoning as spend_analytics: who-spent-what across colleagues is not something a
+    # scope-limited member should be able to read off the billing screen.
+    if not include_by_member:
+        by_member = []
 
     # --- Last 30 days spend ------------------------------------------------
     since = datetime.utcnow() - timedelta(days=30)
@@ -943,6 +973,400 @@ def usage_breakdown(db: Session, organization_id: int, *, member_limit: int = 12
 
 def get_package(package_key: str | None) -> Optional[dict]:
     return PACKAGES.get(str(package_key or "").strip().lower())
+
+
+# ---------------------------------------------------------------------------
+# Org-facing spend analytics — "where did our credits actually go?"
+#
+# usage_breakdown() above is the compact all-time summary the wallet payload
+# carries. This is the full report behind the Credits → Analytics tab: the same
+# feature/member split but time-boxed, plus the two questions an agency owner
+# actually asks — WHO were the credits spent on (per client) and WHEN (timeline)
+# — followed by burn rate, runway, and the free allowances they still have.
+# ---------------------------------------------------------------------------
+
+# Selectable windows for the analytics tab. 0 = all time.
+ANALYTICS_RANGES = [7, 30, 90, 365, 0]
+DEFAULT_ANALYTICS_DAYS = 30
+
+# Ledger rows read when bucketing the timeline. Every headline number comes from
+# a SQL aggregate, so an org past this cap still gets correct totals — only the
+# chart's oldest buckets would clip, and the response stays bounded.
+ANALYTICS_TIMELINE_ROW_CAP = 20000
+
+# Clients / members listed individually before the tail rolls into "Others".
+ANALYTICS_CLIENT_LIMIT = 12
+ANALYTICS_MEMBER_LIMIT = 12
+
+
+def normalize_analytics_days(days) -> int:
+    """Coerce a requested window to one of the supported ranges (default 30d)."""
+    try:
+        value = int(days)
+    except (TypeError, ValueError):
+        return DEFAULT_ANALYTICS_DAYS
+    return value if value in ANALYTICS_RANGES else DEFAULT_ANALYTICS_DAYS
+
+
+def _timeline_bucket(days: int) -> str:
+    """Bucket width that keeps a chart readable: ~7-90 bars, never hundreds."""
+    if 0 < days <= 90:
+        return "day"
+    if 0 < days <= 400:
+        return "week"
+    return "month"
+
+
+def _bucket_key(dt: datetime, bucket: str) -> str:
+    if bucket == "day":
+        return dt.strftime("%Y-%m-%d")
+    if bucket == "week":
+        return (dt - timedelta(days=dt.weekday())).strftime("%Y-%m-%d")  # week starts Monday
+    return dt.strftime("%Y-%m")
+
+
+def _bucket_sequence(start: datetime, end: datetime, bucket: str) -> list[str]:
+    """Every bucket key from start..end inclusive, so quiet days still draw a
+    zero bar (a chart that silently skips them misreads as continuous usage)."""
+    keys: list[str] = []
+    if bucket == "month":
+        year, month = start.year, start.month
+        while (year, month) <= (end.year, end.month):
+            keys.append(f"{year:04d}-{month:02d}")
+            year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        return keys
+    step = timedelta(days=7 if bucket == "week" else 1)
+    cursor = datetime.strptime(_bucket_key(start, bucket), "%Y-%m-%d")
+    last = _bucket_key(end, bucket)
+    while True:
+        key = cursor.strftime("%Y-%m-%d")
+        keys.append(key)
+        if key >= last or len(keys) > 800:  # guard: never build an unbounded axis
+            break
+        cursor += step
+    return keys
+
+
+def spend_analytics(
+    db: Session,
+    organization_id: int,
+    *,
+    days: int = DEFAULT_ANALYTICS_DAYS,
+    client_limit: int = ANALYTICS_CLIENT_LIMIT,
+    member_limit: int = ANALYTICS_MEMBER_LIMIT,
+    include_by_member: bool = True,
+    ctx=None,
+) -> dict:
+    """The full credit-spend report for one organization, over a time window.
+
+    Every figure is scoped to `days` (0 = all time) EXCEPT the burn-rate block,
+    which is deliberately a fixed 30-day rate — a runway estimate must not swing
+    just because someone flipped the chart to "last 7 days".
+
+    `include_by_member=False` drops the per-colleague breakdown. That block is a
+    staff-productivity report, so it is withheld from members whose own record
+    access is limited to one office or their own caseload.
+    """
+    T = models.EnterpriseCreditTransaction
+    C = models.EnterpriseClient
+    org_id = int(organization_id)
+    days = normalize_analytics_days(days)
+    now = datetime.utcnow()
+    since = (now - timedelta(days=days)) if days > 0 else None
+
+    def _scoped(query, *, debits_only: bool = True):
+        query = query.filter(T.organization_id == org_id)
+        if debits_only:
+            query = query.filter(T.type == "debit")
+        if since is not None:
+            query = query.filter(T.created_at >= since)
+        return query
+
+    def _share(part: int, whole: int) -> float:
+        return round((part / whole) * 100, 1) if whole > 0 else 0.0
+
+    # --- Headline totals ----------------------------------------------------
+    spent_credits, action_count = (
+        _scoped(db.query(func.coalesce(func.sum(-T.credits), 0), func.count(T.id))).one()
+    )
+    spent_credits = int(spent_credits or 0)
+    action_count = int(action_count or 0)
+
+    added_credits = int(
+        _scoped(db.query(func.coalesce(func.sum(T.credits), 0)), debits_only=False)
+        .filter(T.credits > 0).scalar() or 0
+    )
+    first_activity = (
+        db.query(func.min(T.created_at)).filter(T.organization_id == org_id).scalar()
+    )
+
+    # --- Where the credits went (per billable feature) ----------------------
+    action_rows = _scoped(
+        db.query(T.action_key, func.count(T.id), func.coalesce(func.sum(-T.credits), 0))
+    ).group_by(T.action_key).all()
+    raw_actions = {
+        (key or ""): {"units": int(units or 0), "credits_spent": int(spent or 0)}
+        for key, units, spent in action_rows
+    }
+    by_action = []
+    for key, action in ACTIONS.items():
+        stat = raw_actions.pop(key, {"units": 0, "credits_spent": 0})
+        by_action.append({
+            "key": key,
+            "label": action["label"],
+            "price_credits": int(action["credits"]),
+            "units": stat["units"],
+            "credits_spent": stat["credits_spent"],
+            "value_display": format_inr(credits_to_paise(stat["credits_spent"])),
+            "share_pct": _share(stat["credits_spent"], spent_credits),
+        })
+    leftover_units = sum(v["units"] for v in raw_actions.values())
+    leftover_credits = sum(v["credits_spent"] for v in raw_actions.values())
+    if leftover_units or leftover_credits:
+        by_action.append({
+            "key": "other", "label": "Other usage", "price_credits": 0,
+            "units": leftover_units, "credits_spent": leftover_credits,
+            "value_display": format_inr(credits_to_paise(leftover_credits)),
+            "share_pct": _share(leftover_credits, spent_credits),
+        })
+    by_action.sort(key=lambda r: r["credits_spent"], reverse=True)
+
+    # --- Who spent them (team member) ---------------------------------------
+    member_rows = _scoped(
+        db.query(
+            T.created_by_user_id,
+            func.max(T.created_by_name),
+            func.count(T.id),
+            func.coalesce(func.sum(-T.credits), 0),
+            func.max(T.created_at),
+        )
+    ).group_by(T.created_by_user_id).all()
+    by_member = []
+    for uid, name, units, spent, last_at in member_rows:
+        spent = int(spent or 0)
+        by_member.append({
+            "user_id": uid,
+            "name": (name or "Unknown / system"),
+            "units": int(units or 0),
+            "credits_spent": spent,
+            "value_display": format_inr(credits_to_paise(spent)),
+            "share_pct": _share(spent, spent_credits),
+            "last_used_at": last_at,
+        })
+    by_member.sort(key=lambda r: r["credits_spent"], reverse=True)
+    member_total = len(by_member)
+    if member_limit and member_total > member_limit:
+        by_member = by_member[:member_limit]
+    if not include_by_member:
+        by_member = []
+        member_total = 0
+
+    # --- On WHOM they were spent (per client) -------------------------------
+    # Per-client actions carry reference_type='client'; org-wide ones (the AI
+    # assistant, a client-less Course Finder search) have no client and are
+    # reported separately rather than silently dropped from the totals.
+    # Restricting only the NAME lookup below is not enough: a row keyed to an out-of-scope client
+    # still reports a real spend against a real client id, which is a usable oracle. The scope is
+    # therefore applied to the transaction rows themselves.
+    _scope_ids = None
+    if ctx is not None and getattr(ctx, "scope_kind", "all") != "all":
+        from app import enterprise_access as _access
+
+        _scope_ids = [
+            int(row[0])
+            for row in _access.scope_client_query(
+                db.query(C.id).filter(C.organization_id == org_id), ctx
+            ).all()
+        ] or [-1]
+
+    def client_scope(q):
+        q = _scoped(q).filter(T.reference_type == "client", T.reference_id.isnot(None))
+        if _scope_ids is not None:
+            q = q.filter(T.reference_id.in_(_scope_ids))
+        return q
+    client_rows = client_scope(
+        db.query(
+            T.reference_id,
+            func.count(T.id),
+            func.coalesce(func.sum(-T.credits), 0),
+            func.max(T.created_at),
+        )
+    ).group_by(T.reference_id).all()
+
+    per_client_actions: dict[int, dict[str, int]] = {}
+    for cid, akey, spent in client_scope(
+        db.query(T.reference_id, T.action_key, func.coalesce(func.sum(-T.credits), 0))
+    ).group_by(T.reference_id, T.action_key).all():
+        per_client_actions.setdefault(int(cid), {})[(akey or "other")] = int(spent or 0)
+
+    client_names: dict[int, str] = {}
+    ids = [int(r[0]) for r in client_rows]
+    if ids:
+        for cid, name in (
+            db.query(C.id, C.full_name)
+            .filter(C.organization_id == org_id, C.id.in_(ids)).all()
+        ):
+            client_names[int(cid)] = name
+
+    by_client = []
+    for cid, units, spent, last_at in client_rows:
+        cid = int(cid)
+        spent = int(spent or 0)
+        breakdown = sorted(
+            (
+                {
+                    "key": k,
+                    "label": (ACTIONS.get(k, {}) or {}).get("label", "Other usage"),
+                    "credits_spent": v,
+                }
+                for k, v in (per_client_actions.get(cid) or {}).items()
+            ),
+            key=lambda r: r["credits_spent"], reverse=True,
+        )
+        by_client.append({
+            "client_id": cid,
+            "name": client_names.get(cid) or "Deleted client",
+            "exists": cid in client_names,
+            "units": int(units or 0),
+            "credits_spent": spent,
+            "value_display": format_inr(credits_to_paise(spent)),
+            "share_pct": _share(spent, spent_credits),
+            "last_used_at": last_at,
+            "actions": breakdown,
+        })
+    by_client.sort(key=lambda r: r["credits_spent"], reverse=True)
+    clients_touched = len(by_client)
+    client_attributed = sum(r["credits_spent"] for r in by_client)
+    if client_limit and clients_touched > client_limit:
+        tail = by_client[client_limit:]
+        by_client = by_client[:client_limit]
+        by_client.append({
+            "client_id": None,
+            "name": f"{len(tail)} other clients",
+            "exists": False,
+            "units": sum(r["units"] for r in tail),
+            "credits_spent": sum(r["credits_spent"] for r in tail),
+            "value_display": format_inr(credits_to_paise(sum(r["credits_spent"] for r in tail))),
+            "share_pct": _share(sum(r["credits_spent"] for r in tail), spent_credits),
+            "last_used_at": None,
+            "actions": [],
+            "is_rollup": True,
+        })
+    unattributed = max(0, spent_credits - client_attributed)
+
+    # --- WHEN they were spent (timeline) ------------------------------------
+    bucket = _timeline_bucket(days)
+    rows = (
+        _scoped(db.query(T.created_at, T.credits))
+        .order_by(T.created_at.desc())
+        .limit(ANALYTICS_TIMELINE_ROW_CAP)
+        .all()
+    )
+    buckets: dict[str, dict[str, int]] = {}
+    oldest = None
+    for created_at, credit_delta in rows:
+        stamp = _naive(created_at) or now
+        oldest = stamp if (oldest is None or stamp < oldest) else oldest
+        slot = buckets.setdefault(_bucket_key(stamp, bucket), {"credits": 0, "units": 0})
+        slot["credits"] += int(-(credit_delta or 0))
+        slot["units"] += 1
+    span_start = since or oldest or now
+    timeline = [
+        {
+            "key": key,
+            "credits": (buckets.get(key) or {}).get("credits", 0),
+            "units": (buckets.get(key) or {}).get("units", 0),
+        }
+        for key in _bucket_sequence(span_start, now, bucket)
+    ]
+    peak = max((b["credits"] for b in timeline), default=0)
+    busiest = next((b for b in timeline if b["credits"] == peak and peak > 0), None)
+
+    # --- Burn rate & runway (always a 30-day rate — see docstring) ----------
+    spent_30d = int(
+        db.query(func.coalesce(func.sum(-T.credits), 0))
+        .filter(
+            T.organization_id == org_id, T.type == "debit",
+            T.created_at >= now - timedelta(days=30),
+        ).scalar() or 0
+    )
+    wallet = get_or_create_wallet(db, org_id, commit=False)
+    balance = int(wallet.balance_credits)
+    daily_burn = round(spent_30d / 30.0, 2)
+    days_left = int(balance / daily_burn) if daily_burn > 0 else None
+    runs_out_on = (now + timedelta(days=days_left)).date().isoformat() if days_left is not None else None
+
+    # --- Free allowances still on the table ---------------------------------
+    free_scans_used = (
+        int(getattr(wallet, "deep_scan_free_used", 0) or 0)
+        if getattr(wallet, "deep_scan_free_month", None) == _month_str() else 0
+    )
+    previews_used = int(getattr(wallet, "interview_staff_previews_used", 0) or 0)
+    copilot_today = _copilot_used_today(wallet)
+    free_credits_value = (
+        free_scans_used * action_cost("deep_scan")
+        + previews_used * action_cost("mock_interview")
+    )
+
+    return {
+        "range": {
+            "days": days,
+            "label": "All time" if days == 0 else f"Last {days} days",
+            "since": (since.isoformat() if since else None),
+            "until": now.isoformat(),
+            "options": ANALYTICS_RANGES,
+        },
+        "summary": {
+            "spent_credits": spent_credits,
+            "spent_display": format_inr(credits_to_paise(spent_credits)),
+            "added_credits": added_credits,
+            "action_count": action_count,
+            "avg_credits_per_action": round(spent_credits / action_count, 1) if action_count else 0,
+            "clients_touched": clients_touched,
+            "avg_credits_per_client": round(client_attributed / clients_touched, 1) if clients_touched else 0,
+            "members_active": member_total,
+            "unattributed_credits": unattributed,
+            "first_activity_at": (first_activity.isoformat() if hasattr(first_activity, "isoformat") else first_activity),
+            "top_action": (by_action[0] if by_action and by_action[0]["credits_spent"] > 0 else None),
+            "top_member": (by_member[0] if by_member and by_member[0]["credits_spent"] > 0 else None),
+            "top_client": (by_client[0] if by_client and by_client[0]["credits_spent"] > 0 else None),
+        },
+        "by_action": by_action,
+        "by_member": by_member,
+        "by_client": by_client,
+        "timeline": {
+            "bucket": bucket,
+            "points": timeline,
+            "peak_credits": peak,
+            "busiest_key": (busiest or {}).get("key"),
+            "truncated": len(rows) >= ANALYTICS_TIMELINE_ROW_CAP,
+        },
+        "burn": {
+            "spent_last_30d_credits": spent_30d,
+            "daily_credits": daily_burn,
+            "daily_display": format_inr(int(round(PAISE_PER_CREDIT * daily_burn))),
+            "monthly_credits": round(daily_burn * 30, 1),
+            "balance_credits": balance,
+            "days_remaining": days_left,
+            "runs_out_on": runs_out_on,
+            "low_balance": balance < (action_cost("mock_interview") or 1),
+        },
+        "allowances": {
+            "deep_scan_free_per_client": DEEP_SCAN_FREE_SCANS_PER_CLIENT,
+            "deep_scan_free_monthly_cap": DEEP_SCAN_FREE_MONTHLY_ORG_CAP,
+            "deep_scan_free_used_this_month": free_scans_used,
+            "deep_scan_free_left_this_month": max(0, DEEP_SCAN_FREE_MONTHLY_ORG_CAP - free_scans_used),
+            "interview_previews_free": INTERVIEW_FREE_STAFF_PREVIEWS,
+            "interview_previews_used": previews_used,
+            "interview_previews_left": max(0, INTERVIEW_FREE_STAFF_PREVIEWS - previews_used),
+            "copilot_free_daily": COPILOT_FREE_DAILY,
+            "copilot_used_today": copilot_today,
+            "copilot_left_today": max(0, COPILOT_FREE_DAILY - copilot_today),
+            "copilot_msgs_per_credit": COPILOT_MSGS_PER_CREDIT,
+            "free_credits_value": free_credits_value,
+            "free_value_display": format_inr(credits_to_paise(free_credits_value)),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 """
 Student-visa & destination-country catalog for the Rilono enterprise platform.
 
-Rilono Enterprise is focused exclusively on STUDENT / education visas for the six
+Rilono Enterprise is focused exclusively on STUDENT / education visas for the ten
 most popular study destinations. This module is the single source of truth for:
   * The (single) visa category — student
   * Destination countries, their iconic landmark, flag and brand gradient
@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
+
+from app import enterprise_client_fields as client_fields
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +135,508 @@ CLIENT_STAGE_MAP = {item["key"]: item for item in CLIENT_STAGES}
 CLIENT_STAGE_KEYS = {item["key"] for item in CLIENT_STAGES}
 DEFAULT_CLIENT_STAGE = STAGE_NEW_LEAD
 
+
+# ---------------------------------------------------------------------------
+# Destination-specific stage WORDING
+# ---------------------------------------------------------------------------
+# The stage KEYS, ORDER and COLORS above are structural: they are stored on the client
+# row, and drive the kanban columns, filter chips and analytics across a whole org, so
+# they are the same for every destination and must stay that way.
+#
+# What the stages are CALLED, though, is destination-specific. The generic set is
+# US/UK-shaped and misleads elsewhere: a UAE case has no "Application Submitted" to a
+# consulate (the university's PRO files an entry permit with ICP/GDRFA), and its
+# "Biometrics / Appointment" is an Emirates ID capture and medical fitness test taken
+# INSIDE the country after arrival. Ditto the Netherlands, where the recognised sponsor
+# — not the student — files with the IND.
+#
+# So label/description resolve per destination while everything else stays fixed.
+# Only the differences are listed; anything omitted keeps the generic wording above.
+ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
+    "US": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry logged after the first consultation — intended university, "
+                           "program and F-1 intake still being scoped.",
+        },
+        "documents": {
+            "label": "I-20 & Documents",
+            "description": "SEVP school issues the I-20 against accepted financial evidence; SEVIS "
+                           "ID, funds figure and program start date recorded.",
+        },
+        "submitted": {
+            "label": "DS-160 & Fees Paid",
+            "description": "DS-160 filed for the chosen consular post, with the SEVIS I-901 and MRV "
+                           "visa fees paid and receipts on file.",
+        },
+        "appointment": {
+            "label": "OFC & Visa Interview",
+            "description": "Fingerprints and photo taken at the OFC/VAC, and the consular interview "
+                           "slot booked at the embassy or consulate.",
+        },
+        "decision": {
+            "label": "Awaiting CEAC Status",
+            "description": "Officer's counter outcome logged; CEAC tracked through Administrative "
+                           "Processing, plus any 221(g) slip or document request.",
+        },
+        "approved": {
+            "label": "F-1 Visa Stamped",
+            "description": "Visa foil printed in the passport and the passport returned — "
+                           "issue/expiry dates, entries and annotation recorded.",
+        },
+        "rejected": {
+            "label": "Visa Refused",
+            "description": "Refused at the counter — most often 214(b) non-immigrant intent; "
+                           "officer's stated reason and reapply plan captured.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused — waiting on the client, funds, a fresh I-20 or a deferred "
+                           "intake before the case moves again.",
+        },
+    },
+    "CA": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry received — log the first consultation and the target province "
+                           "or territory before any filing work starts.",
+        },
+        "documents": {
+            "label": "LOA, PAL & Funds",
+            "description": "Securing the DLI Letter of Acceptance, PAL/TAL (the CAQ carries it in "
+                           "Quebec) and proof of funds — GIC or bank evidence — plus language "
+                           "scores and the tuition deposit.",
+        },
+        "submitted": {
+            "label": "Submitted to IRCC",
+            "description": "Study permit application filed online in the IRCC portal — fees paid, "
+                           "UCI and application number recorded, IMM 5476 on file.",
+        },
+        "appointment": {
+            "label": "Biometrics & Medical",
+            "description": "Biometrics Instruction Letter issued — biometrics given at a VAC within "
+                           "the deadline, plus the panel-physician medical exam (IME).",
+        },
+        "decision": {
+            "label": "IRCC Review & PPR",
+            "description": "IRCC assessing the file: watch the portal for additional-document "
+                           "requests, then the passport request (PPR) and passport handover to the "
+                           "VAC.",
+        },
+        "approved": {
+            "label": "POE Letter & TRV/eTA",
+            "description": "Approved — student holds the Port of Entry Letter of Introduction plus "
+                           "TRV counterfoil or eTA; CBSA issues the study permit on arrival.",
+        },
+        "rejected": {
+            "label": "Refused",
+            "description": "IRCC refusal letter received — order GCMS notes, debrief the grounds, "
+                           "then choose between reapplying and Federal Court judicial review.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused — funds or GIC not ready, PAL/LOA pending, intake deferred or "
+                           "student undecided; reason logged with a follow-up date.",
+        },
+    },
+    "UK": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry received — first consultation booked, course level and target "
+                           "UK sponsors being scoped.",
+        },
+        "documents": {
+            "label": "CAS & Financial Evidence",
+            "description": "Sponsor issues the CAS; maintenance funds held the full 28 days, "
+                           "tuition deposit paid, ATAS certificate where the course needs one.",
+        },
+        "submitted": {
+            "label": "Filed with UKVI",
+            "description": "Student route form submitted online; visa fee and IHS paid, GWF / UAN "
+                           "reference issued.",
+        },
+        "appointment": {
+            "label": "Biometrics Enrolment",
+            "description": "Biometrics and documents given at a VFS Global or TLScontact centre — "
+                           "UKVCAS only when switching inside the UK — or identity verified in the "
+                           "UK Immigration: ID Check app.",
+        },
+        "decision": {
+            "label": "Awaiting UKVI Decision",
+            "description": "With UKVI caseworkers — track the standard or priority SLA and any "
+                           "interview or further-information request.",
+        },
+        "approved": {
+            "label": "eVisa Granted",
+            "description": "Student permission granted — eVisa-only since 15 Jul 2025: confirm the "
+                           "UKVI account and share code work; only courses of 6 months or "
+                           "less still get a passport vignette.",
+        },
+        "rejected": {
+            "label": "Refused / Admin Review",
+            "description": "Refusal notice cites an Immigration Rules paragraph; the administrative "
+                           "review window is short, otherwise plan a reapplication.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused — usually waiting on the CAS, the 28-day funds seasoning, ATAS "
+                           "clearance or the client themselves.",
+        },
+    },
+    "AU": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "First consultation held — capture the intended course and AQF level, "
+                           "preferred institutions and city before opening the file.",
+        },
+        "documents": {
+            "label": "CoE, OSHC & Documents",
+            "description": "Secure the CoE and CRICOS code, OSHC policy, Genuine Student statement, "
+                           "English score and evidence of funds in AUD.",
+        },
+        "submitted": {
+            "label": "Lodged in ImmiAccount",
+            "description": "Subclass 500 lodged online — record the TRN, visa application charge "
+                           "receipt, applicant's location at lodgement and any dependants.",
+        },
+        "appointment": {
+            "label": "Medicals & Biometrics",
+            "description": "Post-lodgement health exam at a panel clinic against the HAP ID, plus "
+                           "biometrics at a collection centre if the Department requests them.",
+        },
+        "decision": {
+            "label": "Awaiting Decision",
+            "description": "Case with the Department of Home Affairs — track ImmiAccount status and "
+                           "answer any s56 request for more information by its due date.",
+        },
+        "approved": {
+            "label": "Subclass 500 Granted",
+            "description": "Electronic grant notification issued — log the grant number, stay-until "
+                           "date, first-entry deadline and visa conditions; no visa label.",
+        },
+        "rejected": {
+            "label": "Refused",
+            "description": "Refusal received — log the ground; if ART review rights apply, diarise "
+                           "the tribunal deadline, otherwise plan a fresh lodgement.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused — deferred intake, funds or CoE not ready, or waiting on the "
+                           "student; record the reason and the resume date.",
+        },
+    },
+    "DE": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry logged — programme type, admission status and whether this "
+                           "student needs an APS certificate for Germany.",
+        },
+        "documents": {
+            "label": "Documents & Sperrkonto",
+            "description": "APS certificate, Zulassungsbescheid, blocked account (Sperrkonto) "
+                           "funded to the annual minimum and German health insurance arranged.",
+        },
+        "submitted": {
+            "label": "Filed with German Mission",
+            "description": "Application filed with the Auslandsvertretung via the Consular Services "
+                           "Portal / VIDEX form, and the visa fee paid.",
+        },
+        "appointment": {
+            "label": "Embassy Appointment",
+            "description": "Personal appearance at the German mission or VFS: originals lodged, "
+                           "biometrics captured, passport usually retained by the mission.",
+        },
+        "decision": {
+            "label": "Awaiting Decision",
+            "description": "Mission reviews the file, often forwarding it to the local "
+                           "Ausländerbehörde for consent; further-information requests are common "
+                           "here.",
+        },
+        "approved": {
+            "label": "National D Visa Issued",
+            "description": "National (D) visa sticker in the passport for entry — student then "
+                           "registers in Germany and converts it to a residence permit.",
+        },
+        "rejected": {
+            "label": "Refused / Klage",
+            "description": "Ablehnungsbescheid issued — remonstration was abolished 1 Jul 2025, so "
+                           "the routes are a Klage at the Verwaltungsgericht Berlin within one "
+                           "month of service, or a stronger fresh application.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused — waiting on an appointment slot, APS or blocked-account "
+                           "funding, or the student deferring to a later semester.",
+        },
+    },
+    "IE": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry logged; check whether the student's nationality needs an Irish "
+                           "visa at all, plus intended ILEP course, level and college.",
+        },
+        "documents": {
+            "label": "Offer, Fees & Funds",
+            "description": "Letter of Acceptance from an ILEP-listed programme, tuition paid or "
+                           "held in escrow, EUR 10,000 living funds evidenced and private medical "
+                           "insurance.",
+        },
+        "submitted": {
+            "label": "AVATS Form Submitted",
+            "description": "AVATS online application completed and the visa fee paid; summary "
+                           "sheet, passport and supporting documents then go to the visa office.",
+        },
+        "appointment": {
+            "label": "Lodgement & Biometrics",
+            "description": "Passport and original documents lodged at VFS or the embassy; "
+                           "fingerprints taken only where that visa office collects biometrics.",
+        },
+        "decision": {
+            "label": "Awaiting Decision",
+            "description": "Visa office reviewing the file: track AVATS status and the weekly "
+                           "decision lists, and answer any further-documents request before its "
+                           "deadline.",
+        },
+        "approved": {
+            "label": "Visa Granted & Stamp 2",
+            "description": "Study visa sticker issued in the passport; the student travels, then "
+                           "registers in Ireland for the IRP card carrying Stamp 2 permission.",
+        },
+        "rejected": {
+            "label": "Refused / Appeal",
+            "description": "Refusal letter issued with reason codes; one free written appeal to the "
+                           "Visa Appeals Officer within 2 months, or rebuild the case and re-apply.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused: intake deferred, funds not yet seasoned, or waiting on the "
+                           "student or college to come back.",
+        },
+    },
+    "FR": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry logged — confirm whether Études en France is compulsory and fix "
+                           "the route: DAP, Parcoursup or EEF, for a named rentrée.",
+        },
+        "documents": {
+            "label": "Études en France Dossier",
+            "description": "Études en France dossier, entretien pédagogique and its avis, resources "
+                           "and 3-month accommodation — closed by the end-of-procedure email.",
+        },
+        "submitted": {
+            "label": "France-Visas Filed",
+            "description": "France-Visas form validated online for the VLS-TS and the consular fee "
+                           "settled — the dossier itself reaches the post at the appointment.",
+        },
+        "appointment": {
+            "label": "Lodgement & Biometrics",
+            "description": "File and passport handed in at VFS, TLScontact or Capago; biometrics "
+                           "captured, receipt issued, passport retained until the decision.",
+        },
+        "decision": {
+            "label": "Awaiting Decision",
+            "description": "Under examination at the post with no public tracker — poll the "
+                           "provider portal, answer document requests fast, follow the passport "
+                           "back.",
+        },
+        "approved": {
+            "label": "VLS-TS Issued & Validated",
+            "description": "Long-stay visa collected, then validated on ANEF within 3 months of "
+                           "arrival — the VLS-TS itself serves as the residence permit.",
+        },
+        "rejected": {
+            "label": "Refused / CRRV Appeal",
+            "description": "Reasoned refusal, or two months' silence; the mandatory CRRV appeal to "
+                           "the visa-refusals commission in Nantes goes by registered post within "
+                           "30 days of notification.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused on a named blocker — Études en France and DAP cut-offs are "
+                           "annual, so a stalled file quietly costs a whole rentrée.",
+        },
+    },
+    "ES": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry logged: study route under art. 52, course length, and whether "
+                           "the file goes to a consulate abroad or an Oficina de Extranjería.",
+        },
+        "documents": {
+            "label": "Carta de Admisión & Docs",
+            "description": "Carta de admisión secured; living funds at 100% of IPREM, health "
+                           "insurance, police-clearance (penales) and medical certificates, "
+                           "apostilles and sworn translations assembled.",
+        },
+        "submitted": {
+            "label": "Solicitud Lodged",
+            "order": 4,
+            "description": "Solicitud completed and the fees settled — consular tasa plus the "
+                           "790/052 authorisation fee — with the número de solicitud recorded from "
+                           "the receipt.",
+        },
+        "appointment": {
+            "label": "Cita Previa & Lodgement",
+            "order": 3,
+            "description": "Passport and originals handed over at the cita previa, plus a "
+                           "comparecencia (personal interview) if summoned; no prints on the D "
+                           "route — VIS is for Schengen C.",
+        },
+        "decision": {
+            "label": "Awaiting Resolución",
+            "description": "Two waits: the estancia authorisation in 7 days (no answer means "
+                           "refused), then the consulate's decision within a month — a subsanación "
+                           "asks you to correct the file inside 10 days.",
+        },
+        "approved": {
+            "label": "Visado Tipo D & TIE",
+            "description": "Tipo D visa issued with the NIE printed on it — collected in person "
+                           "within 2 months, then entry to Spain and, on stays over 6 months, TIE "
+                           "huellas within a month of arrival.",
+        },
+        "rejected": {
+            "label": "Refused / Recurso",
+            "description": "Resolución denegatoria notified — one month for a recurso de "
+                           "reposición, two for the contencioso-administrativo, or refile "
+                           "corrected.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused — admission, funds, cita previa availability or the client; next "
+                           "follow-up date set.",
+        },
+    },
+    "NL": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry received — check the institution is an IND recognised sponsor "
+                           "(erkend referent) and whether the nationality needs an MVV.",
+        },
+        "documents": {
+            "label": "Documents & Funding",
+            "description": "Studielink enrolment, living-cost funds transferred to the sponsor, "
+                           "antecedents certificate (7601) and TB declaration of intent (7603).",
+        },
+        "submitted": {
+            "label": "Sponsor Filed with IND",
+            "description": "The recognised sponsor lodges the TEV application (MVV plus residence "
+                           "permit) with the IND; the zaaknummer is issued now, the V-number "
+                           "arrives with the decision.",
+        },
+        "appointment": {
+            "label": "MVV Appointment",
+            "order": 5,
+            "description": "Biometrics and MVV collection at a Dutch mission or VFS — booked only "
+                           "once the IND approves; MVV-exempt nationalities skip this step.",
+        },
+        "decision": {
+            "label": "Awaiting IND Decision",
+            "order": 4,
+            "description": "IND assesses the sponsor's file; the legal limit is 90 days but most "
+                           "student cases decide far sooner. Updates come via the sponsor.",
+        },
+        "approved": {
+            "label": "Residence Permit Card",
+            "description": "MVV used to enter, residence card collected at the IND desk, BRP "
+                           "registration and BSN done, GGD TB screening where required.",
+        },
+        "rejected": {
+            "label": "Refused / Bezwaar",
+            "description": "IND refused or withdrew the case — bezwaar (objection) is normally due "
+                           "within four weeks, filed by the sponsor or the student.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Paused — deferred intake, funding not yet in place, or waiting on the "
+                           "client or the sponsor.",
+        },
+    },
+    "AE": {
+        "new_lead": {
+            "label": "New Lead",
+            "description": "Enquiry taken: emirate, licensed institution and sponsorship route "
+                           "(university PRO vs other) scoped, plus a UAE ban / absconding check.",
+        },
+        "documents": {
+            "label": "Documents & Attestation",
+            "description": "Degrees run the legalisation chain to MOFAIC attestation; tuition, "
+                           "insurance and the refundable visa deposit settled with the institution.",
+        },
+        "submitted": {
+            "label": "Entry Permit Filed",
+            "description": "The university's PRO (its government-relations officer) files the entry "
+                           "permit with ICP or GDRFA; it comes back as an e-visa the student must "
+                           "enter on within 60 days.",
+        },
+        "appointment": {
+            "label": "Medical & Emirates ID",
+            "description": "Student flies in on the entry permit, then sits the medical fitness "
+                           "test and gives Emirates ID biometrics inside the UAE within 60 days.",
+        },
+        "decision": {
+            "label": "Residence File Pending",
+            "description": "Residence file sits with ICP / GDRFA after biometrics; the PRO chases "
+                           "status and clears any document query before the permit issues.",
+        },
+        "approved": {
+            "label": "Residence & Emirates ID",
+            "description": "Residence permit issued and Emirates ID in hand, with UID and health "
+                           "insurance active and the refundable visa deposit tracked back.",
+        },
+        "rejected": {
+            "label": "Refused / Blocked",
+            "description": "Entry permit or residence refused, or the file blocked by a ban; "
+                           "grievance or reconsideration and any reapplication tracked here.",
+        },
+        "on_hold": {
+            "label": "On Hold",
+            "description": "Case paused — sponsor, PRO or institution-side blocker, a deferred "
+                           "intake, or the student's own delay — with a follow-up date set.",
+        },
+    },
+}
+
+
+def stages_for(country_code: str | None) -> list[dict]:
+    """The eight pipeline stages worded for `country_code` (generic wording as fallback).
+
+    A destination may also override a stage's `order` where its real chronology differs —
+    the Netherlands is the case that forced this: the recognised sponsor files with the IND,
+    the IND DECIDES, and only then is the student invited to a mission for biometrics and
+    MVV collection, so `appointment` genuinely comes after `decision` there. The keys and
+    colors stay fixed (the kanban and analytics are org-wide and share one column order);
+    only this per-client journey view re-sequences.
+    """
+    overrides = ENTERPRISE_STAGE_LABELS.get(str(country_code or "").strip().upper()) or {}
+    resolved = []
+    for stage in CLIENT_STAGES:
+        item = dict(stage)
+        override = overrides.get(stage["key"]) or {}
+        for field in ("label", "description"):
+            value = str(override.get(field) or "").strip()
+            if value:
+                item[field] = value
+        if isinstance(override.get("order"), int):
+            item["order"] = override["order"]
+        resolved.append(item)
+    resolved.sort(key=lambda s: s["order"])
+    return resolved
+
+
+def stages_by_country() -> dict:
+    """Resolved stage wording for the frontend: {COUNTRY_CODE: [stage, …]}."""
+    return {code: stages_for(code) for code in COUNTRY_MAP}
+
+
+def stage_brief(country_code: str | None, stage_key: str | None) -> Optional[dict]:
+    """One resolved stage (for serializing a client's current status pill)."""
+    key = normalize_stage(stage_key)
+    for stage in stages_for(country_code):
+        if stage["key"] == key:
+            return stage
+    return None
+
 CLIENT_PRIORITIES = [
     {"key": "low", "label": "Low", "color": "#94a3b8"},
     {"key": "normal", "label": "Normal", "color": "#6366f1"},
@@ -179,128 +683,285 @@ ENTERPRISE_DOCUMENT_CATALOG: dict[str, list[dict]] = {
         {"key": "passport", "label": "Passport", "required": True, "hint": "Valid at least 6 months beyond intended stay."},
         {"key": "photo", "label": "Passport Photo (2×2 inch, US spec)", "required": True, "hint": "White background, taken within 6 months."},
         {"key": "admission-letter", "label": "University Admission / Offer Letter", "required": True, "hint": "From the SEVP-certified school."},
-        {"key": "form-i20", "label": "Form I-20 (signed)", "required": True, "hint": "Signed by the DSO and the student."},
-        {"key": "ds160-confirmation", "label": "DS-160 Confirmation Page", "required": True, "hint": "Barcode page after submitting the DS-160 online."},
-        {"key": "sevis-receipt", "label": "SEVIS I-901 Fee Receipt", "required": True, "hint": "Paid on fmjfee.com against the I-20 SEVIS ID."},
-        {"key": "mrv-fee-receipt", "label": "Visa (MRV) Fee Receipt", "required": True, "hint": "Machine-readable visa application fee."},
-        {"key": "interview-appointment", "label": "Interview Appointment Confirmation", "required": True, "hint": "OFC/biometrics + consular interview slots."},
+        {"key": "immunization-records", "label": "University Immunization / Vaccination Record", "required": False, "hint": "MMR, TDap and meningococcal on the school's own form — a hold blocks course registration."},
+        {"key": "form-i20", "label": "Form I-20 (signed)", "required": True, "hint": "DSO- and student-signed; from 15 Sep 2026 its end date sets the I-94 admit-until date."},
+        {"key": "f2-dependent-documents", "label": "F-2 / J-2 Dependent Documents", "required": False, "hint": "Each dependent gets their own I-20 plus marriage or birth certificate; no I-901 fee for F-2."},
+        {"key": "ds160-confirmation", "label": "DS-160 Confirmation Page", "required": True, "hint": "Barcode page from CEAC — the 5 years of social-media handles on it must be public accounts."},
+        {"key": "sevis-receipt", "label": "SEVIS I-901 Fee Receipt", "required": True, "hint": "$350 F/M, $220 most J — pay on fmjfee.com against the SEVIS ID on the I-20 or DS-2019; reusable within 12 months if refused."},
+        {"key": "mrv-fee-receipt", "label": "Visa (MRV) Fee Receipt", "required": True, "hint": "$185 — the CGI receipt number unlocks scheduling and lapses 365 days after payment."},
+        {"key": "visa-integrity-fee-receipt", "label": "Visa Integrity Fee Receipt ($250)", "required": False, "hint": "OBBBA fee charged at issuance, not before — rollout is post-by-post, so budget for it."},
+        {"key": "interview-appointment", "label": "Interview Appointment Confirmation", "required": True, "hint": "OFC biometrics + interview, booked at the post covering nationality or residence."},
+        {"key": "residence-proof", "label": "Proof of Residence for the Consular Post", "required": False, "hint": "Needed when not applying in the country of nationality — posts have demanded it since Sep 2025."},
         {"key": "bank-statements", "label": "Bank Statements / Balance Certificate", "required": True, "hint": "Liquid funds covering I-20 first-year cost."},
         {"key": "loan-sanction", "label": "Education Loan Sanction Letter", "required": False, "hint": "If part of funding — sanctioned, not applied."},
         {"key": "scholarship-letter", "label": "Scholarship / Assistantship Letter", "required": False, "hint": "University or external funding award."},
         {"key": "sponsor-affidavit", "label": "Sponsor Affidavit of Support", "required": False, "hint": "With sponsor's bank proof & income evidence."},
+        {"key": "sponsor-income-proof", "label": "Sponsor Income Tax Returns (ITR / Form 16)", "required": False, "hint": "3 years of returns plus salary slips — proves the sponsor earns what the affidavit claims."},
         {"key": "ca-statement", "label": "CA Statement / Asset Valuation", "required": False, "hint": "Chartered-accountant net-worth summary."},
         {"key": "transcripts", "label": "Academic Transcripts & Marksheets", "required": True, "hint": "All semesters, university-attested."},
         {"key": "degree-certificates", "label": "Degree / Provisional Certificates", "required": False, "hint": "Completed programs only."},
         {"key": "english-test", "label": "English Test Score (TOEFL / IELTS / Duolingo)", "required": True, "hint": "As required by the admitting school."},
         {"key": "aptitude-test", "label": "GRE / GMAT / SAT Score Report", "required": False, "hint": "If used in the admission."},
+        {"key": "sop", "label": "Statement of Purpose (SOP)", "required": False, "hint": "Programme-specific admission essay — also the spine the counselor preps the interview from."},
         {"key": "resume", "label": "Resume / CV", "required": False, "hint": "Useful for interview & OPT-related questions."},
+        {"key": "lor", "label": "Letters of Recommendation (LORs)", "required": False, "hint": "Usually 2-3, submitted by the recommender through the university's own portal."},
         {"key": "work-experience", "label": "Work Experience Letters", "required": False, "hint": "For applicants with employment history."},
         {"key": "gap-justification", "label": "Gap / Study-Break Justification", "required": False, "hint": "Explains gaps after prior education."},
+        {"key": "home-ties-evidence", "label": "Evidence of Ties to the Home Country", "required": False, "hint": "Property, family business, job offer on return — the 214(b) presumption is rebutted here."},
         {"key": "prior-visa-refusal", "label": "Previous US Visa / Refusal Documents (221g)", "required": False, "hint": "Any earlier US travel or refusals."},
-        {"key": "ds2019", "label": "Form DS-2019 (J-1 only)", "required": False, "hint": "Exchange-visitor program form."},
+        {"key": "ds2019", "label": "Form DS-2019 (J-1 only)", "required": False, "hint": "J-1 sponsor's form — check whether it flags the 212(e) two-year home-residence rule."},
+        {"key": "i94-record", "label": "I-94 Arrival/Departure Record (CBP)", "required": False, "hint": "Print from i94.cbp.dhs.gov after entry — from 15 Sep 2026 it shows a date, not 'D/S'."},
         {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
     ],
     "UK": [
-        {"key": "passport", "label": "Passport", "required": True, "hint": "With at least one blank page."},
+        {"key": "passport", "label": "Passport", "required": True, "hint": "UKVI sets no 6-month rule — it must simply be valid, and it is what the eVisa links to."},
         {"key": "cas", "label": "CAS Statement", "required": True, "hint": "Confirmation of Acceptance for Studies with CAS number."},
         {"key": "offer-letter", "label": "Unconditional Offer Letter", "required": True, "hint": "From the licensed student sponsor."},
-        {"key": "financial-evidence", "label": "28-Day Bank Statement / Financial Evidence", "required": True, "hint": "Funds held 28 consecutive days, ending ≤31 days before applying."},
-        {"key": "ihs-confirmation", "label": "IHS Payment Confirmation", "required": True, "hint": "Immigration Health Surcharge reference."},
+        {"key": "pre-cas-interview", "label": "Pre-CAS Interview Outcome", "required": False, "hint": "Most sponsors run a mandatory pre-CAS credibility call — no pass, no CAS."},
+        {"key": "cas-deposit-receipt", "label": "Tuition / CAS Deposit Receipt", "required": False, "hint": "Sponsors assign the CAS only once this clears; it must match 'fees paid' on the CAS."},
+        {"key": "financial-evidence", "label": "28-Day Bank Statement / Financial Evidence", "required": True, "hint": "£1,529/mo London, £1,171 outside (max 9 mo), held 28 days, closing ≤31 days out."},
+        {"key": "ihs-confirmation", "label": "IHS Payment Confirmation", "required": True, "hint": "£776 per year of leave, paid inside the application before the visa fee — keep the number."},
         {"key": "visa-application", "label": "Visa Application Confirmation (GOV.UK)", "required": True, "hint": "Submitted online application summary."},
-        {"key": "tb-certificate", "label": "TB Test Certificate", "required": True, "hint": "From an approved clinic (required for many countries incl. India)."},
-        {"key": "atas", "label": "ATAS Certificate", "required": False, "hint": "Only for certain sensitive subjects."},
-        {"key": "selt", "label": "SELT / IELTS-for-UKVI Result", "required": False, "hint": "Or degree-taught-in-English exemption evidence."},
+        {"key": "tb-certificate", "label": "TB Test Certificate", "required": True, "hint": "Approved clinic only (Appendix TB list); expires 6 months after the chest x-ray."},
+        {"key": "atas", "label": "ATAS Certificate", "required": False, "hint": "Sensitive-subject PG/research courses flagged on the CAS; valid 6 months for the application."},
+        {"key": "selt", "label": "SELT / IELTS-for-UKVI Result", "required": False, "hint": "B2 for degree level, B1 below; UKVI-approved SELT only, valid 2 years — quote the URN."},
+        {"key": "ecctis-statement", "label": "Ecctis Statement (Comparability / English Assessment)", "required": False, "hint": "Needed to rely on a degree taught in English outside a majority-English country (ST 6.1)."},
         {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "Documents used to obtain the CAS."},
         {"key": "degree-certificates", "label": "Degree Certificates", "required": False, "hint": "As listed on the CAS."},
-        {"key": "sponsor-consent", "label": "Parental / Sponsor Consent + Relationship Proof", "required": False, "hint": "If funds are in a parent's or sponsor's name."},
-        {"key": "loan-letter", "label": "Education Loan Letter", "required": False, "hint": "Regulated financial institution letterhead."},
-        {"key": "scholarship-letter", "label": "Scholarship / Official Sponsorship Letter", "required": False, "hint": "Government or international scholarship agency."},
+        {"key": "sponsor-consent", "label": "Parental / Sponsor Consent + Relationship Proof", "required": False, "hint": "Student's own account, or a parent's/guardian's with consent + relationship proof; a partner's only if applying too or already has permission."},
+        {"key": "parental-consent", "label": "Parental Consent & Care Arrangements (under 18)", "required": False, "hint": "Both parents' written consent to the visa, travel and care arrangements, plus birth proof."},
+        {"key": "loan-letter", "label": "Education Loan Letter", "required": False, "hint": "Government or regulated education loan; letter dated within 6 months and free of conditions."},
+        {"key": "scholarship-letter", "label": "Scholarship / Official Sponsorship Letter", "required": False, "hint": "Official sponsor on letterhead stating the amount, the period covered and contact details."},
+        {"key": "official-sponsor-consent", "label": "Official Financial Sponsor Consent Letter", "required": False, "hint": "Needed where an official financial sponsor funded the student in the last 12 months."},
         {"key": "photo", "label": "Passport-size Photograph", "required": False, "hint": "Only if a VAC requests physical photos."},
-        {"key": "prior-refusals", "label": "Previous UK Visa / Refusal Documents", "required": False, "hint": "Any earlier UK immigration history."},
+        {"key": "prior-refusals", "label": "Previous UK Visa / Refusal Documents", "required": False, "hint": "Old passports plus any UK refusal, overstay or removal — the form asks 10 years of travel."},
         {"key": "cv", "label": "CV / Resume", "required": False, "hint": "Occasionally requested for credibility interviews."},
+        {"key": "personal-statement", "label": "Personal Statement / Statement of Purpose", "required": False, "hint": "Carries the course-choice story the pre-CAS call and any UKVI interview will test."},
+        {"key": "ukvi-account-evisa", "label": "UKVI Account & eVisa Confirmation", "required": False, "hint": "Students get no 90-day vignette since 15 Jul 2025 — the share code is what boards them."},
         {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
     ],
     "CA": [
-        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid for the full study period."},
-        {"key": "loa", "label": "Letter of Acceptance (LOA)", "required": True, "hint": "From a Designated Learning Institution (DLI)."},
-        {"key": "pal", "label": "Provincial / Territorial Attestation Letter (PAL/TAL)", "required": True, "hint": "Required for most study-permit applications."},
-        {"key": "gic", "label": "GIC Certificate", "required": True, "hint": "Guaranteed Investment Certificate for living costs."},
+        {"key": "passport", "label": "Passport", "required": True, "hint": "A study permit is never issued beyond passport expiry — renew before filing if it runs short."},
+        {"key": "loa", "label": "Letter of Acceptance (LOA)", "required": True, "hint": "From a DLI — IRCC verifies every LOA with the institution before the file is processed."},
+        {"key": "pal", "label": "Provincial / Territorial Attestation Letter (PAL/TAL)", "required": True, "hint": "Master's/PhD at a public DLI are PAL-exempt from 1 Jan 2026 — record the exemption ground."},
+        {"key": "gic", "label": "GIC Certificate", "required": False, "hint": "Optional since SDS closed on 8 Nov 2024, but still the cleanest proof of the living-cost total."},
         {"key": "tuition-receipt", "label": "First-Year Tuition Payment Receipt", "required": True, "hint": "Proof of tuition paid to the DLI."},
-        {"key": "proof-of-funds", "label": "Proof of Funds / Bank Statements (4 months)", "required": True, "hint": "Beyond the GIC where applicable."},
-        {"key": "loan-sanction", "label": "Education Loan Sanction Letter", "required": False, "hint": "If loan-funded."},
-        {"key": "imm1294", "label": "Study Permit Application (IMM 1294)", "required": True, "hint": "Or the IRCC online equivalent summary."},
-        {"key": "sop-study-plan", "label": "Statement of Purpose / Study Plan", "required": True, "hint": "Why this program, why Canada, ties to home country."},
-        {"key": "language-test", "label": "Language Test (IELTS / PTE / CELPIP / TEF)", "required": True, "hint": "Per DLI and stream requirements."},
+        {"key": "proof-of-funds", "label": "Proof of Funds / Bank Statements (4 months)", "required": True, "hint": "CAD 22,895 living costs for one applicant plus first-year tuition; re-indexed every 1 Sept."},
+        {"key": "loan-sanction", "label": "Education Loan Sanction Letter", "required": False, "hint": "Disbursement-ready sanction naming the student — an in-principle letter is discounted."},
+        {"key": "sponsor-affidavit", "label": "Sponsor Affidavit / Declaration of Support + Income & Tax Proof", "required": False, "hint": "Who pays, plus their ITRs, payslips and relationship proof — a bare balance reads as parked."},
+        {"key": "scholarship-letter", "label": "Scholarship / Assistantship Award Letter", "required": False, "hint": "Funded offer or TA/RA stipend letter — it reduces the living-cost funds still to be shown."},
+        {"key": "assets-statement", "label": "Immovable Property & Asset Valuation", "required": False, "hint": "Registered valuations and asset statements — 'personal assets' is a box on the refusal letter."},
+        {"key": "imm1294", "label": "Study Permit Application (IMM 1294)", "required": True, "hint": "Filed inside the IRCC secure account, mandatory since 25 Mar 2025 — keep the submission PDF."},
+        {"key": "imm5476", "label": "Use of a Representative Form (IMM 5476)", "required": False, "hint": "Signed only where a CICC-licensed RCIC or lawyer is named — ghost consulting is an offence."},
+        {"key": "sop-study-plan", "label": "Statement of Purpose / Letter of Explanation (LOE)", "required": True, "hint": "Why this program, why Canada, ties to home country."},
+        {"key": "language-test", "label": "Language Test (IELTS / PTE / CELPIP / TEF)", "required": True, "hint": "No IRCC minimum since SDS closed — the DLI sets it; PGWP needs CLB 7 degree / CLB 5 college."},
         {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "All completed education."},
         {"key": "degree-certificates", "label": "Degree / Diploma Certificates", "required": False, "hint": "Completed programs only."},
-        {"key": "medical-exam", "label": "Medical Exam (eMedical) Confirmation", "required": False, "hint": "Upfront medical from a panel physician."},
+        {"key": "medical-exam", "label": "Medical Exam (eMedical) Confirmation", "required": False, "hint": "Needed for a 6+ month stay after residence in a designated country; the IME is valid 12 months from the exam."},
+        {"key": "police-clearance", "label": "Police Clearance Certificate", "required": False, "hint": "Not standard for a study permit — supply only when the visa office or a fairness letter asks."},
         {"key": "biometrics", "label": "Biometrics Confirmation", "required": False, "hint": "Biometric Instruction Letter / completion slip."},
-        {"key": "custodianship", "label": "Custodianship Declaration (minors)", "required": False, "hint": "IMM 5646 for students under 17."},
-        {"key": "family-forms", "label": "Family Information Form (IMM 5645/5707)", "required": False, "hint": "As requested by IRCC."},
-        {"key": "caq", "label": "Quebec Acceptance Certificate (CAQ)", "required": False, "hint": "Only for study in Quebec."},
-        {"key": "prior-refusals", "label": "Previous Refusal Letter(s)", "required": False, "hint": "Any earlier Canadian refusals — address them in the SOP."},
+        {"key": "custodianship", "label": "Custodianship Declaration (minors)", "required": False, "hint": "IMM 5646, notarised both sides — mandatory under 17, officer discretion to the age of majority."},
+        {"key": "spouse-dependant", "label": "Marriage Certificate & Dependant Documents", "required": False, "hint": "SOWP since 21 Jan 2025 only for master's 16+ months, doctoral or listed professional degrees."},
+        {"key": "family-forms", "label": "Family Information Form (IMM 5645/5707)", "required": True, "hint": "IMM 5707 for every applicant 18+ — list all family, accompanying or not; omissions risk A40."},
+        {"key": "birth-certificate", "label": "Birth Certificate / Proof of Relationship", "required": False, "hint": "Links the student to the sponsor shown in the funds file; required for every minor applicant."},
+        {"key": "caq", "label": "Quebec Acceptance Certificate (CAQ)", "required": False, "hint": "Apply on Arrima before IRCC; from 1 Jan 2026 shows CAD 24,617 funds, fee CAD 135."},
+        {"key": "in-canada-status", "label": "Current Canadian Status Documents (in-Canada filings)", "required": False, "hint": "Existing permit, transcripts and enrolment proof — a DLI change needs a whole new study permit."},
+        {"key": "prior-refusals", "label": "Previous Refusal Letters (Any Country)", "required": False, "hint": "Declare every refusal by any country — an undeclared one becomes A40 misrepresentation."},
+        {"key": "travel-history", "label": "Previous Passports & Travel History", "required": False, "hint": "Old passports, visas and stamps — travel history is a named ground on the IRCC refusal letter."},
         {"key": "digital-photo", "label": "Digital Photo (IRCC spec)", "required": False, "hint": "Per IRCC photo specifications."},
         {"key": "work-experience", "label": "Work Experience Letters", "required": False, "hint": "If employment history supports the study plan."},
         {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
     ],
     "AU": [
-        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid for the intended stay."},
-        {"key": "coe", "label": "Confirmation of Enrolment (CoE)", "required": True, "hint": "One per course being packaged."},
-        {"key": "offer-letter", "label": "Offer Letter", "required": True, "hint": "From the Australian provider."},
-        {"key": "gs-statement", "label": "Genuine Student (GS) Statement & Answers", "required": True, "hint": "Responses to the GS questions — decisive for 500s."},
-        {"key": "oshc", "label": "OSHC Policy Certificate", "required": True, "hint": "Health cover spanning the entire stay."},
-        {"key": "financial-capacity", "label": "Financial Capacity Evidence", "required": True, "hint": "Bank funds / loan / sponsor income per Home Affairs settings."},
-        {"key": "english-test", "label": "English Test (IELTS / PTE / TOEFL)", "required": True, "hint": "Unless exempt."},
+        {"key": "passport", "label": "Passport", "required": True, "hint": "The visa binds to this passport — a renewal mid-case needs a Form 929 update in ImmiAccount."},
+        {"key": "birth-certificate", "label": "Birth Certificate / National Identity Document", "required": False, "hint": "Chased for under-18s, dependants and any name mismatch across passport, CoE and transcripts."},
+        {"key": "coe", "label": "Confirmation of Enrolment (CoE)", "required": True, "hint": "eCoE from PRISMS once fees are paid — a letter of offer has not been accepted since 1 Jan 2025."},
+        {"key": "offer-letter", "label": "Offer Letter", "required": True, "hint": "Kept for the file and the ESOS written agreement's refund terms; not accepted at lodgement."},
+        {"key": "release-letter", "label": "Provider Release / Transfer Approval (onshore)", "required": False, "hint": "Needed to move provider inside the first 6 months of the principal course."},
+        {"key": "gs-statement", "label": "Genuine Student (GS) Statement & Answers", "required": True, "hint": "Four questions, 150 words each, answered in the form — not an attached statement."},
+        {"key": "oshc", "label": "OSHC Policy Certificate", "required": True, "hint": "Approved insurers only: Allianz Care, ahm, Bupa, Medibank, nib. Prepaid for the visa period."},
+        {"key": "financial-capacity", "label": "Financial Capacity Evidence", "required": True, "hint": "AUD 29,710 living costs + first-year tuition + travel; funds held ~3 months, explain spikes."},
+        {"key": "loan-sanction-letter", "label": "Education Loan Sanction / Disbursement Letter", "required": False, "hint": "Must be sanctioned and disbursement-ready — an in-principle approval is not evidence of funds."},
+        {"key": "sponsor-income-evidence", "label": "Sponsor Income & Relationship Evidence", "required": False, "hint": "Income route: a parent's or partner's income (ITRs, payslips) plus proof of the relationship."},
+        {"key": "english-test", "label": "English Test (IELTS / PTE / TOEFL)", "required": True, "hint": "IELTS 6.0 (5.5 with 10wk ELICOS); in-centre sitting under 2 years old — online is void."},
         {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "All prior study."},
         {"key": "degree-certificates", "label": "Degree / Award Certificates", "required": False, "hint": "Completed qualifications."},
-        {"key": "health-exam", "label": "Health Examination (HAP ID / eMedical)", "required": False, "hint": "Panel clinic examination reference."},
-        {"key": "photo", "label": "Passport-size Photograph", "required": False, "hint": "Recent, per specifications."},
-        {"key": "form-956a", "label": "Form 956A (Agent Appointment)", "required": False, "hint": "If your agency lodges on the student's behalf."},
-        {"key": "guardian-forms", "label": "Guardianship / U-18 Welfare Forms (157N / CAAW)", "required": False, "hint": "For minors and subclass 590 guardians."},
-        {"key": "relationship-docs", "label": "Marriage / Relationship Certificates (dependents)", "required": False, "hint": "If including family members."},
-        {"key": "employment-evidence", "label": "Employment Evidence / CV", "required": False, "hint": "Supports GS circumstances."},
-        {"key": "prior-refusals", "label": "Previous Visa / Refusal Documents", "required": False, "hint": "Australian or other-country refusals."},
+        {"key": "naati-translations", "label": "NAATI-Certified English Translations", "required": False, "hint": "Anything not in English — upload the original and the translation with the NAATI number on it."},
+        {"key": "health-exam", "label": "Health Examination (HAP ID / eMedical)", "required": False, "hint": "Book with Bupa MVS on the HAP ID; My Health Declarations can raise one pre-lodgement."},
+        {"key": "health-undertaking-815", "label": "Health Undertaking (Form 815)", "required": False, "hint": "Signed where latent TB is found — student must contact Bupa MVS within 28 days of arrival."},
+        {"key": "biometrics-letter", "label": "Biometrics Request Letter (s.40 Personal Identifiers)", "required": False, "hint": "Post-lodgement — 14 calendar days to attend an ABCC/AVAC or submit via the Immi app."},
+        {"key": "photo", "label": "Passport-size Photograph", "required": False, "hint": "One recent colour passport-size photo — Australia issues no label, so this is ID evidence."},
+        {"key": "form-956a", "label": "Form 956A — Authorised Recipient (or Form 956 for a MARN agent)", "required": False, "hint": "956A only routes correspondence; advising or lodging needs a registered agent on Form 956."},
+        {"key": "character-documents", "label": "Character Documents (Form 80 / 1221, Police Certificates)", "required": False, "hint": "Requested on higher-scrutiny files — 10 years of addresses, travel and work, plus any PCC."},
+        {"key": "guardian-forms", "label": "Under-18 Welfare Forms (CAAW / 157N / 1229)", "required": False, "hint": "CAAW from the provider, or Form 157N + a 590 guardian; Form 1229 from the other parent."},
+        {"key": "relationship-docs", "label": "Marriage / Relationship Certificates (dependents)", "required": False, "hint": "Marriage or de facto and birth certificates; school-age children add schooling costs."},
+        {"key": "employment-evidence", "label": "Employment Evidence / CV", "required": False, "hint": "Payslips, service letters and a written gap explanation — study gaps are a standard GS probe."},
+        {"key": "prior-refusals", "label": "Previous Visa / Refusal Documents", "required": False, "hint": "All prior Australian and other-country visas, refusals and cancellations — PIC 4020 risk."},
+        {"key": "grant-notification", "label": "Visa Grant Notification & VEVO Record", "required": False, "hint": "The grant letter is the only 'visa' — confirm the conditions independently in VEVO."},
         {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
     ],
     "DE": [
         {"key": "passport", "label": "Passport", "required": True, "hint": "Issued within 10 years, 2 blank pages."},
-        {"key": "biometric-photos", "label": "Biometric Photos (35×45 mm)", "required": True, "hint": "German biometric specification."},
-        {"key": "admission", "label": "Admission Letter (Zulassungsbescheid) / Conditional Admission", "required": True, "hint": "Or uni-assist / applicant confirmation."},
-        {"key": "aps", "label": "APS Certificate", "required": True, "hint": "Mandatory for India, China, Vietnam applicants."},
-        {"key": "sperrkonto", "label": "Blocked Account (Sperrkonto) Confirmation", "required": True, "hint": "Funded to the current annual minimum."},
-        {"key": "scholarship-letter", "label": "Scholarship Award Letter", "required": False, "hint": "DAAD or equivalent — alternative to blocked account."},
-        {"key": "verpflichtung", "label": "Formal Obligation Letter (Verpflichtungserklärung)", "required": False, "hint": "Sponsor-based financing alternative."},
-        {"key": "videx", "label": "VIDEX National Visa Form", "required": True, "hint": "Completed and signed VIDEX printout."},
-        {"key": "declaration", "label": "Declaration of Accuracy of Information", "required": True, "hint": "Signed declarations required by the mission."},
-        {"key": "health-insurance", "label": "Health / Travel Insurance Proof", "required": True, "hint": "Coverage from entry until enrolment insurance starts."},
-        {"key": "language-cert", "label": "Language Certificate (TestDaF / DSH / Goethe or IELTS/TOEFL)", "required": True, "hint": "Per the program's language of instruction."},
-        {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "All prior study records."},
+        {"key": "biometric-photos", "label": "Biometric Photos (35×45 mm)", "required": True, "hint": "3 current identical photos to the German biometric spec; the mission keeps them."},
+        {"key": "admission", "label": "Admission Letter (Zulassungsbescheid) / Conditional Admission", "required": True, "hint": "Studienkolleg place or course registration on those files; must state the language of instruction and whether a German degree is awarded."},
+        {"key": "uni-assist-vpd", "label": "uni-assist VPD / Application Confirmation", "required": False, "hint": "Vorprüfungsdokumentation some universities demand before they will look at an application."},
+        {"key": "phd-supervision", "label": "PhD Supervision Confirmation (Betreuungszusage)", "required": False, "hint": "PhD files: supervisor's acceptance or institute contract, in place of a Zulassungsbescheid."},
+        {"key": "aps", "label": "APS Certificate (DigZert)", "required": True, "hint": "India/China/Vietnam only. Waived for PhD, German/EU public scholarships, non-Indian degrees."},
+        {"key": "dmat", "label": "dMAT Score Report (Digital Master Test)", "required": False, "hint": "New APS India element for selected master's applicants, Summer Semester 2027 intake onward."},
+        {"key": "anabin-zab", "label": "Degree Recognition Proof (anabin / ZAB Zeugnisbewertung)", "required": False, "hint": "For APS-exempt files: anabin H+ printout, or a ZAB Zeugnisbewertung (~€208, 2-3 months)."},
+        {"key": "sperrkonto", "label": "Blocked Account (Sperrkonto) Confirmation", "required": True, "hint": "€11,904 / €992 a month — €13,092 for §17 study applicants, Studienkolleg and non-preparatory §16f(1) language courses."},
+        {"key": "tuition-payment-proof", "label": "Proof of Tuition / Study Fee Payment", "required": False, "hint": "Required wherever the institution charges fees — private universities and language courses."},
+        {"key": "scholarship-letter", "label": "Scholarship Award Letter", "required": False, "hint": "Only a German or EU public-fund award replaces the Sperrkonto — and it also waives APS."},
+        {"key": "verpflichtung", "label": "Formal Obligation Letter (Verpflichtungserklärung)", "required": False, "hint": "Sponsor must live in Germany and obtain it from their local authority under §§66-68 AufenthG."},
+        {"key": "videx", "label": "National Visa Application Form (Consular Services Portal)", "required": True, "hint": "Filed online at digital.diplo.de; a VIDEX printout only where CSP is not yet available."},
+        {"key": "declaration", "label": "Declaration under Section 54 of the Residence Act", "required": True, "hint": "Signed acknowledgement of the consequences of false statements — two identical copies."},
+        {"key": "legal-representation-declaration", "label": "Declaration of Additional Contact & Legal Representation", "required": True, "hint": "Mission's own form naming an authorised representative — two signed copies at the appointment."},
+        {"key": "health-insurance", "label": "Health / Travel Insurance Proof", "required": True, "hint": "Travel cover for the first 90 days from the intended entry date, then German statutory/private."},
+        {"key": "language-cert", "label": "Language Certificate (TestDaF / DSH / Goethe or IELTS/TOEFL)", "required": True, "hint": "Not older than 1 year at the appointment; skip only if the admission letter confirms the level."},
+        {"key": "testas", "label": "TestAS Certificate", "required": False, "hint": "g.a.s.t. aptitude test — asked for on many bachelor and Studienkolleg files, never on master's."},
+        {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "Bachelor files need 10th and 12th mark sheets too; master's, the full degree record."},
         {"key": "degree-certificates", "label": "Degree Certificates", "required": False, "hint": "Bachelor's certificate for Master's applicants."},
         {"key": "cv", "label": "CV (Tabular / Lebenslauf)", "required": True, "hint": "German-style tabular CV."},
-        {"key": "motivation-letter", "label": "Motivation Letter (Motivationsschreiben)", "required": True, "hint": "Program-specific reasoning."},
-        {"key": "appointment", "label": "Visa Appointment Confirmation", "required": False, "hint": "Embassy / consulate booking."},
-        {"key": "fee-receipt", "label": "Visa Fee Receipt", "required": False, "hint": "National visa fee payment."},
-        {"key": "accommodation", "label": "Accommodation Proof", "required": False, "hint": "If already arranged in Germany."},
+        {"key": "motivation-letter", "label": "Motivation Letter (Motivationsschreiben)", "required": True, "hint": "Duly signed — why this subject, why Germany, why this university, in German or English."},
+        {"key": "appointment", "label": "Visa Appointment Confirmation", "required": False, "hint": "VFS or mission slot — the booking link only appears once the CSP pre-check is complete."},
+        {"key": "fee-receipt", "label": "Visa Fee Receipt", "required": False, "hint": "€75 adult, €37.50 under-18, non-refundable on refusal; VFS adds its own service charge."},
+        {"key": "accommodation", "label": "Accommodation Proof", "required": False, "hint": "If arranged — the landlord's Wohnungsgeberbestätigung is what unlocks Anmeldung on arrival."},
         {"key": "prior-refusals", "label": "Previous Refusal Documents", "required": False, "hint": "Any Schengen/German refusals."},
         {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
     ],
     "IE": [
         {"key": "passport", "label": "Passport", "required": True, "hint": "Valid 12+ months beyond arrival."},
-        {"key": "acceptance-letter", "label": "Letter of Acceptance", "required": True, "hint": "From the Irish college confirming the full-time course."},
-        {"key": "fee-receipt", "label": "Tuition Fee Payment Receipt", "required": True, "hint": "Proof fees are paid (or ILEP escrow evidence)."},
-        {"key": "proof-of-funds", "label": "Proof of Funds / 6-Month Bank Statements", "required": True, "hint": "Access to required maintenance funds."},
-        {"key": "education-bond", "label": "Education Bond / Official Sponsorship", "required": False, "hint": "If using a bond or sponsor arrangement."},
-        {"key": "medical-insurance", "label": "Medical / Travel Insurance", "required": True, "hint": "Private medical insurance covering the stay."},
-        {"key": "english-test", "label": "English Test (IELTS / TOEFL / Duolingo)", "required": True, "hint": "Meeting the course's English requirement."},
+        {"key": "previous-passports", "label": "Photocopies of All Previous Passports", "required": False, "hint": "Photocopy every page of all previous passports — ISD says omitting them delays the file."},
+        {"key": "acceptance-letter", "label": "Letter of Acceptance", "required": True, "hint": "Must confirm 15+ hours organised daytime tuition a week, fees payable, fees paid and learner protection."},
+        {"key": "programme-eligibility-listing", "label": "ILEP / TrustEd Ireland Programme Listing", "required": True, "hint": "Print the ILEP or TrustEd Ireland list entry — a programme sits on one list, never both."},
+        {"key": "learner-protection-certificate", "label": "Learner Protection Certificate", "required": False, "hint": "Insurance-scheme route only, in the student's own name — publicly funded universities and awarding bodies are exempt."},
+        {"key": "fee-receipt", "label": "Tuition Fee Payment Receipt", "required": True, "hint": "EFT to the college's Irish account, or a Transfermate (ex-Pay to Study) receipt — €6,000 min since 30 Jun 2025."},
+        {"key": "proof-of-funds", "label": "Proof of Funds / 6-Month Bank Statements", "required": True, "hint": "€10,000 for year one plus six months of transactions on headed paper — Ireland has no 28-day seasoning rule."},
+        {"key": "financial-summary-form", "label": "Financial Summary Form (FSF)", "required": True, "hint": "ISD Financial Summary Form — mandatory for every long-stay study visa applicant."},
+        {"key": "bank-access-letter", "label": "Bank Letter — Deposit / Savings Access", "required": False, "hint": "Bank letter confirming funds in a deposit or savings account can actually be withdrawn."},
+        {"key": "funds-source-evidence", "label": "Source-of-Funds Evidence for Large Lodgements", "required": False, "hint": "Loan sanction, property sale or gift papers behind every large or irregular lodgement."},
+        {"key": "education-bond", "label": "Education Bond (Alternative Evidence of Finance)", "required": False, "hint": "Degree students only (NFQ 7-10): €10,000+ lodged with Transfermate and held until you register in Ireland."},
+        {"key": "scholarship-letter", "label": "Scholarship / Government Funding Letter", "required": False, "hint": "College or government award letter stating the amount — it feeds box C of the FSF."},
+        {"key": "medical-insurance", "label": "Medical / Travel Insurance", "required": True, "hint": "College group scheme or an Irish policy; travel cover year one only, min €25,000 accident and €25,000 disease."},
+        {"key": "english-test", "label": "English Test (IELTS / TOEFL / Duolingo)", "required": True, "hint": "ISD visa floor is IELTS Academic 5.0 / TOEFL iBT 61 / Duolingo 75; cert must be under 2 years at course start."},
+        {"key": "preparatory-course-study-plan", "label": "Preparatory English Course Study Plan", "required": False, "hint": "Prep-English route only: dates of both courses, max 6 months, both fees paid in full."},
         {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "Previous exam results & study history."},
         {"key": "degree-certificates", "label": "Degree Certificates", "required": False, "hint": "Completed qualifications."},
-        {"key": "avats-summary", "label": "AVATS Application Summary", "required": True, "hint": "Online visa application summary sheet."},
-        {"key": "photos", "label": "Passport Photographs", "required": True, "hint": "Two recent colour photos."},
-        {"key": "application-letter", "label": "Letter of Application / SOP", "required": True, "hint": "Explains study plan and immigration history."},
-        {"key": "sponsor-docs", "label": "Sponsor Documents + Relationship Proof", "required": False, "hint": "If financially sponsored."},
+        {"key": "avats-summary", "label": "AVATS Application Summary", "required": True, "hint": "Print, sign and date it — the signed form, passport and documents must reach the office within 30 days."},
+        {"key": "photos", "label": "Passport Photographs", "required": True, "hint": "Two colour photos under 6 months old, each signed on the back with the Visa Application Transaction Number."},
+        {"key": "application-letter", "label": "Letter of Application / SOP", "required": True, "hint": "Must state arrival/departure dates, family in Ireland or the EU, and the three ISD commitments."},
+        {"key": "sponsor-docs", "label": "Sponsor Documents + Relationship Proof", "required": False, "hint": "Sponsor's 6-month statements, employer letter + 3 payslips, relationship proof and signed FSF consent."},
         {"key": "work-experience", "label": "Work Experience / Gap Evidence", "required": False, "hint": "Accounts for time since last study."},
-        {"key": "prior-refusals", "label": "Previous Visa Refusals (any country)", "required": False, "hint": "Must be declared with details."},
+        {"key": "prior-refusals", "label": "Previous Visa Refusals (any country)", "required": False, "hint": "Any country, with the ORIGINAL refusal letter — non-disclosure is itself a ground for refusal."},
+        {"key": "certified-translations", "label": "Certified Translations (+ Apostille)", "required": False, "hint": "Certified English or Irish translation; one made outside the EEA must itself be apostilled."},
+        {"key": "birth-certificate", "label": "Birth Certificate (Applicants Under 18)", "required": False, "hint": "Under-18 applicants; a non-EEA original needs the issuing state's MFA apostille."},
+        {"key": "parental-consent", "label": "Notarised Parental Consent & Guardianship (Under 18)", "required": False, "hint": "Notarised consent from BOTH parents naming the Irish guardian, plus their signed ID pages."},
         {"key": "accommodation", "label": "Accommodation Details", "required": False, "hint": "If already arranged in Ireland."},
+        {"key": "garda-vetting-clearance", "label": "Garda Vetting Clearance for the Host Address (Unaccompanied Under 18)", "required": False, "hint": "Unaccompanied under-18s: the school obtains Garda clearance for the host address."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "FR": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Issued within the last 10 years, 2 blank pages, valid 3+ months beyond the visa end date."},
+        {"key": "photos", "label": "Photographs (2, 35×45 mm)", "required": True, "hint": "Identical, plain light background, taken within the last 6 months."},
+        {"key": "transcripts", "label": "Academic Transcripts (relevés de notes)", "required": True, "hint": "All years of study, with a sworn (assermentée) French translation where required."},
+        {"key": "degree-certificates", "label": "Diplomas / Degree Certificates", "required": False, "hint": "Completed qualifications only; sworn French translation where required."},
+        {"key": "cv", "label": "CV", "required": True, "hint": "Uploaded into the Études en France dossier, in the programme's language."},
+        {"key": "lettre-de-motivation", "label": "Lettre de Motivation (one per programme)", "required": True, "hint": "A separate, tailored letter for each programme selected — up to 7."},
+        {"key": "language-certificate", "label": "Language Certificate (TCF / TEF / DELF-DALF or IELTS/TOEFL)", "required": True, "hint": "B2 typical for French-taught courses; TCF-DAP is campaign-specific."},
+        {"key": "dap-dossier", "label": "DAP Dossier (blanc / vert / jaune)", "required": False, "hint": "Blanc = L1 from abroad, vert = already in France, jaune = ENSA 1re–5e année. Closes 15 December."},
+        {"key": "campus-france-fee", "label": "Campus France Procedure Fee Receipt", "required": True, "hint": "Non-refundable EEF fee paid inside the platform in local currency — not the visa fee."},
+        {"key": "acceptance-attestation", "label": "Accord Préalable d'Inscription / Attestation d'Acceptation", "required": True, "hint": "France's admission proof, recorded in the platform — there is no CAS or I-20."},
+        {"key": "convocation-concours", "label": "Convocation to the Concours / Entretien d'Admission", "required": False, "hint": "Institution's summons — required for the court séjour « étudiant-concours »."},
+        {"key": "eef-completion", "label": "Campus France End-of-Procedure Email", "required": True, "hint": "No consular appointment can be booked before this go-ahead lands."},
+        {"key": "france-visas-form", "label": "France-Visas Application Form & Receipt (signed)", "required": True, "hint": "Printed from france-visas.gouv.fr with the application number, signed by the applicant."},
+        {"key": "appointment", "label": "Appointment Confirmation (VFS / TLScontact / Capago)", "required": True, "hint": "Whichever provider serves that post; lodge at most 3 months before departure."},
+        {"key": "proof-of-resources", "label": "Proof of Resources (bank statements)", "required": True, "hint": "Whole first year at the monthly rate in force on the filing date."},
+        {"key": "prise-en-charge", "label": "Attestation de Prise en Charge + Guarantor's Proof", "required": False, "hint": "Worthless without the guarantor's own ID, proof of address and income evidence."},
+        {"key": "avi", "label": "AVI (Attestation de Virement Irrévocable)", "required": False, "hint": "Blocked-transfer certificate — expected at many Maghreb and West-African posts."},
+        {"key": "scholarship-letter", "label": "Scholarship Award Letter (Eiffel / Charpak / AUF)", "required": False, "hint": "French-government award holders are also exempt from the consular visa fee."},
+        {"key": "accommodation", "label": "Accommodation Proof (CROUS / lease / hébergement)", "required": True, "hint": "Covers at least the first 3 months; host's ID and proof of address attached."},
+        {"key": "birth-certificate", "label": "Birth Certificate & Minor's Parental Authorisation", "required": True, "hint": "Recent extract, apostilled or legalised; under-18s add both parents' consent."},
+        {"key": "insurance", "label": "Private Medical / Travel Insurance", "required": False, "hint": "Required for VLS-T and short-stay C; VLS-TS holders join Assurance Maladie."},
+        {"key": "visa-fee-receipt", "label": "Visa Fee Receipt", "required": False, "hint": "€50 student rate under Études en France, €99 standard long-stay, €90 short-stay C."},
+        {"key": "prior-refusals", "label": "Previous Schengen / French Visa & Refusal Documents", "required": False, "hint": "Any earlier refusal, its décision motivée, and any CRRV appeal already filed."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "ES": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid 12+ months at application, 2 blank pages, under 10 years old."},
+        {"key": "photo", "label": "Passport Photo (ICAO Doc 9303 spec)", "required": True, "hint": "Recent colour photo, plain light background, last 6 months."},
+        {"key": "admission-letter", "label": "Carta de Admisión (Final Admission Letter)", "required": True, "hint": "Final admission, not a place reservation — exact dates and timetable."},
+        {"key": "minor-authorisation", "label": "Parental Authorisation + Birth Certificate (under-18s)", "required": False, "hint": "Notarised consent to study in Spain, apostilled and sworn-translated."},
+        {"key": "centre-recognition", "label": "Centre Recognition (RUCT / Registro estatal / Cervantes)", "required": True, "hint": "Proof the centre and title are officially recognised in Spain."},
+        {"key": "access-credential", "label": "UNEDasiss Accreditation / Equivalencia de Nota Media", "required": False, "hint": "Undergrad: UNEDasiss + PCE. Postgrad: equivalencia or homologación."},
+        {"key": "matricula-receipt", "label": "Matrícula / Inscription Fee Receipt", "required": True, "hint": "Fee paid, or a declaración responsable if enrolment is not yet open."},
+        {"key": "transcripts", "label": "Academic Transcripts", "required": True, "hint": "All prior study, apostilled and sworn-translated where required."},
+        {"key": "degree-certificates", "label": "Degree Certificates (apostilled)", "required": False, "hint": "Needed for the equivalencia de nota media or full homologación."},
+        {"key": "language-evidence", "label": "Spanish / English Proficiency Evidence (DELE, SIELE, IELTS)", "required": False, "hint": "Level enough to follow teaching in the language of instruction."},
+        {"key": "motivation-letter", "label": "Carta de Motivación (Letter of Motivation)", "required": False, "hint": "Admissions document — it is not on any consular checklist."},
+        {"key": "bank-statements", "label": "Bank Statements / Proof of Funds (100% IPREM)", "required": True, "hint": "€600/month (IPREM, re-check yearly) × the real course length."},
+        {"key": "family-funds", "label": "Family Funds: Relative's Statements + Proof of Relationship", "required": False, "hint": "Proof of the family link plus the relative's own bank movements."},
+        {"key": "funding-evidence", "label": "Scholarship, Mobility or Work-Contract Evidence", "required": False, "hint": "A mobility body's responsibility certificate replaces IPREM proof."},
+        {"key": "accommodation", "label": "Accommodation Evidence (whole stay)", "required": True, "hint": "Tenancy, residence booking or host-family letter for the full period."},
+        {"key": "health-insurance", "label": "Health Insurance Policy (insurer authorised in Spain)", "required": True, "hint": "No co-pays, no carencias, no ceilings — travel cover is refused."},
+        {"key": "criminal-record", "label": "Criminal Record Certificate (Antecedentes Penales)", "required": True, "hint": "Stays over 6 months; every country lived in for 5 years; valid 3 months."},
+        {"key": "medical-certificate", "label": "Medical Certificate (WHO IHR 2005)", "required": True, "hint": "Stays over 6 months; doctor's licence number; valid 3 months."},
+        {"key": "apostille-translations", "label": "Apostilles & Sworn Translations (Traductor Jurado)", "required": True, "hint": "Photocopy taken after the apostille is affixed."},
+        {"key": "visa-form", "label": "Solicitud de Visado Nacional (signed)", "required": True, "hint": "Unsigned is not submitted; EX-00 instead when filing inside Spain."},
+        {"key": "appointment-confirmation", "label": "Cita Previa / BLS–VFS Appointment Confirmation", "required": False, "hint": "Lodge in person at least 2 months before the course starts."},
+        {"key": "visa-fee-receipt", "label": "Visa / Autorización Fee Receipt (tasa)", "required": True, "hint": "Consular route pays two tasas: €80 visa plus the autorización tasa 790 código 052. Filed inside Spain, only the 052."},
+        {"key": "prior-refusals", "label": "Previous Schengen / Spanish Visa Refusals", "required": False, "hint": "Must be declared — a common trigger for a personal interview."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "NL": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid 6+ months at the MVV appointment, 2 blank pages — the permit is never issued beyond passport expiry."},
+        {"key": "sponsor-register", "label": "IND Recognised-Sponsor Register Check (erkend referent)", "required": True, "hint": "Print of the IND 'study' register entry + Code of Conduct listing. No sponsor, no permit."},
+        {"key": "studielink", "label": "Studielink Enrolment Confirmation", "required": True, "hint": "Studielink application number plus the institution's own student number."},
+        {"key": "admission-letter", "label": "Letter of Admission (Toelatingsbrief / Bewijs van Toelating)", "required": True, "hint": "Conditional, then unconditional — proof of enrolment (bewijs van inschrijving) only exists after matriculation."},
+        {"key": "transcripts", "label": "Academic Transcripts & Marksheets", "required": True, "hint": "All prior study, certified for the institution's admissions office."},
+        {"key": "degree-certificates", "label": "Degree / Diploma Certificates", "required": False, "hint": "Bachelor's certificate for a master's applicant; for a zoekjaar file, top-200 or Erasmus Mundus proof under 3 years old."},
+        {"key": "idw-evaluation", "label": "Nuffic / IDW Credential Evaluation", "required": False, "hint": "Diploma evaluation where the institution or the gemeente asks for one — allow ~10 working weeks."},
+        {"key": "english-test", "label": "English Test Score (IELTS Academic / TOEFL iBT)", "required": True, "hint": "Code of Conduct floor is IELTS 6.0 (TOEFL iBT 80); most master's ask 6.5 — must still be valid at enrolment."},
+        {"key": "cv", "label": "CV / Curriculum Vitae", "required": False, "hint": "Standard in master's and HBO admission files."},
+        {"key": "motivation-letter", "label": "Motivation Letter (Motivatiebrief)", "required": True, "hint": "Programme-specific — it carries the case, because the IND never interviews a study applicant."},
+        {"key": "tuition-invoice", "label": "Tuition Fee Invoice / Receipt (Instellingscollegegeld)", "required": True, "hint": "Non-EU institutional fee — deposit or first instalment, per the offer. Sits on top of the study norm."},
+        {"key": "living-cost-transfer", "label": "Living-Cost Transfer Receipt to the University (Study Norm)", "required": True, "hint": "Most universities require 12 months at the IND study norm in their OWN account before the sponsor files."},
+        {"key": "scholarship-letter", "label": "Scholarship Award Letter", "required": False, "hint": "A full-cost award replaces the transfer; a partial one still needs the shortfall wired."},
+        {"key": "financier-declaration", "label": "Third-Party Financier Declaration + Income Proof", "required": False, "hint": "Parent or sponsor income must meet the IND norm — re-indexed 1 January and 1 July, so re-check before filing."},
+        {"key": "antecedents-certificate", "label": "Antecedents Certificate (Antecedentenverklaring, Appendix 7601)", "required": True, "hint": "Signed by every applicant aged 12+; re-declare within 4 weeks of any change."},
+        {"key": "prior-refusals", "label": "Previous Refusal / Entry-Ban / Prior-Stay Documents", "required": False, "hint": "Papers behind an adverse answer on appendix 7601 — Schengen refusal, EU entry ban, prior stay — plus the written explanation."},
+        {"key": "tb-declaration", "label": "TB Test Declaration of Intent (Appendix 7603)", "required": True, "hint": "A declaration only — the GGD screening happens after arrival. Skip if the nationality is exempt (appendix 7644)."},
+        {"key": "ind-form-7504", "label": "IND Application Form 7504 / 7505 (Sponsor-Filed)", "required": True, "hint": "Sponsor files it: 7504 (code 392, WO/HBO) or 7505 (code 393, secondary/MBO). Keep the copy."},
+        {"key": "health-insurance", "label": "Health Insurance Policy", "required": True, "hint": "Cover from the date of entry; switches to Dutch basisverzekering once paid work starts."},
+        {"key": "birth-certificate", "label": "Birth Certificate (Legalised / Apostilled + Translated)", "required": True, "hint": "For the gemeente and the BSN, not the IND — legalisation plus translation takes months, so start it at offer stage."},
+        {"key": "photo", "label": "Passport Photo (Dutch specification, 35×45 mm)", "required": False, "hint": "Handed in at the MVV appointment; MVV-exempt students are photographed at the IND desk instead."},
+        {"key": "mvv-appointment", "label": "MVV Appointment Confirmation (VFS / Dutch Mission)", "required": False, "hint": "Booked after approval — the MVV must be collected within 3 months of the IND decision."},
+        {"key": "housing-proof", "label": "Proof of Dutch Address / Housing Contract", "required": False, "hint": "A real, registrable Dutch address is what unlocks BRP registration and the BSN."},
+        {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
+    ],
+    "AE": [
+        {"key": "passport", "label": "Passport", "required": True, "hint": "Valid 6+ months when the entry permit is filed; spelling must match the certificates."},
+        {"key": "photo", "label": "Digital Photograph (ICP spec, 4.3×5.5 cm)", "required": True, "hint": "True-white background, taken within 6 months; digital JPEG, no prints."},
+        {"key": "admission-letter", "label": "Offer / Acceptance Letter (MoHESR-licensed)", "required": True, "hint": "From a MoHESR/CAA-licensed institution; many files also need an Arabic copy."},
+        {"key": "english-test", "label": "English Test Score (IELTS Academic / TOEFL iBT)", "required": True, "hint": "Meet the score on the offer letter — universities set their own bar since the Grade-12 EmSAT was scrapped in 2024."},
+        {"key": "attested-certificates", "label": "Attested Academic Certificates & Transcripts", "required": True, "hint": "Home ministry → UAE Embassy → MOFAIC chain (AED 150 per document); an apostille alone is not accepted."},
+        {"key": "moe-equivalency", "label": "MOE Grade-12 Equivalency (Muadala)", "required": False, "hint": "Ministry of Education equivalency for a foreign Grade-12 certificate — school level only."},
+        {"key": "mohesr-recognition", "label": "MoHESR University Certificate Recognition", "required": False, "hint": "Degree-level recognition on mohesr.gov.ae — needed for a foreign bachelor's before Master's entry."},
+        {"key": "legal-translation", "label": "Legal Translation (MoJ-licensed)", "required": False, "hint": "Anything not in Arabic or English needs a UAE Ministry of Justice-licensed translator."},
+        {"key": "tuition-receipt", "label": "Tuition / First-Semester Fee Receipt", "required": True, "hint": "The PRO usually will not file the entry permit until the first instalment is paid."},
+        {"key": "security-deposit", "label": "Refundable Visa Security Deposit Receipt", "required": False, "hint": "Institution-held, commonly AED 3,000–5,000 — refunded when the file closes cleanly."},
+        {"key": "financial-capability", "label": "Bank Statement / Sponsor Financial Undertaking", "required": False, "hint": "Only where the institution or the sponsor route asks — immigration sets no funds threshold here."},
+        {"key": "visa-request-form", "label": "University Student Visa Request Form", "required": True, "hint": "The institution's own form — most PRO offices want it at least two months before the intake start date."},
+        {"key": "sponsor-establishment-card", "label": "Sponsor Establishment Card / Immigration File", "required": False, "hint": "Sponsor's immigration file or free-zone card; quota or fines on it stall every file."},
+        {"key": "entry-permit", "label": "Entry Permit (e-Visa) PDF", "required": True, "hint": "PDF e-permit: single entry, valid 60 days from issue, carries the student's UID."},
+        {"key": "health-insurance", "label": "UAE Health Insurance Policy", "required": True, "hint": "UAE-licensed cover for the whole permit period; a lapse blocks issuance and renewal."},
+        {"key": "medical-fitness", "label": "Medical Fitness Certificate (DHA / EHS / SEHA)", "required": True, "hint": "Taken inside the UAE — HIV blood screen and TB chest X-ray; certificate valid 90 days."},
+        {"key": "emirates-id-receipt", "label": "Emirates ID Application Receipt (biometrics)", "required": False, "hint": "Issued at fingerprint enrolment; tracks card printing and Emirates Post delivery."},
+        {"key": "emirates-id-card", "label": "Emirates ID Card / e-Residence Confirmation", "required": True, "hint": "The Emirates ID is the residence document — no passport sticker since April 2022."},
+        {"key": "parent-sponsor-docs", "label": "Parent Sponsor & Relationship Documents", "required": False, "hint": "Sponsor's Emirates ID, salary certificate (AED 4,000/mo), tenancy and the attested birth certificate."},
+        {"key": "minor-consent", "label": "Parental Consent / Guardian Undertaking (under 18)", "required": False, "hint": "Notarised and attested parental NOC for applicants under 18; under-18s are exempt from the medical."},
+        {"key": "prior-uae-records", "label": "Previous UAE Visa / Cancellation Papers", "required": False, "hint": "Earlier residence, cancellation or exit papers — an undisclosed ban stops the file at clearance."},
+        {"key": "golden-visa-evidence", "label": "Golden Residence Evidence (Nomination / GPA)", "required": False, "hint": "Golden route: 95%+ secondary result, or GPA 3.5+ (Class A) / 3.8+ (Class B) within 2 years of graduating."},
+        {"key": "work-permit-noc", "label": "University No Objection Certificate (part-time work)", "required": False, "hint": "Institution NOC required before MOHRE will issue a part-time student work permit."},
         {"key": "other", "label": "Other", "required": False, "hint": "Anything not covered above."},
     ],
 }
@@ -329,7 +990,7 @@ def normalize_document_type(raw: str | None) -> str:
 # ---------------------------------------------------------------------------
 # Destination countries (student visas only)
 # ---------------------------------------------------------------------------
-# Six most popular study destinations. The `gradient_*` and `accent` colors feed
+# Ten most popular study destinations. The `gradient_*` and `accent` colors feed
 # the bundled SVG landmark art on the frontend.
 
 COUNTRIES = [
@@ -409,6 +1070,58 @@ COUNTRIES = [
         "student_intakes": ["January", "September"],
         "visa_types": {
             VISA_CATEGORY_STUDENT: ["D Study Visa", "Short Stay 'C' Study Visa"],
+        },
+    },
+    {
+        "code": "FR",
+        "name": "France",
+        "flag_emoji": "🇫🇷",
+        "landmark": "Eiffel Tower",
+        "gradient_from": "#1e40af",
+        "gradient_to": "#e11d48",
+        "accent": "#eff6ff",
+        "student_intakes": ["January", "September"],
+        "visa_types": {
+            VISA_CATEGORY_STUDENT: ["Long-Stay Student Visa (VLS-TS « Étudiant »)", "Temporary Long-Stay Student Visa (VLS-T)", "Entrance-Exam Visa (Court Séjour « Étudiant-Concours »)", "Short-Stay Study Visa (Schengen Type C)"],
+        },
+    },
+    {
+        "code": "ES",
+        "name": "Spain",
+        "flag_emoji": "🇪🇸",
+        "landmark": "Sagrada Família",
+        "gradient_from": "#b91c1c",
+        "gradient_to": "#f59e0b",
+        "accent": "#fff7ed",
+        "student_intakes": ["January", "February", "September", "October"],
+        "visa_types": {
+            VISA_CATEGORY_STUDENT: ["Long-Stay Study Visa (Type D) – Higher Education", "Long-Stay Study Visa (Type D) – Language / Training Activity", "Long-Stay Study Visa (Type D) – Secondary / Student Mobility", "Short-Stay Study Visa (Schengen Type C)"],
+        },
+    },
+    {
+        "code": "NL",
+        "name": "Netherlands",
+        "flag_emoji": "🇳🇱",
+        "landmark": "Kinderdijk Windmills",
+        "gradient_from": "#075985",
+        "gradient_to": "#38bdf8",
+        "accent": "#f0f9ff",
+        "student_intakes": ["September", "February"],
+        "visa_types": {
+            VISA_CATEGORY_STUDENT: ["Study Residence Permit (MVV/TEV) – Higher Education", "Study Residence Permit – Secondary / MBO", "Exchange Student Residence Permit", "Orientation Year (Zoekjaar) Permit"],
+        },
+    },
+    {
+        "code": "AE",
+        "name": "United Arab Emirates",
+        "flag_emoji": "🇦🇪",
+        "landmark": "Burj Khalifa",
+        "gradient_from": "#78350f",
+        "gradient_to": "#fbbf24",
+        "accent": "#fffbeb",
+        "student_intakes": ["January", "May", "September"],
+        "visa_types": {
+            VISA_CATEGORY_STUDENT: ["Student Residence Visa", "Study / Training Visit Visa", "Golden Residence – Outstanding Student", "Parent-Sponsored Student Residence"],
         },
     },
 ]
@@ -526,7 +1239,11 @@ def build_catalog_payload(db=None) -> dict:
     )
     return {
         "categories": [dict(item) for item in VISA_CATEGORIES],
+        # Generic wording — for org-wide surfaces (kanban columns, filter chips) where one
+        # list has to cover clients of every destination.
         "stages": [dict(item) for item in CLIENT_STAGES],
+        # Same stages, worded per destination — for anything scoped to ONE client.
+        "stages_by_country": stages_by_country(),
         "priorities": [dict(item) for item in CLIENT_PRIORITIES],
         # Legacy flat list (kept for back-compat); the per-country map below is what
         # the client-profile pickers use.
@@ -534,6 +1251,15 @@ def build_catalog_payload(db=None) -> dict:
         "document_types_by_country": doc_types_by_country,
         # Case-record fields to capture at each pipeline stage, resolved per destination.
         "stage_fields_by_country": stage_fields_by_country(),
+        # Option lists for the client intake record (Add/Edit client). Defined server-side
+        # so the dropdowns and the server-side validation can never drift apart.
+        "client_profile_options": {
+            field: [dict(item) for item in options]
+            for field, options in client_fields.CLIENT_PROFILE_OPTIONS.items()
+        },
+        "marketing_consent_channels": [dict(item) for item in client_fields.MARKETING_CONSENT_CHANNELS],
+        "city_suggestions": list(client_fields.CITY_SUGGESTIONS),
+        "field_of_study_suggestions": list(client_fields.FIELD_OF_STUDY_SUGGESTIONS),
         "countries": countries_payload,
     }
 
@@ -558,9 +1284,37 @@ from app.enterprise_stage_fields import (  # noqa: E402
 )
 
 
+# Lead-qualification questions that USED to be recorded here and are now first-class
+# columns on the client (captured in the Add-client form — see enterprise_client_fields).
+# They stay suppressed rather than deleted from the data file so that anything an org
+# already stored under these keys survives in stage_data; schema_patch copies it into the
+# new columns on startup.
+RETIRED_STAGE_FIELDS: dict[str, set[str]] = {
+    "new_lead": {
+        "enquiry_source",
+        "prior_refusal_history",
+        "admission_stage",
+        "funding_source",
+        "english_test_status",
+        "language_test_status",
+        "study_level",
+    },
+}
+
+
 def stage_fields_for(country_code: str | None, stage_key: str | None) -> list[dict]:
     """Fields to record at `stage_key` for `country_code`: the shared set plus that
-    destination's own fields (a country field reusing a shared key overrides it)."""
+    destination's own fields.
+
+    A country entry that reuses a shared key can do one of two things:
+      * REDEFINE it — the entry names a `label`, and replaces the shared field outright
+        (the UK's "Course Start Date (per CAS)" instead of the generic label).
+      * PATCH it — the entry leaves `label` blank, meaning "keep the shared field, just
+        refine it for this destination". Only its own non-empty values are applied, so
+        the shared label, type and options survive. Without this, a destination that
+        merely wanted to sharpen a hint would flatten a labelled `select` into an
+        unlabelled free-text box and lose its options.
+    """
     stage = str(stage_key or "").strip().lower()
     if stage not in CLIENT_STAGE_KEYS:
         return []
@@ -572,7 +1326,21 @@ def stage_fields_for(country_code: str | None, stage_key: str | None) -> list[di
         if field.get("applicable") is False:
             merged.pop(field["key"], None)
             continue
-        merged[field["key"]] = {k: v for k, v in field.items() if k != "applicable"}
+        entry = {k: v for k, v in field.items() if k != "applicable"}
+        shared = merged.get(field["key"])
+        if shared is not None and not str(entry.get("label", "")).strip():
+            patched = dict(shared)
+            for key, value in entry.items():
+                # `type` is part of the shared field's identity — changing it requires a
+                # full redefinition (i.e. naming a label), not a patch.
+                if key in ("label", "type") or value in ("", None):
+                    continue
+                patched[key] = value
+            merged[field["key"]] = patched
+            continue
+        merged[field["key"]] = entry
+    for retired in RETIRED_STAGE_FIELDS.get(stage, ()):
+        merged.pop(retired, None)
     return list(merged.values())
 
 

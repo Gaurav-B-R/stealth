@@ -26,10 +26,11 @@ import re
 from datetime import datetime, timedelta, date
 from typing import Optional
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app import models
+from app import enterprise_access as access
 from app import ai_usage
 from app import enterprise_catalog as catalog
 from app.utils import gemini_service as gemini_utils
@@ -171,8 +172,18 @@ def _client_brief(c: models.EnterpriseClient, member_names: dict | None = None) 
 # Tool factory — every tool is a closure bound to (db, organization_id)
 # ---------------------------------------------------------------------------
 
-def build_org_tools(db: Session, organization_id: int) -> list:
+def build_org_tools(db: Session, organization_id: int, ctx=None) -> list:
+    """The tool surface the assistant can call.
+
+    `ctx` is the caller's access context. Without it the assistant is the widest hole in the whole
+    access-control design: every tool below is a database query, so "list every client with their
+    passport number" would answer from the entire workspace no matter how narrow the asker's own
+    record scope is. Each tool therefore either goes through `_base()` (which is scoped) or gets
+    the filter applied explicitly, and the workload tool — which is a report about other people —
+    is withheld entirely from anyone who isn't workspace-wide.
+    """
     org_id = int(organization_id)
+    _scope_query = access.scope_client_query
 
     def _member_names() -> dict:
         rows = (
@@ -187,7 +198,18 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         return {int(uid): (full or email or "Team member") for uid, full, email in rows}
 
     def _base():
-        return db.query(models.EnterpriseClient).filter(models.EnterpriseClient.organization_id == org_id)
+        query = db.query(models.EnterpriseClient).filter(
+            models.EnterpriseClient.organization_id == org_id
+        )
+        if ctx is not None and _scope_query is not None:
+            return _scope_query(query, ctx)
+        return query
+
+    def _scoped_client_ids() -> set[int] | None:
+        """Client ids in scope, or None when the caller sees the whole workspace."""
+        if ctx is None or getattr(ctx, "scope_kind", "all") == "all":
+            return None
+        return {int(row[0]) for row in _base().with_entities(models.EnterpriseClient.id).all()}
 
     def get_portal_overview() -> dict:
         """Get a high-level overview of the entire portal: total clients, a breakdown
@@ -232,7 +254,7 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         """Count clients matching optional filters.
         - status: a pipeline stage such as 'approved', 'rejected', 'submitted',
           'documents', 'interview', 'awaiting decision', 'new lead', 'on hold'.
-        - destination_country: country name or 2-letter code (US, CA, UK, AU, DE, IE).
+        - destination_country: country name or 2-letter code (US, CA, UK, AU, DE, IE, FR, ES, NL, AE).
         - visa_type: a substring of the visa type (e.g. 'F-1', 'Study Permit').
         - added_period: filter by when the client was ADDED. One of 'today',
           'yesterday', 'this_week', 'this_month', 'all'.
@@ -331,7 +353,9 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         detail = _client_brief(client, names)
         detail.update({
             "nationality": client.nationality,
-            "passport_number": client.passport_number,
+            # Same rule as _serialize_client: omitted, never masked.
+            "passport_number": (client.passport_number
+                                if (ctx is None or ctx.has("clients.view_sensitive")) else None),
             "passport_expiry": _iso(client.passport_expiry),
             "application_reference": client.application_reference,
             "added_on": _iso(client.created_at),
@@ -393,12 +417,18 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         cutoff = datetime.utcnow() - timedelta(days=days)
         names = _member_names()
         added = _base().filter(models.EnterpriseClient.created_at >= cutoff).order_by(models.EnterpriseClient.created_at.desc()).limit(25).all()
-        notes = (
+        # The join to EnterpriseClient is here for the name, but it also carries the columns the
+        # scope predicate needs — so scope it. Without this the assistant reads out note bodies
+        # from clients the asker cannot open, which is worse than leaking the name alone.
+        notes_q = (
             db.query(models.EnterpriseClientNote, models.EnterpriseClient.full_name)
             .join(models.EnterpriseClient, models.EnterpriseClient.id == models.EnterpriseClientNote.client_id)
-            .filter(models.EnterpriseClientNote.organization_id == org_id, models.EnterpriseClientNote.created_at >= cutoff)
-            .order_by(models.EnterpriseClientNote.created_at.desc()).limit(25).all()
+            .filter(models.EnterpriseClientNote.organization_id == org_id,
+                    models.EnterpriseClientNote.created_at >= cutoff)
         )
+        if ctx is not None and _scope_query is not None:
+            notes_q = _scope_query(notes_q, ctx)
+        notes = notes_q.order_by(models.EnterpriseClientNote.created_at.desc()).limit(25).all()
         return {
             "window_days": days,
             "clients_added": [_client_brief(c, names) for c in added],
@@ -411,6 +441,11 @@ def build_org_tools(db: Session, organization_id: int) -> list:
     def get_team_workload() -> dict:
         """List team members and how many active (non-closed) clients are assigned to
         each, plus how many clients are currently unassigned. Use for workload questions."""
+        # A staff-productivity report about colleagues. Scoping the counts would produce a
+        # misleading answer rather than a safe one, so it is refused outright below org scope.
+        if ctx is not None and getattr(ctx, "scope_kind", "all") != "all":
+            return {"error": "You can only see workload across the whole workspace, "
+                             "and your access is limited to your own clients."}
         names = _member_names()
         terminal = [catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]
         counts = dict(
@@ -524,9 +559,10 @@ def build_org_tools(db: Session, organization_id: int) -> list:
             if not cid:
                 return None
             if cid not in name_cache:
-                row = (db.query(models.EnterpriseClient.full_name)
-                       .filter(models.EnterpriseClient.id == cid,
-                               models.EnterpriseClient.organization_id == organization_id).first())
+                # Resolved through _base(), which is scope-filtered: an event attached to an
+                # out-of-scope client must not be able to reveal that client's name.
+                row = _base().with_entities(models.EnterpriseClient.full_name).filter(
+                    models.EnterpriseClient.id == cid).first()
                 name_cache[cid] = row[0] if row else None
             return name_cache[cid]
 
@@ -537,6 +573,15 @@ def build_org_tools(db: Session, organization_id: int) -> list:
                       models.EnterpriseCalendarEvent.event_date <= end))
         if not include_done:
             mq = mq.filter(models.EnterpriseCalendarEvent.is_done.is_(False))
+        # An event that hangs off a client inherits that client's scope; a standalone one belongs
+        # to whoever created it. Same rule the calendar endpoint applies.
+        scoped_ids = _scoped_client_ids()
+        if scoped_ids is not None:
+            mq = mq.filter(or_(
+                models.EnterpriseCalendarEvent.client_id.in_(scoped_ids or {-1}),
+                and_(models.EnterpriseCalendarEvent.client_id.is_(None),
+                     models.EnterpriseCalendarEvent.created_by_user_id == ctx.user_id),
+            ))
         for ev in mq.order_by(models.EnterpriseCalendarEvent.event_date).all():
             d = ev.event_date
             events.append({
@@ -545,9 +590,8 @@ def build_org_tools(db: Session, organization_id: int) -> list:
                 "notes": (ev.notes or "")[:200] or None, "done": bool(ev.is_done),
                 "overdue": bool(d and d < today and not ev.is_done), "source": "scheduled",
             })
-        for c in (db.query(models.EnterpriseClient)
-                  .filter(models.EnterpriseClient.organization_id == organization_id,
-                          models.EnterpriseClient.target_date.isnot(None),
+        for c in (_base()
+                  .filter(models.EnterpriseClient.target_date.isnot(None),
                           models.EnterpriseClient.target_date >= start,
                           models.EnterpriseClient.target_date <= end,
                           models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED])).all()):
@@ -556,9 +600,8 @@ def build_org_tools(db: Session, organization_id: int) -> list:
                            "title": f"Key date — {c.full_name}", "type": "client_deadline",
                            "client": c.full_name, "stage": _stage_label(c.status),
                            "overdue": bool(d and d < today), "source": "client_key_date"})
-        for c in (db.query(models.EnterpriseClient)
-                  .filter(models.EnterpriseClient.organization_id == organization_id,
-                          models.EnterpriseClient.passport_expiry.isnot(None),
+        for c in (_base()
+                  .filter(models.EnterpriseClient.passport_expiry.isnot(None),
                           models.EnterpriseClient.passport_expiry >= start,
                           models.EnterpriseClient.passport_expiry <= end).all()):
             d = c.passport_expiry
@@ -570,7 +613,11 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         return {"today": today.isoformat(), "within_days": days,
                 "count": len(events), "events": events[:60]}
 
-    return [
+    # Record scope decides WHICH clients the assistant can reach; capabilities decide WHAT it may
+    # say about them. Both are needed: a member deliberately denied `documents.view` or
+    # `clients.view_sensitive` would otherwise get raw document text and passport numbers just by
+    # asking the assistant for them — which defeats the point of denying the capability at all.
+    tools = [
         get_portal_overview,
         count_clients,
         search_clients,
@@ -578,10 +625,14 @@ def build_org_tools(db: Session, organization_id: int) -> list:
         clients_needing_attention,
         list_recent_activity,
         get_team_workload,
-        list_client_documents,
-        read_client_document,
         list_upcoming_calendar_events,
     ]
+    if ctx is None or ctx.has("documents.view"):
+        tools.append(list_client_documents)
+    if ctx is None or ctx.has("documents.download"):
+        # Reading a document's extracted text is the same disclosure as downloading it.
+        tools.append(read_client_document)
+    return tools
 
 
 # ---------------------------------------------------------------------------
@@ -657,13 +708,19 @@ def run_enterprise_ai_chat(
     role: str,
     message: str,
     history: Optional[list] = None,
+    ctx=None,
 ) -> str:
-    """Run one turn of the enterprise AI assistant. Returns the assistant's text answer."""
+    """Run one turn of the enterprise AI assistant. Returns the assistant's text answer.
+
+    `ctx` is the caller's access context. It must be threaded through: the assistant answers from
+    live database queries, so without it a member limited to their own caseload could simply ask
+    for every client in the workspace and get them.
+    """
     if not is_ai_configured():
         return ("The AI assistant isn't configured yet — an administrator needs to enable "
                 "Rilono AI on the server.")
 
-    tools = build_org_tools(db, organization.id)
+    tools = build_org_tools(db, organization.id, ctx=ctx)
     system = _system_instruction(
         organization_name=organization.company_name or "your consultancy",
         user_name=(user.full_name or user.email or "there"),
@@ -1126,6 +1183,41 @@ def run_deep_scan_audit(
         ]
     context_text = "\n\n".join(f"=== {title} ===\n{body}" for title, body in sections)
 
+def _deep_scan_destination_rules(client) -> str:
+    """The client's OWN destination checklist and document-validity rules.
+
+    Without this the audit judged every client against one hardcoded list of enrolment
+    documents (I-20 / CAS / LOA / CoE / Zulassungsbescheid), so a French, Spanish, Dutch
+    or Emirati file was measured against paperwork it will never contain — and the real
+    artifacts (accord préalable, Carta de Admisión, IND approval, entry permit) counted
+    for nothing. Sourced from the same catalog the counselor's own checklist renders from,
+    so the two can never drift apart.
+    """
+    code = str(getattr(client, "destination_country_code", "") or "").strip().upper()
+    country = catalog.get_country(code)
+    if not country:
+        return ""
+    docs = catalog.document_types_for_country(code)
+    required = [d["label"] for d in docs if d.get("required")]
+    optional = [d["label"] for d in docs if not d.get("required") and d.get("key") != "other"]
+    lines = [f"\n=== DESTINATION RULES — {country['name']} ({code}) ===",
+             "Judge this file against THIS destination's process only. Documents from other "
+             "countries' processes are irrelevant and must not be reported as missing."]
+    if required:
+        lines.append("Standard required documents: " + "; ".join(required) + ".")
+    if optional:
+        lines.append("Situational documents (absence is not by itself a finding): "
+                     + "; ".join(optional) + ".")
+    try:
+        from app.utils.gemini_service import _DESTINATION_TIMELINE_RULES
+        rules = str(_DESTINATION_TIMELINE_RULES.get(code) or "").strip()
+    except Exception:
+        rules = ""
+    if rules:
+        lines.append("Validity / date rules for this destination:\n" + rules)
+    return "\n".join(lines) + "\n"
+
+
     system = (
         "You are Rilono AI's Deep Scan: a strict, meticulous forensic auditor for a visa "
         "consultancy, reviewing one client's complete dossier before money and a visa outcome "
@@ -1168,15 +1260,15 @@ def run_deep_scan_audit(
 
 Check at minimum (report anything else irregular too):
 1. Identity consistency — name, date of birth, passport number, nationality identical across the profile, stage records and every document.
-2. Timeline compliance — passport validity (6 months beyond travel), bank statements older than 6 months, offer/enrolment confirmations (I-20, CAS, LOA/PAL, CoE, Zulassungsbescheid), intake or target dates already past, stale pipeline stage vs the target date.
+2. Timeline compliance — passport validity (6 months beyond travel), bank statements older than 6 months, the enrolment confirmation and other dated artifacts named in the destination rules below, intake or target dates already past, stale pipeline stage vs the target date.
 3. Financial sufficiency — do the documented funds clearly cover tuition + living costs for a {client.visa_type or 'student'} visa to {client.destination_country_name or 'the destination'}? Flag missing or ambiguous evidence.
-4. Missing critical documents for this destination and visa type.
+4. Missing critical documents for this destination and visa type — judge against the destination checklist below, not a generic one.
 5. Staff data-entry quality — placeholder/test values, typos, invalid email/phone formats, wrong-looking passport numbers, contradictions between profile fields and stage records or documents.
 6. Cross-source contradictions — anything in notes, emails, universities, interview results or payments that contradicts the profile, the documents, or each other.
 7. Process health — unconfirmed data-processing consent, failed/unpaid/disputed/refunded payments, poor mock-interview verdicts close to the appointment, red-flagged documents never resolved.
 
 Every finding must cite its evidence with sources. If the file is genuinely clean, return few or no findings — do not manufacture problems.
-
+{_deep_scan_destination_rules(client)}
 Return STRICT JSON exactly matching this schema:
 {output_schema}"""
 

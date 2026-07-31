@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Float, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -195,8 +195,177 @@ class EnterpriseOrganizationMember(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    # --- Access control ---------------------------------------------------
+    # `role` above is now a maintained MIRROR of role_key (see legacy_role_for in
+    # app/enterprise_access.py): three older code paths still read that column, and one of
+    # them decides whether bank details are included in a payload, so it can never drift.
+    role_key = Column(String, nullable=False, default="viewer", index=True)
+    # owner | admin | branch_manager | counsellor | finance | viewer | custom
+    custom_role_id = Column(Integer, ForeignKey("enterprise_roles.id"), nullable=True, index=True)
+    # NULLABLE WITH NO DEFAULT, on purpose. NULL means "inherit the role's own scope", which is
+    # what makes a preset's data_scope (counsellor = only their own clients) take effect at all.
+    # A NOT NULL DEFAULT 'all' here would pin every member to workspace-wide access and turn
+    # every role's default scope into dead code.
+    data_scope = Column(String, nullable=True)             # all | branch | assigned
+    capability_grants_json = Column(Text, nullable=True)   # JSON array — added on top of the role
+    capability_denies_json = Column(Text, nullable=True)   # JSON array — removed; deny always wins
+    primary_branch_id = Column(Integer, ForeignKey("enterprise_branches.id"), nullable=True, index=True)
+    job_title = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    # Deactivation keeps the row (history, audit trail, record reassignment). `is_active` above
+    # stays the gate; `status` records why it flipped.
+    status = Column(String, nullable=False, default="active", index=True)  # active | suspended
+    deactivated_at = Column(DateTime(timezone=True), nullable=True)
+    deactivated_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    invited_at = Column(DateTime(timezone=True), nullable=True)
+    invite_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    last_active_at = Column(DateTime(timezone=True), nullable=True)
+
     __table_args__ = (
         Index("ix_ent_org_member_org_user_unique", "organization_id", "user_id", unique=True),
+        Index("ix_ent_member_org_role_key", "organization_id", "role_key"),
+    )
+
+
+class EnterpriseBranch(Base):
+    """A physical office of an enterprise organization (multi-office consultancies are the
+    norm here: a head office plus city branches, with staff hired per office).
+
+    A branch is two things at once — a label on a client record, and the unit a member's
+    data scope can be narrowed to (see EnterpriseMemberBranch).
+
+    Offices are ARCHIVED (is_active=False + archived_at), never deleted: clients, member
+    links and audit rows keep pointing at them, so the name has to survive.
+    """
+    __tablename__ = "enterprise_branches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    code = Column(String, nullable=True)            # the org's own short code, e.g. "HYD-01"
+    city = Column(String, nullable=True)
+    state_region = Column(String, nullable=True)
+    country_code = Column(String, nullable=True)    # ISO-3166 alpha-2
+    address_line = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    timezone = Column(String, nullable=True)
+    # Exactly one default per org, maintained in application code. New clients and new
+    # members land in the default office when nobody picks one.
+    is_default = Column(Boolean, nullable=False, default=False, index=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # There is deliberately NO unique index on (organization_id, name). Name uniqueness is
+    # enforced in application code on lower(trim(name)) and must include ARCHIVED rows — so a
+    # rename can legitimately collide with an office nobody can currently see. A DB constraint
+    # would turn that into an unhandled IntegrityError (500) instead of the 409 that tells the
+    # user to reactivate the archived office, and a case-sensitive index would let "Kukatpally"
+    # and "kukatpally" both through anyway.
+    __table_args__ = (
+        Index("ix_ent_branch_org_active", "organization_id", "is_active"),
+    )
+
+
+class EnterpriseMemberBranch(Base):
+    """Which offices a staff member covers (many-to-many — a branch manager can run several).
+
+    Keyed on `member_id`, not `user_id`: a member row already implies its tenant, so there is
+    no way to link a user to an office in an organization they don't belong to. It also keeps
+    seat billing honest — enterprise_billing.active_seat_count counts member rows, so granting
+    a second office must never read as a second seat.
+
+    ondelete=CASCADE because these rows are pure join data: once the membership is gone the
+    office assignments mean nothing.
+    """
+    __tablename__ = "enterprise_member_branches"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    member_id = Column(
+        Integer,
+        ForeignKey("enterprise_organization_members.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    branch_id = Column(Integer, ForeignKey("enterprise_branches.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_ent_member_branch_unique", "member_id", "branch_id", unique=True),
+        Index("ix_ent_member_branch_org", "organization_id", "branch_id"),
+    )
+
+
+class EnterpriseRole(Base):
+    """A custom, per-organization role — a named capability set a customer assembled themselves.
+
+    The built-in roles (owner, admin, branch manager, counsellor, finance, viewer, plus the
+    "custom" pseudo-role) live in CODE, not in this table — see app/enterprise_access.py — so a
+    preset can gain a capability in a release without a data migration. Only invented roles
+    land here.
+
+    Archived (is_active=False), never deleted: members and audit rows reference them.
+    """
+    __tablename__ = "enterprise_roles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    slug = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    capabilities_json = Column(Text, nullable=True)    # JSON array of capability keys
+    # NULL = inherit the scope of the preset this role was based on, instead of freezing a
+    # scope at creation time (same reasoning as EnterpriseOrganizationMember.data_scope).
+    data_scope = Column(String, nullable=True)         # all | branch | assigned
+    based_on_role_key = Column(String, nullable=True)  # the preset it was duplicated from
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Slug/name uniqueness is application-enforced for the same reason as EnterpriseBranch:
+    # the check is case-insensitive AND spans archived rows, which a DB index cannot express.
+    __table_args__ = (
+        Index("ix_ent_role_org_active", "organization_id", "is_active"),
+        Index("ix_ent_role_org_slug", "organization_id", "slug"),
+    )
+
+
+class EnterpriseAccessAudit(Base):
+    """Append-only log of who changed permissions, roles, offices and team membership.
+
+    This is the record a consultancy shows when a student's file was read or moved by someone
+    who should not have had access, so rows are never updated or deleted, and actor_name /
+    target_name are SNAPSHOTS — the log has to stay readable after a member is removed and
+    their user row de-identified.
+
+    target_role_id and target_branch_id deliberately carry NO foreign key: an audit entry
+    outlives its subject (roles and offices get archived and may one day be purged), and an FK
+    would either block that or cascade the evidence away.
+    """
+    __tablename__ = "enterprise_access_audit"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    action = Column(String, nullable=False, index=True)   # member_role_changed | branch_archived | ...
+    actor_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    actor_name = Column(String, nullable=True)            # snapshot
+    target_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    target_name = Column(String, nullable=True)           # snapshot
+    target_role_id = Column(Integer, nullable=True)       # no FK — see the note above
+    target_branch_id = Column(Integer, nullable=True)     # no FK — see the note above
+    summary = Column(String, nullable=False)              # one line, always esc()'d in the UI
+    detail_json = Column(Text, nullable=True)             # {"before": {...}, "after": {...}}
+    ip_address = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_ent_access_audit_org_created", "organization_id", "created_at"),
+        Index("ix_ent_access_audit_org_action", "organization_id", "action"),
     )
 
 
@@ -230,12 +399,23 @@ class EnterpriseClient(Base):
     full_name = Column(String, nullable=False)
     email = Column(String, nullable=True, index=True)
     phone = Column(String, nullable=True)
+    # Counselling in this market runs on WhatsApp, and students routinely give a parent's
+    # or a landline number as the primary contact — so the two are recorded separately.
+    whatsapp_number = Column(String, nullable=True)
+    current_city = Column(String, nullable=True)
+    gender = Column(String, nullable=True)
     nationality = Column(String, nullable=True)
     date_of_birth = Column(Date, nullable=True)
     # Passport number is a government identifier — stored encrypted at rest.
     # (Encrypted values are not substring-searchable; excluded from client search.)
     passport_number = Column(EncryptedString, nullable=True)
     passport_expiry = Column(Date, nullable=True)
+
+    # Parent / guardian — for a student case this is usually the payer, the sponsor on the
+    # financial documents, and the number the agency actually calls when a student goes quiet.
+    guardian_name = Column(String, nullable=True)
+    guardian_relation = Column(String, nullable=True)
+    guardian_phone = Column(String, nullable=True)
 
     # Visa case
     visa_category = Column(String, nullable=False, default="student")  # student|tourist|work|immigration
@@ -244,6 +424,43 @@ class EnterpriseClient(Base):
     visa_type = Column(String, nullable=False)
     intake = Column(String, nullable=True)
     application_reference = Column(String, nullable=True)
+    # What they want to study and how far along the admission is — the questions that decide
+    # whether a lead is sellable at all. Option keys come from enterprise_client_fields.
+    study_level = Column(String, nullable=True)
+    field_of_study = Column(String, nullable=True)
+    admission_stage = Column(String, nullable=True)
+    # Highest-signal risk field on the intake form: a refusal discovered after the fee has
+    # been collected is the most common refund dispute in this business.
+    prior_refusal_history = Column(String, nullable=True)
+    prior_refusal_notes = Column(Text, nullable=True)
+
+    # Academic profile & tests (lead qualification, and the inputs the AI shortlist needs)
+    highest_qualification = Column(String, nullable=True)
+    qualification_score = Column(String, nullable=True)   # free-form: "7.2", "76%", "First class"
+    qualification_scale = Column(String, nullable=True)   # percentage | cgpa_10 | cgpa_4 | …
+    year_of_passing = Column(Integer, nullable=True)
+    backlogs_count = Column(Integer, nullable=True)
+    work_experience_band = Column(String, nullable=True)
+    english_test_status = Column(String, nullable=True)
+    english_test_type = Column(String, nullable=True)
+    english_test_score = Column(String, nullable=True)    # scales differ wildly (7.5 / 110 / 65)
+    english_test_date = Column(Date, nullable=True)
+    aptitude_test_type = Column(String, nullable=True)
+    aptitude_test_score = Column(String, nullable=True)
+
+    # Funding
+    budget_band = Column(String, nullable=True)
+    funding_source = Column(String, nullable=True)
+
+    # Where the lead came from & who owns it
+    lead_source = Column(String, nullable=True)
+    lead_source_detail = Column(String, nullable=True)    # referrer / campaign / partner name
+    branch_name = Column(String, nullable=True)
+    # The office this case belongs to. branch_id is authoritative and branch_name is its
+    # server-written display copy — branch_name predates this table, is full of free-text
+    # spellings from live data and is still read by the client search clause, so it stays.
+    branch_id = Column(Integer, ForeignKey("enterprise_branches.id"), nullable=True, index=True)
+    next_followup_date = Column(Date, nullable=True)
 
     # Pipeline
     status = Column(String, nullable=False, default="new_lead", index=True)
@@ -263,6 +480,12 @@ class EnterpriseClient(Base):
     # controller; Rilono the processor). Proof-of-consent for end-client data.
     client_consent_confirmed_at = Column(DateTime(timezone=True), nullable=True)
     client_consent_confirmed_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # Purpose-specific consents, each recorded separately from the processing consent
+    # above because they authorise a different thing: promotional contact (per channel,
+    # opt-in) and sharing the profile with universities / partner institutions abroad.
+    marketing_consent_channels = Column(String, nullable=True)   # "whatsapp,email"
+    marketing_consent_at = Column(DateTime(timezone=True), nullable=True)
+    institution_share_consent_at = Column(DateTime(timezone=True), nullable=True)
 
     # Assignment & meta
     assigned_to_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
@@ -306,6 +529,12 @@ class EnterpriseClient(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    writing_drafts = relationship(
+        "EnterpriseClientWritingDraft",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     # Money records are RETAINED (not deleted) when a client is removed: default cascade
     # only, no delete-orphan and no passive_deletes, so SQLAlchemy nulls client_id via
     # UPDATE rather than deleting the financial rows (see EnterpriseStudentPayment).
@@ -313,10 +542,19 @@ class EnterpriseClient(Base):
         "EnterpriseStudentPayment",
         back_populates="client",
     )
+    finance_entries = relationship(
+        "EnterpriseFinanceEntry",
+        back_populates="client",
+    )
 
     __table_args__ = (
         Index("ix_ent_clients_org_status", "organization_id", "status"),
         Index("ix_ent_clients_org_created", "organization_id", "created_at"),
+        # The three access-scope predicates. Every scoped list/count query filters on
+        # organization_id plus exactly one of these, so each pairing gets its own index.
+        Index("ix_ent_clients_org_branch", "organization_id", "branch_id"),
+        Index("ix_ent_clients_org_assigned", "organization_id", "assigned_to_user_id"),
+        Index("ix_ent_clients_org_creator", "organization_id", "created_by_user_id"),
     )
 
 
@@ -505,6 +743,66 @@ class EnterpriseClientDeepScan(Base):
     )
 
 
+class EnterpriseClientWritingDraft(Base):
+    """One AI-drafted admissions document for a client — a Statement of Purpose or a
+    Letter of Recommendation — from the enterprise Writing Studio.
+
+    Versions are immutable: a refinement inserts a NEW row sharing the first version's
+    `root_id`, so a counselor can compare "make it more technical" against the original
+    and re-export any version's Word file. The `recommender_*` columns only apply to
+    LORs: a letter is written in the recommender's voice, and who they are changes what
+    they can credibly attest to, so their identity is part of the document's inputs.
+    """
+    __tablename__ = "enterprise_client_writing_drafts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    doc_type = Column(String, nullable=False, default="sop")  # sop | lor
+    # First version's id — the whole chain shares it (set right after the first flush).
+    root_id = Column(Integer, nullable=True, index=True)
+    version = Column(Integer, nullable=False, default=1)
+
+    # What the document is aimed at (snapshotted, so later profile edits don't rewrite history).
+    country_code = Column(String, nullable=True)
+    university = Column(String, nullable=True)
+    program = Column(String, nullable=True)
+    study_level = Column(String, nullable=True)
+    intake = Column(String, nullable=True)
+
+    # LOR only — whose voice the letter speaks in.
+    recommender_type = Column(String, nullable=True)  # professor|supervisor|manager|mentor|community
+    recommender_name = Column(String, nullable=True)
+    recommender_title = Column(String, nullable=True)
+    recommender_org = Column(String, nullable=True)
+    recommender_email = Column(String, nullable=True)
+    relationship_context = Column(Text, nullable=True)  # how they know the student, in staff's words
+
+    brief = Column(Text, nullable=True)        # the counselor's emphasis brief (generation input)
+    instruction = Column(Text, nullable=True)  # the revision instruction that produced THIS version
+
+    title = Column(String, nullable=True)
+    content_md = Column(Text, nullable=False)  # the document itself (Markdown)
+    # Rilono's coaching notes for the counselor: every [PLACEHOLDER] left in the draft and
+    # what to strengthen. Kept OUT of content_md so the exported Word file can put them on
+    # a final, deletable page instead of inside the letter.
+    notes_md = Column(Text, nullable=True)
+    word_count = Column(Integer, nullable=False, default=0)
+    model_used = Column(String, nullable=True)  # internal only — never sent to the frontend
+    credits_charged = Column(Integer, nullable=False, default=0)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    client = relationship("EnterpriseClient", back_populates="writing_drafts")
+
+    __table_args__ = (
+        Index("ix_ent_writing_drafts_client_created", "client_id", "created_at"),
+        Index("ix_ent_writing_drafts_root_version", "root_id", "version"),
+    )
+
+
 class EnterpriseInterviewSession(Base):
     """A completed AI mock visa interview for a client (transcript + feedback)."""
     __tablename__ = "enterprise_interview_sessions"
@@ -671,6 +969,45 @@ class EnterpriseCalendarEvent(Base):
     )
 
 
+class EnterpriseCalendarEventAttachment(Base):
+    """A reference file pinned to a calendar event — the appointment letter, the agenda for
+    a call, the checklist to run through.
+
+    Files upload immediately rather than on form submit (the calendar form posts JSON, so a
+    file input could never ride along). When the event already exists they bind straight to
+    it; when the reminder is still being composed they land with `event_id` NULL under a
+    per-modal `draft_token` and are bound once it saves — the same draft-then-bind dance the
+    email composer does, keyed on a token so a cancelled modal's files cannot leak into the
+    next reminder. See app/enterprise_calendar_files.py.
+
+    Deliberately no client_id: the owning event already carries the client link and can be
+    re-pointed at a different client on edit, so a copy here would be a second source of
+    truth that silently drifts. The delete-client blob sweep joins through the event instead.
+    Bytes live in the same encrypted private R2 storage as client documents and are only ever
+    served back through the authenticated, org-scoped download endpoint. Internal to staff —
+    never surfaced in the client portal or attached to client emails."""
+    __tablename__ = "enterprise_calendar_event_attachments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    event_id = Column(
+        Integer, ForeignKey("enterprise_calendar_events.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # Set only while unbound; cleared on bind. Owner of a not-yet-saved reminder's uploads.
+    draft_token = Column(String, nullable=True, index=True)
+    original_filename = Column(String, nullable=False)
+    storage_key = Column(String, nullable=False)  # private R2 object key (not a public URL)
+    file_size = Column(Integer, nullable=True)
+    mime_type = Column(String, nullable=True)
+    uploaded_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    uploaded_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_ent_cal_att_draft", "organization_id", "draft_token", "event_id"),
+    )
+
+
 class EnterpriseCalendarReminderRun(Base):
     """Idempotency guard for the daily enterprise calendar-reminder email job
     (one run per UTC day), mirroring AIDailyNotificationRun."""
@@ -727,6 +1064,10 @@ class EnterpriseSupportRequest(Base):
     subject = Column(String, nullable=False)
     message = Column(Text, nullable=False)
     status = Column(String, nullable=False, default="open")  # open | in_progress | closed
+    # Attachments are forwarded straight to the support inbox as email attachments (never
+    # stored in our bucket). This column keeps only the manifest — [{filename, size}] — so
+    # the requester's history can show what they sent.
+    attachments_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -1156,6 +1497,93 @@ class EnterprisePaymentRefund(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 
 
+class EnterpriseFinanceEntry(Base):
+    """One hand-recorded income or expense in a consultancy's own books.
+
+    This table holds ONLY money the platform cannot already see. Collected student
+    payments, the Rilono commission on them, credit top-ups, the infrastructure fee,
+    refunds and lost chargebacks are derived at read time from their own authoritative
+    rows (see app/enterprise_finance.py) — copying them here would invite double
+    counting the moment a webhook lands. So: fees taken in cash, university commissions
+    received, salaries, rent, ads and agent payouts live here; anything Razorpay knows
+    about does not.
+
+    `repeat_monthly` makes a row a monthly TEMPLATE (salary, rent, a subscription):
+    occurrences are projected at read time from `occurred_on` up to today (or
+    `repeat_until`), so there is no cron job and editing the template retroactively
+    fixes every month it produced.
+
+    Money is integer paise, INR (matching enterprise_student_payments). `client_id`
+    nulls out on client delete rather than cascading, and `client_name_snapshot`
+    preserves who a fee belonged to — a financial record has to outlive the client row.
+    """
+    __tablename__ = "enterprise_finance_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+
+    kind = Column(String, nullable=False, default="expense", index=True)   # income | expense
+    category = Column(String, nullable=False, default="other_expense", index=True)
+    amount_paise = Column(Integer, nullable=False, default=0)
+    tax_paise = Column(Integer, nullable=False, default=0)   # GST/tax portion of the amount
+    currency = Column(String, nullable=False, default="INR")
+    occurred_on = Column(Date, nullable=False, index=True)
+
+    description = Column(String, nullable=True)
+    counterparty = Column(String, nullable=True, index=True)  # vendor, payer or partner
+    payment_method = Column(String, nullable=True)            # cash|bank_transfer|upi|card|cheque|other
+    reference = Column(String, nullable=True)                 # invoice / bill / voucher number
+    notes = Column(Text, nullable=True)
+
+    # Optional case attribution — what makes per-client profitability possible.
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="SET NULL"), nullable=True, index=True)
+    client_name_snapshot = Column(String, nullable=True)
+
+    # Monthly template (salaries, rent, subscriptions). repeat_until ends the series.
+    repeat_monthly = Column(Boolean, nullable=False, default=False)
+    repeat_until = Column(Date, nullable=True)
+
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Retention: default cascade only (no delete-orphan, no passive_deletes) so a client
+    # delete issues UPDATE … SET client_id = NULL instead of deleting the money row.
+    client = relationship("EnterpriseClient", back_populates="finance_entries")
+
+    __table_args__ = (
+        Index("ix_ent_fin_entries_org_date", "organization_id", "occurred_on"),
+        Index("ix_ent_fin_entries_org_kind", "organization_id", "kind"),
+    )
+
+
+class EnterpriseFinanceSettings(Base):
+    """Per-organization finance configuration (one row per org).
+
+    `hourly_cost_paise` is the org's own blended staff cost — it turns hours saved by
+    the platform into rupees, and because the number is theirs the ROI panel can't be
+    accused of using a flattering assumption. `savings_overrides_json` holds their
+    edits to the per-task minute baselines ({"deep_scan": 30, …}). `opening_balance_*`
+    anchors the cash position, and `fy_start_month` makes "this quarter"/"this FY"
+    match their financial year (April in India).
+    """
+    __tablename__ = "enterprise_finance_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, unique=True, index=True)
+    hourly_cost_paise = Column(Integer, nullable=False, default=40000)   # ₹400/hour
+    # A BALANCE, not a transaction: integer paise caps at ~₹2.1 crore on Postgres int4,
+    # which a real consultancy's bank balance can exceed, so this one column is BIGINT.
+    opening_balance_paise = Column(BigInteger, nullable=False, default=0)
+    opening_balance_on = Column(Date, nullable=True)
+    fy_start_month = Column(Integer, nullable=False, default=4)          # April–March
+    savings_overrides_json = Column(Text, nullable=True)                 # {"<activity>": minutes}
+    updated_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 class CompanyFinanceEntry(Base):
     __tablename__ = "company_finance_entries"
 
@@ -1481,6 +1909,9 @@ class CourseCatalogUniversity(Base):
     domain_key = Column(String, nullable=True, index=True)
     city = Column(String, nullable=True)
     qs_world_rank = Column(String, nullable=True)      # display string, e.g. "34" or "301-350"
+    # Sortable/filterable form of qs_world_rank (best end of a band: "301-350" -> 301).
+    # The advanced browse filters page in SQL, so "within the top 200" needs a number.
+    qs_rank_numeric = Column(Integer, nullable=True, index=True)
     national_rank = Column(String, nullable=True)
     university_type = Column(String, nullable=True)    # public|private
     website_url = Column(String, nullable=True)
@@ -1531,6 +1962,14 @@ class CourseCatalogCourse(Base):
     ielts_requirement = Column(String, nullable=True)
     toefl_requirement = Column(String, nullable=True)
     gre_gmat_requirement = Column(String, nullable=True)
+    # Numeric forms of the three requirement strings above + duration, parsed once on
+    # write (course_catalog.apply_course_derived_fields). The advanced browse filters
+    # ("student has IELTS 6.5", "no GRE", "finishes within 18 months") run in SQL over a
+    # LIMIT/OFFSET page, so they can only compare columns — never re-parsed free text.
+    ielts_score = Column(Float, nullable=True)         # overall band, e.g. 6.5
+    toefl_score = Column(Integer, nullable=True)       # total iBT, e.g. 90
+    gre_gmat_required = Column(Integer, nullable=True)  # 0 no | 1 optional | 2 yes | NULL unstated
+    duration_months = Column(Integer, nullable=True)   # lower bound of a range ("3-4 years" -> 36)
     entry_requirements = Column(Text, nullable=True)   # short free text (GPA, prerequisites)
     course_url = Column(String, nullable=True)         # official program page
     is_active = Column(Boolean, nullable=False, default=True)

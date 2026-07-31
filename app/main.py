@@ -35,6 +35,7 @@ from app.schema_patch import (
     ensure_coupon_account_columns,
     ensure_document_catalog_columns,
     ensure_enterprise_calendar_table,
+    ensure_enterprise_calendar_attachment_table,
     ensure_enterprise_calendar_reminder_runs_table,
     ensure_enterprise_support_requests_table,
     ensure_enterprise_notifications_table,
@@ -44,14 +45,17 @@ from app.schema_patch import (
     ensure_enterprise_credit_tables,
     ensure_enterprise_payment_coupon_columns,
     ensure_enterprise_crm_tables,
+    ensure_enterprise_access_control_tables,
     ensure_enterprise_client_email_reply_columns,
     ensure_enterprise_email_composer_schema,
     ensure_enterprise_interview_invite_columns,
     ensure_enterprise_document_request_tables,
     ensure_enterprise_client_portal_shares_table,
     ensure_enterprise_deep_scan_table,
+    ensure_enterprise_writing_studio_table,
     ensure_enterprise_refunds_table,
     ensure_enterprise_payments_tables,
+    ensure_enterprise_finance_tables,
     ensure_enterprise_organization_columns,
     ensure_enterprise_students_table,
     ensure_f1_visa_news_table,
@@ -286,18 +290,22 @@ def startup_backfill_subscriptions():
     ensure_enterprise_organization_columns()
     ensure_enterprise_students_table()
     ensure_enterprise_crm_tables()
+    ensure_enterprise_access_control_tables()
     ensure_enterprise_client_email_reply_columns()
     ensure_enterprise_email_composer_schema()
     ensure_enterprise_interview_invite_columns()
     ensure_enterprise_document_request_tables()
     ensure_enterprise_client_portal_shares_table()
     ensure_enterprise_deep_scan_table()
+    ensure_enterprise_writing_studio_table()
     ensure_enterprise_credit_tables()
     ensure_enterprise_refunds_table()
     ensure_enterprise_payments_tables()
+    ensure_enterprise_finance_tables()
     ensure_enterprise_coupons_table()
     ensure_enterprise_payment_coupon_columns()
     ensure_enterprise_calendar_table()
+    ensure_enterprise_calendar_attachment_table()
     ensure_enterprise_calendar_reminder_runs_table()
     ensure_enterprise_support_requests_table()
     ensure_enterprise_notifications_table()

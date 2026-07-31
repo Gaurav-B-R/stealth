@@ -11,13 +11,19 @@
   const state = {
     me: null,
     perms: { can_view_data: true, can_edit_data: false, can_manage_users: false },
+    // Granular access control. `caps` null means "everything" (the workspace owner, whose
+    // capability list comes back as ["*"]); a Set means exactly those keys. `access` is the
+    // resolved role/scope payload; `branches` are the offices this member can see.
+    caps: null,
+    access: null,
+    branches: [],
     subscription: null,
     credits: null,
     catalog: null,
     view: "dashboard",
     clients: [],
     statusCounts: {},
-    filters: { status: "", category: "", country: "", q: "" },
+    filters: { status: "", category: "", country: "", q: "", branch_id: "" },
     billingCycle: "monthly",
     activeClient: null,
     cal: null,
@@ -58,6 +64,10 @@
     AU: { key: "au", code: "AU" },
     DE: { key: "de", code: "DE" },
     IE: { key: "ie", code: "IE" },
+    FR: { key: "fr", code: "FR" },
+    ES: { key: "es", code: "ES" },
+    NL: { key: "nl", code: "NL" },
+    AE: { key: "ae", code: "AE" },
   });
   function clientHeroTheme(client) {
     let code = String(client.destination_country_code || client.country?.code || "").trim().toUpperCase();
@@ -67,16 +77,21 @@
   // How prominently to surface the mock-interview feature, by destination. Whether a real
   // visa interview happens drives the emphasis — the feature is ALWAYS available (tab +
   // send flow), we only change how hard we push it:
-  //   standard — US F-1: mandatory consular interview → push it ("Recommended", Overview CTA).
-  //   possible — UK: occasional credibility interview → available, not badged.
+  //   standard — US F-1: mandatory consular interview. FR: the Campus France entretien
+  //              pédagogique is compulsory for every Études en France applicant — academic
+  //              rather than consular, but it always happens → push it ("Recommended", CTA).
+  //   possible — UK: occasional credibility interview. AE: the decisive conversation is a
+  //              university admissions panel, not a visa officer → available, not badged.
   //   rare     — CA study permit (SOP is the "interview"), AU subclass 500 (Genuine Student is
-  //              written), DE Type-D (embassy intake, not an adjudicating interview), IE →
-  //              available but shown as "Optional", no highlight.
+  //              written), DE Type-D (embassy intake, not an adjudicating interview), IE,
+  //              ES Type-D (consular, but the file decides), NL (the recognised sponsor files
+  //              with the IND and no one interviews the student) → shown as "Optional".
   // Unknown/blank codes default to "standard" (fail open — never hide the feature for a
   // destination we haven't classified). Mirrors the per-country gating already used for the
   // UK maintenance-funds card.
   const INTERVIEW_RELEVANCE = Object.freeze({
     US: "standard", UK: "possible", CA: "rare", AU: "rare", DE: "rare", IE: "rare",
+    FR: "standard", ES: "rare", NL: "rare", AE: "possible",
   });
   function interviewRelevance(client) {
     let code = String((client && client.destination_country_code) || "").trim().toUpperCase();
@@ -113,6 +128,91 @@
     if (!iso) return null;
     const d = parseDateValue(iso); if (!d) return null;
     return Math.ceil((d - new Date()) / 86400000);
+  }
+
+  /* ---------------- access control ----------------
+     Every payload that carries the legacy `permissions` booleans also carries the resolved
+     `access` object (role_key, role_label, capabilities, data_scope, branch_ids, …). The UI
+     asks `can("clients.edit")` rather than reading the three coarse booleans.
+
+     applyAccessPayload only trusts `permissions` when the SAME response also carries
+     `access`. That guard matters: thin payloads (the calendar's, a client's Payments tab)
+     used to overwrite state.perms wholesale, so opening the Calendar downgraded the rest of
+     the session to whatever that one endpoint chose to report. */
+  function applyAccessPayload(d) {
+    if (!d || typeof d !== "object") return;
+    const a = d.access;
+    if (!a || typeof a !== "object") return;   // no access block — never touch the session
+    state.access = a;
+    const caps = a.capabilities;
+    // ["*"] (or a missing list) = the owner: hold nothing, allow everything.
+    state.caps = (!Array.isArray(caps) || caps.indexOf("*") !== -1) ? null : new Set(caps);
+    if (d.permissions && typeof d.permissions === "object") state.perms = d.permissions;
+    if (Array.isArray(d.branches)) state.branches = d.branches;
+  }
+
+  // Capabilities that a pre-access-control server could only have expressed through
+  // can_edit_data / can_manage_users. Used ONLY as a fallback while state.access is
+  // still null (an un-upgraded backend), so an old server keeps behaving exactly as it
+  // does today instead of the UI unlocking every control.
+  const LEGACY_EDIT_CAPS = new Set([
+    "clients.create", "clients.edit", "clients.assign", "clients.set_branch", "clients.delete",
+    "notes.write", "notes.moderate", "emails.send", "emails.send_bulk",
+    "documents.upload", "documents.accept", "documents.delete", "documents.request",
+    "universities.manage", "calendar.manage", "interviews.run", "interviews.invite",
+    "portal.share", "ai.writing", "ai.deepscan", "ai.coursefinder", "ai.shortlist", "credits.spend",
+  ]);
+  const LEGACY_MANAGE_CAPS = new Set([
+    "team.manage", "roles.manage", "branches.manage", "settings.manage", "audit.view",
+    "billing.manage", "credits.purchase", "org.legal_accept", "org.transfer_ownership",
+    "finance.manage", "finance.refund", "finance.payout_account", "finance.books",
+    "finance.books_manage", "finance.export", "support.manage",
+  ]);
+
+  function can(cap) {
+    if (state.caps) return state.caps.has(cap);
+    if (state.access) return true;             // owner — capabilities came back as ["*"]
+    const p = state.perms || {};
+    if (LEGACY_MANAGE_CAPS.has(cap)) return !!p.can_manage_users;
+    if (LEGACY_EDIT_CAPS.has(cap)) return !!p.can_edit_data;
+    return p.can_view_data !== false;
+  }
+  function canAll() {
+    for (let i = 0; i < arguments.length; i++) if (!can(arguments[i])) return false;
+    return true;
+  }
+  function canAny() {
+    for (let i = 0; i < arguments.length; i++) if (can(arguments[i])) return true;
+    return arguments.length === 0;
+  }
+  // The one sentence shown wherever a whole panel is withheld. Never a blank page.
+  function deniedCard(sentence) {
+    return `<div class="card"><div class="card-body" style="color:var(--text-2);font-size:14px;line-height:1.7">
+      ${esc(sentence)}</div></div>`;
+  }
+  // Company books cover the whole workspace, so they need workspace-wide data scope on
+  // top of the capability — a branch/assigned-scoped member is refused server-side.
+  function isOrgScope() {
+    const s = state.access && state.access.data_scope;
+    return !s || s === "all";
+  }
+
+  /* Structured error details. Some conflicts (archiving an office that still has clients,
+     deactivating a member who still owns records) answer 409 with a DICT detail —
+     {message, code, …counts} — which the UI needs in order to offer a reassignment
+     picker. api() flattens the human sentence onto ex.message; the raw body stays on
+     ex.data, so read the dict from there. */
+  function errDetail(ex) {
+    const d = ex && ex.data && ex.data.detail;
+    return (d && typeof d === "object" && !Array.isArray(d)) ? d : null;
+  }
+  function errCode(ex) {
+    const d = errDetail(ex);
+    return (d && d.code) || "";
+  }
+  function errMessage(ex) {
+    const d = errDetail(ex);
+    return (d && d.message) || (ex && ex.message) || "Something went wrong.";
   }
 
   /* ---------------- phone country dial codes ---------------- */
@@ -296,6 +396,10 @@
   // reconcile pass) — much slower than other AI actions. Aborting at 90s would hide a
   // scan the server still finishes (and bills), so it gets a far longer leash.
   const DEEP_SCAN_API_TIMEOUT_MS = 300000;
+  // The Writing Studio is one long-form generation per call — slower than a chat turn,
+  // far faster than a whole-dossier scan. Aborting early would hide a draft the server
+  // finished (and billed), so it still gets a generous leash.
+  const WRITING_API_TIMEOUT_MS = 180000;
 
   async function api(path, opts) {
     opts = opts || {};
@@ -303,12 +407,15 @@
     const timeoutMs = opts.timeout || DEFAULT_API_TIMEOUT_MS;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let res;
+    // A FormData body (file uploads) must go out untouched — the browser sets the multipart
+    // Content-Type with its own boundary, and JSON.stringify would flatten it to "{}".
+    const isForm = typeof FormData !== "undefined" && opts.body instanceof FormData;
     try {
       res = await fetch(API + path, {
         method: opts.method || "GET",
         credentials: "include",
-        headers: opts.body ? { "Content-Type": "application/json" } : {},
-        body: opts.body ? JSON.stringify(opts.body) : undefined,
+        headers: opts.body && !isForm ? { "Content-Type": "application/json" } : {},
+        body: opts.body ? (isForm ? opts.body : JSON.stringify(opts.body)) : undefined,
         signal: controller.signal,
       });
     } catch (_error) {
@@ -325,6 +432,43 @@
       throw makePublicApiError(res, data);
     }
     return data;
+  }
+
+  /* Download a file the API generates on the fly (the Writing Studio's .docx export).
+     api() is JSON-only, so this is the binary sibling: it keeps the session cookie, turns
+     a JSON error body into the same publicClientError the callers already handle, and
+     honours the filename the server sent in Content-Disposition. */
+  async function downloadFile(path, timeoutMs = 60000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetch(path, { credentials: "include", signal: controller.signal });
+    } catch (error) {
+      if (error && error.name === "AbortError") {
+        throw publicClientError("That download is taking too long. Please try again.");
+      }
+      throw publicClientError("We couldn't reach Rilono. Check your connection and try again.");
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      let data = null;
+      try { data = await res.json(); } catch (e) { /* not a JSON error body */ }
+      throw makePublicApiError(res, data);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+    let name = "document";
+    try { name = match ? decodeURIComponent(match[1]) : name; } catch (e) { name = match ? match[1] : name; }
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = href;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(href); a.remove(); }, 0);
   }
 
   async function waitForTurnstile(timeoutMs = 9000) {
@@ -437,8 +581,12 @@
   }
 
   /* ---------------- overlay / modal / drawer ---------------- */
-  function openModal(html) {
-    const m = $("#modal"); m.innerHTML = html;
+  // #modal is a single reused node and closeModal() only strips .show — so the class list
+  // is rebuilt on every open. A size modifier can never leak into the next modal.
+  function openModal(html, opts) {
+    const m = $("#modal");
+    m.className = "modal" + (opts && opts.wide ? " modal-wide" : "");
+    m.innerHTML = html;
     $("#overlay").classList.add("show"); m.classList.add("show");
   }
   function closeModal() {
@@ -640,6 +788,17 @@
   function stageByKey(key) {
     if (!state.catalog) return { key, label: key, color: "#94a3b8" };
     return state.catalog.stages.find((s) => s.key === key) || { key, label: key, color: "#94a3b8" };
+  }
+  // Stage keys/order/colors are org-wide (kanban columns, filter chips, analytics all share
+  // them), but what a stage is CALLED depends on the destination: a UAE case's stage 3 is
+  // "Entry Permit Filed", not "Application Submitted". Anything scoped to ONE client uses
+  // this; anything spanning the whole pipeline keeps state.catalog.stages.
+  function stagesForClient(client) {
+    const all = (state.catalog && state.catalog.stages) || [];
+    let code = String((client && (client.destination_country_code || (client.country && client.country.code))) || "").trim().toUpperCase();
+    if (code === "GB") code = "UK";
+    const byCountry = (state.catalog && state.catalog.stages_by_country) || {};
+    return (code && byCountry[code]) || all;
   }
   function priorityColor(key) {
     const map = { low: "#94a3b8", normal: "#6366f1", high: "#f97316", urgent: "#ef4444" };
@@ -991,6 +1150,7 @@
     if (me.onboarding_required) { showOnboard(); return; }
     state.me = me;
     state.perms = me.permissions || state.perms;
+    applyAccessPayload(me);
     state.subscription = me.subscription || null;
     state.credits = me.credits || null;
 
@@ -1000,7 +1160,10 @@
     if (org.logo_url) { const l = $("#brandLogo"); l.src = org.logo_url; l.style.display = ""; }
     const u = me.user || {};
     $("#userName").textContent = u.full_name || u.email || "User";
-    $("#userRole").textContent = ((me.membership && me.membership.role) || "member").replace(/^\w/, (c) => c.toUpperCase());
+    // The resolved role label ("Branch manager", a custom role's name) — not the coarse
+    // legacy role mirror, which reads "Editor" for everyone who can touch a client.
+    $("#userRole").textContent = (state.access && state.access.role_label) ||
+      ((me.membership && me.membership.role) || "member").replace(/^\w/, (c) => c.toUpperCase());
     const [c1] = avatarColor(u.email);
     $("#userAvatar").textContent = (initials(u.full_name || u.email) || "U").toUpperCase();
     $("#userAvatar").style.background = `linear-gradient(135deg, ${c1}, ${avatarColor(u.email)[1]})`;
@@ -1008,7 +1171,8 @@
     renderDpaBanner();
     maybeShowEntHeardAbout(me);
 
-    if (!state.perms.can_edit_data) $("#topAddClient").classList.add("hidden");
+    if (!can("clients.create")) $("#topAddClient").classList.add("hidden");
+    applyNavCapabilities();
 
     try { state.catalog = await api("/catalog"); } catch (e) { state.catalog = { countries: [], categories: [], stages: [], priorities: [] }; }
 
@@ -1059,6 +1223,10 @@
     client_added: "👤", status_changed: "🔀", interview_completed: "🎤",
     docs_submitted: "📁", member_added: "👥", member_removed: "👥", credits_low: "💳",
     client_email_reply: "✉️",
+    // Access-control events. Only types with a committed emitter are listed — an icon for
+    // a notification nothing ever sends is dead weight that reads as a missing feature.
+    member_role_changed: "🔀", member_access_changed: "🔐",
+    branch_created: "🏢", ownership_transferred: "👑",
   };
 
   function notifAgo(iso) {
@@ -1112,6 +1280,7 @@
         closeNotifPanel();
         if (rt === "client" && rid) openClient(rid);
         else if (rt === "credits") navigate("credits");
+        else if (rt === "branch") teamGoTab("branches");
         else if (rt === "team") navigate("team");
       };
     });
@@ -1168,6 +1337,36 @@
   // "billing" removed: the plan-tier system is dormant (free CRM + credits is the model),
   // so the dead Plans page must not be reachable even by deep link. Code kept for reversibility.
   const ROUTE_VIEWS = ["dashboard", "clients", "calendar", "coursefinder", "ai", "team", "credits", "finance", "support", "settings"];
+  // The capability a whole view needs. A deep link, a bookmark or a Back press into a view
+  // the member can't hold must paint one plain sentence — not the renderer's "Couldn't load"
+  // after the API 403s.
+  const VIEW_CAPABILITY = {
+    dashboard: "dashboard.view", clients: "clients.view", team: "team.view",
+    credits: "credits.view", finance: "finance.view", settings: "settings.manage",
+    billing: "billing.manage", coursefinder: "coursefinder.view", ai: "ai.assistant",
+    calendar: "calendar.view",
+  };
+  const VIEW_DENIED_COPY = {
+    dashboard: "You don't have permission to view the dashboard. Ask a workspace admin for access.",
+    clients: "You don't have permission to view clients. Ask a workspace admin for access.",
+    team: "You don't have permission to view the team. Ask a workspace admin for access.",
+    credits: "You don't have permission to view the credit balance. Ask a workspace admin for access.",
+    finance: "You don't have permission to view payments. Ask a workspace admin for access.",
+    settings: "You don't have permission to change workspace settings. Ask a workspace admin for access.",
+    billing: "You don't have permission to manage plans and the subscription. Ask a workspace admin for access.",
+    coursefinder: "You don't have permission to browse the course catalog. Ask a workspace admin for access.",
+    ai: "You don't have permission to use the Rilono AI Assistant. Ask a workspace admin for access.",
+    calendar: "You don't have permission to view the calendar. Ask a workspace admin for access.",
+  };
+  // Nav items for views the member can't reach are removed outright (house rule: omit the
+  // markup rather than show a control that only ever refuses).
+  const NAV_CAPABILITY = { credits: "credits.view", finance: "finance.view", team: "team.view" };
+  function applyNavCapabilities() {
+    $$(".nav-item").forEach((b) => {
+      const cap = NAV_CAPABILITY[b.dataset.view];
+      if (cap) b.classList.toggle("hidden", !can(cap));
+    });
+  }
   function viewToPath(view) {
     return (view && view !== "dashboard" && ROUTE_VIEWS.includes(view)) ? ("/enterprise/" + view) : "/enterprise";
   }
@@ -1201,7 +1400,15 @@
     const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", coursefinder: "Course Finder", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", finance: "Finance", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
     $("#viewTitle").textContent = titles[view] || "";
     $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
+    // Team's sub-tab travels in ?tab= — read it BEFORE syncUrl rewrites the address bar.
+    if (view === "team") teamConsumeTab();
     syncUrl(viewToPath(view), opts);
+    const needCap = VIEW_CAPABILITY[view];
+    if (needCap && !can(needCap)) {
+      $("#content").innerHTML = deniedCard(VIEW_DENIED_COPY[view] ||
+        "You don't have permission to open this section. Ask a workspace admin for access.");
+      return;
+    }
     if (view === "dashboard") renderDashboard();
     else if (view === "clients") renderClients();
     else if (view === "calendar") renderCalendar();
@@ -1367,7 +1574,7 @@
       return;
     }
     const updatedOn = fmtDate(dpa.current_version);
-    const canAccept = !!(state.perms && state.perms.can_manage_users);
+    const canAccept = can("org.legal_accept");
     wrap.innerHTML = `
       <div class="plan-banner warn" role="status">
         <div class="pb-icon">📄</div>
@@ -1408,7 +1615,9 @@
     const c = $("#content");
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     let d;
-    try { d = await api("/dashboard"); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    const dashQs = state.filters.branch_id ? "?branch_id=" + encodeURIComponent(state.filters.branch_id) : "";
+    try { d = await api("/dashboard" + dashQs); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    applyAccessPayload(d);
     state.subscription = d.subscription || state.subscription;
     updatePlanChip();
 
@@ -1451,15 +1660,19 @@
         <div class="m-meta"><b>${esc(cl.full_name)}</b><span>${esc(cl.country.flag_emoji)} ${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}</span></div>
         ${statusPill(cl.stage)}</div>`).join("") : `<div class="empty" style="padding:24px"><p>No clients yet.</p></div>`;
 
+    const dashBranchBar = branchFilterHtml("dashBranch")
+      ? `<div class="toolbar" style="margin-bottom:16px"><div class="spacer"></div>${branchFilterHtml("dashBranch")}</div>` : "";
+
     c.innerHTML = `
       ${trialBanner()}
+      ${dashBranchBar}
       <div class="kpi-grid">
         ${kpiCard("linear-gradient(135deg,#6366f1,#8b5cf6)", "👥", "Total clients", k.total_clients, "View all clients", "__ent.viewClients({})")}
         ${kpiCard("linear-gradient(135deg,#0ea5e9,#22d3ee)", "📂", "Active cases", k.active_clients, "in progress", "__ent.viewClients({scope:'active',label:'Active cases'})")}
         ${kpiCard("linear-gradient(135deg,#10b981,#34d399)", "✅", "Approved", k.approved, k.approval_rate != null ? k.approval_rate + "% approval rate" : "View approved", "__ent.viewClients({status:'approved'})")}
         ${kpiCard("linear-gradient(135deg,#f59e0b,#f97316)", "🆕", "New this month", k.new_this_month, "this month", "__ent.viewClients({scope:'month',label:'New this month'})")}
       </div>
-      ${state.perms && state.perms.can_edit_data ? `
+      ${can("interviews.invite") ? `
       <div class="dash-cta">
         <div class="dash-cta-ic">🎤</div>
         <div class="dash-cta-txt"><b>Send a mock visa interview</b><span>Email a student a secure link so they can practise on their own — Rilono AI plays the visa officer and you see every result here.</span></div>
@@ -1477,6 +1690,9 @@
         <div class="card"><div class="card-head"><h3>Upcoming deadlines</h3></div><div class="card-body">${deadlines}</div></div>
         <div class="card"><div class="card-head"><h3>Recent clients</h3><button class="link" onclick="__ent.go('clients')">All →</button></div><div class="card-body">${recent}</div></div>
       </div>`;
+
+    const dbf = $("#dashBranch");
+    if (dbf) dbf.onchange = () => { state.filters.branch_id = dbf.value; renderDashboard(); };
   }
 
   function errBox(ex) {
@@ -1504,7 +1720,7 @@
   // Dashboard/anywhere entry point: pick a student, then email them a mock-interview
   // link (the primary way the feature is used). Reuses the same invite endpoint.
   async function openSendInterviewPicker(preselectId) {
-    if (!state.perms || !state.perms.can_edit_data) { toast("Only editors and admins can send mock interviews.", "error"); return; }
+    if (!can("interviews.invite")) { toast("You don't have permission to send interview invites. Ask a workspace admin for access.", "error"); return; }
     let clients = [];
     try { const d = await api("/clients?limit=500"); clients = (d.clients || []).filter((c) => c.email); }
     catch (ex) { toast(ex.message, "error"); return; }
@@ -1655,15 +1871,32 @@
     const countryOpts = `<option value="">All countries</option>` + countries.map((c) => `<option value="${c.code}" ${state.filters.country === c.code ? "selected" : ""}>${esc(c.flag_emoji)} ${esc(c.name)}</option>`).join("");
 
     tb.innerHTML = `<div class="chips">${searchChip}${scopeChip}${chips}</div><div class="spacer"></div>
+      ${branchFilterHtml("filterBranch")}
       <select class="select-mini" id="filterCountry">${countryOpts}</select>
-      ${state.perms.can_edit_data ? `<button class="btn btn-primary btn-sm" id="addClientBtn">+ Add Client</button>` : ""}`;
+      ${can("clients.create") ? `<button class="btn btn-primary btn-sm" id="addClientBtn">+ Add Client</button>` : ""}`;
 
     function clearScope() { state.dashScope = null; state.dashScopeLabel = ""; }
     $$(".chip[data-st]", tb).forEach((ch) => ch.onclick = () => { state.filters.status = ch.dataset.st; clearScope(); loadAndRenderClientList(); renderClientToolbar(); });
     const searchEl = $("#searchChip", tb); if (searchEl) searchEl.onclick = () => clearClientSearch();
     const scEl = $("#scopeChip", tb); if (scEl) scEl.onclick = () => { clearScope(); loadAndRenderClientList(); renderClientToolbar(); };
     $("#filterCountry").onchange = (e) => { state.filters.country = e.target.value; clearScope(); loadAndRenderClientList(); };
+    const bf = $("#filterBranch", tb);
+    if (bf) bf.onchange = () => { state.filters.branch_id = bf.value; clearScope(); loadAndRenderClientList(); };
     const ab = $("#addClientBtn"); if (ab) ab.onclick = () => openClientForm(null);
+  }
+
+  /* An office filter, but only once there is a choice to make: a workspace with one office
+     (or none) would just get a select with a single option. `state.branches` is whatever
+     /me said this member may file a client under, so a branch-scoped counsellor sees only
+     their own offices here. */
+  function branchFilterHtml(id) {
+    const list = (state.branches || []).filter((b) => b.is_active !== false);
+    if (list.length < 2) return "";
+    const sel = String(state.filters.branch_id || "");
+    return `<select class="select-mini" id="${esc(id)}" aria-label="Filter by office">
+      <option value="">All offices</option>
+      ${list.map((b) => `<option value="${b.id}" ${sel === String(b.id) ? "selected" : ""}>${esc(b.name)}</option>`).join("")}
+    </select>`;
   }
 
   let clientLoadSeq = 0; // guards against out-of-order client-list responses (see below)
@@ -1676,6 +1909,7 @@
     if (state.filters.status) p.set("status_filter", state.filters.status);
     if (state.filters.category) p.set("category", state.filters.category);
     if (state.filters.country) p.set("country", state.filters.country);
+    if (state.filters.branch_id) p.set("branch_id", state.filters.branch_id);
     if (q) p.set("q", q);
     // Monotonic token: a slow fetch for a previous query must NOT repaint the list once a
     // newer search/filter has been issued (the "shows the previous query" race).
@@ -1694,14 +1928,14 @@
     $("#clientsBadge").textContent = data.total_clients;
     renderClientToolbar();
 
-    const hasFilter = q || state.filters.status || state.filters.country || state.dashScope;
+    const hasFilter = q || state.filters.status || state.filters.country || state.filters.branch_id || state.dashScope;
     if (!clients.length) {
       const emptyTitle = q ? `No clients found for “${esc(q)}”` : (hasFilter ? "No matching clients" : "No clients yet");
-      const emptyHelp = q ? "Try another name, email, phone, passport, visa type, country, intake, or counselor." : (hasFilter ? "Try clearing your filters." : "Add your first visa client to get started.");
+      const emptyHelp = q ? "Try another name, email, phone, city, course, branch, visa type, country, intake, lead source, or counselor." : (hasFilter ? "Try clearing your filters." : "Add your first visa client to get started.");
       wrap.innerHTML = `<div class="empty"><div class="emoji">🗂️</div><h3>${emptyTitle}</h3>
         <p>${emptyHelp}</p>
         ${q ? `<button class="btn btn-ghost" onclick="__ent.clearSearch()">Clear search</button>` : ""}
-        ${!hasFilter && state.perms.can_edit_data ? `<button class="btn btn-primary" onclick="__ent.openClientForm()">+ Add your first client</button>` : ""}</div>`;
+        ${!hasFilter && can("clients.create") ? `<button class="btn btn-primary" onclick="__ent.openClientForm()">+ Add your first client</button>` : ""}</div>`;
       return;
     }
 
@@ -1724,100 +1958,324 @@
       </tr></thead><tbody>${rows}</tbody></table>`;
   }
 
+  /* ---------------- the client intake record ----------------
+     What a consultancy has to have on file for a lead: who they are and how to reach
+     them, what they want to study and how far along it already is, the profile that
+     decides whether it is sellable (marks, tests, budget, prior refusals), where the
+     lead came from, and the consents.
+
+     ONE markup builder + ONE wiring/collect pair, shared by the Add-client modal and the
+     "Edit details" pane on the client page, so the two can never drift apart. Every
+     dropdown's options come from the server catalog (client_profile_options), which is the
+     same list the API validates against — a select and its validation can't disagree. */
+
+  function profileOptions(field) {
+    const map = (state.catalog && state.catalog.client_profile_options) || {};
+    return map[field] || [];
+  }
+  function profileSelect(name, value, placeholder) {
+    const opts = [`<option value="">${esc(placeholder || "Select…")}</option>`].concat(
+      profileOptions(name).map((o) => `<option value="${esc(o.key)}" ${o.key === value ? "selected" : ""}>${esc(o.label)}</option>`));
+    return `<select name="${name}">${opts.join("")}</select>`;
+  }
+  function suggestList(id, items) {
+    return `<datalist id="${id}">${(items || []).map((s) => `<option value="${esc(s)}"></option>`).join("")}</datalist>`;
+  }
+
+  /* Which office a client belongs to. This used to be a free-text box, which is how one
+     workspace ended up with "Banjara Hills", "banjara hills" and "BH" as three offices.
+     It is now a picker over the real offices (`state.branches`, already narrowed by /me to
+     the ones this member may file under) and the server writes branch_name from the chosen
+     office. A workspace whose server predates offices gets the old text box back so the
+     field never silently stops working. */
+  function clientBranchFieldHtml(c) {
+    const all = (state.branches || []);
+    if (!all.length) {
+      return `<input name="branch_name" value="${esc((c && c.branch_name) || "")}" placeholder="e.g. Banjara Hills"/>`;
+    }
+    const isNew = !(c && c.id);
+    const access = state.access || {};
+    const current = (c && c.branch_id) || null;
+    let list = all.filter((b) => b.is_active !== false);
+    // Keep the client's current office selectable even when it is archived or sits outside
+    // this member's scope — otherwise merely opening and saving the form would move them.
+    if (current && !list.some((b) => b.id === current)) {
+      const known = all.find((b) => b.id === current);
+      list = [{ id: current, name: (known && known.name) || (c && c.branch_name) || "Current office" }].concat(list);
+    }
+    const fallbackDefault = (list.find((b) => b.is_default) || {}).id;
+    const selected = current || (isNew ? (access.primary_branch_id || fallbackDefault || "") : "");
+    // Moving an existing client between offices is its own capability. A new client can
+    // always be filed somewhere, and the server clamps the choice to the member's scope.
+    const locked = !isNew && !!current && !can("clients.set_branch");
+    return `<select name="branch_id"${locked ? " disabled" : ""}${current ? ' data-had-branch="1"' : ""}>
+      <option value="">— No office —</option>
+      ${list.map((b) => `<option value="${b.id}" ${String(selected) === String(b.id) ? "selected" : ""}>${esc(b.name)}${
+        b.city ? " · " + esc(b.city) : ""}</option>`).join("")}
+    </select>${locked ? `<div class="mw-hint" style="margin-top:4px">Only members who can move clients between offices may change this.</div>` : ""}`;
+  }
+
+  /* The assigned counsellor. An assignee who has since been deactivated is NOT in the
+     active member list, and a plain rebuild of this <select> would therefore render with
+     "Unassigned" selected — so opening the edit form and pressing Save silently dropped
+     the assignment. Keep them as a selected (disabled) option instead. */
+  function clientAssigneeSelectHtml(c, members) {
+    const current = (c && c.assigned_to_user_id) || null;
+    const list = members || [];
+    const known = current != null && list.some((m) => m.user_id === current);
+    const opts = [`<option value=""${current == null ? " selected" : ""}>Unassigned</option>`];
+    if (current != null && !known) {
+      opts.push(`<option value="${current}" selected disabled>${esc((c && c.assigned_to_name) || "Former member")} (removed)</option>`);
+    }
+    list.forEach((m) => {
+      opts.push(`<option value="${m.user_id}" ${current === m.user_id ? "selected" : ""}>${esc(m.full_name || m.email)}</option>`);
+    });
+    const locked = !can("clients.assign");
+    return `<select name="assigned_to_user_id"${locked ? " disabled" : ""}>${opts.join("")}</select>`;
+  }
+  // What the "Source detail" box means changes with the source picked next to it.
+  const LEAD_SOURCE_DETAIL_LABEL = {
+    referral: "Referred by", repeat_client: "Referred by",
+    partner_agent: "Partner / agent name", institution_referral: "Institution",
+    social: "Campaign", google_ads: "Campaign", education_fair: "Event",
+    website: "Landing page / form", whatsapp: "Campaign",
+  };
+
+  const CLIENT_FORM_FIELD_KEYS = [
+    "full_name", "email", "nationality", "date_of_birth", "passport_number", "passport_expiry",
+    "application_reference", "destination_country_code", "visa_type", "intake", "target_date",
+    "priority", "status",
+    "whatsapp_number", "current_city", "gender", "guardian_name", "guardian_relation", "guardian_phone",
+    "study_level", "field_of_study", "admission_stage", "prior_refusal_history", "prior_refusal_notes",
+    "highest_qualification", "qualification_score", "qualification_scale", "year_of_passing",
+    "backlogs_count", "work_experience_band", "english_test_status", "english_test_type",
+    "english_test_score", "english_test_date", "aptitude_test_type", "aptitude_test_score",
+    // NB: `branch_name` is NOT here. The office is picked by id now (branch_id) and the
+    // server writes branch_name from the chosen office. collectClientFormBody still
+    // handles the legacy free-text input as a fallback for a workspace with no offices.
+    "budget_band", "funding_source", "lead_source", "lead_source_detail",
+    "next_followup_date",
+  ];
+  // Never sent empty — the server treats these as mandatory for a valid visa case.
+  const CLIENT_FORM_REQUIRED_KEYS = ["full_name", "destination_country_code", "visa_type", "priority", "status"];
+
+  function clientFormFieldsHtml(c, opts) {
+    const p = opts.prefix;
+    const members = opts.members || [];
+    const dval = (v) => esc(String(v || "").slice(0, 10));
+    const nval = (v) => (v === 0 || v ? esc(String(v)) : "");
+    const cat = state.catalog || {};
+    const channels = cat.marketing_consent_channels || [];
+    const picked = c.marketing_consent_channels || [];
+    const refusalOpen = c.prior_refusal_history && c.prior_refusal_history !== "none";
+    const detailLabel = LEAD_SOURCE_DETAIL_LABEL[c.lead_source] || "Source detail";
+
+    return `
+      <div class="cp-sub-label">Client</div>
+      <div class="mw-grid mw-sec">
+        <div class="field span2"><label>Full name *</label><input name="full_name" required value="${esc(c.full_name || "")}" placeholder="As printed on the passport"/></div>
+        <div class="field"><label>Phone</label><div class="phone-input-group"><select name="phone_cc" id="${p}PhoneCc" aria-label="Phone country code"></select><input name="phone" id="${p}Phone" inputmode="tel" placeholder="98765 43210"/></div></div>
+        <div class="field"><label>Email</label><input type="email" name="email" value="${esc(c.email || "")}" placeholder="client@email.com"/></div>
+        <div class="field"><label>WhatsApp number</label><input name="whatsapp_number" inputmode="tel" value="${esc(c.whatsapp_number || "")}" placeholder="Only if different"/></div>
+        <div class="field"><label>Current city</label><input name="current_city" list="${p}CityList" value="${esc(c.current_city || "")}" placeholder="e.g. Hyderabad"/>${suggestList(p + "CityList", cat.city_suggestions)}</div>
+      </div>
+
+      <div class="cp-sub-label">Case &amp; risk</div>
+      <div class="mw-grid mw-sec">
+        <div class="field"><label>Destination country *</label><select name="destination_country_code" id="${p}Country" required></select></div>
+        <div class="field"><label>Visa type *</label><select name="visa_type" id="${p}Visa" required></select></div>
+        <div class="field" id="${p}IntakeWrap"><label>Target intake</label><select name="intake" id="${p}Intake"><option value="">—</option></select></div>
+        <div class="field"><label>Level of study</label>${profileSelect("study_level", c.study_level)}</div>
+        <div class="field span2"><label>Intended course / field</label><input name="field_of_study" list="${p}FieldList" value="${esc(c.field_of_study || "")}" placeholder="e.g. Data Science &amp; AI"/>${suggestList(p + "FieldList", cat.field_of_study_suggestions)}</div>
+        <div class="field"><label>Admission stage</label>${profileSelect("admission_stage", c.admission_stage)}</div>
+        <div class="field span2"><label>Prior visa / refusal history</label>${profileSelect("prior_refusal_history", c.prior_refusal_history)}</div>
+        <div class="field span3" id="${p}RefusalWrap" style="${refusalOpen ? "" : "display:none"}"><label>Refusal details</label><textarea name="prior_refusal_notes" style="min-height:70px" placeholder="Country, visa type, month/year and the ground quoted — e.g. US F-1, Mar 2025, 214(b)">${esc(c.prior_refusal_notes || "")}</textarea></div>
+      </div>
+
+      <div class="cp-sub-label">Lead source &amp; ownership</div>
+      <div class="mw-grid mw-sec">
+        <div class="field"><label>How did they hear about us?</label>${profileSelect("lead_source", c.lead_source)}</div>
+        <div class="field"><label id="${p}DetailLabel">${esc(detailLabel)}</label><input name="lead_source_detail" value="${esc(c.lead_source_detail || "")}" placeholder="Name or campaign"/></div>
+        <div class="field"><label>Branch / office</label>${clientBranchFieldHtml(c)}</div>
+        <div class="field"><label>Assigned counselor</label>${clientAssigneeSelectHtml(c, members)}</div>
+        <div class="field"><label>Next follow-up</label><input type="date" name="next_followup_date" value="${dval(c.next_followup_date)}"/></div>
+        <div class="field"><label>Key date (interview / travel)</label><input type="date" name="target_date" value="${dval(c.target_date)}"/></div>
+        ${opts.withStatus ? `<div class="field"><label>Pipeline stage</label><select name="status" id="${p}Status"></select></div>` : ""}
+        <div class="field"><label>Priority</label><select name="priority" id="${p}Priority"></select></div>
+      </div>
+
+      <details class="mw-fold"><summary>Academic profile, tests &amp; funding</summary>
+        <div class="mw-grid">
+          <div class="field"><label>Highest qualification</label>${profileSelect("highest_qualification", c.highest_qualification)}</div>
+          <div class="field"><label>Marks / GPA</label><input name="qualification_score" value="${esc(c.qualification_score || "")}" placeholder="e.g. 7.2"/></div>
+          <div class="field"><label>Scale</label>${profileSelect("qualification_scale", c.qualification_scale, "Scale…")}</div>
+          <div class="field"><label>Year of passing</label><input type="number" name="year_of_passing" min="1950" max="2100" step="1" value="${nval(c.year_of_passing)}" placeholder="2023"/></div>
+          <div class="field"><label>Backlogs / arrears</label><input type="number" name="backlogs_count" min="0" max="99" step="1" value="${nval(c.backlogs_count)}" placeholder="0"/></div>
+          <div class="field"><label>Work experience</label>${profileSelect("work_experience_band", c.work_experience_band)}</div>
+          <div class="field"><label>English test status</label>${profileSelect("english_test_status", c.english_test_status)}</div>
+          <div class="field"><label>Test taken</label>${profileSelect("english_test_type", c.english_test_type)}</div>
+          <div class="field"><label>Overall score</label><input name="english_test_score" value="${esc(c.english_test_score || "")}" placeholder="7.5 / 110 / 65"/></div>
+          <div class="field"><label>Test date</label><input type="date" name="english_test_date" value="${dval(c.english_test_date)}"/></div>
+          <div class="field"><label>Aptitude test</label>${profileSelect("aptitude_test_type", c.aptitude_test_type)}</div>
+          <div class="field"><label>Aptitude score</label><input name="aptitude_test_score" value="${esc(c.aptitude_test_score || "")}" placeholder="e.g. 318"/></div>
+          <div class="field"><label>Budget (per year)</label>${profileSelect("budget_band", c.budget_band)}</div>
+          <div class="field span2"><label>How will it be funded?</label>${profileSelect("funding_source", c.funding_source)}</div>
+        </div>
+      </details>
+
+      <details class="mw-fold"><summary>Identity, family &amp; documents</summary>
+        <div class="mw-grid">
+          <div class="field"><label>Nationality</label><input name="nationality" value="${esc(c.nationality || "")}"/></div>
+          <div class="field"><label>Gender</label>${profileSelect("gender", c.gender)}</div>
+          <div class="field"><label>Date of birth</label><input type="date" name="date_of_birth" value="${dval(c.date_of_birth)}"/></div>
+          <div class="field"><label>Passport number</label><input name="passport_number" value="${esc(c.passport_number || "")}"/></div>
+          <div class="field"><label>Passport expiry</label><input type="date" name="passport_expiry" value="${dval(c.passport_expiry)}"/></div>
+          <div class="field"><label>Application reference</label><input name="application_reference" value="${esc(c.application_reference || "")}"/></div>
+          <div class="field"><label>Parent / guardian name</label><input name="guardian_name" value="${esc(c.guardian_name || "")}"/></div>
+          <div class="field"><label>Relationship</label>${profileSelect("guardian_relation", c.guardian_relation)}</div>
+          <div class="field"><label>Parent / guardian phone</label><input name="guardian_phone" inputmode="tel" value="${esc(c.guardian_phone || "")}" placeholder="+91 98765 43210"/></div>
+        </div>
+      </details>
+
+      <div class="cp-sub-label">${opts.withNote ? "Notes &amp; consent" : "Consent"}</div>
+      ${opts.withNote ? `<div class="field"><label>First note (optional)</label><textarea name="initial_note" style="min-height:70px" placeholder="e.g. Walk-in enquiry, father wants Canada, sister already in Toronto…"></textarea></div>` : ""}
+      ${opts.withDpaConsent ? `<div class="consent-field"><input type="checkbox" id="${p}Consent" name="client_consent_confirmed"/><label for="${p}Consent">This client has consented to their personal data being collected and processed through Rilono (see <a href="/dpa" target="_blank" rel="noopener">Data Processing Agreement</a>).</label></div>` : ""}
+      <div class="field" style="margin-bottom:8px"><label>Consent to receive updates on</label></div>
+      <div class="mw-checks">
+        ${channels.map((ch) => `<label><input type="checkbox" name="marketing_consent_channels" value="${esc(ch.key)}" ${picked.indexOf(ch.key) !== -1 ? "checked" : ""}/>${esc(ch.label)}</label>`).join("")}
+      </div>
+      <div class="mw-checks">
+        <label><input type="checkbox" name="institution_share_consent" ${c.institution_share_consent ? "checked" : ""}/>Consent to share this profile with universities / partner institutions abroad</label>
+      </div>
+      <p class="mw-hint">Promotional contact and sharing the profile abroad are separate permissions — leave them unticked unless the client agreed to them.</p>`;
+  }
+
+  /* Wires the cascades, phone parts and conditional fields for markup built above.
+     Every lookup is scoped to the form itself — the app has other views carrying ids in the
+     same namespace, and a document-wide $() would bind the modal's cascade to whatever is
+     rendered behind it. */
+  function wireClientFormFields(c, opts) {
+    const p = opts.prefix;
+    const CAT = "student";
+    const form = $("#" + opts.formId);
+    if (!form) return;
+    const pick = (suffix) => $("#" + p + suffix, form);
+    const countrySel = pick("Country"), visaSel = pick("Visa"),
+      intakeSel = pick("Intake"), intakeWrap = pick("IntakeWrap");
+
+    const statusSel = pick("Status");
+    if (statusSel) statusSel.innerHTML = stagesForClient(c).map((s) => `<option value="${s.key}" ${(c.status || "new_lead") === s.key ? "selected" : ""}>${esc(s.label)}</option>`).join("");
+    const prioSel = pick("Priority");
+    if (prioSel) prioSel.innerHTML = state.catalog.priorities.map((pr) => `<option value="${pr.key}" ${(c.priority || "normal") === pr.key ? "selected" : ""}>${esc(pr.label)}</option>`).join("");
+
+    // A client's stored visa type / intake can fall out of the catalog (intakes are
+    // materialized forward, so a past one disappears). Keep the stored value as an option
+    // or editing an unrelated field would silently drop it.
+    function withStored(options, stored) {
+      const list = (options || []).slice();
+      if (stored && list.indexOf(stored) === -1) list.unshift(stored);
+      return list;
+    }
+    function fillVisas() {
+      const ct = countryByCode(countrySel.value);
+      const sameCountry = ct && ct.code === c.destination_country_code;
+      const visas = withStored(ct ? ct.visa_types[CAT] : [], sameCountry ? c.visa_type : "");
+      visaSel.innerHTML = visas.map((v) => `<option value="${esc(v)}" ${c.visa_type === v ? "selected" : ""}>${esc(v)}</option>`).join("");
+      if (ct) {
+        intakeWrap.style.display = "";
+        intakeSel.innerHTML = `<option value="">—</option>` + withStored(ct.student_intakes, sameCountry ? c.intake : "")
+          .map((i) => `<option value="${esc(i)}" ${c.intake === i ? "selected" : ""}>${esc(i)}</option>`).join("");
+      } else { intakeWrap.style.display = "none"; intakeSel.innerHTML = `<option value="">—</option>`; }
+    }
+    const list = state.catalog.countries.filter((ct) => (ct.visa_types[CAT] || []).length);
+    countrySel.innerHTML = list.map((ct) => `<option value="${ct.code}" ${c.destination_country_code === ct.code ? "selected" : ""}>${ct.flag_emoji} ${esc(ct.name)}</option>`).join("");
+    countrySel.onchange = fillVisas;
+    fillVisas();
+
+    const phoneParts = splitPhone(c.phone || "");
+    pick("PhoneCc").innerHTML = phoneCcOptions(phoneParts.dial);
+    pick("Phone").value = phoneParts.local;
+
+    // "Refused once" isn't actionable — ask for the detail the moment there is one to give.
+    const refusalSel = form.prior_refusal_history;
+    const refusalWrap = pick("RefusalWrap");
+    if (refusalSel && refusalWrap) {
+      refusalSel.onchange = () => {
+        const on = refusalSel.value && refusalSel.value !== "none";
+        refusalWrap.style.display = on ? "" : "none";
+        // Clearing it too, so a corrected answer can't leave contradictory notes behind
+        // on a client whose history now reads "No prior application".
+        if (!on && form.prior_refusal_notes) form.prior_refusal_notes.value = "";
+      };
+    }
+    const sourceSel = form.lead_source;
+    const detailLabel = pick("DetailLabel");
+    if (sourceSel && detailLabel) {
+      sourceSel.onchange = () => { detailLabel.textContent = LEAD_SOURCE_DETAIL_LABEL[sourceSel.value] || "Source detail"; };
+    }
+  }
+
+  /* Reads the whole intake record off a form. Empty values ARE sent (so a field can be
+     cleared on edit) except for the handful the server requires. */
+  function collectClientFormBody(f) {
+    const body = {};
+    CLIENT_FORM_FIELD_KEYS.forEach((k) => {
+      const el = f[k]; if (!el) return;
+      const v = (el.value || "").trim();
+      if (v === "" && CLIENT_FORM_REQUIRED_KEYS.indexOf(k) !== -1) return;
+      // Email is validated as an email address server-side, so "cleared" must be null.
+      body[k] = (k === "email" && v === "") ? null : v;
+    });
+    const phoneLocal = (f.phone.value || "").trim();
+    const dial = (f.phone_cc && f.phone_cc.value) || DEFAULT_DIAL;
+    body.phone = phoneLocal ? (phoneLocal[0] === "+" ? phoneLocal : dial + " " + phoneLocal) : "";
+    const assign = f.assigned_to_user_id ? f.assigned_to_user_id.value : "";
+    body.assigned_to_user_id = assign ? parseInt(assign, 10) : null;
+    // Office. Sent as an int, like assigned_to_user_id. An empty pick is only forwarded as
+    // an explicit null when the client HAD an office (a deliberate clear) — on a brand-new
+    // client we leave the key out entirely so the server can apply its own default rather
+    // than us pinning the record to "no office".
+    if (f.branch_id) {
+      const bid = (f.branch_id.value || "").trim();
+      if (bid) body.branch_id = parseInt(bid, 10);
+      else if (f.branch_id.dataset.hadBranch === "1") body.branch_id = null;
+    } else if (f.branch_name) {
+      body.branch_name = (f.branch_name.value || "").trim();   // pre-offices server
+    }
+    body.marketing_consent_channels = $$('input[name="marketing_consent_channels"]:checked', f).map((el) => el.value);
+    body.institution_share_consent = !!(f.institution_share_consent && f.institution_share_consent.checked);
+    return body;
+  }
+
   /* ---------------- add / edit client form ---------------- */
   function openClientForm(client) {
     const isEdit = !!client;
     const members = teamMembersCache || [];
     const c = client || {};
+    // "cform", not "cf" — the Course Finder view renders its own #cfCountry filter and both
+    // can be in the DOM at once (the modal opens over whatever view you were on).
+    const opts = { prefix: "cform", members: members, formId: "clientForm", withStatus: true, withNote: !isEdit, withDpaConsent: !isEdit };
 
     openModal(`
       <div class="modal-head"><h3>${isEdit ? "Edit client" : "Add new client"}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
       <form id="clientForm">
       <div class="modal-body">
-        <div class="field"><label>Full name *</label><input name="full_name" required value="${esc(c.full_name || "")}" placeholder="Client's full name"/></div>
-        <div class="field-row">
-          <div class="field"><label>Email</label><input type="email" name="email" value="${esc(c.email || "")}" placeholder="client@email.com"/></div>
-          <div class="field"><label>Phone</label><div class="phone-input-group"><select name="phone_cc" id="cfPhoneCc" aria-label="Phone country code"></select><input name="phone" id="cfPhone" inputmode="tel" placeholder="98765 43210"/></div></div>
-        </div>
-        <div class="field-row">
-          <div class="field"><label>Destination country *</label><select name="destination_country_code" id="cfCountry" required></select></div>
-          <div class="field"><label>Visa type *</label><select name="visa_type" id="cfVisa" required></select></div>
-        </div>
-        <div class="field" id="cfIntakeWrap"><label>Intake</label><select name="intake" id="cfIntake"><option value="">—</option></select></div>
-        <div class="field-row">
-          <div class="field"><label>Status</label><select name="status" id="cfStatus"></select></div>
-          <div class="field"><label>Priority</label><select name="priority" id="cfPriority"></select></div>
-        </div>
-        <div class="field-row">
-          <div class="field"><label>Assigned counselor</label><select name="assigned_to_user_id" id="cfAssign"><option value="">Unassigned</option>${members.map((m) => `<option value="${m.user_id}" ${c.assigned_to_user_id === m.user_id ? "selected" : ""}>${esc(m.full_name || m.email)}</option>`).join("")}</select></div>
-          <div class="field"><label>Key date (interview / travel)</label><input type="date" name="target_date" value="${esc((c.target_date || "").slice(0, 10))}"/></div>
-        </div>
-        <details style="margin-bottom:6px"><summary style="cursor:pointer;font-size:13px;color:var(--primary-600);font-weight:600">More details (passport, nationality…)</summary>
-          <div class="field-row" style="margin-top:12px">
-            <div class="field"><label>Nationality</label><input name="nationality" value="${esc(c.nationality || "")}"/></div>
-            <div class="field"><label>Date of birth</label><input type="date" name="date_of_birth" value="${esc((c.date_of_birth || "").slice(0, 10))}"/></div>
-          </div>
-          <div class="field-row">
-            <div class="field"><label>Passport number</label><input name="passport_number" value="${esc(c.passport_number || "")}"/></div>
-            <div class="field"><label>Passport expiry</label><input type="date" name="passport_expiry" value="${esc((c.passport_expiry || "").slice(0, 10))}"/></div>
-          </div>
-          <div class="field"><label>Application reference</label><input name="application_reference" value="${esc(c.application_reference || "")}"/></div>
-        </details>
-        ${isEdit ? "" : `<div class="field"><label>First note (optional)</label><textarea name="initial_note" placeholder="e.g. Walk-in enquiry, interested in Fall intake…"></textarea></div>`}
-        ${isEdit ? "" : `<div class="consent-field" style="display:flex;gap:8px;align-items:flex-start;margin-top:2px"><input type="checkbox" id="clientConsent" name="client_consent_confirmed" style="width:auto;margin-top:3px"/><label for="clientConsent" style="font-size:13px;font-weight:500;line-height:1.4">This client has consented to their personal data being collected and processed through Rilono (see <a href="/dpa" target="_blank" rel="noopener">Data Processing Agreement</a>).</label></div>`}
+        ${clientFormFieldsHtml(c, opts)}
         <div id="clientFormError" class="auth-error hidden"></div>
       </div>
       <div class="modal-foot">
         <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary" id="clientSaveBtn">${isEdit ? "Save changes" : "Add client"}</button>
-      </div></form>`);
+      </div></form>`, { wide: true });
 
-    const countrySel = $("#cfCountry"), visaSel = $("#cfVisa"),
-      intakeSel = $("#cfIntake"), intakeWrap = $("#cfIntakeWrap"), statusSel = $("#cfStatus"), prioSel = $("#cfPriority");
-    const CAT = "student";
-
-    statusSel.innerHTML = state.catalog.stages.map((s) => `<option value="${s.key}" ${(c.status || "new_lead") === s.key ? "selected" : ""}>${esc(s.label)}</option>`).join("");
-    prioSel.innerHTML = state.catalog.priorities.map((p) => `<option value="${p.key}" ${(c.priority || "normal") === p.key ? "selected" : ""}>${esc(p.label)}</option>`).join("");
-
-    function fillCountries() {
-      const list = state.catalog.countries.filter((ct) => (ct.visa_types[CAT] || []).length);
-      countrySel.innerHTML = list.map((ct) => `<option value="${ct.code}" ${c.destination_country_code === ct.code ? "selected" : ""}>${ct.flag_emoji} ${esc(ct.name)}</option>`).join("");
-      fillVisas();
-    }
-    function fillVisas() {
-      const ct = countryByCode(countrySel.value);
-      const visas = ct ? (ct.visa_types[CAT] || []) : [];
-      visaSel.innerHTML = visas.map((v) => `<option value="${esc(v)}" ${c.visa_type === v ? "selected" : ""}>${esc(v)}</option>`).join("");
-      if (ct) {
-        intakeWrap.style.display = "";
-        intakeSel.innerHTML = `<option value="">—</option>` + (ct.student_intakes || []).map((i) => `<option value="${esc(i)}" ${c.intake === i ? "selected" : ""}>${esc(i)}</option>`).join("");
-      } else { intakeWrap.style.display = "none"; intakeSel.innerHTML = `<option value="">—</option>`; }
-    }
-    countrySel.onchange = fillVisas;
-    fillCountries();
-
-    const phoneParts = splitPhone(c.phone || "");
-    $("#cfPhoneCc").innerHTML = phoneCcOptions(phoneParts.dial);
-    $("#cfPhone").value = phoneParts.local;
+    wireClientFormFields(c, opts);
 
     $("#clientForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#clientSaveBtn"); const err = $("#clientFormError");
       err.classList.add("hidden");
-      const body = {};
-      ["full_name", "destination_country_code", "visa_type", "intake", "email",
-        "nationality", "date_of_birth", "passport_number", "passport_expiry", "priority", "status",
-        "target_date", "application_reference"].forEach((k) => {
-        const el = f[k]; if (!el) return; const v = (el.value || "").trim(); if (v !== "") body[k] = v;
-      });
-      const phoneLocal = (f.phone.value || "").trim();
-      if (phoneLocal) {
-        const dial = (f.phone_cc && f.phone_cc.value) || DEFAULT_DIAL;
-        body.phone = phoneLocal[0] === "+" ? phoneLocal : (dial + " " + phoneLocal);
-      }
+      const body = collectClientFormBody(f);
       if (!isEdit) body.visa_category = "student";
-      const assign = f.assigned_to_user_id.value;
-      body.assigned_to_user_id = assign ? parseInt(assign, 10) : null;
       if (!isEdit && f.initial_note && f.initial_note.value.trim()) body.initial_note = f.initial_note.value.trim();
 
       if (!isEdit) {
@@ -2009,6 +2467,7 @@
     $("#globalSearchBox").style.display = "none";
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === "clients"));
     const c = $("#content");
+    if (!can("clients.view")) { c.innerHTML = deniedCard(VIEW_DENIED_COPY.clients); return; }
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     await ensureTeam();
     let data;
@@ -2018,7 +2477,26 @@
 
   function renderClientPage(data) {
     const cl = data.client;
-    const canEdit = state.perms.can_edit_data;
+    // One coarse "can they edit anything here" used to gate every control on this page.
+    // Each area now asks for the capability it actually needs, so a role can hand out
+    // note-writing without handing out document deletion.
+    const canEdit = can("clients.edit");
+    const canShare = can("portal.share");
+    const canWriteNotes = can("notes.write");
+    const canModerateNotes = can("notes.moderate");
+    const canSendEmail = can("emails.send");
+    const canUploadDocs = can("documents.upload");
+    const canAcceptDocs = can("documents.accept");
+    const canDeleteDocs = can("documents.delete");
+    const canRequestDocs = can("documents.request");
+    const canDownloadDocs = can("documents.download");
+    const canInviteInterview = can("interviews.invite");
+    const canRunInterview = can("interviews.run");
+    const canManageUnis = can("universities.manage");
+    const canShortlistAi = can("ai.shortlist");
+    const canWritingAi = can("ai.writing");
+    const canDeepScan = can("ai.deepscan");
+    const canSeeSensitive = can("clients.view_sensitive");
     const members = teamMembersCache || [];
     const grad = `linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})`;
     const hero = clientHeroTheme(cl);
@@ -2035,6 +2513,19 @@
     const uni = { data: null, suggestions: [] };  // university shortlist state (lazy-loaded)
     // Deep Scan tab state (lazy-loaded): stored scan history + the currently open report.
     const ds = { scans: null, active: null, pricing: null, aiAvailable: true, loading: false, error: null, busy: false };
+    // Writing Studio tab state (lazy-loaded). `form` is the composer's live values, held
+    // here rather than read off the DOM so a half-filled brief survives a tab switch.
+    const ws = {
+      drafts: null, active: null, catalog: null, defaults: null, pricing: null,
+      aiAvailable: true, loading: false, error: null, busy: false,
+      docType: "sop", composerOpen: true, refineOpen: false, refineText: "",
+      versions: null, versionsRoot: null,
+      form: {
+        university: "", program: "", study_level: "", intake: "", brief: "",
+        recommender_type: "professor", recommender_name: "", recommender_title: "",
+        recommender_org: "", recommender_email: "", relationship_context: "",
+      },
+    };
     let overviewEditing = false;  // inline "Edit details" mode on the Overview tab
     let openStageKey = null;      // stage whose case-record panel is expanded under the tracker
     $("#viewTitle").textContent = cl.full_name;
@@ -2046,8 +2537,8 @@
         <div class="cp-actionbar">
           <button class="cp-back" id="cpBack"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 12H5M11 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg> Back</button>
           <div style="flex:1"></div>
-          ${canEdit ? `<button class="btn btn-soft btn-sm" id="cpShare">🔗 Share with client</button>
-            <button class="btn btn-soft btn-sm" id="cpEdit">Edit details</button>` : ""}
+          ${canShare ? `<button class="btn btn-soft btn-sm" id="cpShare">🔗 Share with client</button>` : ""}
+          ${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEdit">Edit details</button>` : ""}
         </div>
         <div class="cp-hero cp-hero--${hero.key}" style="--cp-hero-fallback:${grad}"
           aria-label="${esc(cl.destination_country_name)} visa case for ${esc(cl.full_name)}">
@@ -2069,7 +2560,8 @@
           <button class="cp-tab" data-tab="emails">Emails${data.emails.length ? ` (${data.emails.length})` : ""}</button>
           <button class="cp-tab" data-tab="payments">💳 Payments</button>
           <button class="cp-tab" data-tab="universities">🎓 Universities</button>
-          <button class="cp-tab" data-tab="interview">🎤 Mock Interview</button>
+          <button class="cp-tab" data-tab="interview">🎤 Interview</button>
+          <button class="cp-tab" data-tab="writing">✍️ SOP &amp; LOR</button>
           <button class="cp-tab" data-tab="deepscan">🛡️ Deep Scan</button>
         </div>
         <div class="cp-body" id="cpBody"></div>
@@ -2081,8 +2573,8 @@
       // Deleting is deliberately NOT here — it lives in a type-to-confirm "Danger zone"
       // at the bottom of Edit details, so a client can't be removed with a stray click.
       $("#cpEdit").onclick = () => { overviewEditing = true; showTab("overview"); };
-      $("#cpShare").onclick = openPortalShareModal;
     }
+    if (canShare) $("#cpShare").onclick = openPortalShareModal;
     const body = $("#cpBody");
 
     /* ---- Share portal with client (read-only tracking link) ----
@@ -2196,8 +2688,8 @@
     // Stage buttons. In view mode they are read-only (a progress indicator); they only
     // become clickable inside the inline edit form, so a stray click can't auto-save.
     function stageStepsHtml(interactive, current) {
-      const stages = state.catalog.stages.filter((s) => s.key !== "on_hold");
-      const onHold = state.catalog.stages.find((s) => s.key === "on_hold");
+      const stages = stagesForClient(cl).filter((s) => s.key !== "on_hold");
+      const onHold = stagesForClient(cl).find((s) => s.key === "on_hold");
       const cur = current != null ? current : cl.status;
       const btn = (s) => {
         const active = cur === s.key;
@@ -2212,7 +2704,7 @@
     // connected nodes with done / current / upcoming states, off-path Rejected & On-Hold
     // pills, and a document-readiness line built from the client's uploaded documents.
     function journeyTrackHtml(interactive, current, docs) {
-      const stages = (state.catalog && state.catalog.stages) || [];
+      const stages = stagesForClient(cl);
       if (!stages.length) return "";
       const ordered = stages
         .map((s, i) => Object.assign({}, s, { _o: s.order != null ? s.order : i + 1 }))
@@ -2314,7 +2806,7 @@
 
     function stagePanelHtml() {
       if (!openStageKey) return "";
-      const stages = (state.catalog && state.catalog.stages) || [];
+      const stages = stagesForClient(cl);
       const s = stages.find((x) => x.key === openStageKey);
       if (!s) return "";
       const fields = stageFieldsFor(openStageKey);
@@ -2367,11 +2859,11 @@
       const ovFirst = (cl.full_name || "the student").split(" ")[0];
       const isUKClient = String(cl.destination_country_code || "").toUpperCase() === "UK";
       // Only pin the mock-interview CTA to the top of Overview for destinations that actually
-      // run an interview (US). For UK/CA/AU/DE the feature stays reachable in the Mock
+      // run an interview (US, FR). For the rest the feature stays reachable in the Mock
       // Interview tab, just not pushed here — see interviewRelevance().
       const pushInterview = interviewRelevance(cl) === "standard";
       body.innerHTML = `
-        ${canEdit && pushInterview ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
+        ${canInviteInterview && pushInterview ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
         <div class="cp-card">
           <div class="cp-card-head"><h3>Visa journey</h3>${statusPill(cl.stage)}</div>
           <div id="ovStageFlow">${journeyTrackHtml(canEdit, cl.status, docs)}</div>
@@ -2391,16 +2883,52 @@
           <div class="detail-grid">
             ${detail("Email", cl.email ? esc(cl.email) : "")}
             ${detail("Phone", cl.phone ? esc(cl.phone) : "")}
+            ${detail("WhatsApp", cl.whatsapp_number ? esc(cl.whatsapp_number) : "")}
+            ${detail("Current city", cl.current_city ? esc(cl.current_city) : "")}
             ${detail("Priority", `<span class="prio" style="background:${priorityColor(cl.priority)}1f;color:${priorityColor(cl.priority)}">${esc(cl.priority)}</span>`)}
             ${detail("Key date", cl.target_date ? fmtDate(cl.target_date) : "")}
+            ${detail("Next follow-up", cl.next_followup_date ? fmtDate(cl.next_followup_date) : "")}
             ${detail("Intake", cl.intake ? esc(cl.intake) : "")}
             ${assignField}
+            ${detail("Branch / office", cl.branch_name ? esc(cl.branch_name) : "")}
+            ${detail("Lead source", esc(cl.lead_source_label || ""))}
+            ${detail(esc(LEAD_SOURCE_DETAIL_LABEL[cl.lead_source] || "Source detail"), cl.lead_source_detail ? esc(cl.lead_source_detail) : "")}
+            ${detail("Added", fmtDate(cl.created_at))}
+          </div>
+        </div>
+        <div class="cp-card">
+          <div class="cp-card-head"><h3>Study plan &amp; profile</h3></div>
+          <div class="detail-grid">
+            ${detail("Level of study", esc(cl.study_level_label || ""))}
+            ${detail("Intended course / field", cl.field_of_study ? esc(cl.field_of_study) : "")}
+            ${detail("Admission stage", esc(cl.admission_stage_label || ""))}
+            ${detail("Highest qualification", esc(cl.highest_qualification_label || ""))}
+            ${detail("Marks / GPA", cl.qualification_score ? esc(cl.qualification_score) + (cl.qualification_scale_label ? ` <small style="color:var(--muted)">${esc(cl.qualification_scale_label)}</small>` : "") : "")}
+            ${detail("Year of passing", cl.year_of_passing ? esc(String(cl.year_of_passing)) : "")}
+            ${detail("Backlogs / arrears", cl.backlogs_count != null ? esc(String(cl.backlogs_count)) : "")}
+            ${detail("Work experience", esc(cl.work_experience_band_label || ""))}
+            ${detail("English test", [cl.english_test_type_label, cl.english_test_status_label, cl.english_test_date ? fmtDate(cl.english_test_date) : ""].filter(Boolean).map(esc).join(" · "))}
+            ${detail("Overall score", cl.english_test_score ? esc(cl.english_test_score) : "")}
+            ${detail("Aptitude test", [cl.aptitude_test_type_label, cl.aptitude_test_score].filter(Boolean).map(esc).join(" · "))}
+            ${detail("Budget (per year)", esc(cl.budget_band_label || ""))}
+            ${detail("Funding", esc(cl.funding_source_label || ""))}
+            ${detail("Prior visa / refusal", esc(cl.prior_refusal_history_label || ""))}
+            ${cl.prior_refusal_notes ? `<div class="detail-item" style="grid-column:1/-1"><label>Refusal details</label><div>${esc(cl.prior_refusal_notes)}</div></div>` : ""}
+          </div>
+        </div>
+        <div class="cp-card">
+          <div class="cp-card-head"><h3>Identity, family &amp; consent</h3></div>
+          <div class="detail-grid">
             ${detail("Nationality", cl.nationality ? esc(cl.nationality) : "")}
+            ${detail("Gender", esc(cl.gender_label || ""))}
             ${detail("Date of birth", cl.date_of_birth ? fmtDate(cl.date_of_birth) : "")}
-            ${detail("Passport no.", cl.passport_number ? esc(cl.passport_number) : "")}
+            ${canSeeSensitive ? detail("Passport no.", cl.passport_number ? esc(cl.passport_number) : "") : ""}
             ${detail("Passport expiry", cl.passport_expiry ? fmtDate(cl.passport_expiry) : "")}
             ${detail("Application ref.", cl.application_reference ? esc(cl.application_reference) : "")}
-            ${detail("Added", fmtDate(cl.created_at))}
+            ${detail("Parent / guardian", [cl.guardian_name, cl.guardian_relation_label].filter(Boolean).map(esc).join(" · "))}
+            ${detail("Guardian phone", cl.guardian_phone ? esc(cl.guardian_phone) : "")}
+            ${detail("Promotional contact", (cl.marketing_consent_channel_labels || []).map(esc).join(", "))}
+            ${detail("Share with institutions", cl.institution_share_consent ? "Consented " + (cl.institution_share_consent_at ? "· " + fmtDate(cl.institution_share_consent_at) : "") : "Not given")}
           </div>
         </div>`;
       const ovIv = $("#ovSendIv");
@@ -2463,7 +2991,7 @@
       if (moveBtn) moveBtn.onclick = async () => {
         const key = openStageKey;
         if (!key || key === cl.status) return;
-        const stages = (state.catalog && state.catalog.stages) || [];
+        const stages = stagesForClient(cl);
         const stageOf = (k) => stages.find((x) => x.key === k) || {};
         const labelOf = (k) => stageOf(k).label || (k || "").replace(/_/g, " ");
         const orderOf = (k) => (stageOf(k).order != null ? stageOf(k).order : 0);
@@ -2498,11 +3026,7 @@
     // Inline edit of the client details, in-pane (no popup). Save writes via PATCH and
     // re-renders the client page so the hero + details reflect the change immediately.
     function renderOverviewEdit() {
-      const CAT = "student";
-      const ph = splitPhone(cl.phone || "");
-      const dval = (v) => esc((v || "").slice(0, 10));
-      const prioOpts = state.catalog.priorities.map((p) => `<option value="${p.key}" ${(cl.priority || "normal") === p.key ? "selected" : ""}>${esc(p.label)}</option>`).join("");
-      const assignOpts = `<option value="">Unassigned</option>` + members.map((m) => `<option value="${m.user_id}" ${cl.assigned_to_user_id === m.user_id ? "selected" : ""}>${esc(m.full_name || m.email)}</option>`).join("");
+      const formOpts = { prefix: "cpe", members: members, formId: "cpEditForm", withStatus: false, withNote: false, withDpaConsent: false };
       let pending = cl.status;  // selected-but-unsaved visa status — only applied on Save
       body.innerHTML = `
         <div class="cp-card">
@@ -2512,22 +3036,7 @@
         <div class="cp-card">
           <div class="cp-card-head"><h3>Edit client details</h3></div>
           <form id="cpEditForm" class="cp-edit-form">
-            <div class="detail-grid">
-              <div class="field cpe-full"><label>Full name</label><input name="full_name" value="${esc(cl.full_name || "")}" required></div>
-              <div class="field"><label>Email</label><input type="email" name="email" value="${esc(cl.email || "")}"></div>
-              <div class="field"><label>Phone</label><div class="phone-input-group"><select name="phone_cc" id="cpePhoneCc" aria-label="Phone country code"></select><input name="phone" id="cpePhone" inputmode="tel" placeholder="98765 43210"></div></div>
-              <div class="field"><label>Destination country</label><select name="destination_country_code" id="cpeCountry"></select></div>
-              <div class="field"><label>Visa type</label><select name="visa_type" id="cpeVisa"></select></div>
-              <div class="field"><label>Intake</label><select name="intake" id="cpeIntake"><option value="">—</option></select></div>
-              <div class="field"><label>Priority</label><select name="priority">${prioOpts}</select></div>
-              <div class="field"><label>Assigned counselor</label><select name="assigned_to_user_id">${assignOpts}</select></div>
-              <div class="field"><label>Key date (interview / travel)</label><input type="date" name="target_date" value="${dval(cl.target_date)}"></div>
-              <div class="field"><label>Nationality</label><input name="nationality" value="${esc(cl.nationality || "")}"></div>
-              <div class="field"><label>Date of birth</label><input type="date" name="date_of_birth" value="${dval(cl.date_of_birth)}"></div>
-              <div class="field"><label>Passport number</label><input name="passport_number" value="${esc(cl.passport_number || "")}"></div>
-              <div class="field"><label>Passport expiry</label><input type="date" name="passport_expiry" value="${dval(cl.passport_expiry)}"></div>
-              <div class="field cpe-full"><label>Application reference</label><input name="application_reference" value="${esc(cl.application_reference || "")}"></div>
-            </div>
+            ${clientFormFieldsHtml(cl, formOpts)}
             <div id="cpEditError" class="auth-error hidden" style="margin-top:2px"></div>
             <div class="cp-edit-actions">
               <button type="button" class="btn btn-ghost btn-sm" id="cpEditCancel">Cancel</button>
@@ -2556,41 +3065,17 @@
       }
       wireStages();
 
-      // Country → visa → intake cascade (same catalog as the add-client form).
-      const countrySel = $("#cpeCountry"), visaSel = $("#cpeVisa"), intakeSel = $("#cpeIntake");
-      function fillVisas() {
-        const ct = countryByCode(countrySel.value);
-        const visas = ct ? (ct.visa_types[CAT] || []) : [];
-        visaSel.innerHTML = visas.map((v) => `<option value="${esc(v)}" ${cl.visa_type === v ? "selected" : ""}>${esc(v)}</option>`).join("");
-        intakeSel.innerHTML = `<option value="">—</option>` + (ct ? (ct.student_intakes || []) : []).map((i) => `<option value="${esc(i)}" ${cl.intake === i ? "selected" : ""}>${esc(i)}</option>`).join("");
-      }
-      const clist = state.catalog.countries.filter((ct) => (ct.visa_types[CAT] || []).length);
-      countrySel.innerHTML = clist.map((ct) => `<option value="${ct.code}" ${cl.destination_country_code === ct.code ? "selected" : ""}>${ct.flag_emoji} ${esc(ct.name)}</option>`).join("");
-      countrySel.onchange = fillVisas;
-      fillVisas();
-      $("#cpePhoneCc").innerHTML = phoneCcOptions(ph.dial);
-      $("#cpePhone").value = ph.local;
+      // Same builder/cascade as the Add-client modal — one source of truth for the fields.
+      wireClientFormFields(cl, formOpts);
 
       $("#cpEditCancel").onclick = () => { overviewEditing = false; renderOverview(); };
       $("#cpEditForm").onsubmit = async (e) => {
         e.preventDefault();
         const f = e.target, btn = $("#cpEditSave"), err = $("#cpEditError");
         err.classList.add("hidden");
-        const patch = {};
-        ["full_name", "destination_country_code", "visa_type", "intake", "email", "nationality",
-          "date_of_birth", "passport_number", "passport_expiry", "priority", "target_date",
-          "application_reference"].forEach((k) => {
-          const el = f[k]; if (!el) return; const v = (el.value || "").trim(); if (v !== "") patch[k] = v;
-        });
-        const phoneLocal = (f.phone.value || "").trim();
-        if (phoneLocal) {
-          const dial = (f.phone_cc && f.phone_cc.value) || DEFAULT_DIAL;
-          patch.phone = phoneLocal[0] === "+" ? phoneLocal : (dial + " " + phoneLocal);
-        }
-        // Visa status + counselor now save with the form (no live auto-save on click).
+        const patch = collectClientFormBody(f);
+        // Visa status + counselor save with the form (no live auto-save on click).
         patch.status = pending;
-        const assignEl = f.assigned_to_user_id;
-        patch.assigned_to_user_id = (assignEl && assignEl.value) ? parseInt(assignEl.value, 10) : null;
         btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
         try {
           await api("/clients/" + cl.id, { method: "PATCH", body: patch });
@@ -2627,7 +3112,7 @@
       }
     }
 
-    // Destination-personalized document list for THIS client (US/UK/CA/AU/DE/IE each
+    // Destination-personalized document list for THIS client (each of the ten destinations
     // get their own detailed catalog; unknown destinations fall back to the generic list).
     function clientDocTypes() {
       const map = state.catalog.document_types_by_country || {};
@@ -2678,7 +3163,7 @@
     }
 
     function renderDocs() {
-      const uploader = canEdit ? `
+      const uploader = canUploadDocs ? `
         <div class="cp-card doc-upload">
           <div class="cp-sub-label">Upload a document</div>
           <div class="doc-up-row">
@@ -2752,21 +3237,26 @@
         const cvfRow = cvfBody
           ? `<div class="doc-cf${d.manually_accepted ? " overridden" : ""}"><b>${cvfHead}</b>${cvfBody}</div>`
           : cvfNote;
-        const acceptRow = (canEdit && (d.validation_status === "invalid" || d.validation_status === "error"))
+        const acceptRow = (canAcceptDocs && (d.validation_status === "invalid" || d.validation_status === "error"))
           ? `<div class="doc-accept-row"><button class="btn btn-soft btn-sm doc-accept" data-id="${d.id}">✓ Checked it myself — accept anyway</button></div>` : "";
+        // Downloading raw files (passports, bank letters) is its own capability — without
+        // it the filename stays visible but never becomes a link to the file.
+        const nameCell = canDownloadDocs
+          ? `<a href="${d.download_url}" target="_blank" rel="noopener" class="doc-name">${esc(d.original_filename)}</a>`
+          : `<span class="doc-name">${esc(d.original_filename)}</span>`;
         return `
         <div class="doc-card">
           <div class="doc-ic">${docIcon(d.original_filename)}</div>
           <div class="doc-meta">
-            <a href="${d.download_url}" target="_blank" rel="noopener" class="doc-name">${esc(d.original_filename)}</a>
+            ${nameCell}
             <div class="doc-sub">${esc(d.document_type)} · ${fmtSize(d.file_size)} · ${esc(d.uploaded_by_name || "")} · ${fmtDate(d.created_at)}</div>
             ${valRow}${afRow}${cfRow}${cvfRow}${acceptRow}
           </div>
-          <a class="doc-act" href="${d.download_url}" target="_blank" rel="noopener" title="View / download">⬇</a>
-          ${canEdit ? `<button class="doc-act doc-del" data-id="${d.id}" title="Delete">✕</button>` : ""}
+          ${canDownloadDocs ? `<a class="doc-act" href="${d.download_url}" target="_blank" rel="noopener" title="View / download">⬇</a>` : ""}
+          ${canDeleteDocs ? `<button class="doc-act doc-del" data-id="${d.id}" title="Delete">✕</button>` : ""}
         </div>`;
       }).join("")}</div>`
-        : `<div class="empty" style="padding:34px"><div class="emoji">📁</div><h3>No documents yet</h3><p>${canEdit ? "Upload this student's passport, offer letter, financials, test scores and more — securely." : "No documents have been uploaded for this client."}</p></div>`;
+        : `<div class="empty" style="padding:34px"><div class="emoji">📁</div><h3>No documents yet</h3><p>${canUploadDocs ? "Upload this student's passport, offer letter, financials, test scores and more — securely." : "No documents have been uploaded for this client."}</p></div>`;
       // The full audit lives in its own Deep Scan tab now — this card is a pointer.
       const deepScanBar = docs.length ? `
         <div class="cp-card deep-scan-card" id="deepScanCard">
@@ -2778,13 +3268,13 @@
             <button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanOpenBtn">Open Deep Scan</button>
           </div>
         </div>` : "";
-      const docReqHolder = canEdit ? `<div id="docReqCard" class="cp-card doc-req-card" style="margin-bottom:14px"></div>` : "";
+      const docReqHolder = canRequestDocs ? `<div id="docReqCard" class="cp-card doc-req-card" style="margin-bottom:14px"></div>` : "";
       body.innerHTML = uploader + docReqHolder + deepScanBar + list;
       const dsb = $("#deepScanOpenBtn");
       if (dsb) dsb.onclick = () => showTab("deepscan");
-      if (canEdit) { drawDocReq(); if (dr.request === undefined) loadDocReq(); }
+      if (canRequestDocs) { drawDocReq(); if (dr.request === undefined) loadDocReq(); }
 
-      if (canEdit) {
+      if (canUploadDocs) {
         // Searchable, destination-scoped document-type picker.
         const dtInput = $("#docTypeInput");
         const dtMenu = $("#docTypeMenu");
@@ -2849,7 +3339,12 @@
             if (out.document && out.document.id) pollDocValidation(out.document.id);
           } catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Upload document"; }
         };
-        $$(".doc-del", body).forEach((b) => b.onclick = async () => {
+      }
+
+      // Delete and "accept anyway" are separate capabilities from uploading, so their
+      // wiring lives outside the uploader block — the buttons simply don't exist
+      // when the member can't hold them, and these loops then find nothing.
+      $$(".doc-del", body).forEach((b) => b.onclick = async () => {
           const id = parseInt(b.dataset.id, 10);
           if (!(await confirmModal("This document will be permanently deleted. This cannot be undone.", { title: "Delete document?", okText: "Delete" }))) return;
           try {
@@ -2875,8 +3370,7 @@
             toast("Marked as manually approved — profile updated where empty", "success");
             renderDocs();
           } catch (ex) { b.disabled = false; toast(ex.message, "error"); }
-        });
-      }
+      });
     }
 
     /* ---- Secure document requests (email a client an upload link) ---- */
@@ -2958,19 +3452,18 @@
     }
 
     function renderNotes() {
-      const add = canEdit ? `<div class="cp-card note-add">
+      const add = canWriteNotes ? `<div class="cp-card note-add">
         <div class="cp-sub-label">Add a note</div>
         <textarea id="noteInput" placeholder="Log a call, a follow-up or a decision about ${esc(cl.full_name)}…"></textarea>
         <button class="btn btn-primary btn-sm" id="noteSaveBtn">Add note</button></div>` : "";
-      // Admins can delete any note (incl. AI-generated); editors only their own.
+      // notes.moderate deletes anyone's note (incl. AI-generated); notes.write only their own.
       const myId = state.me && state.me.user ? state.me.user.id : null;
-      const isAdmin = !!(state.perms && state.perms.can_manage_users);
-      const canDeleteNote = (n) => canEdit && (isAdmin || (myId != null && n.author_user_id === myId));
+      const canDeleteNote = (n) => canModerateNotes || (canWriteNotes && myId != null && n.author_user_id === myId);
       const list = data.notes.length ? `<div class="timeline">${data.notes.map((n) =>
         `<div class="tl-item"><div class="tl-meta">${esc(n.author_name || "Team")} · ${fmtDateTime(n.created_at)}${canDeleteNote(n) ? `<button class="tl-del" data-note-id="${n.id}" title="Delete note" aria-label="Delete note">✕</button>` : ""}</div><div class="tl-body">${esc(n.body)}</div></div>`).join("")}</div>`
         : `<div class="empty" style="padding:30px"><div class="emoji">📝</div><h3>No notes yet</h3><p>Keep a running record of calls, follow-ups and decisions.</p></div>`;
       body.innerHTML = add + list;
-      if (canEdit) $("#noteSaveBtn").onclick = async () => {
+      if (canWriteNotes) $("#noteSaveBtn").onclick = async () => {
         const v = $("#noteInput").value.trim(); if (!v) return;
         const btn = $("#noteSaveBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
         try { const r = await api(`/clients/${cl.id}/notes`, { method: "POST", body: { body: v } }); data.notes.unshift(r.note); tabCount("notes", data.notes.length); renderNotes(); toast("Note added", "success"); }
@@ -3355,7 +3848,7 @@
     };
 
     function emComposerHtml() {
-      if (!canEdit) return "";
+      if (!canSendEmail) return "";
       if (!cl.email) {
         return `<div class="plan-banner warn" style="margin-bottom:18px">
           <div class="pb-icon">✉</div>
@@ -3446,7 +3939,7 @@
       if (!all.length) {
         return `<div class="empty" style="padding:38px 30px"><div class="emoji">✉️</div>
           <h3>No emails yet</h3>
-          <p>${canEdit && cl.email
+          <p>${canSendEmail && cl.email
             ? "Everything you send from here is kept on the client's file, so your whole team sees the same history."
             : "Messages sent to this client will appear here."}</p></div>`;
       }
@@ -3792,8 +4285,8 @@
       if (iv.started) return drawIvChat(w);
       const sessions = iv.sessions || [];
       w.innerHTML = `
-        ${canEdit ? sendHeroCard() : `<div class="cp-card iv-intro"><div class="iv-orb">🎤</div><h3>AI mock visa interview</h3><p class="muted">Only editors and admins can send or run mock interviews.</p></div>`}
-        ${canEdit ? staffPreviewCard() : ""}
+        ${canInviteInterview ? sendHeroCard() : `<div class="cp-card iv-intro"><div class="iv-orb">🎤</div><h3>AI mock visa interview</h3><p class="muted">You don't have permission to send or run mock interviews. Ask a workspace admin for access.</p></div>`}
+        ${canRunInterview ? staffPreviewCard() : ""}
         <div class="cp-card">
           <div class="cp-sub-label">Past mock interviews</div>
           <div class="iv-slist">${sessions.length ? sessions.map(ivSessionRow).join("") : `<div class="iv-empty">No mock interviews yet — sessions ${esc((cl.full_name || "the student").split(" ")[0])} completes will show up here.</div>`}</div>
@@ -3985,7 +4478,11 @@
       let d;
       try { d = await api(`/clients/${cl.id}/payments`); }
       catch (ex) { body.innerHTML = errBox(ex); return; }
-      const canManage = !!(d.permissions && d.permissions.can_manage_users);
+      applyAccessPayload(d);
+      // Raising / cancelling / recording a payment is finance.manage; moving real money
+      // back out to a student is the separate, owner-only finance.refund.
+      const canManage = can("finance.manage");
+      const canRefund = can("finance.refund");
       const t = d.totals || {};
       const fee = d.fee || { percent: 2, min_fee_rupees: 49 };
       const MANUAL_METHODS = [["cash", "Cash"], ["bank_transfer", "Bank transfer"], ["upi", "UPI"], ["card", "Card / POS"], ["cheque", "Cheque"], ["other", "Other"]];
@@ -4076,7 +4573,7 @@
           acts.push(`<button class="btn btn-ghost btn-xs" data-act="resend" data-id="${p.id}">Copy / resend link</button>`);
           acts.push(`<button class="btn btn-ghost btn-xs" data-act="cancel" data-id="${p.id}">Cancel</button>`);
         }
-        if (canManage && !isManual && ["paid", "transferred", "settled", "partially_refunded"].includes(p.status)) {
+        if (canRefund && !isManual && ["paid", "transferred", "settled", "partially_refunded"].includes(p.status)) {
           acts.push(`<button class="btn btn-ghost btn-xs danger" data-act="refund" data-id="${p.id}" data-amt="${fmtPaise(p.amount_paise - (p.refunded_amount_paise || 0))}">Refund</button>`);
         }
         if (canManage && isManual) {
@@ -4304,8 +4801,8 @@
           ${linkRow}
         </div>
         <div class="uni-actions">
-          ${canEdit ? uniStatusSelect(e) : `<span class="uni-status-ro">${esc((UNI_STATUSES.find((s) => s.key === e.status) || UNI_STATUSES[0]).label)}</span>`}
-          ${canEdit ? `<button class="uni-del" title="Remove" onclick="__ent.removeUni(${cl.id},${e.id})">&times;</button>` : ""}
+          ${canManageUnis ? uniStatusSelect(e) : `<span class="uni-status-ro">${esc((UNI_STATUSES.find((s) => s.key === e.status) || UNI_STATUSES[0]).label)}</span>`}
+          ${canManageUnis ? `<button class="uni-del" title="Remove" onclick="__ent.removeUni(${cl.id},${e.id})">&times;</button>` : ""}
         </div>
       </div>`;
     }
@@ -4319,7 +4816,7 @@
       const cost = d.recommend_cost || 0;
       const first = (cl.full_name || "this client").split(" ")[0];
 
-      const aiCard = !canEdit ? "" : `
+      const aiCard = !canShortlistAi ? "" : `
         <div class="cp-card uni-ai-card">
           <div class="uni-ai-head">
             <div>
@@ -4345,7 +4842,7 @@
                </div>`}
         </div>`;
 
-      const addCard = !canEdit ? "" : `
+      const addCard = !canManageUnis ? "" : `
         <div class="cp-card">
           <div class="cp-sub-label">Add manually</div>
           <div class="uni-add-row">
@@ -4358,7 +4855,7 @@
 
       w.innerHTML = `
         ${aiCard}
-        ${canEdit ? uniSuggestionsPanel() : ""}
+        ${canManageUnis ? uniSuggestionsPanel() : ""}
         ${addCard}
         <div class="cp-card">
           <div class="cp-card-head"><h3>Shortlist</h3>
@@ -4369,14 +4866,14 @@
           </div>
           ${entries.length
             ? `<div class="uni-list">${entries.map(uniRow).join("")}</div>`
-            : `<div class="uni-empty">No universities shortlisted yet${canEdit ? ` — run an AI match for ${esc(dest)} or add one manually.` : "."}</div>`}
+            : `<div class="uni-empty">No universities shortlisted yet${canManageUnis ? ` — run an AI match for ${esc(dest)} or add one manually.` : "."}</div>`}
         </div>`;
 
       // Export is available to viewers too — reading the shortlist doesn't require edit rights.
       const exportBtn = $("#uniExportBtn");
       if (exportBtn) exportBtn.onclick = () => exportUniversitiesCsv();
 
-      if (canEdit) {
+      if (canManageUnis || canShortlistAi) {
         const rec = $("#uniRecBtn");
         if (rec) rec.onclick = () => recommendUniversities();
         const addBtn = $("#uniAddBtn");
@@ -4385,19 +4882,19 @@
         if (save) save.onclick = () => addSelectedUniSuggestions();
         const dismiss = $("#uniDismissSugg");
         if (dismiss) dismiss.onclick = () => dismissUniSuggestions();
-        wireUniAutocomplete();
+        if (canManageUnis) wireUniAutocomplete();
       }
     }
 
     // Country-aware placeholders so a UK client never sees "$" / "GRE" hints.
     function uniBudgetHint(code) {
-      return ({ US: "e.g. $30,000", UK: "e.g. £22,000", CA: "e.g. C$25,000", AU: "e.g. A$35,000", DE: "e.g. €12,000", IE: "e.g. €18,000" })[code] || "e.g. annual budget";
+      return ({ US: "e.g. $30,000", UK: "e.g. £22,000", CA: "e.g. C$25,000", AU: "e.g. A$35,000", DE: "e.g. €12,000", IE: "e.g. €18,000", FR: "e.g. €13,000", ES: "e.g. €14,000", NL: "e.g. €22,000", AE: "e.g. AED 80,000" })[code] || "e.g. annual budget";
     }
     function uniGpaHint(code) {
-      return ({ US: "e.g. 3.6/4.0", UK: "e.g. 2:1 or AAB", CA: "e.g. 3.6/4.0 or 85%", AU: "e.g. 75% or GPA 5.5/7", DE: "e.g. 1.7 (German scale)", IE: "e.g. 2:1 (Honours)" })[code] || "e.g. GPA or grade average";
+      return ({ US: "e.g. 3.6/4.0", UK: "e.g. 2:1 or AAB", CA: "e.g. 3.6/4.0 or 85%", AU: "e.g. 75% or GPA 5.5/7", DE: "e.g. 1.7 (German scale)", IE: "e.g. 2:1 (Honours)", FR: "e.g. 14/20 (mention bien)", ES: "e.g. 7.5/10 (notable)", NL: "e.g. 7.5/10", AE: "e.g. 3.4/4.0" })[code] || "e.g. GPA or grade average";
     }
     function uniScoreHint(code) {
-      return ({ US: "e.g. IELTS 7.5, GRE 320", UK: "e.g. IELTS 7.0", CA: "e.g. IELTS 7.0", AU: "e.g. IELTS 7.0, PTE 65", DE: "e.g. IELTS 6.5, TestDaF 4", IE: "e.g. IELTS 6.5" })[code] || "e.g. IELTS 7.0";
+      return ({ US: "e.g. IELTS 7.5, GRE 320", UK: "e.g. IELTS 7.0", CA: "e.g. IELTS 7.0", AU: "e.g. IELTS 7.0, PTE 65", DE: "e.g. IELTS 6.5, TestDaF 4", IE: "e.g. IELTS 6.5", FR: "e.g. IELTS 6.5, DELF B2", ES: "e.g. IELTS 6.5, DELE B2", NL: "e.g. IELTS 6.5, TOEFL 90", AE: "e.g. IELTS 6.5, TOEFL 79" })[code] || "e.g. IELTS 7.0";
     }
 
     function wireUniAutocomplete() {
@@ -4770,7 +5267,7 @@
                 infoTip(scanTip, "What Deep Scan checks")}</div>
               ${!ds.aiAvailable ? `<div class="deep-scan-description"><b>Rilono AI isn't configured on this server yet.</b></div>` : ""}
             </div>
-            ${canEdit ? `<button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn" ${(!ds.aiAvailable || scanning) ? "disabled" : ""}>${
+            ${canDeepScan ? `<button class="btn btn-primary btn-sm deep-scan-btn" id="deepScanBtn" ${(!ds.aiAvailable || scanning) ? "disabled" : ""}>${
               scanning ? '<span class="spinner"></span> Scanning…' : isFree ? "Run Deep Scan · Free" : `Run Deep Scan · ${cost} cr`}</button>` : ""}
           </div>
           <div class="deep-scan-visualizer hidden" id="deepScanVisualizer" aria-live="polite"></div>
@@ -4780,7 +5277,7 @@
         : ds.active
           ? `<div class="cp-card" id="dsResult">${deepScanResultHtml(ds.active)}</div>`
           : `<div class="cp-card"><div class="empty" style="padding:30px"><div class="emoji">🛡️</div><h3>${ds.error ? "Couldn't load Deep Scans" : "No Deep Scan yet"}</h3>
-              <p>${ds.error ? esc(ds.error) : canEdit ? `Run ${esc(first)}'s first full-dossier audit — it's free.` : "No audits have been run for this client yet."}</p>
+              <p>${ds.error ? esc(ds.error) : canDeepScan ? `Run ${esc(first)}'s first full-dossier audit — it's free.` : "No audits have been run for this client yet."}</p>
               ${ds.error ? `<button class="btn btn-soft btn-sm" id="dsRetryBtn" style="margin-top:10px">Retry</button>` : ""}</div></div>`;
       const historyCard = (ds.scans || []).length ? `
         <div class="cp-card">
@@ -4819,6 +5316,489 @@
       drawDeepScan();
     }
 
+    /* ---- Writing Studio tab: AI-drafted SOPs & LORs, exported as Word ----
+       Generation and refinement each cost one credit; re-downloading a stored
+       version is free, so the Word button never spends anything. Versions are
+       immutable server-side — refining adds v2, v3 … to the same document. */
+    async function loadWriting() {
+      try {
+        const r = await api(`/clients/${cl.id}/writing`);
+        ws.drafts = r.drafts || [];
+        ws.active = r.active || null;
+        ws.catalog = r.catalog || null;
+        ws.defaults = r.defaults || null;
+        ws.pricing = r.pricing || null;
+        ws.aiAvailable = r.ai_available !== false;
+        ws.composerOpen = !ws.drafts.length;
+        if (ws.active) ws.docType = ws.active.doc_type || "sop";
+        if (!ws.form.intake && ws.defaults && ws.defaults.intake) ws.form.intake = ws.defaults.intake;
+        ws.error = null;
+      } catch (ex) {
+        ws.error = ex.message;
+        ws.drafts = ws.drafts || [];
+      } finally {
+        ws.loading = false;
+        if (body.isConnected && $("#wsWrap")) drawWriting();
+      }
+    }
+
+    function wsField(name, value) { ws.form[name] = value; }
+
+    async function openWritingDraft(id, opts) {
+      const keepOpen = opts && opts.keepComposer;
+      const summary = (ws.drafts || []).find((d) => d.id === id || d.root_id === id);
+      // Fetching the chain gives us the full content AND the version list in one call.
+      const rootId = summary ? summary.root_id : id;
+      ws.loading = true;
+      if (!keepOpen) ws.composerOpen = false;
+      ws.refineOpen = false;
+      drawWriting();
+      try {
+        const r = await api(`/clients/${cl.id}/writing/${rootId}/versions`);
+        ws.versions = r.versions || [];
+        ws.versionsRoot = rootId;
+        ws.active = ws.versions.length ? ws.versions[ws.versions.length - 1] : null;
+        if (ws.active) ws.docType = ws.active.doc_type || ws.docType;
+      } catch (ex) {
+        toast(ex.message, "error");
+      } finally {
+        ws.loading = false;
+        if (body.isConnected && $("#wsWrap")) drawWriting();
+      }
+    }
+
+    function wsShowVersion(id) {
+      const v = (ws.versions || []).find((x) => x.id === id);
+      if (v) { ws.active = v; drawWriting(); }
+    }
+
+    async function generateWritingNow() {
+      if (ws.busy || writingInflight.has(cl.id)) return;
+      const isLor = ws.docType === "lor";
+      const f = ws.form;
+      if (isLor && !(f.recommender_name || "").trim()) {
+        toast("Add the recommender's name — the letter is written in their voice.", "error");
+        return;
+      }
+      if (!isLor && !(f.university || "").trim() && !(f.program || "").trim()) {
+        toast("Add the target university or program first.", "error");
+        return;
+      }
+      ws.busy = true;
+      writingInflight.add(cl.id);
+      drawWriting();
+      const stop = wsProgressTicker("wsGenerateBtn", isLor ? "Drafting the letter" : "Drafting the statement");
+      try {
+        const payload = {
+          doc_type: ws.docType,
+          university: f.university || null,
+          program: f.program || null,
+          study_level: f.study_level || null,
+          intake: f.intake || null,
+          brief: f.brief || null,
+        };
+        if (isLor) {
+          payload.recommender_type = f.recommender_type || "professor";
+          payload.recommender_name = f.recommender_name || null;
+          payload.recommender_title = f.recommender_title || null;
+          payload.recommender_org = f.recommender_org || null;
+          payload.recommender_email = f.recommender_email || null;
+          payload.relationship_context = f.relationship_context || null;
+        }
+        const r = await api(`/clients/${cl.id}/writing/generate`, {
+          method: "POST", body: payload, timeout: WRITING_API_TIMEOUT_MS,
+        });
+        if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
+        if (r.pricing) ws.pricing = r.pricing;
+        ws.active = r.draft;
+        ws.versions = [r.draft];
+        ws.versionsRoot = r.draft.root_id;
+        ws.drafts = [{ ...r.draft, content_md: undefined, notes_md: undefined }, ...(ws.drafts || [])];
+        ws.composerOpen = false;
+        ws.form.brief = "";
+        toast(`Draft ready · ${r.credits_charged} ${r.credits_charged === 1 ? "credit" : "credits"} used`, "success");
+      } catch (ex) {
+        toast(ex.message, "error");
+      } finally {
+        stop();
+        ws.busy = false;
+        writingInflight.delete(cl.id);
+        if (!body.isConnected) { writingDirty.add(cl.id); return; }
+        drawWriting();
+      }
+    }
+
+    async function refineWritingNow() {
+      if (ws.busy || writingInflight.has(cl.id)) return;
+      const instruction = (ws.refineText || "").trim();
+      if (instruction.length < 3) { toast("Describe the revision you want.", "error"); return; }
+      if (!ws.active) return;
+      ws.busy = true;
+      writingInflight.add(cl.id);
+      drawWriting();
+      const stop = wsProgressTicker("wsRefineBtn", "Revising");
+      try {
+        const r = await api(`/clients/${cl.id}/writing/${ws.active.root_id}/refine`, {
+          method: "POST", body: { instruction }, timeout: WRITING_API_TIMEOUT_MS,
+        });
+        if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
+        if (r.pricing) ws.pricing = r.pricing;
+        ws.active = r.draft;
+        ws.versions = [...(ws.versions || []), r.draft];
+        ws.drafts = (ws.drafts || []).map((d) =>
+          d.root_id === r.draft.root_id ? { ...r.draft, content_md: undefined, notes_md: undefined } : d);
+        ws.refineOpen = false;
+        ws.refineText = "";
+        toast(`Version ${r.draft.version} ready · ${r.credits_charged} ${r.credits_charged === 1 ? "credit" : "credits"} used`, "success");
+      } catch (ex) {
+        toast(ex.message, "error");
+      } finally {
+        stop();
+        ws.busy = false;
+        writingInflight.delete(cl.id);
+        if (!body.isConnected) { writingDirty.add(cl.id); return; }
+        drawWriting();
+      }
+    }
+
+    async function downloadWritingDocx(draftId) {
+      const btn = $("#wsDownloadBtn");
+      const label = btn ? btn.innerHTML : "";
+      if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Building…'; }
+      try {
+        await downloadFile(`${API}/clients/${cl.id}/writing/${draftId}/docx`);
+        toast("Word document downloaded", "success");
+      } catch (ex) {
+        toast(ex.message, "error");
+      } finally {
+        if (btn && btn.isConnected) { btn.disabled = false; btn.innerHTML = label; }
+      }
+    }
+
+    async function deleteWritingDraft(rootId) {
+      const ok = await confirmModal(
+        "Delete this document and every version of it? The credits already spent on it can't be recovered.",
+        { title: "Delete document", okText: "Delete" }
+      );
+      if (!ok) return;
+      try {
+        await api(`/clients/${cl.id}/writing/${rootId}`, { method: "DELETE" });
+        ws.drafts = (ws.drafts || []).filter((d) => d.root_id !== rootId);
+        if (ws.active && ws.active.root_id === rootId) { ws.active = null; ws.versions = null; }
+        ws.composerOpen = !ws.drafts.length;
+        toast("Document deleted", "success");
+        drawWriting();
+      } catch (ex) { toast(ex.message, "error"); }
+    }
+
+    function wsComposerHtml() {
+      const isLor = ws.docType === "lor";
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const cost = (ws.pricing && ws.pricing.cost_credits != null) ? ws.pricing.cost_credits
+        : (((state.credits && (state.credits.actions || []).find((a) => a.key === "writing_studio")) || {}).credits || 1);
+      const rTypes = (ws.catalog && ws.catalog.recommender_types) || [];
+      const shortlist = (ws.defaults && ws.defaults.universities) || [];
+      const docName = wsDocName(ws.docType);
+      const running = ws.busy || writingInflight.has(cl.id);
+
+      const tip = isLor
+        ? `Rilono AI drafts the letter in the <b>recommender's</b> voice, grounded in ${esc(first)}'s dossier — case records, uploaded documents, shortlist and notes — and never invents a fact.<br><br>The export is a <b>draft for the recommender to review, edit and sign</b>, with that stated on its own final page. It is never a finished letter.<br><br>Costs <b>${cost} credit</b> per draft or revision. Re-downloading the Word file is free.`
+        : `Rilono AI writes a ${esc(docName)} in ${esc(first)}'s own voice from their real dossier — case records, the contents of every uploaded document, university shortlist and counselor notes. Anything it can't evidence becomes a <b>[PLACEHOLDER]</b> for you to fill, never a guess.<br><br>Conventions follow the destination: a UK personal statement, a Canadian study plan and a German Motivationsschreiben are written differently.<br><br>Costs <b>${cost} credit</b> per draft or revision. Re-downloading the Word file is free.`;
+
+      const shortlistPicker = shortlist.length ? `
+        <label class="ws-lbl">Pick from ${esc(first)}'s shortlist
+          <select class="ws-in" id="wsPick">
+            <option value="">—</option>
+            ${shortlist.map((u, i) => `<option value="${i}">${esc(u.university_name)}${
+              u.program ? " · " + esc(u.program) : ""}${u.status ? " (" + esc(u.status) + ")" : ""}</option>`).join("")}
+          </select>
+        </label>` : "";
+
+      const targetFields = `
+        ${shortlistPicker}
+        <label class="ws-lbl">Target university${isLor ? " (optional)" : ""}
+          <input class="ws-in" id="wsUniversity" value="${esc(ws.form.university)}" placeholder="e.g. University of Toronto" maxlength="200">
+        </label>
+        <label class="ws-lbl">Program${isLor ? " (optional)" : ""}
+          <input class="ws-in" id="wsProgram" value="${esc(ws.form.program)}" placeholder="e.g. MSc Computer Science" maxlength="200">
+        </label>`;
+
+      const sopFields = `
+        <label class="ws-lbl">Study level
+          <input class="ws-in" id="wsStudyLevel" value="${esc(ws.form.study_level)}" placeholder="e.g. Master's" maxlength="60">
+        </label>
+        <label class="ws-lbl">Intake
+          <input class="ws-in" id="wsIntake" value="${esc(ws.form.intake)}" placeholder="e.g. Fall 2027" maxlength="60">
+        </label>`;
+
+      const lorFields = `
+        <label class="ws-lbl"><span class="ws-cap">Recommender's name <span class="ws-req">required</span></span>
+          <input class="ws-in" id="wsRecName" value="${esc(ws.form.recommender_name)}" placeholder="e.g. Dr. Anita Sharma" maxlength="160">
+        </label>
+        <label class="ws-lbl">Who are they to ${esc(first)}?
+          <select class="ws-in" id="wsRecType">
+            ${rTypes.map((t) => `<option value="${esc(t.key)}"${
+              t.key === ws.form.recommender_type ? " selected" : ""}>${esc(t.label)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="ws-lbl">Their title / role
+          <input class="ws-in" id="wsRecTitle" value="${esc(ws.form.recommender_title)}" placeholder="e.g. Associate Professor, Dept. of Physics" maxlength="160">
+        </label>
+        <label class="ws-lbl">Their institution or company
+          <input class="ws-in" id="wsRecOrg" value="${esc(ws.form.recommender_org)}" placeholder="e.g. University of Delhi" maxlength="200">
+        </label>
+        <label class="ws-lbl">Their email (printed on the letterhead)
+          <input class="ws-in" id="wsRecEmail" type="email" value="${esc(ws.form.recommender_email)}" placeholder="name@university.edu" maxlength="254">
+        </label>
+        <label class="ws-lbl ws-lbl-wide">How do they know ${esc(first)}? Capacity, dates, the course or project
+          <textarea class="ws-in ws-ta" id="wsRelationship" rows="3" maxlength="2000" placeholder="e.g. Taught her Thermodynamics (PHY-302) in 2025-26 and supervised her final-year project on solar absorber coatings.">${esc(ws.form.relationship_context)}</textarea>
+        </label>`;
+
+      const canAfford = !ws.pricing || ws.pricing.can_afford !== false;
+      return `
+        <div class="cp-card ws-card">
+          <div class="ws-head">
+            <div class="ws-title"><span class="ws-title-icon" aria-hidden="true">✍️</span> ${
+              ws.drafts && ws.drafts.length ? "New document" : "Writing Studio"}${infoTip(tip, "How the Writing Studio works")}</div>
+            ${ws.drafts && ws.drafts.length
+              ? `<button class="btn btn-ghost btn-sm" id="wsComposerClose">Cancel</button>` : ""}
+          </div>
+          ${!ws.aiAvailable ? `<div class="ws-blocked"><b>Rilono AI isn't configured on this server yet.</b></div>` : ""}
+          <div class="ws-seg" role="tablist">
+            <button class="ws-seg-btn${ws.docType === "sop" ? " active" : ""}" data-doctype="sop" role="tab" aria-selected="${ws.docType === "sop"}">Statement of Purpose</button>
+            <button class="ws-seg-btn${ws.docType === "lor" ? " active" : ""}" data-doctype="lor" role="tab" aria-selected="${ws.docType === "lor"}">Letter of Recommendation</button>
+          </div>
+          <div class="ws-doc-note">${esc(cl.destination_country_name)} convention · <b>${esc(docName)}</b></div>
+          <div class="ws-grid">
+            ${isLor ? lorFields + targetFields : targetFields + sopFields}
+            <label class="ws-lbl ws-lbl-wide"><span class="ws-cap">What should this document emphasise? <span class="ws-opt">optional</span></span>
+              <textarea class="ws-in ws-ta" id="wsBrief" rows="3" maxlength="4000" placeholder="${
+                isLor ? "e.g. Lean on the research project, not grades. Mention she rebuilt the rig after it failed."
+                      : "e.g. Lead with the 18 months at Infosys, address the one-year study gap honestly, keep it under 800 words."}">${esc(ws.form.brief)}</textarea>
+            </label>
+          </div>
+          <div class="ws-actions">
+            <button class="btn btn-primary" id="wsGenerateBtn" ${(!ws.aiAvailable || running || !canAfford) ? "disabled" : ""}>${
+              running ? '<span class="spinner"></span> Drafting…' : `Draft with Rilono AI · ${cost} cr`}</button>
+            ${!canAfford ? `<span class="ws-hint ws-hint-warn">Your wallet is empty — top up in Credits.</span>`
+              : `<span class="ws-hint">Takes up to a minute. You're charged only if a draft comes back.</span>`}
+          </div>
+        </div>`;
+    }
+
+    function wsDraftListHtml() {
+      if (!(ws.drafts || []).length) return "";
+      return `
+        <div class="cp-card">
+          <div class="cp-sub-label">Documents</div>
+          ${ws.drafts.map((d) => {
+            const active = ws.active && ws.active.root_id === d.root_id;
+            const target = [d.university, d.program].filter(Boolean).join(" · ");
+            const who = d.doc_type === "lor" && d.recommender_name ? `for ${esc(d.recommender_name)}` : "";
+            return `<div class="ws-hrow${active ? " active" : ""}" data-root="${d.root_id}">
+              <span class="ws-badge ${d.doc_type === "lor" ? "lor" : "sop"}">${d.doc_type === "lor" ? "LOR" : "SOP"}</span>
+              <div class="ws-hmain">
+                <b>${esc(target || d.doc_name || "Document")}</b>
+                <span>${who ? who + " · " : ""}v${d.version} · ${d.word_count || 0} words${
+                  d.created_by_name ? " · " + esc(d.created_by_name) : ""} · ${fmtDate(d.created_at)}</span>
+              </div>
+              <span class="ws-hcr">${d.credits_charged ? d.credits_charged + " cr" : ""}</span>
+            </div>`;
+          }).join("")}
+        </div>`;
+    }
+
+    function wsReaderHtml() {
+      const d = ws.active;
+      if (!d) return "";
+      const isLor = d.doc_type === "lor";
+      const target = [d.university, d.program].filter(Boolean).join(" · ");
+      const versions = ws.versions || [];
+      const running = ws.busy || writingInflight.has(cl.id);
+      const chips = isLor
+        ? ["Add a stronger cohort comparison", "Be more specific about the project", "Shorten it to one page", "Make the tone more restrained"]
+        : ["Make it more technical", "Tighten it to the word limit", "Strengthen why this university", "Make the opening more specific"];
+
+      const notice = isLor ? `
+        <div class="ws-notice">
+          <span class="ws-notice-ic" aria-hidden="true">✋</span>
+          <div><b>This is a draft for ${esc(d.recommender_name || "the recommender")} to review and sign.</b>
+          Send it to them to verify, edit into their own words and sign on their letterhead — the Word file says so on its final page. Never submit it as it stands.</div>
+        </div>` : "";
+
+      const versionBar = versions.length > 1 ? `
+        <div class="ws-versions">
+          ${versions.map((v) => `<button class="ws-vbtn${v.id === d.id ? " active" : ""}" data-version="${v.id}" title="${
+            v.instruction ? esc(v.instruction) : "Original draft"}">v${v.version}</button>`).join("")}
+          ${d.instruction ? `<span class="ws-vnote">“${esc(d.instruction)}”</span>` : `<span class="ws-vnote">Original draft</span>`}
+        </div>` : "";
+
+      const refine = ws.refineOpen ? `
+        <div class="ws-refine">
+          <div class="ws-refine-chips">${chips.map((c) =>
+            `<button class="ws-chip" data-chip="${esc(c)}">${esc(c)}</button>`).join("")}</div>
+          <textarea class="ws-in ws-ta" id="wsRefineText" rows="2" maxlength="1000"
+            placeholder="What should change? e.g. “Cut the second paragraph and expand the internship instead.”">${esc(ws.refineText)}</textarea>
+          <div class="ws-actions">
+            <button class="btn btn-primary btn-sm" id="wsRefineBtn" ${running ? "disabled" : ""}>${
+              running ? '<span class="spinner"></span> Revising…' : `Revise · ${
+                (ws.pricing && ws.pricing.cost_credits) || 1} cr`}</button>
+            <button class="btn btn-ghost btn-sm" id="wsRefineCancel">Cancel</button>
+          </div>
+        </div>` : "";
+
+      return `
+        <div class="cp-card ws-reader">
+          <div class="ws-rhead">
+            <div>
+              <div class="ws-rtitle">${esc(d.doc_name || (isLor ? "Letter of Recommendation" : "Statement of Purpose"))}</div>
+              <div class="ws-rmeta">${esc(cl.full_name)}${target ? " · " + esc(target) : ""} · ${d.word_count || 0} words · v${d.version}</div>
+            </div>
+            <div class="ws-rbtns">
+              <button class="btn btn-primary btn-sm" id="wsDownloadBtn">⬇ Download Word</button>
+              ${canWritingAi ? `<button class="btn btn-soft btn-sm" id="wsRefineOpen" ${running ? "disabled" : ""}>Refine</button>` : ""}
+              <button class="btn btn-ghost btn-sm" id="wsCopyBtn">Copy text</button>
+              ${canWritingAi ? `<button class="btn btn-ghost btn-sm ws-del" id="wsDeleteBtn">Delete</button>` : ""}
+            </div>
+          </div>
+          ${notice}
+          ${versionBar}
+          ${refine}
+          <div class="ws-paper">${wsMarkdownToHtml(d.content_md)}</div>
+          ${(d.notes_md || "").trim() ? `
+            <div class="ws-notes">
+              <div class="ws-notes-head">Rilono notes — finish these before it goes out</div>
+              ${wsMarkdownToHtml(d.notes_md)}
+            </div>` : ""}
+        </div>`;
+    }
+
+    function drawWriting() {
+      const wrap = $("#wsWrap");
+      if (!wrap || !body.isConnected) return;
+      // A live generation owns this tree (ticking button) — repainting now would orphan
+      // it. generateWritingNow/refineWritingNow always redraw when the request settles.
+      const running = ws.busy;
+      if (ws.loading && !running) {
+        wrap.innerHTML = `<div class="cp-card"><div class="center-load"><div class="spinner dark"></div></div></div>`;
+        return;
+      }
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const composer = (ws.composerOpen || running) ? wsComposerHtml() : `
+        <div class="cp-card ws-newbar">
+          <div class="ws-title"><span class="ws-title-icon" aria-hidden="true">✍️</span> Writing Studio</div>
+          ${canWritingAi ? `<button class="btn btn-primary btn-sm" id="wsNewBtn">+ New SOP or LOR</button>` : ""}
+        </div>`;
+      const empty = (!ws.active && !ws.composerOpen && !running) ? `
+        <div class="cp-card"><div class="empty" style="padding:30px"><div class="emoji">✍️</div>
+          <h3>${ws.error ? "Couldn't load the Writing Studio" : "No documents yet"}</h3>
+          <p>${ws.error ? esc(ws.error)
+            : canWritingAi ? `Draft ${esc(first)}'s statement of purpose or a letter of recommendation.`
+                      : "No documents have been drafted for this client yet."}</p>
+          ${ws.error ? `<button class="btn btn-soft btn-sm" id="wsRetryBtn" style="margin-top:10px">Retry</button>` : ""}</div></div>` : "";
+
+      wrap.innerHTML = composer + empty + wsReaderHtml() + wsDraftListHtml();
+      wireWriting();
+    }
+
+    function wireWriting() {
+      const wrap = $("#wsWrap");
+      if (!wrap) return;
+      // Composer
+      $$(".ws-seg-btn", wrap).forEach((b) => b.onclick = () => {
+        ws.docType = b.dataset.doctype; drawWriting();
+      });
+      const bind = (sel, name) => {
+        const el = $(sel, wrap);
+        if (el) el.oninput = () => wsField(name, el.value);
+      };
+      bind("#wsUniversity", "university");
+      bind("#wsProgram", "program");
+      bind("#wsStudyLevel", "study_level");
+      bind("#wsIntake", "intake");
+      bind("#wsBrief", "brief");
+      bind("#wsRecName", "recommender_name");
+      bind("#wsRecTitle", "recommender_title");
+      bind("#wsRecOrg", "recommender_org");
+      bind("#wsRecEmail", "recommender_email");
+      bind("#wsRelationship", "relationship_context");
+      const recType = $("#wsRecType", wrap);
+      if (recType) recType.onchange = () => {
+        wsField("recommender_type", recType.value);
+        // Prefill the title from the archetype only while the counselor hasn't typed one.
+        const t = ((ws.catalog && ws.catalog.recommender_types) || []).find((x) => x.key === recType.value);
+        const titleEl = $("#wsRecTitle", wrap);
+        if (t && titleEl && !titleEl.value.trim()) {
+          titleEl.value = t.default_title || "";
+          wsField("recommender_title", titleEl.value);
+        }
+      };
+      const pick = $("#wsPick", wrap);
+      if (pick) pick.onchange = () => {
+        const u = ((ws.defaults && ws.defaults.universities) || [])[Number(pick.value)];
+        if (!u) return;
+        const uEl = $("#wsUniversity", wrap), pEl = $("#wsProgram", wrap);
+        if (uEl) { uEl.value = u.university_name || ""; wsField("university", uEl.value); }
+        if (pEl) { pEl.value = u.program || ""; wsField("program", pEl.value); }
+      };
+      const gen = $("#wsGenerateBtn", wrap);
+      if (gen) gen.onclick = generateWritingNow;
+      const close = $("#wsComposerClose", wrap);
+      if (close) close.onclick = () => { ws.composerOpen = false; drawWriting(); };
+      const newBtn = $("#wsNewBtn", wrap);
+      if (newBtn) newBtn.onclick = () => { ws.composerOpen = true; drawWriting(); };
+      const retry = $("#wsRetryBtn", wrap);
+      if (retry) retry.onclick = () => { ws.error = null; ws.loading = true; drawWriting(); loadWriting(); };
+
+      // Reader
+      const dl = $("#wsDownloadBtn", wrap);
+      if (dl && ws.active) dl.onclick = () => downloadWritingDocx(ws.active.id);
+      const del = $("#wsDeleteBtn", wrap);
+      if (del && ws.active) del.onclick = () => deleteWritingDraft(ws.active.root_id);
+      const copy = $("#wsCopyBtn", wrap);
+      if (copy && ws.active) copy.onclick = () => {
+        const plain = String(ws.active.content_md || "").replace(/^#+\s*/gm, "").replace(/\*\*/g, "");
+        navigator.clipboard.writeText(plain).then(
+          () => toast("Copied to clipboard", "success"),
+          () => toast("Couldn't copy — select the text instead.", "error"));
+      };
+      const refOpen = $("#wsRefineOpen", wrap);
+      if (refOpen) refOpen.onclick = () => { ws.refineOpen = true; drawWriting(); };
+      const refCancel = $("#wsRefineCancel", wrap);
+      if (refCancel) refCancel.onclick = () => { ws.refineOpen = false; ws.refineText = ""; drawWriting(); };
+      const refText = $("#wsRefineText", wrap);
+      if (refText) refText.oninput = () => { ws.refineText = refText.value; };
+      const refBtn = $("#wsRefineBtn", wrap);
+      if (refBtn) refBtn.onclick = refineWritingNow;
+      $$(".ws-chip", wrap).forEach((c) => c.onclick = () => {
+        ws.refineText = c.dataset.chip;
+        const t = $("#wsRefineText", wrap);
+        if (t) { t.value = ws.refineText; t.focus(); }
+      });
+      $$(".ws-vbtn", wrap).forEach((b) => b.onclick = () => wsShowVersion(Number(b.dataset.version)));
+      $$(".ws-hrow", wrap).forEach((r) => r.onclick = () => openWritingDraft(Number(r.dataset.root)));
+    }
+
+    function renderWriting() {
+      body.innerHTML = `<div id="wsWrap"></div>`;
+      if (ws.busy) {
+        // Tabbed back mid-generation (same closure): hold, then the settling request redraws.
+        $("#wsWrap").innerHTML = `<div class="cp-card"><div class="center-load"><div class="spinner dark"></div></div>
+          <p class="muted" style="text-align:center;margin:0 0 14px">Rilono AI is writing — this takes up to a minute…</p></div>`;
+        return;
+      }
+      // A draft from a previous render of this client settled after its DOM was replaced.
+      if (writingDirty.has(cl.id)) { writingDirty.delete(cl.id); ws.drafts = null; ws.active = null; ws.versions = null; }
+      if (ws.drafts === null && !ws.loading) { ws.loading = true; loadWriting(); }
+      drawWriting();
+    }
+
+    function wsDocName(docType) {
+      const names = (ws.catalog && ws.catalog.doc_names) || {};
+      const forCountry = names[(cl.country && cl.country.code) || cl.destination_country_code || "US"] || {};
+      return forCountry[docType] || (docType === "lor" ? "Letter of Recommendation" : "Statement of Purpose");
+    }
+
     function showTab(tab) {
       $$(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
       if (tab !== "interview") ivStopSpeak();
@@ -4829,6 +5809,7 @@
       else if (tab === "payments") renderPayments();
       else if (tab === "universities") renderUniversities();
       else if (tab === "interview") renderInterview();
+      else if (tab === "writing") renderWriting();
       else if (tab === "deepscan") renderDeepScan();
     }
     $$(".cp-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
@@ -4842,6 +5823,70 @@
   // settled while its closure's DOM was already replaced.
   const deepScanInflight = new Set();
   const deepScanDirty = new Set();
+
+  // Same cross-render guards for the Writing Studio: one generation per client at a time
+  // (so a stray second click can't double-charge), and a dirty flag so a draft that lands
+  // after its closure's DOM was replaced is refetched by the next render.
+  const writingInflight = new Set();
+  const writingDirty = new Set();
+
+  /* Escalating button label for the 20-60s writing calls, so the wait reads as progress
+     rather than a stuck spinner. Returns stop(); call it in a finally block. */
+  function wsProgressTicker(buttonId, baseLabel) {
+    const startedAt = Date.now();
+    const paint = () => {
+      const btn = document.getElementById(buttonId);
+      if (!btn) return;
+      const s = Math.round((Date.now() - startedAt) / 1000);
+      const label = s < 8 ? `${baseLabel}…` : s < 25 ? `${baseLabel}… · ${s}s` : `Still writing… ${s}s`;
+      btn.innerHTML = `<span class="spinner"></span> ${esc(label)}`;
+    };
+    const timer = setInterval(paint, 1000);
+    return () => clearInterval(timer);
+  }
+
+  // Letter conventions that must stay on their own line — mirrors the same guard in
+  // app/enterprise_writing.py so the on-screen document matches the exported Word file.
+  const WS_SALUTATION_RE = /^(dear\b.{0,80}|to whom it may concern)[,:]?$/i;
+  const WS_SIGNOFF_RE = /^(sincerely|yours sincerely|yours faithfully|yours truly|respectfully|respectfully yours|kind regards|warm regards|best regards|regards|mit freundlichen grüßen)[,.]?$/i;
+
+  /* Render the restrained Markdown the writing prompts ask for: paragraphs, headings,
+     bullets, **bold**, --- rules. Everything is escaped first and only known structure is
+     re-introduced, so AI text can never inject markup. [PLACEHOLDER: …] is highlighted —
+     it's the one thing the counselor must act on before the document goes out. */
+  function wsMarkdownToHtml(md) {
+    const escaped = esc(String(md || ""));
+    const inline = (s) => s
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/\[PLACEHOLDER:([^\]]*)\]/gi, '<span class="ws-ph">[PLACEHOLDER:$1]</span>');
+    const out = [];
+    escaped.split(/\n\s*\n/).forEach((rawBlock) => {
+      const block = rawBlock.trim();
+      if (!block) return;
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(block)) { out.push('<hr class="ws-hr">'); return; }
+      let pending = [];
+      const flush = () => {
+        if (!pending.length) return;
+        out.push(`<p>${inline(pending.join(" "))}</p>`);
+        pending = [];
+      };
+      block.split("\n").forEach((raw) => {
+        const line = raw.trim();
+        if (!line) return;
+        const heading = /^#{1,6}\s+(.*)$/.exec(line);
+        if (heading) { flush(); out.push(`<h4>${inline(heading[1])}</h4>`); return; }
+        const item = /^(?:[-*•]|\d+[.)])\s+(.*)$/.exec(line);
+        if (item) { flush(); out.push(`<li>${inline(item[1])}</li>`); return; }
+        if (WS_SALUTATION_RE.test(line) || WS_SIGNOFF_RE.test(line)) {
+          flush(); out.push(`<p class="ws-line">${inline(line)}</p>`); return;
+        }
+        pending.push(line);
+      });
+      flush();
+    });
+    // Wrap each run of consecutive list items in a single <ul>.
+    return out.join("").replace(/(?:<li>[\s\S]*?<\/li>)+/g, (m) => `<ul>${m}</ul>`);
+  }
 
   // Set by the Universities tab so these inline-onclick handlers can redraw it.
   let _uniRefresh = null;
@@ -4875,7 +5920,10 @@
     } catch (ex) { toast(ex.message, "error"); }
   }
   async function editClient(id) {
-    const cl = state.clients.find((c) => c.id === id) || (await api("/clients/" + id)).client;
+    // Always refetch: state.clients is only refreshed by the list view, and the form now
+    // submits every field — so prefilling from a stale snapshot would blank whatever was
+    // written since (an in-pane edit, or the AI's passport auto-fill).
+    const cl = (await api("/clients/" + id)).client;
     await ensureTeam();
     openClientForm(cl);
   }
@@ -4895,64 +5943,1900 @@
   let teamMembersCache = null;
   async function ensureTeam() {
     if (teamMembersCache) return teamMembersCache;
-    try { const d = await api("/team"); teamMembersCache = d.members; return d.members; }
+    try { const d = await api("/team"); teamMembersCache = d.members; applyAccessPayload(d); return d.members; }
     catch (e) { teamMembersCache = []; return []; }
   }
 
+  /* ---- Team is five jobs, so it is five sub-tabs -------------------------------------
+     Members (anyone who can see the team) · Roles & permissions (roles.manage) ·
+     Offices (branches.view) · Access log (audit.view) · My access (everyone, always).
+     Deliberately sub-tabs and not sidebar entries: the sidebar is the workspace's map,
+     and "who may do what" is one destination on it, not four.
+     The active tab travels in ?tab= so a link to it survives a refresh. */
+  const TEAM_TABS = [
+    { key: "members", ic: "👥", label: "Members", cap: null },
+    { key: "roles", ic: "🔐", label: "Roles &amp; permissions", cap: "roles.manage" },
+    { key: "branches", ic: "🏢", label: "Offices", cap: "branches.view" },
+    { key: "log", ic: "📜", label: "Access log", cap: "audit.view" },
+    { key: "myaccess", ic: "🪪", label: "My access", cap: null },
+  ];
+  const teamUi = {
+    tab: "members",
+    meta: null, metaError: null,
+    team: null, teamError: null,
+    includeInactive: false,
+    filters: { q: "", role: "", branch: "", status: "" },
+    selected: new Set(),
+    branchList: null, branchError: null, showArchivedBranches: false,
+    log: {
+      rows: [], total: 0, hasMore: false, loading: false, error: null, loaded: false,
+      filters: { action: "", target_user_id: "", days: "30" },
+    },
+    mine: null, mineError: null,
+  };
+  let teamPendingTab = null;
+
+  function teamVisibleTabs() { return TEAM_TABS.filter((t) => !t.cap || can(t.cap)); }
+  // Called from navigate() BEFORE syncUrl rewrites the address bar, which is the only
+  // moment ?tab= is still readable.
+  function teamConsumeTab() {
+    const tabs = teamVisibleTabs();
+    let want = teamPendingTab;
+    teamPendingTab = null;
+    if (!want) { try { want = new URLSearchParams(location.search).get("tab"); } catch (e) { want = null; } }
+    if (want && tabs.some((t) => t.key === want)) teamUi.tab = want;
+    if (!tabs.some((t) => t.key === teamUi.tab)) teamUi.tab = (tabs[0] || TEAM_TABS[0]).key;
+  }
+  function teamGoTab(key) { teamPendingTab = key; navigate("team"); }
+  function tmSelfId() { return (state.me && state.me.user && state.me.user.id) || null; }
+  function tmMemberById(uid) {
+    return ((teamUi.team || {}).members || []).find((m) => m.user_id === uid) || null;
+  }
+  function tmMount() { return $("#tmPanel"); }
+  function tmLoadingInto(mount) {
+    if (mount) mount.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+  }
+  // Nothing in this section can be drawn without /team/meta (it carries the capability
+  // registry, the role presets and the office list).
+  function tmMetaReady(mount) {
+    if (teamUi.metaError) { mount.innerHTML = errBox(teamUi.metaError); return false; }
+    if (!teamUi.meta) { tmLoadingInto(mount); return false; }
+    return true;
+  }
+  function tmActorCaps() {
+    const a = (teamUi.meta || {}).actor_capabilities;
+    if (!Array.isArray(a) || a.indexOf("*") !== -1) return null;    // owner: everything
+    return a;
+  }
+  function tmIsOwner() { return !!(state.access && state.access.is_owner); }
+
   async function renderTeam() {
+    teamUi.selected = new Set();
     const c = $("#content");
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
-    let d;
-    try { d = await api("/team"); } catch (ex) { c.innerHTML = errBox(ex); return; }
-    teamMembersCache = d.members;
-    const canManage = d.permissions.can_manage_users;
-    const rows = d.members.map((m) => `<div class="member-row">
-      <div class="m-av">${esc(initials(m.full_name || m.email).toUpperCase())}</div>
-      <div class="m-meta"><b>${esc(m.full_name || m.email)}</b><span>${esc(m.email)}${m.last_login_at ? " · last seen " + fmtDate(m.last_login_at) : ""}</span></div>
-      ${canManage && m.user_id !== (state.me.user.id) ? `<select class="select-mini" onchange="__ent.changeRole(${m.user_id}, this.value)">
-        ${["admin", "editor", "viewer"].map((r) => `<option value="${r}" ${m.role === r ? "selected" : ""}>${r[0].toUpperCase() + r.slice(1)}</option>`).join("")}
-      </select><button class="btn btn-danger btn-sm" onclick="__ent.removeMember(${m.user_id})">Remove</button>`
-        : `<span class="role-badge role-${m.role}">${esc(m.role)}</span>`}
-    </div>`).join("");
+    if (!teamUi.meta && !teamUi.metaError) {
+      try {
+        teamUi.meta = await api("/team/meta");
+        if (teamUi.meta && teamUi.meta.me) applyAccessPayload({ access: teamUi.meta.me });
+      } catch (ex) { teamUi.metaError = ex; }
+    }
+    if (state.view !== "team") return;
+    teamConsumeTab();
+    teamDrawShell();
+    teamDrawPanel();
+  }
+  // Re-fetch everything this section shows. Called after any mutation so counts, badges
+  // and the office list can never disagree with what was just changed.
+  async function teamRefresh() {
+    teamUi.meta = null; teamUi.metaError = null;
+    teamUi.team = null; teamUi.teamError = null;
+    teamUi.branchList = null; teamUi.branchError = null;
+    teamUi.log.loaded = false; teamUi.log.rows = []; teamUi.log.total = 0;
+    teamUi.mine = null; teamUi.mineError = null;
+    teamMembersCache = null;
+    await renderTeam();
+  }
 
+  function teamTabCount(key) {
+    const meta = teamUi.meta || {};
+    if (key === "members") {
+      const n = (teamUi.team && teamUi.team.members) ? teamUi.team.members.length : (meta.seats && meta.seats.used);
+      return n ? `<b>${n}</b>` : "";
+    }
+    if (key === "branches") {
+      const n = (meta.branches || []).filter((b) => b.is_active !== false).length;
+      return n ? `<b>${n}</b>` : "";
+    }
+    if (key === "roles") {
+      const n = (meta.custom_roles || []).filter((r) => r.is_active !== false).length;
+      return n ? `<b>${n}</b>` : "";
+    }
+    return "";
+  }
+  // A branch-scoped member with no office assigned can see nothing at all — say so
+  // instead of letting them stare at empty lists.
+  function teamScopeBanner() {
+    const a = state.access || {};
+    if (a.data_scope !== "branch" || (a.branch_ids || []).length) return "";
+    return `<div class="tm-banner warn"><div class="tm-banner-ic">⚠️</div><div class="tm-banner-txt">
+      <b>You're not assigned to an office yet.</b>
+      <span>Your access is limited to your own office, but you haven't been added to one — so no client records are in scope. Ask a workspace admin to add you to an office.</span>
+    </div></div>`;
+  }
+
+  function teamDrawShell() {
+    const c = $("#content");
+    const tabs = teamVisibleTabs();
+    // Switching tabs rebuilds this markup, which would drop keyboard focus onto <body> and
+    // strand a keyboard user mid-tablist. Remember whether a tab had focus and give it back.
+    const hadTabFocus = !!(document.activeElement && document.activeElement.classList &&
+      document.activeElement.classList.contains("tm-tab"));
     c.innerHTML = `
       ${trialBanner()}
-      <div class="card"><div class="card-head"><h3>Team members (${d.members.length})</h3>
-        ${canManage ? `<button class="btn btn-primary btn-sm" id="inviteBtn">+ Invite member</button>` : ""}</div>
-        <div class="card-body" style="padding:6px 0">${rows}</div></div>
-      ${canManage ? `<p style="color:var(--muted);font-size:13px;margin-top:14px">Invited members receive an email to set their password and join your workspace. Seats used: ${state.subscription ? state.subscription.seats_used + "/" + (state.subscription.max_seats === -1 ? "∞" : state.subscription.max_seats) : ""}.</p>` : ""}`;
+      ${teamScopeBanner()}
+      <div class="tm-tabs" role="tablist" aria-label="Team sections">
+        ${tabs.map((t) => `<button type="button" class="tm-tab" role="tab" data-tmtab="${t.key}"
+          aria-selected="${teamUi.tab === t.key}" tabindex="${teamUi.tab === t.key ? "0" : "-1"}"><span class="ic">${t.ic}</span> ${t.label}${teamTabCount(t.key)}</button>`).join("")}
+      </div>
+      <div id="tmPanel" role="tabpanel"></div>`;
+    $$(".tm-tab", c).forEach((b) => {
+      b.onclick = () => {
+        if (teamUi.tab === b.dataset.tmtab) return;
+        teamUi.tab = b.dataset.tmtab;
+        syncUrl("/enterprise/team?tab=" + teamUi.tab, { replace: true });
+        teamDrawShell();
+        teamDrawPanel();
+      };
+      // Same arrow-key behaviour as the Help & Support tabs.
+      b.onkeydown = (e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        const list = $$(".tm-tab");
+        const i = list.indexOf(b);
+        const next = list[(i + (e.key === "ArrowRight" ? 1 : list.length - 1)) % list.length];
+        if (next) { next.focus(); next.click(); }
+      };
+    });
+    if (hadTabFocus) {
+      const active = $(`.tm-tab[data-tmtab="${teamUi.tab}"]`, c);
+      if (active) active.focus();
+    }
+    tmWireMenuDismiss();
+  }
+  function teamDrawPanel() {
+    const t = teamUi.tab;
+    if (t === "roles") return tmDrawRoles();
+    if (t === "branches") return tmDrawBranches();
+    if (t === "log") return tmDrawLog();
+    if (t === "myaccess") return tmDrawMyAccess();
+    return tmDrawMembers();
+  }
 
-    const ib = $("#inviteBtn");
-    if (ib) ib.onclick = () => {
-      openModal(`<div class="modal-head"><h3>Invite team member</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
-        <form id="inviteForm"><div class="modal-body">
-          <div class="field"><label>Email</label><input type="email" name="email" required placeholder="teammate@company.com"/></div>
-          <div class="field"><label>Full name (optional)</label><input name="full_name" placeholder="Their name"/></div>
-          <div class="field"><label>Role</label><select name="role"><option value="editor">Editor — can manage clients</option><option value="viewer">Viewer — read only</option><option value="admin">Admin — full access</option></select></div>
-          <div class="hint" style="font-size:12px;color:var(--muted)">They'll get an email to set their password and join your workspace.</div>
-          <div id="inviteError" class="auth-error hidden"></div>
-        </div><div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="inviteSubmit">Send invite</button></div></form>`);
-      $("#inviteForm").onsubmit = async (e) => {
-        e.preventDefault(); const f = e.target; const btn = $("#inviteSubmit"); const err = $("#inviteError"); err.classList.add("hidden");
-        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-        try { await api("/team/users", { method: "POST", body: { email: f.email.value.trim(), full_name: f.full_name.value.trim() || null, role: f.role.value } });
-          toast("Invitation sent", "success"); closeModal(); renderTeam(); }
-        catch (ex) {
-          if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("credits"); return; }
-          err.textContent = ex.message; err.classList.remove("hidden"); btn.disabled = false; btn.textContent = "Send invite";
+  /* ---------------- shared bits ---------------- */
+  const RL_BADGE_CLASS = {
+    owner: "owner", admin: "admin", branch_manager: "manager",
+    counsellor: "counsellor", finance: "finance", viewer: "viewer", custom: "custom",
+  };
+  function roleBadgeHtml(roleKey, roleLabel) {
+    const cls = RL_BADGE_CLASS[roleKey] || "custom";
+    return `<span class="rl-badge ${cls}">${esc(roleLabel || roleKey || "Member")}</span>`;
+  }
+  const SCOPE_FALLBACK_LABEL = {
+    all: "Entire workspace", branch: "Their office only", assigned: "Only their own clients",
+  };
+  function scopeMeta(key) {
+    const list = ((teamUi.meta || {}).scopes) || [];
+    return list.find((s) => s.key === key) || null;
+  }
+  function scopeChipHtml(scope, label) {
+    const k = SCOPE_FALLBACK_LABEL[scope] ? scope : "assigned";
+    const m = scopeMeta(k);
+    return `<span class="tm-scope-chip" data-scope="${k}">${esc(label || (m && m.label) || SCOPE_FALLBACK_LABEL[k])}</span>`;
+  }
+  // Offices as chips, collapsed past three so a member in eight offices doesn't blow up
+  // the row height.
+  function branchChipsHtml(names, primaryName) {
+    const list = (names || []).filter(Boolean);
+    if (!list.length) return `<span class="tm-hint">—</span>`;
+    const shown = list.slice(0, 3);
+    const rest = list.length - shown.length;
+    return `<span class="br-chips">${shown.map((n) =>
+      `<span class="br-chip${primaryName && n === primaryName ? " is-primary" : ""}">${esc(n)}</span>`).join("")}${
+      rest > 0 ? `<span class="br-chip more">+${rest}</span>` : ""}</span>`;
+  }
+
+  /* The ⋯ row menu. .tm-menu is position:fixed — an absolutely-positioned menu inside the
+     table would be cropped by both .client-table's overflow:hidden and the wrapper's
+     horizontal scroll — so its coordinates come from the trigger's own rect. */
+  function tmCloseMenus() { $$(".tm-menu").forEach((m) => m.classList.add("hidden")); }
+  let tmMenuDismissWired = false;
+  function tmWireMenuDismiss() {
+    if (tmMenuDismissWired) return;
+    tmMenuDismissWired = true;
+    document.addEventListener("click", (e) => {
+      if (!(e.target.closest && e.target.closest(".tm-menu-wrap"))) tmCloseMenus();
+    });
+    window.addEventListener("scroll", tmCloseMenus, true);
+    window.addEventListener("resize", tmCloseMenus);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") tmCloseMenus(); });
+  }
+  function tmPositionMenu(trigger, menu) {
+    menu.classList.remove("hidden");
+    const r = trigger.getBoundingClientRect();
+    const w = menu.offsetWidth || 210;
+    const h = menu.offsetHeight || 220;
+    const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+    let top = r.bottom + 6;
+    if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+    menu.style.left = left + "px";
+    menu.style.top = top + "px";
+  }
+
+  /* ---- The capability matrix -------------------------------------------------------
+     ONE component with three users: the member editor (tri-state Inherit / Allow / Block
+     layered on whatever the role already grants), the role editor (Allowed / Not allowed)
+     and My access (read-only). Rows the ACTOR does not hold itself are disabled — nobody
+     hands out more than they have — and owner-only rows are omitted entirely for
+     non-owners rather than dangled as a checkbox that always refuses. */
+  function capMatrixHtml(selected, actorCaps, opts) {
+    opts = opts || {};
+    const mode = opts.mode || "override";
+    const prefix = opts.idPrefix || "cap";
+    const meta = teamUi.meta || {};
+    const caps = meta.capabilities || [];
+    if (!caps.length) return `<div class="tm-hint">The permission list isn't available right now.</div>`;
+    const grants = new Set((selected && selected.grants) || []);
+    const denies = new Set((selected && selected.denies) || []);
+    const base = new Set((selected && selected.base) || []);
+    const actor = actorCaps == null ? null : new Set(actorCaps);
+    const actorHas = (k) => !actor || actor.has(k);
+    // Owner-only capabilities (refunds, the payout account, transferring ownership) are
+    // stripped from every non-owner by the resolution engine, so they can never be granted
+    // to a member or written into a role — not even by the owner. Showing them in an editor
+    // as three permanently-locked rows is dead UI, so they only appear where they're a
+    // statement of fact: the read-only views.
+    const showOwnerOnly = mode === "readonly" && !!opts.isOwner;
+
+    const order = ((meta.sections || []).slice());
+    caps.forEach((cp) => { if (order.indexOf(cp.section) === -1) order.push(cp.section); });
+
+    let allowed = 0, total = 0;
+    const body = order.map((sec) => {
+      let secOn = 0, secTotal = 0;
+      const rows = caps.filter((cp) => cp.section === sec && (showOwnerOnly || !cp.owner_only)).map((cp) => {
+        const k = cp.key;
+        const inherited = base.has(k);
+        const isGrant = grants.has(k);
+        const isDeny = denies.has(k);
+        const on = mode === "role" ? isGrant : (isDeny ? false : (isGrant || inherited));
+        total += 1; secTotal += 1;
+        if (on) { allowed += 1; secOn += 1; }
+        const locked = !actorHas(k);
+        const held = isGrant || isDeny;
+        const stateAttr = isDeny ? "block" : (on ? "allow" : "");
+        // A locked row the subject ALREADY holds is echoed back on save (data-capheld),
+        // because silently dropping it from a full-replacement payload would strip the
+        // permission just because the editor can't grant it themselves.
+        const keep = locked && held ? ' data-capheld="1"' : "";
+        let control;
+        if (mode === "readonly") {
+          // The same three states read differently depending on whose access you're
+          // looking at: "From your role" is only true on the My access tab.
+          control = `<span class="cap-state" data-state="${stateAttr}">${
+            isDeny ? "Blocked" : isGrant ? esc(opts.grantLabel || "Added for you")
+              : inherited ? esc(opts.baseLabel || "From your role") : "Not allowed"}</span>`;
+        } else if (mode === "role") {
+          control = `<select class="cap-state" data-state="${stateAttr}" data-capsel="${esc(k)}"${locked ? " disabled" : ""}${keep}>
+            <option value="" ${isGrant ? "" : "selected"}>Not allowed</option>
+            <option value="allow" ${isGrant ? "selected" : ""}>Allowed</option>
+          </select>`;
+        } else {
+          control = `<select class="cap-state" data-state="${stateAttr}" data-capsel="${esc(k)}"${locked ? " disabled" : ""}${keep}>
+            <option value="" ${held ? "" : "selected"}>Inherit — ${inherited ? "allowed" : "not allowed"}</option>
+            <option value="allow" ${isGrant ? "selected" : ""}>Allow</option>
+            <option value="deny" ${isDeny ? "selected" : ""}>Block</option>
+          </select>`;
         }
+        // Exactly two grid children: the sentence, then the one control. The lock sits
+        // beside the control rather than as a third child, which would wrap to its own row.
+        const cell = locked
+          ? `<span style="display:inline-flex;align-items:center;gap:8px">${control}<span class="cap-lock" title="You don't hold this permission yourself, so you can't grant it">🔒</span></span>`
+          : control;
+        return `<div class="cap-row${cp.dangerous ? " cap-danger" : ""}${locked ? " locked" : ""}" data-cap="${esc(k)}" data-capbase="${inherited ? "1" : "0"}">
+          <div><b>${esc(cp.label)}</b>${cp.dangerous ? "<em>Sensitive</em>" : ""}<span>${esc(cp.desc || "")}</span></div>
+          ${cell}
+        </div>`;
+      }).join("");
+      return rows ? `<div class="cap-sec"><div class="cap-sec-h">${esc(sec)} <b>${secOn}/${secTotal}</b></div>${rows}</div>` : "";
+    }).join("");
+
+    return `<div class="cap-matrix" id="${esc(prefix)}Matrix" data-capmode="${esc(mode)}">${body}
+      <div class="cap-summary"><b>${allowed}</b> of ${total} permissions allowed</div></div>`;
+  }
+  // Live count + the colour state on each row, recomputed on every change. The <select>
+  // IS the .cap-state element, so its data-state attribute is what changes colour.
+  function capMatrixWire(root) {
+    const box = $(".cap-matrix", root);
+    if (!box) return;
+    const sum = $(".cap-summary", box);
+    const rowIsOn = (row) => {
+      const sel = $("[data-capsel]", row);
+      if (!sel) {
+        const st = $(".cap-state", row);
+        return !!(st && st.dataset.state === "allow");
+      }
+      let on;
+      if (sel.value === "allow") on = true;
+      else if (sel.value === "deny") on = false;
+      else on = row.dataset.capbase === "1";
+      sel.dataset.state = sel.value === "deny" ? "block" : (on ? "allow" : "");
+      return on;
+    };
+    const recount = () => {
+      let allowed = 0, total = 0;
+      // Per-section counts too — a stale "6/9" beside a section you just changed is
+      // worse than no count at all.
+      $$(".cap-sec", box).forEach((sec) => {
+        let secOn = 0, secTotal = 0;
+        $$(".cap-row", sec).forEach((row) => {
+          secTotal += 1;
+          if (rowIsOn(row)) secOn += 1;
+        });
+        allowed += secOn; total += secTotal;
+        const badge = $(".cap-sec-h b", sec);
+        if (badge) badge.textContent = secOn + "/" + secTotal;
+      });
+      if (sum) sum.innerHTML = `<b>${allowed}</b> of ${total} permissions allowed`;
+    };
+    $$("[data-capsel]", box).forEach((sel) => sel.onchange = recount);
+    recount();
+  }
+  function readCapMatrix(root) {
+    const grants = [], denies = [], capabilities = [];
+    $$("[data-capsel]", root).forEach((sel) => {
+      const k = sel.dataset.capsel;
+      if (sel.disabled && sel.dataset.capheld !== "1") return;
+      if (sel.value === "allow") { grants.push(k); capabilities.push(k); }
+      else if (sel.value === "deny") denies.push(k);
+    });
+    return { grants: grants, denies: denies, capabilities: capabilities };
+  }
+
+  /* ---- role radios + scope radios + office picker, shared by invite / edit / bulk ---- */
+  function tmAssignablePresets() {
+    return ((teamUi.meta || {}).role_presets || [])
+      .filter((r) => r.assignable !== false && r.key !== "owner" && r.key !== "custom");
+  }
+  function tmActiveCustomRoles() {
+    return ((teamUi.meta || {}).custom_roles || []).filter((r) => r.is_active !== false);
+  }
+  function tmRoleChoiceValue(roleKey, customRoleId) {
+    return (roleKey === "custom" && customRoleId) ? "custom:" + customRoleId : "preset:" + (roleKey || "viewer");
+  }
+  // Built from /team/meta, never from a hardcoded ["admin","editor","viewer"] — a
+  // workspace's own roles have to be pickable or they may as well not exist.
+  function tmRoleRadiosHtml(name, current) {
+    const rows = [];
+    const row = (val, label, desc, scope, scopeLocked, caps) =>
+      `<label class="rl-row${current === val ? " selected" : ""}">
+        <input type="radio" name="${esc(name)}" value="${esc(val)}" ${current === val ? "checked" : ""}
+          data-scope="${esc(scope || "")}" data-scopelocked="${scopeLocked ? "1" : "0"}"
+          data-caps="${esc(JSON.stringify(caps || []))}"/>
+        <span><b>${esc(label)}</b><span>${esc(desc || "")}</span></span>
+      </label>`;
+    tmAssignablePresets().forEach((r) => {
+      rows.push(row("preset:" + r.key, r.label, r.description, r.data_scope, r.scope_locked, r.capabilities));
+    });
+    const customs = tmActiveCustomRoles();
+    if (customs.length) {
+      rows.push(`<div class="cap-sec-h">Your workspace's own roles</div>`);
+      customs.forEach((r) => {
+        rows.push(row("custom:" + r.id, r.name, r.description, r.data_scope, false, r.capabilities));
+      });
+    }
+    return `<div class="rl-list">${rows.join("")}</div>`;
+  }
+  function tmScopeRadiosHtml(name, current) {
+    const list = ((teamUi.meta || {}).scopes) || [
+      { key: "all", label: SCOPE_FALLBACK_LABEL.all, desc: "" },
+      { key: "branch", label: SCOPE_FALLBACK_LABEL.branch, desc: "" },
+      { key: "assigned", label: SCOPE_FALLBACK_LABEL.assigned, desc: "" },
+    ];
+    return `<div class="rl-list">${list.map((s) => `<label class="rl-row${current === s.key ? " selected" : ""}">
+      <input type="radio" name="${esc(name)}" value="${esc(s.key)}" ${current === s.key ? "checked" : ""}/>
+      <span><b>${esc(s.label)}</b><span>${esc(s.desc || "")}</span></span></label>`).join("")}</div>`;
+  }
+  function tmBranchPickerHtml(name, selectedIds, primaryId) {
+    const list = ((teamUi.meta || {}).branches || []).filter((b) => b.is_active !== false);
+    if (!list.length) {
+      return `<div class="br-picker-empty">No offices yet — add one on the Offices tab first.</div>`;
+    }
+    const sel = new Set((selectedIds || []).map(Number));
+    // .br-picker label puts its <span> on the right as the secondary meta, so the office
+    // name is bare text and the city/code is the span.
+    return `<div class="br-picker">${list.map((b) => `<label>
+        <input type="checkbox" name="${esc(name)}" value="${b.id}" ${sel.has(Number(b.id)) ? "checked" : ""}/>
+        ${esc(b.name)}${(b.city || b.code) ? `<span>${esc(b.city || b.code)}</span>` : ""}</label>`).join("")}</div>
+      <div class="field" style="margin-top:10px"><label>Primary office</label>
+        <select name="primary_branch_id"><option value="">— None —</option>
+          ${list.map((b) => `<option value="${b.id}" ${Number(primaryId) === Number(b.id) ? "selected" : ""}>${esc(b.name)}</option>`).join("")}
+        </select></div>`;
+  }
+  // Keeps the scope block honest as the role changes: a scope-locked preset (Owner, Admin)
+  // has no choice to offer, and the office picker only matters at "their office only".
+  function tmWireRoleScope(root, roleName, scopeName) {
+    const sync = () => {
+      const picked = $(`input[name="${roleName}"]:checked`, root);
+      const scopeWrap = $("[data-scopewrap]", root);
+      const branchWrap = $("[data-branchwrap]", root);
+      const locked = picked && picked.dataset.scopelocked === "1";
+      if (scopeWrap) {
+        scopeWrap.classList.toggle("hidden", !!locked);
+        if (locked && picked) {
+          const hint = $("[data-scopelockedhint]", root);
+          if (hint) hint.classList.remove("hidden");
+        } else {
+          const hint = $("[data-scopelockedhint]", root);
+          if (hint) hint.classList.add("hidden");
+        }
+      }
+      // Default the scope radios to the role's own default the first time a role is picked.
+      if (!locked && picked && picked.dataset.scope) {
+        const already = $(`input[name="${scopeName}"]:checked`, root);
+        if (!already) {
+          const target = $(`input[name="${scopeName}"][value="${picked.dataset.scope}"]`, root);
+          if (target) target.checked = true;
+        }
+      }
+      const scopeVal = (($(`input[name="${scopeName}"]:checked`, root) || {}).value) ||
+        (picked && picked.dataset.scope) || "assigned";
+      if (branchWrap) branchWrap.classList.toggle("hidden", locked || scopeVal !== "branch");
+      $$(".rl-row", root).forEach((r) => {
+        const input = $("input", r);
+        r.classList.toggle("selected", !!(input && input.checked));
+      });
+    };
+    $$(`input[name="${roleName}"]`, root).forEach((i) => i.onchange = sync);
+    $$(`input[name="${scopeName}"]`, root).forEach((i) => i.onchange = sync);
+    sync();
+  }
+  function tmReadBranchPicker(form, name) {
+    return $$(`input[name="${name}"]:checked`, form).map((el) => parseInt(el.value, 10)).filter((n) => !isNaN(n));
+  }
+
+  /* ============================ MEMBERS ============================ */
+  async function tmDrawMembers() {
+    const mount = tmMount(); if (!mount) return;
+    if (!tmMetaReady(mount)) return;
+    if (!teamUi.team && !teamUi.teamError) {
+      tmLoadingInto(mount);
+      try {
+        const qs = (teamUi.includeInactive && can("team.manage")) ? "?include_inactive=1" : "";
+        const d = await api("/team" + qs);
+        applyAccessPayload(d);
+        teamUi.team = d;
+        teamMembersCache = d.members;
+      } catch (ex) { teamUi.teamError = ex; }
+      if (state.view !== "team" || teamUi.tab !== "members") return;
+      teamDrawShell();
+    }
+    const m2 = tmMount(); if (!m2) return;
+    if (teamUi.teamError) { m2.innerHTML = errBox(teamUi.teamError); return; }
+    tmPaintMembers();
+  }
+
+  function tmFilteredMembers() {
+    const f = teamUi.filters;
+    const q = (f.q || "").trim().toLowerCase();
+    return ((teamUi.team || {}).members || []).filter((m) => {
+      if (q) {
+        const hay = ((m.full_name || "") + " " + (m.email || "") + " " + (m.job_title || "")).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      if (f.role && String(m.role_key || "") !== f.role) return false;
+      // "" = active only (and the server didn't send the rest), "all" = both,
+      // "suspended" = only the deactivated ones. One control instead of a status filter
+      // plus a redundant "show deactivated" checkbox that half-overlapped it.
+      if (f.status !== "all") {
+        const st = m.status || (m.is_active === false ? "suspended" : "active");
+        if (f.status === "suspended" && st !== "suspended") return false;
+        if (f.status === "" && st === "suspended") return false;
+      }
+      if (f.branch) {
+        const ids = (m.branch_ids || []).map(String);
+        if (String(m.primary_branch_id || "") !== f.branch && ids.indexOf(f.branch) === -1) return false;
+      }
+      return true;
+    });
+  }
+
+  function tmPaintMembers() {
+    const mount = tmMount(); if (!mount) return;
+    // Repainting replaces the search box mid-typing — remember the caret so the filter
+    // doesn't yank focus out from under the user. (Same idiom as the credit ledger.)
+    const focused = document.activeElement;
+    const keepCaret = focused && focused.id === "tmQ" ? focused.selectionStart : null;
+
+    const meta = teamUi.meta || {};
+    const d = teamUi.team || {};
+    const rows = tmFilteredMembers();
+    const canManage = can("team.manage");
+    const canRoles = can("roles.manage");
+    const selfId = tmSelfId();
+    const branches = (meta.branches || []).filter((b) => b.is_active !== false);
+    const filtered = !!(teamUi.filters.q || teamUi.filters.role || teamUi.filters.branch || teamUi.filters.status);
+    const seats = meta.seats || {};
+
+    const roleOpts = [`<option value="">All roles</option>`].concat(
+      ((meta.role_presets || []).filter((r) => r.key !== "custom").map((r) =>
+        `<option value="${esc(r.key)}" ${teamUi.filters.role === r.key ? "selected" : ""}>${esc(r.label)}</option>`)),
+      tmActiveCustomRoles().length ? [`<option value="custom" ${teamUi.filters.role === "custom" ? "selected" : ""}>Custom roles</option>`] : []
+    ).join("");
+
+    const toolbar = `<div class="tm-toolbar">
+      <input id="tmQ" class="tm-input" placeholder="Search name, email or job title…" value="${esc(teamUi.filters.q)}" autocomplete="off"/>
+      <select id="tmRole" class="select-mini" aria-label="Filter by role">${roleOpts}</select>
+      ${branches.length > 1 ? `<select id="tmBranch" class="select-mini" aria-label="Filter by office">
+        <option value="">All offices</option>
+        ${branches.map((b) => `<option value="${b.id}" ${teamUi.filters.branch === String(b.id) ? "selected" : ""}>${esc(b.name)}</option>`).join("")}
+      </select>` : ""}
+      ${canManage ? `<select id="tmStatus" class="select-mini" aria-label="Filter by status">
+        <option value="">Active</option>
+        <option value="all" ${teamUi.filters.status === "all" ? "selected" : ""}>Active + deactivated</option>
+        <option value="suspended" ${teamUi.filters.status === "suspended" ? "selected" : ""}>Deactivated</option>
+      </select>` : ""}
+      ${filtered ? `<button class="btn btn-ghost btn-sm" id="tmClear">Clear</button>` : ""}
+      <div class="spacer"></div>
+      ${canManage ? `<button class="btn btn-primary btn-sm" id="tmInvite">+ Invite member</button>` : ""}
+    </div>`;
+
+    const body = rows.length ? rows.map((m) => {
+      const suspended = (m.status === "suspended") || m.is_active === false;
+      const isSelf = m.user_id === selfId;
+      const [a1, a2] = avatarColor(m.email || m.full_name);
+      const overrides = Number(m.override_count || ((m.capability_grants || []).length + (m.capability_denies || []).length));
+      return `<tr data-tmrow="${m.user_id}">
+        ${canManage ? `<td class="tm-pick"><input type="checkbox" class="tm-check" data-uid="${m.user_id}" ${
+          teamUi.selected.has(m.user_id) ? "checked" : ""} ${isSelf ? "disabled" : ""} aria-label="Select ${esc(m.full_name || m.email)}"/></td>` : ""}
+        <td><div class="tm-meta${suspended ? " is-off" : ""}">
+          <div class="tm-av${suspended ? " is-off" : ""}"${suspended ? "" : ` style="background:linear-gradient(135deg,${a1},${a2})"`}>${esc(initials(m.full_name || m.email).toUpperCase())}</div>
+          <div><b>${esc(m.full_name || m.email)}${isSelf ? "<em>you</em>" : ""}</b>
+            <span>${esc(m.email)}${m.job_title ? " · " + esc(m.job_title) : ""}${suspended ? " · deactivated" : ""}</span></div>
+        </div></td>
+        <td>${roleBadgeHtml(m.role_key, m.role_label)}${overrides > 0
+          ? `<span class="tm-override" title="${overrides} individual permission ${overrides === 1 ? "override" : "overrides"} on top of this role">±${overrides}</span>` : ""}</td>
+        <td>${scopeChipHtml(m.data_scope || (m.is_owner ? "all" : "assigned"), m.scope_label)}</td>
+        <td>${branchChipsHtml(m.branch_names, m.primary_branch_name)}</td>
+        <td class="tm-num">${m.assigned_client_count != null ? m.assigned_client_count : "—"}</td>
+        <td class="tm-num">${m.last_active_at ? esc(notifAgo(m.last_active_at)) : "—"}</td>
+        <td>${tmRowMenuHtml(m, { canManage, canRoles, isSelf, suspended })}</td>
+      </tr>`;
+    }).join("")
+      : `<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:26px">${
+        filtered ? "No members match these filters." : "No team members yet."}</td></tr>`;
+
+    mount.innerHTML = `
+      ${toolbar}
+      <div class="card"><div class="card-body" style="padding:0">
+        <div class="tm-tablewrap"><table class="client-table tm-table"><thead><tr>
+          ${canManage ? `<th class="tm-pick"><input type="checkbox" id="tmCheckAll" aria-label="Select all members"/></th>` : ""}
+          <th>Member</th><th>Role</th><th>Access scope</th><th>Offices</th>
+          <th class="tm-num">Clients</th><th class="tm-num">Last active</th><th></th>
+        </tr></thead><tbody>${body}</tbody></table></div>
+      </div></div>
+      ${canManage ? `<p class="tm-hint" style="margin-top:12px">Invited members get an email to set their password and join.${
+        seats.used != null ? ` Seats used: ${seats.used}/${seats.max === -1 || seats.max == null ? "∞" : seats.max}.` : ""}</p>` : ""}
+      <div id="tmBulkMount"></div>`;
+
+    // ---- filters (debounced search, caret preserved) ----
+    const q = $("#tmQ", mount);
+    if (q) {
+      let timer = null;
+      q.oninput = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { teamUi.filters.q = q.value; tmPaintMembers(); }, 220);
+      };
+      q.onkeydown = (e) => {
+        if (e.key === "Enter") { clearTimeout(timer); teamUi.filters.q = q.value; tmPaintMembers(); }
+      };
+      if (keepCaret != null) {
+        q.focus();
+        try { q.setSelectionRange(keepCaret, keepCaret); } catch (e) { /* not a text input */ }
+      }
+    }
+    const bindFilter = (id, key) => {
+      const el = $(id, mount);
+      if (el) el.onchange = () => { teamUi.filters[key] = el.value; tmPaintMembers(); };
+    };
+    bindFilter("#tmRole", "role"); bindFilter("#tmBranch", "branch");
+    // Status is the one filter the SERVER has to know about: deactivated members are not
+    // in the default /team payload at all, so asking for them means refetching.
+    const st = $("#tmStatus", mount);
+    if (st) st.onchange = () => {
+      teamUi.filters.status = st.value;
+      const needInactive = st.value !== "";
+      if (needInactive !== teamUi.includeInactive) {
+        teamUi.includeInactive = needInactive;
+        teamUi.team = null; teamUi.teamError = null;
+        tmDrawMembers();
+        return;
+      }
+      tmPaintMembers();
+    };
+    const clear = $("#tmClear", mount);
+    if (clear) clear.onclick = () => {
+      const wasInactive = teamUi.includeInactive;
+      teamUi.filters = { q: "", role: "", branch: "", status: "" };
+      teamUi.includeInactive = false;
+      if (wasInactive) { teamUi.team = null; teamUi.teamError = null; tmDrawMembers(); return; }
+      tmPaintMembers();
+    };
+    const invite = $("#tmInvite", mount);
+    if (invite) invite.onclick = () => tmOpenInvite();
+
+    // ---- selection + bulk bar ----
+    $$(".tm-check", mount).forEach((cb) => cb.onchange = () => {
+      const uid = parseInt(cb.dataset.uid, 10);
+      if (cb.checked) teamUi.selected.add(uid); else teamUi.selected.delete(uid);
+      const tr = cb.closest("tr");
+      if (tr) tr.classList.toggle("is-picked", cb.checked);
+      tmDrawBulkBar();
+    });
+    const all = $("#tmCheckAll", mount);
+    if (all) all.onchange = () => {
+      $$(".tm-check", mount).forEach((cb) => {
+        if (cb.disabled) return;
+        cb.checked = all.checked;
+        const uid = parseInt(cb.dataset.uid, 10);
+        if (all.checked) teamUi.selected.add(uid); else teamUi.selected.delete(uid);
+        const tr = cb.closest("tr");
+        if (tr) tr.classList.toggle("is-picked", all.checked);
+      });
+      tmDrawBulkBar();
+    };
+    $$(".tm-check:checked", mount).forEach((cb) => {
+      const tr = cb.closest("tr"); if (tr) tr.classList.add("is-picked");
+    });
+
+    tmWireRowMenus(mount);
+    tmDrawBulkBar();
+  }
+
+  function tmRowMenuHtml(m, ctx) {
+    const items = [];
+    if (ctx.canRoles && !ctx.isSelf && !m.is_owner) items.push(["access", "Edit access", false]);
+    if (ctx.canManage || ctx.isSelf) items.push(["profile", "Edit profile", false]);
+    // "Never signed in" rather than "invite_accepted_at is null": that column is not
+    // backfilled for members who joined before invites were tracked, and offering to
+    // re-invite a colleague who has been working here for a year is nonsense.
+    if (ctx.canManage && !ctx.isSelf && !m.invite_accepted_at && !m.last_active_at) {
+      items.push(["resend", "Resend invite", false]);
+    }
+    if (ctx.canManage && !ctx.isSelf && !m.is_owner) {
+      items.push(ctx.suspended ? ["reactivate", "Reactivate", false] : ["deactivate", "Deactivate", true]);
+      items.push(["remove", "Remove from workspace", true]);
+    }
+    if (!ctx.isSelf && !m.is_owner && (can("org.transfer_ownership") || ctx.canManage)) {
+      items.push(["transfer", "Transfer ownership", true]);
+    }
+    if (!items.length) return `<span class="tm-hint">—</span>`;
+    let lastSafe = true;
+    const rendered = items.map(([act, label, danger]) => {
+      const rule = (lastSafe && danger) ? "<hr>" : "";
+      lastSafe = !danger;
+      return `${rule}<button type="button"${danger ? ' class="danger"' : ""} data-tmact="${act}" data-uid="${m.user_id}">${esc(label)}</button>`;
+    }).join("");
+    return `<span class="tm-menu-wrap">
+      <button type="button" class="btn btn-ghost btn-xs" data-tmmenu="${m.user_id}"
+        aria-label="Actions for ${esc(m.full_name || m.email)}">⋯</button>
+      <div class="tm-menu hidden">
+        <div class="tm-menu-label">${esc(m.full_name || m.email)}</div>
+        ${rendered}
+      </div></span>`;
+  }
+  function tmWireRowMenus(root) {
+    $$("[data-tmmenu]", root).forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const menu = b.parentNode.querySelector(".tm-menu");
+        if (!menu) return;
+        const wasOpen = !menu.classList.contains("hidden");
+        tmCloseMenus();
+        if (!wasOpen) tmPositionMenu(b, menu);
+      };
+    });
+    $$("[data-tmact]", root).forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        tmCloseMenus();
+        const uid = parseInt(b.dataset.uid, 10);
+        const act = b.dataset.tmact;
+        if (act === "access") tmOpenAccessModal(uid);
+        else if (act === "profile") tmOpenProfileModal(uid);
+        else if (act === "resend") tmResendInvite(uid);
+        else if (act === "deactivate") tmDeactivate(uid);
+        else if (act === "reactivate") tmReactivate(uid);
+        else if (act === "remove") removeMember(uid);
+        else if (act === "transfer") tmOpenTransferOwnership(uid);
+      };
+    });
+  }
+
+  /* ---- bulk bar ---- */
+  function tmDrawBulkBar() {
+    const mount = $("#tmBulkMount");
+    if (!mount) return;
+    const n = teamUi.selected.size;
+    if (!n) { mount.innerHTML = ""; return; }
+    mount.innerHTML = `<div class="tm-bulkbar">
+      <b>${n} selected</b>
+      ${can("roles.manage") ? `<button class="btn btn-soft btn-sm" data-bulk="set_role">Change role</button>` : ""}
+      ${can("roles.manage") ? `<button class="btn btn-soft btn-sm" data-bulk="set_scope">Change access scope</button>` : ""}
+      ${can("branches.manage") ? `<button class="btn btn-soft btn-sm" data-bulk="set_branches">Set offices</button>` : ""}
+      ${can("branches.manage") ? `<button class="btn btn-soft btn-sm" data-bulk="add_branch">Add to an office</button>` : ""}
+      ${can("team.manage") ? `<button class="btn btn-danger btn-sm" data-bulk="deactivate">Deactivate</button>` : ""}
+      <div class="spacer"></div>
+      <button class="tm-bulkbar-clear" data-bulk="clear">Clear selection</button>
+    </div>`;
+    $$("[data-bulk]", mount).forEach((b) => b.onclick = () => {
+      const act = b.dataset.bulk;
+      if (act === "clear") {
+        teamUi.selected = new Set();
+        tmPaintMembers();
+        return;
+      }
+      tmOpenBulkModal(act);
+    });
+  }
+
+  function tmOpenBulkModal(action) {
+    const ids = Array.from(teamUi.selected);
+    if (!ids.length) return;
+    if (ids.length > 100) { toast("Select at most 100 members at a time.", "error"); return; }
+    const titles = {
+      set_role: "Change role", set_scope: "Change access scope",
+      set_branches: "Set offices", add_branch: "Add to an office", deactivate: "Deactivate members",
+    };
+    let inner = "";
+    if (action === "set_role") inner = tmRoleRadiosHtml("bulk_role", "");
+    else if (action === "set_scope") inner = tmScopeRadiosHtml("bulk_scope", "") +
+      `<div data-branchwrap class="hidden" style="margin-top:12px"><div class="cap-sec-h">Which offices?</div>${tmBranchPickerHtml("bulk_branch_ids", [], "")}</div>`;
+    else if (action === "set_branches") inner = tmBranchPickerHtml("bulk_branch_ids", [], "");
+    else if (action === "add_branch") {
+      const list = ((teamUi.meta || {}).branches || []).filter((b) => b.is_active !== false);
+      inner = list.length
+        ? `<div class="field"><label>Office</label><select name="bulk_single_branch">${
+          list.map((b) => `<option value="${b.id}">${esc(b.name)}</option>`).join("")}</select></div>`
+        : `<div class="br-picker-empty">No offices yet — add one on the Offices tab first.</div>`;
+    } else if (action === "deactivate") {
+      inner = `<p class="tm-hint">They lose access immediately and their sessions are signed out. Anyone still holding client records or calendar events will be skipped — reassign those first.</p>`;
+    }
+    openModal(`<div class="modal-head"><h3>${esc(titles[action] || "Apply to selected")}</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmBulkForm"><div class="modal-body">
+        <p class="tm-hint">Applying to <b>${ids.length}</b> ${ids.length === 1 ? "member" : "members"}.</p>
+        ${inner}
+        <div id="tmBulkError" class="auth-error hidden"></div>
+        <div id="tmBulkResult"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn ${action === "deactivate" ? "btn-danger" : "btn-primary"}" id="tmBulkSubmit">Apply</button>
+      </div></form>`, { wide: action === "set_role" || action === "set_scope" });
+
+    const form = $("#tmBulkForm");
+    if (action === "set_scope") tmWireRoleScope(form, "bulk_role", "bulk_scope");
+    $$(".rl-row input", form).forEach((i) => i.onchange = () => {
+      $$(".rl-row", form).forEach((r) => {
+        const el = $("input", r);
+        r.classList.toggle("selected", !!(el && el.checked));
+      });
+      if (action === "set_scope") {
+        const wrap = $("[data-branchwrap]", form);
+        const picked = $('input[name="bulk_scope"]:checked', form);
+        if (wrap) wrap.classList.toggle("hidden", !picked || picked.value !== "branch");
+      }
+    });
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $("#tmBulkSubmit"); const err = $("#tmBulkError");
+      err.classList.add("hidden");
+      const body = { user_ids: ids, action: action };
+      if (action === "set_role") {
+        const picked = $('input[name="bulk_role"]:checked', form);
+        if (!picked) { err.textContent = "Pick a role."; err.classList.remove("hidden"); return; }
+        const [kind, val] = picked.value.split(":");
+        if (kind === "custom") { body.role_key = "custom"; body.custom_role_id = parseInt(val, 10); }
+        else body.role_key = val;
+      } else if (action === "set_scope") {
+        const picked = $('input[name="bulk_scope"]:checked', form);
+        if (!picked) { err.textContent = "Pick an access scope."; err.classList.remove("hidden"); return; }
+        body.data_scope = picked.value;
+        if (picked.value === "branch") body.branch_ids = tmReadBranchPicker(form, "bulk_branch_ids");
+      } else if (action === "set_branches") {
+        body.branch_ids = tmReadBranchPicker(form, "bulk_branch_ids");
+      } else if (action === "add_branch") {
+        const sel = form.bulk_single_branch;
+        if (!sel || !sel.value) { err.textContent = "Pick an office."; err.classList.remove("hidden"); return; }
+        body.branch_id = parseInt(sel.value, 10);
+      }
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      let res;
+      try { res = await api("/team/bulk", { method: "POST", body: body }); }
+      catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = "Apply";
+        return;
+      }
+      const applied = (res.applied || []).length;
+      const skipped = res.skipped || [];
+      // Never claim a clean sweep: a skipped member is the whole point of this response.
+      if (!skipped.length) {
+        closeModal();
+        toast(`Updated ${applied} ${applied === 1 ? "member" : "members"}`, "success");
+        teamUi.selected = new Set();
+        await teamRefresh();
+        return;
+      }
+      const nameOf = (uid) => {
+        const m = tmMemberById(uid);
+        return (m && (m.full_name || m.email)) || ("User #" + uid);
+      };
+      $("#tmBulkResult").innerHTML = `<div class="tm-banner" style="margin-top:14px">
+        <div class="tm-banner-ic">ℹ️</div>
+        <div class="tm-banner-txt"><b>${applied} updated, ${skipped.length} skipped.</b>
+          <span>${skipped.map((s) => `${esc(nameOf(s.user_id))} — ${esc(s.reason || "not allowed")}`).join("<br>")}</span></div>
+      </div>`;
+      btn.disabled = false; btn.textContent = "Done";
+      btn.onclick = async (ev) => {
+        ev.preventDefault();
+        closeModal();
+        teamUi.selected = new Set();
+        await teamRefresh();
       };
     };
   }
-  async function changeRole(uid, role) {
-    try { await api(`/team/users/${uid}/role`, { method: "PATCH", body: { role } }); toast("Role updated", "success"); renderTeam(); }
-    catch (ex) { toast(ex.message, "error"); renderTeam(); }
+
+  /* ---- invite ---- */
+  function tmOpenInvite() {
+    const meta = teamUi.meta || {};
+    if (!(meta.role_presets || []).length) { toast("Roles aren't available right now — try again.", "error"); return; }
+    const defaultRole = tmRoleChoiceValue("counsellor", null);
+    openModal(`<div class="modal-head"><h3>Invite a team member</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmInviteForm"><div class="modal-body">
+        <div class="mw-grid mw-sec">
+          <div class="field"><label>Email *</label><input type="email" name="email" required placeholder="teammate@company.com"/></div>
+          <div class="field"><label>Full name</label><input name="full_name" placeholder="Their name"/></div>
+          <div class="field"><label>Job title</label><input name="job_title" maxlength="80" placeholder="e.g. Senior counsellor"/></div>
+          <div class="field"><label>Phone</label><input name="phone" inputmode="tel" placeholder="Optional"/></div>
+        </div>
+        <div class="cp-sub-label">Role</div>
+        ${tmRoleRadiosHtml("invite_role", defaultRole)}
+        <div data-scopewrap>
+          <div class="cp-sub-label">What client data can they see?</div>
+          ${tmScopeRadiosHtml("invite_scope", "")}
+        </div>
+        <div data-scopelockedhint class="tm-hint hidden">This role always covers the entire workspace.</div>
+        <div data-branchwrap class="hidden">
+          <div class="cp-sub-label">Which offices?</div>
+          ${tmBranchPickerHtml("invite_branch_ids", [], "")}
+        </div>
+        <details class="cap-fold"><summary>Fine-tune individual permissions</summary>
+          <p class="tm-hint">You can also do this later from the member's ⋯ menu, once they've joined.</p>
+        </details>
+        <div class="tm-hint" style="margin-top:12px">They'll get an email to set their password and join your workspace.</div>
+        <div id="tmInviteError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="tmInviteSubmit">Send invite</button>
+      </div></form>`, { wide: true });
+
+    const form = $("#tmInviteForm");
+    tmWireRoleScope(form, "invite_role", "invite_scope");
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $("#tmInviteSubmit"); const err = $("#tmInviteError");
+      err.classList.add("hidden");
+      const picked = $('input[name="invite_role"]:checked', form);
+      if (!picked) { err.textContent = "Pick a role."; err.classList.remove("hidden"); return; }
+      const [kind, val] = picked.value.split(":");
+      const body = {
+        email: (form.email.value || "").trim(),
+        full_name: (form.full_name.value || "").trim() || null,
+        job_title: (form.job_title.value || "").trim() || null,
+        phone: (form.phone.value || "").trim() || null,
+      };
+      if (kind === "custom") { body.role_key = "custom"; body.custom_role_id = parseInt(val, 10); }
+      else body.role_key = val;
+      // `role` is still sent so an older server (which validates the legacy column) keeps
+      // working; the server prefers role_key when it understands it.
+      body.role = (body.role_key === "admin") ? "admin" : (body.role_key === "viewer" ? "viewer" : "editor");
+      const scopePicked = $('input[name="invite_scope"]:checked', form);
+      if (picked.dataset.scopelocked !== "1" && scopePicked) body.data_scope = scopePicked.value;
+      if (scopePicked && scopePicked.value === "branch") body.branch_ids = tmReadBranchPicker(form, "invite_branch_ids");
+      const primary = form.primary_branch_id;
+      if (primary && primary.value) body.primary_branch_id = parseInt(primary.value, 10);
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        await api("/team/users", { method: "POST", body: body });
+        toast("Invitation sent", "success");
+        closeModal();
+        await teamRefresh();
+      } catch (ex) {
+        if (ex.status === 402) { closeModal(); toast(errMessage(ex), "error"); navigate("credits"); return; }
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = "Send invite";
+      }
+    };
+  }
+
+  /* ---- edit access ---- */
+  async function tmOpenAccessModal(userId) {
+    const m = tmMemberById(userId);
+    openModal(`<div class="modal-head"><h3>Edit access</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body"><div class="center-load"><div class="spinner dark"></div></div></div>`, { wide: true });
+    let d;
+    try { d = await api(`/team/users/${userId}/access`); }
+    catch (ex) {
+      openModal(`<div class="modal-head"><h3>Edit access</h3>
+        <button class="x" onclick="__ent.closeModal()">×</button></div>
+        <div class="modal-body">${errBox(ex)}</div>
+        <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`, { wide: true });
+      return;
+    }
+    const who = d.member || d.user || m || {};
+    const name = who.full_name || who.email || (m && (m.full_name || m.email)) || "this member";
+    const roleKey = d.role_key || who.role_key || "viewer";
+    const scope = d.data_scope || who.data_scope || "";
+    const grants = d.capability_grants || [];
+    const denies = d.capability_denies || [];
+    // The role's own capabilities are the "inherit" baseline the overrides sit on top of.
+    const preset = (roleKey === "custom")
+      ? tmActiveCustomRoles().find((r) => r.id === (d.custom_role_id || who.custom_role_id))
+      : ((teamUi.meta || {}).role_presets || []).find((r) => r.key === roleKey);
+    const base = (preset && preset.capabilities) || d.role_capabilities || [];
+    const branchIds = d.branch_ids || who.branch_ids || [];
+    const primaryId = d.primary_branch_id || who.primary_branch_id || "";
+    const current = tmRoleChoiceValue(roleKey, d.custom_role_id || who.custom_role_id);
+
+    openModal(`<div class="modal-head"><h3>Access for ${esc(name)}</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmAccessForm"><div class="modal-body">
+        <div class="cp-sub-label">Role</div>
+        ${tmRoleRadiosHtml("acc_role", current)}
+        <div data-scopewrap>
+          <div class="cp-sub-label">What client data can they see?</div>
+          ${tmScopeRadiosHtml("acc_scope", scope)}
+        </div>
+        <div data-scopelockedhint class="tm-hint hidden">This role always covers the entire workspace.</div>
+        <div data-branchwrap class="hidden">
+          <div class="cp-sub-label">Which offices?</div>
+          ${tmBranchPickerHtml("acc_branch_ids", branchIds, primaryId)}
+        </div>
+        <details class="cap-fold"${(grants.length || denies.length) ? " open" : ""}>
+          <summary>Fine-tune individual permissions</summary>
+          <p class="tm-hint">Everything here is layered on top of the role. <b>Inherit</b> follows the role, <b>Allow</b> adds a permission just for ${esc(name)}, and <b>Block</b> takes one away even if the role grants it.</p>
+          ${capMatrixHtml({ grants: grants, denies: denies, base: base }, tmActorCaps(), { mode: "override", idPrefix: "acc", isOwner: tmIsOwner() })}
+        </details>
+        <div id="tmAccessError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="tmAccessSubmit">Save access</button>
+      </div></form>`, { wide: true });
+
+    const form = $("#tmAccessForm");
+    tmWireRoleScope(form, "acc_role", "acc_scope");
+    capMatrixWire(form);
+    // Changing the role changes what "Inherit" means, so redraw the matrix's baseline.
+    $$('input[name="acc_role"]', form).forEach((i) => i.addEventListener("change", () => {
+      let caps = [];
+      try { caps = JSON.parse(i.dataset.caps || "[]"); } catch (e) { caps = []; }
+      const holder = $(".cap-fold", form);
+      if (!holder) return;
+      const read = readCapMatrix(form);
+      const rebuilt = capMatrixHtml({ grants: read.grants, denies: read.denies, base: caps },
+        tmActorCaps(), { mode: "override", idPrefix: "acc", isOwner: tmIsOwner() });
+      const old = $(".cap-matrix", holder);
+      if (old) { old.outerHTML = rebuilt; capMatrixWire(form); }
+    }));
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $("#tmAccessSubmit"); const err = $("#tmAccessError");
+      err.classList.add("hidden");
+      const picked = $('input[name="acc_role"]:checked', form);
+      if (!picked) { err.textContent = "Pick a role."; err.classList.remove("hidden"); return; }
+      const [kind, val] = picked.value.split(":");
+      const body = {};
+      if (kind === "custom") { body.role_key = "custom"; body.custom_role_id = parseInt(val, 10); }
+      else { body.role_key = val; body.custom_role_id = null; }
+      const scopePicked = $('input[name="acc_scope"]:checked', form);
+      if (picked.dataset.scopelocked !== "1" && scopePicked) body.data_scope = scopePicked.value;
+      if (scopePicked && scopePicked.value === "branch") {
+        body.branch_ids = tmReadBranchPicker(form, "acc_branch_ids");
+        const primary = form.primary_branch_id;
+        body.primary_branch_id = primary && primary.value ? parseInt(primary.value, 10) : null;
+      }
+      const read = readCapMatrix(form);
+      body.capability_grants = read.grants;
+      body.capability_denies = read.denies;
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        await api(`/team/users/${userId}/access`, { method: "PATCH", body: body });
+        toast("Access updated", "success");
+        closeModal();
+        await teamRefresh();
+      } catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = "Save access";
+      }
+    };
+  }
+
+  /* ---- edit profile (self-serve or team.manage) ---- */
+  function tmOpenProfileModal(userId) {
+    const m = tmMemberById(userId) || {};
+    openModal(`<div class="modal-head"><h3>Edit profile</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmProfileForm"><div class="modal-body">
+        <div class="field"><label>Full name</label><input name="full_name" value="${esc(m.full_name || "")}" maxlength="120"/></div>
+        <div class="field"><label>Job title</label><input name="job_title" value="${esc(m.job_title || "")}" maxlength="80" placeholder="e.g. Senior counsellor"/></div>
+        <div class="field"><label>Phone</label><input name="phone" value="${esc(m.phone || "")}" inputmode="tel" maxlength="32"/></div>
+        <div class="tm-hint">Email addresses can't be changed here — they identify the account.</div>
+        <div id="tmProfileError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="tmProfileSubmit">Save</button>
+      </div></form>`);
+    $("#tmProfileForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#tmProfileSubmit"); const err = $("#tmProfileError");
+      err.classList.add("hidden");
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        await api(`/team/users/${userId}/profile`, { method: "PATCH", body: {
+          full_name: (f.full_name.value || "").trim() || null,
+          job_title: (f.job_title.value || "").trim() || null,
+          phone: (f.phone.value || "").trim() || null,
+        } });
+        toast("Profile updated", "success");
+        closeModal();
+        await teamRefresh();
+      } catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = "Save";
+      }
+    };
+  }
+
+  async function tmResendInvite(userId) {
+    try {
+      await api(`/team/users/${userId}/resend-invite`, { method: "POST" });
+      toast("Invitation resent", "success");
+    } catch (ex) { toast(errMessage(ex), "error"); }
+  }
+
+  /* ---- deactivate (with the 409 reassignment picker) ---- */
+  async function tmDeactivate(userId, extra) {
+    const m = tmMemberById(userId) || {};
+    const name = m.full_name || m.email || "this member";
+    if (!extra) {
+      const ok = await confirmModal(
+        `${name} loses access immediately and is signed out everywhere. Their client records and calendar events stay exactly where they are.`,
+        { title: "Deactivate member?", okText: "Deactivate" });
+      if (!ok) return;
+    }
+    try {
+      await api(`/team/users/${userId}/deactivate`, { method: "POST", body: extra || {} });
+      toast("Member deactivated", "success");
+      await teamRefresh();
+    } catch (ex) {
+      const det = errDetail(ex);
+      if (ex.status === 409 && det) { tmOpenDeactivateReassign(userId, det); return; }
+      toast(errMessage(ex), "error");
+    }
+  }
+  function tmOpenDeactivateReassign(userId, det) {
+    const m = tmMemberById(userId) || {};
+    const name = m.full_name || m.email || "this member";
+    const others = ((teamUi.team || {}).members || [])
+      .filter((x) => x.user_id !== userId && x.is_active !== false && (x.status || "active") === "active");
+    const clients = Number(det.assigned_client_count || 0);
+    const events = Number(det.open_event_count || 0);
+    const picker = (id, label, count) => `<div class="field"><label>${esc(label)}</label>
+      <select name="${id}"><option value="">— Leave them assigned to ${esc(name)} —</option>
+        ${others.map((o) => `<option value="${o.user_id}">${esc(o.full_name || o.email)}</option>`).join("")}
+      </select><div class="tm-hint">${count} ${count === 1 ? "record" : "records"}</div></div>`;
+    openModal(`<div class="modal-head"><h3>Reassign ${esc(name)}'s work</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmDeacForm"><div class="modal-body">
+        <p class="tm-hint">${esc(det.message || "This member still owns records.")}</p>
+        ${clients ? picker("reassign_clients_to_user_id", "Move their clients to", clients) : ""}
+        ${events ? picker("reassign_events_to_user_id", "Move their calendar events to", events) : ""}
+        ${!others.length ? `<div class="br-picker-empty">There's nobody else active to move this work to.</div>` : ""}
+        <div class="field"><label>Reason (optional)</label><input name="reason" maxlength="200" placeholder="Left the company, on leave…"/></div>
+        <div id="tmDeacError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="tmDeacSubmit">Deactivate</button>
+      </div></form>`);
+    $("#tmDeacForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#tmDeacSubmit"); const err = $("#tmDeacError");
+      err.classList.add("hidden");
+      const body = { reason: (f.reason.value || "").trim() || null };
+      if (f.reassign_clients_to_user_id && f.reassign_clients_to_user_id.value) {
+        body.reassign_clients_to_user_id = parseInt(f.reassign_clients_to_user_id.value, 10);
+      }
+      if (f.reassign_events_to_user_id && f.reassign_events_to_user_id.value) {
+        body.reassign_events_to_user_id = parseInt(f.reassign_events_to_user_id.value, 10);
+      }
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        await api(`/team/users/${userId}/deactivate`, { method: "POST", body: body });
+        toast("Member deactivated", "success");
+        closeModal();
+        await teamRefresh();
+      } catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = "Deactivate";
+      }
+    };
+  }
+  async function tmReactivate(userId) {
+    const m = tmMemberById(userId) || {};
+    const ok = await confirmModal(
+      `${m.full_name || m.email || "This member"} gets their access back with the role and scope they had before.`,
+      { title: "Reactivate member?", okText: "Reactivate", danger: false });
+    if (!ok) return;
+    try {
+      await api(`/team/users/${userId}/reactivate`, { method: "POST", body: {} });
+      toast("Member reactivated", "success");
+      await teamRefresh();
+    } catch (ex) {
+      if (ex.status === 402) { toast(errMessage(ex), "error"); navigate("credits"); return; }
+      toast(errMessage(ex), "error");
+    }
   }
   async function removeMember(uid) {
-    if (!(await confirmModal("They'll lose access to this workspace immediately.", { title: "Remove member?", okText: "Remove" }))) return;
-    try { await api(`/team/users/${uid}`, { method: "DELETE" }); toast("Member removed", "success"); renderTeam(); }
-    catch (ex) { toast(ex.message, "error"); }
+    const m = tmMemberById(uid) || {};
+    if (!(await confirmModal(
+      `${m.full_name || m.email || "They"} will lose access to this workspace immediately. Deactivating instead keeps their name on the records they created.`,
+      { title: "Remove member?", okText: "Remove" }))) return;
+    try {
+      await api(`/team/users/${uid}`, { method: "DELETE" });
+      toast("Member removed", "success");
+      await teamRefresh();
+    } catch (ex) { toast(errMessage(ex), "error"); }
+  }
+
+  /* ---- transfer ownership (type the email to confirm) ---- */
+  function tmOpenTransferOwnership(userId) {
+    const m = tmMemberById(userId) || {};
+    const email = m.email || "";
+    openModal(`<div class="modal-head"><h3>Transfer ownership</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmTransferForm"><div class="modal-body">
+        <p class="tm-hint">${esc(m.full_name || email || "This member")} becomes the workspace owner and gets every permission, including refunds and the payout bank account. You keep Admin. <b>This can't be undone by you afterwards</b> — only the new owner can transfer it back.</p>
+        <div class="field"><label>Type <b>${esc(email)}</b> to confirm</label>
+          <input name="confirm_email" autocomplete="off" placeholder="${esc(email)}"/></div>
+        <div id="tmTransferError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="tmTransferSubmit">Transfer ownership</button>
+      </div></form>`);
+    $("#tmTransferForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#tmTransferSubmit"); const err = $("#tmTransferError");
+      err.classList.add("hidden");
+      const typed = (f.confirm_email.value || "").trim();
+      if (typed.toLowerCase() !== String(email).toLowerCase()) {
+        err.textContent = "That doesn't match their email address.";
+        err.classList.remove("hidden");
+        return;
+      }
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        await api("/organization/transfer-ownership", { method: "POST", body: { target_user_id: userId, confirm_email: typed } });
+        toast("Ownership transferred", "success");
+        closeModal();
+        // OUR own capabilities just changed (owner → admin), so nothing cached is
+        // trustworthy: drop it all and re-boot, which re-reads /me and re-routes here.
+        teamUi.meta = null; teamUi.metaError = null;
+        teamUi.team = null; teamUi.teamError = null;
+        teamUi.mine = null; teamUi.mineError = null;
+        teamMembersCache = null;
+        await boot();
+      } catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = "Transfer ownership";
+      }
+    };
+  }
+
+  /* ============================ ROLES & PERMISSIONS ============================ */
+  function tmDrawRoles() {
+    const mount = tmMount(); if (!mount) return;
+    if (!can("roles.manage")) {
+      mount.innerHTML = deniedCard("You don't have permission to manage roles and permissions. Ask a workspace admin for access.");
+      return;
+    }
+    if (!tmMetaReady(mount)) return;
+    const meta = teamUi.meta;
+    const presets = (meta.role_presets || []).filter((r) => r.key !== "custom");
+    const customs = (meta.custom_roles || []).filter((r) => r.is_active !== false);
+    const limit = (meta.limits && meta.limits.max_custom_roles) || 20;
+
+    const capCount = (r) => (r.capabilities || []).length;
+    const scopeText = (s) => esc((scopeMeta(s) || {}).label || SCOPE_FALLBACK_LABEL[s] || "—");
+    const presetCard = (r) => `<div class="rl-card${r.key === "owner" ? " is-primary" : ""}">
+      <div class="rl-card-top"><h4>${esc(r.label)}</h4>${roleBadgeHtml(r.key, "Built-in")}</div>
+      <p>${esc(r.description || "")}</p>
+      <div class="rl-card-facts">
+        <span><b>${capCount(r)}</b> permissions</span>
+        <span>${scopeText(r.data_scope)}</span>
+      </div>
+      <div class="rl-card-acts">
+        <button class="btn btn-ghost btn-sm" data-rlview="${esc(r.key)}">View permissions</button>
+        ${r.key === "owner" ? "" : `<button class="btn btn-soft btn-sm" data-rlduppreset="${esc(r.key)}">Duplicate to customise</button>`}
+      </div>
+    </div>`;
+    const customCard = (r) => `<div class="rl-card">
+      <div class="rl-card-top"><h4>${esc(r.name)}</h4>${roleBadgeHtml("custom", "Custom")}</div>
+      <p>${esc(r.description || "")}</p>
+      <div class="rl-card-facts">
+        <span><b>${capCount(r)}</b> permissions</span>
+        <span>${scopeText(r.data_scope)}</span>
+        <span><b>${r.member_count || 0}</b> ${r.member_count === 1 ? "member" : "members"}</span>
+      </div>
+      <div class="rl-card-acts">
+        <button class="btn btn-soft btn-sm" data-rledit="${r.id}">Edit</button>
+        <button class="btn btn-ghost btn-sm" data-rldup="${r.id}">Duplicate</button>
+        <button class="btn btn-ghost btn-sm" data-rlarchive="${r.id}">Archive</button>
+      </div>
+    </div>`;
+
+    mount.innerHTML = `
+      <div class="tm-toolbar">
+        <div><b>Your workspace's own roles</b>
+          <div class="tm-hint">${customs.length} of ${limit} used. Start from a built-in role and change what it can do.</div></div>
+        <div class="spacer" style="flex:1"></div>
+        <button class="btn btn-primary btn-sm" id="rlCreate" ${customs.length >= limit ? "disabled" : ""}>+ Create role</button>
+      </div>
+      ${customs.length
+        ? `<div class="rl-grid">${customs.map(customCard).join("")}</div>`
+        : `<div class="card"><div class="card-body tm-hint">No custom roles yet. The built-in roles below cover most teams — duplicate one when you need to change what it can do.</div></div>`}
+      <div class="cp-sub-label" style="margin-top:22px">Built-in roles</div>
+      <div class="rl-grid">${presets.map(presetCard).join("")}</div>`;
+
+    const create = $("#rlCreate", mount);
+    if (create) create.onclick = () => tmOpenRoleEditor(null, null);
+    $$("[data-rlview]", mount).forEach((b) => b.onclick = () => tmViewPresetRole(b.dataset.rlview));
+    $$("[data-rlduppreset]", mount).forEach((b) => b.onclick = () => tmOpenRoleEditor(null, b.dataset.rlduppreset));
+    $$("[data-rledit]", mount).forEach((b) => b.onclick = () => tmOpenRoleEditor(parseInt(b.dataset.rledit, 10), null));
+    $$("[data-rldup]", mount).forEach((b) => b.onclick = () => tmDuplicateRole(parseInt(b.dataset.rldup, 10)));
+    $$("[data-rlarchive]", mount).forEach((b) => b.onclick = () => tmArchiveRole(parseInt(b.dataset.rlarchive, 10)));
+  }
+
+  function tmViewPresetRole(key) {
+    const r = ((teamUi.meta || {}).role_presets || []).find((x) => x.key === key);
+    if (!r) return;
+    openModal(`<div class="modal-head"><h3>${esc(r.label)}</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body">
+        <p class="tm-hint">${esc(r.description || "")}</p>
+        <p class="tm-hint">Data scope: <b>${esc((scopeMeta(r.data_scope) || {}).label || SCOPE_FALLBACK_LABEL[r.data_scope] || "—")}</b>${
+          r.scope_locked ? " (fixed for this role)" : ""}</p>
+        ${capMatrixHtml({ base: r.capabilities || [] }, null,
+          { mode: "readonly", idPrefix: "rlv", isOwner: true, baseLabel: "Allowed" })}
+      </div>
+      <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`, { wide: true });
+  }
+
+  function tmOpenRoleEditor(roleId, basePresetKey) {
+    const meta = teamUi.meta || {};
+    const existing = roleId ? tmActiveCustomRoles().find((r) => r.id === roleId) : null;
+    const preset = basePresetKey ? (meta.role_presets || []).find((r) => r.key === basePresetKey) : null;
+    const seed = existing || preset || {};
+    const caps = (existing && existing.capabilities) || (preset && preset.capabilities) || [];
+    const scope = seed.data_scope || "assigned";
+    const name = existing ? existing.name : (preset ? preset.label + " (copy)" : "");
+    openModal(`<div class="modal-head"><h3>${existing ? "Edit role" : "Create a role"}</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmRoleForm"><div class="modal-body">
+        <div class="mw-grid mw-sec">
+          <div class="field span2"><label>Role name *</label>
+            <input name="name" required maxlength="60" value="${esc(name)}" placeholder="e.g. Senior counsellor"/></div>
+          <div class="field span3"><label>Description</label>
+            <input name="description" maxlength="200" value="${esc(seed.description || "")}" placeholder="What this role is for"/></div>
+        </div>
+        <div class="cp-sub-label">What client data can this role see?</div>
+        ${tmScopeRadiosHtml("role_scope", scope)}
+        <div class="cp-sub-label">Permissions</div>
+        ${capMatrixHtml({ grants: caps, base: [] }, tmActorCaps(), { mode: "role", idPrefix: "rle", isOwner: tmIsOwner() })}
+        <div id="tmRoleError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="tmRoleSubmit">${existing ? "Save role" : "Create role"}</button>
+      </div></form>`, { wide: true });
+    const form = $("#tmRoleForm");
+    capMatrixWire(form);
+    $$('input[name="role_scope"]', form).forEach((i) => i.onchange = () => {
+      $$(".rl-row", form).forEach((r) => {
+        const el = $("input", r);
+        r.classList.toggle("selected", !!(el && el.checked));
+      });
+    });
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $("#tmRoleSubmit"); const err = $("#tmRoleError");
+      err.classList.add("hidden");
+      const read = readCapMatrix(form);
+      if (!read.capabilities.length) {
+        err.textContent = "Pick at least one permission for this role.";
+        err.classList.remove("hidden");
+        return;
+      }
+      const scopePicked = $('input[name="role_scope"]:checked', form);
+      const body = {
+        name: (form.name.value || "").trim(),
+        description: (form.description.value || "").trim() || null,
+        capabilities: read.capabilities,
+        data_scope: (scopePicked && scopePicked.value) || "assigned",
+      };
+      if (!existing && basePresetKey) body.based_on_role_key = basePresetKey;
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        if (existing) await api(`/roles/${existing.id}`, { method: "PATCH", body: body });
+        else await api("/roles", { method: "POST", body: body });
+        toast(existing ? "Role updated" : "Role created", "success");
+        closeModal();
+        await teamRefresh();
+      } catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = existing ? "Save role" : "Create role";
+      }
+    };
+  }
+
+  async function tmDuplicateRole(roleId) {
+    const r = tmActiveCustomRoles().find((x) => x.id === roleId);
+    const name = await promptModal("What should the copy be called?", {
+      title: "Duplicate role", okText: "Duplicate", value: ((r && r.name) || "Role") + " (copy)",
+    });
+    if (!name || !name.trim()) return;
+    try {
+      await api(`/roles/${roleId}/duplicate`, { method: "POST", body: { name: name.trim() } });
+      toast("Role duplicated", "success");
+      await teamRefresh();
+    } catch (ex) { toast(errMessage(ex), "error"); }
+  }
+
+  async function tmArchiveRole(roleId) {
+    const r = tmActiveCustomRoles().find((x) => x.id === roleId);
+    const ok = await confirmModal(
+      `“${(r && r.name) || "This role"}” stops being assignable. Roles are archived rather than deleted so the access log keeps making sense.`,
+      { title: "Archive role?", okText: "Archive" });
+    if (!ok) return;
+    try {
+      await api(`/roles/${roleId}/archive`, { method: "POST", body: {} });
+      toast("Role archived", "success");
+      await teamRefresh();
+    } catch (ex) {
+      const det = errDetail(ex);
+      if (ex.status === 409) { tmOpenRoleArchiveMove(roleId, det, r); return; }
+      toast(errMessage(ex), "error");
+    }
+  }
+  function tmOpenRoleArchiveMove(roleId, det, role) {
+    const n = Number((det && det.member_count) || 0);
+    const others = tmActiveCustomRoles().filter((r) => r.id !== roleId);
+    openModal(`<div class="modal-head"><h3>Move members off this role</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmRoleArchForm"><div class="modal-body">
+        <p class="tm-hint">${esc((det && det.message) ||
+          `${n} ${n === 1 ? "member is" : "members are"} still on “${(role && role.name) || "this role"}”. Pick where they should go.`)}</p>
+        <div class="field"><label>Move ${n || "these"} ${n === 1 ? "member" : "members"} to</label>
+          <select name="move_members_to">
+            <option value="viewer">Viewer — read only</option>
+            ${others.map((r) => `<option value="custom:${r.id}">${esc(r.name)}</option>`).join("")}
+          </select></div>
+        <div id="tmRoleArchError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="tmRoleArchSubmit">Move &amp; archive</button>
+      </div></form>`);
+    $("#tmRoleArchForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#tmRoleArchSubmit"); const err = $("#tmRoleArchError");
+      err.classList.add("hidden");
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        await api(`/roles/${roleId}/archive`, { method: "POST", body: { move_members_to: f.move_members_to.value } });
+        toast("Role archived", "success");
+        closeModal();
+        await teamRefresh();
+      } catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.innerHTML = "Move &amp; archive";
+      }
+    };
+  }
+
+  /* ============================ OFFICES ============================ */
+  async function tmDrawBranches() {
+    const mount = tmMount(); if (!mount) return;
+    if (!can("branches.view")) {
+      mount.innerHTML = deniedCard("You don't have permission to view offices. Ask a workspace admin for access.");
+      return;
+    }
+    if (!tmMetaReady(mount)) return;
+    if (teamUi.showArchivedBranches && !teamUi.branchList && !teamUi.branchError) {
+      tmLoadingInto(mount);
+      try { teamUi.branchList = await api("/branches?include_archived=1"); }
+      catch (ex) { teamUi.branchError = ex; }
+      if (state.view !== "team" || teamUi.tab !== "branches") return;
+    }
+    tmPaintBranches();
+  }
+
+  function tmPaintBranches() {
+    const mount = tmMount(); if (!mount) return;
+    const meta = teamUi.meta || {};
+    const fromMeta = meta.branches || [];
+    // The archived view needs its own fetch; merge the counts meta already has so a card
+    // doesn't lose its numbers just because "show archived" is on.
+    let list = fromMeta;
+    if (teamUi.showArchivedBranches && teamUi.branchList) {
+      const counts = {};
+      fromMeta.forEach((b) => { counts[b.id] = b; });
+      list = (teamUi.branchList.branches || teamUi.branchList || []).map((b) =>
+        Object.assign({}, b, {
+          member_count: b.member_count != null ? b.member_count : (counts[b.id] || {}).member_count,
+          client_count: b.client_count != null ? b.client_count : (counts[b.id] || {}).client_count,
+        }));
+    }
+    const canManage = can("branches.manage");
+    const limit = (meta.limits && meta.limits.max_branches) || 50;
+    const activeCount = list.filter((b) => b.is_active !== false).length;
+
+    const card = (b) => {
+      const archived = b.is_active === false;
+      const num = (v) => (v == null ? "—" : v);
+      return `<div class="br-card${b.is_default ? " is-default" : ""}${archived ? " br-archived" : ""}">
+        <div class="br-card-top">
+          <h4>${esc(b.name)}</h4>
+          ${b.is_default ? `<span class="br-default-pill">Default</span>` : ""}
+          ${archived ? `<span class="br-chip br-archived">Archived</span>` : ""}
+          ${b.code ? `<div class="br-card-code">${esc(b.code)}</div>` : ""}
+        </div>
+        <div class="br-card-sub">${esc([b.city, b.state_region, b.country_code].filter(Boolean).join(", ")) || "No address on file"}</div>
+        <div class="br-card-stats">
+          <button type="button" class="br-card-stat" data-drill="members" data-bid="${b.id}"
+            aria-label="Show the ${num(b.member_count)} team members in ${esc(b.name)}">
+            <b>${num(b.member_count)}</b><span>${b.member_count === 1 ? "member" : "members"}</span></button>
+          <button type="button" class="br-card-stat" data-drill="clients" data-bid="${b.id}"
+            aria-label="Show the ${num(b.client_count)} clients filed under ${esc(b.name)}">
+            <b>${num(b.client_count)}</b><span>${b.client_count === 1 ? "client" : "clients"}</span></button>
+        </div>
+        ${canManage ? `<div class="br-card-acts">
+          ${archived
+            ? `<button class="btn btn-soft btn-sm" data-bract="reactivate" data-bid="${b.id}">Reactivate</button>`
+            : `<button class="btn btn-soft btn-sm" data-bract="edit" data-bid="${b.id}">Edit</button>
+               ${b.is_default ? "" : `<button class="btn btn-ghost btn-sm" data-bract="default" data-bid="${b.id}">Make default</button>`}
+               <button class="btn btn-ghost btn-sm" data-bract="assign" data-bid="${b.id}">Assign team</button>
+               ${b.is_default ? "" : `<button class="btn btn-ghost btn-sm" data-bract="archive" data-bid="${b.id}">Archive</button>`}`}
+        </div>` : ""}
+      </div>`;
+    };
+
+    mount.innerHTML = `
+      ${teamUi.branchError ? errBox(teamUi.branchError) : ""}
+      <div class="tm-toolbar">
+        <div><b>Offices</b><div class="tm-hint">${activeCount} of ${limit} used. Every client belongs to one office, which is what "their office only" access means.</div></div>
+        <div class="spacer" style="flex:1"></div>
+        <label class="tm-hint" for="brShowArchived" style="display:flex;align-items:center;gap:6px">
+          <input type="checkbox" id="brShowArchived" aria-label="Show archived offices" ${
+            teamUi.showArchivedBranches ? "checked" : ""}/> Show archived</label>
+        ${canManage ? `<button class="btn btn-primary btn-sm" id="brCreate" ${activeCount >= limit ? "disabled" : ""}>+ Add office</button>` : ""}
+      </div>
+      ${list.length
+        ? `<div class="br-grid">${list.map(card).join("")}</div>`
+        : `<div class="card"><div class="card-body tm-hint">No offices yet.${canManage ? " Add your first one — every existing client will keep working, they just won't be filed under an office until you set one." : ""}</div></div>`}`;
+
+    const showArch = $("#brShowArchived", mount);
+    if (showArch) showArch.onchange = () => {
+      teamUi.showArchivedBranches = showArch.checked;
+      teamUi.branchList = null; teamUi.branchError = null;
+      tmDrawBranches();
+    };
+    const create = $("#brCreate", mount);
+    if (create) create.onclick = () => tmOpenBranchEditor(null);
+    $$("[data-drill]", mount).forEach((b) => b.onclick = () => {
+      const bid = b.dataset.bid;
+      if (b.dataset.drill === "members") {
+        teamUi.filters = { q: "", role: "", branch: String(bid), status: "" };
+        teamUi.tab = "members";
+        syncUrl("/enterprise/team?tab=members", { replace: true });
+        teamDrawShell();
+        teamDrawPanel();
+      } else {
+        state.filters.branch_id = String(bid);
+        openClientsFiltered({});
+      }
+    });
+    $$("[data-bract]", mount).forEach((b) => b.onclick = () => {
+      const bid = parseInt(b.dataset.bid, 10);
+      const act = b.dataset.bract;
+      if (act === "edit") tmOpenBranchEditor(bid);
+      else if (act === "default") tmSetDefaultBranch(bid);
+      else if (act === "assign") tmOpenBranchMembers(bid);
+      else if (act === "archive") tmArchiveBranch(bid);
+      else if (act === "reactivate") tmReactivateBranch(bid);
+    });
+  }
+
+  function tmBranchById(id) {
+    const fromMeta = ((teamUi.meta || {}).branches || []).find((b) => b.id === id);
+    if (fromMeta) return fromMeta;
+    const all = (teamUi.branchList && (teamUi.branchList.branches || teamUi.branchList)) || [];
+    return all.find((b) => b.id === id) || null;
+  }
+
+  function tmOpenBranchEditor(branchId) {
+    const b = branchId ? (tmBranchById(branchId) || {}) : {};
+    openModal(`<div class="modal-head"><h3>${branchId ? "Edit office" : "Add an office"}</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmBranchForm"><div class="modal-body">
+        <div class="mw-grid mw-sec">
+          <div class="field span2"><label>Office name *</label>
+            <input name="name" required maxlength="80" value="${esc(b.name || "")}" placeholder="e.g. Banjara Hills"/></div>
+          <div class="field"><label>Short code</label>
+            <input name="code" maxlength="16" value="${esc(b.code || "")}" placeholder="e.g. HYD-BH"/></div>
+          <div class="field"><label>City</label><input name="city" maxlength="60" value="${esc(b.city || "")}"/></div>
+          <div class="field"><label>State / region</label><input name="state_region" maxlength="60" value="${esc(b.state_region || "")}"/></div>
+          <div class="field"><label>Country code</label>
+            <input name="country_code" maxlength="2" value="${esc(b.country_code || "")}" placeholder="IN"/></div>
+          <div class="field span3"><label>Address</label><input name="address_line" maxlength="200" value="${esc(b.address_line || "")}"/></div>
+          <div class="field"><label>Phone</label><input name="phone" inputmode="tel" maxlength="32" value="${esc(b.phone || "")}"/></div>
+          <div class="field"><label>Email</label><input type="email" name="email" maxlength="120" value="${esc(b.email || "")}"/></div>
+          <div class="field"><label>Time zone</label><input name="timezone" maxlength="60" value="${esc(b.timezone || "")}" placeholder="Asia/Kolkata"/></div>
+        </div>
+        ${branchId ? `<div class="tm-hint">Renaming an office updates it on every client filed under it.</div>` : ""}
+        <div id="tmBranchError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="tmBranchSubmit">${branchId ? "Save office" : "Add office"}</button>
+      </div></form>`, { wide: true });
+    $("#tmBranchForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#tmBranchSubmit"); const err = $("#tmBranchError");
+      err.classList.add("hidden");
+      const body = {};
+      ["name", "code", "city", "state_region", "country_code", "address_line", "phone", "email", "timezone"].forEach((k) => {
+        if (!f[k]) return;
+        const v = (f[k].value || "").trim();
+        if (k === "name") { body.name = v; return; }
+        body[k] = v || null;
+      });
+      if (body.country_code) body.country_code = body.country_code.toUpperCase();
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        if (branchId) await api(`/branches/${branchId}`, { method: "PATCH", body: body });
+        else await api("/branches", { method: "POST", body: body });
+        toast(branchId ? "Office updated" : "Office added", "success");
+        closeModal();
+        await teamRefresh();
+      } catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.textContent = branchId ? "Save office" : "Add office";
+      }
+    };
+  }
+
+  async function tmSetDefaultBranch(branchId) {
+    try {
+      await api(`/branches/${branchId}/set-default`, { method: "POST", body: {} });
+      toast("Default office updated", "success");
+      await teamRefresh();
+    } catch (ex) { toast(errMessage(ex), "error"); }
+  }
+  async function tmReactivateBranch(branchId) {
+    try {
+      await api(`/branches/${branchId}/reactivate`, { method: "POST", body: {} });
+      toast("Office reactivated", "success");
+      await teamRefresh();
+    } catch (ex) { toast(errMessage(ex), "error"); }
+  }
+  async function tmArchiveBranch(branchId) {
+    const b = tmBranchById(branchId) || {};
+    const ok = await confirmModal(
+      `“${b.name || "This office"}” stops being available for new clients. It's archived, not deleted, so its history stays readable.`,
+      { title: "Archive office?", okText: "Archive" });
+    if (!ok) return;
+    try {
+      await api(`/branches/${branchId}/archive`, { method: "POST", body: {} });
+      toast("Office archived", "success");
+      await teamRefresh();
+    } catch (ex) {
+      const det = errDetail(ex);
+      if (ex.status === 409 && det) { tmOpenBranchArchiveMove(branchId, det); return; }
+      toast(errMessage(ex), "error");
+    }
+  }
+  function tmOpenBranchArchiveMove(branchId, det) {
+    const b = tmBranchById(branchId) || {};
+    const others = ((teamUi.meta || {}).branches || []).filter((x) => x.is_active !== false && x.id !== branchId);
+    const clients = Number(det.client_count || 0);
+    const members = Number(det.member_count || 0);
+    const pick = (nm, label, count) => `<div class="field"><label>${esc(label)}</label>
+      <select name="${nm}"><option value="">— Leave them where they are —</option>
+        ${others.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}
+      </select><div class="tm-hint">${count} ${count === 1 ? "record" : "records"}</div></div>`;
+    openModal(`<div class="modal-head"><h3>Move ${esc(b.name || "this office")}'s work</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="tmBrArchForm"><div class="modal-body">
+        <p class="tm-hint">${esc(det.message || "This office still has clients or members attached.")}</p>
+        ${clients ? pick("reassign_clients_to_branch_id", "Move clients to", clients) : ""}
+        ${members ? pick("reassign_members_to_branch_id", "Move members to", members) : ""}
+        ${!others.length ? `<div class="br-picker-empty">There's no other active office to move them to. Add one first.</div>` : ""}
+        <div id="tmBrArchError" class="auth-error hidden"></div>
+      </div><div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-danger" id="tmBrArchSubmit">Move &amp; archive</button>
+      </div></form>`);
+    $("#tmBrArchForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target; const btn = $("#tmBrArchSubmit"); const err = $("#tmBrArchError");
+      err.classList.add("hidden");
+      const body = {};
+      if (f.reassign_clients_to_branch_id && f.reassign_clients_to_branch_id.value) {
+        body.reassign_clients_to_branch_id = parseInt(f.reassign_clients_to_branch_id.value, 10);
+      }
+      if (f.reassign_members_to_branch_id && f.reassign_members_to_branch_id.value) {
+        body.reassign_members_to_branch_id = parseInt(f.reassign_members_to_branch_id.value, 10);
+      }
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        await api(`/branches/${branchId}/archive`, { method: "POST", body: body });
+        toast("Office archived", "success");
+        closeModal();
+        await teamRefresh();
+      } catch (ex) {
+        err.textContent = errMessage(ex); err.classList.remove("hidden");
+        btn.disabled = false; btn.innerHTML = "Move &amp; archive";
+      }
+    };
+  }
+
+  async function tmOpenBranchMembers(branchId) {
+    const b = tmBranchById(branchId) || {};
+    openModal(`<div class="modal-head"><h3>${esc(b.name || "Office")} — team</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body"><div class="center-load"><div class="spinner dark"></div></div></div>`);
+    let d;
+    try { d = await api(`/branches/${branchId}/members`); }
+    catch (ex) {
+      openModal(`<div class="modal-head"><h3>${esc(b.name || "Office")} — team</h3>
+        <button class="x" onclick="__ent.closeModal()">×</button></div>
+        <div class="modal-body">${errBox(ex)}</div>
+        <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`);
+      return;
+    }
+    const rows = (d.members || d || []);
+    openModal(`<div class="modal-head"><h3>${esc(b.name || "Office")} — team</h3>
+      <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body">
+        ${rows.length ? `<div style="display:grid;gap:12px">${rows.map((m) => {
+          const [b1, b2] = avatarColor(m.email || m.full_name);
+          return `<div class="tm-meta">
+            <div class="tm-av" style="background:linear-gradient(135deg,${b1},${b2})">${esc(initials(m.full_name || m.email).toUpperCase())}</div>
+            <div><b>${esc(m.full_name || m.email)}</b><span>${esc(m.email || "")}${
+              m.role_label ? " · " + esc(m.role_label) : ""}${m.is_primary ? " · primary office" : ""}</span></div>
+          </div>`;
+        }).join("")}</div>`
+          : `<div class="br-picker-empty">Nobody is assigned to this office yet.</div>`}
+        <p class="tm-hint" style="margin-top:14px">Add or remove people from an office in the Members tab — open their ⋯ menu and choose <b>Edit access</b>.</p>
+      </div>
+      <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Close</button></div>`);
+  }
+
+  /* ============================ ACCESS LOG ============================ */
+  // Icon + tone per audited action. Anything unrecognised still renders (a new server-side
+  // action must never produce a blank row).
+  const AL_ICONS = {
+    member_invited: ["✉️", "info"], member_added: ["👤", "ok"], member_removed: ["🚫", "danger"],
+    member_deactivated: ["🚫", "warn"], member_reactivated: ["✅", "ok"],
+    member_role_changed: ["🔀", "info"], member_access_changed: ["🔐", "warn"],
+    member_profile_updated: ["✏️", "info"], member_branches_changed: ["🏢", "info"],
+    role_created: ["🔐", "ok"], role_updated: ["🔐", "info"], role_archived: ["🗄️", "warn"],
+    role_duplicated: ["🔐", "info"],
+    branch_created: ["🏢", "ok"], branch_updated: ["🏢", "info"], branch_archived: ["🗄️", "warn"],
+    branch_reactivated: ["✅", "ok"], branch_default_changed: ["📌", "info"],
+    clients_reassigned: ["🔀", "warn"], ownership_transferred: ["👑", "danger"],
+  };
+  function alValue(v) {
+    if (v == null || v === "") return "—";
+    if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
+    if (typeof v === "boolean") return v ? "Yes" : "No";
+    if (typeof v === "object") {
+      // The audit's nested shapes (e.g. {granted:[…], blocked:[…]}) read as prose. Nobody
+      // auditing who-changed-what should have to parse braces and quotes to do it.
+      try {
+        const parts = Object.keys(v).map((k) => {
+          const inner = v[k];
+          const txt = Array.isArray(inner) ? (inner.length ? inner.join(", ") : "none")
+            : (inner == null || inner === "" ? "none" : String(inner));
+          return String(k).replace(/_/g, " ") + ": " + txt;
+        });
+        return parts.length ? parts.join(" · ") : "—";
+      } catch (e) { return "—"; }
+    }
+    return String(v);
+  }
+  function alDetailHtml(row) {
+    let d = row.detail != null ? row.detail : row.detail_json;
+    if (typeof d === "string") { try { d = JSON.parse(d); } catch (e) { d = null; } }
+    if (!d || typeof d !== "object") return "";
+    const before = d.before || {};
+    const after = d.after || {};
+    const keys = Array.from(new Set(Object.keys(before).concat(Object.keys(after))));
+    if (!keys.length) return "";
+    return `<details class="al-detail"><summary>What changed</summary><div class="al-detail-grid">
+      ${keys.map((k) => `<span>${esc(String(k).replace(/_/g, " "))}</span>
+        <b><del>${esc(alValue(before[k]))}</del> <ins>${esc(alValue(after[k]))}</ins></b>`).join("")}
+    </div></details>`;
+  }
+
+  async function tmDrawLog() {
+    const mount = tmMount(); if (!mount) return;
+    if (!can("audit.view")) {
+      mount.innerHTML = deniedCard("You don't have permission to view the access log. Ask a workspace admin for access.");
+      return;
+    }
+    if (!teamUi.log.loaded && !teamUi.log.loading) { tmLoadingInto(mount); await tmLoadLog(true); }
+    tmPaintLog();
+  }
+  async function tmLoadLog(reset) {
+    const L = teamUi.log;
+    if (reset) { L.rows = []; L.total = 0; L.hasMore = false; }
+    L.loading = true; L.error = null;
+    const p = new URLSearchParams();
+    p.set("limit", "50");
+    p.set("offset", String(L.rows.length));
+    if (L.filters.action) p.set("action", L.filters.action);
+    if (L.filters.target_user_id) p.set("target_user_id", L.filters.target_user_id);
+    if (L.filters.days) p.set("days", L.filters.days);
+    try {
+      const d = await api("/team/access-log?" + p.toString());
+      const rows = d.entries || d.log || d.rows || [];
+      L.rows = L.rows.concat(rows);
+      L.total = d.total != null ? d.total : L.rows.length;
+      L.hasMore = d.has_more != null ? !!d.has_more : L.rows.length < L.total;
+    } catch (ex) { L.error = ex; }
+    L.loading = false;
+    L.loaded = true;
+  }
+  function tmPaintLog() {
+    const mount = tmMount(); if (!mount) return;
+    const L = teamUi.log;
+    const members = ((teamUi.team || {}).members || []);
+    const actions = Array.from(new Set(L.rows.map((r) => r.action).filter(Boolean))).sort();
+    const rows = L.rows.map((r) => {
+      const [ic, tone] = AL_ICONS[r.action] || ["📜", "info"];
+      const actor = r.actor_name || (r.actor_user_id ? "User #" + r.actor_user_id : "System");
+      const target = r.target_name || "";
+      return `<div class="al-row">
+        <div class="al-icon" data-tone="${tone}">${ic}</div>
+        <div class="al-main">
+          <b>${esc(r.summary || String(r.action || "").replace(/_/g, " "))}</b>
+          <div class="al-meta">${esc(actor)}${target ? " → " + esc(target) : ""} · ${esc(notifAgo(r.created_at))}${
+            r.ip_address ? " · " + esc(r.ip_address) : ""}</div>
+          ${alDetailHtml(r)}
+        </div>
+      </div>`;
+    }).join("");
+
+    mount.innerHTML = `
+      <div class="tm-toolbar">
+        <select id="alDays" class="tm-input" aria-label="Time range">
+          <option value="7" ${L.filters.days === "7" ? "selected" : ""}>Last 7 days</option>
+          <option value="30" ${L.filters.days === "30" ? "selected" : ""}>Last 30 days</option>
+          <option value="90" ${L.filters.days === "90" ? "selected" : ""}>Last 90 days</option>
+          <option value="" ${L.filters.days === "" ? "selected" : ""}>All time</option>
+        </select>
+        <select id="alAction" class="tm-input" aria-label="Filter by action">
+          <option value="">All changes</option>
+          ${actions.map((a) => `<option value="${esc(a)}" ${L.filters.action === a ? "selected" : ""}>${esc(String(a).replace(/_/g, " "))}</option>`).join("")}
+        </select>
+        <select id="alMember" class="tm-input" aria-label="Filter by member">
+          <option value="">Anyone</option>
+          ${members.map((m) => `<option value="${m.user_id}" ${L.filters.target_user_id === String(m.user_id) ? "selected" : ""}>${esc(m.full_name || m.email)}</option>`).join("")}
+        </select>
+      </div>
+      ${L.error ? errBox(L.error) : ""}
+      ${rows
+        ? `<div class="al-list">${rows}</div>`
+        : (L.error ? "" : `<div class="al-empty"><b>Nothing recorded yet</b>Role changes, office changes and permission overrides all show up here, with who made them and what changed.</div>`)}
+      ${L.hasMore ? `<div style="text-align:center;margin-top:16px">
+        <button class="btn btn-ghost btn-sm" id="alMore" ${L.loading ? "disabled" : ""}>${L.loading ? "Loading…" : "Load more"}</button></div>` : ""}`;
+
+    const bind = (id, key) => {
+      const el = $(id, mount);
+      if (el) el.onchange = async () => {
+        L.filters[key] = el.value;
+        tmLoadingInto(mount);
+        await tmLoadLog(true);
+        if (state.view === "team" && teamUi.tab === "log") tmPaintLog();
+      };
+    };
+    bind("#alDays", "days"); bind("#alAction", "action"); bind("#alMember", "target_user_id");
+    const more = $("#alMore", mount);
+    if (more) more.onclick = async () => {
+      more.disabled = true; more.textContent = "Loading…";
+      await tmLoadLog(false);
+      if (state.view === "team" && teamUi.tab === "log") tmPaintLog();
+    };
+  }
+
+  /* ============================ MY ACCESS ============================ */
+  async function tmDrawMyAccess() {
+    const mount = tmMount(); if (!mount) return;
+    if (!tmMetaReady(mount)) return;
+    if (!teamUi.mine && !teamUi.mineError) {
+      tmLoadingInto(mount);
+      try { teamUi.mine = await api("/team/my-access"); }
+      catch (ex) { teamUi.mineError = ex; }
+      if (state.view !== "team" || teamUi.tab !== "myaccess") return;
+    }
+    if (teamUi.mineError) { mount.innerHTML = errBox(teamUi.mineError); return; }
+    const d = teamUi.mine || {};
+    // The contract describes this payload's contents but not its exact field names, so
+    // read it tolerantly and fall back to the session's own access block.
+    const acc = d.access || d.me || state.access || {};
+    const added = d.added || d.capability_grants || [];
+    const blocked = d.blocked || d.capability_denies || [];
+    // Fall back to the role preset's own capability list, so the matrix can never read
+    // "Not allowed" for everything just because the payload named that field differently.
+    let inherited = d.inherited || d.role_capabilities || [];
+    if (!inherited.length) {
+      const rp = (acc.role_key === "custom")
+        ? tmActiveCustomRoles().find((r) => r.id === acc.custom_role_id)
+        : (((teamUi.meta || {}).role_presets) || []).find((r) => r.key === acc.role_key);
+      inherited = (rp && rp.capabilities) || (Array.isArray(acc.capabilities) && acc.capabilities.indexOf("*") === -1 ? acc.capabilities : []);
+    }
+    const branches = d.branches || acc.branches || [];
+    const scope = acc.data_scope || "assigned";
+    const scopeInfo = scopeMeta(scope) || {};
+    const roleDesc = d.role_description ||
+      ((((teamUi.meta || {}).role_presets) || []).find((r) => r.key === acc.role_key) || {}).description || "";
+    const effectiveCount = Array.isArray(d.capabilities || acc.capabilities)
+      ? (d.capabilities || acc.capabilities).length : null;
+
+    mount.innerHTML = `
+      <div class="card"><div class="card-body">
+        <div class="rl-card-top" style="margin-bottom:8px">${roleBadgeHtml(acc.role_key, acc.role_label)}</div>
+        ${roleDesc ? `<p class="tm-hint">${esc(roleDesc)}</p>` : ""}
+        <div class="cp-sub-label">What you can see</div>
+        <p style="margin:0 0 4px;font-size:14px">${esc(scopeInfo.label || SCOPE_FALLBACK_LABEL[scope] || "Only your own clients")}</p>
+        <p class="tm-hint">${esc(scopeInfo.desc || (scope === "assigned"
+          ? "Clients assigned to you, plus ones you created."
+          : scope === "branch" ? "Every client filed under your office." : "Every client in the workspace."))}</p>
+        ${scope === "branch" ? `<div class="cp-sub-label">Your offices</div>
+          ${branches.length
+            ? `<span class="br-chips">${branches.map((b) => `<span class="br-chip${
+                Number(acc.primary_branch_id) === Number(b.id || b) ? " is-primary" : ""}">${esc(b.name || b)}</span>`).join("")}</span>`
+            : `<p class="tm-hint">You're not assigned to an office yet, so no client records are in scope. Ask a workspace admin to add you to one.</p>`}` : ""}
+        ${effectiveCount != null ? `<p class="tm-hint" style="margin-top:14px">${effectiveCount} permissions in total${
+          added.length ? ` · ${added.length} added just for you` : ""}${blocked.length ? ` · ${blocked.length} blocked` : ""}.</p>` : ""}
+      </div></div>
+      <details class="cap-fold" open><summary>Everything you're allowed to do</summary>
+        ${capMatrixHtml({ base: inherited, grants: added, denies: blocked }, null,
+          { mode: "readonly", idPrefix: "mine", isOwner: !!acc.is_owner })}
+      </details>
+      <p class="tm-hint" style="margin-top:14px">Need something you can't do? Ask a workspace admin — they can change this from Team → Members.</p>`;
   }
 
   /* ============================================================
@@ -4965,7 +7849,7 @@
     try { d = await api("/billing/subscription"); } catch (ex) { c.innerHTML = errBox(ex); return; }
     state.subscription = d.subscription; updatePlanChip();
     const sub = d.subscription;
-    const canManage = state.perms.can_manage_users;
+    const canManage = can("billing.manage");
 
     const usagePct = sub.max_clients === -1 ? 0 : Math.min(100, Math.round((sub.clients_used / Math.max(1, sub.max_clients)) * 100));
     const cycle = state.billingCycle;
@@ -5083,6 +7967,7 @@
     ai_copilot: { label: "AI assistant", color: "#6366f1" },
     university_match: { label: "University shortlist", color: "#0ea5e9" },
     course_finder: { label: "Course Finder", color: "#10b981" },
+    writing_studio: { label: "SOP / LOR draft", color: "#8b5cf6" },
     other: { label: "Usage", color: "#64748b" },
   };
   const creditActionColor = (key) => (CREDIT_ACTION_META[key] || {}).color || "#6366f1";
@@ -5107,23 +7992,63 @@
       `<div style="height:100%;width:${v}%;background:${color};border-radius:6px"></div></div>`;
   }
 
+  /* ---- Credits & Billing is two jobs, so it is two tabs ----------------------
+     "Plans & top-up" (default) is the money-IN view: balance, what things cost,
+     packages, and the purchase receipts. "Analytics" is the money-OUT view: where
+     the credits went, on which clients, by whom, when — and how long the balance
+     will last. They share the wallet payload; analytics loads on demand. */
+  const creditsUi = {
+    tab: "buy",
+    range: 30,
+    wallet: null,       // /credits/wallet payload
+    analytics: null,    // /credits/analytics payload for the active range
+    payments: null,     // /credits/payments payload (admins only)
+    ledger: { rows: [], total: 0, offset: 0, loading: false, error: null },
+    filters: { kind: "", action: "", member_id: "", client_id: "", q: "" },
+  };
+  const CREDIT_RANGES = [
+    { days: 7, label: "7 days" },
+    { days: 30, label: "30 days" },
+    { days: 90, label: "90 days" },
+    { days: 365, label: "12 months" },
+    { days: 0, label: "All time" },
+  ];
+
   async function renderCredits() {
     const c = $("#content");
-    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
-    let d, tx;
+    if (!creditsUi.wallet) c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    let d;
     try {
-      [d, tx] = await Promise.all([api("/credits/wallet"), api("/credits/transactions?limit=50")]);
-    } catch (ex) { c.innerHTML = errBox(ex); return; }
-    const w = d.wallet || {};
-    state.credits = w; updatePlanChip();
-    const canManage = state.perms.can_manage_users;
-    const infra = w.infra_fee || {};
-    const packages = d.packages || [];
+      d = await api("/credits/wallet");
+    } catch (ex) {
+      if (state.view !== "credits") return;
+      c.innerHTML = errBox(ex); return;
+    }
+    if (state.view !== "credits") return;   // user moved on while we were loading
+    creditsUi.wallet = d;
+    // Every entry into this view (and every top-up, which re-enters through here)
+    // starts from fresh data — the per-tab caches below only survive tab switches.
+    creditsUi.analytics = null;
+    creditsUi.payments = null;
+    creditsUi.ledger = { rows: [], total: 0, offset: 0, loading: false, error: null };
+    state.credits = d.wallet || {};
+    state.creditPackages = d.packages || [];
     state.creditCoupon = state.creditCoupon || null;
-    state.creditPackages = packages;
-    const actions = w.actions || [];
-    const usage = d.usage || {};
-    const txns = (tx && tx.transactions) || [];
+    updatePlanChip();
+    creditsDraw();
+  }
+
+  // Shell: infra banner + balance + tabs. The active tab paints into #crPanel.
+  function creditsDraw() {
+    if (state.view !== "credits") return;
+    const c = $("#content");
+    const d = creditsUi.wallet || {};
+    const w = d.wallet || {};
+    // The infrastructure fee is a subscription charge (server gate: billing.manage);
+    // buying credit packs is credits.purchase. Two different jobs, two capabilities.
+    const canPayInfra = can("billing.manage");
+    const canBuy = can("credits.purchase");
+    const infra = w.infra_fee || {};
 
     const infraBanner = (infra.over_free_limit || infra.fee_due)
       ? `<div class="card" style="margin-bottom:18px;border-left:4px solid ${infra.is_current ? "var(--success,#10b981)" : "var(--warning,#f59e0b)"}">
@@ -5137,14 +8062,69 @@
                   : `Activate the ${fmtPaise(infra.fee_paise)}/month fee to keep adding clients.`}
               </div>
             </div>
-            ${!infra.is_current && canManage
+            ${!infra.is_current && canPayInfra
               ? `<button class="btn btn-primary" id="infraPayBtn">Activate ${esc(fmtPaise(infra.fee_paise))}/mo</button>`
               : (infra.is_current ? `<span class="plan-current-tag" style="color:var(--success,#10b981)">✓ Active</span>` : "")}
           </div>
         </div>`
       : "";
 
+    const usage = (creditsUi.wallet || {}).usage || {};
+    const spentAll = usage.total_spent_credits || 0;
+
+    c.innerHTML = `
+      ${infraBanner}
+      <div class="card cr-wallet"><div class="card-body cr-wallet-body">
+        <div class="cr-wallet-main">
+          <div class="cr-eyebrow">Rilono Credits balance</div>
+          <div class="cr-balance">${w.balance_credits} <span>credits</span></div>
+          <div class="cr-worth">Worth ${esc(fmtInr(w.balance_value_inr != null ? w.balance_value_inr : (w.balance_credits || 0) * (w.credit_value_inr || 10)))} · 1 credit = ${esc(fmtInr(w.credit_value_inr || 10))}</div>
+          ${w.low_balance ? `<div class="cr-lowbal">⚠ Low balance — top up to keep using premium AI.</div>` : ""}
+        </div>
+        <div class="cr-wallet-stats">
+          <div><span>Purchased</span><b>${w.lifetime_purchased_credits || 0}</b><em>all time</em></div>
+          <div><span>Spent</span><b>${w.lifetime_spent_credits || 0}</b><em>${esc(fmtInr(spentAll * (w.credit_value_inr || 10)))} of AI</em></div>
+        </div>
+        ${canBuy ? `<button class="btn btn-primary" id="crTopUpBtn">Top up credits</button>` : ""}
+      </div></div>
+
+      <div class="cr-tabs">
+        <button class="cr-tab ${creditsUi.tab === "buy" ? "active" : ""}" data-crtab="buy">💳 Plans &amp; top-up</button>
+        <button class="cr-tab ${creditsUi.tab === "analytics" ? "active" : ""}" data-crtab="analytics">📊 Usage analytics</button>
+      </div>
+      <div id="crPanel"></div>`;
+
+    const ip = $("#infraPayBtn");
+    if (ip) ip.onclick = () => activateInfraFee();
+    const topBtn = $("#crTopUpBtn");
+    if (topBtn) topBtn.onclick = () => {
+      creditsUi.tab = "buy";
+      creditsDraw();
+      const grid = $(".plan-grid");
+      if (grid) grid.scrollIntoView({ behavior: "smooth", block: "center" });
+    };
+    $$(".cr-tab", c).forEach((b) => b.onclick = () => {
+      if (creditsUi.tab === b.dataset.crtab) return;
+      creditsUi.tab = b.dataset.crtab;
+      creditsDraw();
+    });
+
+    if (creditsUi.tab === "analytics") crDrawAnalytics();
+    else crDrawBuy();
+  }
+
+  /* ---------------- Tab 1 · Plans, pricing & purchase history ---------------- */
+  function crDrawBuy() {
+    const panel = $("#crPanel");
+    if (!panel) return;
+    const d = creditsUi.wallet || {};
+    const w = d.wallet || {};
+    const canManage = can("credits.purchase");
+    const packages = d.packages || [];
+    const actions = w.actions || [];
+    const freeTier = w.free_tier || {};
     const coupon = state.creditCoupon;
+
     const priceBlock = (p) => {
       if (!coupon) return `<div class="price">${esc(fmtPaise(p.amount_paise))}</div>`;
       const discounted = Math.max(0, Math.round(p.amount_paise * (100 - coupon.percent) / 100));
@@ -5166,112 +8146,536 @@
       </div>`;
 
     const actionRows = actions.map((a) =>
-      `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border,#eee)">
-        <div><b>${esc(a.label)}</b><div style="font-size:12px;color:var(--text-2)">${esc(a.description || "")}</div></div>
-        <div style="text-align:right;white-space:nowrap"><b>${a.credits} cr</b><div style="font-size:12px;color:var(--text-2)">${esc(fmtInr(a.price_inr != null ? a.price_inr : (a.credits || 0) * 10))}</div></div>
+      `<div class="cr-price-row">
+        <div><b>${esc(a.label)}</b><div class="cr-price-desc">${esc(a.description || "")}</div></div>
+        <div class="cr-price-amt"><b>${a.credits} cr</b><div>${esc(fmtInr(a.price_inr != null ? a.price_inr : (a.credits || 0) * 10))}</div></div>
       </div>`).join("");
 
-    // --- Usage breakdown: where credits go, and who on the team spent them ---
-    const byAction = (usage.by_action || []).filter((a) => a.units > 0 || a.credits_spent > 0);
-    const byMember = usage.by_member || [];
-    const hasUsage = (usage.total_spent_credits || 0) > 0;
+    // What the agency gets without spending a credit — stated next to the prices
+    // rather than buried in each action's description.
+    const freeItems = [
+      freeTier.free_clients ? `<b>${freeTier.free_clients} clients</b> on the free CRM` : "",
+      freeTier.deep_scans_per_client
+        ? `<b>First Deep Scan free</b> on every client<span class="cr-free-sub">up to ${freeTier.deep_scans_monthly_cap}/month</span>` : "",
+      freeTier.interview_previews
+        ? `<b>${freeTier.interview_previews} staff interview previews</b><span class="cr-free-sub">${freeTier.interview_previews_left} left</span>` : "",
+      freeTier.copilot_msgs_daily
+        ? `<b>${freeTier.copilot_msgs_daily} AI assistant messages/day</b><span class="cr-free-sub">${freeTier.copilot_msgs_left_today} left today</span>` : "",
+      `<b>Unlimited catalog browsing</b><span class="cr-free-sub">Course Finder</span>`,
+    ].filter(Boolean);
 
-    const featureRows = byAction.map((a) => {
-      const color = creditActionColor(a.key);
-      return `<div style="padding:11px 0;border-bottom:1px solid var(--border)">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px">
-          <div><b>${esc(a.label)}</b> <span style="color:var(--text-2);font-size:12.5px">· ${a.units} ${a.units === 1 ? "use" : "uses"}</span></div>
-          <div style="text-align:right;white-space:nowrap"><b>${a.credits_spent} cr</b><span style="color:var(--muted);font-size:12px"> · ${a.share_pct}%</span></div>
-        </div>
-        ${usageBar(a.share_pct, color)}
-      </div>`;
-    }).join("");
-
-    const memberRows = byMember.length ? byMember.map((m) => {
-      const col = avatarColor(m.name)[0];
-      return `<div style="display:flex;align-items:center;gap:11px;padding:10px 0;border-bottom:1px solid var(--border)">
-        <span style="width:30px;height:30px;border-radius:50%;background:${col};color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700;flex:none">${esc(initials(m.name))}</span>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.name)}</div>
-          <div style="font-size:12px;color:var(--text-2)">${m.units} ${m.units === 1 ? "action" : "actions"}</div>
-        </div>
-        <div style="text-align:right;white-space:nowrap"><b>${m.credits_spent} cr</b><div style="font-size:12px;color:var(--muted)">${m.share_pct}%</div></div>
-      </div>`;
-    }).join("") : `<div class="muted" style="padding:14px 0">No team usage yet.</div>`;
-
-    const usageCard = `
-      <div class="card" style="margin-bottom:24px">
-        <div class="card-head"><h3>Credit usage</h3>
-          <span style="font-size:12.5px;color:var(--text-2)">${usage.total_spent_credits || 0} credits spent all-time · ${usage.spent_last_30d_credits || 0} in last 30 days</span>
-        </div>
-        <div class="card-body">
-          ${hasUsage
-            ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:28px">
-                <div>
-                  <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:2px">Where credits go</div>
-                  ${featureRows}
-                </div>
-                <div>
-                  <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:2px">By team member</div>
-                  ${memberRows}
-                </div>
-              </div>`
-            : `<div class="muted" style="padding:6px 0">No credits spent yet. Usage will appear here as your team runs Deep Scans and AI mock interviews.</div>`}
-        </div>
-      </div>`;
-
-    const txnRows = txns.length ? txns.map((t) => {
-      const pos = t.credits > 0;
-      const sign = pos ? "+" : "";
-      const meta = creditTxnMeta(t);
-      const detail = t.client_name
-        ? `<span style="color:var(--text)">${esc(t.client_name)}</span>`
-        : `<span style="color:var(--text-2)">${esc(t.description || "—")}</span>`;
-      return `<tr>
-        <td style="white-space:nowrap">${fmtDateTime(t.created_at)}</td>
-        <td>${creditBadge(meta)}</td>
-        <td>${detail}</td>
-        <td style="color:var(--text-2)">${esc(t.created_by_name || "—")}</td>
-        <td style="text-align:right;color:${pos ? "var(--success,#10b981)" : "var(--text)"};font-weight:600">${t.credits === 0 ? "—" : sign + t.credits}</td>
-        <td style="text-align:right">${t.balance_after}</td>
-      </tr>`;
-    }).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">No credit activity yet.</td></tr>`;
-
-    c.innerHTML = `
-      ${infraBanner}
-      <div class="card" style="margin-bottom:24px"><div class="card-body" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
-        <div style="flex:1;min-width:220px">
-          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Rilono Credits balance</div>
-          <div style="font-size:38px;font-weight:800;margin:4px 0;line-height:1.1">${w.balance_credits} <span style="font-size:16px;font-weight:600;color:var(--text-2)">credits</span></div>
-          <div style="font-size:13px;color:var(--text-2)">Worth ${esc(fmtInr(w.balance_value_inr != null ? w.balance_value_inr : (w.balance_credits || 0) * (w.credit_value_inr || 10)))} · 1 credit = ${esc(fmtInr(w.credit_value_inr || 10))}</div>
-          ${w.low_balance ? `<div style="margin-top:8px;font-size:12px;color:var(--warning,#f59e0b);font-weight:600">⚠ Low balance — top up to keep using premium AI.</div>` : ""}
-        </div>
-        <div style="display:flex;gap:28px;flex-wrap:wrap">
-          <div><div style="font-size:12px;color:var(--muted)">Purchased</div><b style="font-size:18px">${w.lifetime_purchased_credits || 0}</b></div>
-          <div><div style="font-size:12px;color:var(--muted)">Spent</div><b style="font-size:18px">${w.lifetime_spent_credits || 0}</b></div>
-        </div>
-      </div></div>
-
-      ${usageCard}
-
-      <div class="card" style="margin-bottom:24px"><div class="card-head"><h3>How credits are spent</h3></div>
-        <div class="card-body">${actionRows || '<div class="muted">No billable actions configured.</div>'}</div></div>
-
+    // Anyone opening this tab is here to buy — the packs lead, and the
+    // "what's free" / per-action pricing that justifies the spend sits below.
+    panel.innerHTML = `
       <h3 style="margin:0 0 12px">Top up your wallet</h3>
       ${canManage ? couponRow(coupon, "applyCreditCoupon", "removeCreditCoupon", "creditCouponInput", "top-ups") : ""}
       <div class="plan-grid">${packages.map(pkgCard).join("")}</div>
-      <p style="text-align:center;color:var(--muted);font-size:13px;margin-top:14px">Secure top-ups via Razorpay (UPI, NetBanking). Credits never expire.</p>
+      <p style="text-align:center;color:var(--muted);font-size:13px;margin:14px 0 28px">Secure top-ups via Razorpay (UPI, NetBanking). Credits never expire.</p>
 
-      <div class="card" style="margin-top:24px"><div class="card-head"><h3>Recent activity</h3>
-        <span style="font-size:12.5px;color:var(--text-2)">Every top-up and credit spend, with who used it and on which client</span></div>
+      <div class="card cr-free-card"><div class="card-body">
+        <div class="cr-free-head">Included free ${infoTip(
+          "The core CRM, the first Deep Scan on each client, a few staff interview previews and a daily AI-assistant allowance cost nothing. Credits are only spent once you go past these.",
+          "What's free")}</div>
+        <div class="cr-free-grid">${freeItems.map((f) => `<div class="cr-free-item">${f}</div>`).join("")}</div>
+      </div></div>
+
+      <div class="card"><div class="card-head"><h3>What each AI action costs</h3>
+        <span class="cr-head-note">1 credit = ${esc(fmtInr(w.credit_value_inr || 10))} · credits never expire</span></div>
+        <div class="card-body">${actionRows || '<div class="muted">No billable actions configured.</div>'}</div></div>
+
+      <div id="crPurchases" style="margin-top:26px"></div>`;
+
+    crDrawPurchases();
+  }
+
+  /* ---- Purchase history (money in). It carries amounts and payment references, so it
+     follows the capability that buys credits rather than plain wallet visibility. ---- */
+  function crDrawPurchases() {
+    const mount = $("#crPurchases");
+    if (!mount) return;
+    if (!can("credits.purchase")) {
+      mount.innerHTML = deniedCard("You don't have permission to buy credits, so top-up receipts aren't shown here. Ask a workspace admin for access.");
+      return;
+    }
+    const p = creditsUi.payments;
+    if (!p) {
+      mount.innerHTML = `<div class="card"><div class="card-body"><div class="center-load" style="min-height:90px"><div class="spinner dark"></div></div></div></div>`;
+      crLoadPayments();
+      return;
+    }
+    if (p.error) {
+      mount.innerHTML = `<div class="card"><div class="card-body">${errBox(p.error)}</div></div>`;
+      return;
+    }
+    const rows = p.payments || [];
+    const statusPill = (s) => {
+      const map = {
+        verified: ["Paid", "#10b981"],
+        partially_refunded: ["Part refunded", "#f59e0b"],
+        refunded: ["Refunded", "#64748b"],
+        failed: ["Failed", "#ef4444"],
+      };
+      const [label, color] = map[s] || [s || "—", "#64748b"];
+      return `<span class="status-pill" style="background:${color}1a;color:${color};white-space:nowrap"><span class="sd" style="background:${color}"></span>${esc(label)}</span>`;
+    };
+    const body = rows.length ? rows.map((r) => `<tr>
+        <td style="white-space:nowrap">${fmtDate(r.verified_at || r.created_at)}</td>
+        <td><b>${esc(r.label)}</b>${r.coupon_code ? `<div class="cr-sub">🎟 ${esc(r.coupon_code)}${r.coupon_percent_off ? ` · ${r.coupon_percent_off}% off` : ""}</div>` : ""}</td>
+        <td style="text-align:right">${r.kind === "credits" ? `+${r.total_credits}${r.bonus_credits ? ` <span class="cr-sub-inline">(${r.bonus_credits} bonus)</span>` : ""}` : "—"}</td>
+        <td style="text-align:right;white-space:nowrap"><b>${esc(r.net_amount_display)}</b>${r.refunded_amount_paise ? `<div class="cr-sub">${esc(r.refunded_display)} refunded</div>` : ""}</td>
+        <td>${statusPill(r.status)}</td>
+        <td class="cr-sub" style="white-space:nowrap">${esc(r.created_by_name || "—")}<div>${esc(r.payment_reference || "")}</div></td>
+      </tr>`).join("")
+      : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">No purchases yet — your first top-up will appear here.</td></tr>`;
+
+    const sum = p.summary || {};
+    mount.innerHTML = `
+      <div class="card"><div class="card-head"><h3>Purchase history</h3>
+        <span class="cr-head-note">${sum.count || 0} ${sum.count === 1 ? "payment" : "payments"} · ${esc(sum.collected_display || "₹0")} paid · ${sum.credits_purchased || 0} credits bought</span></div>
         <div class="card-body" style="padding:0;overflow-x:auto">
-          <table class="client-table"><thead><tr>
-            <th>When</th><th>Activity</th><th>Details</th><th>Member</th><th style="text-align:right">Credits</th><th style="text-align:right">Balance</th>
-          </tr></thead><tbody>${txnRows}</tbody></table>
+          <table class="client-table cr-table"><thead><tr>
+            <th>Date</th><th>Item</th><th style="text-align:right">Credits</th>
+            <th style="text-align:right">Paid</th><th>Status</th><th>Bought by / reference</th>
+          </tr></thead><tbody>${body}</tbody></table>
+        </div></div>`;
+  }
+
+  async function crLoadPayments() {
+    try {
+      creditsUi.payments = await api("/credits/payments?limit=100");
+    } catch (ex) {
+      creditsUi.payments = { error: ex, payments: [] };
+    }
+    if (state.view === "credits" && creditsUi.tab === "buy") crDrawPurchases();
+  }
+
+  /* ---------------- Tab 2 · Usage analytics ---------------- */
+  function crDrawAnalytics() {
+    const panel = $("#crPanel");
+    if (!panel) return;
+    panel.innerHTML = `
+      <div class="cr-rangebar">
+        <span class="cr-rangelabel">Period</span>
+        ${CREDIT_RANGES.map((r) => `<button class="cr-range ${r.days === creditsUi.range ? "active" : ""}" data-crrange="${r.days}">${esc(r.label)}</button>`).join("")}
+      </div>
+      <div id="crAnaBody"><div class="center-load"><div class="spinner dark"></div></div></div>`;
+    $$(".cr-range", panel).forEach((b) => b.onclick = () => {
+      const days = Number(b.dataset.crrange);
+      if (days === creditsUi.range) return;
+      creditsUi.range = days;
+      creditsUi.analytics = null;
+      crDrawAnalytics();
+    });
+    if (creditsUi.analytics && creditsUi.analytics._days === creditsUi.range) {
+      crDrawAnalyticsBody();
+    } else {
+      crLoadAnalytics();
+    }
+  }
+
+  async function crLoadAnalytics() {
+    const days = creditsUi.range;
+    let res;
+    try {
+      res = await api(`/credits/analytics?days=${days}`);
+    } catch (ex) {
+      if (state.view !== "credits" || creditsUi.tab !== "analytics") return;
+      const body = $("#crAnaBody");
+      if (body) body.innerHTML = errBox(ex);
+      return;
+    }
+    // Guard the async gap: the user may have switched range/tab/view meanwhile.
+    if (state.view !== "credits" || creditsUi.tab !== "analytics" || creditsUi.range !== days) return;
+    res._days = days;
+    creditsUi.analytics = res;
+    crDrawAnalyticsBody();
+    crLoadLedger(true);
+  }
+
+  function crDrawAnalyticsBody() {
+    const body = $("#crAnaBody");
+    if (!body) return;
+    const a = (creditsUi.analytics || {}).analytics || {};
+    const s = a.summary || {};
+    const burn = a.burn || {};
+    const w = (creditsUi.wallet || {}).wallet || {};
+    const creditInr = w.credit_value_inr || 10;
+    const rangeLabel = (a.range || {}).label || "";
+
+    if (!s.action_count) {
+      // Nothing spent — but an org that has only topped up still has ledger rows
+      // worth seeing, so keep the ledger whenever there was any movement at all.
+      const anyMovement = !!s.added_credits;
+      body.innerHTML = `<div class="card" style="margin-bottom:${anyMovement ? "24px" : "0"}"><div class="card-body" style="text-align:center;padding:46px 20px">
+        <div style="font-size:34px">📊</div>
+        <h3 style="margin:10px 0 6px">No credits spent in this period</h3>
+        <p class="muted" style="margin:0 auto;max-width:440px;font-size:13.5px">
+          Once your team runs Deep Scans, mock interviews, shortlists or SOP drafts, this tab shows exactly
+          where every credit went — which client, which staff member, when and why.</p>
+      </div></div>${anyMovement ? `<div id="crLedgerMount"></div>` : ""}`;
+      if (anyMovement) crDrawLedger();
+      return;
+    }
+
+    const kpi = (icon, color, label, value, sub, tip) => `
+      <div class="kpi">
+        <div class="kpi-top"><div class="kpi-ic" style="background:${color}">${icon}</div></div>
+        <div class="kpi-label">${esc(label)}${tip ? infoTip(tip, label) : ""}</div>
+        <div class="kpi-value">${value}</div>
+        <div class="kpi-sub">${sub}</div>
+      </div>`;
+
+    const runway = burn.days_remaining == null
+      ? "No spend yet"
+      : (burn.days_remaining > 400 ? "400+ days" : `${burn.days_remaining} ${burn.days_remaining === 1 ? "day" : "days"} left`);
+    const runwayTone = burn.days_remaining != null && burn.days_remaining <= 14 ? "var(--danger)" : "var(--text)";
+
+    const kpis = `<div class="kpi-grid">
+      ${kpi("💸", "#6366f1", "Credits spent", `${s.spent_credits}`,
+        `${esc(fmtInr(s.spent_credits * creditInr))} · ${esc(rangeLabel.toLowerCase())}`)}
+      ${kpi("⚡", "#ec4899", "AI actions run", `${s.action_count}`,
+        `${s.avg_credits_per_action} credits per action on average`)}
+      ${kpi("🎓", "#0ea5e9", "Clients served", `${s.clients_touched}`,
+        `${s.avg_credits_per_client} credits per client on average`)}
+      ${kpi("⏳", burn.days_remaining != null && burn.days_remaining <= 14 ? "#ef4444" : "#10b981", "Runway",
+        `<span style="color:${runwayTone}">${esc(runway)}</span>`,
+        burn.runs_out_on ? `At ${burn.daily_credits}/day, empty by ${fmtDate(burn.runs_out_on)}` : "Based on the last 30 days",
+        "Runway is always measured against your last 30 days of spend, so changing the period above doesn't move it.")}
+    </div>`;
+
+    const chart = `
+      <div class="card" style="margin-bottom:24px">
+        <div class="card-head"><h3>When credits were spent</h3>
+          <span class="cr-head-note">${esc(rangeLabel)} · peak ${a.timeline ? a.timeline.peak_credits : 0} cr</span></div>
+        <div class="card-body">${crChart(a.timeline)}</div>
+      </div>`;
+
+    const byAction = (a.by_action || []).filter((x) => x.credits_spent > 0);
+    const featureRows = byAction.map((x) => {
+      const color = creditActionColor(x.key);
+      return `<div class="cr-split-row">
+        <div class="cr-split-top">
+          <div><b>${esc(x.label)}</b> <span class="cr-sub-inline">· ${x.units} ${x.units === 1 ? "use" : "uses"}</span></div>
+          <div class="cr-split-amt"><b>${x.credits_spent} cr</b><span> · ${x.share_pct}%</span></div>
+        </div>
+        ${usageBar(x.share_pct, color)}
+        <div class="cr-sub">${esc(x.value_display)}${x.price_credits ? ` · ${x.price_credits} cr each` : ""}</div>
+      </div>`;
+    }).join("");
+
+    const byMember = (a.by_member || []).filter((m) => m.credits_spent > 0);
+    const memberRows = byMember.length ? byMember.map((m) => {
+      const col = avatarColor(m.name)[0];
+      return `<div class="cr-member-row" ${m.user_id ? `data-crmember="${m.user_id}" role="button" tabindex="0" title="Filter the ledger to ${esc(m.name)}"` : ""}>
+        <span class="cr-avatar" style="background:${col}">${esc(initials(m.name))}</span>
+        <div class="cr-member-main">
+          <div class="cr-member-name">${esc(m.name)}</div>
+          <div class="cr-sub">${m.units} ${m.units === 1 ? "action" : "actions"}${m.last_used_at ? ` · last ${fmtDate(m.last_used_at)}` : ""}</div>
+        </div>
+        <div class="cr-split-amt"><b>${m.credits_spent} cr</b><div class="cr-sub">${m.share_pct}%</div></div>
+      </div>`;
+    }).join("") : `<div class="muted" style="padding:14px 0">No team usage in this period.</div>`;
+
+    const split = `
+      <div class="cr-split">
+        <div class="card"><div class="card-head"><h3>Where credits go</h3>
+          <span class="cr-head-note">by feature</span></div>
+          <div class="card-body">${featureRows || '<div class="muted">Nothing spent yet.</div>'}</div></div>
+        <div class="card"><div class="card-head"><h3>Who spent them</h3>
+          <span class="cr-head-note">by team member</span></div>
+          <div class="card-body">${memberRows}</div></div>
+      </div>`;
+
+    const clients = (a.by_client || []).filter((x) => x.credits_spent > 0);
+    const clientRows = clients.length ? clients.map((x) => {
+      const chips = (x.actions || []).slice(0, 4).map((act) => {
+        const col = creditActionColor(act.key);
+        return `<span class="cr-chip" style="background:${col}14;color:${col}">${esc((CREDIT_ACTION_META[act.key] || {}).label || act.label)} · ${act.credits_spent}</span>`;
+      }).join("");
+      const clickable = x.client_id && x.exists;
+      return `<tr ${clickable ? `data-crclient="${x.client_id}" title="Open ${esc(x.name)}"` : `style="cursor:default"`}>
+        <td><b>${esc(x.name)}</b>${x.is_rollup ? "" : (x.exists ? "" : ` <span class="cr-sub-inline">(removed)</span>`)}</td>
+        <td class="cr-chips">${chips || '<span class="cr-sub">—</span>'}</td>
+        <td style="text-align:right">${x.units}</td>
+        <td style="text-align:right;white-space:nowrap"><b>${x.credits_spent} cr</b><div class="cr-sub">${esc(x.value_display)}</div></td>
+        <td style="text-align:right">${x.share_pct}%</td>
+        <td style="white-space:nowrap" class="cr-sub">${x.last_used_at ? fmtDate(x.last_used_at) : "—"}</td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">No per-client spend in this period.</td></tr>`;
+
+    const clientCard = `
+      <div class="card" style="margin-bottom:24px"><div class="card-head"><h3>Which clients your credits went on</h3>
+        <span class="cr-head-note">${s.clients_touched} ${s.clients_touched === 1 ? "client" : "clients"}${s.unattributed_credits ? ` · ${s.unattributed_credits} cr org-wide (AI assistant & general searches)` : ""}</span></div>
+        <div class="card-body" style="padding:0;overflow-x:auto">
+          <table class="client-table cr-table"><thead><tr>
+            <th>Client</th><th>What it was spent on</th><th style="text-align:right">Actions</th>
+            <th style="text-align:right">Credits</th><th style="text-align:right">Share</th><th>Last used</th>
+          </tr></thead><tbody>${clientRows}</tbody></table>
         </div></div>`;
 
-    const ip = $("#infraPayBtn");
-    if (ip) ip.onclick = () => activateInfraFee();
+    body.innerHTML = `${kpis}${chart}${split}${clientCard}<div id="crLedgerMount"></div>`;
+
+    $$("[data-crclient]", body).forEach((tr) => tr.onclick = () => openClient(Number(tr.dataset.crclient)));
+    $$("[data-crmember]", body).forEach((el) => {
+      const pick = () => { creditsUi.filters.member_id = el.dataset.crmember; crLoadLedger(true, true); };
+      el.onclick = pick;
+      el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+    });
+    crDrawLedger();
+  }
+
+  /* ---- Spend timeline. A plain CSS bar chart: it reflows with the card, needs
+     no chart library, and every bar carries its own hover readout. ---- */
+  function crBucketLabel(key, bucket, short) {
+    if (!key) return "";
+    if (bucket === "month") {
+      const [y, m] = key.split("-").map(Number);
+      return new Date(y, (m || 1) - 1, 1).toLocaleDateString(undefined, { month: "short", year: short ? "2-digit" : "numeric" });
+    }
+    const d = parseDateValue(key);
+    if (!d) return key;
+    // Weekly buckets only appear on the 12-month view, which spans a year
+    // boundary — without the year "Jul 21" and "Jul 27" look like the same month.
+    const opts = bucket === "week"
+      ? { day: "numeric", month: "short", year: short ? "2-digit" : "numeric" }
+      : { day: "numeric", month: "short", year: short ? undefined : "numeric" };
+    const label = d.toLocaleDateString(undefined, opts);
+    return bucket === "week" && !short ? `Week of ${label}` : label;
+  }
+
+  function crChart(tl) {
+    const points = (tl && tl.points) || [];
+    if (!points.length) return `<div class="muted" style="padding:20px 0;text-align:center">No spend in this period.</div>`;
+    const peak = Math.max(1, tl.peak_credits || 0);
+    const bucket = tl.bucket;
+    const bars = points.map((p) => {
+      const pct = p.credits > 0 ? Math.max(4, Math.round((p.credits / peak) * 100)) : 0;
+      const title = `${crBucketLabel(p.key, bucket)} — ${p.credits} ${p.credits === 1 ? "credit" : "credits"}${p.units ? ` · ${p.units} ${p.units === 1 ? "action" : "actions"}` : ""}`;
+      return `<div class="cr-bar-slot" title="${esc(title)}">
+        ${p.credits
+          ? `<div class="cr-bar" style="height:${pct}%"></div>`
+          : `<div class="cr-bar cr-bar-zero"></div>`}
+      </div>`;
+    }).join("");
+    const mid = points[Math.floor(points.length / 2)];
+    return `
+      <div class="cr-chart-wrap">
+        <div class="cr-chart-y"><span>${peak}</span><span>0</span></div>
+        <div class="cr-chart">${bars}</div>
+      </div>
+      <div class="cr-chart-x">
+        <span>${esc(crBucketLabel(points[0].key, bucket, true))}</span>
+        <span>${esc(crBucketLabel(mid.key, bucket, true))}</span>
+        <span>${esc(crBucketLabel(points[points.length - 1].key, bucket, true))}</span>
+      </div>`;
+  }
+
+  /* ---- The ledger: every credit movement, filterable. This is the audit trail
+     behind every number above — who, when, on whom, why, and the running balance. */
+  function crLedgerQuery(extra) {
+    const f = creditsUi.filters;
+    const params = new URLSearchParams();
+    params.set("limit", String((extra && extra.limit) || 25));
+    params.set("offset", String((extra && extra.offset) || 0));
+    params.set("days", String(creditsUi.range));
+    if (f.kind) params.set("kind", f.kind);
+    if (f.action) params.set("action", f.action);
+    if (f.member_id) params.set("member_id", f.member_id);
+    if (f.client_id) params.set("client_id", f.client_id);
+    if (f.q) params.set("q", f.q);
+    return params.toString();
+  }
+
+  // Typing in the search box fires a request per keystroke-burst; a slow earlier
+  // response must never overwrite a newer one, so only the latest request applies.
+  let crLedgerSeq = 0;
+
+  async function crLoadLedger(reset, redraw) {
+    const L = creditsUi.ledger;
+    const seq = ++crLedgerSeq;
+    L.loading = true;
+    if (reset) { L.rows = []; L.offset = 0; L.total = 0; L.error = null; }
+    if (redraw) crDrawLedger();
+    let res;
+    try {
+      res = await api("/credits/transactions?" + crLedgerQuery({ limit: 25, offset: L.offset }));
+    } catch (ex) {
+      if (seq !== crLedgerSeq) return;
+      L.error = ex; L.loading = false; crDrawLedger(); return;
+    }
+    if (seq !== crLedgerSeq) return;   // superseded by a newer filter change
+    if (state.view !== "credits" || creditsUi.tab !== "analytics") { L.loading = false; return; }
+    L.rows = L.rows.concat(res.transactions || []);
+    L.total = res.total || 0;
+    L.offset = L.rows.length;
+    L.hasMore = !!res.has_more;
+    L.loading = false;
+    crDrawLedger();
+  }
+
+  function crDrawLedger() {
+    const mount = $("#crLedgerMount");
+    if (!mount) return;
+    // Re-rendering replaces the search box mid-typing — remember the caret so the
+    // debounced refresh doesn't yank focus out from under the user.
+    const focused = document.activeElement;
+    const keepCaret = focused && focused.id === "crQ" ? focused.selectionStart : null;
+    const L = creditsUi.ledger;
+    const f = creditsUi.filters;
+    const a = (creditsUi.analytics || {}).analytics || {};
+    const members = (a.by_member || []).filter((m) => m.user_id);
+    const clients = (a.by_client || []).filter((c) => c.client_id && !c.is_rollup);
+    const actions = (a.by_action || []).filter((x) => x.units > 0);
+    const filtered = !!(f.kind || f.action || f.member_id || f.client_id || f.q);
+    // Most debits are described with the action's own name, which the badge
+    // already shows — collect those labels so the row doesn't say it twice.
+    const actionLabels = new Set(
+      (((creditsUi.wallet || {}).wallet || {}).actions || []).map((x) => x.label)
+    );
+
+    const rows = L.rows.length ? L.rows.map((t) => {
+      const pos = t.credits > 0;
+      const meta = creditTxnMeta(t);
+      const who = t.client_name
+        ? `<b class="cr-link" data-crrowclient="${t.reference_id}">${esc(t.client_name)}</b>`
+        : `<span class="cr-sub-inline">${t.credits > 0 ? "Wallet" : "Org-wide"}</span>`;
+      // The badge already names the feature — only add the description when it
+      // says something more (a top-up package, a support note, a bundle count).
+      const why = (t.description && t.description !== meta.label && !actionLabels.has(t.description))
+        ? t.description : "";
+      return `<tr>
+        <td style="white-space:nowrap">${fmtDateTime(t.created_at)}</td>
+        <td>${creditBadge(meta)}</td>
+        <td>${who}${why ? `<div class="cr-sub">${esc(why)}</div>` : ""}</td>
+        <td class="cr-sub">${esc(t.created_by_name || "System")}</td>
+        <td style="text-align:right;color:${pos ? "var(--success,#10b981)" : "var(--text)"};font-weight:600">${t.credits === 0 ? "—" : (pos ? "+" : "") + t.credits}</td>
+        <td style="text-align:right">${t.balance_after}</td>
+      </tr>`;
+    }).join("")
+      : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">${L.loading ? "Loading…" : (filtered ? "No entries match these filters." : "No credit activity in this period.")}</td></tr>`;
+
+    mount.innerHTML = `
+      <div class="card"><div class="card-head"><h3>Credit ledger</h3>
+        <span class="cr-head-note">${L.total} ${L.total === 1 ? "entry" : "entries"} · showing ${L.rows.length}</span></div>
+        <div class="card-body">
+          <div class="cr-filters">
+            <input id="crQ" class="cr-input" placeholder="Search client, note or member…" value="${esc(f.q)}" />
+            <select id="crKind" class="cr-input">
+              <option value="">All activity</option>
+              <option value="debit" ${f.kind === "debit" ? "selected" : ""}>Spend only</option>
+              <option value="topup" ${f.kind === "topup" ? "selected" : ""}>Top-ups only</option>
+              <option value="bonus" ${f.kind === "bonus" ? "selected" : ""}>Bonuses</option>
+              <option value="adjustment" ${f.kind === "adjustment" ? "selected" : ""}>Adjustments</option>
+            </select>
+            <select id="crAction" class="cr-input">
+              <option value="">All features</option>
+              ${actions.map((x) => `<option value="${esc(x.key)}" ${f.action === x.key ? "selected" : ""}>${esc(x.label)}</option>`).join("")}
+            </select>
+            <select id="crMember" class="cr-input">
+              <option value="">Everyone</option>
+              ${members.map((m) => `<option value="${m.user_id}" ${String(f.member_id) === String(m.user_id) ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
+            </select>
+            <select id="crClient" class="cr-input">
+              <option value="">All clients</option>
+              ${clients.map((c) => `<option value="${c.client_id}" ${String(f.client_id) === String(c.client_id) ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
+            </select>
+            ${filtered ? `<button class="btn btn-ghost btn-sm" id="crClear">Clear</button>` : ""}
+            <button class="btn btn-soft btn-sm" id="crExport" title="Download these entries as CSV — opens directly in Excel">⬇ Export</button>
+          </div>
+        </div>
+        <div class="card-body" style="padding:0;overflow-x:auto">
+          <table class="client-table cr-table"><thead><tr>
+            <th>When</th><th>Activity</th><th>On whom / why</th><th>Member</th>
+            <th style="text-align:right">Credits</th><th style="text-align:right">Balance</th>
+          </tr></thead><tbody>${rows}</tbody></table>
+        </div>
+        ${L.error ? `<div class="card-body">${errBox(L.error)}</div>` : ""}
+        ${L.hasMore ? `<div class="card-body" style="text-align:center">
+          <button class="btn btn-ghost btn-sm" id="crMore" ${L.loading ? "disabled" : ""}>${L.loading ? "Loading…" : `Load 25 more (${L.total - L.rows.length} left)`}</button>
+        </div>` : ""}
+      </div>`;
+
+    const q = $("#crQ");
+    if (q) {
+      let timer = null;
+      q.oninput = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { creditsUi.filters.q = q.value.trim(); crLoadLedger(true, true); }, 350);
+      };
+      q.onkeydown = (e) => {
+        if (e.key === "Enter") { clearTimeout(timer); creditsUi.filters.q = q.value.trim(); crLoadLedger(true, true); }
+      };
+      if (keepCaret != null) {
+        q.focus();
+        try { q.setSelectionRange(keepCaret, keepCaret); } catch (e) { /* not a text input */ }
+      }
+    }
+    const bind = (id, key) => {
+      const el = $(id);
+      if (el) el.onchange = () => { creditsUi.filters[key] = el.value; crLoadLedger(true, true); };
+    };
+    bind("#crKind", "kind"); bind("#crAction", "action");
+    bind("#crMember", "member_id"); bind("#crClient", "client_id");
+    const clear = $("#crClear");
+    if (clear) clear.onclick = () => {
+      creditsUi.filters = { kind: "", action: "", member_id: "", client_id: "", q: "" };
+      crLoadLedger(true, true);
+    };
+    const more = $("#crMore");
+    if (more) more.onclick = () => crLoadLedger(false, true);
+    const exp = $("#crExport");
+    if (exp) exp.onclick = () => crExportLedger();
+    $$("[data-crrowclient]", mount).forEach((el) => el.onclick = () => openClient(Number(el.dataset.crrowclient)));
+  }
+
+  /* Export the filtered ledger as CSV. Pulls the whole matching set (not just the
+     rows on screen) so the download matches what the filters describe. */
+  async function crExportLedger() {
+    const btn = $("#crExport");
+    if (btn) { btn.disabled = true; btn.textContent = "Preparing…"; }
+    let res;
+    try {
+      res = await api("/credits/transactions?" + crLedgerQuery({ limit: 2000, offset: 0 }));
+    } catch (ex) {
+      toast(ex.message || "Couldn't build the export.", "error");
+      if (btn) { btn.disabled = false; btn.textContent = "⬇ Export"; }
+      return;
+    }
+    const rows = res.transactions || [];
+    if (btn) { btn.disabled = false; btn.textContent = "⬇ Export"; }
+    if (!rows.length) { toast("Nothing to export for these filters.", "error"); return; }
+
+    // A cell starting with = + - @ is executed as a formula by Excel, and these
+    // rows carry free-text notes — prefix-quote them. The BOM keeps ₹ intact.
+    const cell = (v) => {
+      if (typeof v === "number") return String(v);   // keep credits/balance numeric in Excel
+      let s = v === null || v === undefined ? "" : String(v);
+      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+    const headers = ["When", "Type", "Feature", "Client", "Description", "Member", "Credits", "Balance after"];
+    const body = rows.map((t) => [
+      t.created_at ? new Date(t.created_at).toLocaleString() : "",
+      t.type,
+      (CREDIT_ACTION_META[t.action_key] || {}).label || (t.action_key || ""),
+      t.client_name || "",
+      t.description || "",
+      t.created_by_name || "System",
+      t.credits,
+      t.balance_after,
+    ]);
+    const csv = [headers, ...body].map((r) => r.map(cell).join(",")).join("\r\n");
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rilono-credit-ledger-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+    toast(`Exported ${rows.length} ${rows.length === 1 ? "entry" : "entries"}`, "success");
+    if (res.has_more) toast("Export capped at 2,000 entries — narrow the period to get the rest.", "error");
   }
 
   async function applyCreditCoupon() {
@@ -5411,13 +8815,897 @@
     </div></div>`;
   }
 
+  /* ================================================================
+     FINANCE — the consultancy's own books, not just the payout account.
+
+     One server-built ledger (/finance/books) feeds every tab: money the
+     platform already knows about (collected payments, the Rilono fee on
+     them, credit top-ups, refunds, lost chargebacks) is DERIVED, and only
+     money it can't see (cash fees, salaries, rent, ads, commissions) is
+     hand-recorded — so the ledger and the analytics can never disagree.
+     Company money is admin-only; everyone else sees the payout status.
+     ================================================================ */
+  const finUi = {
+    tab: "overview",
+    range: "this_month",
+    custom: { start: "", end: "" },
+    summary: null,        // /finance/summary — payout account + fee config
+    analytics: null,      // /finance/analytics for the active period
+    savings: null,        // /finance/savings for the active period
+    settings: null,       // hourly cost, opening balance, FY start, baselines
+    categories: null,     // selectable category lists from the server
+    clients: null,        // lazily loaded for the entry form's client picker
+    ledger: { kind: "income", rows: [], total: 0, offset: 0, loading: false, error: null, totals: null, note: null },
+    filters: { category: "", source: "", client_id: "", q: "" },
+  };
+  const FIN_RANGES = [
+    { key: "this_month", label: "This month" },
+    { key: "last_month", label: "Last month" },
+    { key: "this_quarter", label: "This quarter" },
+    { key: "this_fy", label: "This FY" },
+    { key: "last_12m", label: "12 months" },
+    { key: "all", label: "All time" },
+  ];
+  const FIN_TABS = [
+    { key: "overview", label: "📊 Overview" },
+    { key: "income", label: "↘ Income" },
+    { key: "expenses", label: "↗ Costs" },
+    { key: "savings", label: "⚡ Saved with Rilono" },
+    { key: "account", label: "🏦 Payout account" },
+  ];
+  // Category hues. Income leans green/teal, costs warm/violet, and anything
+  // Rilono bills sits in the brand indigo so platform cost reads as its own thing.
+  const FIN_CAT_COLORS = {
+    student_fee: "#10b981", rilono_refund: "#818cf8", service_fee: "#0ea5e9", university_commission: "#14b8a6",
+    test_prep: "#22c55e", visa_filing: "#06b6d4", document_service: "#84cc16",
+    travel_forex: "#2dd4bf", other_income: "#64748b",
+    salaries: "#f97316", agent_commission: "#f59e0b", rent_utilities: "#ef4444",
+    marketing: "#ec4899", software: "#8b5cf6", travel_events: "#f43f5e",
+    professional: "#a855f7", office: "#94a3b8", taxes: "#dc2626",
+    bank_charges: "#fb7185", chargeback: "#b91c1c", student_refund: "#f43f5e",
+    rilono_platform: "#6366f1", rilono_credits: "#818cf8", rilono_infra: "#4f46e5",
+    other_expense: "#64748b",
+  };
+  function finCatColor(key) { return FIN_CAT_COLORS[key] || "#64748b"; }
+  // A net figure: minus sign OUTSIDE the currency symbol, and never "-₹0".
+  function finNet(paise) {
+    const n = Number(paise || 0);
+    return (n < 0 ? "−" : "") + fmtPaise(Math.abs(n));
+  }
+  function finPct(value) {
+    if (value == null) return "";
+    const n = Number(value);
+    // A first month with revenue against a near-empty one produces "+2383.3%", which reads
+    // as a glitch rather than growth. Past 999% the exact figure carries no information.
+    if (Math.abs(n) > 999) return (n > 0 ? "+" : "−") + "999%+";
+    return (n > 0 ? "+" : "") + n.toFixed(n % 1 === 0 ? 0 : 1) + "%";
+  }
+  function finRangeQuery(extra) {
+    const params = new URLSearchParams();
+    params.set("range_key", finUi.range);
+    if (finUi.range === "custom") {
+      if (finUi.custom.start) params.set("start", finUi.custom.start);
+      if (finUi.custom.end) params.set("end", finUi.custom.end);
+    }
+    Object.entries(extra || {}).forEach(([k, v]) => {
+      if (v !== "" && v != null) params.set(k, String(v));
+    });
+    return params.toString();
+  }
+  function finInvalidateRange() {
+    finUi.analytics = null;
+    finUi.savings = null;
+    finUi.ledger = { ...finUi.ledger, rows: [], total: 0, offset: 0, error: null, totals: null, note: null };
+  }
+  // Called after every successful write. Saving from Overview must also drop the LEDGER
+  // cache, or the Income/Costs tab keeps showing rows from before the edit.
+  function finAfterWrite() {
+    finInvalidateRange();
+    if (finUi.tab === "overview") finDrawOverview();
+    else if (finUi.tab === "savings") finDrawSavings();
+    else finLoadLedger(true, true);
+  }
+
   async function renderFinance() {
     const c = $("#content");
-    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    if (!finUi.summary) c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     let d;
     try { d = await api("/finance/summary"); }
-    catch (ex) { c.innerHTML = errBox(ex); return; }
-    const canManage = state.perms.can_manage_users;
+    catch (ex) {
+      if (state.view !== "finance") return;
+      c.innerHTML = errBox(ex); return;
+    }
+    if (state.view !== "finance") return;   // user moved on while we were loading
+    finUi.summary = d;
+    // Every entry into the view starts from fresh data; the per-tab caches below
+    // only survive tab switches.
+    finInvalidateRange();
+    finDraw();
+  }
+
+  // Shell: payout banner (only when something needs doing) + tabs. The active
+  // tab paints into #finPanel.
+  function finDraw() {
+    if (state.view !== "finance") return;
+    const c = $("#content");
+    const d = finUi.summary || {};
+    const la = d.linked_account;
+    const fee = d.fee || {};
+    // Two independent capabilities meet in this view: the company books (P&L, costs,
+    // savings — which additionally need workspace-wide data scope, because a branch's
+    // slice of the books is not a book) and the payout bank account.
+    const canBooks = can("finance.books") && isOrgScope();
+    const canPayout = can("finance.payout_account");
+    const connected = !!(la && la.activation_status && la.activation_status !== "not_started");
+
+    // Without either, all we report is whether collection is live at all.
+    if (!canBooks && !canPayout) {
+      c.innerHTML = `<div class="card"><div class="card-body" style="color:var(--text-2);line-height:1.7">
+        <div style="font-weight:800;font-size:16px;color:var(--text);margin-bottom:6px">Finance</div>
+        ${connected
+          ? `Your organization's payout account is ${acctStatusChip(la.activation_status)}.`
+          : "No payout account is connected yet, so student payments can't be collected online."}
+        <br>${can("finance.books") && !isOrgScope()
+          ? "The company books cover the whole workspace, so they're only shown to members whose access isn't limited to one office."
+          : "You don't have permission to view the company books. Ask a workspace admin for access."}
+      </div></div>`;
+      return;
+    }
+
+    // Only offer the tabs this member can actually open, and keep the active tab legal.
+    const tabs = FIN_TABS.filter((t) => (t.key === "account" ? canPayout : canBooks));
+    if (!tabs.some((t) => t.key === finUi.tab)) finUi.tab = tabs[0].key;
+
+    const needsBank = !connected || !la.is_payable;
+    const bankBanner = (needsBank && canPayout && finUi.tab !== "account")
+      ? `<div class="fin-nudge">
+          <div class="fin-nudge-ic">🏦</div>
+          <div class="fin-nudge-txt">
+            <b>${connected ? "Your payout account is still being verified" : "Connect your bank to collect student payments online"}</b>
+            <span>${connected
+              ? "Razorpay is checking your details. Until it clears, you can still record payments you collected offline."
+              : `Send students a secure pay link and have the money settle straight into your own account. Rilono keeps ${esc(String(fee.percent))}%, min ${esc(fmtInr(fee.min_fee_rupees))} — and never holds your funds.`}</span>
+          </div>
+          <button class="btn btn-primary" id="finGoAccount">${connected ? "Check status" : "Connect bank"}</button>
+        </div>`
+      : "";
+
+    c.innerHTML = `
+      ${bankBanner}
+      <div class="fin-tabs">
+        ${tabs.map((t) => `<button class="fin-tab ${finUi.tab === t.key ? "active" : ""}" data-fintab="${t.key}">${t.label}${
+          t.key === "account" && needsBank ? ' <span class="fin-dot"></span>' : ""}</button>`).join("")}
+      </div>
+      <div id="finPanel"></div>`;
+
+    const go = $("#finGoAccount");
+    if (go) go.onclick = () => { finUi.tab = "account"; finDraw(); };
+    $$(".fin-tab", c).forEach((b) => b.onclick = () => {
+      if (finUi.tab === b.dataset.fintab) return;
+      finUi.tab = b.dataset.fintab;
+      finDraw();
+    });
+
+    if (finUi.tab === "overview") finDrawOverview();
+    else if (finUi.tab === "income") finDrawLedger("income");
+    else if (finUi.tab === "expenses") finDrawLedger("expense");
+    else if (finUi.tab === "savings") finDrawSavings();
+    else finDrawAccount();
+  }
+
+  /* ---- Shared period selector. Every data tab carries the same one so the
+     answer to "which period am I looking at?" is always in the same place. ---- */
+  function finRangeBar(extraRight) {
+    const custom = finUi.range === "custom";
+    return `<div class="fin-rangebar">
+      <span class="fin-rangelabel">Period</span>
+      ${FIN_RANGES.map((r) => `<button class="fin-range ${finUi.range === r.key ? "active" : ""}" data-finrange="${r.key}">${esc(r.label)}</button>`).join("")}
+      <button class="fin-range ${custom ? "active" : ""}" data-finrange="custom">Custom</button>
+      ${custom ? `<span class="fin-custom">
+        <input type="date" class="fin-input" id="finFrom" value="${esc(finUi.custom.start || "")}" aria-label="From date">
+        <span class="fin-custom-sep">→</span>
+        <input type="date" class="fin-input" id="finTo" value="${esc(finUi.custom.end || "")}" aria-label="To date">
+      </span>` : ""}
+      <span class="fin-rangespacer"></span>
+      ${extraRight ? `<span class="fin-actions">${extraRight}</span>` : ""}
+    </div>`;
+  }
+
+  function finWireRangeBar(root) {
+    $$("[data-finrange]", root).forEach((b) => b.onclick = () => {
+      const key = b.dataset.finrange;
+      if (key === finUi.range && key !== "custom") return;
+      finUi.range = key;
+      finInvalidateRange();
+      finDraw();
+    });
+    const from = $("#finFrom", root);
+    const to = $("#finTo", root);
+    const apply = () => {
+      const nextStart = (from && from.value) || "";
+      const nextEnd = (to && to.value) || "";
+      if (!nextStart || !nextEnd) return;   // wait for both halves; don't touch state yet
+      if (nextStart === finUi.custom.start && nextEnd === finUi.custom.end) return;
+      finUi.custom.start = nextStart;
+      finUi.custom.end = nextEnd;
+      finInvalidateRange();
+      finDraw();
+    };
+    if (from) from.onchange = apply;
+    if (to) to.onchange = apply;
+    const exp = $("#finExportBtn", root);
+    if (exp) exp.onclick = () => finExport(exp);
+    const set = $("#finSettingsBtn", root);
+    if (set) set.onclick = () => finOpenSettings();
+  }
+
+  // Editing the assumptions writes to the books (finance.books_manage); the export is its
+  // own capability because it walks out of the building as a file.
+  function finToolbarActionsHtml() {
+    return (can("finance.books_manage")
+      ? `<button class="btn btn-ghost btn-sm" id="finSettingsBtn" title="Hourly cost, opening balance, financial year">⚙ Assumptions</button>` : "") +
+      (can("finance.export")
+        ? `<button class="btn btn-soft btn-sm" id="finExportBtn">⬇ Export book</button>` : "");
+  }
+
+  /* ---------------- Tab 1 · Overview (the P&L) ---------------- */
+  function finDrawOverview() {
+    const panel = $("#finPanel");
+    if (!panel) return;
+    panel.innerHTML = finRangeBar(finToolbarActionsHtml()) +
+      `<div id="finOvBody"><div class="center-load"><div class="spinner dark"></div></div></div>`;
+    finWireRangeBar(panel);
+    if (finUi.analytics && finUi.analytics._key === finRangeQuery()) finDrawOverviewBody();
+    else finLoadAnalytics();
+  }
+
+  async function finLoadAnalytics() {
+    const stamp = finRangeQuery();
+    let res;
+    try { res = await api("/finance/analytics?" + stamp); }
+    catch (ex) {
+      if (state.view !== "finance" || finUi.tab !== "overview") return;
+      const body = $("#finOvBody");
+      if (body) body.innerHTML = errBox(ex);
+      return;
+    }
+    if (state.view !== "finance" || finUi.tab !== "overview" || finRangeQuery() !== stamp) return;
+    res._key = stamp;
+    finUi.analytics = res;
+    finUi.settings = res.settings || finUi.settings;
+    finDrawOverviewBody();
+  }
+
+  function finDrawOverviewBody() {
+    const body = $("#finOvBody");
+    if (!body) return;
+    const a = finUi.analytics || {};
+    const t = a.totals || {};
+    const prev = a.previous;
+    const rec = a.receivables || {};
+    const col = a.collections || {};
+    const cash = a.cash || {};
+    const rangeLabel = (a.range || {}).label || "";
+    const profit = Number(t.net_paise || 0) >= 0;
+
+    if (!t.entry_count) {
+      body.innerHTML = `<div class="card"><div class="card-body" style="text-align:center;padding:44px 20px">
+        <div style="font-size:34px">📒</div>
+        <h3 style="margin:10px 0 6px">Nothing in the books for ${esc(rangeLabel.toLowerCase())}</h3>
+        <p class="fin-muted" style="margin:0 auto 18px;max-width:520px;font-size:13.5px;line-height:1.65">
+          Payments you collect through Rilono land here on their own. Add the money Rilono can't see —
+          fees taken in cash, university commissions, salaries, rent, ads — and this becomes your live P&amp;L.</p>
+        ${can("finance.books_manage") ? `<div class="fin-empty-cta">
+          <button class="btn btn-primary" onclick="__ent.finAdd('income')">+ Record income</button>
+          <button class="btn btn-ghost" onclick="__ent.finAdd('expense')">+ Record a cost</button>
+        </div>` : ""}
+      </div></div>`;
+      return;
+    }
+
+    const delta = (pct, invert) => {
+      if (pct == null) return "";
+      const good = invert ? Number(pct) <= 0 : Number(pct) >= 0;
+      return `<span class="fin-delta ${good ? "up" : "down"}">${esc(finPct(pct))}</span>`;
+    };
+    const kpi = (icon, color, label, value, sub, tip) => `
+      <div class="kpi">
+        <div class="kpi-top"><div class="kpi-ic" style="background:${color}">${icon}</div></div>
+        <div class="kpi-label">${esc(label)}${tip ? infoTip(tip, label) : ""}</div>
+        <div class="kpi-value">${value}</div>
+        <div class="kpi-sub">${sub}</div>
+      </div>`;
+
+    const kpis = `<div class="kpi-grid">
+      ${kpi("↘", "linear-gradient(135deg,#10b981,#34d399)", "Money in", fmtPaise(t.income_paise),
+        `${t.income_count} ${t.income_count === 1 ? "entry" : "entries"} ${prev
+          ? delta(prev.income_change_pct) + (prev.label ? ` <span class="fin-vs">vs ${esc(prev.label)}</span>` : "")
+          : "· " + esc(rangeLabel.toLowerCase())}`)}
+      ${kpi("↗", "linear-gradient(135deg,#f97316,#fb923c)", "Money out", fmtPaise(t.expense_paise),
+        `${t.expense_count} ${t.expense_count === 1 ? "entry" : "entries"} ${prev ? delta(prev.expense_change_pct, true) : ""}`)}
+      ${kpi(profit ? "📈" : "📉", profit ? "linear-gradient(135deg,#6366f1,#8b5cf6)" : "linear-gradient(135deg,#ef4444,#f87171)",
+        profit ? "Net profit" : "Net loss",
+        `<span style="color:${profit ? "var(--success,#10b981)" : "var(--danger,#ef4444)"}">${esc(finNet(t.net_paise))}</span>`,
+        `${t.margin_is_meaningful === false ? "no income yet" : t.margin_pct + "% margin"} ${prev ? delta(prev.net_change_pct) : ""}`,
+        "Margin is net profit as a share of money in, for this period only.")}
+      ${kpi("⏳", Number(rec.overdue_paise || 0) > 0 ? "linear-gradient(135deg,#ef4444,#f87171)" : "linear-gradient(135deg,#0ea5e9,#22d3ee)",
+        "Still owed to you", fmtPaise(rec.total_paise),
+        rec.count ? `${rec.count} unpaid ${rec.count === 1 ? "request" : "requests"}${Number(rec.overdue_paise) ? ` · ${fmtPaise(rec.overdue_paise)} overdue` : ""}` : "Everything raised has been paid",
+        "Payment requests raised on your clients that haven't been paid yet. Not affected by the period above — an old invoice is still owed today.")}
+    </div>`;
+
+    const tl = a.timeline || {};
+    const chart = `<div class="card fin-card"><div class="card-head">
+        <h3>Money in vs money out</h3>
+        <span class="fin-head-note">
+          <span class="fin-key in"></span>In <span class="fin-key out"></span>Out · ${esc(rangeLabel)}
+        </span></div>
+      <div class="card-body">${finChart(tl)}</div></div>`;
+
+    const catRows = (list, empty) => (list && list.length)
+      ? list.map((x) => `<div class="fin-split-row">
+          <div class="fin-split-top">
+            <div><b>${esc(x.label)}</b> <span class="fin-sub-inline">· ${x.count} ${x.count === 1 ? "entry" : "entries"}${x.auto ? " · automatic" : ""}</span></div>
+            <div class="fin-split-amt"><b>${fmtPaise(x.amount_paise)}</b><span> · ${x.share_pct}%</span></div>
+          </div>
+          ${usageBar(x.share_pct, finCatColor(x.key))}
+        </div>`).join("")
+      : `<div class="fin-empty">${empty}</div>`;
+
+    const split = `<div class="grid-2 even">
+      <div class="card"><div class="card-head"><h3>Where the money came from</h3><span class="fin-head-note">income by category</span></div>
+        <div class="card-body">${catRows(a.income_by_category, "No income recorded in this period.")}</div></div>
+      <div class="card"><div class="card-head"><h3>Where it went</h3><span class="fin-head-note">costs by category</span></div>
+        <div class="card-body">${catRows(a.expense_by_category, "No costs recorded in this period.")}</div></div>
+    </div>`;
+
+    // Cash + collections: the two "can I pay my bills" questions.
+    const cashCard = `<div class="card"><div class="card-head"><h3>Cash position</h3>
+        <span class="fin-head-note">${cash.is_configured ? `opening ${fmtPaise(cash.opening_paise)}${cash.opening_on ? ` on ${fmtDate(cash.opening_on)}` : ""}` : "not set up"}</span></div>
+      <div class="card-body">
+        ${cash.is_configured
+          ? `<div class="fin-bignum ${Number(cash.balance_paise) < 0 ? "neg" : ""}">${esc(finNet(cash.balance_paise))}</div>
+             <div class="fin-sub">Opening balance ${cash.movement_paise >= 0 ? "plus" : "minus"} everything in your books since then.</div>`
+          : `<div class="fin-empty" style="text-align:left">
+              Set your opening bank balance in <b>⚙ Assumptions</b> and Rilono will keep a running cash
+              position from your books.
+              <div style="margin-top:10px"><button class="btn btn-ghost btn-sm" id="finCashSetup">Set opening balance</button></div>
+            </div>`}
+        <div class="fin-facts">
+          <div><span>Collected this period</span><b>${fmtPaise(col.collected_paise)}</b></div>
+          <div><span>Collection rate</span><b>${col.collection_rate_pct}%</b></div>
+          <div><span>Avg days to pay</span><b>${col.avg_days_to_pay == null ? "—" : col.avg_days_to_pay}</b></div>
+          <div><span>Avg payment size</span><b>${fmtPaise(col.avg_invoice_paise)}</b></div>
+          <div><span>Online vs offline</span><b>${col.online_share_pct}% online</b></div>
+          <div><span>Refunded</span><b>${fmtPaise(col.refunded_paise)}</b></div>
+        </div>
+      </div></div>`;
+
+    const save = a._savings;   // filled in by finLoadOverviewSavings()
+    const savingsTeaser = `<div class="card fin-accent" id="finSaveTeaser"><div class="card-head">
+        <h3>Saved with Rilono</h3><span class="fin-head-note">${esc(rangeLabel)}</span></div>
+      <div class="card-body">
+        ${save ? `
+          <div class="fin-bignum">${esc(save.totals.hours_display)}<span> hours</span></div>
+          <div class="fin-sub">≈ ${save.totals.workdays} working days of counsellor time, worth
+            <b>${fmtPaise(save.totals.value_paise)}</b> at ${fmtPaise(save.hourly_cost_paise)}/hour.</div>
+          <div class="fin-facts">
+            <div><span>You paid Rilono</span><b>${fmtPaise(save.rilono_cost.total_paise)}</b></div>
+            <div><span>Net gain</span><b class="${save.is_net_positive ? "ok" : "warn"}">${esc(finNet(save.net_paise))}</b></div>
+            <div><span>Return</span><b>${save.roi_multiple == null ? "—" : save.roi_multiple + "×"}</b></div>
+          </div>
+          <button class="btn btn-ghost btn-sm" style="margin-top:14px" onclick="__ent.finTab('savings')">See the full breakdown →</button>`
+          : `<div class="center-load" style="padding:30px"><div class="spinner dark"></div></div>`}
+      </div></div>`;
+
+    const agingRows = (rec.aging || []).filter((b) => b.count).map((b) => `
+      <div class="fin-split-row">
+        <div class="fin-split-top">
+          <div><b>${esc(b.label)}</b> <span class="fin-sub-inline">· ${b.count} ${b.count === 1 ? "request" : "requests"}</span></div>
+          <div class="fin-split-amt"><b>${fmtPaise(b.amount_paise)}</b><span> · ${b.share_pct}%</span></div>
+        </div>
+        ${usageBar(b.share_pct, b.key === "not_due" ? "#0ea5e9" : (b.key === "d60_plus" ? "#b91c1c" : "#f59e0b"))}
+      </div>`).join("");
+
+    const chaseRows = (rec.oldest || []).map((i) => `
+      <tr${i.client_id ? ` data-finclient="${i.client_id}" title="Open ${esc(i.client_name)}"` : ""}>
+        <td><b>${esc(i.client_name)}</b>${i.invoice_number ? `<div class="fin-sub">${esc(i.invoice_number)}</div>` : ""}</td>
+        <td class="hide-sm fin-sub">${i.raised_on ? fmtDate(i.raised_on) : "—"}</td>
+        <td class="hide-sm fin-sub">${i.due_date ? fmtDate(i.due_date) : "—"}</td>
+        <td style="text-align:right"><b>${fmtPaise(i.amount_paise)}</b></td>
+        <td style="text-align:right">${i.days_late > 0
+          ? `<span class="fin-status warn">${i.days_late}d late</span>`
+          : `<span class="fin-status pend">Not due</span>`}</td>
+      </tr>`).join("");
+
+    const receivablesCard = rec.count ? `
+      <div class="card"><div class="card-head"><h3>Who owes you</h3>
+        <span class="fin-head-note">${rec.count} unpaid · ${fmtPaise(rec.total_paise)}</span></div>
+        <div class="card-body">${agingRows}</div>
+        <div class="card-body" style="padding:0;overflow-x:auto;border-top:1px solid var(--border)">
+          <table class="client-table fin-table"><thead><tr>
+            <th>Client</th><th class="hide-sm">Raised</th><th class="hide-sm">Due</th>
+            <th style="text-align:right">Amount</th><th style="text-align:right">Status</th>
+          </tr></thead><tbody>${chaseRows}</tbody></table>
+        </div>
+        <div class="card-body fin-sub" style="border-top:1px solid var(--border)">
+          Open a client and use their <b>Payments</b> tab to resend the pay link or record money taken offline.
+        </div></div>` : "";
+
+    const clients = (a.by_client || {}).clients || [];
+    const clientRows = clients.length ? clients.map((x) => `
+      <tr${x.client_id && x.exists ? ` data-finclient="${x.client_id}" title="Open ${esc(x.name)}"` : ' style="cursor:default"'}>
+        <td><b>${esc(x.name)}</b>${x.is_rollup || x.exists ? "" : ' <span class="fin-sub-inline">(removed)</span>'}</td>
+        <td style="text-align:right">${fmtPaise(x.income_paise)}</td>
+        <td style="text-align:right" class="hide-sm">${fmtPaise(x.expense_paise)}</td>
+        <td style="text-align:right"><b>${esc(finNet(x.net_paise))}</b></td>
+        <td style="text-align:right" class="hide-sm">${x.margin_pct}%</td>
+      </tr>`).join("")
+      : `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:22px">No money attributed to a client yet.</td></tr>`;
+
+    const un = a.by_client || {};
+    const clientCard = `<div class="card"><div class="card-head"><h3>Profit per client</h3>
+        <span class="fin-head-note">fees in, direct costs out${
+          Number(un.unassigned_income_paise) || Number(un.unassigned_expense_paise)
+            ? ` · ${fmtPaise(un.unassigned_income_paise)} in / ${fmtPaise(un.unassigned_expense_paise)} out not tied to a client` : ""}</span></div>
+      <div class="card-body" style="padding:0;overflow-x:auto">
+        <table class="client-table fin-table"><thead><tr>
+          <th>Client</th><th style="text-align:right">Income</th>
+          <th style="text-align:right" class="hide-sm">Direct costs</th>
+          <th style="text-align:right">Net</th><th style="text-align:right" class="hide-sm">Margin</th>
+        </tr></thead><tbody>${clientRows}</tbody></table>
+      </div>
+      <div class="card-body fin-sub" style="border-top:1px solid var(--border)">
+        Tag an income or cost entry with a client and it lands in this table — that's how a case's real
+        margin shows up (agent commission, ad spend, the Rilono fee on their payment).
+      </div></div>`;
+
+    const dims = a.dimensions || {};
+    const dimCard = (title, note, list, empty) => `
+      <div class="card"><div class="card-head"><h3>${esc(title)}</h3><span class="fin-head-note">${esc(note)}</span></div>
+        <div class="card-body">${(list && list.length) ? list.map((x, i) => `
+          <div class="fin-split-row">
+            <div class="fin-split-top">
+              <div><b>${esc(x.label)}</b> <span class="fin-sub-inline">· ${x.clients} ${x.clients === 1 ? "client" : "clients"} · avg ${fmtPaise(x.clients ? Math.round(x.amount_paise / x.clients) : 0)}</span></div>
+              <div class="fin-split-amt"><b>${fmtPaise(x.amount_paise)}</b><span> · ${x.share_pct}%</span></div>
+            </div>
+            ${usageBar(x.share_pct, ["#6366f1", "#0ea5e9", "#10b981", "#f59e0b", "#ec4899", "#8b5cf6"][i % 6])}
+          </div>`).join("") : `<div class="fin-empty">${empty}</div>`}
+        </div></div>`;
+
+    const dimsRow = `<div class="grid-2 even">
+      ${dimCard("Revenue by destination", "which countries pay", dims.destinations, "Attribute income to clients to see this.")}
+      ${dimCard("Revenue by lead source", "which channels pay back", dims.lead_sources, "Set a lead source on your clients to see which marketing pays.")}
+    </div>`;
+
+    const members = a.by_member || [];
+    const branches = dims.branches || [];
+    const teamRow = (members.length || branches.length) ? `<div class="grid-2 even">
+      <div class="card"><div class="card-head"><h3>Who collected it</h3><span class="fin-head-note">by team member</span></div>
+        <div class="card-body">${members.length ? members.map((m) => `
+          <div class="fin-member-row">
+            <span class="fin-avatar" style="background:${avatarColor(m.name)[0]}">${esc(initials(m.name))}</span>
+            <div class="fin-member-main">
+              <div class="fin-member-name">${esc(m.name)}</div>
+              <div class="fin-sub">${m.payments} ${m.payments === 1 ? "payment" : "payments"} collected</div>
+            </div>
+            <div class="fin-split-amt"><b>${fmtPaise(m.amount_paise)}</b><div class="fin-sub">${m.share_pct}%</div></div>
+          </div>`).join("") : `<div class="fin-empty">No payments collected in this period.</div>`}
+        </div></div>
+      ${branches.length
+        ? dimCard("Revenue by branch", "by office", branches, "Set a branch on your clients to compare offices.")
+        : `<div class="card"><div class="card-head"><h3>Biggest costs</h3><span class="fin-head-note">by payee</span></div>
+            <div class="card-body">${(a.top_counterparties || []).length ? (a.top_counterparties || []).map((x, i) => `
+              <div class="fin-split-row">
+                <div class="fin-split-top">
+                  <div><b>${esc(x.name)}</b> <span class="fin-sub-inline">· ${x.count} ${x.count === 1 ? "payment" : "payments"}</span></div>
+                  <div class="fin-split-amt"><b>${fmtPaise(x.amount_paise)}</b><span> · ${x.share_pct}%</span></div>
+                </div>
+                ${usageBar(x.share_pct, ["#f97316", "#ef4444", "#8b5cf6", "#ec4899", "#f59e0b", "#64748b"][i % 6])}
+              </div>`).join("") : `<div class="fin-empty">No costs recorded in this period.</div>`}
+            </div></div>`}
+    </div>` : "";
+
+    const trend = a.trend || {};
+    const series = trend.series || [];
+    const trendPeak = Math.max(1, ...series.map((p) => Math.max(p.income_paise, p.expense_paise)));
+    const trendCard = series.length ? `
+      <div class="card"><div class="card-head"><h3>Last 6 months</h3>
+        <span class="fin-head-note">${trend.projection ? `next month tracking ${esc(finNet(trend.projection.net_paise))}` : "month by month"}</span></div>
+        <div class="card-body" style="padding:0;overflow-x:auto">
+          <table class="client-table fin-table"><thead><tr>
+            <th>Month</th><th style="text-align:right">In</th><th style="text-align:right">Out</th>
+            <th style="text-align:right">Net</th><th class="hide-sm" style="width:34%">Shape</th>
+          </tr></thead><tbody>
+          ${series.map((p) => `<tr style="cursor:default">
+            <td><b>${esc(p.label)}</b>${p.is_partial ? ' <span class="fin-sub-inline">so far</span>' : ""}</td>
+            <td style="text-align:right">${fmtPaise(p.income_paise)}</td>
+            <td style="text-align:right">${fmtPaise(p.expense_paise)}</td>
+            <td style="text-align:right"><b style="color:${p.net_paise >= 0 ? "var(--success,#10b981)" : "var(--danger,#ef4444)"}">${esc(finNet(p.net_paise))}</b></td>
+            <td class="hide-sm"><div class="fin-mini">
+              <div class="fin-mini-bar in" style="width:${Math.round((p.income_paise / trendPeak) * 100)}%"></div>
+              <div class="fin-mini-bar out" style="width:${Math.round((p.expense_paise / trendPeak) * 100)}%"></div>
+            </div></td>
+          </tr>`).join("")}
+          </tbody></table>
+        </div>
+        ${trend.projection ? `<div class="card-body fin-sub" style="border-top:1px solid var(--border)">
+          At the average of your last ${trend.projection.months_used} complete months, <b>${esc(trend.projection.label)}</b>
+          lands near ${fmtPaise(trend.projection.income_paise)} in and ${fmtPaise(trend.projection.expense_paise)} out
+          (${esc(finNet(trend.projection.net_paise))} net). An estimate from your own history, not a forecast model.
+        </div>` : ""}
+      </div>` : "";
+
+    const truncated = a.truncated ? `<div class="fin-notice">⚠ ${esc(a.truncated_note || "")}</div>` : "";
+
+    body.innerHTML = `${truncated}${kpis}${chart}${split}
+      <div class="grid-2 even">${cashCard}${savingsTeaser}</div>
+      ${receivablesCard}${clientCard}${dimsRow}${teamRow}${trendCard}`;
+
+    $$("[data-finclient]", body).forEach((tr) => tr.onclick = () => openClient(Number(tr.dataset.finclient)));
+    const setup = $("#finCashSetup", body);
+    if (setup) setup.onclick = () => finOpenSettings();
+    if (!save) finLoadOverviewSavings();
+  }
+
+  // The savings teaser rides along on the overview but loads separately, so a
+  // slower ROI query never delays the P&L.
+  async function finLoadOverviewSavings() {
+    const stamp = finRangeQuery();
+    let res;
+    try { res = await api("/finance/savings?" + stamp); }
+    catch (ex) {
+      if (state.view !== "finance" || finUi.tab !== "overview" || finRangeQuery() !== stamp) return;
+      const card = $("#finSaveTeaser .card-body");
+      if (card) card.innerHTML = `<div class="fin-empty">Couldn't load your savings just now.</div>`;
+      return;
+    }
+    if (state.view !== "finance" || finUi.tab !== "overview" || finRangeQuery() !== stamp) return;
+    res._key = stamp;
+    finUi.savings = res;
+    if (finUi.analytics) finUi.analytics._savings = res;
+    finDrawOverviewBody();
+  }
+
+  /* ---- Paired in/out column chart. Same dependency-free approach as the
+     credits chart: it reflows with the card and each column carries its own
+     hover readout. ---- */
+  function finChart(tl) {
+    const points = (tl && tl.points) || [];
+    if (!points.length) return `<div class="fin-empty">No entries in this period.</div>`;
+    const peak = Math.max(1, Number(tl.peak_paise) || 0);
+    const bars = points.map((p) => {
+      const ih = p.income_paise > 0 ? Math.max(4, Math.round((p.income_paise / peak) * 100)) : 0;
+      const eh = p.expense_paise > 0 ? Math.max(4, Math.round((p.expense_paise / peak) * 100)) : 0;
+      const title = `${crBucketLabel(p.key, tl.bucket)} — in ${fmtPaise(p.income_paise)} · out ${fmtPaise(p.expense_paise)} · net ${finNet(p.net_paise)}`;
+      return `<div class="fin-bar-slot" title="${esc(title)}">
+        ${ih ? `<div class="fin-bar in" style="height:${ih}%"></div>` : `<div class="fin-bar fin-bar-zero"></div>`}
+        ${eh ? `<div class="fin-bar out" style="height:${eh}%"></div>` : `<div class="fin-bar fin-bar-zero"></div>`}
+      </div>`;
+    }).join("");
+    const mid = points[Math.floor(points.length / 2)];
+    return `
+      <div class="fin-chart-wrap">
+        <div class="fin-chart-y"><span>${esc(fmtPaise(peak))}</span><span>0</span></div>
+        <div class="fin-chart">${bars}</div>
+      </div>
+      <div class="fin-chart-x">
+        <span>${esc(crBucketLabel(points[0].key, tl.bucket, true))}</span>
+        <span>${esc(crBucketLabel(mid.key, tl.bucket, true))}</span>
+        <span>${esc(crBucketLabel(points[points.length - 1].key, tl.bucket, true))}</span>
+      </div>`;
+  }
+
+  /* ---------------- Tabs 2 & 3 · The ledgers ---------------- */
+  function finDrawLedger(kind) {
+    const panel = $("#finPanel");
+    if (!panel) return;
+    if (finUi.ledger.kind !== kind) {
+      finUi.ledger = { kind, rows: [], total: 0, offset: 0, loading: false, error: null, totals: null, note: null };
+      finUi.filters = { category: "", source: "", client_id: "", q: "" };
+    }
+    const isIncome = kind === "income";
+    panel.innerHTML = finRangeBar(`
+      ${can("finance.books_manage") ? `<button class="btn btn-primary btn-sm" id="finAddBtn">+ Record ${isIncome ? "income" : "a cost"}</button>` : ""}
+      ${finToolbarActionsHtml()}`) +
+      `<div id="finLedgerMount"><div class="center-load"><div class="spinner dark"></div></div></div>`;
+    finWireRangeBar(panel);
+    const add = $("#finAddBtn", panel);
+    if (add) add.onclick = () => finAddEntry(kind);
+    if (finUi.ledger.rows.length || finUi.ledger.totals) finDrawLedgerBody();
+    else finLoadLedger(true);
+  }
+
+  let finLedgerSeq = 0;
+  async function finLoadLedger(reset, redraw) {
+    const L = finUi.ledger;
+    if (reset) { L.rows = []; L.offset = 0; L.total = 0; }
+    L.loading = true;
+    L.error = null;
+    if (redraw) finDrawLedgerBody();
+    const seq = ++finLedgerSeq;
+    const f = finUi.filters;
+    const query = finRangeQuery({
+      kind: L.kind, limit: 25, offset: L.offset,
+      category: f.category, source: f.source, client_id: f.client_id, q: f.q,
+    });
+    let res;
+    try { res = await api("/finance/books?" + query); }
+    catch (ex) {
+      if (seq !== finLedgerSeq) return;
+      L.loading = false; L.error = ex;
+      finDrawLedgerBody();
+      return;
+    }
+    if (seq !== finLedgerSeq || state.view !== "finance") return;
+    const page = res.ledger || {};
+    L.rows = L.rows.concat(page.rows || []);
+    L.offset = L.rows.length;
+    L.total = page.total || 0;
+    L.totals = res.totals || null;
+    L.periodTotals = res.period_totals || null;
+    L.note = res.truncated ? res.truncated_note : null;
+    L.loading = false;
+    finUi.settings = res.settings || finUi.settings;
+    finUi.categories = res.categories || finUi.categories;
+    finDrawLedgerBody();
+  }
+
+  function finDrawLedgerBody() {
+    const mount = $("#finLedgerMount");
+    if (!mount) return;
+    const L = finUi.ledger;
+    const f = finUi.filters;
+    const isIncome = L.kind === "income";
+    const filtered = !!(f.category || f.source || f.client_id || f.q);
+    const cats = ((finUi.categories || {})[L.kind] || []);
+    const sources = (finUi.categories || {}).sources || {};
+    const totals = L.totals || {};
+    const shown = isIncome ? totals.income_paise : totals.expense_paise;
+
+    const focused = document.activeElement;
+    const keepCaret = focused && focused.id === "finQ" ? focused.selectionStart : null;
+
+    const rows = L.rows.map((r) => {
+      const color = finCatColor(r.category);
+      // A projected month of a monthly series isn't editable in place — its template
+      // usually sits outside the period on screen — so those rows act on the SERIES.
+      const isSeries = !r.editable && r.recurring && r.entry_id;
+      const label = esc((r.description || r.category_label) + " · " + fmtPaise(r.amount_paise));
+      const acts = (r.editable || isSeries)
+        ? `<button class="btn btn-ghost btn-xs" data-finact="edit" data-finid="${r.entry_id}" data-finrow="${esc(r.id)}">${isSeries ? "Edit series" : "Edit"}</button>
+           <button class="btn btn-ghost btn-xs danger" data-finact="delete" data-finid="${r.entry_id}"
+             data-finseries="${isSeries || r.recurring ? "1" : ""}" data-finlabel="${label}">Delete</button>`
+        : `<span class="fin-lock" title="${esc(r.locked_reason || "Recorded automatically.")}">🔒 auto</span>`;
+      return `<tr style="cursor:default">
+        <td style="white-space:nowrap">${fmtDate(r.occurred_on)}</td>
+        <td>
+          <b>${esc(r.description || r.category_label)}</b>
+          <div class="fin-rowmeta">
+            <span class="fin-chip" style="background:${color}14;color:${color}">${esc(r.category_label)}</span>
+            ${r.recurring ? '<span class="fin-chip" style="background:#eef2ff;color:#4338ca">↻ monthly</span>' : ""}
+            ${r.counterparty ? `<span class="fin-sub-inline">${esc(r.counterparty)}</span>` : ""}
+            ${r.reference ? `<span class="fin-sub-inline">#${esc(r.reference)}</span>` : ""}
+          </div>
+        </td>
+        <td class="hide-sm">${r.client_name
+          ? (r.client_id ? `<span class="fin-link" data-finclient="${r.client_id}" role="button" tabindex="0">${esc(r.client_name)}</span>` : esc(r.client_name))
+          : '<span class="fin-sub">—</span>'}</td>
+        <td class="hide-sm fin-sub">${esc(r.method_label || r.source_label)}</td>
+        <td style="text-align:right;white-space:nowrap"><b>${fmtPaise(r.amount_paise)}</b>${
+          r.tax_paise ? `<div class="fin-sub">incl. tax ${fmtPaise(r.tax_paise)}</div>` : ""}</td>
+        <td style="text-align:right;white-space:nowrap">${acts}</td>
+      </tr>`;
+    }).join("");
+
+    const emptyRow = `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:26px">
+      ${L.loading ? "Loading…" : (filtered
+        ? "No entries match these filters."
+        : `Nothing recorded yet for this period. ${isIncome
+            ? "Payments collected through Rilono appear here automatically — add anything you took in cash or as a university commission."
+            : "Add salaries, rent, ads and agent commissions to see your true profit."}`)}
+    </td></tr>`;
+
+    mount.innerHTML = `
+      ${L.note ? `<div class="fin-notice">⚠ ${esc(L.note)}</div>` : ""}
+      <div class="fin-chips">
+        <div class="fin-moneychip"><span>${isIncome ? "Money in" : "Money out"}${filtered ? " (filtered)" : ""}</span>
+          <b class="${isIncome ? "ok" : ""}">${fmtPaise(shown)}</b></div>
+        <div class="fin-moneychip"><span>Entries</span><b>${L.total}</b></div>
+        ${L.periodTotals ? `<div class="fin-moneychip"><span>Net for the period</span>
+          <b class="${Number(L.periodTotals.net_paise) >= 0 ? "ok" : "warn"}">${esc(finNet(L.periodTotals.net_paise))}</b></div>` : ""}
+      </div>
+      <div class="card">
+        <div class="card-body">
+          <div class="fin-filters">
+            <input id="finQ" class="fin-input" placeholder="Search description, payee, client…" value="${esc(f.q)}">
+            <select id="finCat" class="fin-input">
+              <option value="">All categories</option>
+              ${cats.map((c) => `<option value="${esc(c.key)}" ${f.category === c.key ? "selected" : ""}>${esc(c.label)}</option>`).join("")}
+            </select>
+            <select id="finSrc" class="fin-input">
+              <option value="">Recorded &amp; automatic</option>
+              ${Object.entries(sources).map(([k, v]) => `<option value="${esc(k)}" ${f.source === k ? "selected" : ""}>${esc(v)}</option>`).join("")}
+            </select>
+            ${filtered ? `<button class="btn btn-ghost btn-sm" id="finClear">Clear</button>` : ""}
+          </div>
+        </div>
+        <div class="card-body" style="padding:0;overflow-x:auto;border-top:1px solid var(--border)">
+          <table class="client-table fin-table"><thead><tr>
+            <th style="white-space:nowrap">Date</th><th>What</th>
+            <th class="hide-sm">Client</th><th class="hide-sm">How</th>
+            <th style="text-align:right">Amount</th><th style="text-align:right">&nbsp;</th>
+          </tr></thead><tbody>${rows || emptyRow}</tbody></table>
+        </div>
+        ${L.error ? `<div class="card-body">${errBox(L.error)}</div>` : ""}
+        ${L.rows.length < L.total ? `<div class="card-body" style="text-align:center;border-top:1px solid var(--border)">
+          <button class="btn btn-ghost btn-sm" id="finMore" ${L.loading ? "disabled" : ""}>${
+            L.loading ? "Loading…" : `Load 25 more (${L.total - L.rows.length} left)`}</button>
+        </div>` : ""}
+      </div>`;
+
+    const q = $("#finQ", mount);
+    if (q) {
+      let timer = null;
+      q.oninput = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { finUi.filters.q = q.value.trim(); finLoadLedger(true, true); }, 350);
+      };
+      q.onkeydown = (e) => {
+        if (e.key === "Enter") { e.preventDefault(); clearTimeout(timer); finUi.filters.q = q.value.trim(); finLoadLedger(true, true); }
+      };
+      if (keepCaret != null) { q.focus(); try { q.setSelectionRange(keepCaret, keepCaret); } catch (e) { /* ignore */ } }
+    }
+    const bind = (sel, key) => {
+      const el = $(sel, mount);
+      if (el) el.onchange = () => { finUi.filters[key] = el.value; finLoadLedger(true, true); };
+    };
+    bind("#finCat", "category");
+    bind("#finSrc", "source");
+    const clear = $("#finClear", mount);
+    if (clear) clear.onclick = () => { finUi.filters = { category: "", source: "", client_id: "", q: "" }; finLoadLedger(true, true); };
+    const more = $("#finMore", mount);
+    if (more) more.onclick = () => finLoadLedger(false, true);
+    $$("[data-finclient]", mount).forEach((el) => {
+      const open = () => openClient(Number(el.dataset.finclient));
+      el.onclick = open;
+      el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } };
+    });
+    $$("[data-finact]", mount).forEach((btn) => btn.onclick = async () => {
+      const id = Number(btn.dataset.finid);
+      if (btn.dataset.finact === "edit") { finEditEntry(id); return; }
+      const series = !!btn.dataset.finseries;
+      if (!(await confirmModal(
+        series
+          ? `This removes every month of the series, not just this one. ${btn.dataset.finlabel || ""}`.trim()
+          : `Delete this entry? ${btn.dataset.finlabel || ""}`.trim(),
+        { title: series ? "Delete the whole series?" : "Delete entry?", okText: "Delete" },
+      ))) return;
+      try {
+        await api(`/finance/entries/${id}`, { method: "DELETE" });
+        toast("Entry deleted.", "success");
+        finAfterWrite();
+      } catch (ex) { toast(ex.message || "Couldn't delete that entry.", "error"); }
+    });
+  }
+
+  /* ---------------- Tab 4 · Saved with Rilono ---------------- */
+  function finDrawSavings() {
+    const panel = $("#finPanel");
+    if (!panel) return;
+    panel.innerHTML = finRangeBar(finToolbarActionsHtml()) +
+      `<div id="finSaveBody"><div class="center-load"><div class="spinner dark"></div></div></div>`;
+    finWireRangeBar(panel);
+    if (finUi.savings && finUi.savings._key === finRangeQuery()) finDrawSavingsBody();
+    else finLoadSavings();
+  }
+
+  async function finLoadSavings() {
+    const stamp = finRangeQuery();
+    let res;
+    try { res = await api("/finance/savings?" + stamp); }
+    catch (ex) {
+      if (state.view !== "finance" || finUi.tab !== "savings") return;
+      const body = $("#finSaveBody");
+      if (body) body.innerHTML = errBox(ex);
+      return;
+    }
+    if (state.view !== "finance" || finUi.tab !== "savings" || finRangeQuery() !== stamp) return;
+    res._key = stamp;
+    finUi.savings = res;
+    finUi.settings = res.settings || finUi.settings;
+    finDrawSavingsBody();
+  }
+
+  function finDrawSavingsBody() {
+    const body = $("#finSaveBody");
+    if (!body) return;
+    const s = finUi.savings || {};
+    const t = s.totals || {};
+    const cost = s.rilono_cost || {};
+    const rangeLabel = (s.range || {}).label || "";
+    const used = (s.activities || []).filter((a) => a.units > 0);
+
+    if (!t.units) {
+      body.innerHTML = `<div class="card"><div class="card-body" style="text-align:center;padding:44px 20px">
+        <div style="font-size:34px">⚡</div>
+        <h3 style="margin:10px 0 6px">No platform activity in ${esc(rangeLabel.toLowerCase())}</h3>
+        <p class="fin-muted" style="margin:0 auto;max-width:520px;font-size:13.5px;line-height:1.65">
+          Once your team runs Deep Scans, sends mock interviews, drafts statements, collects documents by
+          link or lets clients self-serve their portal, this tab counts the hours that work would have
+          taken by hand — priced at your own hourly cost.</p>
+      </div></div>`;
+      return;
+    }
+
+    const hero = `<div class="card fin-accent" style="margin-bottom:20px"><div class="card-body fin-hero">
+      <div class="fin-hero-main">
+        <div class="fin-eyebrow">Staff time Rilono took off your team · ${esc(rangeLabel)}</div>
+        <div class="fin-hero-num">${esc(t.hours_display)} <span>hours</span></div>
+        <div class="fin-sub">That's about <b>${t.workdays} working days</b> across ${t.units} pieces of work,
+          worth <b>${fmtPaise(t.value_paise)}</b> at your ${fmtPaise(s.hourly_cost_paise)}/hour cost.</div>
+      </div>
+      <div class="fin-hero-side">
+        <div class="fin-hero-stat"><span>You paid Rilono</span><b>${fmtPaise(cost.total_paise)}</b></div>
+        <div class="fin-hero-stat"><span>${s.is_net_positive ? "Net gain" : "Net cost"}</span>
+          <b class="${s.is_net_positive ? "ok" : "warn"}">${esc(finNet(s.net_paise))}</b></div>
+        <div class="fin-hero-stat"><span>Return on spend</span>
+          <b>${s.roi_multiple == null ? "—" : s.roi_multiple + "×"}</b></div>
+      </div>
+    </div></div>`;
+
+    const rows = used.map((a) => `
+      <tr style="cursor:default">
+        <td><b>${a.icon} ${esc(a.label)}</b>
+          <div class="fin-sub">${esc(a.manual_equivalent)}</div></td>
+        <td style="text-align:right">${a.units}</td>
+        <td style="text-align:right;white-space:nowrap">${a.minutes_each} min${a.is_custom ? ' <span class="fin-sub-inline">yours</span>' : ""}</td>
+        <td style="text-align:right"><b>${a.hours}h</b></td>
+        <td style="text-align:right;white-space:nowrap"><b>${fmtPaise(a.value_paise)}</b>
+          <div class="fin-sub">${a.share_pct}% of the time</div></td>
+      </tr>`).join("");
+
+    const table = `<div class="card"><div class="card-head"><h3>Where the time went</h3>
+        <span class="fin-head-note">${used.length} ${used.length === 1 ? "feature" : "features"} used · ${esc(rangeLabel)}</span></div>
+      <div class="card-body" style="padding:0;overflow-x:auto">
+        <table class="client-table fin-table"><thead><tr>
+          <th>What Rilono did${infoTip("Each row counts real completed work in your account — stored Deep Scans, finished interviews, drafts, documents collected by secure link, portals your clients actually opened. Free actions count too.", "What Rilono did")}</th>
+          <th style="text-align:right">Times</th>
+          <th style="text-align:right">By hand</th>
+          <th style="text-align:right">Saved</th>
+          <th style="text-align:right">Worth</th>
+        </tr></thead><tbody>${rows}</tbody></table>
+      </div>
+      <div class="card-body" style="border-top:1px solid var(--border);display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <span class="fin-sub" style="flex:1;min-width:260px">${esc(s.method_note || "")}</span>
+        <button class="btn btn-ghost btn-sm" id="finTuneBtn">⚙ Change these assumptions</button>
+      </div></div>`;
+
+    const costCard = `<div class="card" style="margin-top:20px"><div class="card-head"><h3>What Rilono cost you</h3>
+        <span class="fin-head-note">${esc(rangeLabel)} · from your own expense ledger</span></div>
+      <div class="card-body">
+        <div class="fin-facts">
+          <div><span>AI credit top-ups</span><b>${fmtPaise(cost.credits_paise)}</b></div>
+          <div><span>Infrastructure fee</span><b>${fmtPaise(cost.infra_paise)}</b></div>
+          <div><span>Collection fee on payments</span><b>${fmtPaise(cost.platform_fee_paise)}</b></div>
+          <div><span>Total</span><b>${fmtPaise(cost.total_paise)}</b></div>
+        </div>
+        <div class="fin-sub" style="margin-top:12px">
+          These are the same rows you'll find in <b>Costs</b> under the Rilono categories — the ROI above is
+          your saved time minus exactly this.
+        </div>
+      </div></div>`;
+
+    body.innerHTML = hero + table + costCard;
+    const tune = $("#finTuneBtn", body);
+    if (tune) tune.onclick = () => finOpenSettings("minutes");
+  }
+
+  /* ---------------- Tab 5 · Payout account (the original page) ---------------- */
+  function finDrawAccount() {
+    const panel = $("#finPanel");
+    if (!panel) return;
+    const d = finUi.summary || {};
     const la = d.linked_account;
     const fee = d.fee || {};
     const enabled = !!d.payments_enabled;
@@ -5437,13 +9725,6 @@
     const notEnabledBanner = !enabled ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--warning,#f59e0b)"><div class="card-body">
         <b>Online collection is being activated.</b> You can connect your bank details now; you'll be able to
         collect student payments as soon as it goes live.</div></div>` : "";
-
-    if (!canManage) {
-      c.innerHTML = intro + `<div class="card"><div class="card-body" style="color:var(--text-2)">
-        ${connected ? `Your organization's payout account is ${acctStatusChip(la.activation_status)}.` : "No payout account is connected yet."}
-        <br>Only an organization admin can manage the payout bank account.</div></div>`;
-      return;
-    }
 
     if (connected) {
       const reqs = (la.requirements || []).filter(Boolean);
@@ -5465,15 +9746,298 @@
       const next = ready
         ? `<div class="card"><div class="card-body" style="color:var(--text-2)">
             <b style="color:var(--success,#10b981)">✓ You're connected and ready to receive payouts.</b>
-            <br>Raising payment requests for your students will be available here shortly.</div></div>`
+            <br>Open any client's <b>Payments</b> tab to raise a payment request — collected money books itself
+            into your <b>Income</b> ledger automatically.</div></div>`
         : `<div class="card"><div class="card-body" style="color:var(--text-2)">
             Razorpay is verifying your account. This usually takes a short while — use <b>Refresh status</b> to check.
             ${reqs.length ? " Please resolve the items above to continue." : ""}</div></div>`;
-      c.innerHTML = intro + statusCard + next;
+      panel.innerHTML = intro + statusCard + next;
       return;
     }
 
-    c.innerHTML = intro + notEnabledBanner + acctOnboardingForm(la);
+    panel.innerHTML = intro + notEnabledBanner + acctOnboardingForm(la);
+  }
+
+  /* ---------------- Recording an entry ---------------- */
+  async function finEnsureClients() {
+    if (finUi.clients) return finUi.clients;
+    try {
+      const d = await api("/clients?limit=500");
+      finUi.clients = (d.clients || []).map((c) => ({ id: c.id, name: c.full_name }));
+    } catch (ex) { finUi.clients = []; }
+    return finUi.clients;
+  }
+
+  async function finOpenEntry(entry, kind) {
+    const clients = await finEnsureClients();
+    const cats = ((finUi.categories || {})[kind] || []).filter((c) => !c.auto);
+    const methods = (finUi.categories || {}).payment_methods || [];
+    const isIncome = kind === "income";
+    const editing = !!entry;
+    const today = new Date().toISOString().slice(0, 10);
+    const v = entry || {};
+    // Editing a monthly template changes every month it produced, so say so in the
+    // title and label the date as what it really is: where the series starts.
+    const isSeries = editing && !!v.repeat_monthly;
+
+    openModal(`
+      <div class="modal-head"><h3>${isSeries ? "Edit monthly series" : (editing ? "Edit entry" : (isIncome ? "Record income" : "Record a cost"))}</h3>
+        <button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="finEntryForm"><div class="modal-body">
+        ${isSeries ? `<div class="fin-notice">↻ This is a monthly series. Saving changes updates
+          <b>every month</b> it has booked, not just one.</div>` : ""}
+        <p class="fin-sub" style="margin:0 0 16px">${isIncome
+          ? "For money Rilono can't already see — a fee taken in cash or by bank transfer outside the app, a university commission, coaching income. Payments collected through Rilono are already in your books."
+          : "Salaries, rent, ads, agent commissions, software — everything that decides whether a case actually made money. Rilono's own fees are added for you."}</p>
+        <div class="field-row">
+          <div class="field"><label>Amount (₹) *</label>
+            <input type="number" id="finAmt" min="1" step="0.01" inputmode="decimal"
+              value="${v.amount_paise ? (Number(v.amount_paise) / 100) : ""}" placeholder="0.00"></div>
+          <div class="field"><label>${isSeries ? "First month *" : "Date *"}</label>
+            <input type="date" id="finDate" value="${esc(v.occurred_on || today)}">
+            ${isSeries ? '<div class="hint">Every month from this date up to today is booked at this amount.</div>' : ""}</div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Category *</label>
+            <select id="finCatSel">${cats.map((c) =>
+              `<option value="${esc(c.key)}" ${v.category === c.key ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select></div>
+          <div class="field"><label>${isIncome ? "Received by" : "Paid by"}</label>
+            <select id="finMethod"><option value="">Not specified</option>${methods.map((m) =>
+              `<option value="${esc(m.key)}" ${v.payment_method === m.key ? "selected" : ""}>${esc(m.label)}</option>`).join("")}</select></div>
+        </div>
+        <div class="field"><label>Description</label>
+          <input type="text" id="finDesc" maxlength="300" value="${esc(v.description || "")}"
+            placeholder="${isIncome ? "e.g. Second instalment — Rohan Sharma" : "e.g. Meta ads — August"}"></div>
+        <div class="field-row">
+          <div class="field"><label>${isIncome ? "Who paid you" : "Who you paid"}</label>
+            <input type="text" id="finParty" maxlength="160" value="${esc(v.counterparty || "")}"
+              placeholder="${isIncome ? "Student, university, partner…" : "Vendor or staff name"}"></div>
+          <div class="field"><label>Client (optional)</label>
+            <select id="finClientSel"><option value="">Not tied to a client</option>${clients.map((c) =>
+              `<option value="${c.id}" ${Number(v.client_id) === c.id ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Reference</label>
+            <input type="text" id="finRef" maxlength="120" value="${esc(v.reference || "")}" placeholder="Invoice / bill / UTR"></div>
+          <div class="field"><label>Tax included (₹)</label>
+            <input type="number" id="finTax" min="0" step="0.01" inputmode="decimal"
+              value="${v.tax_paise ? (Number(v.tax_paise) / 100) : ""}" placeholder="GST portion, if any"></div>
+        </div>
+        <label class="fin-check"><input type="checkbox" id="finRepeat" ${v.repeat_monthly ? "checked" : ""}>
+          <span><b>Repeats every month</b> — Rilono books it on the same date each month up to today
+          (salary, rent, a subscription). Edit this entry to change every month at once.</span></label>
+        <div class="field ${v.repeat_monthly ? "" : "hidden"}" id="finUntilWrap"><label>Stop repeating after (optional)</label>
+          <input type="date" id="finUntil" value="${esc(v.repeat_until || "")}"></div>
+        <div class="field"><label>Notes</label>
+          <textarea id="finNotes" rows="2" maxlength="2000" placeholder="Anything you'd want to remember at audit time">${esc(v.notes || "")}</textarea></div>
+        <div id="finEntryErr" class="auth-error hidden"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="finEntrySave">${editing ? "Save changes" : (isIncome ? "Record income" : "Record cost")}</button>
+      </div></form>`, { wide: true });
+
+    const repeat = $("#finRepeat");
+    const untilWrap = $("#finUntilWrap");
+    if (repeat && untilWrap) repeat.onchange = () => untilWrap.classList.toggle("hidden", !repeat.checked);
+
+    $("#finEntryForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const err = $("#finEntryErr");
+      const fail = (msg) => { err.textContent = msg; err.classList.remove("hidden"); };
+      err.classList.add("hidden");
+      const rupees = parseFloat(($("#finAmt").value || "0"));
+      if (!(rupees > 0)) return fail("Enter the amount.");
+      const when = ($("#finDate").value || "").trim();
+      if (!when) return fail("Pick the date this money moved.");
+      const taxRupees = parseFloat(($("#finTax").value || "0")) || 0;
+      if (taxRupees > rupees) return fail("The tax portion can't be more than the amount.");
+      const body = {
+        kind,
+        category: $("#finCatSel").value,
+        amount_paise: Math.round(rupees * 100),
+        tax_paise: Math.round(taxRupees * 100),
+        occurred_on: when,
+        description: ($("#finDesc").value || "").trim(),
+        counterparty: ($("#finParty").value || "").trim(),
+        payment_method: $("#finMethod").value || null,
+        reference: ($("#finRef").value || "").trim(),
+        notes: ($("#finNotes").value || "").trim(),
+        client_id: $("#finClientSel").value ? Number($("#finClientSel").value) : null,
+        repeat_monthly: !!($("#finRepeat") || {}).checked,
+        repeat_until: (($("#finUntil") || {}).value || "") || null,
+      };
+      const btn = $("#finEntrySave");
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const res = entry
+          ? await api(`/finance/entries/${entry.id}`, { method: "PATCH", body })
+          : await api("/finance/entries", { method: "POST", body });
+        toast(res.message || "Saved.", "success");
+        closeModal();
+        finAfterWrite();
+      } catch (ex) {
+        btn.disabled = false;
+        btn.textContent = editing ? "Save changes" : (isIncome ? "Record income" : "Record cost");
+        fail(ex.message || "Couldn't save that entry.");
+      }
+    };
+  }
+
+  // Entry rows come from the ledger cache, so an edit never needs a round trip.
+  // A projected month of a series carries the template's own start date in
+  // `series_start` — editing it must not move the series to the occurrence's date.
+  function finEditEntry(entryId) {
+    const row = (finUi.ledger.rows || []).find((r) => r.entry_id === entryId && (r.editable || r.recurring));
+    if (!row) { toast("Reload the page and try that edit again.", "error"); return; }
+    finOpenEntry({
+      id: entryId,
+      kind: row.kind,
+      category: row.category,
+      amount_paise: row.amount_paise,
+      tax_paise: row.tax_paise,
+      occurred_on: row.series_start || row.occurred_on,
+      description: row.description,
+      counterparty: row.counterparty,
+      payment_method: row.method,
+      reference: row.reference,
+      notes: row.notes || "",
+      client_id: row.client_id,
+      repeat_monthly: row.recurring,
+      repeat_until: row.repeat_until || "",
+    }, row.kind);
+  }
+
+  async function finAddEntry(kind) {
+    // Categories arrive with the ledger payload; fetch them if the user starts here.
+    if (!finUi.categories) {
+      try {
+        const res = await api("/finance/books?" + finRangeQuery({ kind, limit: 1 }));
+        finUi.categories = res.categories || null;
+        finUi.settings = res.settings || finUi.settings;
+      } catch (ex) { toast(ex.message || "Couldn't open the form.", "error"); return; }
+    }
+    finOpenEntry(null, kind);
+  }
+
+  /* ---------------- Assumptions (hourly cost, cash, FY, baselines) ---------------- */
+  const FIN_MONTHS = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+
+  async function finOpenSettings(focus) {
+    let s = finUi.settings;
+    if (!s) {
+      try {
+        const res = await api("/finance/books?" + finRangeQuery({ limit: 1 }));
+        s = finUi.settings = res.settings;
+        finUi.categories = res.categories || finUi.categories;
+      } catch (ex) { toast(ex.message || "Couldn't load your settings.", "error"); return; }
+    }
+    const minutes = s.savings_minutes || {};
+    const defaults = s.savings_defaults || {};
+    const acts = (finUi.savings || {}).activities || [];
+    // Fall back to the server's own key list when the savings tab hasn't loaded yet.
+    const keys = acts.length ? acts.map((a) => ({ key: a.key, label: a.label, unit: a.unit }))
+      : Object.keys(minutes).map((k) => ({ key: k, label: k.replace(/_/g, " "), unit: "" }));
+
+    openModal(`
+      <div class="modal-head"><h3>Finance assumptions</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="finSetForm"><div class="modal-body">
+        <div class="fin-eyebrow">Your numbers</div>
+        <p class="fin-sub" style="margin:4px 0 14px">These drive the cash position and turn saved time into
+          money. They're yours — nothing here is a Rilono estimate.</p>
+        <div class="field-row">
+          <div class="field"><label>Blended staff cost per hour (₹)</label>
+            <input type="number" id="finHourly" min="0" step="1" inputmode="decimal"
+              value="${Number(s.hourly_cost_paise || 0) / 100}">
+            <div class="hint">Salary + overheads ÷ hours worked. Default ₹${Number(s.hourly_cost_default_paise || 40000) / 100}.</div></div>
+          <div class="field"><label>Financial year starts</label>
+            <select id="finFy">${FIN_MONTHS.map((m, i) =>
+              `<option value="${i + 1}" ${Number(s.fy_start_month) === i + 1 ? "selected" : ""}>${m}</option>`).join("")}</select>
+            <div class="hint">Drives “This quarter” and “This FY”.</div></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Opening bank balance (₹)</label>
+            <input type="number" id="finOpen" min="0" step="0.01" inputmode="decimal"
+              value="${Number(s.opening_balance_paise || 0) / 100}"></div>
+          <div class="field"><label>As of</label>
+            <input type="date" id="finOpenOn" value="${esc(s.opening_balance_on || "")}">
+            <div class="hint">Cash position = this balance plus your books since that date.</div></div>
+        </div>
+        <div class="fin-eyebrow" style="margin-top:20px">How long these take you by hand</div>
+        <p class="fin-sub" style="margin:4px 0 12px">Minutes per task without Rilono. Lower them if your team
+          is faster — the savings figure follows your numbers, not ours.</p>
+        <div class="fin-minutes">
+          ${keys.map((a) => `<label class="fin-minute">
+            <span>${esc(a.label)}${a.unit ? ` <em>per ${esc(a.unit)}</em>` : ""}</span>
+            <input type="number" min="0" max="600" step="1" data-finmin="${esc(a.key)}"
+              value="${Number(minutes[a.key] != null ? minutes[a.key] : (defaults[a.key] || 0))}">
+          </label>`).join("")}
+        </div>
+        <div id="finSetErr" class="auth-error hidden"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="finSetSave">Save assumptions</button>
+      </div></form>`, { wide: true });
+
+    if (focus === "minutes") {
+      const first = $("[data-finmin]");
+      if (first) first.scrollIntoView({ block: "center" });
+    }
+
+    $("#finSetForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const err = $("#finSetErr");
+      err.classList.add("hidden");
+      const savings = {};
+      $$("[data-finmin]").forEach((el) => { savings[el.dataset.finmin] = Math.max(0, Math.round(Number(el.value) || 0)); });
+      const openOn = ($("#finOpenOn").value || "").trim();
+      const body = {
+        hourly_cost_paise: Math.round((parseFloat($("#finHourly").value || "0") || 0) * 100),
+        opening_balance_paise: Math.round((parseFloat($("#finOpen").value || "0") || 0) * 100),
+        opening_balance_on: openOn || null,
+        fy_start_month: Number($("#finFy").value) || 4,
+        savings_minutes: savings,
+      };
+      const btn = $("#finSetSave");
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const res = await api("/finance/settings", { method: "PUT", body });
+        finUi.settings = res.settings || finUi.settings;
+        toast(res.message || "Saved.", "success");
+        closeModal();
+        finInvalidateRange();
+        finDraw();
+      } catch (ex) {
+        btn.disabled = false;
+        btn.textContent = "Save assumptions";
+        err.textContent = ex.message || "Couldn't save those settings.";
+        err.classList.remove("hidden");
+      }
+    };
+  }
+
+  async function finExport(btn) {
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Preparing…"; }
+    try {
+      await downloadFile(`${API}/finance/export?` + finRangeQuery({ fmt: "xlsx" }), 120000);
+      toast("Your finance book is downloading.", "success");
+    } catch (ex) {
+      toast(ex.message || "Couldn't build that export.", "error");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
+  }
+
+  function finGoTab(tab) {
+    finUi.tab = tab;
+    finDraw();
+    const c = $("#content");
+    if (c) c.scrollIntoView({ block: "start" });
   }
 
   async function saveLinkedAccount() {
@@ -5696,7 +10260,7 @@
   function renderSettings() {
     const c = $("#content");
     const org = state.me.organization || {};
-    const canManage = state.perms.can_manage_users;
+    const canManage = can("settings.manage");
     // Company location — for records; the country also drives the portal display currency.
     const ORG_COUNTRIES = [
       ["", "— Select country —"],
@@ -6354,6 +10918,18 @@
      ============================================================ */
   let calEventsById = {};
 
+  /* Reference files on an event. Mirrors ENTERPRISE_CAL_ATTACH_* and ALLOWED_EXT in
+     app/enterprise_calendar_files.py — the allow-list is spelled out again rather than shared
+     with SUP_ALLOWED_EXT because that one is declared much further down this IIFE and a
+     `const` is not readable before its own initialiser runs. */
+  const CAL_ATT_EXT = [
+    ".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic",
+    ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt",
+  ];
+  const CAL_ATT_MAX_FILES = 6;
+  const CAL_ATT_MAX_BYTES = 15 * 1024 * 1024;
+  const CAL_ATT_MAX_TOTAL_BYTES = 40 * 1024 * 1024;
+
   function calState() {
     if (!state.cal) { const d = new Date(); state.cal = { year: d.getFullYear(), month: d.getMonth() }; }
     return state.cal;
@@ -6393,8 +10969,11 @@
       ]);
     } catch (ex) { c.innerHTML = errBox(ex); return; }
     state.calClients = (clientsResp && clientsResp.clients) || [];
-    state.perms = data.permissions || state.perms;
-    const canEdit = state.perms.can_edit_data;
+    // Was `state.perms = data.permissions || state.perms` — a thin calendar payload
+    // overwrote the whole session's permissions. applyAccessPayload only accepts them
+    // alongside a resolved `access` block, so opening Calendar can't downgrade anything.
+    applyAccessPayload(data);
+    const canEdit = can("calendar.manage");
     state.calTypes = data.event_types || [];
     const today = data.today;
 
@@ -6417,7 +10996,7 @@
       const chips = dayEvents.slice(0, 3).map((e) => `
         <div class="cal-ev ${e.is_done ? "done" : ""} ${e.overdue ? "overdue" : ""}" style="border-left-color:${e.color}"
              title="${esc(e.type_label)}: ${esc(e.title)}" onclick="event.stopPropagation(); __ent.calEvent('${e.id}')">
-          ${e.time ? `<b>${esc(e.time)}</b> ` : ""}${esc(e.title)}
+          ${e.time ? `<b>${esc(e.time)}</b> ` : ""}${esc(e.title)}${e.attachment_count ? ` <span class="cal-ev-clip" title="${e.attachment_count} reference file${e.attachment_count === 1 ? "" : "s"}">📎</span>` : ""}
         </div>`).join("");
       const more = dayEvents.length > 3 ? `<div class="cal-more">+${dayEvents.length - 3} more</div>` : "";
       cells += `<div class="cal-cell ${inMonth ? "" : "muted"} ${isToday ? "today" : ""}" ${canEdit ? `onclick="__ent.calAdd('${ds}')"` : ""}>
@@ -6444,7 +11023,7 @@
         <span class="cal-dot" style="background:${e.color}"></span>
         <div class="cal-up-meta">
           <b>${esc(e.title)}</b>
-          <span>${esc(e.type_label)}${e.client_name && e.source !== "client" ? " · " + esc(e.client_name) : ""}</span>
+          <span>${esc(e.type_label)}${e.client_name && e.source !== "client" ? " · " + esc(e.client_name) : ""}${e.attachment_count ? " · 📎 " + e.attachment_count : ""}</span>
         </div>
         <div class="cal-up-when ${e.overdue ? "overdue" : ""}">${esc(calRel(e.date, today))}${e.time ? " · " + esc(e.time) : ""}</div>
       </div>`;
@@ -6496,13 +11075,16 @@
   }
 
   function calAdd(dateStr) {
-    if (!state.perms.can_edit_data) return;
+    if (!can("calendar.manage")) return;
     calEditModal(null, dateStr);
   }
 
   function calEditModal(ev, presetDate) {
     const types = state.calTypes || [{ key: "reminder", label: "Reminder" }];
     const isEdit = !!ev;
+    // A viewer opening an event still sees (and can download) what's attached — the tray that
+    // adds and removes files is what managing the calendar buys you.
+    const calCanAttach = can("calendar.manage");
     const dateVal = (ev && ev.date) || presetDate || new Date().toISOString().slice(0, 10);
     openModal(`<div class="modal-head"><h3>${isEdit ? "Edit event" : "Add reminder"}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
       <form id="calForm"><div class="modal-body">
@@ -6524,13 +11106,26 @@
           <label class="cal-check"><input type="checkbox" id="calNotifyChk"/><span id="calNotifyLabel"></span></label>
           <button type="button" class="cal-mention-clear" id="calMentionClear" title="Remove client link" aria-label="Remove client link">✕</button>
         </div>
+        <div class="field cal-att-field" id="calAttField">
+          <label>Reference files (optional)</label>
+          ${calCanAttach ? `
+          <input type="file" id="calAttFile" class="hidden" multiple accept="${CAL_ATT_EXT.join(",")}"/>
+          <button type="button" class="cal-att-drop" id="calAttDrop">
+            <span class="cal-att-drop-ic">📎</span>
+            <span class="cal-att-drop-txt">
+              <b>Attach a file</b>
+              <span class="cal-att-drop-note" id="calAttNote"></span>
+            </span>
+          </button>` : ""}
+          <div class="cal-att-list hidden" id="calAttList"></div>
+        </div>
         <div id="calFormErr" class="auth-error hidden"></div>
       </div>
       <div class="modal-foot">
         ${isEdit ? `<button type="button" class="btn btn-danger btn-sm" onclick="__ent.calDelete(${ev.event_id})">Delete</button>
           <button type="button" class="btn btn-ghost btn-sm" onclick="__ent.calToggleDone(${ev.event_id}, ${ev.is_done ? "false" : "true"})">${ev.is_done ? "Mark not done" : "✓ Mark done"}</button>` : ""}
         <div class="spacer" style="flex:1"></div>
-        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="button" class="btn btn-ghost" id="calCancelBtn">Cancel</button>
         <button type="submit" class="btn btn-primary" id="calSaveBtn">${isEdit ? "Save" : "Add"}</button>
       </div></form>`);
 
@@ -6607,6 +11202,173 @@
     titleInput.addEventListener("blur", () => setTimeout(closeMenu, 150));
     $("#calMentionClear").onclick = () => { modalClient = null; notifyRow.classList.add("hidden"); };
 
+    // ---- reference files ----
+    // Uploads fire immediately, never on submit: the body below is JSON, so a file input
+    // inside this form would be silently dropped. An event that already exists takes the file
+    // straight away; a reminder still being written parks it under this modal's draft token,
+    // which the create call then binds.
+    const calAttToken = isEdit
+      ? null
+      : "cd" + Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+    const calAtts = (isEdit && ev.attachments ? ev.attachments : []).map((a, i) => ({
+      uid: "a" + i, id: a.id, name: a.filename, size: a.file_size || 0,
+      url: a.download_url, status: "done", pct: 100, xhr: null,
+    }));
+    let calAttSeq = calAtts.length;
+
+    function calAttUsed() { return calAtts.reduce((sum, a) => sum + (a.size || 0), 0); }
+
+    function calDrawAtts() {
+      const host = $("#calAttList");
+      if (!host) return;
+      host.innerHTML = calAtts.map((a) => {
+        const cls = a.status === "error" ? " is-error" : a.status === "uploading" ? " is-uploading" : "";
+        const meta = a.status === "uploading" ? (a.pct || 0) + "%"
+          : a.status === "error" ? "Couldn't upload" : fmtSize(a.size);
+        const name = a.url
+          ? `<a class="cal-att-name" href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name)}">${esc(a.name)}</a>`
+          : `<span class="cal-att-name" title="${esc(a.name)}">${esc(a.name)}</span>`;
+        return `<div class="cal-att-chip${cls}">
+            <span class="cal-att-ic">${a.status === "error" ? "⚠️" : docIcon(a.name)}</span>${name}
+            <span class="cal-att-meta">${esc(meta)}</span>
+            ${calCanAttach ? `<button type="button" class="cal-att-x" data-uid="${esc(a.uid)}" aria-label="Remove ${esc(a.name)}">✕</button>` : ""}
+            ${a.status === "uploading" ? `<span class="cal-att-bar" style="width:${a.pct || 0}%"></span>` : ""}
+          </div>`;
+      }).join("");
+      host.classList.toggle("hidden", !calAtts.length);
+      $$(".cal-att-x", host).forEach((b) => { b.onclick = () => calRemoveAtt(b.dataset.uid); });
+      const note = $("#calAttNote");
+      if (note) {
+        note.textContent = calAtts.length
+          ? `${calAtts.length} of ${CAL_ATT_MAX_FILES} · ${fmtSize(calAttUsed())}`
+          : `Agenda, appointment letter, checklist — up to ${CAL_ATT_MAX_FILES} files`;
+      }
+      const drop = $("#calAttDrop");
+      if (drop) drop.disabled = calAtts.length >= CAL_ATT_MAX_FILES;
+    }
+
+    async function calRemoveAtt(uid) {
+      const index = calAtts.findIndex((a) => a.uid === uid);
+      if (index < 0) return;
+      const entry = calAtts[index];
+      // No confirmModal here: it reuses #modal, which would destroy this open form.
+      if (entry.xhr && entry.status === "uploading") { try { entry.xhr.abort(); } catch (e) {} }
+      calAtts.splice(index, 1);
+      calDrawAtts();
+      if (entry.id) {
+        try { await api(`/calendar/attachments/${entry.id}`, { method: "DELETE" }); }
+        catch (ex) { toast(ex.message, "error"); }
+      }
+    }
+
+    function calUploadAtt(file) {
+      const entry = {
+        uid: "u" + (++calAttSeq), name: file.name || "file", size: file.size || 0,
+        status: "uploading", pct: 0, id: null, url: null, xhr: null,
+      };
+      calAtts.push(entry);
+      calDrawAtts();
+
+      const form = new FormData();
+      form.append("file", file);
+      // ev.event_id is the numeric row id — ev.id is the prefixed "manual-42" grid key.
+      if (isEdit) form.append("event_id", String(ev.event_id));
+      else form.append("draft_token", calAttToken);
+
+      const xhr = new XMLHttpRequest();
+      entry.xhr = xhr;
+      xhr.open("POST", API + "/calendar/attachments");
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        entry.pct = Math.min(99, Math.round((e.loaded / e.total) * 100));
+        calDrawAtts();
+      };
+      xhr.onload = () => {
+        let out = null;
+        try { out = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status >= 200 && xhr.status < 300 && out && out.attachment) {
+          entry.status = "done";
+          entry.pct = 100;
+          entry.id = out.attachment.id;
+          entry.url = out.attachment.download_url;
+          entry.size = out.attachment.file_size || entry.size;
+        } else {
+          entry.status = "error";
+          const detail = out && typeof out.detail === "string" && out.detail.length < 300 ? out.detail : "";
+          toast(detail || `Couldn't attach ${entry.name}`, "error");
+        }
+        entry.xhr = null;
+        calDrawAtts();
+      };
+      xhr.onerror = () => {
+        entry.status = "error"; entry.xhr = null; calDrawAtts();
+        toast("Upload failed — check your connection and try again", "error");
+      };
+      // Without this a stalled connection leaves the chip spinning and Save blocked forever.
+      xhr.timeout = 180000;
+      xhr.ontimeout = () => {
+        entry.status = "error"; entry.xhr = null; calDrawAtts();
+        toast(`${entry.name} took too long to upload — remove it and try again`, "error");
+      };
+      xhr.send(form);
+    }
+
+    function calAddAttFiles(fileList) {
+      const files = Array.prototype.slice.call(fileList || []);
+      if (!files.length) return;
+      const room = CAL_ATT_MAX_FILES - calAtts.length;
+      if (room <= 0) { toast(`An event can hold ${CAL_ATT_MAX_FILES} reference files`, "error"); return; }
+      const accepted = [];
+      let running = calAttUsed();
+      let badType = 0, tooBig = 0, noRoom = 0;
+      files.forEach((f) => {
+        const dot = (f.name || "").lastIndexOf(".");
+        const ext = dot >= 0 ? (f.name || "").slice(dot).toLowerCase() : "";
+        if (!CAL_ATT_EXT.includes(ext)) { badType++; return; }
+        if ((f.size || 0) > CAL_ATT_MAX_BYTES) { tooBig++; return; }
+        // Don't upload what the server is going to refuse anyway.
+        if (accepted.length >= room || running + (f.size || 0) > CAL_ATT_MAX_TOTAL_BYTES) { noRoom++; return; }
+        running += f.size || 0;
+        accepted.push(f);
+      });
+      accepted.forEach(calUploadAtt);
+      if (badType) toast("Attach a PDF, image, Word/Excel file, CSV or text file", "error");
+      else if (tooBig) toast(`Each file can be up to ${fmtSize(CAL_ATT_MAX_BYTES)}`, "error");
+      else if (noRoom) toast(`Reference files for one event can total ${fmtSize(CAL_ATT_MAX_TOTAL_BYTES)}`, "error");
+    }
+
+    if (calCanAttach) {
+      $("#calAttDrop").onclick = () => $("#calAttFile").click();
+      $("#calAttFile").onchange = () => { calAddAttFiles($("#calAttFile").files); $("#calAttFile").value = ""; };
+      // Drag & drop onto the whole field, depth-counted so moving over a child doesn't flicker.
+      const attField = $("#calAttField");
+      let dragDepth = 0;
+      attField.addEventListener("dragenter", (e) => {
+        if (!(e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0)) return;
+        e.preventDefault(); dragDepth++; attField.classList.add("is-dragging");
+      });
+      attField.addEventListener("dragover", (e) => { e.preventDefault(); });
+      attField.addEventListener("dragleave", () => {
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) attField.classList.remove("is-dragging");
+      });
+      attField.addEventListener("drop", (e) => {
+        e.preventDefault(); dragDepth = 0; attField.classList.remove("is-dragging");
+        calAddAttFiles(e.dataTransfer && e.dataTransfer.files);
+      });
+    }
+    calDrawAtts();
+
+    // Cancelling a brand-new reminder throws its uploads away now rather than leaving them
+    // for the 24h sweep. Only a courtesy — Escape and the overlay close with no hook at all.
+    $("#calCancelBtn").onclick = () => {
+      if (!isEdit && calAtts.some((a) => a.id)) {
+        api(`/calendar/attachments/drafts/${encodeURIComponent(calAttToken)}`, { method: "DELETE" }).catch(() => {});
+      }
+      closeModal();
+    };
+
     // Pre-fill when editing an event that's already linked to a client.
     if (ev && ev.client_id) {
       const known = (state.calClients || []).find((x) => x.id === ev.client_id);
@@ -6636,6 +11398,14 @@
         body.notify_client = false;
       }
       if (!body.title || !body.event_date) return;
+      // Saving mid-upload would create the event before its files exist to bind.
+      if (calAtts.some((a) => a.status === "uploading")) {
+        const er = $("#calFormErr");
+        er.textContent = "Hold on — a file is still uploading.";
+        er.classList.remove("hidden");
+        return;
+      }
+      if (!isEdit && calAtts.some((a) => a.id)) body.attachment_draft_token = calAttToken;
       const btn = $("#calSaveBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
       try {
         if (isEdit) await api(`/calendar/events/${ev.event_id}`, { method: "PATCH", body });
@@ -6660,42 +11430,274 @@
 
   /* ============================================================
      HELP & SUPPORT + feature requests
+     One composer with two modes (help / feature idea) instead of two competing
+     forms, quick answers in the rail beside it (matched live against what is
+     being typed, so the easy questions never become a ticket), and this org's
+     history underneath. Drafts survive a view switch; attachments are picked,
+     pasted or dropped and ride along with the POST — nothing is stored.
      ============================================================ */
+  // Mirrors ENTERPRISE_DOC_ALLOWED_EXT server-side — the picker only offers what the
+  // endpoint will actually accept, so a screenshot never bounces after the upload.
+  const SUP_ALLOWED_EXT = [
+    ".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic",
+    ".doc", ".docx", ".xls", ".xlsx", ".csv", ".txt",
+  ];
+  const SUP_ACCEPT = SUP_ALLOWED_EXT.join(",");
+  const SUP_THUMB_EXT = [".jpg", ".jpeg", ".png", ".webp", ".gif"];
+  const SUP_IC = {
+    clip: '<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M14.5 9.2 9.3 14.4a3.3 3.3 0 0 1-4.7-4.7l5.6-5.6a2.2 2.2 0 0 1 3.1 3.1l-5.5 5.6a1.1 1.1 0 0 1-1.6-1.6l5-5"/></svg>',
+    mail: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 6 10-6"/></svg>',
+    copy: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>',
+    chev: '<svg class="chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 5 7 7-7 7"/></svg>',
+    arw: '<svg class="arw" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg>',
+    bulb: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9.5 18h5"/><path d="M10.5 21.5h3"/><path d="M12 2.5a6.5 6.5 0 0 0-3.8 11.8V16h7.6v-1.7A6.5 6.5 0 0 0 12 2.5z"/></svg>',
+    check: '<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4.5 4.5L19 7"/></svg>',
+    inbox: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M22 12h-5.5l-1.5 2.5h-6L7.5 12H2"/><path d="M5.6 5.2 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.6-6.8A2 2 0 0 0 16.6 4H7.4a2 2 0 0 0-1.8 1.2z"/></svg>',
+  };
+
+  /* Quick answers. Static, trusted markup (never interpolate user values into `a`).
+     `keys` drive both the rail accordion and the live suggestions under the subject —
+     the cheapest ticket is the one the answer above the form already resolved. */
+  const SUP_KB = [
+    {
+      id: "credits",
+      q: "How do Rilono Credits work?",
+      a: "Every AI action — Deep Scan, Writing Studio drafts, mock-interview links, Course Finder shortlists — spends credits from your organization's shared wallet. <b>Credits</b> shows the balance, what each action costs and where the credits went, and any admin can top up there.",
+      view: "credits", cta: "Open Credits",
+      keys: ["credit", "credits", "wallet", "balance", "top up", "topup", "recharge", "pricing", "cost", "ran out", "insufficient"],
+    },
+    {
+      id: "clients",
+      q: "Adding and updating a client",
+      a: "<b>+ Add Client</b> at the top right opens the intake form — contact details, destination, intake, budget and the rest. Every field stays editable afterwards from the client's profile, and a case moves through the pipeline from the stage picker in its dossier.",
+      view: "clients", cta: "Open Clients",
+      keys: ["client", "add client", "intake", "profile", "pipeline", "stage", "lead", "student", "applicant", "dossier"],
+    },
+    {
+      id: "portal",
+      q: "Can a student see their own case?",
+      a: "Yes — open the client and use <b>Share portal</b>. They get a secure link at their email address, confirm a one-time code, then see a view-only copy of the case: stages, recorded details, documents, universities and payments. Internal notes are never shown.",
+      view: "clients", cta: "Open Clients",
+      keys: ["portal", "share", "view only", "view-only", "one-time", "otp", "student login", "client access", "tracking link"],
+    },
+    {
+      id: "team",
+      q: "Inviting your team",
+      a: "<b>Team → + Invite member</b> emails an invitation to a colleague. Their role decides who can manage billing, credits and organization settings — everyone else works the pipeline as normal.",
+      view: "team", cta: "Open Team",
+      keys: ["team", "invite", "member", "colleague", "staff", "role", "permission", "access", "seat", "admin", "counsellor", "counselor"],
+    },
+    {
+      id: "payments",
+      q: "Collecting payments from students",
+      a: "<b>Finance</b> links your bank account once. After that, each client's <b>Payments</b> tab raises a secure pay link that goes straight to the student, funds settle into your own account, and refunds are issued from the same tab.",
+      view: "finance", cta: "Open Finance",
+      keys: ["payment", "pay link", "invoice", "fee", "refund", "razorpay", "bank", "settlement", "finance", "collect", "charge", "payout"],
+    },
+    {
+      id: "privacy",
+      q: "Documents and data privacy",
+      a: "Client documents are stored encrypted and are reachable only by members of your organization. We don't open a client's files to investigate a problem without asking you first — a screenshot of what you're seeing is almost always enough.",
+      keys: ["document", "upload", "file", "privacy", "security", "encrypt", "confidential", "gdpr", "data", "delete", "passport"],
+    },
+    {
+      id: "stuck",
+      q: "A page is stuck, blank or looks wrong",
+      a: "A hard refresh clears a stale copy of the console and fixes most of these. If it survives the refresh, send it below with a screenshot and leave <b>include technical details</b> ticked — it tells us your browser and the exact page, which is usually what pins the bug down.",
+      keys: ["stuck", "broken", "error", "bug", "not working", "spinner", "loading", "blank", "crash", "freeze", "fails", "failed", "nothing happens"],
+    },
+    {
+      id: "reply",
+      q: "What happens after you send this?",
+      a: "Your message reaches the Rilono team with your name and organization already attached, and the reply comes straight back to your email address — usually within one business day. Everything you send is listed under <b>Your requests</b> with its status.",
+      keys: ["reply", "response", "how long", "when will", "status", "ticket", "follow up", "chase", "heard back", "waiting"],
+    },
+  ];
+
+  const supIsMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  // Thumbnails for picked screenshots; revoked when the chip goes or the view re-renders.
+  let supUrls = [];
+  function supFreeUrls() {
+    supUrls.forEach((u) => { try { URL.revokeObjectURL(u); } catch (e) { /* already revoked */ } });
+    supUrls = [];
+  }
+  function supDraftKey(kind) {
+    const org = (state.me && state.me.organization && state.me.organization.id) || "0";
+    return "rilono.ent.support.draft." + org + "." + kind;
+  }
+  function supLoadDraft(kind) {
+    try {
+      const raw = localStorage.getItem(supDraftKey(kind));
+      const d = raw ? JSON.parse(raw) : null;
+      if (d && (d.subject || d.message)) return { subject: String(d.subject || ""), message: String(d.message || ""), restored: true };
+    } catch (e) { /* private mode / corrupt value — start clean */ }
+    return { subject: "", message: "", restored: false };
+  }
+  function supSaveDraft(kind, subject, message) {
+    try {
+      if (!subject && !message) localStorage.removeItem(supDraftKey(kind));
+      else localStorage.setItem(supDraftKey(kind), JSON.stringify({ subject: subject, message: message }));
+    } catch (e) { /* storage full or blocked — the draft is a nicety, not a contract */ }
+  }
+  function supAgo(iso) {
+    const t = new Date(iso).getTime();
+    if (!t || isNaN(t)) return "";
+    const s = Math.max(0, (Date.now() - t) / 1000);
+    if (s < 90) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + " min ago";
+    if (s < 86400) { const h = Math.floor(s / 3600); return h + (h === 1 ? " hour ago" : " hours ago"); }
+    if (s < 604800) { const d = Math.floor(s / 86400); return d + (d === 1 ? " day ago" : " days ago"); }
+    return fmtDate(iso);
+  }
+  function supStatus(raw) {
+    const s = String(raw || "").toLowerCase().trim();
+    if (s === "closed" || s === "resolved" || s === "done") return { cls: "done", label: "Resolved" };
+    if (s === "in_progress" || s === "in progress" || s === "triaged") return { cls: "prog", label: "In progress" };
+    if (!s || s === "open" || s === "new") return { cls: "open", label: "Received" };
+    return { cls: "gray", label: s.replace(/_/g, " ") };
+  }
+  /* One line of context appended to a help request when the requester leaves the box
+     ticked. Browser, OS, viewport and the page they were on — nothing about clients. */
+  function supTechLine() {
+    const ua = navigator.userAgent || "";
+    const m = /(Edg|OPR|Chrome|Firefox|Version)\/([\d.]+)/.exec(ua);
+    const names = { Edg: "Edge", OPR: "Opera", Version: "Safari" };
+    const browser = m ? ((names[m[1]] || m[1]) + " " + String(m[2]).split(".")[0]) : "unknown browser";
+    const os = /Mac/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /Android/.test(ua) ? "Android"
+      : /iPhone|iPad/.test(ua) ? "iOS" : /Linux/.test(ua) ? "Linux" : "unknown OS";
+    return browser + " · " + os + " · " + window.innerWidth + "×" + window.innerHeight + " · " + location.pathname;
+  }
+  /* Score the KB against what has been typed so far. Long keys score higher and a single
+     short hit isn't enough (threshold 3), which keeps stray words from suggesting nonsense. */
+  function supMatch(text) {
+    const t = " " + String(text || "").toLowerCase().replace(/[^a-z0-9']+/g, " ").trim() + " ";
+    if (t.trim().length < 4) return [];
+    return SUP_KB
+      .map((k) => {
+        let score = 0;
+        k.keys.forEach((w) => {
+          const needle = w.toLowerCase();
+          if (t.indexOf(" " + needle + " ") >= 0) score += needle.length >= 6 ? 4 : 3;
+          else if (needle.length >= 5 && t.indexOf(needle) >= 0) score += 2;
+        });
+        return { k: k, score: score };
+      })
+      .filter((x) => x.score >= 3)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 2)
+      .map((x) => x.k);
+  }
+
   async function renderSupport() {
     const c = $("#content");
+    supFreeUrls();
     c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
     let d;
     try { d = await api("/support"); } catch (ex) { c.innerHTML = errBox(ex); return; }
+    // Guard the async gap: never paint over a view the user has already moved on to.
+    if (state.view !== "support") return;
+
     const supportEmail = d.support_email || "contact@rilono.com";
-    const reqs = d.requests || [];
+    const maxFiles = Number(d.attach_max_files) || 5;
+    const maxBytes = Number(d.attach_max_total_bytes) || 10 * 1024 * 1024;
+    const meUser = (state.me && state.me.user) || {};
+    const org = (state.me && state.me.organization) || {};
+    const myEmail = meUser.email || "";
 
-    const histRow = (r) => `
+    let kind = "support";
+    const trays = { support: [], feature_request: [] };
+    const drafts = { support: supLoadDraft("support"), feature_request: supLoadDraft("feature_request") };
+    let traySeq = 0;
+    let draftTimer = null, suggestTimer = null;
+
+    /* ---------------- markup ---------------- */
+    const kbHtml = () => SUP_KB.map((k) => `
+      <div class="sup-kb-item" data-kb="${k.id}">
+        <button type="button" class="sup-kb-q" aria-expanded="false">${esc(k.q)}${SUP_IC.chev}</button>
+        <div class="sup-kb-a hidden">${k.a}${k.view ? `<button type="button" class="btn btn-soft btn-sm sup-kb-cta" data-goto="${k.view}">${esc(k.cta)} →</button>` : ""}</div>
+      </div>`).join("");
+
+    const histRow = (r) => {
+      const isF = r.request_type === "feature_request";
+      const st = supStatus(r.status);
+      const atts = r.attachments || [];
+      const files = atts.length
+        ? `<div class="sup-hist-files">${atts.map((a) => `<span class="sup-hist-file">${docIcon(a.filename)} ${esc(a.filename)}${a.size ? " · " + fmtSize(a.size) : ""}</span>`).join("")}</div>`
+        : "";
+      return `
       <div class="sup-hist-item">
-        <span class="sup-badge ${r.request_type === "feature_request" ? "feature" : "help"}">${r.request_type === "feature_request" ? "💡 Feature" : "🛟 Help"}</span>
-        <div class="sup-hist-meta"><b>${esc(r.subject)}</b><span>${fmtDateTime(r.created_at)} · ${esc(r.status)}</span></div>
+        <button type="button" class="sup-hist-row" aria-expanded="false" aria-label="${esc(r.subject)} — ${esc(st.label)}, ${esc(supAgo(r.created_at))}. Show the message you sent">
+          <span class="sup-hist-ic ${isF ? "feature" : "help"}">${isF ? "💡" : "🛟"}</span>
+          <span class="sup-hist-main">
+            <b>${esc(r.subject)}</b>
+            <span class="sup-hist-sub" title="${esc(fmtDateTime(r.created_at))}">${esc(isF ? "Feature idea" : "Help request")} · ${esc(supAgo(r.created_at))}${atts.length ? " · 📎 " + atts.length : ""}</span>
+          </span>
+          <span class="sup-pill ${st.cls}">${esc(st.label)}</span>
+          ${SUP_IC.chev}
+        </button>
+        <div class="sup-hist-body hidden">${esc(r.message || "")}${files}</div>
       </div>`;
-    const history = reqs.length
-      ? `<div class="card" style="margin-top:24px"><div class="card-head"><h3>Your recent requests</h3></div>
-          <div class="card-body" style="padding:8px 0">${reqs.map(histRow).join("")}</div></div>`
-      : "";
+    };
+    const historyHtml = (reqs) => `
+      <div class="card-head"><h3>Your requests</h3>${reqs.length ? `<span class="sup-hcount">${reqs.length} most recent</span>` : ""}</div>
+      <div class="sup-hist">${reqs.length ? reqs.map(histRow).join("") : `
+        <div class="sup-empty">
+          <div class="sup-empty-ic">${SUP_IC.inbox}</div>
+          <b>Nothing sent yet</b>
+          <span>Messages from anyone on your team show up here with their status.</span>
+        </div>`}</div>`;
 
-    const formCard = (kind) => {
-      const isFeature = kind === "feature_request";
-      return `<div class="card sup-card">
-        <div class="sup-card-head">
-          <div class="sup-icon ${isFeature ? "feature" : "help"}">${isFeature ? "💡" : "🛟"}</div>
-          <div>
-            <h3>${isFeature ? "Request a feature" : "Get help"}</h3>
-            <p>${isFeature ? "Have an idea to make Rilono better? Tell us — we read every one." : "Stuck or something not working? Our team will get back to you by email."}</p>
+    const composerHtml = () => {
+      const isF = kind === "feature_request";
+      return `
+      <div class="sup-tabs" role="tablist" aria-label="What would you like to send?">
+        <button type="button" class="sup-tab" role="tab" data-kind="support" aria-selected="${!isF}"><span class="ic">🛟</span> Get help</button>
+        <button type="button" class="sup-tab" role="tab" data-kind="feature_request" aria-selected="${isF}"><span class="ic">💡</span> Feature idea</button>
+      </div>
+      <div class="sup-body" role="tabpanel">
+        <p class="sup-lead">${isF
+          ? "Have an idea that would make Rilono better for your team? We read every one — and we ship a lot of them."
+          : "Something not behaving? The steps you took and a screenshot get it fixed fastest."}</p>
+        <form class="sup-form" id="supForm" novalidate>
+          <div class="sup-field">
+            <div class="sup-flabel">
+              <label for="supSubject">${isF ? "What would you like to see?" : "Subject"}</label>
+              <span class="sup-count" id="supSubjCount"></span>
+            </div>
+            <input id="supSubject" maxlength="160" autocomplete="off"
+              placeholder="${isF ? "e.g. Bulk import clients from a CSV" : "e.g. A client document won't upload"}"/>
+            <div class="sup-err hidden" id="supSubjErr"></div>
           </div>
-        </div>
-        <form class="sup-form" data-type="${kind}">
-          <div class="field"><label>${isFeature ? "What would you like to see?" : "Subject"}</label>
-            <input name="subject" required maxlength="160" placeholder="${isFeature ? "e.g. Bulk import clients from CSV" : "e.g. I can't upload a document"}"/></div>
-          <div class="field"><label>${isFeature ? "Tell us more" : "Describe the issue"}</label>
-            <textarea name="message" required maxlength="4000" rows="4" placeholder="${isFeature ? "How would it help your team? Any details welcome." : "What happened, and what did you expect? Include any error messages."}"></textarea></div>
-          <div class="sup-form-err auth-error hidden"></div>
-          <button type="submit" class="btn ${isFeature ? "btn-ghost" : "btn-primary"}">${isFeature ? "Send feature request" : "Send to support"}</button>
+          <div class="sup-sugg hidden" id="supSugg"></div>
+          <div class="sup-field">
+            <div class="sup-flabel">
+              <label for="supMessage">${isF ? "Tell us more" : "What happened?"}</label>
+              <span class="sup-count" id="supMsgCount"></span>
+            </div>
+            <textarea id="supMessage" maxlength="4000"
+              placeholder="${isF ? "How would your team use it, and what does it save them doing by hand?" : "What you were doing, what you expected, and what happened instead. You can paste a screenshot straight into this box."}"></textarea>
+            <div class="sup-err hidden" id="supMsgErr"></div>
+          </div>
+          <input type="file" id="supFile" class="hidden" multiple accept="${SUP_ACCEPT}"/>
+          <button type="button" class="sup-drop" id="supDrop" aria-label="${isF ? "Attach a mockup or file" : "Attach a screenshot or file"} — optional, up to ${maxFiles} files">
+            <span class="sup-drop-ic">${SUP_IC.clip}</span>
+            <span class="sup-drop-txt">
+              <b>${isF ? "Attach a mockup or file" : "Attach a screenshot or file"}</b>
+              <span class="sup-drop-note" id="supDropNote"></span>
+            </span>
+          </button>
+          <div class="sup-atts hidden" id="supAtts"></div>
+          ${isF ? "" : `<label class="sup-tech">
+            <input type="checkbox" id="supTech" checked/>
+            <span>Include technical details</span>
+            ${infoTip("Adds one line to your message: your browser and version, operating system, window size and the page you are on. Nothing about your clients.", "What gets included")}
+          </label>`}
+          <div class="sup-alert hidden" id="supErr" role="alert"></div>
+          <div class="sup-foot">
+            <span class="sup-draft" id="supDraft"></span>
+            <span class="sup-foot-note"><span class="sup-kbd">${supIsMac ? "⌘" : "Ctrl"}</span><span class="sup-kbd">↵</span> to send</span>
+            <button type="submit" class="btn btn-primary sup-send${isF ? " feature" : ""}">${isF ? "Send feature idea" : "Send to support"}</button>
+          </div>
         </form>
       </div>`;
     };
@@ -6704,31 +11706,335 @@
       <div class="card sup-hero">
         <div>
           <h2>How can we help?</h2>
-          <p>Email us any time at <a href="mailto:${esc(supportEmail)}">${esc(supportEmail)}</a> — we typically reply within one business day.</p>
+          <p>Tell us what's going on and we'll reply${myEmail ? ` to <b>${esc(myEmail)}</b>` : ""} — usually within one business day.</p>
+        </div>
+        <div class="sup-hero-side">
+          <a class="sup-mail" href="mailto:${esc(supportEmail)}">${SUP_IC.mail}${esc(supportEmail)}</a>
+          <button type="button" class="sup-copy" id="supCopy" title="Copy email address" aria-label="Copy support email address">${SUP_IC.copy}</button>
         </div>
       </div>
-      <div class="sup-grid">${formCard("support")}${formCard("feature_request")}</div>
-      ${history}`;
+      <div class="sup-layout">
+        <div class="sup-main">
+          <div class="card sup-card" id="supCard">${composerHtml()}</div>
+          <div class="card" id="supHistory">${historyHtml(d.requests || [])}</div>
+        </div>
+        <aside class="sup-rail">
+          <div class="card sup-kb">
+            <div class="sup-kb-head">${SUP_IC.bulb} Quick answers</div>
+            ${kbHtml()}
+          </div>
+          <div class="card sup-side">
+            <div class="sup-side-head">Writing as</div>
+            <div class="sup-side-row"><span>You</span><b>${esc(meUser.full_name || myEmail || "—")}</b></div>
+            ${myEmail && meUser.full_name ? `<div class="sup-side-row"><span>Email</span><b>${esc(myEmail)}</b></div>` : ""}
+            <div class="sup-side-row"><span>Organization</span><b>${esc(org.company_name || org.name || "—")}</b></div>
+            <p class="sup-side-note">These travel with every message, so you never have to repeat them — and the reply comes back to that address.</p>
+          </div>
+        </aside>
+      </div>`;
 
-    $$(".sup-form", c).forEach((form) => {
+    /* ---------------- attachments ---------------- */
+    function freeChip(a) {
+      if (!a.url) return;
+      const i = supUrls.indexOf(a.url);
+      if (i >= 0) supUrls.splice(i, 1);
+      try { URL.revokeObjectURL(a.url); } catch (e) { /* already revoked */ }
+      a.url = "";
+    }
+    function drawTray() {
+      const tray = trays[kind];
+      const host = $("#supAtts");
+      const note = $("#supDropNote");
+      if (!host) return;
+      host.innerHTML = tray.map((a) => `
+        <div class="sup-chip">
+          ${a.url ? `<img class="sup-chip-th" src="${a.url}" alt=""/>` : `<span class="sup-chip-ic">${docIcon(a.file.name)}</span>`}
+          <span class="sup-chip-name" title="${esc(a.file.name)}">${esc(a.file.name)}</span>
+          <span class="sup-chip-meta">${fmtSize(a.file.size)}</span>
+          <button type="button" class="sup-chip-x" data-uid="${esc(a.uid)}" aria-label="Remove ${esc(a.file.name)}">✕</button>
+        </div>`).join("");
+      host.classList.toggle("hidden", !tray.length);
+      $$(".sup-chip-x", host).forEach((b) => b.onclick = () => {
+        const i = tray.findIndex((a) => a.uid === b.dataset.uid);
+        if (i >= 0) { freeChip(tray[i]); tray.splice(i, 1); }
+        drawTray();
+      });
+      if (!note) return;
+      const total = tray.reduce((sum, a) => sum + (a.file.size || 0), 0);
+      note.textContent = tray.length
+        ? `${tray.length} of ${maxFiles} attached · ${fmtSize(total)} of ${fmtSize(maxBytes)}`
+        : `Optional · drag files here or paste a screenshot · up to ${maxFiles} files, ${fmtSize(maxBytes)}`;
+    }
+    function addFiles(fileList) {
+      const tray = trays[kind];
+      const files = Array.prototype.slice.call(fileList || []);
+      if (!files.length) return;
+      let running = tray.reduce((sum, a) => sum + (a.file.size || 0), 0);
+      const rejected = [];
+      files.forEach((raw) => {
+        // Clipboard images arrive unnamed on some browsers — give them one we accept.
+        let f = raw;
+        if (!f.name || f.name.indexOf(".") < 0) {
+          const ext = (String(f.type || "").split("/")[1] || "png").replace("jpeg", "jpg");
+          try { f = new File([raw], `screenshot-${Date.now()}.${ext}`, { type: raw.type || "image/png" }); }
+          catch (e) { rejected.push("That file has no name we can send"); return; }
+        }
+        const ext = "." + String(f.name).split(".").pop().toLowerCase();
+        if (!SUP_ALLOWED_EXT.includes(ext)) { rejected.push(`${f.name} — file type not supported`); return; }
+        if (tray.length >= maxFiles) { rejected.push(`${f.name} — limit is ${maxFiles} files`); return; }
+        if (running + (f.size || 0) > maxBytes) { rejected.push(`${f.name} — over the ${fmtSize(maxBytes)} total`); return; }
+        running += f.size || 0;
+        let url = "";
+        if (SUP_THUMB_EXT.includes(ext)) {
+          try { url = URL.createObjectURL(f); supUrls.push(url); } catch (e) { url = ""; }
+        }
+        tray.push({ uid: "s" + (++traySeq), file: f, url: url });
+      });
+      drawTray();
+      if (rejected.length) toast(rejected[0], "error");
+    }
+
+    /* ---------------- composer ---------------- */
+    function fieldErr(which, msg) {
+      const box = $(which === "subject" ? "#supSubjErr" : "#supMsgErr");
+      const input = $(which === "subject" ? "#supSubject" : "#supMessage");
+      if (!box || !input) return;
+      if (msg) { box.textContent = msg; box.classList.remove("hidden"); input.setAttribute("aria-invalid", "true"); }
+      else { box.classList.add("hidden"); input.removeAttribute("aria-invalid"); }
+    }
+    function counts() {
+      const subj = $("#supSubject"), msg = $("#supMessage");
+      [[subj, $("#supSubjCount"), 160], [msg, $("#supMsgCount"), 4000]].forEach(([el, out, max]) => {
+        if (!el || !out) return;
+        const n = el.value.length;
+        // Quiet until it starts to matter — a counter on an empty field is just noise.
+        out.textContent = n >= max * 0.6 ? `${n} / ${max}` : "";
+        out.classList.toggle("warn", n >= max * 0.9 && n < max);
+        out.classList.toggle("over", n >= max);
+      });
+    }
+    function autoGrow() {
+      const el = $("#supMessage");
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight + 2, 380) + "px";
+    }
+    function noteDraft(text, withDiscard) {
+      const el = $("#supDraft");
+      if (!el) return;
+      el.innerHTML = esc(text) + (withDiscard ? ' <button type="button" id="supDiscard">Discard</button>' : "");
+      el.classList.toggle("on", !!text);
+      const dis = $("#supDiscard");
+      if (dis) dis.onclick = () => {
+        supSaveDraft(kind, "", "");
+        drafts[kind] = { subject: "", message: "", restored: false };
+        const s = $("#supSubject"), m = $("#supMessage");
+        if (s) s.value = ""; if (m) m.value = "";
+        counts(); autoGrow(); showSuggestions(); noteDraft("", false);
+        if (s) s.focus();
+      };
+    }
+    function showSuggestions() {
+      const box = $("#supSugg");
+      if (!box) return;
+      const subj = $("#supSubject"), msg = $("#supMessage");
+      // Only on the help side: a feature idea has no answer to deflect it with.
+      const hits = kind === "support" ? supMatch((subj ? subj.value : "") + " " + (msg ? msg.value : "")) : [];
+      if (!hits.length) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+      box.innerHTML = `<div class="sup-sugg-head">Might this answer it?</div>` + hits.map((k) =>
+        `<button type="button" class="sup-sugg-item" data-kb="${k.id}">${esc(k.q)}${SUP_IC.arw}</button>`).join("");
+      box.classList.remove("hidden");
+      $$(".sup-sugg-item", box).forEach((b) => b.onclick = () => openKb(b.dataset.kb, true));
+    }
+    function saveDraftSoon() {
+      clearTimeout(draftTimer);
+      draftTimer = setTimeout(() => {
+        const s = $("#supSubject"), m = $("#supMessage");
+        if (!s || !m) return;
+        const subject = s.value.trim(), message = m.value.trim();
+        drafts[kind] = { subject: subject, message: message, restored: false };
+        supSaveDraft(kind, subject, message);
+        noteDraft(subject || message ? "Draft saved" : "", !!(subject || message));
+      }, 500);
+    }
+
+    function mountComposer(focus) {
+      // Raising a ticket is an outbound email channel that can carry attachments, so it is
+      // its own revocable capability rather than something every member always has.
+      if (!can("support.request")) {
+        $("#supCard").innerHTML = deniedCard("You don't have permission to contact Rilono support. Ask a workspace admin to raise this for you.");
+        return;
+      }
+      $("#supCard").innerHTML = composerHtml();
+      const form = $("#supForm"), subj = $("#supSubject"), msg = $("#supMessage"), file = $("#supFile");
+      const isF = kind === "feature_request";
+
+      subj.value = drafts[kind].subject || "";
+      msg.value = drafts[kind].message || "";
+      counts(); autoGrow(); drawTray(); showSuggestions();
+      const hasDraft = !!(subj.value || msg.value);
+      noteDraft(hasDraft ? (drafts[kind].restored ? "Draft restored" : "Draft saved") : "", hasDraft);
+
+      $$(".sup-tab").forEach((t) => {
+        t.onclick = () => {
+          if (t.dataset.kind === kind) return;
+          drafts[kind] = { subject: subj.value.trim(), message: msg.value.trim(), restored: false };
+          supSaveDraft(kind, drafts[kind].subject, drafts[kind].message);
+          kind = t.dataset.kind;
+          mountComposer(true);
+        };
+        t.onkeydown = (e) => {
+          if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+          e.preventDefault();
+          const other = $$(".sup-tab").find((x) => x !== t);
+          if (other) other.click();
+        };
+      });
+
+      [subj, msg].forEach((el) => el.addEventListener("input", () => {
+        counts(); saveDraftSoon();
+        if (el === msg) autoGrow();
+        fieldErr(el === subj ? "subject" : "message", "");
+        clearTimeout(suggestTimer);
+        suggestTimer = setTimeout(showSuggestions, 240);
+      }));
+      // Paste a screenshot straight into the message — the shortest path from ⌘⇧4 to us.
+      msg.addEventListener("paste", (e) => {
+        const dt = e.clipboardData;
+        if (!dt || !dt.files || !dt.files.length) return;
+        const files = Array.prototype.filter.call(dt.files, (f) => f && f.size);
+        if (!files.length) return;
+        if (!dt.getData("text/plain")) e.preventDefault();
+        addFiles(files);
+      });
+      form.addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); form.requestSubmit ? form.requestSubmit() : form.dispatchEvent(new Event("submit", { cancelable: true })); }
+      });
+
+      $("#supDrop").onclick = () => file.click();
+      file.onchange = () => { addFiles(file.files); file.value = ""; };
+
       form.onsubmit = async (e) => {
         e.preventDefault();
-        const kind = form.dataset.type;
-        const fd = new FormData(form);
-        const body = { request_type: kind, subject: (fd.get("subject") || "").trim(), message: (fd.get("message") || "").trim() };
-        if (body.subject.length < 3 || body.message.length < 5) return;
+        const subject = subj.value.trim(), message = msg.value.trim();
+        let bad = null;
+        if (subject.length < 3) {
+          fieldErr("subject", isF ? "Give the idea a short title so we can file it." : "Add a short subject so we know what this is about.");
+          bad = subj;
+        } else fieldErr("subject", "");
+        if (message.length < 5) {
+          fieldErr("message", isF ? "Tell us a little about the idea — a sentence is fine." : "Describe what happened — even one line helps.");
+          bad = bad || msg;
+        } else fieldErr("message", "");
+        if (bad) { bad.focus(); return; }
+
+        const tech = $("#supTech");
+        const body = new FormData();
+        body.append("request_type", kind);
+        body.append("subject", subject);
+        body.append("message", !isF && tech && tech.checked ? `${message}\n\n— Technical details: ${supTechLine()}` : message);
+        trays[kind].forEach((a) => body.append("files", a.file, a.file.name));
+
         const btn = form.querySelector("button[type=submit]");
-        const orig = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+        const orig = btn.textContent;
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+        $("#supErr").classList.add("hidden");
         try {
-          const r = await api("/support", { method: "POST", body });
+          // Uploads are slower than a plain JSON post — give the files room to finish.
+          const r = await api("/support", { method: "POST", body: body, timeout: 180000 });
+          clearTimeout(draftTimer);
+          supSaveDraft(kind, "", "");
+          drafts[kind] = { subject: "", message: "", restored: false };
+          trays[kind].forEach(freeChip);
+          trays[kind] = [];
           toast(r.message || "Sent — thank you!", "success");
-          renderSupport();
+          showSent(subject);
+          refreshHistory();
         } catch (ex) {
-          const er = form.querySelector(".sup-form-err"); er.textContent = ex.message; er.classList.remove("hidden");
+          const er = $("#supErr");
+          er.textContent = ex.message; er.classList.remove("hidden");
           btn.disabled = false; btn.textContent = orig;
         }
       };
+
+      if (focus) subj.focus();
+    }
+
+    function showSent(subject) {
+      const isF = kind === "feature_request";
+      $("#supCard").innerHTML = `
+        <div class="sup-sent">
+          <div class="sup-sent-ic">${SUP_IC.check}</div>
+          <h3>${isF ? "Idea sent" : "Message sent"}</h3>
+          <p>We've got <b>${esc(subject)}</b>${myEmail ? ` and we'll reply to <b>${esc(myEmail)}</b>` : ""} — usually within one business day. It's listed below with its status.</p>
+          <button type="button" class="btn btn-ghost" id="supAgain">Write another message</button>
+        </div>`;
+      $("#supAgain").onclick = () => mountComposer(true);
+    }
+
+    async function refreshHistory() {
+      try {
+        const fresh = await api("/support");
+        if (state.view !== "support") return;
+        const host = $("#supHistory");
+        if (!host) return;
+        host.innerHTML = historyHtml(fresh.requests || []);
+        wireHistory();
+      } catch (ex) { /* the send succeeded; a stale list is not worth an error box */ }
+    }
+
+    /* ---------------- history + quick answers ---------------- */
+    function wireHistory() {
+      $$("#supHistory .sup-hist-row").forEach((row) => row.onclick = () => {
+        const item = row.closest(".sup-hist-item");
+        const open = item.classList.toggle("open");
+        $(".sup-hist-body", item).classList.toggle("hidden", !open);
+        row.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+    }
+    function openKb(id, scroll) {
+      const item = $$(".sup-kb-item").find((x) => x.dataset.kb === id);
+      if (!item) return;
+      if (!item.classList.contains("open")) $(".sup-kb-q", item).click();
+      if (!scroll) return;
+      item.scrollIntoView({ behavior: "smooth", block: "center" });
+      item.classList.remove("flash");
+      void item.offsetWidth; // restart the highlight if it is already the open one
+      item.classList.add("flash");
+    }
+    $$(".sup-kb-q").forEach((q) => q.onclick = () => {
+      const item = q.closest(".sup-kb-item");
+      const open = item.classList.toggle("open");
+      $(".sup-kb-a", item).classList.toggle("hidden", !open);
+      q.setAttribute("aria-expanded", open ? "true" : "false");
     });
+    $$(".sup-kb-cta").forEach((b) => b.onclick = (e) => { e.stopPropagation(); navigate(b.dataset.goto); });
+
+    $("#supCopy").onclick = async () => {
+      try { await navigator.clipboard.writeText(supportEmail); toast("Email address copied", "success"); }
+      catch (ex) { toast("Copy failed — the address is " + supportEmail, "error"); }
+    };
+
+    // Drag-and-drop lives on the card, not the form, so it survives every composer swap.
+    const card = $("#supCard");
+    ["dragenter", "dragover"].forEach((evt) => card.addEventListener(evt, (e) => {
+      if (!$("#supForm")) return;
+      if (!(e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0)) return;
+      e.preventDefault(); card.classList.add("is-dragging");
+    }));
+    ["dragleave", "dragend"].forEach((evt) => card.addEventListener(evt, (e) => {
+      if (e.relatedTarget && card.contains(e.relatedTarget)) return;
+      card.classList.remove("is-dragging");
+    }));
+    card.addEventListener("drop", (e) => {
+      if (!$("#supForm")) return;
+      if (!(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length)) return;
+      e.preventDefault(); card.classList.remove("is-dragging");
+      addFiles(e.dataTransfer.files);
+    });
+
+    wireHistory();
+    mountComposer(false);
   }
 
   /* ============================================================
@@ -6740,6 +12046,7 @@
   const cf = {
     meta: null,
     country: "", level: "", discipline: "", q: "", maxTuition: "",
+    adv: null, advOpen: false, // deep filters — set below from cfEmptyAdv()
     browse: null, browseSeq: 0,
     clients: null, clientId: "", clientName: "",
     recs: null, activeRec: null, aiBusy: false, saveBusy: false,
@@ -6772,6 +12079,94 @@
   function cfCost() {
     if (cf.meta && cf.meta.cost_credits != null) return cf.meta.cost_credits;
     return ((state.credits && state.credits.actions || []).find((a) => a.key === "course_finder") || {}).credits || 5;
+  }
+
+  /* ---------------- Advanced browse filters ----------------
+     Deep filters for consultants working a specific brief ("6.0 IELTS, no GRE, under
+     CAD 30k, finishes in a year"). Held in ONE object so the panel inputs, the removable
+     chip row, the reset and the query string can never drift apart. Enum option lists
+     come from /course-catalog/meta (the same vocabulary the server validates against);
+     the constants below are only the fallback if that payload is missing a list. */
+  function cfEmptyAdv() {
+    return {
+      min_tuition: "", require_tuition: false, no_app_fee: false, scholarships_only: false,
+      max_ielts: "", max_toefl: "", tests_include_unknown: false, gre: "",
+      intake: "", max_duration: "", has_deadline: false,
+      max_qs_rank: "", uni_type: "", city: "", verified_only: false,
+      sort: "rank",
+    };
+  }
+  cf.adv = cfEmptyAdv();
+  const CF_IELTS_BANDS = ["5.0", "5.5", "6.0", "6.5", "7.0", "7.5", "8.0"];
+  const CF_DURATIONS = [
+    { v: 12, l: "1 year or less" },
+    { v: 18, l: "18 months or less" },
+    { v: 24, l: "2 years or less" },
+    { v: 36, l: "3 years or less" },
+  ];
+  const CF_QS_BANDS = [50, 100, 200, 300, 500, 1000];
+  const CF_INTAKES = [
+    { key: "fall", label: "Fall / Autumn" }, { key: "spring", label: "Spring" },
+    { key: "summer", label: "Summer" }, { key: "winter", label: "Winter" },
+  ];
+  const CF_SORTS = [
+    { key: "rank", label: "Best ranked first" }, { key: "qs", label: "QS world rank" },
+    { key: "tuition_asc", label: "Tuition: low → high" }, { key: "tuition_desc", label: "Tuition: high → low" },
+    { key: "name", label: "University name (A–Z)" }, { key: "verified", label: "Recently verified" },
+  ];
+  const CF_UNI_TYPES = [{ key: "public", label: "Public" }, { key: "private", label: "Private" }];
+  const CF_GRE_FILTERS = [
+    { key: "not_required", label: "Not required / optional" }, { key: "required", label: "Required" },
+  ];
+  function cfOptions(metaKey, fallback) {
+    const list = cf.meta && cf.meta[metaKey];
+    return list && list.length ? list : fallback;
+  }
+  function cfOptLabel(metaKey, fallback, key) {
+    return (cfOptions(metaKey, fallback).find((x) => x.key === key) || {}).label || key;
+  }
+  function cfInt(v) {
+    const n = Number(v);
+    return v !== "" && v != null && isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  }
+  // Thousands separators only — the amount is in the destination's own currency, which
+  // varies per country, so no symbol is safe to prepend.
+  function cfAmount(v) {
+    return cfInt(v).toLocaleString();
+  }
+
+  /* One descriptor per active filter, driving the chip row AND the count badge. Sort
+     rides along as a chip (the panel it lives in is usually collapsed) but never counts
+     as a filter — it changes the order, not the result set. */
+  function cfAdvChips() {
+    const a = cf.adv || {};
+    const out = [];
+    const push = (key, text) => out.push({ key, text });
+    if (cfInt(a.min_tuition)) push("min_tuition", `Tuition ≥ ${cfAmount(a.min_tuition)}`);
+    if (a.require_tuition) push("require_tuition", "Fee published");
+    if (a.no_app_fee) push("no_app_fee", "No application fee");
+    if (a.scholarships_only) push("scholarships_only", "Lists scholarships");
+    if (a.max_ielts) push("max_ielts", `IELTS ≤ ${a.max_ielts}`);
+    if (cfInt(a.max_toefl)) push("max_toefl", `TOEFL ≤ ${cfInt(a.max_toefl)}`);
+    if (a.tests_include_unknown) push("tests_include_unknown", "Incl. no published score");
+    if (a.gre) push("gre", `GRE/GMAT: ${cfOptLabel("gre_filters", CF_GRE_FILTERS, a.gre)}`);
+    if (a.intake) push("intake", `${cfOptLabel("intakes", CF_INTAKES, a.intake)} intake`);
+    if (cfInt(a.max_duration)) push("max_duration", (CF_DURATIONS.find((d) => d.v === cfInt(a.max_duration)) || {}).l || `≤ ${cfInt(a.max_duration)} months`);
+    if (a.has_deadline) push("has_deadline", "Deadline published");
+    if (cfInt(a.max_qs_rank)) push("max_qs_rank", `QS top ${cfInt(a.max_qs_rank)}`);
+    if (a.uni_type) push("uni_type", cfOptLabel("university_types", CF_UNI_TYPES, a.uni_type));
+    if (a.city) push("city", `City: ${a.city}`);
+    if (a.verified_only) push("verified_only", "Verified data only");
+    if (a.sort && a.sort !== "rank") push("sort", `Sorted: ${cfOptLabel("sorts", CF_SORTS, a.sort)}`);
+    return out;
+  }
+  function cfAdvCount() {
+    return cfAdvChips().filter((c) => c.key !== "sort").length;
+  }
+  // Any narrowing at all (basic row included) — decides whether the empty state offers a
+  // "clear filters" way out instead of implying the catalog itself is empty.
+  function cfAnyFilters() {
+    return !!(cf.level || cf.discipline || cf.q || cfInt(cf.maxTuition) || cfAdvCount());
   }
 
   async function renderCourseFinder() {
@@ -6852,20 +12247,190 @@
           </label>
           <button class="btn btn-primary btn-sm" id="cfApply">Search</button>
         </div>
+        ${cfAdvBarHtml()}
+        ${cfAdvPanelHtml()}
       </div></div>
       <div id="cfBrowseBody"><div class="center-load"><div class="spinner dark"></div></div></div>`;
-    const apply = () => {
-      cf.country = $("#cfCountry").value;
-      cf.level = $("#cfLevel").value;
-      cf.discipline = $("#cfDiscipline").value;
-      cf.q = $("#cfQ").value.trim();
-      cf.maxTuition = $("#cfMaxTuition").value;
-      cfLoadBrowse();
-    };
+    // One read-everything-then-load path: the advanced panel stays in the DOM when
+    // collapsed, so a filter set and then hidden is still the filter that gets applied.
+    const apply = () => { cfReadFilters(); cfSyncFilterBar(); cfLoadBrowse(); };
     $("#cfApply").onclick = apply;
     $("#cfQ").onkeydown = (e) => { if (e.key === "Enter") apply(); };
     ["cfCountry", "cfLevel", "cfDiscipline"].forEach((id) => { $("#" + id).onchange = apply; });
+    // The deep filters are set several at a time, so they wait for Apply (or Enter) rather
+    // than firing a request per change — Sort is the one control that decides on its own.
+    $("#cfAdvApply").onclick = apply;
+    $("#cfSort").onchange = apply;
+    $$("#cfAdvPanel input", panel).forEach((el) => {
+      el.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); apply(); } };
+    });
+    $("#cfAdvToggle").onclick = () => {
+      cf.advOpen = !cf.advOpen;
+      $("#cfAdvPanel").classList.toggle("open", cf.advOpen);
+      $("#cfAdvToggle").classList.toggle("open", cf.advOpen);
+      $("#cfAdvToggle").setAttribute("aria-expanded", cf.advOpen ? "true" : "false");
+    };
+    // Read first, then reset: a re-render paints from state, so anything typed into the
+    // basic row but not yet applied would otherwise be thrown away with the deep filters.
+    $("#cfAdvReset").onclick = () => { cfReadFilters(); cf.adv = cfEmptyAdv(); cfDrawBrowseShell(); };
+    cfWireFilterBar();
     cfLoadBrowse();
+  }
+
+  function cfAdvBarHtml() {
+    const n = cfAdvCount();
+    return `
+      <div class="cf-adv-bar">
+        <button type="button" class="cf-adv-toggle ${cf.advOpen ? "open" : ""}" id="cfAdvToggle" aria-expanded="${cf.advOpen ? "true" : "false"}" aria-controls="cfAdvPanel">
+          <span class="cf-adv-caret">▸</span> Advanced filters${n ? ` <span class="cf-adv-count">${n}</span>` : ""}
+        </button>
+        ${infoTip(
+          "Deep filters read the figures Rilono AI has <b>verified from the university's own pages</b> — tuition, test scores, program length, intakes, deadlines and rank."
+          + "<br><br>A program that publishes nothing for a filter you set is left out, so results get smaller but each match is defensible. Test scores are the exception: tick <b>Also show programs that publish no score</b> to keep those in."
+          + "<br><br>IELTS and TOEFL work as “my student has this score” — a program matches when it accepts either one.",
+          "How advanced filters work",
+        )}
+        <div class="cf-fchips" id="cfChips">${cfChipsHtml()}</div>
+      </div>`;
+  }
+
+  function cfChipsHtml() {
+    const chips = cfAdvChips();
+    if (!chips.length) return "";
+    return chips.map((c) => `
+      <span class="cf-fchip ${c.key === "sort" ? "cf-fchip-sort" : ""}">${esc(c.text)}
+        <button type="button" class="cf-fchip-x" data-cfchip="${esc(c.key)}" aria-label="Remove filter ${esc(c.text)}">×</button>
+      </span>`).join("")
+      + `<button type="button" class="cf-clear-all" id="cfClearFilters">Clear all</button>`;
+  }
+
+  function cfAdvPanelHtml() {
+    const a = cf.adv;
+    const sel = (v, cur) => (String(v) === String(cur) ? "selected" : "");
+    const chk = (v) => (v ? "checked" : "");
+    const opts = (list, cur) => list.map((x) => `<option value="${esc(x.key)}" ${sel(x.key, cur)}>${esc(x.label)}</option>`).join("");
+    return `
+      <div class="cf-adv ${cf.advOpen ? "open" : ""}" id="cfAdvPanel">
+        <div class="cf-adv-grid">
+          <div class="cf-adv-group">
+            <h4>💰 Fees &amp; funding</h4>
+            <label class="cf-f"><span>Min tuition/yr</span>
+              <input id="cfMinTuition" type="number" min="0" step="1000" placeholder="Local currency" value="${esc(a.min_tuition)}" />
+            </label>
+            <label class="cf-check"><input type="checkbox" id="cfRequireTuition" ${chk(a.require_tuition)} /><span>Only programs with a published fee</span></label>
+            <label class="cf-check"><input type="checkbox" id="cfNoAppFee" ${chk(a.no_app_fee)} /><span>No application fee</span></label>
+            <label class="cf-check"><input type="checkbox" id="cfScholarships" ${chk(a.scholarships_only)} /><span>University lists scholarships</span></label>
+          </div>
+          <div class="cf-adv-group">
+            <h4>📝 Tests &amp; entry</h4>
+            <label class="cf-f"><span>Student's IELTS band</span>
+              <select id="cfIelts"><option value="">Any requirement</option>${CF_IELTS_BANDS.map((b) => `<option value="${b}" ${sel(b, a.max_ielts)}>${b} or lower</option>`).join("")}</select>
+            </label>
+            <label class="cf-f"><span>Student's TOEFL (iBT)</span>
+              <input id="cfToefl" type="number" min="40" max="120" placeholder="e.g. 95" value="${esc(a.max_toefl)}" />
+            </label>
+            <label class="cf-f"><span>GRE / GMAT</span>
+              <select id="cfGre"><option value="">Any</option>${opts(cfOptions("gre_filters", CF_GRE_FILTERS), a.gre)}</select>
+            </label>
+            <label class="cf-check"><input type="checkbox" id="cfTestsUnknown" ${chk(a.tests_include_unknown)} /><span>Also show programs that publish no score</span></label>
+          </div>
+          <div class="cf-adv-group">
+            <h4>🎓 Program</h4>
+            <label class="cf-f"><span>Intake</span>
+              <select id="cfIntake"><option value="">Any intake</option>${opts(cfOptions("intakes", CF_INTAKES), a.intake)}</select>
+            </label>
+            <label class="cf-f"><span>Finishes within</span>
+              <select id="cfDuration"><option value="">Any length</option>${CF_DURATIONS.map((d) => `<option value="${d.v}" ${sel(d.v, a.max_duration)}>${esc(d.l)}</option>`).join("")}</select>
+            </label>
+            <label class="cf-check"><input type="checkbox" id="cfHasDeadline" ${chk(a.has_deadline)} /><span>Application deadline published</span></label>
+          </div>
+          <div class="cf-adv-group">
+            <h4>🏛️ University</h4>
+            <label class="cf-f"><span>QS world rank</span>
+              <select id="cfQsRank"><option value="">Any rank</option>${CF_QS_BANDS.map((n) => `<option value="${n}" ${sel(n, a.max_qs_rank)}>Top ${n}</option>`).join("")}</select>
+            </label>
+            <label class="cf-f"><span>Type</span>
+              <select id="cfUniType"><option value="">Any type</option>${opts(cfOptions("university_types", CF_UNI_TYPES), a.uni_type)}</select>
+            </label>
+            <label class="cf-f"><span>City</span>
+              <input id="cfCity" type="search" placeholder="e.g. Toronto" value="${esc(a.city)}" />
+            </label>
+            <label class="cf-check"><input type="checkbox" id="cfVerifiedOnly" ${chk(a.verified_only)} /><span>Verified data only</span></label>
+          </div>
+        </div>
+        <div class="cf-adv-foot">
+          <label class="cf-f cf-adv-sort"><span>Sort by</span>
+            <select id="cfSort">${opts(cfOptions("sorts", CF_SORTS), a.sort)}</select>
+          </label>
+          <div class="cf-adv-foot-actions">
+            <button type="button" class="btn btn-soft btn-sm" id="cfAdvReset">Reset advanced</button>
+            <button type="button" class="btn btn-primary btn-sm" id="cfAdvApply">Apply filters</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Pull every control (basic row + advanced panel) into state before a load, so the
+  // request, the chips and the inputs always describe the same search.
+  function cfReadFilters() {
+    const val = (id) => { const el = $("#" + id); return el ? String(el.value || "").trim() : ""; };
+    const on = (id) => { const el = $("#" + id); return !!(el && el.checked); };
+    cf.country = val("cfCountry") || cf.country;
+    cf.level = val("cfLevel");
+    cf.discipline = val("cfDiscipline");
+    cf.q = val("cfQ");
+    cf.maxTuition = val("cfMaxTuition");
+    cf.adv = {
+      min_tuition: val("cfMinTuition"),
+      require_tuition: on("cfRequireTuition"),
+      no_app_fee: on("cfNoAppFee"),
+      scholarships_only: on("cfScholarships"),
+      max_ielts: val("cfIelts"),
+      max_toefl: val("cfToefl"),
+      tests_include_unknown: on("cfTestsUnknown"),
+      gre: val("cfGre"),
+      intake: val("cfIntake"),
+      max_duration: val("cfDuration"),
+      has_deadline: on("cfHasDeadline"),
+      max_qs_rank: val("cfQsRank"),
+      uni_type: val("cfUniType"),
+      city: val("cfCity"),
+      verified_only: on("cfVerifiedOnly"),
+      sort: val("cfSort") || "rank",
+    };
+  }
+
+  // Repaint just the chips + count badge. A full shell re-render would throw away the
+  // panel's scroll position and focus while the consultant is still adjusting filters.
+  function cfSyncFilterBar() {
+    const chips = $("#cfChips");
+    if (chips) { chips.innerHTML = cfChipsHtml(); cfWireFilterBar(); }
+    const toggle = $("#cfAdvToggle");
+    if (toggle) {
+      const n = cfAdvCount();
+      toggle.innerHTML = `<span class="cf-adv-caret">▸</span> Advanced filters${n ? ` <span class="cf-adv-count">${n}</span>` : ""}`;
+    }
+  }
+
+  function cfWireFilterBar() {
+    $$("[data-cfchip]").forEach((b) => {
+      b.onclick = () => {
+        // Reset the one key to its default (false/""/"rank") and re-render the shell so
+        // the panel control that set it visibly clears too. Reading the panel first keeps
+        // any other pending edit the consultant has already made on screen.
+        cfReadFilters();
+        cf.adv[b.dataset.cfchip] = cfEmptyAdv()[b.dataset.cfchip];
+        cfDrawBrowseShell();
+      };
+    });
+    const clear = $("#cfClearFilters");
+    if (clear) clear.onclick = cfClearFilters;
+  }
+
+  function cfClearFilters() {
+    cf.level = ""; cf.discipline = ""; cf.q = ""; cf.maxTuition = "";
+    cf.adv = cfEmptyAdv();
+    cfDrawBrowseShell();
   }
 
   async function cfLoadBrowse(offset) {
@@ -6879,6 +12444,17 @@
     if (cf.discipline) p.set("discipline", cf.discipline);
     if (cf.q) p.set("q", cf.q);
     if (cf.maxTuition && Number(cf.maxTuition) > 0) p.set("max_tuition", String(Math.floor(Number(cf.maxTuition))));
+    // Advanced filters. Only non-empty values are sent, so the URL stays readable and the
+    // server never has to tell "unset" from "cleared".
+    const a = cf.adv || {};
+    [["min_tuition", a.min_tuition], ["max_toefl", a.max_toefl], ["max_duration", a.max_duration],
+      ["max_qs_rank", a.max_qs_rank]].forEach(([k, v]) => { if (cfInt(v)) p.set(k, String(cfInt(v))); });
+    if (a.max_ielts) p.set("max_ielts", String(a.max_ielts));
+    [["gre", a.gre], ["intake", a.intake], ["uni_type", a.uni_type], ["city", a.city]]
+      .forEach(([k, v]) => { if (v) p.set(k, String(v)); });
+    ["require_tuition", "tests_include_unknown", "no_app_fee", "has_deadline", "verified_only", "scholarships_only"]
+      .forEach((k) => { if (a[k]) p.set(k, "1"); });
+    if (a.sort && a.sort !== "rank") p.set("sort", a.sort);
     if (append) p.set("offset", String(offset));
     try {
       const d = await api("/course-catalog?" + p.toString());
@@ -6907,11 +12483,19 @@
     if (!body || !cf.browse) return;
     const unis = cf.browse.universities || [];
     if (!unis.length) {
+      // With deep filters on, "nothing matched" is usually one filter too many rather than
+      // a thin catalog — so say which way out applies.
+      const filtered = cfAnyFilters();
       body.innerHTML = `
         <div class="empty"><div class="emoji">🛰️</div>
-          <h3>Nothing here yet</h3>
-          <p>No catalog matches for these filters. Rilono's research agent adds &amp; re-verifies universities every day — or try the <b>AI Shortlists</b> tab, which can also search live data.</p>
+          <h3>${filtered ? "No matches for these filters" : "Nothing here yet"}</h3>
+          <p>${filtered
+            ? "Nothing in the verified catalog meets every filter at once. Loosen the strictest one — tuition, test scores or QS rank are the usual culprits — or try the <b>AI Shortlists</b> tab, which can also search live data."
+            : "Rilono's research agent adds &amp; re-verifies universities every day — or try the <b>AI Shortlists</b> tab, which can also search live data."}</p>
+          ${filtered ? '<button type="button" class="btn btn-secondary btn-sm" id="cfEmptyClear">Clear all filters</button>' : ""}
         </div>`;
+      const clear = $("#cfEmptyClear");
+      if (clear) clear.onclick = cfClearFilters;
       return;
     }
     const total = Number(cf.browse.total_universities || unis.length);
@@ -7053,7 +12637,7 @@
     const panel = $("#cfPanel");
     if (!panel) return;
     const m = cf.meta || {};
-    const canEdit = state.perms && state.perms.can_edit_data;
+    const canEdit = can("ai.coursefinder");
     const cost = cfCost();
     panel.innerHTML = `
       <div class="card"><div class="card-head"><h3>✨ New AI shortlist <span class="uni-cost">${esc(String(cost))} credits</span></h3></div>
@@ -7190,7 +12774,7 @@
       // busy state) by a tab switch mid-run, so a captured snapshot can't be trusted.
       const runBtn = $("#cfAiRun");
       if (runBtn) {
-        runBtn.disabled = !(state.perms && state.perms.can_edit_data);
+        runBtn.disabled = !can("ai.coursefinder");
         runBtn.innerHTML = `Generate shortlist · ${esc(String(cfCost()))} cr`;
       }
     }
@@ -7202,7 +12786,8 @@
     const rec = cf.activeRec;
     if (!rec) { mount.innerHTML = ""; return; }
     const items = rec.recommendations || [];
-    const canEdit = state.perms && state.perms.can_edit_data;
+    // Saving a catalog match onto a client writes to their shortlist.
+    const canEdit = can("universities.manage");
     const target = rec.client_name ? `for <b>${esc(rec.client_name)}</b>` : (cf.clientName ? `→ can save to <b>${esc(cf.clientName)}</b>` : "");
     mount.innerHTML = `
       <div class="card cf-rec-card"><div class="card-head">
@@ -7313,10 +12898,15 @@
 
   window.__ent = {
     go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
-    closeModal, closeDrawer, changeRole, removeMember, checkout, setCycle,
+    closeModal, closeDrawer, removeMember, checkout, setCycle,
+    // Team sub-tabs. `changeRole` is gone on purpose: the legacy 3-option role <select>
+    // it backed would silently convert a branch manager or a custom role into "editor".
+    // Role changes now go through Edit access (PATCH /team/users/{id}/access).
+    teamTab: teamGoTab,
     applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
     topup: openCreditCheckout, activateInfra: activateInfraFee,
     saveBank: saveLinkedAccount, refreshBank: refreshLinkedAccount,
+    finAdd: finAddEntry, finTab: finGoTab,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
     viewInterview: viewInterviewSession, sendInterview: openSendInterviewPicker,
     setUniStatus, removeUni,

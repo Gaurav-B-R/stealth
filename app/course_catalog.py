@@ -98,6 +98,61 @@ DEGREE_LEVELS = [
 ]
 _LEVEL_KEYS = {l["key"] for l in DEGREE_LEVELS}
 
+# ---------------------------------------------------------------------------
+# Advanced browse filters
+#
+# One vocabulary, served to the UI by /course-catalog/meta AND used to validate the
+# incoming query — so a value the dropdown offers is always a value the query accepts.
+# ---------------------------------------------------------------------------
+
+INTAKE_BUCKETS = [
+    {"key": "fall", "label": "Fall / Autumn (Aug–Oct)"},
+    {"key": "spring", "label": "Spring (Jan–Mar)"},
+    {"key": "summer", "label": "Summer (May–Jul)"},
+    {"key": "winter", "label": "Winter (Nov–Dec)"},
+]
+# Substrings matched (case-insensitively) against the stored intakes JSON. Universities
+# publish intakes as seasons OR months ("Fall" vs "September"), so a season bucket has to
+# cover both spellings or half the catalog would look like it has no intake at all.
+_INTAKE_MATCH = {
+    "fall": ["fall", "autumn", "aug", "sep", "oct"],
+    "spring": ["spring", "jan", "feb", "mar"],
+    "summer": ["summer", "may", "jun", "jul"],
+    "winter": ["winter", "nov", "dec"],
+}
+_INTAKE_KEYS = {b["key"] for b in INTAKE_BUCKETS}
+
+CATALOG_SORTS = [
+    {"key": "rank", "label": "Best ranked first"},
+    {"key": "qs", "label": "QS world rank"},
+    {"key": "tuition_asc", "label": "Tuition: low → high"},
+    {"key": "tuition_desc", "label": "Tuition: high → low"},
+    {"key": "name", "label": "University name (A–Z)"},
+    {"key": "verified", "label": "Recently verified"},
+]
+_SORT_KEYS = {s["key"] for s in CATALOG_SORTS}
+
+UNIVERSITY_TYPES = [
+    {"key": "public", "label": "Public"},
+    {"key": "private", "label": "Private"},
+]
+_UNIVERSITY_TYPE_KEYS = {t["key"] for t in UNIVERSITY_TYPES}
+
+GRE_FILTERS = [
+    # "unstated" counts as not-required on purpose: outside the US the field is simply
+    # never published, so excluding NULLs would return nothing for UK/CA/AU/EU programs.
+    {"key": "not_required", "label": "Not required / optional"},
+    {"key": "required", "label": "Required"},
+]
+_GRE_FILTER_KEYS = {g["key"] for g in GRE_FILTERS}
+
+# Course-level advanced keys — these narrow WHICH courses match, so they also decide
+# whether a university survives the browse query (see query_catalog).
+_COURSE_LEVEL_ADVANCED = (
+    "min_tuition", "require_tuition", "max_ielts", "max_toefl", "gre",
+    "intake", "max_duration_months", "no_app_fee", "has_deadline",
+)
+
 _FIT_LEVELS = {"reach", "match", "safety"}
 
 # Recommendation context sizing: how many catalog courses we hand the model, and the
@@ -462,6 +517,184 @@ def _clean_intakes(value) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Derived numeric fields
+#
+# The advanced browse filters (IELTS/TOEFL/GRE/duration/QS rank) have to run in SQL —
+# the catalog is paged with LIMIT/OFFSET, so a Python-side pass could only ever filter
+# the page it already fetched. The agent stores those figures as published free text
+# ("6.5 overall (6.0 in each band)", "301-350"), so each one is parsed once at write
+# time into a numeric column that SQL can compare.
+# ---------------------------------------------------------------------------
+
+def parse_ielts_band(value) -> Optional[float]:
+    """Overall IELTS band a program asks for, snapped to a half band.
+
+    The overall requirement always leads the published phrasing ("6.5 overall (6.0 in
+    each band)", "IELTS 7.0 minimum"), so the first number inside the band range wins.
+    """
+    for match in re.finditer(r"\d+(?:\.\d+)?", str(value or "")):
+        try:
+            n = float(match.group())
+        except Exception:
+            continue
+        if 4.0 <= n <= 9.0:
+            return round(n * 2) / 2
+    return None
+
+
+def parse_toefl_score(value) -> Optional[int]:
+    """Total TOEFL iBT a program asks for. Skips per-section minimums ("20 in each
+    section, 90 total") by only accepting numbers inside the plausible total range."""
+    for match in re.finditer(r"\d+(?:\.\d+)?", str(value or "")):
+        try:
+            n = int(float(match.group()))
+        except Exception:
+            continue
+        if 40 <= n <= 120:
+            return n
+    return None
+
+
+def parse_gre_requirement(value) -> Optional[int]:
+    """0 = not required, 1 = optional, 2 = required, None = nothing published.
+
+    Order matters: "GRE not required" also contains "requir", so the negative
+    phrasings are tested first.
+    """
+    s = str(value or "").strip().lower()
+    if not s:
+        return None
+    if any(k in s for k in (
+        "not required", "no gre", "no gmat", "not needed", "waive", "not accepted",
+        "not applicable", "none", "no test",
+    )):
+        return 0
+    if "optional" in s or "recommended" in s or "not mandatory" in s:
+        return 1
+    if "requir" in s or re.search(r"\bgre\b|\bgmat\b", s):
+        return 2
+    return None
+
+
+def parse_duration_months(value) -> Optional[int]:
+    """Program length in months. A range or a full-time/part-time pair takes the LOWER
+    bound ("3-4 years" -> 36), which is the figure a "finishes within X" filter means."""
+    s = str(value or "").strip().lower()
+    match = re.search(r"\d+(?:\.\d+)?", s)
+    if not match:
+        return None
+    try:
+        n = float(match.group())
+    except Exception:
+        return None
+    if "month" in s or re.search(r"\bmos?\b", s):
+        months = n
+    elif "year" in s or re.search(r"\byrs?\b", s):
+        months = n * 12
+    elif "semester" in s or "term" in s or "trimester" in s:
+        months = n * 6
+    else:
+        return None
+    months = int(round(months))
+    return months if 1 <= months <= 120 else None
+
+
+def parse_rank_number(value) -> Optional[int]:
+    """Sortable/filterable rank from a display rank. A band takes its best end
+    ("301-350" -> 301) — that is how "within the top 500" is read in practice."""
+    match = re.search(r"\d+", str(value or ""))
+    if not match:
+        return None
+    try:
+        n = int(match.group())
+    except Exception:
+        return None
+    return n if 1 <= n <= 5000 else None
+
+
+def apply_course_derived_fields(row: models.CourseCatalogCourse) -> None:
+    """Re-derive a course's numeric filter columns from the text fields they come from.
+    Called on every upsert — the advanced filters run in SQL, so they can only ever see
+    what these columns hold."""
+    row.ielts_score = parse_ielts_band(row.ielts_requirement)
+    row.toefl_score = parse_toefl_score(row.toefl_requirement)
+    row.gre_gmat_required = parse_gre_requirement(row.gre_gmat_requirement)
+    row.duration_months = parse_duration_months(row.duration)
+
+
+def normalize_catalog_filters(raw: Optional[dict]) -> dict:
+    """Validate + clamp the advanced browse filters.
+
+    Single gate for every caller (browse endpoint today, AI shortlist context tomorrow):
+    unknown keys are dropped, enums must be in the served vocabulary, numbers are clamped
+    to sane ranges, and anything unusable is simply omitted rather than 400-ing — a stale
+    bookmark should degrade to a broader search, not an error page.
+    """
+    src = raw if isinstance(raw, dict) else {}
+    out: dict = {}
+
+    def _int(key: str, lo: int, hi: int):
+        v = src.get(key)
+        if v is None or v == "":
+            return
+        try:
+            n = int(float(v))
+        except Exception:
+            return
+        n = max(lo, min(n, hi))
+        if n > 0:
+            out[key] = n
+
+    def _flag(key: str):
+        v = src.get(key)
+        if v is True or str(v).strip().lower() in {"1", "true", "yes", "on"}:
+            out[key] = True
+
+    def _enum(key: str, allowed: set):
+        v = str(src.get(key) or "").strip().lower()
+        if v in allowed:
+            out[key] = v
+
+    _int("min_tuition", 0, 10_000_000)
+    _int("max_tuition", 0, 10_000_000)
+    _int("max_toefl", 40, 120)
+    _int("max_duration_months", 1, 120)
+    _int("max_qs_rank", 1, 5000)
+    _flag("require_tuition")
+    _flag("tests_include_unknown")
+    _flag("no_app_fee")
+    _flag("has_deadline")
+    _flag("verified_only")
+    _flag("scholarships_only")
+    _enum("gre", _GRE_FILTER_KEYS)
+    _enum("intake", _INTAKE_KEYS)
+    _enum("university_type", _UNIVERSITY_TYPE_KEYS)
+    _enum("sort", _SORT_KEYS)
+
+    try:
+        band = float(src.get("max_ielts") or 0)
+    except Exception:
+        band = 0.0
+    if 4.0 <= band <= 9.0:
+        out["max_ielts"] = round(band * 2) / 2
+
+    city = str(src.get("city") or "").strip()
+    if city:
+        out["city"] = city[:60]
+
+    # A min above the max would silently return nothing — treat the pair as a range and
+    # keep the wider intent instead of a dead result set.
+    if out.get("min_tuition") and out.get("max_tuition") and out["min_tuition"] > out["max_tuition"]:
+        out["min_tuition"], out["max_tuition"] = out["max_tuition"], out["min_tuition"]
+    return out
+
+
+def active_filter_count(filters: Optional[dict]) -> int:
+    """How many advanced filters are actually narrowing the result (sort isn't one)."""
+    return len([k for k, v in (filters or {}).items() if k != "sort" and v not in (None, "", False)])
+
+
+# ---------------------------------------------------------------------------
 # 0) Registry seeding — real universities from the curated domain registry
 # ---------------------------------------------------------------------------
 
@@ -668,6 +901,7 @@ def discover_universities(db: Session, country_code: str, target: int, usage_sou
                 current.seed_rank = idx + 1
                 added += 1
             current.qs_world_rank = current.qs_world_rank or _clean_rank(item.get("qs_world_rank"))
+            current.qs_rank_numeric = parse_rank_number(current.qs_world_rank)
             current.national_rank = current.national_rank or _clean_rank(item.get("national_rank"))
             current.university_type = current.university_type or _clean_text(item.get("university_type"), 20)
             current.city = current.city or _clean_text(item.get("city"), 160)
@@ -690,6 +924,7 @@ def discover_universities(db: Session, country_code: str, target: int, usage_sou
             domain_key=dkey,
             city=_clean_text(item.get("city"), 160),
             qs_world_rank=_clean_rank(item.get("qs_world_rank")),
+            qs_rank_numeric=parse_rank_number(item.get("qs_world_rank")),
             national_rank=_clean_rank(item.get("national_rank")),
             university_type=_clean_text(item.get("university_type"), 20),
             website_url=site,
@@ -780,6 +1015,7 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
     if profile:
         uni.city = _clean_text(profile.get("city"), 160) or uni.city
         uni.qs_world_rank = _clean_rank(profile.get("qs_world_rank")) or uni.qs_world_rank
+        uni.qs_rank_numeric = parse_rank_number(uni.qs_world_rank)
         uni.national_rank = _clean_rank(profile.get("national_rank")) or uni.national_rank
         uni.university_type = _clean_text(profile.get("university_type"), 20) or uni.university_type
         new_site = _clean_url(profile.get("website"))
@@ -862,6 +1098,8 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
             if course_url and site_domain and _registrable_domain(course_url) == site_domain
             else None
         )
+        # Keep the SQL-filterable numerics in step with the text they're parsed from.
+        apply_course_derived_fields(row)
         row.is_active = True
         row.last_verified_at = now
         upserted += 1
@@ -947,25 +1185,37 @@ def query_catalog(
     discipline: Optional[str] = None,
     q: Optional[str] = None,
     max_tuition: Optional[int] = None,
+    advanced: Optional[dict] = None,
     limit_universities: int = 30,
     offset_universities: int = 0,
 ) -> tuple[list[tuple[models.CourseCatalogUniversity, list[models.CourseCatalogCourse]]], int]:
     """Universities (with their matching courses) for the browse view, best-ranked first.
 
-    Course-level filters (level/discipline/q/max_tuition) narrow WHICH courses show
-    AND which universities appear (a university with zero matching courses is
-    dropped — unless there are no course filters at all, when stub universities
-    awaiting enrichment still show with an empty course list).
+    Course-level filters (level/discipline/q/max_tuition plus the course half of
+    `advanced`) narrow WHICH courses show AND which universities appear (a university
+    with zero matching courses is dropped — unless there are no course filters at all,
+    when stub universities awaiting enrichment still show with an empty course list).
+    University-level advanced filters (rank/type/city/verified/scholarships) narrow the
+    universities directly and never hide a course.
+
+    `advanced` must come from normalize_catalog_filters() — it is trusted here to hold
+    validated, clamped values only.
 
     Returns (page_rows, total_matching) — the catalog runs to ~1.5k universities, far
     past one screen, so the caller pages through with offset_universities and shows
     the true total rather than silently truncating the tail.
     """
-    from sqlalchemy import or_
+    from sqlalchemy import and_, func as sqlfunc, or_
 
     code = (country_code or "").upper()
     U, C = models.CourseCatalogUniversity, models.CourseCatalogCourse
-    has_course_filters = bool(degree_level or discipline or q or max_tuition)
+    adv = advanced if isinstance(advanced, dict) else {}
+    max_tuition = max_tuition or adv.get("max_tuition")
+    has_course_filters = bool(
+        degree_level or discipline or q or max_tuition
+        or any(adv.get(k) for k in _COURSE_LEVEL_ADVANCED)
+    )
+    sort = adv.get("sort") or "rank"
     start = max(0, int(offset_universities or 0))
     limit = max(1, int(limit_universities))
 
@@ -979,6 +1229,44 @@ def query_catalog(
         if q:
             needle = f"%{str(q).strip()[:80]}%"
             cq = cq.filter(or_(C.course_name.ilike(needle), C.discipline.ilike(needle)))
+        if adv.get("min_tuition"):
+            cq = cq.filter(C.tuition_amount.isnot(None), C.tuition_amount >= int(adv["min_tuition"]))
+        if adv.get("require_tuition"):
+            cq = cq.filter(C.tuition_amount.isnot(None))
+        # Test scores: a program qualifies if the student clears EITHER published
+        # requirement — someone with both scores applies with whichever one is accepted.
+        score_clauses = []
+        if adv.get("max_ielts") is not None:
+            score_clauses.append(C.ielts_score <= float(adv["max_ielts"]))
+        if adv.get("max_toefl") is not None:
+            score_clauses.append(C.toefl_score <= int(adv["max_toefl"]))
+        if score_clauses:
+            condition = or_(*score_clauses)
+            if adv.get("tests_include_unknown"):
+                condition = or_(condition, and_(C.ielts_score.is_(None), C.toefl_score.is_(None)))
+            cq = cq.filter(condition)
+        if adv.get("gre") == "not_required":
+            cq = cq.filter(or_(C.gre_gmat_required.in_((0, 1)), C.gre_gmat_required.is_(None)))
+        elif adv.get("gre") == "required":
+            cq = cq.filter(C.gre_gmat_required == 2)
+        if adv.get("intake"):
+            patterns = _INTAKE_MATCH.get(adv["intake"]) or []
+            if patterns:
+                cq = cq.filter(or_(*[C.intakes.ilike(f"%{p}%") for p in patterns]))
+        if adv.get("max_duration_months"):
+            cq = cq.filter(
+                C.duration_months.isnot(None),
+                C.duration_months <= int(adv["max_duration_months"]),
+            )
+        if adv.get("no_app_fee"):
+            # The fee is stored as the university publishes it, so "free to apply" has to
+            # be matched by phrasing rather than by a number.
+            cq = cq.filter(or_(*[
+                C.application_fee.ilike(p) for p in
+                ("%no application fee%", "%no fee%", "%free%", "%waive%", "%nil%", "0", "%none%")
+            ]))
+        if adv.get("has_deadline"):
+            cq = cq.filter(C.application_deadline.isnot(None), C.application_deadline != "")
         return cq
 
     # Order: ranked head first, then rank-less rows by name. Done in SQL so paging is
@@ -987,6 +1275,18 @@ def query_catalog(
     order_by = (U.seed_rank.is_(None), U.seed_rank.asc(), U.name.asc(), U.id.asc())
 
     uq = db.query(U).filter(U.country_code == code, U.is_active.is_(True))
+    if adv.get("max_qs_rank"):
+        uq = uq.filter(U.qs_rank_numeric.isnot(None), U.qs_rank_numeric <= int(adv["max_qs_rank"]))
+    if adv.get("university_type"):
+        # Stored as the free text the model returned ("public", "Public research"), so
+        # this is a contains-match rather than an equality test.
+        uq = uq.filter(U.university_type.ilike(f"%{adv['university_type']}%"))
+    if adv.get("city"):
+        uq = uq.filter(U.city.ilike(f"%{adv['city']}%"))
+    if adv.get("verified_only"):
+        uq = uq.filter(U.last_verified_at.isnot(None))
+    if adv.get("scholarships_only"):
+        uq = uq.filter(U.scholarships_note.isnot(None), U.scholarships_note != "")
     if has_course_filters:
         matching_uni_ids = _course_filters(
             db.query(C.university_id).filter(C.country_code == code, C.is_active.is_(True))
@@ -1000,6 +1300,35 @@ def query_catalog(
             uq = uq.filter(U.id.in_(matching_uni_ids))
 
     total = uq.count()
+
+    # Sort. Ties always fall back to name so paging can never repeat or skip a row.
+    # NULLs are ordered with an explicit `is_(None)` key rather than NULLS LAST, which
+    # older SQLite builds reject.
+    if sort in ("tuition_asc", "tuition_desc"):
+        # Universities are ordered by the cheapest course that MATCHES the current
+        # filters, so "cheapest first" answers the question actually on screen.
+        cheapest = (
+            _course_filters(
+                db.query(C.university_id.label("uid"), sqlfunc.min(C.tuition_amount).label("min_tuition"))
+                .filter(C.country_code == code, C.is_active.is_(True))
+            )
+            .group_by(C.university_id)
+            .subquery()
+        )
+        uq = uq.outerjoin(cheapest, U.id == cheapest.c.uid)
+        price = cheapest.c.min_tuition
+        order_by = (
+            price.is_(None),
+            price.asc() if sort == "tuition_asc" else price.desc(),
+            U.name.asc(), U.id.asc(),
+        )
+    elif sort == "qs":
+        order_by = (U.qs_rank_numeric.is_(None), U.qs_rank_numeric.asc(), U.name.asc(), U.id.asc())
+    elif sort == "name":
+        order_by = (U.name.asc(), U.id.asc())
+    elif sort == "verified":
+        order_by = (U.last_verified_at.is_(None), U.last_verified_at.desc(), U.name.asc(), U.id.asc())
+
     page = uq.order_by(*order_by).offset(start).limit(limit).all()
     if not page:
         return [], total
@@ -1012,8 +1341,20 @@ def query_catalog(
     by_uni: dict[int, list] = {}
     for course in cq.all():
         by_uni.setdefault(course.university_id, []).append(course)
-    for course_list in by_uni.values():
-        course_list.sort(key=lambda c: (c.degree_level or "", c.course_name or ""))
+    if sort in ("tuition_asc", "tuition_desc"):
+        # Match the card order inside the card: sorting universities by price and then
+        # listing their courses alphabetically hides the row that won them the position.
+        descending = sort == "tuition_desc"
+        for course_list in by_uni.values():
+            # Negate rather than reverse=True: a plain reverse would also flip the
+            # is-None key and float the courses with no published fee to the top.
+            course_list.sort(key=lambda c: (
+                c.tuition_amount is None,
+                -(c.tuition_amount or 0) if descending else (c.tuition_amount or 0),
+            ))
+    else:
+        for course_list in by_uni.values():
+            course_list.sort(key=lambda c: (c.degree_level or "", c.course_name or ""))
 
     return [(u, by_uni.get(u.id, [])) for u in page], total
 

@@ -12,6 +12,17 @@
       "autoPort": true
     },
     {
+      "// rilono-local-ai": "Same sqlite sandbox as rilono-local, but GEMINI_API_KEY is left unset so the app's own .env supplies the real key and AI features (Writing Studio, Deep Scan, copilot) can actually be exercised locally. Still the sandbox DB, no Razorpay, no Resend — model calls cost real GCP tokens, nothing else is live.",
+      "name": "rilono-local-ai",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "cd /Users/gaurav/Downloads/Developer/Stealth/web_app && DATABASE_URL='sqlite:///./_preview.db' ENVIRONMENT='development' RESEND_API_KEY='' RAZORPAY_KEY_ID='' RAZORPAY_KEY_SECRET='' RAZORPAY_WEBHOOK_SECRET='' AUTH_COOKIE_DOMAIN='' AUTH_COOKIE_SECURE='false' AUTH_COOKIE_SAMESITE='lax' ENTERPRISE_ROOT_DOMAIN='localhost' ENTERPRISE_PORTAL_PORT='' ENTERPRISE_PORTAL_SCHEME='http' ENTERPRISE_DOCS_DIR='./_docs_local' exec /Users/gaurav/.pyenv/versions/3.11.6/bin/python3 -m uvicorn app.main:app --port ${PORT:-8098} --host 127.0.0.1 --log-level warning"
+      ],
+      "port": 8098,
+      "autoPort": true
+    },
+    {
       "name": "rilono-e2e-sandbox",
       "runtimeExecutable": "bash",
       "runtimeArgs": [

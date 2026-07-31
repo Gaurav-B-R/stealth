@@ -3660,16 +3660,21 @@ def send_enterprise_support_request_email(
     requester_name: str,
     requester_email: str,
     portal_url: str = DEFAULT_PUBLIC_BASE_URL,
+    attachments: Optional[list[dict]] = None,
 ) -> bool:
     """Notify the support inbox of an enterprise help/feature request. Reply-To is the
-    requester so the team can respond directly. No-ops without Resend."""
+    requester so the team can respond directly. `attachments` are dicts of
+    {filename, content (bytes), content_type} — screenshots or sample files the requester
+    added, forwarded as email attachments. No-ops without Resend."""
     if not RESEND_API_KEY:
         print("Enterprise support email skipped: RESEND_API_KEY not configured.")
         return False
 
     is_feature = (request_type or "").strip().lower() == "feature_request"
     kind_label = "Feature request" if is_feature else "Help / support request"
-    safe_subject = escape(re.sub(r"[\r\n]+", " ", (subject or "").strip()) or "(No subject)")
+    # One line for the Subject header, HTML-escaped for the body.
+    header_subject = re.sub(r"[\r\n]+", " ", (subject or "").strip()) or "(No subject)"
+    safe_subject = escape(header_subject)
     safe_message = escape((message or "").strip()).replace("\n", "<br>")
     safe_org = escape((org_name or "").strip() or "Unknown organization")
     safe_name = escape((requester_name or "").strip() or "Unknown")
@@ -3677,6 +3682,34 @@ def send_enterprise_support_request_email(
     safe_email = escape(clean_email)
     accent = "#8b5cf6" if is_feature else "#6366f1"
     emoji = "💡" if is_feature else "🛟"
+
+    # Build the Resend attachment payload once so the body can list exactly what got attached.
+    payload_attachments = []
+    for item in attachments or []:
+        content = item.get("content")
+        filename = re.sub(r"[\r\n\"]+", "", str(item.get("filename") or "")).strip()
+        if not content or not filename:
+            continue
+        entry = {
+            "filename": filename,
+            # Resend takes attachment content as a base64 string.
+            "content": base64.b64encode(content).decode("ascii"),
+        }
+        if item.get("content_type"):
+            entry["content_type"] = item["content_type"]
+        payload_attachments.append(entry)
+
+    attachments_html = ""
+    if payload_attachments:
+        items = "".join(
+            f'<li style="margin:2px 0">{escape(a["filename"])}</li>' for a in payload_attachments
+        )
+        attachments_html = (
+            '<div style="margin-top:14px;font-size:13px;color:#475569">'
+            f'<b style="color:#0f172a">📎 {len(payload_attachments)} attachment'
+            f'{"" if len(payload_attachments) == 1 else "s"}</b>'
+            f'<ul style="margin:6px 0 0;padding-left:18px">{items}</ul></div>'
+        )
 
     html_content = f"""<!DOCTYPE html><html><body style="margin:0;background:#f5f6fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif">
       <div style="max-width:600px;margin:0 auto;padding:24px 18px">
@@ -3692,6 +3725,7 @@ def send_enterprise_support_request_email(
               <tr><td style="padding:6px 0;color:#64748b">Subject</td><td style="padding:6px 0;font-weight:600">{safe_subject}</td></tr>
             </table>
             <div style="margin-top:16px;padding:14px;background:#f8fafc;border:1px solid #e7e9f3;border-radius:8px;font-size:14px;line-height:1.6;color:#0f172a">{safe_message}</div>
+            {attachments_html}
           </div>
         </div>
       </div></body></html>"""
@@ -3700,11 +3734,13 @@ def send_enterprise_support_request_email(
         params = {
             "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
             "to": [ENTERPRISE_SUPPORT_INBOX],
-            "subject": f"[Rilono Enterprise · {kind_label}] {subject.strip()[:120]}",
+            "subject": f"[Rilono Enterprise · {kind_label}] {header_subject[:120]}",
             "html": html_content,
         }
         if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", clean_email):
             params["reply_to"] = clean_email
+        if payload_attachments:
+            params["attachments"] = payload_attachments
         email_response = resend.Emails.send(params)
         if _extract_resend_email_id(email_response):
             return True
