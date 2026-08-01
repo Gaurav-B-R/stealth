@@ -5,24 +5,24 @@
     <script>document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/, 'js');</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rilono — AI-Powered Study-Abroad Platform · US, UK, Canada, Australia & Germany</title>
+    <title>Rilono — AI University Shortlist &amp; Study-Abroad Platform</title>
     <meta name="description"
-        content="Rilono helps students headed to the US, UK, Canada, Australia and Germany shortlist universities, write SOPs, validate documents with Rilono AI, track their journey, and ace the visa interview — and gives consultancies one workspace to manage every student.">
+        content="AI university shortlist with QS + national ranks, tuition and application-fee estimates and reach/match/safety picks — plus SOPs, doc checks and interview prep.">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://rilono.com/">
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Rilono">
     <meta property="og:url" content="https://rilono.com/">
-    <meta property="og:title" content="Rilono — AI-Powered Study-Abroad Platform">
+    <meta property="og:title" content="Rilono — AI University Shortlist &amp; Study-Abroad Platform">
     <meta property="og:description"
-        content="Shortlist universities, write SOPs, validate documents with Rilono AI, track your journey, and ace the visa interview — for the US, UK, Canada, Australia & Germany. For students and consultancies.">
+        content="AI university shortlist with QS + national ranks, tuition and application-fee estimates and reach/match/safety picks — plus SOPs, doc checks and interview prep.">
     <meta property="og:image" content="https://rilono.com/static/logo.png">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:site" content="@Rilono_AI">
     <meta name="twitter:creator" content="@Rilono_AI">
-    <meta name="twitter:title" content="Rilono — AI-Powered Study-Abroad Platform">
+    <meta name="twitter:title" content="Rilono — AI University Shortlist &amp; Study-Abroad Platform">
     <meta name="twitter:description"
-        content="Shortlist universities, write SOPs, validate documents with Rilono AI, track your journey, and ace the visa interview — US, UK, Canada, Australia & Germany.">
+        content="AI university shortlist with QS + national ranks, tuition and application-fee estimates and reach/match/safety picks — plus SOPs, doc checks and interview prep.">
     <meta name="twitter:image" content="https://rilono.com/static/logo.png">
     <link rel="icon" type="image/png" href="/static/logo.png">
     <link rel="apple-touch-icon" href="/static/logo.png">
@@ -48,7 +48,7 @@
             {
                 "@type": "FAQPage",
                 "mainEntity": [
-                    { "@type": "Question", "name": "Is Rilono free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — you can create an account and start organizing your study-abroad journey for free, including 1 document red-flag scan. To unlock unlimited document audits, full red-flag reveals and Rilono AI voice mock interviews, get the Visa Success Pass — a one-time ₹999 for 30 days (no subscription)." } },
+                    { "@type": "Question", "name": "Is Rilono free?", "acceptedAnswer": { "@type": "Answer", "text": "Yes — you can create an account and start organizing your study-abroad journey for free, including 1 document red-flag scan, 1 AI university shortlist and 3 AI SOP actions. The Visa Success Pass unlocks unlimited document audits with full red-flag reveals, unlimited AI university shortlists (QS world and national rank, reach/match/safety difficulty, estimated tuition and application fees) and unlimited SOP drafts, plus 3 Rilono AI voice mock interviews — a one-time ₹999 for 30 days (no subscription)." } },
                     { "@type": "Question", "name": "Which destinations does Rilono support?", "acceptedAnswer": { "@type": "Answer", "text": "Rilono supports students heading to the US (F-1, J-1, M-1), the UK, Canada, Australia and Germany — with document guidance, validation and interview prep tailored to each. Consultancies using Rilono Enterprise can manage students across the US, Canada, UK, Australia, Germany and Ireland." } },
                     { "@type": "Question", "name": "Is my data secure?", "acceptedAnswer": { "@type": "Answer", "text": "Absolutely. Your documents are end-to-end encrypted on your device with a passphrase only you hold, so we only ever store ciphertext we can't read. Our AI reviews a document only when you explicitly ask, and never stores it." } },
                     { "@type": "Question", "name": "Does Rilono help with the visa interview?", "acceptedAnswer": { "@type": "Answer", "text": "Yes. Rilono includes AI-powered mock interviews with real consulate-style questions for your destination and instant feedback, so you walk in prepared and confident." } },
@@ -407,6 +407,7 @@
         .bx-lg { grid-column: span 3; grid-row: span 2; display: flex; flex-direction: column; }
         .bx-md { grid-column: span 3; }
         .bx-sm { grid-column: span 2; }
+        .bx-xl { grid-column: span 6; }
         .bx .ficon { width: 48px; height: 48px; border-radius: 14px; display: grid; place-content: center; margin-bottom: 16px; box-shadow: 0 10px 24px rgba(99, 102, 241, .22); transition: transform .3s cubic-bezier(.2, .7, .2, 1.6); }
         .bx:hover .ficon { transform: translateY(-3px) rotate(-6deg) scale(1.06); }
         .bx .ficon svg { width: 23px; height: 23px; color: #fff; }
@@ -557,7 +558,7 @@
         /* ======================= RESPONSIVE ======================= */
         @media (max-width: 1020px) {
             .bento { grid-template-columns: repeat(2, 1fr); }
-            .bx-lg, .bx-md, .bx-sm { grid-column: span 1; grid-row: auto; }
+            .bx-lg, .bx-md, .bx-sm, .bx-xl { grid-column: span 1; grid-row: auto; }
             .jr-step { grid-template-columns: 1fr; gap: 18px; padding-left: 44px; }
             .jr-step:nth-child(even) .jr-card, .jr-step:nth-child(even) .jr-stampzone { grid-column: 1; grid-row: auto; }
             .jr-stampzone { justify-content: start; min-height: 0; }
@@ -940,8 +941,11 @@
                             <div class="jr-card">
                                 <div class="jr-num"><i>1</i> Checkpoint 01</div>
                                 <h3>Shortlist &amp; admit 🎓</h3>
-                                <p>Tell Rilono your profile, budget and dream field — get a university shortlist you can
-                                    actually defend in a visa interview, and track every application to the admit letter.</p>
+                                <p>Tell Rilono your grades, test scores, budget and dream field — get a shortlist grounded
+                                    in live web search, not stale AI memory: QS world and national rank, estimated tuition,
+                                    the separate application fee, and a reach / match / safety call on each, linked to the
+                                    official admissions page where one is available. Track every pick from considering to
+                                    admitted.</p>
                             </div>
                             <div class="jr-stampzone"><span class="stamp cyan">Shortlisted</span></div>
                         </div>
@@ -1179,7 +1183,7 @@
         <section class="pad" style="padding-top:0">
             <div class="wrap">
                 <div class="sec-head rv">
-                    <h2>Everything you need to <span class="grad">clear the consulate</span></h2>
+                    <h2>Everything you need, from <span class="grad">first shortlist to final approval</span></h2>
                     <p class="lead">Rilono turns a stressful, paperwork-heavy process into a guided, AI-assisted journey.</p>
                 </div>
                 <div class="bento">
@@ -1217,6 +1221,18 @@
                             <span class="td done"></span><span class="tl done"></span><span class="td done"></span><span class="tl done"></span><span class="td done"></span><span class="tl"></span><span class="td"></span><span class="tl"></span><span class="td"></span>
                         </div>
                     </div>
+                    <div class="bx bx-xl rv" style="--d:.2s">
+                        <div class="ficon" style="background:linear-gradient(135deg,#14b8a6,#0ea5e9)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10 12 5 2 10l10 5z" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 12v5c3.5 2.6 8.5 2.6 12 0v-5M22 10v6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </div>
+                        <h4>AI university shortlist</h4>
+                        <p>Share your grades, test scores and annual budget, and Rilono builds a ranked shortlist that
+                            deliberately mixes reach, match and safety picks. Each one shows the best-fit program, QS world
+                            rank, national rank, estimated annual tuition and the separate application fee, plus links to
+                            the university's own site and admissions page — never a third-party aggregator — wherever
+                            those details are available. Shortlists are grounded in live web search rather than stale
+                            training data, and you can track every pick as considering, applied, admitted or rejected.</p>
+                    </div>
                     <div class="bx bx-sm rv" style="--d:.1s">
                         <div class="ficon" style="background:linear-gradient(135deg,#ec4899,#f43f5e)">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1249,19 +1265,20 @@
             <div class="wrap">
                 <div class="ent-band rv">
                     <div>
-                        <span class="eyebrow">Rilono Enterprise · 100% Free</span>
+                        <span class="eyebrow">Rilono Enterprise · Free up to 50 students</span>
                         <h2>Run a study-abroad consultancy? <span class="grad">Manage every student — with a Rilono AI copilot.</span></h2>
                         <p class="lead">Track applicants from first enquiry to visa approval, keep notes, email students in
                             one click, and just <strong style="color:#dbe3ff">ask the built-in Rilono AI</strong> things like "who needs my attention
                             today?" — it reads your live portal to answer. Built for offices placing students in the US,
-                            Canada, UK, Australia, Germany &amp; Ireland, and <strong style="color:#dbe3ff">completely free</strong>.</p>
+                            Canada, UK, Australia, Germany &amp; Ireland, and <strong style="color:#dbe3ff">free up to 50 active
+                            students</strong> — after that it's ₹999/month, plus prepaid credits for AI.</p>
                         <div class="pills">
                             <span class="pill">✨ Rilono AI copilot</span>
                             <span class="pill">Visual pipeline</span>
                             <span class="pill">Client notes &amp; reminders</span>
                             <span class="pill">One-click emails</span>
                             <span class="pill">Live dashboard</span>
-                            <span class="pill">Free forever</span>
+                            <span class="pill">Free up to 50 students</span>
                         </div>
                         <div style="margin-top:28px">
                             <a href="/for-enterprise" class="btn btn-primary">See Rilono Enterprise
@@ -1311,7 +1328,7 @@
                     <h2>Questions, <span class="grad">answered</span></h2>
                 </div>
                 <div class="faq">
-                    <details class="rv" open><summary>Is Rilono free? <span class="chev">+</span></summary><div class="ans">Yes — you can create an account and start organizing your study-abroad journey for free, including 1 document red-flag scan. To unlock unlimited document audits, full red-flag reveals and Rilono AI voice mock interviews, get the <a href="/pricing">Visa Success Pass</a> — a one-time ₹999 for 30 days (no subscription).</div></details>
+                    <details class="rv" open><summary>Is Rilono free? <span class="chev">+</span></summary><div class="ans">Yes — you can create an account and start organizing your study-abroad journey for free, including 1 document red-flag scan, 1 AI university shortlist and 3 AI SOP actions. The <a href="/pricing">Visa Success Pass</a> unlocks unlimited document audits with full red-flag reveals, unlimited AI university shortlists (QS world and national rank, reach/match/safety difficulty, estimated tuition and application fees) and unlimited SOP drafts, plus 3 Rilono AI voice mock interviews — a one-time ₹999 for 30 days (no subscription).</div></details>
                     <details class="rv"><summary>Which destinations does Rilono support? <span class="chev">+</span></summary><div class="ans">Rilono supports students heading to the US (F-1, J-1, M-1), the UK, Canada, Australia and Germany — with document guidance, validation and interview prep tailored to each. Consultancies using Rilono Enterprise can manage students across the US, Canada, UK, Australia, Germany and Ireland.</div></details>
                     <details class="rv"><summary>Is my data secure? <span class="chev">+</span></summary><div class="ans">Absolutely. Your documents are end-to-end encrypted on your device with a passphrase only you hold, so we only ever store ciphertext we can't read. Our AI reviews a document only when you explicitly ask, and never stores it.</div></details>
                     <details class="rv"><summary>Does Rilono help with the visa interview? <span class="chev">+</span></summary><div class="ans">Yes. Rilono includes AI-powered mock interviews with real consulate-style questions for your destination and instant feedback, so you walk in prepared and confident.</div></details>

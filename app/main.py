@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, JSON
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
 from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e, outcomes, sop, careers
+from app import careers_catalog
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
 from app.services.daily_ai_notifications import (
@@ -190,6 +191,13 @@ def _is_enterprise_subdomain_request(request: Request) -> bool:
     return host.endswith(f".{root_domain}")
 
 
+# The only API responses that are public branding rather than account data.
+_PUBLIC_LOGO_PATHS = (
+    "/api/enterprise/public/org-logo/",
+    "/api/enterprise/public/brand-mark/",
+)
+
+
 # Add CORS middleware with explicit origins only.
 app.add_middleware(
     CORSMiddleware,
@@ -207,9 +215,10 @@ async def add_security_headers(request: Request, call_next):
     # API responses may contain identity, notification, billing, document, or AI data.
     # Make the safe default explicit for browsers, CDNs, and reverse proxies so a future
     # cache rule can never reuse one account's response for another visitor.
-    # Sole exception: uploaded org logos — public branding assets served under an
-    # unguessable token URL, rendered on every portal page, and safe to cache hard.
-    if request.url.path.startswith("/api/") and not request.url.path.startswith("/api/enterprise/public/org-logo/"):
+    # Sole exception: org logos — public branding assets (an upload behind an unguessable
+    # token URL, or a mark drawn from the spec in its own path), rendered on every portal
+    # page and in client emails, carrying nothing account-specific and safe to cache hard.
+    if request.url.path.startswith("/api/") and not request.url.path.startswith(_PUBLIC_LOGO_PATHS):
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
         response.headers["CDN-Cache-Control"] = "no-store"
         response.headers["Surrogate-Control"] = "no-store"
@@ -415,10 +424,12 @@ async def read_admin_console_slash():
 @app.get("/for-enterprise")
 async def read_for_enterprise():
     """Serve the enterprise marketing / landing page."""
-    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "for_enterprise.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
-    raise HTTPException(status_code=404, detail="Not found")
+    # Read through the helper rather than FileResponse: the page composes a shared
+    # <!--@partial:--> block, so the bytes on disk are not the bytes to serve.
+    page = _read_static_html("for_enterprise.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
 
 
 @app.get("/for-enterprise/")
@@ -432,18 +443,45 @@ async def read_for_enterprise_slash():
 @app.get("/jobs/")
 async def read_careers():
     """Serve the public careers hub (job listings)."""
-    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "careers.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
-    raise HTTPException(status_code=404, detail="Not found")
+    page = _read_static_html("careers.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
 
 
 @app.get("/careers/{slug}")
 @app.get("/careers/{slug}/")
 async def read_careers_role(slug: str):
     """Serve the careers hub for a deep-linked role (e.g. /careers/ai-product-tester-intern).
-    The page reads the slug client-side and renders that posting's detail + apply form."""
-    return await read_careers()
+    The page reads the slug client-side and renders that posting's detail + apply form.
+
+    careers.html ships a hard-coded canonical of /careers, so serving it verbatim made every
+    role URL de-index itself — and its JobPosting data — into the hub. Rewrite the metadata
+    per role (same helper the SPA and country pages use) so each open posting canonicalizes
+    to its own URL. Unknown, closed and talent-pool slugs fall through to the hub unchanged,
+    which is what we want: those have no page of their own to point at."""
+    job = careers_catalog.get_job(slug)
+    if job is None:
+        return await read_careers()
+    page = _read_static_html("careers.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    # Description comes from the posting itself. The fallback is built only from catalog
+    # fields the page actually renders (title, location) — never from assumed hiring terms.
+    description = job.get("tagline") or (
+        f"Open role at Rilono: {job['title']}"
+        + (f" — {job['location']}." if job.get("location") else ".")
+        + " See what the role involves, what we're looking for, and apply online."
+    )
+    if len(description) > 158:  # taglines are uncapped in the catalog; keep the snippet intact
+        description = description[:157].rsplit(" ", 1)[0].rstrip(" ,;:—-") + "…"
+    page = _apply_seo_meta(
+        page,
+        title=f"{job['title']} — Careers at Rilono",
+        description=description,
+        canonical=f"{SITE_ORIGIN}/careers/{job['slug']}",
+    )
+    return HTMLResponse(page)
 
 
 @app.get("/enterprise/demo")
@@ -454,10 +492,10 @@ async def read_careers_role(slug: str):
 @app.get("/book-a-demo/")
 async def read_enterprise_demo():
     """Serve the enterprise 'book a demo' / contact-sales landing page."""
-    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "enterprise_demo.html")
-    if os.path.exists(html_path):
-        return FileResponse(html_path)
-    raise HTTPException(status_code=404, detail="Not found")
+    page = _read_static_html("enterprise_demo.html")
+    if page is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return HTMLResponse(page)
 
 
 # --- Per-route SEO metadata -------------------------------------------------
@@ -636,12 +674,58 @@ _COUNTRY_ROUTE_META = {
 }
 
 
+_PARTIALS_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "partials")
+# <!--@partial:name--> in a static page is replaced by static/partials/name.html at serve
+# time. Server-side (not a JS include like footer.js) so the markup is in the initial HTML
+# for crawlers — these blocks carry the nav, the footer and product claims that must stay
+# indexable. Substitution is byte-exact: a partial file holds the region verbatim, so a
+# page renders identically before and after extraction.
+_PARTIAL_TOKEN = re.compile(r"<!--@partial:([a-z0-9-]+)-->")
+_partial_cache: dict[str, tuple[float, str]] = {}
+
+
+def _load_partial(name: str) -> str | None:
+    """Partial body, or None when the file is missing. Cached on mtime so editing a
+    partial shows up without a restart (matching how the static pages themselves behave)."""
+    path = os.path.join(_PARTIALS_DIR, f"{name}.html")
+    try:
+        stamp = os.path.getmtime(path)
+    except OSError:
+        return None
+    hit = _partial_cache.get(name)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    with open(path, "r", encoding="utf-8") as handle:
+        body = handle.read()
+    _partial_cache[name] = (stamp, body)
+    return body
+
+
+def _render_partials(page_html: str) -> str:
+    """Expand every <!--@partial:name--> token.
+
+    An unknown name leaves the token in place rather than raising: a missing partial
+    should cost one block, never the whole page. It stays an HTML comment, so a visitor
+    sees nothing either way — but it is loud in the served source when someone looks."""
+    if "<!--@partial:" not in page_html:
+        return page_html
+
+    def _expand(match: re.Match) -> str:
+        body = _load_partial(match.group(1))
+        if body is None:
+            logger.warning("Unknown HTML partial %r referenced by a static page", match.group(1))
+            return match.group(0)
+        return body
+
+    return _PARTIAL_TOKEN.sub(_expand, page_html)
+
+
 def _read_static_html(name: str) -> str | None:
     path = os.path.join(os.path.dirname(__file__), "..", "static", name)
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as handle:
-        return handle.read()
+        return _render_partials(handle.read())
 
 
 def _apply_seo_meta(

@@ -104,6 +104,15 @@ def _enterprise_model_candidates() -> list[str]:
 _STATUS_SYNONYMS = {
     "lead": catalog.STAGE_NEW_LEAD, "leads": catalog.STAGE_NEW_LEAD, "new": catalog.STAGE_NEW_LEAD,
     "new lead": catalog.STAGE_NEW_LEAD, "enquiry": catalog.STAGE_NEW_LEAD, "inquiry": catalog.STAGE_NEW_LEAD,
+    "shortlisting": catalog.STAGE_SHORTLISTING, "shortlist": catalog.STAGE_SHORTLISTING,
+    "applications": catalog.STAGE_APPLICATIONS_SENT, "applied": catalog.STAGE_APPLICATIONS_SENT,
+    "applications sent": catalog.STAGE_APPLICATIONS_SENT,
+    # "admitted" is this product's own vocabulary for "admit received, offer NOT accepted"
+    # (enterprise_client_fields, admission_stage) — that client is still at applications_sent.
+    # Taking the offer up is a separate, later event, and a strictly smaller cohort.
+    "admitted": catalog.STAGE_APPLICATIONS_SENT,
+    "offers": catalog.STAGE_OFFER_ACCEPTED, "offer": catalog.STAGE_OFFER_ACCEPTED,
+    "offer accepted": catalog.STAGE_OFFER_ACCEPTED, "deposit paid": catalog.STAGE_OFFER_ACCEPTED,
     "documents": catalog.STAGE_DOCUMENTS, "document": catalog.STAGE_DOCUMENTS, "collecting": catalog.STAGE_DOCUMENTS,
     "docs": catalog.STAGE_DOCUMENTS,
     "submitted": catalog.STAGE_SUBMITTED, "application submitted": catalog.STAGE_SUBMITTED, "filed": catalog.STAGE_SUBMITTED,
@@ -124,6 +133,22 @@ def _normalize_status(value: Optional[str]) -> Optional[str]:
     if v in catalog.CLIENT_STAGE_KEYS:
         return v
     return _STATUS_SYNONYMS.get(v)
+
+
+def _unresolved_status(value: Optional[str]) -> dict:
+    """The tool result for a stage filter that could not be resolved.
+
+    A dropped filter is worse than an error here: the query would silently widen to the
+    whole workspace and the model would report that total as the answer to a question
+    about one stage. This must come back as a failure the model has to relay.
+    """
+    return {
+        "error": f"'{str(value or '').strip()}' does not match any pipeline stage, so no "
+                 "count or list was produced. Tell the user you could not match that "
+                 "stage and ask which one they meant — do NOT answer with a workspace "
+                 "total or any other number.",
+        "valid_stages": [f"{s['label']} ({s['key']})" for s in catalog.CLIENT_STAGES],
+    }
 
 
 def _normalize_country(value: Optional[str]) -> Optional[str]:
@@ -165,6 +190,34 @@ def _period_range(period: Optional[str]) -> tuple[Optional[datetime], Optional[d
 def _stage_label(status_key: str) -> str:
     stage = catalog.CLIENT_STAGE_MAP.get(status_key)
     return stage["label"] if stage else status_key
+
+
+# Which part of the student's journey each stage belongs to. The pipeline itself is one
+# flat ordered list; this grouping exists for the prompts, which have to tell the model
+# that a university outcome and a visa outcome are different events. Membership is by
+# KEY, never by position — a stage inserted into the middle of the pipeline must not
+# silently change which phase any other stage is in.
+_STAGE_PHASES: list[tuple[str, tuple[str, ...]]] = [
+    ("Lead", (catalog.STAGE_NEW_LEAD,)),
+    ("University phase", (catalog.STAGE_SHORTLISTING, catalog.STAGE_APPLICATIONS_SENT,
+                          catalog.STAGE_OFFER_ACCEPTED)),
+    ("Visa phase", (catalog.STAGE_DOCUMENTS, catalog.STAGE_SUBMITTED,
+                    catalog.STAGE_APPOINTMENT, catalog.STAGE_DECISION)),
+    ("Closed / paused", (catalog.STAGE_APPROVED, catalog.STAGE_REJECTED, catalog.STAGE_ON_HOLD)),
+]
+_PRE_VISA_STAGES = frozenset(
+    key for title, keys in _STAGE_PHASES if title in ("Lead", "University phase") for key in keys
+)
+_PRE_OFFER_STAGES = frozenset({
+    catalog.STAGE_NEW_LEAD, catalog.STAGE_SHORTLISTING, catalog.STAGE_APPLICATIONS_SENT,
+})
+
+
+def _stage_phase(status_key: str) -> str:
+    for title, keys in _STAGE_PHASES:
+        if status_key in keys:
+            return title
+    return "Pipeline"
 
 
 def _iso(value) -> Optional[str]:
@@ -350,8 +403,10 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         updated_period: Optional[str] = None,
     ) -> dict:
         """Count clients matching optional filters.
-        - status: a pipeline stage such as 'approved', 'rejected', 'submitted',
-          'documents', 'interview', 'awaiting decision', 'new lead', 'on hold'.
+        - status: a pipeline stage such as 'new lead', 'shortlisting', 'applications
+          sent', 'offer accepted', 'documents', 'submitted', 'interview', 'awaiting
+          decision', 'approved', 'rejected', 'on hold'. A status that matches no stage
+          returns an error instead of a count — relay it, never answer with a total.
         - destination_country: country name or 2-letter code (US, CA, UK, AU, DE, IE, FR, ES, NL, AE).
         - visa_type: a substring of the visa type (e.g. 'F-1', 'Study Permit').
         - added_period: filter by when the client was ADDED. One of 'today',
@@ -364,7 +419,9 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         q = _base()
         applied = {}
         st = _normalize_status(status)
-        if status and st:
+        if status and not st:
+            return _unresolved_status(status)
+        if st:
             q = q.filter(models.EnterpriseClient.status == st)
             applied["status"] = _stage_label(st)
         code = _normalize_country(destination_country)
@@ -398,13 +455,16 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
     ) -> dict:
         """Search for clients and return a short list with their key fields.
         - query: matches name, email, phone, passport number or application reference.
-        - status: optional pipeline stage filter.
+        - status: optional pipeline stage filter. A status that matches no stage returns
+          an error instead of a list — relay it, never fall back to an unfiltered list.
         - destination_country: optional country name or code.
         - limit: max results (default 20, capped at 50).
         Use this to list clients matching a description."""
         q = _base()
         st = _normalize_status(status)
-        if status and st:
+        if status and not st:
+            return _unresolved_status(status)
+        if st:
             q = q.filter(models.EnterpriseClient.status == st)
         code = _normalize_country(destination_country)
         if destination_country and code:
@@ -472,7 +532,11 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
         'who needs my attention' / 'what should I follow up on' questions."""
         today = date.today()
         names = _member_names()
-        open_early = {catalog.STAGE_NEW_LEAD, catalog.STAGE_DOCUMENTS}
+        # An intake deadline is just as unmovable during the university phase — a client
+        # sitting at applications_sent with two weeks left is exactly who this flags.
+        open_early = {catalog.STAGE_NEW_LEAD, catalog.STAGE_SHORTLISTING,
+                      catalog.STAGE_APPLICATIONS_SENT, catalog.STAGE_OFFER_ACCEPTED,
+                      catalog.STAGE_DOCUMENTS}
         terminal = {catalog.STAGE_APPROVED, catalog.STAGE_REJECTED}
         rows = _base().filter(models.EnterpriseClient.status.notin_(list(terminal))).all()
         scored = []
@@ -1397,7 +1461,10 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
 
 def _system_instruction(organization_name: str, user_name: str, role: str) -> str:
     today = datetime.utcnow().strftime("%A, %d %B %Y")
-    stages = ", ".join(f"{s['label']} ({s['key']})" for s in catalog.CLIENT_STAGES)
+    stages = "\n".join(
+        f"- {title}: " + ", ".join(f"{_stage_label(key)} ({key})" for key in keys)
+        for title, keys in _STAGE_PHASES
+    )
     countries = ", ".join(c["name"] for c in catalog.COUNTRIES)
     return (
         f"You are the Rilono AI Assistant inside the Rilono Enterprise portal for "
@@ -1410,7 +1477,24 @@ def _system_instruction(organization_name: str, user_name: str, role: str) -> st
         "settings, and Rilono's shared catalog of universities and courses. ALWAYS use the "
         "provided tools to look up real data before answering anything factual — never guess or "
         "invent numbers, names or details. If the tools return nothing, say so plainly.\n\n"
-        f"The client pipeline stages are: {stages}.\n"
+        "The client pipeline is one ordered list of stages, grouped into the phases of the "
+        f"student's journey:\n{stages}\n"
+        "A case runs lead → university phase (choosing universities, applying, accepting an "
+        "offer) → visa phase (documents, filing, biometrics/interview, the authority's "
+        "decision). Read a client's stage as the phase they are IN: someone at shortlisting "
+        "or applications_sent has no visa file open yet, and someone at documents already "
+        "holds a university place.\n"
+        "'approved' and 'rejected' are the VISA decision ONLY — a visa granted or a visa "
+        "refused. A university turning an application down is NOT a pipeline stage: it is "
+        "recorded against that university on the client's university shortlist, and the "
+        "client stays in the university phase. So never call a client rejected because a "
+        "university declined them, never read 'approved' as an admission or an offer, and "
+        "when asked about admits or university outcomes look at the shortlist, not the "
+        "stage. An 'admitted' client — one holding an admit they have not taken up — is "
+        "still at applications_sent; 'offer_accepted' means an offer was ACCEPTED and the "
+        "deposit paid, so it is always a smaller group than the admits and must never be "
+        "reported as the admit count. 'on_hold' is a pause — the case keeps whatever "
+        "stage it was paused at.\n"
         f"This consultancy handles study-abroad cases (STUDENT visas) for these destinations only: {countries}.\n\n"
         "How to answer:\n"
         "- Be genuinely helpful and informative — give a complete, useful answer, never a bare one-liner. "
@@ -2193,42 +2277,6 @@ def run_deep_scan_audit(
             ("PAYMENT RECORDS", _deep_scan_payments_block(db, client.id) or "No payment records."),
         ]
     context_text = "\n\n".join(f"=== {title} ===\n{body}" for title, body in sections)
-
-def _deep_scan_destination_rules(client) -> str:
-    """The client's OWN destination checklist and document-validity rules.
-
-    Without this the audit judged every client against one hardcoded list of enrolment
-    documents (I-20 / CAS / LOA / CoE / Zulassungsbescheid), so a French, Spanish, Dutch
-    or Emirati file was measured against paperwork it will never contain — and the real
-    artifacts (accord préalable, Carta de Admisión, IND approval, entry permit) counted
-    for nothing. Sourced from the same catalog the counselor's own checklist renders from,
-    so the two can never drift apart.
-    """
-    code = str(getattr(client, "destination_country_code", "") or "").strip().upper()
-    country = catalog.get_country(code)
-    if not country:
-        return ""
-    docs = catalog.document_types_for_country(code)
-    required = [d["label"] for d in docs if d.get("required")]
-    optional = [d["label"] for d in docs if not d.get("required") and d.get("key") != "other"]
-    lines = [f"\n=== DESTINATION RULES — {country['name']} ({code}) ===",
-             "Judge this file against THIS destination's process only. Documents from other "
-             "countries' processes are irrelevant and must not be reported as missing."]
-    if required:
-        lines.append("Standard required documents: " + "; ".join(required) + ".")
-    if optional:
-        lines.append("Situational documents (absence is not by itself a finding): "
-                     + "; ".join(optional) + ".")
-    try:
-        from app.utils.gemini_service import _DESTINATION_TIMELINE_RULES
-        rules = str(_DESTINATION_TIMELINE_RULES.get(code) or "").strip()
-    except Exception:
-        rules = ""
-    if rules:
-        lines.append("Validity / date rules for this destination:\n" + rules)
-    return "\n".join(lines) + "\n"
-
-
     system = (
         "You are Rilono AI's Deep Scan: a strict, meticulous forensic auditor for a study-abroad "
         "consultancy, reviewing one client's complete dossier before money and the final outcome "
@@ -2273,13 +2321,13 @@ Check at minimum (report anything else irregular too):
 1. Identity consistency — name, date of birth, passport number, nationality identical across the profile, stage records and every document.
 2. Timeline compliance — passport validity (6 months beyond travel), bank statements older than 6 months, the enrolment confirmation and other dated artifacts named in the destination rules below, intake or target dates already past, stale pipeline stage vs the target date.
 3. Financial sufficiency — do the documented funds clearly cover tuition + living costs for a {client.visa_type or 'student'} visa to {client.destination_country_name or 'the destination'}? Flag missing or ambiguous evidence.
-4. Missing critical documents for this destination and visa type — judge against the destination checklist below, not a generic one.
+4. Missing documents that are ALREADY DUE at this client's current stage for this destination and visa type — judge against the destination checklist and the stage scope below, not a generic one.
 5. Staff data-entry quality — placeholder/test values, typos, invalid email/phone formats, wrong-looking passport numbers, contradictions between profile fields and stage records or documents.
 6. Cross-source contradictions — anything in notes, emails, universities, interview results or payments that contradicts the profile, the documents, or each other.
 7. Process health — unconfirmed data-processing consent, failed/unpaid/disputed/refunded payments, poor mock-interview verdicts close to the appointment, red-flagged documents never resolved.
 
 Every finding must cite its evidence with sources. If the file is genuinely clean, return few or no findings — do not manufacture problems.
-{_deep_scan_destination_rules(client)}
+{_deep_scan_stage_scope(client)}{_deep_scan_destination_rules(client)}
 Return STRICT JSON exactly matching this schema:
 {output_schema}"""
 
@@ -2367,3 +2415,87 @@ Return STRICT JSON exactly matching this schema:
         },
         "model_used": model_state.get("ok"),
     }
+
+
+def _deep_scan_stage_scope(client) -> str:
+    """Where the case actually IS, so the audit judges the file against that point only.
+
+    Deep Scan is credit-gated, not stage-gated: it runs just as happily on a day-one lead
+    or a student still choosing universities, where every visa artifact is legitimately
+    absent. Without this the whole visa checklist came back as "missing critical
+    documents" for a client who could not possibly hold any of it yet.
+    """
+    key = catalog.normalize_stage(getattr(client, "status", None))
+    effective = key
+    held_from = getattr(client, "held_from_status", None)
+    if key == catalog.STAGE_ON_HOLD and held_from:
+        effective = catalog.normalize_stage(held_from)
+    brief = catalog.stage_brief(getattr(client, "destination_country_code", None), effective) or {}
+    label = str(brief.get("label") or "").strip() or _stage_label(effective)
+    lines = [
+        "\n=== CURRENT STAGE SCOPE ===",
+        f"Current stage: {label} ({effective}) — {_stage_phase(effective)}."
+        + (" The case is currently ON HOLD at that stage." if effective != key else ""),
+    ]
+    description = str(brief.get("description") or "").strip()
+    if description:
+        lines.append(f"What that stage means: {description}")
+    if effective in _PRE_VISA_STAGES:
+        lines.append(
+            "This client has NOT reached the visa phase. Visa-phase paperwork — the visa "
+            "application form and fee receipt, biometrics/appointment artifacts, and the "
+            "travel and accommodation evidence filed with the application — is NOT due yet. "
+            "Its absence is normal at this stage and must NOT be reported as a missing "
+            "document or as a timeline problem."
+        )
+    if effective in _PRE_OFFER_STAGES:
+        lines.append(
+            "No university offer has been accepted yet either, so the admission/offer letter, "
+            "the enrolment confirmation (I-20 / CAS / CoE / LoA / accord préalable / Carta de "
+            "Admisión / Zulassungsbescheid or this destination's equivalent) and any tuition "
+            "deposit receipt cannot exist yet — do not flag them as missing."
+        )
+    lines.append(
+        "Judge completeness against THIS stage only. Never report a document as missing "
+        "because a later stage will need it. A case sitting far upstream of where its target "
+        "date implies it should be is still worth flagging — as a process/timeline finding "
+        "about the stage, not as missing paperwork."
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _deep_scan_destination_rules(client) -> str:
+    """The client's OWN destination checklist and document-validity rules.
+
+    Without this the audit judged every client against one hardcoded list of enrolment
+    documents (I-20 / CAS / LOA / CoE / Zulassungsbescheid), so a French, Spanish, Dutch
+    or Emirati file was measured against paperwork it will never contain — and the real
+    artifacts (accord préalable, Carta de Admisión, IND approval, entry permit) counted
+    for nothing. Sourced from the same catalog the counselor's own checklist renders from,
+    so the two can never drift apart.
+    """
+    code = str(getattr(client, "destination_country_code", "") or "").strip().upper()
+    country = catalog.get_country(code)
+    if not country:
+        return ""
+    docs = catalog.document_types_for_country(code)
+    required = [d["label"] for d in docs if d.get("required")]
+    optional = [d["label"] for d in docs if not d.get("required") and d.get("key") != "other"]
+    lines = [f"\n=== DESTINATION RULES — {country['name']} ({code}) ===",
+             "Judge this file against THIS destination's process only. Documents from other "
+             "countries' processes are irrelevant and must not be reported as missing."]
+    if required:
+        lines.append("Standard required documents: " + "; ".join(required) + ".")
+    if optional:
+        lines.append("Situational documents (absence is not by itself a finding): "
+                     + "; ".join(optional) + ".")
+    try:
+        from app.utils.gemini_service import _DESTINATION_TIMELINE_RULES
+        rules = str(_DESTINATION_TIMELINE_RULES.get(code) or "").strip()
+    except Exception:
+        rules = ""
+    if rules:
+        lines.append("Validity / date rules for this destination:\n" + rules)
+    return "\n".join(lines) + "\n"
+
+

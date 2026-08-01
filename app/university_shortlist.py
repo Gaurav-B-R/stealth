@@ -57,12 +57,16 @@ def _model_name() -> str:
     return _model_candidates()[0]
 
 
-def _grounded_generate(prompt: str, model_name: str):
+def _grounded_generate(prompt: str, model_name: str, usage_source: str):
     """Generate with Google Search grounding (google-genai SDK, API-key auth).
 
     Returns (text, response) on success, or None to signal the caller to fall back
     to the ungrounded model — so recommendations never break if grounding is
     unavailable in this environment.
+
+    Meters its own usage, including the empty-response case: returning None sends the
+    caller down the ungrounded path, and if the billed grounded call were only recorded
+    by the caller's success branch it would never reach the ledger at all.
     """
     if not GROUNDING_ENABLED:
         return None
@@ -83,6 +87,13 @@ def _grounded_generate(prompt: str, model_name: str):
             model=model_name, contents=prompt, config=config
         )
         text = (getattr(response, "text", "") or "").strip()
+        try:
+            from app import ai_usage
+            ai_usage.record_gemini_usage(
+                usage_source, model_name, response, status="ok" if text else "empty",
+            )
+        except Exception:
+            pass
         if not text:
             return None
         return text, response
@@ -261,17 +272,12 @@ def recommend_universities(
         model_name = candidates[0]
         grounded = False
         # Preferred path: Google-Search-grounded so QS / national rankings are current.
-        grounded_result = _grounded_generate(prompt, model_name)
+        grounded_result = _grounded_generate(prompt, model_name, usage_source)
         if grounded_result is not None:
             text, response = grounded_result
             grounded = True
-            # The grounded path uses the google-genai SDK directly (not wrapped by
-            # build_generative_model), so its token usage must be logged manually.
-            try:
-                from app import ai_usage
-                ai_usage.record_gemini_usage(usage_source, model_name, response)
-            except Exception:
-                pass
+            # Usage (tokens + search fees) is metered inside _grounded_generate so the
+            # billed-but-empty case is captured too — do not record it again here.
         else:
             # Ungrounded fallback: try every configured model in order so a single
             # retired/unavailable primary model id (a 404) doesn't kill recommendations —

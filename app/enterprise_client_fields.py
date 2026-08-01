@@ -43,7 +43,8 @@ CLIENT_PROFILE_OPTIONS: dict[str, list[dict]] = {
         ("language", "Language / Pre-sessional English"),
     ),
     # The triage question: a lead holding their enrolment confirmation is a paying client
-    # today, "just exploring" is a nurture-list entry.
+    # today, "just exploring" is a nurture-list entry. Captured by staff, and advanced for
+    # them when the case is moved to a university stage — see DERIVED_PROFILE_FIELDS below.
     # Destination-neutral wording on purpose — this field sits on the Add-client form, which
     # is filled in before (or while) the destination is chosen, and it is asked identically
     # of all ten destinations. The artifact is an I-20 in the US, a CAS in the UK, an LOA in
@@ -201,6 +202,39 @@ CLIENT_PROFILE_OPTION_KEYS: dict[str, set[str]] = {
     field: {item["key"] for item in options}
     for field, options in CLIENT_PROFILE_OPTIONS.items()
 }
+
+# ---------------------------------------------------------------------------
+# Profile fields the pipeline also writes
+# ---------------------------------------------------------------------------
+# `admission_stage` describes the university phase of a case, which is also a set of PIPELINE
+# stages (shortlisting / applications_sent / offer_accepted). Moving the case to one of those
+# is a statement that the phase was reached, so a stage CHANGE advances this column too
+# (routers/enterprise._apply_status_change) and the counselor is not asked the same thing
+# twice. It stays a captured field, though: it is the only place a walk-in who already holds
+# an admit can be recorded, months before their visa case opens.
+#
+# The values listed against a field are the states no pipeline stage implies. They are set by
+# hand and derivation must leave them alone. `deferred` is that state — a case parked for a
+# later intake sits at whatever stage it had reached, so no stage can mean it.
+DERIVED_PROFILE_FIELDS: dict[str, set[str]] = {
+    "admission_stage": {"deferred"},
+}
+
+# A typo here would make a manual-only value overwritable, which does not show up as an
+# error at runtime.
+for _field, _manual_keys in DERIVED_PROFILE_FIELDS.items():
+    if _field not in CLIENT_PROFILE_OPTION_KEYS:
+        raise ValueError(f"DERIVED_PROFILE_FIELDS: '{_field}' is not a client profile field.")
+    _unknown = _manual_keys - CLIENT_PROFILE_OPTION_KEYS[_field]
+    if _unknown:
+        raise ValueError(f"DERIVED_PROFILE_FIELDS['{_field}']: unknown option(s) {sorted(_unknown)}.")
+
+
+def is_manual_choice(field: str, value) -> bool:
+    """Whether `value` is one of a field's manual-only keys — the values derivation must
+    leave alone because no source state implies them."""
+    raw = ("" if value is None else str(value)).strip()
+    return bool(raw) and raw in DERIVED_PROFILE_FIELDS.get(field, set())
 
 
 def normalize_choice(field: str, value) -> str | None:

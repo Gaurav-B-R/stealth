@@ -1214,11 +1214,17 @@ def delete_company_finance_entry_admin(
 @router.get("/ai-usage/analytics")
 def ai_usage_analytics_admin(
     request: Request,
+    start: str | None = None,
+    end: str | None = None,
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),
     db: Session = Depends(get_db),
 ):
-    """Gemini API usage & estimated cost analytics for the admin console."""
+    """Gemini API usage & estimated cost analytics for the admin console.
+
+    Optional `start`/`end` (YYYY-MM-DD, inclusive, UTC) filter the range summary,
+    timeline, per-day table and breakdowns. Omitted = the last 30 days.
+    """
     _enforce_rate_limit_or_429(
         request=request,
         scope="admin.ai_usage.analytics",
@@ -1226,7 +1232,9 @@ def ai_usage_analytics_admin(
         window_seconds=ADMIN_ENDPOINT_RATE_WINDOW_SECONDS,
         extra_key=f"user:{current_user.id}",
     )
-    return ai_usage.build_ai_usage_analytics(db)
+    start_date = _finance_parse_date(start) if (start or "").strip() else None
+    end_date = _finance_parse_date(end) if (end or "").strip() else None
+    return ai_usage.build_ai_usage_analytics(db, start=start_date, end=end_date)
 
 
 @router.get("/acquisition/analytics")

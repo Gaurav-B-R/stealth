@@ -1,3 +1,7 @@
+# Do not add Disallow rules for /f/, /portal/ or /upload/. Those pages keep
+# themselves out of search with a page-level noindex, and a crawler has to fetch
+# a page to read that tag. Blocking the crawl here would hide the noindex and
+# leave the URLs eligible to appear in results anyway.
 User-agent: *
 Allow: /
 

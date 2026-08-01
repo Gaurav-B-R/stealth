@@ -93,8 +93,11 @@
     .jt-step.current .jt-node{background:#fff;border-color:var(--primary);color:var(--primary-600);box-shadow:0 0 0 5px rgba(99,102,241,.16)}
     .jt-step.current.approved .jt-node,.jt-step.done.approved .jt-node{background:#10b981;border-color:#10b981;color:#fff;box-shadow:0 0 0 5px rgba(16,185,129,.16)}
     .jt-step.current.paused .jt-node{border-color:#9ca3af;color:#6b7280;box-shadow:0 0 0 5px rgba(156,163,175,.18)}
-    .jt-label{font-size:11.5px;font-weight:700;color:var(--muted);margin-top:8px;line-height:1.35;padding:0 4px}
+    .jt-label{font-size:11.5px;font-weight:700;color:var(--muted);margin-top:8px;line-height:1.35;padding:0 4px;overflow-wrap:break-word}
     .jt-step.done .jt-label,.jt-step.current .jt-label{color:var(--text)}
+    /* The track carries nine stages — it stops fitting one row well before the phone breakpoint.
+       This rule must stay ABOVE the 640px one, which wins on the narrowest screens. */
+    @media (max-width:900px){ .jt{flex-wrap:wrap;gap:16px 0} .jt-step{flex:0 0 20%} .jt-step:not(:last-child)::after{display:none} }
     @media (max-width:640px){ .jt{flex-wrap:wrap;gap:14px 0} .jt-step{flex:0 0 33.33%} .jt-step:not(:last-child)::after{display:none} }
 
     .p-banner{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:13px 16px;font-size:14px;line-height:1.6;margin-top:16px}
@@ -150,6 +153,9 @@
     .uni-badges{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
     .uni-meta{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:12.5px;color:var(--text-2)}
     .uni-meta b{color:var(--text)}
+    .uni-why{margin-top:10px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:9px 12px}
+    .uni-why label{display:block;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:3px}
+    .uni-why p{margin:0;font-size:12.5px;color:var(--text-2);line-height:1.6}
     .uni-reqs{margin:10px 0 0;padding-left:18px;font-size:12.5px;color:var(--text-2)}
     .uni-reqs li{margin:2px 0}
     .uni-links{margin-top:10px;display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px}
@@ -313,56 +319,71 @@
         return '<span class="status-pill" style="color:'+c+'"><span class="sd" style="background:'+c+'"></span>'+esc(stage&&stage.label||"")+'</span>';
       }
 
+      // The track the student actually walks: every open stage plus the single successful
+      // terminal that ends it. Refusal and on-hold sit OFF the track and are surfaced by
+      // the banner instead. Stages are identified by KEY only — the pipeline gains stages
+      // over time, so any ordinal test here silently mislabels every node below it.
+      function journeyPath(){
+        return (data.stages||[]).slice().sort(function(a,b){return (a.order||0)-(b.order||0);})
+          .filter(function(s){
+            // A payload without the flags must not collapse the track to a lone Approved
+            // node — fall back to the two keys that are off the track by definition.
+            if(typeof s.is_terminal!=="boolean") return s.key!=="rejected"&&s.key!=="on_hold";
+            return s.key==="approved"||(!s.is_terminal&&s.key!=="on_hold");
+          });
+      }
+      function pathIndex(path){ var m={}; path.forEach(function(s,i){ m[s.key]=i; }); return m; }
+
       function journeyHtml(){
-        var stages=(data.stages||[]).slice().sort(function(a,b){return (a.order||0)-(b.order||0);});
-        var linear=stages.filter(function(s){return (s.order||0)<=6;});
+        var path=journeyPath(), pos=pathIndex(path);
         var status=data.status, isRejected=status==="rejected", isOnHold=status==="on_hold";
-        var curOrder=0;
-        // Only linear stages (order 1-6) can be "current". An on-hold case with no
-        // recorded hold position, or any non-linear status key, must NOT fall through
-        // to order 7/8 — that would paint the whole track (incl. Approved) as done.
-        if(isOnHold){ var h=stages.filter(function(s){return s.key===data.held_from_status;})[0]; curOrder=(h&&h.order<=6)?h.order:0; }
-        else if(!isRejected){ var c=stages.filter(function(s){return s.key===status;})[0]; curOrder=(c&&c.order<=6)?c.order:1; }
-        var nodes=linear.map(function(s){
+        // Only a stage on the track can be "current". An on-hold case with no recorded hold
+        // position, or any status key that isn't on the track, must leave curIdx at -1 —
+        // otherwise the whole track (incl. Approved) paints as done.
+        var curIdx=-1;
+        if(isOnHold) curIdx=pos.hasOwnProperty(data.held_from_status)?pos[data.held_from_status]:-1;
+        else if(!isRejected) curIdx=pos.hasOwnProperty(status)?pos[status]:-1;
+        var nodes=path.map(function(s,i){
           var cls;
-          if(isRejected) cls=s.order<=5?"done":"upcoming";
-          else if(s.order<curOrder) cls="done";
-          else if(s.order===curOrder) cls="current"+(isOnHold?" paused":"");
+          if(isRejected) cls=s.key==="approved"?"upcoming":"done";
+          else if(curIdx>=0&&i<curIdx) cls="done";
+          else if(i===curIdx) cls="current"+(isOnHold?" paused":"");
           else cls="upcoming";
-          if(s.order===6&&cls!=="upcoming"&&!isOnHold) cls+=" approved";
-          var inner=cls.indexOf("done")===0?"✓":String(s.order);
-          if(s.order===6&&cls.indexOf("upcoming")<0&&!isOnHold&&!isRejected) inner="🎉";
+          if(s.key==="approved"&&cls!=="upcoming"&&!isOnHold) cls+=" approved";
+          var inner=cls.indexOf("done")===0?"✓":String(i+1);
+          if(s.key==="approved"&&cls.indexOf("upcoming")<0&&!isOnHold&&!isRejected) inner="🎉";
           return '<div class="jt-step '+cls+'"><div class="jt-node">'+inner+'</div><div class="jt-label">'+esc(s.label)+'</div></div>';
         }).join("");
         var banner="";
-        if(isRejected) banner='<div class="p-banner red">😞 <div><b>This application was refused.</b> Your consultancy can walk you through what happened and what reapplying would look like — many refusals are successfully overturned on a stronger second attempt.</div></div>';
+        if(isRejected) banner='<div class="p-banner red">😞 <div><b>This application was refused.</b> Your consultancy can walk you through what happened and what reapplying would look like — your consultancy can talk you through the reasons and your options.</div></div>';
         else if(isOnHold) banner='<div class="p-banner gray">⏸ <div><b>Your application is currently on hold'+(data.held_from_stage?' (paused at "'+esc(data.held_from_stage.label)+'")':"")+'.</b> Contact your consultancy if you have questions about resuming.</div></div>';
-        else if(status==="approved") banner='<div class="p-banner green">🎉 <div><b>Congratulations — your visa has been approved!</b> Your consultancy will guide you through the next steps before you travel.</div></div>';
+        else if(status==="approved") banner='<div class="p-banner green">🎉 <div><b>Congratulations — your visa has been approved!</b></div></div>';
         return '<div class="jt">'+nodes+'</div>'+banner;
       }
 
       function stageDetailsHtml(){
         var stages=(data.stages||[]).slice().sort(function(a,b){return (a.order||0)-(b.order||0);});
+        var path=journeyPath(), pos=pathIndex(path);
         var records=data.stage_records||{};
         var status=data.status, isRejected=status==="rejected", isOnHold=status==="on_hold";
         var curKey=isOnHold?(data.held_from_status||status):status;
-        var curOrder=0;
-        var cs=stages.filter(function(s){return s.key===curKey;})[0];
-        if(cs&&(cs.order||0)<=6) curOrder=cs.order;  // non-linear keys (on_hold/rejected) never mark the track done
-        // The 6 linear stages always render; Rejected / On Hold sections only when staff recorded details there.
-        var list=stages.filter(function(s){ return (s.order||0)<=6 || (records[s.key]&&records[s.key].length); });
+        var curIdx=pos.hasOwnProperty(curKey)?pos[curKey]:-1;  // off-track keys (on_hold/rejected) never mark the track done
+        // Every stage on the track always renders; Rejected / On Hold sections only when staff recorded details there.
+        var list=stages.filter(function(s){ return pos.hasOwnProperty(s.key)||(records[s.key]&&records[s.key].length); });
         var html=list.map(function(s){
           var fields=records[s.key]||[];
-          var isCur=s.key===curKey&&(s.order||0)<=6;
-          // Match the tracker's rejected rendering (orders <= 5 shown as done) so the
-          // accordion and the journey stepper never tell contradictory stories.
-          var st=(s.order||0)<=6?((isRejected?s.order<=5:s.order<curOrder)?"done":(isCur?"current":"")):"";
+          var onPath=pos.hasOwnProperty(s.key);
+          var isCur=onPath&&s.key===curKey;
+          // Match the tracker's refused rendering (everything but Approved shown as done) so
+          // the accordion and the journey stepper never tell contradictory stories.
+          var done=onPath&&(isRejected?s.key!=="approved":(curIdx>=0&&pos[s.key]<curIdx));
+          var st=done?"done":(isCur?"current":"");
           var open=isCur||(isRejected&&s.key==="rejected");
-          var dot=st==="done"?"✓":((s.order||0)<=6?String(s.order):(s.key==="rejected"?"!":"⏸"));
+          var dot=done?"✓":(onPath?String(pos[s.key]+1):(s.key==="rejected"?"!":"⏸"));
           var note=fields.length?('<span class="n">'+fields.length+' detail'+(fields.length===1?"":"s")+'</span>'):"";
           var kv=fields.length
             ? '<div class="kv">'+fields.map(function(f){ return '<div class="it"><label>'+esc(f.label)+'</label><div>'+(f.type==="date"?esc(fmtDate(f.value)||f.value):esc(f.value))+'</div></div>'; }).join("")+'</div>'
-            : '<p class="st-desc" style="margin:0">No details recorded at this stage yet.</p>';
+            : '<p class="st-desc" style="margin:0">No details recorded for this stage.</p>';
           return '<div class="st '+st+(open?" open":"")+'" data-sk="'+esc(s.key)+'">'+
             '<div class="st-head"><div class="st-dot">'+dot+'</div>'+
               '<div><div class="st-ttl">'+esc(s.label)+(isCur?' <span class="badge mut" style="margin-left:6px">Current stage</span>':"")+'</div></div>'+
@@ -388,7 +409,7 @@
 
       function documentsHtml(){
         var docs=data.documents||[];
-        if(!docs.length) return '<p class="st-desc" style="margin:0">No documents on file yet. Your consultancy will let you know what to send.</p>';
+        if(!docs.length) return '<p class="st-desc" style="margin:0">No documents on file yet.</p>';
         return docs.map(function(d){
           var badge=d.status==="verified"?'<span class="badge ok">✓ Verified</span>':(d.status==="needs_review"?'<span class="badge warn">Being reviewed</span>':'<span class="badge mut">On file</span>');
           return '<div class="doc-row"><div class="doc-ic">📄</div>'+
@@ -400,6 +421,7 @@
 
       function universitiesHtml(){
         var unis=data.universities||[];
+        if(!unis.length) return '<p class="st-desc" style="margin:0">No universities shortlisted yet.</p>';
         var UNI_STATUS={considering:["Considering","mut"],applied:["Applied","warn"],admitted:["Admitted 🎉","ok"],rejected:["Not admitted","red"]};
         var DIFF={reach:"Ambitious",match:"Good match",safety:"Safe bet"};
         return unis.map(function(u){
@@ -411,6 +433,7 @@
           if(u.country_rank) meta.push("Country rank <b>"+esc(u.country_rank)+"</b>");
           if(u.est_tuition) meta.push("Est. tuition <b>"+esc(u.est_tuition)+"</b>");
           if(u.application_fee) meta.push("Application fee <b>"+esc(u.application_fee)+"</b>");
+          var why=u.rationale?'<div class="uni-why"><label>Why this fits you</label><p>'+esc(u.rationale)+'</p></div>':"";
           var reqs=(u.key_requirements||[]).length?'<ul class="uni-reqs">'+u.key_requirements.map(function(r){return "<li>"+esc(r)+"</li>";}).join("")+"</ul>":"";
           var links=[];
           if(u.website_url) links.push('<a href="'+esc(u.website_url)+'" target="_blank" rel="noopener">University website ↗</a>');
@@ -419,7 +442,7 @@
             (u.program?'<div class="uni-prog">'+esc(u.program)+'</div>':"")+'</div>'+
             '<div class="uni-badges"><span class="badge '+st[1]+'">'+st[0]+'</span>'+(u.admission_difficulty&&DIFF[u.admission_difficulty]?'<span class="badge mut">'+DIFF[u.admission_difficulty]+'</span>':"")+'</div></div>'+
             (meta.length?'<div class="uni-meta">'+meta.map(function(m){return "<span>"+m+"</span>";}).join("")+'</div>':"")+
-            reqs+(links.length?'<div class="uni-links">'+links.join("")+'</div>':"")+
+            why+reqs+(links.length?'<div class="uni-links">'+links.join("")+'</div>':"")+
           '</div>';
         }).join("");
       }

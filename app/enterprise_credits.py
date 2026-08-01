@@ -1125,6 +1125,13 @@ ANALYTICS_TIMELINE_ROW_CAP = 20000
 ANALYTICS_CLIENT_LIMIT = 12
 ANALYTICS_MEMBER_LIMIT = 12
 
+# Custom windows: how far back one may be asked for, and the widest axis we will
+# draw. Past the bar cap the requested grouping is widened (day → week → month)
+# rather than truncated, so the chart still covers the whole period asked for.
+ANALYTICS_MAX_CUSTOM_DAYS = 1100          # ~3 years
+ANALYTICS_MAX_TIMELINE_BUCKETS = 400
+ANALYTICS_BUCKETS = ["day", "week", "month"]
+
 
 def normalize_analytics_days(days) -> int:
     """Coerce a requested window to one of the supported ranges (default 30d)."""
@@ -1135,12 +1142,140 @@ def normalize_analytics_days(days) -> int:
     return value if value in ANALYTICS_RANGES else DEFAULT_ANALYTICS_DAYS
 
 
+def parse_analytics_date(value) -> Optional[datetime]:
+    """A YYYY-MM-DD from a date input → midnight UTC. None if unparseable.
+
+    Everything in this module timestamps with datetime.utcnow(), and the chart's
+    bucket keys are UTC calendar days, so a picked date is read as a UTC day too.
+    Mixing in the viewer's local midnight would put a row in one day on the chart
+    and a different day in the range filter.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return _naive(value)
+    text = str(value).strip()[:10]
+    if not text:
+        return None
+    try:
+        parsed = datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return None
+    # strptime happily accepts 0001-01-01, and the resolver then subtracts a default
+    # window from it — which overflows datetime.min and 500s the whole tab. No ledger
+    # predates the product, so anything before 2000 is treated as unparseable.
+    return parsed if parsed.year >= 2000 else None
+
+
+def _range_label(start: datetime, end: datetime) -> str:
+    """'2 Jul – 15 Jul 2026' — the year is stated once unless the window crosses one,
+    and a one-day window is a date, not a range from a day to itself."""
+    if start.date() == end.date():
+        return end.strftime("%-d %b %Y")
+    same_year = start.year == end.year
+    left = start.strftime("%-d %b") if same_year else start.strftime("%-d %b %Y")
+    return f"{left} – {end.strftime('%-d %b %Y')}"
+
+
+def resolve_analytics_range(days=None, start=None, end=None) -> dict:
+    """The window every analytics figure is measured over.
+
+    Two ways in, one shape out: a preset (`days`, 0 = all time) or an explicit
+    `start`/`end` pair from the date pickers. `until` is None for a preset — a
+    preset always runs to "now" and needs no upper bound — and set for a custom
+    window, which is what makes a closed historical period possible.
+
+    A custom window is clamped rather than rejected wherever it can be: an end in
+    the future becomes today (a period that includes tomorrow makes every rate
+    read low), a reversed pair is swapped, and a start beyond the retention cap is
+    pulled forward. Only a completely unparseable pair falls back to the preset.
+    """
+    now = datetime.utcnow()
+    start_dt = parse_analytics_date(start)
+    end_dt = parse_analytics_date(end)
+
+    if start_dt is None and end_dt is None:
+        window = normalize_analytics_days(days)
+        # Whole calendar days, not a rolling 720 hours. A preset used to start at
+        # `now - N days` — keeping the current time-of-day — which made the oldest
+        # bar a PARTIAL day: the chart counted spend after 14:20 while clicking that
+        # bar (and the day-by-day row) asked the ledger for the whole date. Anchoring
+        # to midnight makes every bucket in the window a complete period, so the
+        # chart, the breakdown table and the ledger under them always agree.
+        since = (
+            (now - timedelta(days=window - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            if window > 0 else None
+        )
+        return {
+            "key": str(window),
+            "custom": False,
+            "days": window,
+            "since": since,
+            "until": None,
+            "label": "All time" if window == 0 else f"Last {window} days",
+            "sub_label": "all time" if window == 0 else f"last {window} days",
+        }
+
+    # One half filled in is still a usable intent: "from X" means X → today, and
+    # "until Y" means the default window ending at Y.
+    if end_dt is None:
+        end_dt = now
+    if start_dt is None:
+        start_dt = end_dt - timedelta(days=DEFAULT_ANALYTICS_DAYS)
+    if start_dt > end_dt:
+        start_dt, end_dt = end_dt, start_dt
+
+    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    since = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    until = min(end_dt.replace(hour=23, minute=59, second=59, microsecond=999999), today_end)
+    if since > until:
+        since = until.replace(hour=0, minute=0, second=0, microsecond=0)
+    if (until - since).days > ANALYTICS_MAX_CUSTOM_DAYS:
+        since = (until - timedelta(days=ANALYTICS_MAX_CUSTOM_DAYS)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+    span_days = (until.date() - since.date()).days + 1
+    return {
+        "key": "custom",
+        "custom": True,
+        "days": span_days,
+        "since": since,
+        "until": until,
+        "label": _range_label(since, until),
+        "sub_label": _range_label(since, until),
+        "start_date": since.date().isoformat(),
+        "end_date": until.date().isoformat(),
+    }
+
+
 def _timeline_bucket(days: int) -> str:
     """Bucket width that keeps a chart readable: ~7-90 bars, never hundreds."""
     if 0 < days <= 90:
         return "day"
     if 0 < days <= 400:
         return "week"
+    return "month"
+
+
+def _bucket_span_days(span_days: int, bucket: str) -> int:
+    """Roughly how many bars `bucket` would draw across `span_days`."""
+    if bucket == "week":
+        return (span_days // 7) + 2
+    if bucket == "month":
+        return (span_days // 28) + 2
+    return span_days
+
+
+def resolve_timeline_bucket(span_days: int, requested=None) -> str:
+    """Honour an explicit day/week/month grouping, widening it only when the axis
+    it asks for would run past the bar cap — a 3-year day-by-day chart is 1,100
+    unreadable slivers, and silently trimming it would hide the oldest months."""
+    choice = str(requested or "").strip().lower()
+    if choice not in ANALYTICS_BUCKETS:
+        return _timeline_bucket(span_days if span_days > 0 else 0)
+    for bucket in ANALYTICS_BUCKETS[ANALYTICS_BUCKETS.index(choice):]:
+        if _bucket_span_days(span_days, bucket) <= ANALYTICS_MAX_TIMELINE_BUCKETS:
+            return bucket
     return "month"
 
 
@@ -1179,6 +1314,9 @@ def spend_analytics(
     organization_id: int,
     *,
     days: int = DEFAULT_ANALYTICS_DAYS,
+    start=None,
+    end=None,
+    bucket=None,
     client_limit: int = ANALYTICS_CLIENT_LIMIT,
     member_limit: int = ANALYTICS_MEMBER_LIMIT,
     include_by_member: bool = True,
@@ -1186,7 +1324,10 @@ def spend_analytics(
 ) -> dict:
     """The full credit-spend report for one organization, over a time window.
 
-    Every figure is scoped to `days` (0 = all time) EXCEPT the burn-rate block,
+    The window is either a preset (`days`, 0 = all time) or an explicit
+    `start`/`end` pair from the date pickers; `bucket` ("day"/"week"/"month")
+    overrides the automatic grouping so a long period can still be read a day at
+    a time. Every figure is scoped to that window EXCEPT the burn-rate block,
     which is deliberately a fixed 30-day rate — a runway estimate must not swing
     just because someone flipped the chart to "last 7 days".
 
@@ -1197,9 +1338,11 @@ def spend_analytics(
     T = models.EnterpriseCreditTransaction
     C = models.EnterpriseClient
     org_id = int(organization_id)
-    days = normalize_analytics_days(days)
+    rng = resolve_analytics_range(days=days, start=start, end=end)
+    days = rng["days"]
     now = datetime.utcnow()
-    since = (now - timedelta(days=days)) if days > 0 else None
+    since = rng["since"]
+    until = rng["until"]
 
     def _scoped(query, *, debits_only: bool = True):
         query = query.filter(T.organization_id == org_id)
@@ -1207,6 +1350,8 @@ def spend_analytics(
             query = query.filter(T.type == "debit")
         if since is not None:
             query = query.filter(T.created_at >= since)
+        if until is not None:
+            query = query.filter(T.created_at <= until)
         return query
 
     def _share(part: int, whole: int) -> float:
@@ -1381,33 +1526,79 @@ def spend_analytics(
         })
     unattributed = max(0, spent_credits - client_attributed)
 
-    # --- WHEN they were spent (timeline) ------------------------------------
-    bucket = _timeline_bucket(days)
+    # --- WHEN they were spent (timeline + per-period breakdown) -------------
+    # One pass over the window's debits feeds both the chart and the day-by-day
+    # table under it: same rows, so a bar and its table line can never disagree.
     rows = (
-        _scoped(db.query(T.created_at, T.credits))
+        _scoped(db.query(T.created_at, T.credits, T.action_key, T.reference_type, T.reference_id))
         .order_by(T.created_at.desc())
         .limit(ANALYTICS_TIMELINE_ROW_CAP)
         .all()
     )
-    buckets: dict[str, dict[str, int]] = {}
+    span_end = until or now
     oldest = None
-    for created_at, credit_delta in rows:
+    for created_at, *_ in rows:
         stamp = _naive(created_at) or now
         oldest = stamp if (oldest is None or stamp < oldest) else oldest
-        slot = buckets.setdefault(_bucket_key(stamp, bucket), {"credits": 0, "units": 0})
-        slot["credits"] += int(-(credit_delta or 0))
+    span_start = since or oldest or span_end
+    span_days = max(1, (span_end.date() - span_start.date()).days + 1)
+    bucket_request = bucket
+    bucket = resolve_timeline_bucket(span_days, bucket)
+
+    buckets: dict[str, dict] = {}
+    scope_set = set(_scope_ids) if _scope_ids is not None else None
+    for created_at, credit_delta, action_key, ref_type, ref_id in rows:
+        stamp = _naive(created_at) or now
+        slot = buckets.setdefault(
+            _bucket_key(stamp, bucket),
+            {"credits": 0, "units": 0, "actions": {}, "clients": set()},
+        )
+        spent = int(-(credit_delta or 0))
+        slot["credits"] += spent
         slot["units"] += 1
-    span_start = since or oldest or now
-    timeline = [
-        {
+        # Retired / never-priced keys collapse into one "Other usage" line, exactly as
+        # by_action does — otherwise a bucket shows the same label two or three times.
+        act_key = action_key if action_key in ACTIONS else "other"
+        act = slot["actions"].setdefault(act_key, {"credits": 0, "units": 0})
+        act["credits"] += spent
+        act["units"] += 1
+        # Scope-limited members must not learn how many DIFFERENT clients the rest of the
+        # org touched, so only the clients they can already see are counted here.
+        if ref_type == "client" and ref_id is not None and (
+            scope_set is None or int(ref_id) in scope_set
+        ):
+            slot["clients"].add(int(ref_id))
+
+    def _bucket_actions(slot: dict) -> list[dict]:
+        return sorted(
+            (
+                {
+                    "key": key,
+                    "label": (ACTIONS.get(key, {}) or {}).get("label", "Other usage"),
+                    "credits": stat["credits"],
+                    "units": stat["units"],
+                }
+                for key, stat in (slot.get("actions") or {}).items()
+            ),
+            key=lambda r: (-r["credits"], r["label"]),
+        )
+
+    timeline = []
+    for key in _bucket_sequence(span_start, span_end, bucket):
+        slot = buckets.get(key) or {}
+        credits_spent = int(slot.get("credits", 0))
+        timeline.append({
             "key": key,
-            "credits": (buckets.get(key) or {}).get("credits", 0),
-            "units": (buckets.get(key) or {}).get("units", 0),
-        }
-        for key in _bucket_sequence(span_start, now, bucket)
-    ]
+            "credits": credits_spent,
+            "units": int(slot.get("units", 0)),
+            "clients": len(slot.get("clients") or ()),
+            "value_display": format_inr(credits_to_paise(credits_spent)),
+            "share_pct": _share(credits_spent, spent_credits),
+            "actions": _bucket_actions(slot),
+        })
     peak = max((b["credits"] for b in timeline), default=0)
     busiest = next((b for b in timeline if b["credits"] == peak and peak > 0), None)
+    active_buckets = sum(1 for b in timeline if b["credits"] > 0)
 
     # --- Burn rate & runway (always a 30-day rate — see docstring) ----------
     spent_30d = int(
@@ -1437,11 +1628,20 @@ def spend_analytics(
 
     return {
         "range": {
+            "key": rng["key"],
+            "custom": rng["custom"],
             "days": days,
-            "label": "All time" if days == 0 else f"Last {days} days",
+            "label": rng["label"],
+            # Reads inside a sentence ("₹570 · last 30 days"), where the headline
+            # label would have to be lowercased — and lowercasing a custom label
+            # gives "2 jul – 15 jul 2026".
+            "sub_label": rng["sub_label"],
             "since": (since.isoformat() if since else None),
-            "until": now.isoformat(),
+            "until": (until or now).isoformat(),
+            "start_date": rng.get("start_date") or (since.date().isoformat() if since else None),
+            "end_date": rng.get("end_date") or (until or now).date().isoformat(),
             "options": ANALYTICS_RANGES,
+            "max_custom_days": ANALYTICS_MAX_CUSTOM_DAYS,
         },
         "summary": {
             "spent_credits": spent_credits,
@@ -1463,9 +1663,15 @@ def spend_analytics(
         "by_client": by_client,
         "timeline": {
             "bucket": bucket,
+            # What the caller asked for, so the UI can say when a day-by-day
+            # request was widened to weeks rather than silently showing weeks.
+            "requested_bucket": (str(bucket_request or "").strip().lower() or "auto"),
+            "bucket_options": ANALYTICS_BUCKETS,
             "points": timeline,
             "peak_credits": peak,
             "busiest_key": (busiest or {}).get("key"),
+            "active_buckets": active_buckets,
+            "span_days": span_days,
             "truncated": len(rows) >= ANALYTICS_TIMELINE_ROW_CAP,
         },
         "burn": {

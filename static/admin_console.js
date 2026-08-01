@@ -39,6 +39,12 @@ const state = {
     },
     financeAnalytics: null,
     financeLoading: false,
+    // AI Costs date filter. start/end are inclusive YYYY-MM-DD (UTC); null = server default.
+    aiRange: { preset: '30d', start: null, end: null },
+    aiUsageData: null,
+    aiSeries: [],
+    aiGranularity: 'day',
+    aiChartResizeBound: false,
     turnstileSiteKey: '',
     turnstileWidgetId: null,
     actionTurnstileWidgetId: null
@@ -148,6 +154,34 @@ const refs = {
     aiTimelineChart: document.getElementById('adminAiTimelineChart'),
     aiSourceChart: document.getElementById('adminAiSourceChart'),
     aiModelChart: document.getElementById('adminAiModelChart'),
+    aiHeroLabel: document.getElementById('adminAiHeroLabel'),
+    aiRangeCaption: document.getElementById('adminAiRangeCaption'),
+    aiRangePresets: document.getElementById('adminAiRangePresets'),
+    aiRangeForm: document.getElementById('adminAiRangeForm'),
+    aiRangeStart: document.getElementById('adminAiRangeStart'),
+    aiRangeEnd: document.getElementById('adminAiRangeEnd'),
+    aiRangeReset: document.getElementById('adminAiRangeReset'),
+    aiRangeError: document.getElementById('adminAiRangeError'),
+    aiRangeCost: document.getElementById('adminAiRangeCost'),
+    aiRangeSub: document.getElementById('adminAiRangeSub'),
+    aiRangeAvg: document.getElementById('adminAiRangeAvg'),
+    aiRangeAvgSub: document.getElementById('adminAiRangeAvgSub'),
+    aiRangeTopDay: document.getElementById('adminAiRangeTopDay'),
+    aiRangeTopDaySub: document.getElementById('adminAiRangeTopDaySub'),
+    aiRangeSaved: document.getElementById('adminAiRangeSaved'),
+    aiRangeSavedSub: document.getElementById('adminAiRangeSavedSub'),
+    aiRangeSearch: document.getElementById('adminAiRangeSearch'),
+    aiRangeSearchSub: document.getElementById('adminAiRangeSearchSub'),
+    aiTimelineTitle: document.getElementById('adminAiTimelineTitle'),
+    aiTimelineSub: document.getElementById('adminAiTimelineSub'),
+    aiSourceSub: document.getElementById('adminAiSourceSub'),
+    aiModelSub: document.getElementById('adminAiModelSub'),
+    aiDailyCaption: document.getElementById('adminAiDailyCaption'),
+    aiDailyTableBody: document.getElementById('adminAiDailyTableBody'),
+    aiHideEmptyDays: document.getElementById('adminAiHideEmptyDays'),
+    aiDailyTotalCalls: document.getElementById('adminAiDailyTotalCalls'),
+    aiDailyTotalTokens: document.getElementById('adminAiDailyTotalTokens'),
+    aiDailyTotalCost: document.getElementById('adminAiDailyTotalCost'),
     revMarginHero: document.getElementById('adminRevMarginHero'),
     revTotal: document.getElementById('adminRevTotal'),
     revTotalSub: document.getElementById('adminRevTotalSub'),
@@ -229,6 +263,15 @@ function bindEvents() {
     refs.financeExportBtn?.addEventListener('click', exportFinanceLedger);
     refs.financeEntryForm?.addEventListener('submit', submitFinanceEntry);
     refs.financeEntryCancel?.addEventListener('click', () => { if (refs.financeEntryForm) refs.financeEntryForm.hidden = true; });
+    refs.aiRangePresets?.addEventListener('click', (event) => {
+        const btn = event.target.closest('.ai-preset-btn');
+        if (btn && btn.dataset.preset) applyAiPreset(btn.dataset.preset);
+    });
+    refs.aiRangeForm?.addEventListener('submit', handleAiRangeSubmit);
+    refs.aiRangeReset?.addEventListener('click', resetAiRange);
+    refs.aiHideEmptyDays?.addEventListener('change', renderAiDailyTable);
+    refs.aiTabPanel?.addEventListener('click', handleAiExportClick);
+    initAiRangeInputs();
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && refs.couponModal && !refs.couponModal.hidden) closeCouponModal();
     });
@@ -1927,17 +1970,126 @@ function aiUsageEmptyState(message) {
     [refs.aiTimelineChart, refs.aiSourceChart, refs.aiModelChart].forEach((el) => {
         if (el) el.innerHTML = `<div class="table-empty">${m}</div>`;
     });
+    if (refs.aiDailyTableBody) refs.aiDailyTableBody.innerHTML = `<tr><td colspan="5" class="table-empty">${m}</td></tr>`;
 }
 
-async function loadAiUsage() {
+function setAiRefreshing(on) {
+    [refs.aiTimelineChart, refs.aiSourceChart, refs.aiModelChart, refs.aiDailyTableBody]
+        .forEach((el) => { if (el) el.classList.toggle('is-refreshing', !!on); });
+}
+
+// --- AI Costs date filter --------------------------------------------------
+// Dates are handled as plain YYYY-MM-DD strings in UTC, matching the usage ledger's
+// created_at (the table header says UTC), so a preset never shifts by the viewer's
+// timezone the way toISOString() on a local-midnight Date would.
+function aiUtcToday() {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+function aiDateToIso(d) {
+    return d.toISOString().slice(0, 10);
+}
+
+function aiShiftDays(d, days) {
+    const copy = new Date(d.getTime());
+    copy.setUTCDate(copy.getUTCDate() + days);
+    return copy;
+}
+
+function aiPresetRange(preset) {
+    const today = aiUtcToday();
+    switch (preset) {
+        case 'today':
+            return { start: aiDateToIso(today), end: aiDateToIso(today) };
+        case '7d':
+            return { start: aiDateToIso(aiShiftDays(today, -6)), end: aiDateToIso(today) };
+        case '90d':
+            return { start: aiDateToIso(aiShiftDays(today, -89)), end: aiDateToIso(today) };
+        case 'month': {
+            const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+            return { start: aiDateToIso(first), end: aiDateToIso(today) };
+        }
+        case 'prev_month': {
+            const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 1, 1));
+            const last = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+            return { start: aiDateToIso(first), end: aiDateToIso(last) };
+        }
+        case 'all': {
+            // Falls back to a wide window until the first payload tells us the real start.
+            const earliest = (state.aiUsageData && state.aiUsageData.earliest_event_date) || null;
+            return { start: earliest || aiDateToIso(aiShiftDays(today, -730)), end: aiDateToIso(today) };
+        }
+        case '30d':
+        default:
+            return { start: aiDateToIso(aiShiftDays(today, -29)), end: aiDateToIso(today) };
+    }
+}
+
+function initAiRangeInputs() {
+    if (!refs.aiRangeStart && !refs.aiRangeEnd) return;
+    const today = aiDateToIso(aiUtcToday());
+    const preset = aiPresetRange(state.aiRange.preset);
+    if (refs.aiRangeStart) { refs.aiRangeStart.value = preset.start; refs.aiRangeStart.max = today; }
+    if (refs.aiRangeEnd) { refs.aiRangeEnd.value = preset.end; refs.aiRangeEnd.max = today; }
+    syncAiPresetButtons();
+}
+
+function setAiRangeError(message) {
+    if (!refs.aiRangeError) return;
+    refs.aiRangeError.textContent = message || '';
+    refs.aiRangeError.hidden = !message;
+}
+
+function syncAiPresetButtons() {
+    if (!refs.aiRangePresets) return;
+    refs.aiRangePresets.querySelectorAll('.ai-preset-btn').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.preset === state.aiRange.preset);
+    });
+}
+
+function applyAiPreset(preset) {
+    const range = aiPresetRange(preset);
+    state.aiRange = { preset, start: range.start, end: range.end };
+    if (refs.aiRangeStart) refs.aiRangeStart.value = range.start;
+    if (refs.aiRangeEnd) refs.aiRangeEnd.value = range.end;
+    syncAiPresetButtons();
+    setAiRangeError('');
+    void loadAiUsage({ chartsOnly: true });
+}
+
+function handleAiRangeSubmit(event) {
+    event.preventDefault();
+    const start = (refs.aiRangeStart?.value || '').trim();
+    const end = (refs.aiRangeEnd?.value || '').trim();
+    if (!start || !end) { setAiRangeError('Pick both a From and a To date.'); return; }
+    if (start > end) { setAiRangeError('The From date must be on or before the To date.'); return; }
+    setAiRangeError('');
+    state.aiRange = { preset: 'custom', start, end };
+    syncAiPresetButtons();
+    void loadAiUsage({ chartsOnly: true });
+}
+
+function resetAiRange() {
+    applyAiPreset('30d');
+}
+
+async function loadAiUsage(options = {}) {
+    const chartsOnly = !!options.chartsOnly;   // a filter change shouldn't refetch revenue panels
     if (!state.currentUser) {
         const canAccess = await refreshCurrentAdminUser({ silent: true });
         if (!canAccess) { showAuth(); showFlash('Please login with an admin account.', 'error'); return; }
     }
     if (!await ensureAdminProtection({ silent: false })) return;
-    aiUsageEmptyState('Loading AI usage...');
+    // Refetch keeps the frame: hold the previous render at reduced opacity rather than
+    // blanking to a skeleton, so changing the date range doesn't jump the layout.
+    if (state.aiUsageData) setAiRefreshing(true); else aiUsageEmptyState('Loading AI usage...');
     try {
-        const response = await fetch(`${API_BASE}/api/admin/ai-usage/analytics`, {
+        const params = new URLSearchParams();
+        if (state.aiRange.start) params.set('start', state.aiRange.start);
+        if (state.aiRange.end) params.set('end', state.aiRange.end);
+        const query = params.toString();
+        const response = await fetch(`${API_BASE}/api/admin/ai-usage/analytics${query ? `?${query}` : ''}`, {
             headers: buildAuthHeaders(),
             credentials: 'same-origin'
         });
@@ -1955,7 +2107,10 @@ async function loadAiUsage() {
         console.error('Failed to load AI usage:', error);
         aiUsageEmptyState('Could not load AI usage. Please retry.');
         showFlash('Could not load AI usage. Please retry.', 'error');
+    } finally {
+        setAiRefreshing(false);
     }
+    if (chartsOnly) return;
     await loadEnterpriseRevenue();
     await loadB2cRevenue();
     await loadOptimization();
@@ -2619,7 +2774,21 @@ function renderEnterpriseRevenue(data) {
     }
 }
 
+function formatAiDate(iso) {
+    const raw = String(iso || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || '—';
+    const d = new Date(`${raw}T00:00:00Z`);
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+function aiRangeLabel(range) {
+    if (!range) return '';
+    if (range.start === range.end) return formatAiDate(range.start);
+    return `${formatAiDate(range.start)} – ${formatAiDate(range.end)}`;
+}
+
 function renderAiUsage(data) {
+    state.aiUsageData = data || null;
     const totals = (data && data.totals) || {};
     const setMetric = (costEl, subEl, t) => {
         const s = t || { cost_usd: 0, tokens: 0, calls: 0 };
@@ -2634,35 +2803,439 @@ function renderAiUsage(data) {
     setMetric(refs.ai7Cost, refs.ai7Sub, totals.last_7_days);
     setMetric(refs.aiMonthCost, refs.aiMonthSub, totals.this_month);
     setMetric(refs.aiAllCost, refs.aiAllSub, totals.all_time);
-    if (refs.aiMonthHero) refs.aiMonthHero.textContent = formatAiUsd((totals.this_month || {}).cost_usd);
 
-    const daily = Array.isArray(data && data.daily) ? data.daily : [];
-    if (refs.aiTimelineChart) {
-        const nonzero = daily.some((d) => Number(d.cost_usd) > 0);
-        if (!daily.length || !nonzero) {
-            refs.aiTimelineChart.innerHTML = '<div class="table-empty">No AI usage in the last 30 days.</div>';
-        } else {
-            const max = Math.max(1e-9, ...daily.map((d) => Number(d.cost_usd) || 0));
-            const columns = daily.map((d, i) => {
-                const c = Number(d.cost_usd) || 0;
-                const h = c > 0 ? Math.max((c / max) * 100, 4) : 0;
-                // 30 day-labels won't all fit; show every 5th day plus the most recent.
-                const showLabel = (i % 5 === 0) || (i === daily.length - 1);
-                const label = showLabel ? String(d.date || '').slice(5) : '';
-                return `
-                    <div class="finance-month">
-                        <div class="finance-bars" title="${escapeHtml(d.date)} — ${escapeHtml(formatAiUsd(c))} · ${escapeHtml(formatTokens(d.tokens))} tokens">
-                            <span class="finance-bar investment" style="height: ${h.toFixed(2)}%"></span>
-                        </div>
-                        <div class="finance-month-label">${escapeHtml(label)}</div>
-                    </div>`;
-            }).join('');
-            refs.aiTimelineChart.innerHTML = `<div class="finance-timeline-plot finance-ai-daily">${columns}</div>`;
+    // --- selected range -----------------------------------------------------
+    const range = (data && data.range) || null;
+    const label = aiRangeLabel(range);
+    if (range) {
+        // Keep the inputs and state in step with what the server actually applied
+        // (it clamps a future end date and swaps a reversed pair).
+        state.aiRange.start = range.start;
+        state.aiRange.end = range.end;
+        if (refs.aiRangeStart && refs.aiRangeStart.value !== range.start) refs.aiRangeStart.value = range.start;
+        if (refs.aiRangeEnd && refs.aiRangeEnd.value !== range.end) refs.aiRangeEnd.value = range.end;
+    }
+    if (refs.aiRangeStart && data && data.earliest_event_date) refs.aiRangeStart.min = data.earliest_event_date;
+
+    setMetric(refs.aiRangeCost, refs.aiRangeSub, range);
+    if (refs.aiMonthHero) refs.aiMonthHero.textContent = formatAiUsd((range || {}).cost_usd);
+    if (refs.aiHeroLabel) refs.aiHeroLabel.textContent = label ? `${label} (est.)` : 'Selected range (est.)';
+    if (refs.aiRangeCaption && range) {
+        refs.aiRangeCaption.textContent =
+            `Showing ${label} · ${range.days} day${range.days === 1 ? '' : 's'}. Everything below — totals, charts and the daily table — follows this range.`;
+    }
+    if (refs.aiRangeAvg) refs.aiRangeAvg.textContent = formatAiUsd((range || {}).avg_per_day_usd);
+    if (refs.aiRangeAvgSub && range) {
+        refs.aiRangeAvgSub.textContent = `${range.active_days} of ${range.days} day${range.days === 1 ? '' : 's'} had activity`;
+    }
+    if (refs.aiRangeTopDay) {
+        const top = range && range.top_day;
+        refs.aiRangeTopDay.textContent = top ? formatAiUsd(top.cost_usd) : '—';
+        if (refs.aiRangeTopDaySub) {
+            refs.aiRangeTopDaySub.textContent = top ? formatAiDate(top.date) : 'No usage in this range';
         }
     }
+    if (refs.aiRangeSaved) refs.aiRangeSaved.textContent = formatAiUsd((range || {}).cache_saved_usd);
+    if (refs.aiRangeSavedSub && range) {
+        refs.aiRangeSavedSub.textContent = `${range.cache_hit_pct || 0}% of input tokens served from cache`;
+    }
+    // Google Search grounding is a PER-REQUEST fee with its own free tier, so it moves
+    // independently of token spend — shown separately or it looks like a token spike.
+    if (refs.aiRangeSearch) refs.aiRangeSearch.textContent = formatAiUsd((range || {}).search_cost_usd);
+    if (refs.aiRangeSearchSub && range) {
+        const queries = Number(range.search_queries) || 0;
+        const total = Number(range.cost_usd) || 0;
+        const share = total > 0 ? Math.round((Number(range.search_cost_usd) || 0) / total * 100) : 0;
+        refs.aiRangeSearchSub.textContent = queries
+            ? `${queries.toLocaleString()} search request${queries === 1 ? '' : 's'} · ${share}% of spend`
+            : 'No grounded searches in this range';
+    }
+
+    const rangeSuffix = label ? ` · ${label}` : '';
+    const granularity = (range && range.granularity) || 'day';
+    const granularityWord = granularity === 'month' ? 'month' : (granularity === 'week' ? 'week' : 'day');
+    if (refs.aiTimelineTitle) {
+        refs.aiTimelineTitle.textContent = `AI Cost by ${granularityWord === 'day' ? 'Day' : (granularityWord === 'week' ? 'Week' : 'Month')}`;
+    }
+    if (refs.aiTimelineSub) refs.aiTimelineSub.textContent = `Estimated USD spent per ${granularityWord}${rangeSuffix}.`;
+    if (refs.aiSourceSub) refs.aiSourceSub.textContent = `Which features drive AI processing spend${rangeSuffix}.`;
+    if (refs.aiModelSub) refs.aiModelSub.textContent = `Spend across configured AI model tiers${rangeSuffix}.`;
+    if (refs.aiDailyCaption) refs.aiDailyCaption.textContent = `Every day in ${label || 'the selected range'}, newest first.`;
+
+    const series = Array.isArray(data && data.series) && data.series.length
+        ? data.series
+        : (Array.isArray(data && data.daily) ? data.daily : []);
+    state.aiSeries = series;
+    state.aiGranularity = granularity;
+    renderAiTimelineChart();
 
     renderAiBreakdown(refs.aiSourceChart, (data && data.by_source) || [], (r) => r.label);
     renderAiBreakdown(refs.aiModelChart, (data && data.by_model) || [], (_r, index) => `AI Model ${index + 1}`);
+    renderAiDailyTable();
+}
+
+// --- AI Costs CSV export ---------------------------------------------------
+// Built client-side from the payload already on screen, so the file always matches
+// exactly what the selected date range is showing (no second server round-trip).
+function csvCell(value) {
+    const s = value === null || value === undefined ? '' : String(value);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function csvRows(rows) {
+    return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
+}
+
+function aiExportSections(kind, data) {
+    const range = data.range || {};
+    const sections = [];
+    if (kind === 'sources' || kind === 'all') {
+        sections.push({
+            title: 'Cost by feature',
+            header: ['Feature', 'Source key', 'Calls', 'Tokens', 'Searches', 'Search cost (USD)', 'Est. cost (USD)'],
+            rows: (data.by_source || []).map((r) => [
+                r.label || r.source, r.source, r.calls || 0, r.tokens || 0,
+                r.search_queries || 0, r.search_cost_usd || 0, r.cost_usd || 0,
+            ]),
+        });
+    }
+    if (kind === 'models' || kind === 'all') {
+        sections.push({
+            title: 'Cost by model',
+            header: ['Model', 'Calls', 'Tokens', 'Est. cost (USD)'],
+            rows: (data.by_model || []).map((r) => [r.model, r.calls || 0, r.tokens || 0, r.cost_usd || 0]),
+        });
+    }
+    if (kind === 'daily' || kind === 'all') {
+        const total = Number(range.cost_usd) || 0;
+        // The per-card export mirrors the table (so the hide-empty toggle beside the
+        // button applies); "export everything" always carries every day in the range.
+        const hideEmpty = kind === 'daily' && (!refs.aiHideEmptyDays || refs.aiHideEmptyDays.checked);
+        const days = hideEmpty ? (data.daily || []).filter((d) => (d.calls || 0) > 0) : (data.daily || []);
+        sections.push({
+            title: 'Spend by date',
+            header: ['Date (UTC)', 'Calls', 'Tokens', 'Est. cost (USD)', 'Share of range (%)'],
+            rows: days.map((d) => [
+                d.date, d.calls || 0, d.tokens || 0, d.cost_usd || 0,
+                total > 0 ? Number(((d.cost_usd || 0) / total * 100).toFixed(2)) : 0,
+            ]),
+        });
+    }
+    return sections.filter(Boolean);
+}
+
+function exportAiCsv(kind, btn) {
+    const data = state.aiUsageData;
+    if (!data || !data.range) { showFlash('Load the AI usage data before exporting.', 'error'); return; }
+    const range = data.range;
+    const lines = [
+        ['Rilono — AI usage & cost (estimated)'],
+        ['Range (UTC)', range.start, 'to', range.end],
+        ['Days in range', range.days, 'Days with activity', range.active_days],
+        ['Total est. cost (USD)', range.cost_usd, 'Calls', range.calls, 'Tokens', range.tokens],
+        ['Average per day (USD)', range.avg_per_day_usd, 'Cache hit (%)', range.cache_hit_pct],
+        ['Note', 'Estimated from per-token pricing; cross-check the provider invoice.'],
+    ];
+    aiExportSections(kind, data).forEach((section) => {
+        lines.push([], [section.title], section.header, ...section.rows);
+    });
+
+    // BOM so Excel reads the em-dashes in feature labels as UTF-8.
+    const blob = new Blob(['\uFEFF' + csvRows(lines)], { type: 'text/csv;charset=utf-8;' });
+    const suffix = kind === 'all' ? 'full' : kind;
+    const filename = `rilono-ai-costs-${suffix}-${range.start}_to_${range.end}.csv`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Revoke after the click so the download has a live URL to read from.
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    showFlash(`Downloaded ${filename}`, 'success');
+}
+
+function handleAiExportClick(event) {
+    const btn = event.target.closest('.ai-export-btn');
+    if (!btn) return;
+    exportAiCsv(btn.dataset.aiExport || 'all', btn);
+}
+
+function renderAiDailyTable() {
+    if (!refs.aiDailyTableBody) return;
+    const data = state.aiUsageData || {};
+    const daily = Array.isArray(data.daily) ? data.daily : [];
+    const rangeTotal = Number((data.range || {}).cost_usd) || 0;
+    const hideEmpty = !refs.aiHideEmptyDays || refs.aiHideEmptyDays.checked;
+    const rows = (hideEmpty ? daily.filter((d) => (d.calls || 0) > 0) : daily).slice().reverse();
+
+    if (!rows.length) {
+        const message = daily.length && hideEmpty
+            ? 'No AI usage on any day in this range.'
+            : 'No AI usage in the selected range.';
+        refs.aiDailyTableBody.innerHTML = `<tr><td colspan="5" class="table-empty">${escapeHtml(message)}</td></tr>`;
+    } else {
+        refs.aiDailyTableBody.innerHTML = rows.map((d) => {
+            const cost = Number(d.cost_usd) || 0;
+            const share = rangeTotal > 0 ? (cost / rangeTotal) * 100 : 0;
+            return `
+                <tr${(d.calls || 0) ? '' : ' class="ai-daily-empty-row"'}>
+                    <td>${escapeHtml(formatAiDate(d.date))}</td>
+                    <td>${escapeHtml((d.calls || 0).toLocaleString())}</td>
+                    <td>${escapeHtml(formatTokens(d.tokens))}</td>
+                    <td><strong>${escapeHtml(formatAiUsd(cost))}</strong></td>
+                    <td>${escapeHtml(share.toFixed(1))}%</td>
+                </tr>`;
+        }).join('');
+    }
+
+    const put = (el, v) => { if (el) el.textContent = v; };
+    const totalCalls = daily.reduce((sum, d) => sum + (d.calls || 0), 0);
+    const totalTokens = daily.reduce((sum, d) => sum + (d.tokens || 0), 0);
+    put(refs.aiDailyTotalCalls, totalCalls.toLocaleString());
+    put(refs.aiDailyTotalTokens, formatTokens(totalTokens));
+    put(refs.aiDailyTotalCost, formatAiUsd(rangeTotal));
+}
+
+// --- AI cost timeline (SVG column chart) -----------------------------------
+// Single series, so no legend — the card title names what is plotted. One hue
+// (#6366f1, validated against the white card surface), hairline solid gridlines,
+// value axis, per-column hover/keyboard tooltip, and a direct label on the peak
+// only. Every value is also in the "Spend by date" table below, so the tooltip
+// enhances rather than gates.
+const AI_CHART = {
+    height: 300,
+    pad: { top: 24, right: 14, bottom: 30, left: 58 },
+    series: '#6366f1',
+    seriesHover: '#4338ca',
+    wash: 'rgba(99, 102, 241, 0.10)',
+    grid: '#e4e4e7',
+    baseline: '#d4d4d8',
+    axisInk: '#71717a',
+    labelInk: '#18181b',
+};
+
+// Steps of 1/2/5 × 10ⁿ only — a 2.5 step would render as "$3" beside "$5" once the
+// label is rounded, which misstates the gridline.
+function niceAxis(max, targetCount = 4) {
+    if (!(max > 0)) return { top: 1, step: 1, ticks: [0, 1] };
+    const rawStep = max / targetCount;
+    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const normalized = rawStep / magnitude;
+    const step = (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * magnitude;
+    const top = Math.ceil(max / step) * step;
+    const ticks = [];
+    for (let v = 0; v <= top + step / 2; v += step) ticks.push(Number(v.toPrecision(12)));
+    return { top, step, ticks };
+}
+
+function formatAxisUsd(value, step) {
+    const decimals = step >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log10(step)));
+    return `$${Number(value).toFixed(decimals)}`;
+}
+
+// Square at the baseline, 4px rounded at the data end.
+function aiBarPath(x, y, w, h) {
+    const r = Math.max(0, Math.min(4, w / 2, h));
+    return `M${x} ${y + h} L${x} ${y + r} Q${x} ${y} ${x + r} ${y} `
+        + `L${x + w - r} ${y} Q${x + w} ${y} ${x + w} ${y + r} L${x + w} ${y + h} Z`;
+}
+
+function aiBucketSpan(d) {
+    const start = formatAiDate(d.date);
+    return d.end && d.end !== d.date ? `${start} – ${formatAiDate(d.end)}` : start;
+}
+
+function renderAiTimelineChart() {
+    const host = refs.aiTimelineChart;
+    if (!host) return;
+    const series = Array.isArray(state.aiSeries) ? state.aiSeries : [];
+    const values = series.map((d) => Number(d.cost_usd) || 0);
+    if (!series.length || !values.some((v) => v > 0)) {
+        host.innerHTML = '<div class="table-empty">No AI usage in the selected range.</div>';
+        return;
+    }
+    if (series.length < 2) {
+        // A single bucket is a number, not a chart — "Spent in range" above already
+        // states it, and a lone column would just be that number drawn badly.
+        host.innerHTML = '<div class="table-empty">One day selected — see <strong>Spent in range</strong> above.'
+            + '<br>Pick a wider range to see the trend.</div>';
+        return;
+    }
+
+    const { height } = AI_CHART;
+    const width = Math.max(320, Math.round(host.clientWidth) || 640);
+    // Narrow cards get a tighter value gutter so the plot keeps its width.
+    const pad = { ...AI_CHART.pad, left: width < 480 ? 42 : AI_CHART.pad.left };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    const baselineY = pad.top + plotH;
+    const axis = niceAxis(Math.max(...values));
+    const band = plotW / series.length;
+    const barW = Math.max(2, Math.min(24, band - 2, band * 0.7));
+    const yOf = (v) => pad.top + plotH * (1 - v / axis.top);
+
+    // Label density follows the plot width (~64px per label) so a narrow card thins
+    // its axis instead of colliding; at most 8 labels, plus the final bucket when it
+    // clears the previous one.
+    const maxLabels = Math.max(3, Math.min(8, Math.floor(plotW / 64)));
+    const step = Math.max(1, Math.ceil(series.length / maxLabels));
+    const labelled = new Set();
+    let lastLabelled = 0;
+    for (let i = 0; i < series.length; i += step) { labelled.add(i); lastLabelled = i; }
+    if (series.length - 1 - lastLabelled >= Math.ceil(step / 2)) labelled.add(series.length - 1);
+
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const make = (tag, attrs) => {
+        const node = document.createElementNS(svgNS, tag);
+        Object.entries(attrs).forEach(([k, v]) => node.setAttribute(k, String(v)));
+        return node;
+    };
+
+    const svg = make('svg', {
+        class: 'ai-chart-svg', width: '100%', height, viewBox: `0 0 ${width} ${height}`,
+        preserveAspectRatio: 'xMidYMid meet', 'aria-hidden': 'true',
+    });
+
+    // Gridlines + value axis (solid hairlines, one step off the surface).
+    axis.ticks.forEach((tick) => {
+        const y = yOf(tick);
+        svg.appendChild(make('line', {
+            x1: pad.left, x2: pad.left + plotW, y1: y, y2: y,
+            stroke: tick === 0 ? AI_CHART.baseline : AI_CHART.grid, 'stroke-width': 1,
+        }));
+        const text = make('text', {
+            x: pad.left - 10, y: y + 4, 'text-anchor': 'end', class: 'ai-chart-axis-text',
+        });
+        text.textContent = formatAxisUsd(tick, axis.step);
+        svg.appendChild(text);
+    });
+
+    // Columns.
+    const peakIndex = values.indexOf(Math.max(...values));
+    series.forEach((d, i) => {
+        const value = values[i];
+        if (value <= 0) return;
+        const x = pad.left + i * band + (band - barW) / 2;
+        const y = yOf(value);
+        const h = Math.max(1, baselineY - y);   // 1px floor so a tiny day is still visible
+        svg.appendChild(make('path', {
+            d: aiBarPath(x, baselineY - h, barW, h),
+            fill: AI_CHART.series, class: 'ai-chart-bar', 'data-index': i,
+        }));
+    });
+
+    // Direct-label the peak only; everything else is carried by the axis and tooltip.
+    if (values[peakIndex] > 0) {
+        const label = formatAiUsd(values[peakIndex]);
+        const centre = pad.left + peakIndex * band + band / 2;
+        const halfText = label.length * 3.4;
+        const x = Math.min(Math.max(centre, pad.left + halfText), pad.left + plotW - halfText);
+        const text = make('text', {
+            x, y: Math.max(12, yOf(values[peakIndex]) - 8), 'text-anchor': 'middle', class: 'ai-chart-peak',
+        });
+        text.textContent = label;
+        svg.appendChild(text);
+    }
+
+    // X axis labels.
+    series.forEach((d, i) => {
+        if (!labelled.has(i)) return;
+        const text = make('text', {
+            x: pad.left + i * band + band / 2, y: baselineY + 18,
+            'text-anchor': 'middle', class: 'ai-chart-axis-text',
+        });
+        text.textContent = d.label || String(d.date || '').slice(5);
+        svg.appendChild(text);
+    });
+
+    // Hit targets: the whole band, not just the painted column.
+    series.forEach((d, i) => {
+        svg.appendChild(make('rect', {
+            x: pad.left + i * band, y: pad.top, width: band, height: plotH,
+            fill: 'transparent', class: 'ai-chart-hit', 'data-index': i,
+        }));
+    });
+
+    host.innerHTML = '';
+    host.appendChild(svg);
+    const tip = document.createElement('div');
+    tip.className = 'ai-chart-tip';
+    tip.hidden = true;
+    host.appendChild(tip);
+
+    host.tabIndex = 0;
+    host.setAttribute('aria-label',
+        `Estimated AI cost per ${state.aiGranularity || 'day'}, ${series.length} points. Values are listed in the Spend by date table below.`);
+
+    let active = -1;
+    const clear = () => {
+        active = -1;
+        tip.hidden = true;
+        svg.querySelectorAll('.ai-chart-bar.is-active').forEach((b) => b.classList.remove('is-active'));
+    };
+    const show = (index) => {
+        const d = series[index];
+        if (!d) return;
+        active = index;
+        svg.querySelectorAll('.ai-chart-bar.is-active').forEach((b) => b.classList.remove('is-active'));
+        const bar = svg.querySelector(`.ai-chart-bar[data-index="${index}"]`);
+        if (bar) bar.classList.add('is-active');
+
+        // Labels are data — build the readout with textContent, never innerHTML.
+        tip.textContent = '';
+        const value = document.createElement('strong');
+        value.textContent = formatAiUsd(values[index]);
+        const when = document.createElement('span');
+        when.textContent = aiBucketSpan(d);
+        const detail = document.createElement('span');
+        detail.textContent = `${(d.calls || 0).toLocaleString()} calls · ${formatTokens(d.tokens)} tokens`;
+        tip.append(value, when, detail);
+        tip.hidden = false;
+
+        const centre = pad.left + index * band + band / 2;
+        const scale = host.clientWidth / width;
+        tip.style.left = `${Math.round(centre * scale)}px`;
+        tip.style.top = `${Math.round(yOf(values[index]) * scale)}px`;
+        // Flip the tooltip inside the card when the column sits near an edge.
+        tip.classList.toggle('flip-left', centre * scale > host.clientWidth - 130);
+        tip.classList.toggle('flip-right', centre * scale < 130);
+    };
+
+    svg.addEventListener('pointermove', (event) => {
+        const hit = event.target.closest('.ai-chart-hit');
+        if (!hit) { clear(); return; }
+        const index = Number(hit.dataset.index);
+        if (index !== active) show(index);
+    });
+    svg.addEventListener('pointerleave', clear);
+    host.addEventListener('blur', clear);
+    host.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
+            event.preventDefault();
+            const next = active < 0
+                ? (event.key === 'ArrowRight' ? 0 : series.length - 1)
+                : Math.min(series.length - 1, Math.max(0, active + (event.key === 'ArrowRight' ? 1 : -1)));
+            show(next);
+        } else if (event.key === 'Escape') {
+            clear();
+        }
+    });
+
+    // Re-render on width changes so the axis and bands stay honest.
+    if (!state.aiChartResizeBound) {
+        state.aiChartResizeBound = true;
+        if (typeof ResizeObserver === 'function') {
+            let lastWidth = host.clientWidth;
+            new ResizeObserver(() => {
+                const nextWidth = host.clientWidth;
+                if (Math.abs(nextWidth - lastWidth) < 8) return;
+                lastWidth = nextWidth;
+                renderAiTimelineChart();
+            }).observe(host);
+        }
+    }
 }
 
 function renderAiBreakdown(el, rows, labelFn) {

@@ -6,15 +6,19 @@ to pass the visa interview once). So instead of a recurring plan we use:
 
   1. A FREEMIUM HOOK on signup / Chrome-extension install:
        * 1 free document "Red Flag" scan (shows ONE error, blurs the rest)
+       * 1 free AI university shortlist
+       * 3 free SOP generator actions (generate + refine share the counter)
   2. A ONE-TIME "Visa Success Pass" — ₹999, 30-day validity (under the ₹1000
      psychological line). Unlocks:
        * Unlimited Chrome-extension usage + document audits
+       * Unlimited AI university shortlists
+       * Unlimited AI SOP / motivation-letter generations (generate + refine)
        * 3 full AI voice mock interviews
        * Full red-flag reveal (no blur)
 
 The Pass is implemented as a one-time 30-day grant of the existing Pro access
 (`app.subscriptions.grant_pro_access_for_days`), so all the broad "unlimited" Pro
-benefits (AI chat, uploads) apply automatically. This module layers the three NEW
+benefits (AI chat, uploads) apply automatically. This module layers the four NEW
 metered features on top via dedicated counters on the Subscription row, plus the
 admin economics that prove the ~₹950 profit per pass against real Gemini cost.
 """
@@ -202,6 +206,9 @@ def pass_benefits() -> list[str]:
     return [
         "Unlimited Chrome-extension usage",
         "Unlimited document audits (Gemini)",
+        "Unlimited AI university shortlists — QS + national rank, reach/match/safety, "
+        "estimated tuition and application fees",
+        "Unlimited AI SOP / motivation-letter drafts and refinements",
         f"{PASS_VOICE_INTERVIEWS} full AI voice mock interviews",
         "Full red-flag reveal — no blur",
         f"{PASS_DURATION_DAYS}-day validity",

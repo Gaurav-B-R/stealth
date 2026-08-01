@@ -143,8 +143,16 @@ def get_model_candidates(
     )
 
 
-def _instrument_usage(model, model_name: str, usage_source: str = "document_ai"):
-    """Wrap generate_content so every document-AI call logs its token usage/cost."""
+def _instrument_usage(model, model_name: str, usage_source: str = "document_ai",
+                      user_id: Optional[int] = None, organization_id: Optional[int] = None):
+    """Wrap generate_content so every call through this model logs its usage/cost.
+
+    This is the metering choke point: callers that build their model here cannot forget
+    to record, and cannot lose a billed response by recording only after a successful
+    parse. Passing user_id/organization_id keeps attribution on paths that never call
+    set_usage_account() — without it the row lands with a NULL account and drops out of
+    the per-account margin report.
+    """
     try:
         original = model.generate_content
     except Exception:
@@ -154,7 +162,10 @@ def _instrument_usage(model, model_name: str, usage_source: str = "document_ai")
         resp = original(*args, **kwargs)
         try:
             from app import ai_usage
-            ai_usage.record_gemini_usage(usage_source, model_name, resp)
+            ai_usage.record_gemini_usage(
+                usage_source, model_name, resp,
+                user_id=user_id, organization_id=organization_id,
+            )
         except Exception:
             pass
         return resp
@@ -165,14 +176,15 @@ def _instrument_usage(model, model_name: str, usage_source: str = "document_ai")
         pass
 
 
-def build_generative_model(model_name: str, usage_source: str = "document_ai"):
+def build_generative_model(model_name: str, usage_source: str = "document_ai",
+                           user_id: Optional[int] = None, organization_id: Optional[int] = None):
     model = None
     if USE_VERTEX_AI and VERTEX_AI_AVAILABLE:
         model = GenerativeModel(model_name)
     elif GENAI_AVAILABLE:
         model = genai.GenerativeModel(model_name)
     if model is not None:
-        _instrument_usage(model, model_name, usage_source)
+        _instrument_usage(model, model_name, usage_source, user_id, organization_id)
     return model
 
 

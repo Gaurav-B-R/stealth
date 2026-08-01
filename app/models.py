@@ -2040,6 +2040,16 @@ class GeminiUsageEvent(Base):
     # Subset of prompt_tokens served from Gemini's context cache (implicit on 2.5 models,
     # or explicit). Billed at a discount, so estimated_cost_usd already reflects it.
     cached_tokens = Column(Integer, nullable=False, default=0)
+    # Google Search grounding billable units for this call: distinct search queries on
+    # Gemini 3.x, 1 per grounded prompt on 2.5 and older. Billed PER REQUEST, so it has
+    # no token column — a third of the 2026-07 invoice was these fees, unmetered.
+    search_queries = Column(Integer, nullable=False, default=0)
+    search_cost_usd = Column(Numeric(12, 6), nullable=False, default=0)
+    # "ok" = the caller used this response; "empty" = billed but discarded (no text,
+    # parse failure, fallback moving on). Both cost money; only "ok" produced value.
+    status = Column(String, nullable=False, default="ok", index=True)
+    # Total = tokens + search fees, so every downstream consumer (admin console,
+    # enterprise per-action margin) picks up grounding cost without changing.
     estimated_cost_usd = Column(Numeric(12, 6), nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
 

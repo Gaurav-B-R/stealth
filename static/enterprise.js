@@ -887,10 +887,11 @@
     if (!state.catalog) return { key, label: key, color: "#94a3b8" };
     return state.catalog.stages.find((s) => s.key === key) || { key, label: key, color: "#94a3b8" };
   }
-  // Stage keys/order/colors are org-wide (kanban columns, filter chips, analytics all share
-  // them), but what a stage is CALLED depends on the destination: a UAE case's stage 3 is
-  // "Entry Permit Filed", not "Application Submitted". Anything scoped to ONE client uses
-  // this; anything spanning the whole pipeline keeps state.catalog.stages.
+  // Stage keys/colors are org-wide (kanban columns, filter chips, analytics all share them),
+  // but what a stage is CALLED — and, for a few destinations, where it sits in the order —
+  // depends on the destination: a UAE case's "submitted" is "Entry Permit Filed", not
+  // "Application Submitted", and the Netherlands decides before biometrics. Anything scoped
+  // to ONE client uses this; anything spanning the whole pipeline keeps state.catalog.stages.
   function stagesForClient(client) {
     const all = (state.catalog && state.catalog.stages) || [];
     let code = String((client && (client.destination_country_code || (client.country && client.country.code))) || "").trim().toUpperCase();
@@ -1773,11 +1774,21 @@
         <div><div class="cv">${vt.count}</div><div class="cl">${esc(vt.visa_type)}</div></div></div>`).join("")
       : `<div class="empty" style="padding:22px"><p>Add clients to see visa-type insights.</p></div>`;
 
-    const countryCards = (d.top_countries.length ? d.top_countries : []).map((ct) =>
-      `<div class="country-card clickable" role="button" tabindex="0" onclick="__ent.viewClients({country:'${ct.code}'})">
+    // These cards are *our clients* grouped by where they're applying — not a menu of
+    // countries Rilono supports. Every label says "clients" so nobody reads it as a
+    // destination catalogue. The landmark name moves to hover; the photo already shows it.
+    const ctList = d.top_countries || [];
+    const ctShown = ctList.reduce((n, ct) => n + (ct.count || 0), 0);
+    const ctPlural = (n) => n + " client" + (n === 1 ? "" : "s");
+    const ctHint = !ctList.length ? ""
+      : ctShown < (k.total_clients || 0)
+        ? `Top ${ctList.length} · ${ctShown} of your ${k.total_clients} clients`
+        : `All ${ctPlural(ctShown)}, by where they're applying`;
+    const countryCards = ctList.map((ct) =>
+      `<div class="country-card clickable" role="button" tabindex="0" title="${esc(ctPlural(ct.count) + " applying to " + ct.name + (ct.landmark ? " · " + ct.landmark : ""))}" onclick="__ent.viewClients({country:'${ct.code}'})">
         <div class="country-art" style="background:linear-gradient(135deg,${ct.gradient_from || "#6366f1"},${ct.gradient_to || "#8b5cf6"})">${landmarkArt(ct)}
         <span class="flag">${ct.flag_emoji || "🌐"}</span><span class="cnt">${ct.count}</span></div>
-        <div class="country-meta"><b>${esc(ct.name)}</b><span>${esc(ct.landmark || "")}</span></div></div>`).join("");
+        <div class="country-meta"><b>${esc(ct.name)}</b><span>${esc(ctPlural(ct.count))}</span></div></div>`).join("");
 
     const deadlines = (d.upcoming_deadlines || []).length ? d.upcoming_deadlines.map((cl) => {
       const du = daysUntil(cl.target_date);
@@ -1919,8 +1930,9 @@
         <div class="card"><div class="card-head"><h3>English tests</h3></div>
           <div class="card-body">${engRows}</div></div>
       </div>
-      <div class="card" style="margin-top:20px"><div class="card-head"><h3>Destinations</h3></div>
-        <div class="card-body">${countryCards ? `<div class="country-grid">${countryCards}</div>` : `<div class="empty" style="padding:24px"><p>Add clients to see destination insights.</p></div>`}</div></div>`;
+      <div class="card" style="margin-top:20px"><div class="card-head"><h3>Client destinations</h3>
+        ${ctHint ? `<span class="dash-head-hint">${esc(ctHint)}</span>` : ""}</div>
+        <div class="card-body">${countryCards ? `<div class="country-grid">${countryCards}</div>` : `<div class="empty" style="padding:24px"><p>Add clients to see where they're applying.</p></div>`}</div></div>`;
 
     const dbf = $("#dashBranch");
     if (dbf) dbf.onchange = () => { state.filters.branch_id = dbf.value; renderDashboard(); };
@@ -2290,6 +2302,10 @@
     "application_reference", "destination_country_code", "visa_type", "intake", "target_date",
     "priority", "status",
     "whatsapp_number", "current_city", "gender", "guardian_name", "guardian_relation", "guardian_phone",
+    // `admission_stage` is staff-editable: it records the UNIVERSITY phase, which the visa
+    // pipeline cannot express on its own (a walk-in already holding an admit may sit at
+    // `new_lead`), and `deferred` is only ever reachable from here. The server re-derives it
+    // on a real stage transition, so a save that does not move the case leaves it alone.
     "study_level", "field_of_study", "admission_stage", "prior_refusal_history", "prior_refusal_notes",
     "highest_qualification", "qualification_score", "qualification_scale", "year_of_passing",
     "backlogs_count", "work_experience_band", "english_test_status", "english_test_type",
@@ -2408,7 +2424,6 @@
       intakeSel = pick("Intake"), intakeWrap = pick("IntakeWrap");
 
     const statusSel = pick("Status");
-    if (statusSel) statusSel.innerHTML = stagesForClient(c).map((s) => `<option value="${s.key}" ${(c.status || "new_lead") === s.key ? "selected" : ""}>${esc(s.label)}</option>`).join("");
     const prioSel = pick("Priority");
     if (prioSel) prioSel.innerHTML = state.catalog.priorities.map((pr) => `<option value="${pr.key}" ${(c.priority || "normal") === pr.key ? "selected" : ""}>${esc(pr.label)}</option>`).join("");
 
@@ -2430,6 +2445,25 @@
         intakeSel.innerHTML = `<option value="">—</option>` + withStored(ct.student_intakes, sameCountry ? c.intake : "")
           .map((i) => `<option value="${esc(i)}" ${c.intake === i ? "selected" : ""}>${esc(i)}</option>`).join("");
       } else { intakeWrap.style.display = "none"; intakeSel.innerHTML = `<option value="">—</option>`; }
+      // Stage wording is destination-specific, so the picker has to be rebuilt whenever the
+      // destination changes — otherwise it keeps the previous destination's labels. The key
+      // already chosen stays chosen; the keys themselves are the same everywhere.
+      if (statusSel) {
+        const stages = stagesForClient({ destination_country_code: countrySel.value });
+        const picked = statusSel.value || c.status || "new_lead";
+        const known = stages.some((s) => s.key === picked);
+        const keep = known ? picked : "";
+        // A stored stage the catalog no longer carries has no <option> to select, and the
+        // browser silently falls back to the first one — so opening this form to fix a phone
+        // number would rewind the case to New Lead and drag the admissions milestone down
+        // with it. Show the stored key as a disabled option instead: the counsellor can see
+        // the case sits on an unknown stage, and its empty value means `status` is dropped
+        // by collectClientFormBody (a required key is never sent empty), so saving without
+        // choosing a stage leaves the case exactly where it is.
+        const unknown = known ? ""
+          : `<option value="" selected disabled>${esc(String(picked).replace(/_/g, " "))} — unknown stage, leave as is</option>`;
+        statusSel.innerHTML = unknown + stages.map((s) => `<option value="${s.key}" ${keep === s.key ? "selected" : ""}>${esc(s.label)}</option>`).join("");
+      }
     }
     const list = state.catalog.countries.filter((ct) => (ct.visa_types[CAT] || []).length);
     countrySel.innerHTML = list.map((ct) => `<option value="${ct.code}" ${c.destination_country_code === ct.code ? "selected" : ""}>${ct.flag_emoji} ${esc(ct.name)}</option>`).join("");
@@ -2967,43 +3001,54 @@
     function journeyTrackHtml(interactive, current, docs) {
       const stages = stagesForClient(cl);
       if (!stages.length) return "";
-      const ordered = stages
-        .map((s, i) => Object.assign({}, s, { _o: s.order != null ? s.order : i + 1 }))
-        .sort((a, b) => a._o - b._o);
-      const linear = ordered.filter((s) => s._o <= 6);          // New Lead → Approved
-      const rejected = ordered.find((s) => s._o === 7);
-      const onHold = ordered.find((s) => s._o === 8);
-      const curStage = ordered.find((s) => s.key === current) || {};
-      const curOrder = curStage._o || 0;
+      // Resolved order (a destination may re-sequence it) only ever SORTS. Every stage is
+      // picked out by KEY and every comparison is a position within this resolved list, so
+      // inserting a stage into the catalog can never re-point a check at the wrong one.
+      const ordered = stages.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+      const rejected = ordered.find((s) => s.key === "rejected");
+      const onHold = ordered.find((s) => s.key === "on_hold");
+      const linear = ordered.filter((s) => s.key !== "rejected" && s.key !== "on_hold");
+      const idxOf = (k) => linear.findIndex((s) => s.key === k);
+      const curIdx = idxOf(current);
       const isRejected = rejected && current === rejected.key;
       const isOnHold = onHold && current === onHold.key;
       // On Hold keeps the client's real position (held_from_status, remembered by the
       // backend) so the tracker shows WHERE the case is paused — and Resume restores it.
       const heldStage = isOnHold && cl.held_from_status
-        ? ordered.find((s) => s.key === cl.held_from_status) : null;
-      const heldOrder = heldStage ? heldStage._o : 0;
+        ? linear.find((s) => s.key === cl.held_from_status) : null;
+      const heldIdx = heldStage ? idxOf(heldStage.key) : -1;
+      // Gaps only show on stages the case has already REACHED. Off the linear path — closed
+      // as rejected, or a legacy hold with no remembered position — all of it counts.
+      const reachedIdx = curIdx >= 0 ? curIdx
+        : heldIdx >= 0 ? heldIdx
+        : (isRejected || isOnHold) ? linear.length - 1 : -1;
 
-      const nodes = linear.map((s) => {
+      const nodes = linear.map((s, i) => {
+        // The success node is the one keyed `approved` — not "whichever stage is terminal".
+        // `linear` is built by EXCLUDING rejected/on_hold, so a future terminal stage would
+        // land in it and inherit the green tick without being a win.
+        const isSuccess = s.key === "approved";
         let cls;
-        if (isRejected) cls = s._o <= 5 ? "done" : "upcoming";  // reached decision, then refused
+        if (isRejected) cls = isSuccess ? "upcoming" : "done";  // walked the path, then refused
         else if (isOnHold) {
-          if (heldOrder > 0) {
-            cls = s._o < heldOrder ? "done" : (s._o === heldOrder ? "current paused" : "upcoming");
+          if (heldIdx >= 0) {
+            cls = i < heldIdx ? "done" : (i === heldIdx ? "current paused" : "upcoming");
           } else cls = "upcoming";                              // legacy hold — position unknown
         }
-        else if (s._o < curOrder) cls = "done";
-        else if (s._o === curOrder) cls = "current";
+        else if (i < curIdx) cls = "done";
+        else if (i === curIdx) cls = "current";
         else cls = "upcoming";
-        if (s._o === 6 && cls !== "upcoming" && !isOnHold) cls += " approved"; // success node
+        if (isSuccess && cls !== "upcoming" && !isOnHold) cls += " approved"; // success node
         const inner = cls.indexOf("paused") >= 0 ? "⏸"
           : cls.indexOf("done") >= 0 ? "✓"
-          : (cls.indexOf("current") >= 0 && s._o === 6 ? "✓" : String(s._o));
+          : (cls.indexOf("current") >= 0 && isSuccess ? "✓" : String(i + 1));
         const jk = interactive ? ` data-jkey="${s.key}"` : "";
         // Amber dot on a reached stage whose required case-record fields are still empty.
-        const gaps = (interactive && s._o <= (curOrder || heldOrder)) ? stageMissingRequired(s.key).length : 0;
+        const gaps = (interactive && i <= reachedIdx) ? stageMissingRequired(s.key).length : 0;
         const openCls = (openStageKey === s.key) ? " panel-open" : "";
-        const tip = gaps ? `${s.label} — ${gaps} required field${gaps === 1 ? "" : "s"} still empty` : s.label;
-        return `<div class="jtrack-step ${cls}${gaps ? " has-gap" : ""}${openCls}"${jk} title="${esc(tip)}">
+        const tip = gaps ? `${s.label} — ${gaps} required field${gaps === 1 ? "" : "s"} still empty`
+          : s.label;
+        return `<div class="jtrack-step ${cls}${openCls}"${jk} title="${esc(tip)}">
             <div class="jtrack-node">${inner}${gaps ? '<span class="jtrack-gap" aria-hidden="true"></span>' : ""}</div>
             <div class="jtrack-label">${esc(s.label)}</div>
           </div>`;
@@ -3012,7 +3057,7 @@
       const altPill = (s, active) => {
         if (!s) return "";
         const jk = interactive ? ` data-jkey="${s.key}"` : "";
-        const tone = s._o === 7 ? "jtrack-alt-rej" : "jtrack-alt-hold";
+        const tone = s.key === "rejected" ? "jtrack-alt-rej" : "jtrack-alt-hold";
         return `<button type="button" class="jtrack-alt-pill ${tone}${active ? " active" : ""}"${jk}${interactive ? "" : " disabled"}>${esc(s.label)}</button>`;
       };
       // One-click way OUT of On Hold: resume to the remembered stage (or restart at the
@@ -3064,7 +3109,6 @@
       const vals = stageValuesFor(stageKey);
       return stageFieldsFor(stageKey).filter((f) => f.required && !String(vals[f.key] || "").trim());
     }
-
     function stagePanelHtml() {
       if (!openStageKey) return "";
       const stages = stagesForClient(cl);
@@ -3209,22 +3253,56 @@
         try { await navigator.clipboard.writeText(url); toast("Calculator link copied — paste it to your student.", "success"); }
         catch (e) { toast(url, "info"); }
       };
-      // Clicking a stage OPENS that stage's case-record panel underneath the tracker.
-      // Moving the case is a deliberate button inside the panel, so a stray click on the
-      // journey can never silently change the client's status.
       if (canEdit) {
-        $$("#ovStageFlow [data-jkey]").forEach((b) => {
-          b.onclick = () => {
-            const key = b.dataset.jkey;
-            if (!key) return;
-            openStageKey = (openStageKey === key) ? null : key;   // click again to collapse
-            renderOverview();
-            const panel = $("#stagePanel");
-            if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
-          };
-        });
+        wireJourneyTrack();
         wireStagePanel();
       }
+      focusCurrentStage();
+    }
+
+    // Clicking a stage OPENS that stage's case-record panel underneath the tracker.
+    // Moving the case is a deliberate button inside the panel, so a stray click on the
+    // journey can never silently change the client's status.
+    function wireJourneyTrack() {
+      $$("#ovStageFlow [data-jkey]").forEach((b) => {
+        b.onclick = () => {
+          const key = b.dataset.jkey;
+          if (!key) return;
+          openStageKey = (openStageKey === key) ? null : key;   // click again to collapse
+          renderOverview();
+          const panel = $("#stagePanel");
+          if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        };
+      });
+    }
+
+    // The track is the one strip that scrolls sideways, and nothing ever scrolled it — on a
+    // laptop pane a late-stage case sat past the right edge with no hint it was there. Bring
+    // the node the case is actually on into view, horizontally only and without animation:
+    // the vertical position of the page belongs to the counsellor, not to a re-render.
+    // `inline: nearest` (not center) is what makes .jtrack-step's scroll-margin-inline count,
+    // so the node lands a step short of the edge instead of under the edge gradient.
+    function focusCurrentStage() {
+      const track = $("#ovStageFlow .jtrack");
+      if (!track || track.scrollWidth <= track.clientWidth + 1) return;
+      const reached = $$(".jtrack-step.done", track);
+      // `current paused` covers On Hold; a closed-as-rejected case has no current node, so
+      // fall back to the furthest stage it walked.
+      const node = $(".jtrack-step.current", track) || reached[reached.length - 1];
+      if (!node || !node.scrollIntoView) return;
+      node.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+
+    // Redraws the parts of the journey that are on screen right now, for a stage change that
+    // must NOT rebuild the client page (the counsellor may be working in another tab).
+    function refreshStageUi() {
+      const pill = $(".cp-hstatus");
+      if (pill) pill.innerHTML = statusPill(cl.stage);
+      const flow = $("#ovStageFlow");
+      if (!flow) return;
+      flow.innerHTML = journeyTrackHtml(canEdit, cl.status, docs);
+      if (canEdit) wireJourneyTrack();
+      focusCurrentStage();
     }
 
     function wireStagePanel() {
@@ -3258,7 +3336,9 @@
         const orderOf = (k) => (stageOf(k).order != null ? stageOf(k).order : 0);
         const first = (cl.full_name || "the client").split(" ")[0];
         const toLabel = labelOf(key), fromLabel = labelOf(cl.status);
-        const isReject = /reject/i.test(key), isHold = /hold/i.test(key);
+        // Exact keys, never a substring match: this decides whether the move CLOSES the
+        // case, and a future key such as "offer_rejected" must not trip it.
+        const isReject = key === "rejected", isHold = key === "on_hold";
 
         // Warn — but never block — when advancing while the stage being LEFT is still
         // missing required record fields.
@@ -5198,6 +5278,7 @@
       // Let the module-level row handlers (status change / remove) redraw this tab,
       // since they're invoked from inline onclick and can't see this closure.
       _uniRefresh = loadUniversities;
+      _uniStageSync = syncStepperToShortlist;
       // Bring back any paid-for AI matches the user hasn't actioned yet.
       restoreUniSuggestions();
       loadUniversities();
@@ -5213,6 +5294,47 @@
         return;
       }
       if ($("#uniWrap")) drawUniversities();
+    }
+
+    // Keeps the journey stepper in step with the shortlist, and OFFERS the matching pipeline
+    // move — it must never make one. Three separate code paths write shortlist rows, and a
+    // counsellor marking research must not silently reposition the client or fire a
+    // "moved X to Y" notification, so the move only happens if the user confirms it.
+    async function syncStepperToShortlist(clientId, status) {
+      if (clientId !== cl.id) return;
+      refreshStageUi();
+      if (status !== "applied" || !canEdit) return;
+      const stages = stagesForClient(cl);
+      const target = stages.find((s) => s.key === "applications_sent");
+      const from = stages.find((s) => s.key === cl.status);
+      if (!target || !from) return;
+      const orderOf = (s) => (s.order != null ? s.order : 0);
+      if (orderOf(from) >= orderOf(target)) return;
+      const first = (cl.full_name || "the client").split(" ")[0];
+      // Same wording as the "Move X here" button in the stage panel — it is the same move,
+      // and a counsellor should not have to work out whether two differently-phrased prompts
+      // do the same thing. The extra line is the only part specific to this trigger.
+      const missing = stageMissingRequired(cl.status);
+      const warn = missing.length
+        ? `\n\n⚠ “${from.label}” is still missing: ${missing.map((f) => f.label).join(", ")}.\nYou can continue and fill this in later.`
+        : "";
+      const ok = await confirmModal(
+        `${first} will move from “${from.label}” to “${target.label}”.\n\nThe shortlist row is saved either way.` + warn,
+        { title: "Move to “" + target.label + "”?", okText: "Move stage", cancelText: "Leave the stage as is", danger: false }
+      );
+      if (!ok) return;
+      // Deliberately not setStatus(): that rebuilds the client page and drops the counsellor
+      // back on Overview, mid-shortlist. Patch, re-read the client into this closure so every
+      // tab renders the new stage, and redraw only the journey.
+      try {
+        await api(`/clients/${cl.id}/status`, { method: "PATCH", body: { status: target.key } });
+        const fresh = await api("/clients/" + cl.id);
+        if (fresh && fresh.client) Object.assign(cl, fresh.client);
+        toast("Status updated", "success");
+        refreshStageUi();
+      } catch (ex) {
+        toast(ex.message, "error");
+      }
     }
 
     function uniStatusSelect(entry) {
@@ -6340,13 +6462,16 @@
     return out.join("").replace(/(?:<li>[\s\S]*?<\/li>)+/g, (m) => `<ul>${m}</ul>`);
   }
 
-  // Set by the Universities tab so these inline-onclick handlers can redraw it.
+  // Set by the Universities tab so these inline-onclick handlers can redraw it, and redraw
+  // the journey stepper the shortlist feeds.
   let _uniRefresh = null;
+  let _uniStageSync = null;
 
   async function setUniStatus(clientId, entryId, status) {
     try {
       await api(`/clients/${clientId}/universities/${entryId}`, { method: "PATCH", body: { status } });
       if (_uniRefresh) await _uniRefresh();
+      if (_uniStageSync) await _uniStageSync(clientId, status);
     } catch (ex) { toast(ex.message, "error"); }
   }
 
@@ -6359,6 +6484,7 @@
       await api(`/clients/${clientId}/universities/${entryId}`, { method: "DELETE" });
       toast("Removed from shortlist", "success");
       if (_uniRefresh) await _uniRefresh();
+      if (_uniStageSync) await _uniStageSync(clientId, null);
     } catch (ex) { toast(ex.message, "error"); }
   }
 
@@ -8523,6 +8649,7 @@
     deep_scan: { label: "Deep Scan", color: "#f59e0b" },
     mock_interview: { label: "Mock interview", color: "#ec4899" },
     ai_copilot: { label: "AI assistant", color: "#6366f1" },
+    copilot_client: { label: "Client copilot", color: "#818cf8" },
     university_match: { label: "University shortlist", color: "#0ea5e9" },
     course_finder: { label: "Course Finder", color: "#10b981" },
     writing_studio: { label: "SOP / LOR draft", color: "#8b5cf6" },
@@ -8557,12 +8684,18 @@
      will last. They share the wallet payload; analytics loads on demand. */
   const creditsUi = {
     tab: "buy",
-    range: 30,
+    range: 30,          // a preset day-count, or "custom" (then `custom` below applies)
+    custom: { start: "", end: "" },
+    bucket: "auto",     // timeline / breakdown grouping: auto | day | week | month
+    breakdownAll: false,   // breakdown table: show every period, not just the first page
+    breakdownQuiet: false, // ...including the ones with no spend at all
     wallet: null,       // /credits/wallet payload
     analytics: null,    // /credits/analytics payload for the active range
     payments: null,     // /credits/payments payload (admins only)
     ledger: { rows: [], total: 0, offset: 0, loading: false, error: null },
-    filters: { kind: "", action: "", member_id: "", client_id: "", q: "" },
+    // `period` is the drill-down set by clicking a row in the breakdown table:
+    // it narrows the ledger to one day/week/month inside the selected range.
+    filters: { kind: "", action: "", member_id: "", client_id: "", q: "", period: null },
   };
   const CREDIT_RANGES = [
     { days: 7, label: "7 days" },
@@ -8571,6 +8704,41 @@
     { days: 365, label: "12 months" },
     { days: 0, label: "All time" },
   ];
+  const CREDIT_BUCKETS = [
+    { key: "auto", label: "Auto" },
+    { key: "day", label: "Day" },
+    { key: "week", label: "Week" },
+    { key: "month", label: "Month" },
+  ];
+  const CREDIT_BREAKDOWN_PAGE = 14;   // periods shown before "show all"
+
+  function crIsCustomRange() { return creditsUi.range === "custom"; }
+  // A custom range only becomes real once BOTH halves are filled in — until then the
+  // request keeps the last preset, so a half-typed date can't blank the whole tab.
+  function crCustomReady() {
+    return crIsCustomRange() && !!creditsUi.custom.start && !!creditsUi.custom.end;
+  }
+
+  /* The active window as query params. One helper feeds the analytics request, the
+     ledger request and the CSV export, so the three can never describe different
+     periods. `withPeriod` additionally applies the breakdown drill-down. */
+  function crRangeParams(params, withPeriod) {
+    const period = withPeriod ? creditsUi.filters.period : null;
+    if (period) {
+      params.set("start", period.start);
+      params.set("end", period.end);
+    } else if (crCustomReady()) {
+      params.set("start", creditsUi.custom.start);
+      params.set("end", creditsUi.custom.end);
+    } else {
+      params.set("days", String(crIsCustomRange() ? 30 : creditsUi.range));
+    }
+    return params;
+  }
+  // Identifies the window + grouping a cached analytics payload was fetched for.
+  function crRangeSig() {
+    return crRangeParams(new URLSearchParams(), false).toString() + "&g=" + creditsUi.bucket;
+  }
 
   async function renderCredits() {
     const c = $("#content");
@@ -8842,20 +9010,70 @@
   function crDrawAnalytics() {
     const panel = $("#crPanel");
     if (!panel) return;
+    const custom = crIsCustomRange();
+    const today = calYmd(new Date());
     panel.innerHTML = `
       <div class="cr-rangebar">
         <span class="cr-rangelabel">Period</span>
         ${CREDIT_RANGES.map((r) => `<button class="cr-range ${r.days === creditsUi.range ? "active" : ""}" data-crrange="${r.days}">${esc(r.label)}</button>`).join("")}
+        <button class="cr-range ${custom ? "active" : ""}" data-crrange="custom">📅 Custom range</button>
+        ${custom ? `<span class="cr-custom">
+          <input type="date" class="cr-input cr-date" id="crFrom" max="${today}" value="${esc(creditsUi.custom.start)}" aria-label="From date">
+          <span class="cr-custom-sep">→</span>
+          <input type="date" class="cr-input cr-date" id="crTo" max="${today}" value="${esc(creditsUi.custom.end)}" aria-label="To date">
+        </span>` : ""}
+        <span class="cr-rangespacer"></span>
+        <span class="cr-granwrap">
+          <span class="cr-rangelabel">Group by</span>
+          ${CREDIT_BUCKETS.map((b) => `<button class="cr-gran ${b.key === creditsUi.bucket ? "active" : ""}" data-crgran="${b.key}">${esc(b.label)}</button>`).join("")}
+        </span>
       </div>
       <div id="crAnaBody"><div class="center-load"><div class="spinner dark"></div></div></div>`;
-    $$(".cr-range", panel).forEach((b) => b.onclick = () => {
-      const days = Number(b.dataset.crrange);
-      if (days === creditsUi.range) return;
-      creditsUi.range = days;
+
+    // Switching the window invalidates the drill-down with it: a day picked out of
+    // "last 7 days" is not necessarily inside the window that replaces it.
+    const reload = (resetPeriod) => {
+      if (resetPeriod) creditsUi.filters.period = null;
       creditsUi.analytics = null;
+      creditsUi.breakdownAll = false;
       crDrawAnalytics();
+    };
+    $$("[data-crrange]", panel).forEach((b) => b.onclick = () => {
+      const raw = b.dataset.crrange;
+      const next = raw === "custom" ? "custom" : Number(raw);
+      if (next === creditsUi.range && next !== "custom") return;
+      creditsUi.range = next;
+      if (next === "custom" && !creditsUi.custom.start && !creditsUi.custom.end) {
+        // Seed the pickers with the window they were just looking at, so opening
+        // "Custom" shows the same data rather than an empty chart.
+        const back = new Date();
+        back.setDate(back.getDate() - 29);
+        creditsUi.custom = { start: calYmd(back), end: calYmd(new Date()) };
+      }
+      reload(true);
     });
-    if (creditsUi.analytics && creditsUi.analytics._days === creditsUi.range) {
+    $$("[data-crgran]", panel).forEach((b) => b.onclick = () => {
+      if (b.dataset.crgran === creditsUi.bucket) return;
+      creditsUi.bucket = b.dataset.crgran;
+      // Regrouping drops the drill-down too: a day picked out of a daily table is
+      // no longer a row once the table is weekly, so the highlight would vanish
+      // while the ledger stayed narrowed to a period nothing on screen names.
+      reload(true);
+    });
+    const from = $("#crFrom", panel);
+    const to = $("#crTo", panel);
+    const applyDates = () => {
+      const nextStart = (from && from.value) || "";
+      const nextEnd = (to && to.value) || "";
+      if (nextStart === creditsUi.custom.start && nextEnd === creditsUi.custom.end) return;
+      creditsUi.custom = { start: nextStart, end: nextEnd };
+      if (!nextStart || !nextEnd) return;   // half-filled: keep showing what's on screen
+      reload(true);
+    };
+    if (from) from.onchange = applyDates;
+    if (to) to.onchange = applyDates;
+
+    if (creditsUi.analytics && creditsUi.analytics._sig === crRangeSig()) {
       crDrawAnalyticsBody();
     } else {
       crLoadAnalytics();
@@ -8863,19 +9081,21 @@
   }
 
   async function crLoadAnalytics() {
-    const days = creditsUi.range;
+    const sig = crRangeSig();
+    const params = crRangeParams(new URLSearchParams(), false);
+    if (creditsUi.bucket && creditsUi.bucket !== "auto") params.set("bucket", creditsUi.bucket);
     let res;
     try {
-      res = await api(`/credits/analytics?days=${days}`);
+      res = await api("/credits/analytics?" + params.toString());
     } catch (ex) {
       if (state.view !== "credits" || creditsUi.tab !== "analytics") return;
       const body = $("#crAnaBody");
       if (body) body.innerHTML = errBox(ex);
       return;
     }
-    // Guard the async gap: the user may have switched range/tab/view meanwhile.
-    if (state.view !== "credits" || creditsUi.tab !== "analytics" || creditsUi.range !== days) return;
-    res._days = days;
+    // Guard the async gap: the user may have switched range/grouping/tab/view meanwhile.
+    if (state.view !== "credits" || creditsUi.tab !== "analytics" || crRangeSig() !== sig) return;
+    res._sig = sig;
     creditsUi.analytics = res;
     crDrawAnalyticsBody();
     crLoadLedger(true);
@@ -8890,6 +9110,9 @@
     const w = (creditsUi.wallet || {}).wallet || {};
     const creditInr = w.credit_value_inr || 10;
     const rangeLabel = (a.range || {}).label || "";
+    // Reads inside a sentence; the server lowercases presets and leaves a custom
+    // window's date span capitalised ("₹570 · 2 Jul – 15 Jul 2026").
+    const rangeSub = (a.range || {}).sub_label || rangeLabel.toLowerCase();
 
     if (!s.action_count) {
       // Nothing spent — but an org that has only topped up still has ledger rows
@@ -8897,11 +9120,19 @@
       const anyMovement = !!s.added_credits;
       body.innerHTML = `<div class="card" style="margin-bottom:${anyMovement ? "24px" : "0"}"><div class="card-body" style="text-align:center;padding:46px 20px">
         <div style="font-size:34px">📊</div>
-        <h3 style="margin:10px 0 6px">No credits spent in this period</h3>
+        <h3 style="margin:10px 0 6px">No credits spent in ${esc(rangeLabel || "this period")}</h3>
         <p class="muted" style="margin:0 auto;max-width:440px;font-size:13.5px">
           Once your team runs Deep Scans, mock interviews, shortlists or SOP drafts, this tab shows exactly
           where every credit went — which client, which staff member, when and why.</p>
+        ${crIsCustomRange() ? `<button class="btn btn-ghost btn-sm" style="margin-top:14px" id="crWiden">Widen to all time</button>` : ""}
       </div></div>${anyMovement ? `<div id="crLedgerMount"></div>` : ""}`;
+      const widen = $("#crWiden", body);
+      if (widen) widen.onclick = () => {
+        creditsUi.range = 0;
+        creditsUi.filters.period = null;
+        creditsUi.analytics = null;
+        crDrawAnalytics();
+      };
       if (anyMovement) crDrawLedger();
       return;
     }
@@ -8921,7 +9152,7 @@
 
     const kpis = `<div class="kpi-grid">
       ${kpi("💸", "#6366f1", "Credits spent", `${s.spent_credits}`,
-        `${esc(fmtInr(s.spent_credits * creditInr))} · ${esc(rangeLabel.toLowerCase())}`)}
+        `${esc(fmtInr(s.spent_credits * creditInr))} · ${esc(rangeSub)}`)}
       ${kpi("⚡", "#ec4899", "AI actions run", `${s.action_count}`,
         `${s.avg_credits_per_action} credits per action on average`)}
       ${kpi("🎓", "#0ea5e9", "Clients served", `${s.clients_touched}`,
@@ -8932,11 +9163,18 @@
         "Runway is always measured against your last 30 days of spend, so changing the period above doesn't move it.")}
     </div>`;
 
+    const tl = a.timeline || {};
+    const bucketWord = { day: "day", week: "week", month: "month" }[tl.bucket] || "day";
+    // Asking for days across three years is unreadable, so the server widens the
+    // grouping. Say so, rather than showing weeks under a button marked "Day".
+    const widened = tl.requested_bucket && tl.requested_bucket !== "auto" && tl.requested_bucket !== tl.bucket
+      ? ` · too long to chart by ${esc(tl.requested_bucket)}, grouped by ${esc(bucketWord)}`
+      : "";
     const chart = `
       <div class="card" style="margin-bottom:24px">
         <div class="card-head"><h3>When credits were spent</h3>
-          <span class="cr-head-note">${esc(rangeLabel)} · peak ${a.timeline ? a.timeline.peak_credits : 0} cr</span></div>
-        <div class="card-body">${crChart(a.timeline)}</div>
+          <span class="cr-head-note">${esc(rangeLabel)} · by ${esc(bucketWord)} · peak ${tl.peak_credits || 0} cr${widened}</span></div>
+        <div class="card-body">${crChart(tl)}</div>
       </div>`;
 
     const byAction = (a.by_action || []).filter((x) => x.credits_spent > 0);
@@ -9002,7 +9240,7 @@
           </tr></thead><tbody>${clientRows}</tbody></table>
         </div></div>`;
 
-    body.innerHTML = `${kpis}${chart}${split}${clientCard}<div id="crLedgerMount"></div>`;
+    body.innerHTML = `${kpis}${chart}${crBreakdownCard(tl)}${split}${clientCard}<div id="crLedgerMount"></div>`;
 
     $$("[data-crclient]", body).forEach((tr) => tr.onclick = () => openClient(Number(tr.dataset.crclient)));
     $$("[data-crmember]", body).forEach((el) => {
@@ -9010,6 +9248,7 @@
       el.onclick = pick;
       el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
     });
+    crWireBreakdown(body, tl);
     crDrawLedger();
   }
 
@@ -9032,31 +9271,240 @@
     return bucket === "week" && !short ? `Week of ${label}` : label;
   }
 
+  /* The calendar span one bucket key covers. Drilling into a bar or a table row
+     asks the ledger for exactly these dates, so "35 cr on 2 Jul" and the entries
+     listed underneath it are always the same 35 credits. */
+  function crBucketRange(key, bucket) {
+    if (!key) return null;
+    if (bucket === "month") {
+      const [y, m] = String(key).split("-").map(Number);
+      const first = new Date(y, (m || 1) - 1, 1);
+      const last = new Date(y, m || 1, 0);          // day 0 of next month = last of this
+      return { start: calYmd(first), end: calYmd(last) };
+    }
+    const d = parseDateValue(key);
+    if (!d) return null;
+    if (bucket === "week") {
+      const end = new Date(d);
+      end.setDate(end.getDate() + 6);
+      return { start: calYmd(d), end: calYmd(end) };
+    }
+    return { start: calYmd(d), end: calYmd(d) };
+  }
+
+  /* The same span, trimmed to the window on screen. A bucket at either end of the
+     range is a PARTIAL period — "Jul 2026" inside a 1–15 Jul range summarises a
+     fortnight, and a week key is the Monday, which can sit days before the range
+     starts — so the calendar span would pull in entries the row never counted. */
+  function crWindowedBucketRange(key, bucket) {
+    const span = crBucketRange(key, bucket);
+    if (!span) return null;
+    const win = ((creditsUi.analytics || {}).analytics || {}).range || {};
+    return {
+      start: win.start_date && span.start < win.start_date ? win.start_date : span.start,
+      end: win.end_date && span.end > win.end_date ? win.end_date : span.end,
+    };
+  }
+
+  // "Thu · 2 Jul 2026", with today/yesterday called out — a day-by-day table is
+  // read by scanning down it, and a weekday is what makes a pattern visible.
+  function crPeriodLabel(key, bucket) {
+    if (bucket !== "day") return crBucketLabel(key, bucket);
+    const d = parseDateValue(key);
+    if (!d) return crBucketLabel(key, bucket);
+    const today = calYmd(new Date());
+    const yest = new Date(); yest.setDate(yest.getDate() - 1);
+    const stamp = key === today ? "Today" : (key === calYmd(yest) ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "short" }));
+    return `${stamp} · ${d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
+  }
+
+  /* ---- Period-by-period breakdown: the chart's numbers as a table you can read,
+     sort down and drill into. This is the "what did we spend it on, day by day"
+     answer the bar chart can only gesture at. ---- */
+  function crBreakdownCard(tl) {
+    const bucket = (tl || {}).bucket || "day";
+    const all = ((tl || {}).points || []).slice().reverse();   // newest period first
+    const spent = all.filter((p) => p.credits > 0);
+    const quiet = all.length - spent.length;
+    const source = creditsUi.breakdownQuiet ? all : spent;
+    const shown = creditsUi.breakdownAll ? source : source.slice(0, CREDIT_BREAKDOWN_PAGE);
+    const heading = { day: "Day-by-day breakdown", week: "Week-by-week breakdown", month: "Month-by-month breakdown" }[bucket]
+      || "Period breakdown";
+    const noun = { day: "day", week: "week", month: "month" }[bucket] || "period";
+    const peak = Math.max(1, (tl || {}).peak_credits || 0);
+    const active = creditsUi.filters.period;
+
+    const rows = shown.length ? shown.map((p) => {
+      const chips = (p.actions || []).map((act) => {
+        const col = creditActionColor(act.key);
+        const label = (CREDIT_ACTION_META[act.key] || {}).label || act.label;
+        return `<span class="cr-chip" style="background:${col}14;color:${col}" title="${esc(label)} · ${act.units} ${act.units === 1 ? "use" : "uses"} · ${act.credits} credits">${esc(label)} · ${act.credits}</span>`;
+      }).join("");
+      const isActive = !!(active && active.key === p.key);
+      return `<tr class="cr-day-row ${isActive ? "active" : ""}" data-crperiod="${esc(p.key)}"
+          title="Show the ledger entries for ${esc(crPeriodLabel(p.key, bucket))}">
+        <td style="white-space:nowrap"><b>${esc(crPeriodLabel(p.key, bucket))}</b>${
+          isActive ? `<div class="cr-sub" style="color:var(--primary-600)">Showing in ledger ↓</div>` : ""}</td>
+        <td class="cr-chips">${chips || '<span class="cr-sub">No spend</span>'}</td>
+        <td style="text-align:right">${p.units || 0}</td>
+        <td style="text-align:right">${p.clients || 0}</td>
+        <td style="text-align:right;white-space:nowrap"><b>${p.credits} cr</b><div class="cr-sub">${esc(p.value_display || "")}</div></td>
+        <td class="cr-day-share">${usageBar(Math.round((p.credits / peak) * 100), "#6366f1")}
+          <span class="cr-sub">${p.share_pct}% of period</span></td>
+      </tr>`;
+    }).join("")
+      : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">No spend in this period.</td></tr>`;
+
+    const more = source.length > shown.length
+      ? `<button class="btn btn-ghost btn-sm" id="crDayMore">Show all ${source.length} ${source.length === 1 ? noun : noun + "s"}</button>`
+      : (creditsUi.breakdownAll && source.length > CREDIT_BREAKDOWN_PAGE
+        ? `<button class="btn btn-ghost btn-sm" id="crDayLess">Show fewer</button>` : "");
+
+    return `
+      <div class="card" style="margin-bottom:24px"><div class="card-head"><h3>${esc(heading)}</h3>
+        <span class="cr-head-note">${spent.length} active ${spent.length === 1 ? noun : noun + "s"}${
+          quiet ? ` · ${quiet} with no spend` : ""} · click a row to see the entries</span></div>
+        ${(tl || {}).truncated ? `<div class="card-body"><div class="cr-day-warn">⚠ This period has more entries than one report can read.
+          The totals above are complete, but the oldest ${esc(noun)}s in this table may be understated — narrow the dates for an exact split.</div></div>` : ""}
+        <div class="card-body cr-day-tools">
+          ${quiet ? `<label class="cr-day-toggle"><input type="checkbox" id="crDayQuiet" ${creditsUi.breakdownQuiet ? "checked" : ""}> Show ${noun}s with no spend</label>` : ""}
+          <button class="btn btn-soft btn-sm" id="crDayExport" title="Download this breakdown as CSV — opens directly in Excel">⬇ Export breakdown</button>
+        </div>
+        <div class="card-body" style="padding:0;overflow-x:auto">
+          <table class="client-table cr-table"><thead><tr>
+            <th>${esc(noun.charAt(0).toUpperCase() + noun.slice(1))}</th><th>What it went on</th>
+            <th style="text-align:right">Actions</th><th style="text-align:right">Clients</th>
+            <th style="text-align:right">Credits</th><th>Share</th>
+          </tr></thead><tbody>${rows}</tbody></table>
+        </div>
+        ${more ? `<div class="card-body" style="text-align:center">${more}</div>` : ""}
+      </div>`;
+  }
+
+  function crWireBreakdown(root, tl) {
+    const bucket = (tl || {}).bucket || "day";
+    const quiet = $("#crDayQuiet", root);
+    if (quiet) quiet.onchange = () => {
+      creditsUi.breakdownQuiet = quiet.checked;
+      crDrawAnalyticsBody();
+    };
+    const more = $("#crDayMore", root);
+    if (more) more.onclick = () => { creditsUi.breakdownAll = true; crDrawAnalyticsBody(); };
+    const less = $("#crDayLess", root);
+    if (less) less.onclick = () => { creditsUi.breakdownAll = false; crDrawAnalyticsBody(); };
+    const exp = $("#crDayExport", root);
+    if (exp) exp.onclick = () => crExportBreakdown(tl);
+    $$("[data-crperiod]", root).forEach((tr) => tr.onclick = () => crPickPeriod(tr.dataset.crperiod, bucket));
+    // The bars drill into exactly the same period the table rows do.
+    $$("[data-crbar]", root).forEach((el) => {
+      const pick = () => crPickPeriod(el.dataset.crbar, bucket);
+      el.onclick = pick;
+      el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+    });
+  }
+
+  // Clicking a period narrows the ledger below to it (clicking it again clears the
+  // drill-down). Only the LEDGER moves — the cards above keep describing the whole
+  // window, so the row's own numbers stay on screen to compare against.
+  function crPickPeriod(key, bucket) {
+    const active = creditsUi.filters.period;
+    if (active && active.key === key) {
+      creditsUi.filters.period = null;
+    } else {
+      const span = crWindowedBucketRange(key, bucket);
+      if (!span) return;
+      creditsUi.filters.period = { key, bucket, start: span.start, end: span.end, label: crPeriodLabel(key, bucket) };
+    }
+    crDrawAnalyticsBody();
+    crLoadLedger(true, true);
+    const mount = $("#crLedgerMount");
+    if (mount && creditsUi.filters.period) mount.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function crExportBreakdown(tl) {
+    const bucket = (tl || {}).bucket || "day";
+    const points = ((tl || {}).points || []).slice().reverse();
+    if (!points.length) { toast("Nothing to export for this period.", "error"); return; }
+    // Same formula-injection guard and BOM as the ledger export.
+    const cell = (v) => {
+      if (typeof v === "number") return String(v);
+      let s = v === null || v === undefined ? "" : String(v);
+      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
+    // One column per billable feature, named by the server's own label — a key the
+    // client doesn't know about yet must not reach the spreadsheet as "copilot_client".
+    const features = (((creditsUi.wallet || {}).wallet || {}).actions || []).filter((x) => x && x.key);
+    const headers = ["Period", "Starts", "Ends", "Credits", "Value (INR)", "Actions", "Clients", "Share %"]
+      .concat(features.map((x) => ((CREDIT_ACTION_META[x.key] || {}).label || x.label || x.key) + " (cr)"))
+      .concat(["Other usage (cr)"]);
+    const body = points.map((p) => {
+      const span = crWindowedBucketRange(p.key, bucket) || {};
+      const byKey = {};
+      (p.actions || []).forEach((a) => { byKey[a.key] = a.credits; });
+      return [
+        crPeriodLabel(p.key, bucket), span.start || "", span.end || "",
+        p.credits, p.credits * (((creditsUi.wallet || {}).wallet || {}).credit_value_inr || 10),
+        p.units || 0, p.clients || 0, p.share_pct || 0,
+      ].concat(features.map((x) => byKey[x.key] || 0)).concat([byKey.other || 0]);
+    });
+    const csv = [headers, ...body].map((r) => r.map(cell).join(",")).join("\r\n");
+    const range = ((creditsUi.analytics || {}).analytics || {}).range || {};
+    const stamp = `${range.start_date || "start"}_${range.end_date || calYmd(new Date())}`;
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rilono-credits-by-${bucket}-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+    toast(`Exported ${points.length} ${points.length === 1 ? bucket : bucket + "s"}`, "success");
+  }
+
   function crChart(tl) {
     const points = (tl && tl.points) || [];
     if (!points.length) return `<div class="muted" style="padding:20px 0;text-align:center">No spend in this period.</div>`;
     const peak = Math.max(1, tl.peak_credits || 0);
     const bucket = tl.bucket;
+    const active = creditsUi.filters.period;
     const bars = points.map((p) => {
       const pct = p.credits > 0 ? Math.max(4, Math.round((p.credits / peak) * 100)) : 0;
-      const title = `${crBucketLabel(p.key, bucket)} — ${p.credits} ${p.credits === 1 ? "credit" : "credits"}${p.units ? ` · ${p.units} ${p.units === 1 ? "action" : "actions"}` : ""}`;
-      return `<div class="cr-bar-slot" title="${esc(title)}">
+      // The hover readout carries the same split the table row does, so the chart
+      // answers "spent on what" without having to scroll down to read it.
+      const parts = (p.actions || []).map((x) => `${(CREDIT_ACTION_META[x.key] || {}).label || x.label} ${x.credits}`);
+      const title = `${crBucketLabel(p.key, bucket)} — ${p.credits} ${p.credits === 1 ? "credit" : "credits"}${
+        p.units ? ` · ${p.units} ${p.units === 1 ? "action" : "actions"}` : ""}${
+        parts.length ? `\n${parts.join(" · ")}` : ""}`;
+      return `<div class="cr-bar-slot ${active && active.key === p.key ? "active" : ""}" title="${esc(title)}"
+          ${p.credits ? `data-crbar="${esc(p.key)}" role="button" tabindex="0"` : ""}>
         ${p.credits
           ? `<div class="cr-bar" style="height:${pct}%"></div>`
           : `<div class="cr-bar cr-bar-zero"></div>`}
       </div>`;
     }).join("");
     const mid = points[Math.floor(points.length / 2)];
+    // A slot can't shrink below 2px + its 2px gap, so past ~200 bars the row is wider
+    // than the card and would paint over the page instead of clipping. Asking for a
+    // year day-by-day is a legitimate thing to want, so the plot scrolls sideways at a
+    // legible bar width rather than being squeezed or silently regrouped — the axis
+    // labels travel inside the same scroller so they keep naming the bars beneath them.
+    const MIN_BAR_PX = 5;
+    const wide = points.length > 120;
+    const plotWidth = wide ? ` style="min-width:${points.length * MIN_BAR_PX}px"` : "";
     return `
       <div class="cr-chart-wrap">
         <div class="cr-chart-y"><span>${peak}</span><span>0</span></div>
-        <div class="cr-chart">${bars}</div>
+        <div class="cr-chart-scroll">
+          <div class="cr-chart"${plotWidth}>${bars}</div>
+          <div class="cr-chart-x"${plotWidth}>
+            <span>${esc(crBucketLabel(points[0].key, bucket, true))}</span>
+            <span>${esc(crBucketLabel(mid.key, bucket, true))}</span>
+            <span>${esc(crBucketLabel(points[points.length - 1].key, bucket, true))}</span>
+          </div>
+        </div>
       </div>
-      <div class="cr-chart-x">
-        <span>${esc(crBucketLabel(points[0].key, bucket, true))}</span>
-        <span>${esc(crBucketLabel(mid.key, bucket, true))}</span>
-        <span>${esc(crBucketLabel(points[points.length - 1].key, bucket, true))}</span>
-      </div>`;
+      ${wide ? `<div class="cr-sub" style="margin-top:8px;text-align:right">← scroll to see the whole period · ${points.length} ${esc(bucket)}s</div>` : ""}`;
   }
 
   /* ---- The ledger: every credit movement, filterable. This is the audit trail
@@ -9066,7 +9514,9 @@
     const params = new URLSearchParams();
     params.set("limit", String((extra && extra.limit) || 25));
     params.set("offset", String((extra && extra.offset) || 0));
-    params.set("days", String(creditsUi.range));
+    // The selected window — narrowed to one day/week/month when a breakdown row
+    // is picked, so the ledger under the table lists exactly that row's entries.
+    crRangeParams(params, true);
     if (f.kind) params.set("kind", f.kind);
     if (f.action) params.set("action", f.action);
     if (f.member_id) params.set("member_id", f.member_id);
@@ -9115,7 +9565,7 @@
     const members = (a.by_member || []).filter((m) => m.user_id);
     const clients = (a.by_client || []).filter((c) => c.client_id && !c.is_rollup);
     const actions = (a.by_action || []).filter((x) => x.units > 0);
-    const filtered = !!(f.kind || f.action || f.member_id || f.client_id || f.q);
+    const filtered = !!(f.kind || f.action || f.member_id || f.client_id || f.q || f.period);
     // Most debits are described with the action's own name, which the badge
     // already shows — collect those labels so the row doesn't say it twice.
     const actionLabels = new Set(
@@ -9143,9 +9593,15 @@
     }).join("")
       : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">${L.loading ? "Loading…" : (filtered ? "No entries match these filters." : "No credit activity in this period.")}</td></tr>`;
 
+    const periodLabel = f.period ? f.period.label : ((a.range || {}).label || "");
     mount.innerHTML = `
       <div class="card"><div class="card-head"><h3>Credit ledger</h3>
-        <span class="cr-head-note">${L.total} ${L.total === 1 ? "entry" : "entries"} · showing ${L.rows.length}</span></div>
+        <span class="cr-head-note">${L.total} ${L.total === 1 ? "entry" : "entries"} · showing ${L.rows.length}${
+          periodLabel ? ` · ${esc(periodLabel)}` : ""}</span></div>
+        ${f.period ? `<div class="card-body cr-drill">
+          <span class="cr-drill-chip">📅 ${esc(f.period.label)}<button id="crDrillClear" title="Show the whole period again" aria-label="Clear the ${esc(f.period.bucket)} filter">×</button></span>
+          <span class="cr-sub">Only entries from this ${esc(f.period.bucket)} — the cards above still cover ${esc((a.range || {}).label || "the selected period")}.</span>
+        </div>` : ""}
         <div class="card-body">
           <div class="cr-filters">
             <input id="crQ" class="cr-input" placeholder="Search client, note or member…" value="${esc(f.q)}" />
@@ -9207,7 +9663,17 @@
     bind("#crMember", "member_id"); bind("#crClient", "client_id");
     const clear = $("#crClear");
     if (clear) clear.onclick = () => {
-      creditsUi.filters = { kind: "", action: "", member_id: "", client_id: "", q: "" };
+      const hadPeriod = !!creditsUi.filters.period;
+      creditsUi.filters = { kind: "", action: "", member_id: "", client_id: "", q: "", period: null };
+      // Dropping the drill-down un-highlights the bar and the table row too.
+      if (hadPeriod) crDrawAnalyticsBody();
+      crLoadLedger(true, true);
+    };
+    const drill = $("#crDrillClear");
+    if (drill) drill.onclick = (e) => {
+      e.stopPropagation();
+      creditsUi.filters.period = null;
+      crDrawAnalyticsBody();
       crLoadLedger(true, true);
     };
     const more = $("#crMore");
@@ -11119,7 +11585,7 @@
           ${canManage ? `
           <div class="set-hero-actions">
             <button class="btn btn-ghost btn-sm" id="uploadLogoBtn">${BTN_UPLOAD_HTML}</button>
-            <button class="btn btn-ghost btn-sm" id="regenLogo">${BTN_REGEN_HTML}</button>
+            <button class="btn btn-ghost btn-sm" id="regenLogo" title="Draws a study-abroad emblem — mortarboard, globe, campus — until you upload your own logo">${BTN_REGEN_HTML}</button>
             <span class="set-hint">PNG, JPG or WebP · up to 2 MB</span>
             <input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" style="display:none"/>
           </div>` : ""}

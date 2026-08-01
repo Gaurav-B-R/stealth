@@ -48,6 +48,9 @@ VISA_CATEGORY_KEYS = {item["key"] for item in VISA_CATEGORIES}
 # ---------------------------------------------------------------------------
 
 STAGE_NEW_LEAD = "new_lead"
+STAGE_SHORTLISTING = "shortlisting"
+STAGE_APPLICATIONS_SENT = "applications_sent"
+STAGE_OFFER_ACCEPTED = "offer_accepted"
 STAGE_DOCUMENTS = "documents"
 STAGE_SUBMITTED = "submitted"
 STAGE_APPOINTMENT = "appointment"
@@ -67,10 +70,37 @@ CLIENT_STAGES = [
         "is_terminal": False,
     },
     {
+        "key": STAGE_SHORTLISTING,
+        "label": "University Shortlisting",
+        "description": "Choosing courses and universities, and preparing the application essays.",
+        "order": 2,
+        "color": "#2dd4bf",
+        "is_open": True,
+        "is_terminal": False,
+    },
+    {
+        "key": STAGE_APPLICATIONS_SENT,
+        "label": "University Applications",
+        "description": "Applications sent to the shortlisted universities — awaiting their decisions.",
+        "order": 3,
+        "color": "#14b8a6",
+        "is_open": True,
+        "is_terminal": False,
+    },
+    {
+        "key": STAGE_OFFER_ACCEPTED,
+        "label": "Offer Accepted & Deposit Paid",
+        "description": "One offer accepted and the tuition deposit paid; enrolment document requested.",
+        "order": 4,
+        "color": "#0d9488",
+        "is_open": True,
+        "is_terminal": False,
+    },
+    {
         "key": STAGE_DOCUMENTS,
         "label": "Collecting Documents",
         "description": "Gathering and preparing the applicant's documents.",
-        "order": 2,
+        "order": 5,
         "color": "#6366f1",
         "is_open": True,
         "is_terminal": False,
@@ -79,7 +109,7 @@ CLIENT_STAGES = [
         "key": STAGE_SUBMITTED,
         "label": "Application Submitted",
         "description": "Application filed with the consulate / authority.",
-        "order": 3,
+        "order": 6,
         "color": "#0ea5e9",
         "is_open": True,
         "is_terminal": False,
@@ -88,7 +118,7 @@ CLIENT_STAGES = [
         "key": STAGE_APPOINTMENT,
         "label": "Biometrics / Appointment",
         "description": "Biometrics or VFS appointment booked — plus a visa interview where the destination requires one.",
-        "order": 4,
+        "order": 7,
         "color": "#8b5cf6",
         "is_open": True,
         "is_terminal": False,
@@ -97,7 +127,7 @@ CLIENT_STAGES = [
         "key": STAGE_DECISION,
         "label": "Awaiting Decision",
         "description": "Application under review by the authority.",
-        "order": 5,
+        "order": 8,
         "color": "#f59e0b",
         "is_open": True,
         "is_terminal": False,
@@ -106,7 +136,7 @@ CLIENT_STAGES = [
         "key": STAGE_APPROVED,
         "label": "Approved",
         "description": "Visa granted. 🎉",
-        "order": 6,
+        "order": 9,
         "color": "#10b981",
         "is_open": False,
         "is_terminal": True,
@@ -115,7 +145,7 @@ CLIENT_STAGES = [
         "key": STAGE_REJECTED,
         "label": "Rejected",
         "description": "Application refused.",
-        "order": 7,
+        "order": 10,
         "color": "#ef4444",
         "is_open": False,
         "is_terminal": True,
@@ -124,7 +154,7 @@ CLIENT_STAGES = [
         "key": STAGE_ON_HOLD,
         "label": "On Hold",
         "description": "Paused — waiting on the client or external factors.",
-        "order": 8,
+        "order": 11,
         "color": "#9ca3af",
         "is_open": False,
         "is_terminal": False,
@@ -156,13 +186,30 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
     "US": {
         "new_lead": {
             "label": "New Lead",
-            "description": "Enquiry logged after the first consultation — intended university, "
-                           "program and F-1 intake still being scoped.",
+            "description": "Enquiry logged after the first consultation — academic profile, budget "
+                           "and the F-1 intake being targeted.",
+        },
+        "shortlisting": {
+            "label": "Shortlisting & SOP",
+            "description": "SEVP-certified schools shortlisted on program fit, test scores and "
+                           "first-year cost; SOP drafted and recommenders briefed for their LORs.",
+        },
+        "applications_sent": {
+            "label": "Applications Sent",
+            "description": "Applications filed on each school's own portal or the Common App with "
+                           "transcripts, TOEFL/IELTS and GRE/GMAT scores; admits, waitlists and "
+                           "denials tracked per school.",
+        },
+        "offer_accepted": {
+            "label": "Admit Accepted & I-20 Requested",
+            "description": "One admit accepted and the enrolment deposit paid; financial evidence "
+                           "sent to the DSO so the SEVP school can raise the I-20.",
         },
         "documents": {
-            "label": "I-20 & Documents",
-            "description": "SEVP school issues the I-20 against accepted financial evidence; SEVIS "
-                           "ID, funds figure and program start date recorded.",
+            "label": "I-20 & Financial Evidence",
+            "description": "Signed I-20 in hand — SEVIS ID, funds figure and program start date "
+                           "recorded — with bank statements, sponsor affidavit and academic "
+                           "originals assembled for the interview.",
         },
         "submitted": {
             "label": "DS-160 & Fees Paid",
@@ -201,11 +248,29 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
             "description": "Enquiry received — log the first consultation and the target province "
                            "or territory before any filing work starts.",
         },
+        "shortlisting": {
+            "label": "Shortlisting DLIs & SOP",
+            "description": "DLIs shortlisted by program, province and PAL/TAL availability; the "
+                           "Statement of Purpose / Letter of Explanation drafted and the language "
+                           "test booked.",
+        },
+        "applications_sent": {
+            "label": "Applications to DLIs",
+            "description": "Applications filed direct with each DLI — OUAC for Ontario undergrad — "
+                           "with transcripts and language scores; offers and their conditions "
+                           "tracked.",
+        },
+        "offer_accepted": {
+            "label": "LOA Accepted & Deposit Paid",
+            "description": "One DLI offer accepted and the tuition deposit paid so the Letter of "
+                           "Acceptance is confirmed; PAL/TAL requested from the province — the CAQ "
+                           "carries it in Quebec — and the GIC opened.",
+        },
         "documents": {
-            "label": "LOA, PAL & Funds",
-            "description": "Securing the DLI Letter of Acceptance, PAL/TAL (the CAQ carries it in "
-                           "Quebec) and proof of funds — GIC or bank evidence — plus language "
-                           "scores and the tuition deposit.",
+            "label": "PAL, Funds & Forms",
+            "description": "LOA and PAL/TAL in hand; proof of funds assembled — GIC or four months "
+                           "of bank evidence — plus IMM 1294, the family information form and the "
+                           "panel-physician medical.",
         },
         "submitted": {
             "label": "Submitted to IRCC",
@@ -242,13 +307,30 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
     "UK": {
         "new_lead": {
             "label": "New Lead",
-            "description": "Enquiry received — first consultation booked, course level and target "
-                           "UK sponsors being scoped.",
+            "description": "Enquiry received — first consultation booked, course level, budget and "
+                           "English test status captured.",
+        },
+        "shortlisting": {
+            "label": "Shortlisting & Personal Statement",
+            "description": "Licensed student sponsors shortlisted on course, entry requirements and "
+                           "fees; UCAS or direct route decided and the personal statement drafted.",
+        },
+        "applications_sent": {
+            "label": "UCAS / Direct Applications",
+            "description": "Applications sent through UCAS for undergraduate study or the "
+                           "university's own portal for postgraduate; references and transcripts "
+                           "supplied, offers and their conditions tracked.",
+        },
+        "offer_accepted": {
+            "label": "Offer Firmed & CAS Requested",
+            "description": "One unconditional offer accepted, the tuition deposit paid and the "
+                           "pre-CAS credibility interview passed so the sponsor will assign a CAS.",
         },
         "documents": {
             "label": "CAS & Financial Evidence",
-            "description": "Sponsor issues the CAS; maintenance funds held the full 28 days, "
-                           "tuition deposit paid, ATAS certificate where the course needs one.",
+            "description": "CAS assigned and checked line by line; maintenance funds held the full "
+                           "28 days, TB certificate obtained and ATAS clearance where the course "
+                           "needs one.",
         },
         "submitted": {
             "label": "Filed with UKVI",
@@ -286,13 +368,32 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
     "AU": {
         "new_lead": {
             "label": "New Lead",
-            "description": "First consultation held — capture the intended course and AQF level, "
-                           "preferred institutions and city before opening the file.",
+            "description": "First consultation held — capture the AQF level, budget, English test "
+                           "status and preferred city before opening the file.",
+        },
+        "shortlisting": {
+            "label": "Shortlisting Providers & Courses",
+            "description": "CRICOS-registered providers and courses shortlisted on fit, fees and "
+                           "city, with the course-choice rationale the later Genuine Student "
+                           "answers rest on.",
+        },
+        "applications_sent": {
+            "label": "Applications to Providers",
+            "description": "Applications lodged with each provider, direct or through its education "
+                           "agent; transcripts and English scores sent, letters of offer and their "
+                           "conditions tracked.",
+        },
+        "offer_accepted": {
+            "label": "Offer Accepted & CoE Requested",
+            "description": "One letter of offer accepted, the ESOS written agreement signed and the "
+                           "first tuition instalment plus OSHC paid so the provider issues the eCoE "
+                           "from PRISMS.",
         },
         "documents": {
             "label": "CoE, OSHC & Documents",
-            "description": "Secure the CoE and CRICOS code, OSHC policy, Genuine Student statement, "
-                           "English score and evidence of funds in AUD.",
+            "description": "eCoE and CRICOS code in hand; Genuine Student answers drafted, OSHC "
+                           "policy on file, English score and evidence of funds in AUD assembled "
+                           "with NAATI translations.",
         },
         "submitted": {
             "label": "Lodged in ImmiAccount",
@@ -328,13 +429,32 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
     "DE": {
         "new_lead": {
             "label": "New Lead",
-            "description": "Enquiry logged — programme type, admission status and whether this "
-                           "student needs an APS certificate for Germany.",
+            "description": "Enquiry logged — study level, budget and whether this student needs an "
+                           "APS certificate for Germany.",
+        },
+        "shortlisting": {
+            "label": "Hochschule Shortlist & Motivation",
+            "description": "Hochschulen shortlisted on language of instruction, NC and "
+                           "Semesterbeitrag; APS started, TestAS or the language certificate booked "
+                           "and the Motivationsschreiben and tabular Lebenslauf drafted.",
+        },
+        "applications_sent": {
+            "label": "uni-assist / Direct Applications",
+            "description": "Applications filed through uni-assist or the university's own portal by "
+                           "the 15 Jan / 15 Jul deadline; the VPD issued where a university demands "
+                           "one, and admission decisions tracked.",
+        },
+        "offer_accepted": {
+            "label": "Zulassung Accepted & Enrolled",
+            "description": "One admission taken up — place accepted, any tuition or Semesterbeitrag "
+                           "settled and the Zulassungsbescheid (or Studienkolleg place) confirmed "
+                           "in writing.",
         },
         "documents": {
             "label": "Documents & Sperrkonto",
-            "description": "APS certificate, Zulassungsbescheid, blocked account (Sperrkonto) "
-                           "funded to the annual minimum and German health insurance arranged.",
+            "description": "Blocked account (Sperrkonto) funded to the annual minimum, German "
+                           "health insurance arranged, and the APS certificate, transcripts and "
+                           "§54 declaration assembled for the mission.",
         },
         "submitted": {
             "label": "Filed with German Mission",
@@ -373,13 +493,31 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
         "new_lead": {
             "label": "New Lead",
             "description": "Enquiry logged; check whether the student's nationality needs an Irish "
-                           "visa at all, plus intended ILEP course, level and college.",
+                           "visa at all, plus the study level and budget.",
+        },
+        "shortlisting": {
+            "label": "Shortlisting ILEP Programmes",
+            "description": "Colleges and programmes shortlisted off the ILEP / TrustEd Ireland "
+                           "lists on level, fees and learner protection; English test booked and "
+                           "the letter of application drafted.",
+        },
+        "applications_sent": {
+            "label": "College Applications",
+            "description": "Applications sent through the CAO for undergraduate study or direct to "
+                           "the college for postgraduate; transcripts and English scores supplied, "
+                           "offers tracked.",
+        },
+        "offer_accepted": {
+            "label": "Offer Accepted & Fees Paid",
+            "description": "One offer taken up and tuition paid — EUR 6,000 minimum, by EFT to the "
+                           "college's Irish account or via Transfermate — so it issues the Letter "
+                           "of Acceptance.",
         },
         "documents": {
-            "label": "Offer, Fees & Funds",
-            "description": "Letter of Acceptance from an ILEP-listed programme, tuition paid or "
-                           "held in escrow, EUR 10,000 living funds evidenced and private medical "
-                           "insurance.",
+            "label": "Funds, FSF & Insurance",
+            "description": "Letter of Acceptance in hand; EUR 10,000 living funds evidenced over "
+                           "six months, the Financial Summary Form completed and private medical "
+                           "insurance taken out.",
         },
         "submitted": {
             "label": "AVATS Form Submitted",
@@ -419,10 +557,29 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
             "description": "Enquiry logged — confirm whether Études en France is compulsory and fix "
                            "the route: DAP, Parcoursup or EEF, for a named rentrée.",
         },
-        "documents": {
+        "shortlisting": {
+            "label": "Shortlist & Lettres de Motivation",
+            "description": "Établissements and programmes shortlisted for the chosen route; "
+                           "TCF/TEF booked, CV written and one tailored lettre de motivation per "
+                           "programme — the EEF dossier takes up to seven.",
+        },
+        "applications_sent": {
             "label": "Études en France Dossier",
-            "description": "Études en France dossier, entretien pédagogique and its avis, resources "
-                           "and 3-month accommodation — closed by the end-of-procedure email.",
+            "description": "EEF dossier submitted with the programme choices and the Campus France "
+                           "procedure fee paid; entretien pédagogique sat and its avis recorded, "
+                           "then the établissements' decisions awaited. DAP files close 15 Dec.",
+        },
+        "offer_accepted": {
+            "label": "Acceptation & Inscription",
+            "description": "One accord préalable d'inscription accepted in the platform and the "
+                           "inscription fee paid; Campus France closes the procedure with the "
+                           "end-of-procedure email that unlocks the consular appointment.",
+        },
+        "documents": {
+            "label": "Ressources & Visa Documents",
+            "description": "Post-acceptance visa file built: resources for the whole first year at "
+                           "the rate in force, 3-month accommodation, apostilled birth certificate "
+                           "and sworn translations.",
         },
         "submitted": {
             "label": "France-Visas Filed",
@@ -463,22 +620,40 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
             "description": "Enquiry logged: study route under art. 52, course length, and whether "
                            "the file goes to a consulate abroad or an Oficina de Extranjería.",
         },
+        "shortlisting": {
+            "label": "Shortlist & Acceso",
+            "description": "Recognised centres shortlisted off RUCT / the Registro estatal on "
+                           "course length and fees; UNEDasiss and the PCE for undergraduates, or "
+                           "the equivalencia de nota media for postgraduates, set in motion.",
+        },
+        "applications_sent": {
+            "label": "Solicitudes de Admisión",
+            "description": "Admission applications sent to the shortlisted centres with apostilled, "
+                           "sworn-translated transcripts; preinscripción results and admission "
+                           "decisions tracked.",
+        },
+        "offer_accepted": {
+            "label": "Admisión & Matrícula",
+            "description": "One place taken up and the matrícula paid — a declaración responsable "
+                           "stands in where enrolment is not yet open — so the centre issues the "
+                           "carta de admisión.",
+        },
         "documents": {
-            "label": "Carta de Admisión & Docs",
-            "description": "Carta de admisión secured; living funds at 100% of IPREM, health "
+            "label": "Fondos, Penales & Docs",
+            "description": "Carta de admisión in hand; living funds at 100% of IPREM, health "
                            "insurance, police-clearance (penales) and medical certificates, "
                            "apostilles and sworn translations assembled.",
         },
         "submitted": {
             "label": "Solicitud Lodged",
-            "order": 4,
+            "order": 7,
             "description": "Solicitud completed and the fees settled — consular tasa plus the "
                            "790/052 authorisation fee — with the número de solicitud recorded from "
                            "the receipt.",
         },
         "appointment": {
             "label": "Cita Previa & Lodgement",
-            "order": 3,
+            "order": 6,
             "description": "Passport and originals handed over at the cita previa, plus a "
                            "comparecencia (personal interview) if summoned; no prints on the D "
                            "route — VIS is for Schengen C.",
@@ -510,13 +685,32 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
     "NL": {
         "new_lead": {
             "label": "New Lead",
-            "description": "Enquiry received — check the institution is an IND recognised sponsor "
-                           "(erkend referent) and whether the nationality needs an MVV.",
+            "description": "Enquiry received — check whether the nationality needs an MVV, and the "
+                           "study level and budget.",
+        },
+        "shortlisting": {
+            "label": "Shortlisting Erkend Referenten",
+            "description": "Programmes shortlisted only at IND recognised sponsors (erkend "
+                           "referent); numerus fixus deadlines diarised, English test booked and "
+                           "the motivation letter drafted.",
+        },
+        "applications_sent": {
+            "label": "Studielink Applications",
+            "description": "Applications submitted through Studielink — at most four programmes, "
+                           "two of them numerus fixus — plus each institution's own portal; "
+                           "selection rounds and admission decisions tracked.",
+        },
+        "offer_accepted": {
+            "label": "Admission Accepted & Enrolled",
+            "description": "One admission accepted in Studielink and enrolment completed; tuition "
+                           "settled with the institution so the recognised sponsor will open the "
+                           "IND file.",
         },
         "documents": {
             "label": "Documents & Funding",
-            "description": "Studielink enrolment, living-cost funds transferred to the sponsor, "
-                           "antecedents certificate (7601) and TB declaration of intent (7603).",
+            "description": "Living-cost funds transferred to the sponsor, antecedents certificate "
+                           "(7601) signed and TB declaration of intent (7603) completed, with "
+                           "legalised diplomas handed to the sponsor.",
         },
         "submitted": {
             "label": "Sponsor Filed with IND",
@@ -526,13 +720,13 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
         },
         "appointment": {
             "label": "MVV Appointment",
-            "order": 5,
+            "order": 8,
             "description": "Biometrics and MVV collection at a Dutch mission or VFS — booked only "
                            "once the IND approves; MVV-exempt nationalities skip this step.",
         },
         "decision": {
             "label": "Awaiting IND Decision",
-            "order": 4,
+            "order": 7,
             "description": "IND assesses the sponsor's file; the legal limit is 90 days but most "
                            "student cases decide far sooner. Updates come via the sponsor.",
         },
@@ -555,13 +749,30 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
     "AE": {
         "new_lead": {
             "label": "New Lead",
-            "description": "Enquiry taken: emirate, licensed institution and sponsorship route "
-                           "(university PRO vs other) scoped, plus a UAE ban / absconding check.",
+            "description": "Enquiry taken: emirate, budget and sponsorship route (university PRO vs "
+                           "other) scoped, plus a UAE ban / absconding check.",
+        },
+        "shortlisting": {
+            "label": "Shortlisting Licensed Institutions",
+            "description": "Institutions shortlisted off the CAA / KHDA / ADEK licensed lists on "
+                           "emirate, programme accreditation and fees; English test booked and the "
+                           "personal statement drafted.",
+        },
+        "applications_sent": {
+            "label": "Applications to Institutions",
+            "description": "Applications sent to the shortlisted universities with transcripts; "
+                           "equivalency requirements and offer decisions tracked.",
+        },
+        "offer_accepted": {
+            "label": "Offer Accepted & Fees Paid",
+            "description": "One offer accepted, with tuition and the refundable visa deposit "
+                           "settled, so the institution's PRO can open the sponsorship file.",
         },
         "documents": {
             "label": "Documents & Attestation",
-            "description": "Degrees run the legalisation chain to MOFAIC attestation; tuition, "
-                           "insurance and the refundable visa deposit settled with the institution.",
+            "description": "Degrees run the legalisation chain to MOFAIC attestation; medical "
+                           "insurance arranged and passport copies, photos and the PRO's "
+                           "sponsorship paperwork handed over.",
         },
         "submitted": {
             "label": "Entry Permit Filed",
@@ -599,7 +810,7 @@ ENTERPRISE_STAGE_LABELS: dict[str, dict[str, dict]] = {
 
 
 def stages_for(country_code: str | None) -> list[dict]:
-    """The eight pipeline stages worded for `country_code` (generic wording as fallback).
+    """The pipeline stages worded for `country_code` (generic wording as fallback).
 
     A destination may also override a stage's `order` where its real chronology differs —
     the Netherlands is the case that forced this: the recognised sponsor files with the IND,
@@ -607,6 +818,10 @@ def stages_for(country_code: str | None) -> list[dict]:
     MVV collection, so `appointment` genuinely comes after `decision` there. The keys and
     colors stay fixed (the kanban and analytics are org-wide and share one column order);
     only this per-client journey view re-sequences.
+
+    An override is an ABSOLUTE position in the canonical order, not an offset from the
+    stage's own default — so inserting a stage into CLIENT_STAGES means renumbering every
+    override that sits below it. The assertions at the bottom of this module catch a miss.
     """
     overrides = ENTERPRISE_STAGE_LABELS.get(str(country_code or "").strip().upper()) or {}
     resolved = []
@@ -1435,3 +1650,50 @@ def resolve_visa_case(
         "visa_type": canonical_visa_type,
         "intake": canonical_intake,
     }
+
+
+# ---------------------------------------------------------------------------
+# Stage-catalog invariants (checked at import)
+# ---------------------------------------------------------------------------
+# The pipeline order lives in two places — the canonical `order` on CLIENT_STAGES and the
+# absolute per-destination overrides in ENTERPRISE_STAGE_LABELS — and nothing at runtime
+# reads the two together, so a drift between them shows up only as a silently mis-sequenced
+# journey for one country. These run once, at import, so the process refuses to start.
+
+def _assert_stage_catalog_invariants() -> None:
+    seen: dict[int, str] = {}
+    for stage in CLIENT_STAGES:
+        clash = seen.get(stage["order"])
+        if clash:
+            raise ValueError(
+                f"CLIENT_STAGES: stages '{clash}' and '{stage['key']}' share order "
+                f"{stage['order']} — pipeline orders must be unique."
+            )
+        seen[stage["order"]] = stage["key"]
+    expected = list(range(1, len(CLIENT_STAGES) + 1))
+    if sorted(seen) != expected:
+        raise ValueError(
+            f"CLIENT_STAGES: orders {sorted(seen)} are not contiguous from 1 — "
+            f"expected {expected}."
+        )
+
+    for code, overrides in ENTERPRISE_STAGE_LABELS.items():
+        for key in overrides:
+            if key not in CLIENT_STAGE_KEYS:
+                raise ValueError(
+                    f"ENTERPRISE_STAGE_LABELS['{code}']: '{key}' is not a pipeline stage — "
+                    f"known keys are {sorted(CLIENT_STAGE_KEYS)}."
+                )
+        resolved: dict[int, str] = {}
+        for stage in stages_for(code):
+            clash = resolved.get(stage["order"])
+            if clash:
+                raise ValueError(
+                    f"ENTERPRISE_STAGE_LABELS['{code}']: stages '{clash}' and "
+                    f"'{stage['key']}' both resolve to order {stage['order']} — an absolute "
+                    f"`order` override was left behind when the canonical order changed."
+                )
+            resolved[stage["order"]] = stage["key"]
+
+
+_assert_stage_catalog_invariants()

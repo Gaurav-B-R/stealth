@@ -2,163 +2,217 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://rilono.com/</loc>
-    <lastmod>2026-03-07</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>weekly</changefreq>
     <priority>1.0</priority>
   </url>
   <url>
+    <loc>https://rilono.com/us-f1-visa</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://rilono.com/uk-student-visa</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://rilono.com/canada-study-permit</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://rilono.com/australia-student-visa</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://rilono.com/germany-student-visa</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://rilono.com/for-enterprise</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
     <loc>https://rilono.com/pricing</loc>
-    <lastmod>2026-03-07</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://rilono.com/enterprise/demo</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://rilono.com/about-us</loc>
-    <lastmod>2026-03-07</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/contact</loc>
-    <lastmod>2026-03-07</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
+    <loc>https://rilono.com/careers</loc>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.6</priority>
+  </url>
+  <url>
     <loc>https://rilono.com/privacy</loc>
-    <lastmod>2026-03-07</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.4</priority>
   </url>
   <url>
     <loc>https://rilono.com/terms</loc>
-    <lastmod>2026-03-07</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.4</priority>
   </url>
   <url>
     <loc>https://rilono.com/refund-policy</loc>
-    <lastmod>2026-03-07</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
     <loc>https://rilono.com/delivery-policy</loc>
-    <lastmod>2026-03-07</lastmod>
+    <lastmod>2026-07-31</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.3</priority>
+  </url>
+  <url>
+    <loc>https://rilono.com/dpa</loc>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>yearly</changefreq>
     <priority>0.3</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/how-to-use-rilono-ai-copilot</loc>
-    <lastmod>2026-07-05</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/how-to-use-rilono-ai-us-f1-visa</loc>
-    <lastmod>2026-07-05</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/how-to-use-rilono-ai-canada-study-permit</loc>
-    <lastmod>2026-07-05</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/how-to-use-rilono-ai-australia-student-visa</loc>
-    <lastmod>2026-07-06</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/how-to-use-rilono-ai-uk-student-visa</loc>
-    <lastmod>2026-07-06</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/how-to-use-rilono-ai-germany-student-visa</loc>
-    <lastmod>2026-07-10</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.6</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog</loc>
-    <lastmod>2026-07-06</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/student-visa-crm-for-consultancies</loc>
-    <lastmod>2026-07-12</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/us-f1-visa-interview-questions-and-answers</loc>
-    <lastmod>2026-07-11</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/uk-student-visa-credibility-interview-questions</loc>
-    <lastmod>2026-07-11</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/canada-study-permit-interview-questions</loc>
-    <lastmod>2026-07-11</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/australia-genuine-student-interview-questions</loc>
-    <lastmod>2026-07-11</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/uk-student-visa-maintenance-funds</loc>
-    <lastmod>2026-07-12</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://rilono.com/tools/uk-maintenance-calculator</loc>
-    <lastmod>2026-07-12</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/how-to-write-sop-for-student-visa</loc>
-    <lastmod>2026-07-12</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/sop-for-us-f1-visa</loc>
-    <lastmod>2026-07-12</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/sop-for-uk-student-visa</loc>
-    <lastmod>2026-07-12</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/sop-for-canada-study-permit</loc>
-    <lastmod>2026-07-12</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>
   <url>
     <loc>https://rilono.com/blog/sop-for-australia-student-visa</loc>
-    <lastmod>2026-07-12</lastmod>
+    <lastmod>2026-07-31</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.7</priority>
   </url>

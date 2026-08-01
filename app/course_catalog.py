@@ -31,7 +31,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 from sqlalchemy import text as sqltext
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app import models
 from app.utils import gemini_service
@@ -170,6 +170,15 @@ GROUNDED_REQUEST_TIMEOUT_MS = max(30_000, int(os.getenv("COURSE_CATALOG_REQUEST_
 # Re-verification cadence (same env var as the refresh agent) — a course not
 # re-confirmed across ~2 cycles is treated as renamed/discontinued and pruned.
 _REVERIFY_DAYS = max(1, int(os.getenv("COURSE_CATALOG_REVERIFY_DAYS", "30") or "30"))
+
+# Link liveness. The same-domain rule below validates the HOST of a course_url and
+# nothing else, so a model-composed path on a real university domain
+# ("eecs.mit.edu/academics/undergraduate-programs/course-6-3-.../") stored clean and
+# rendered as an official "Page ↗" — measured at 23.5% hard 404 across a 200-row
+# sample of live rows. Every candidate URL is now fetched before it is stored.
+COURSE_URL_CHECK_ENABLED = os.getenv("COURSE_CATALOG_URL_CHECK_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+COURSE_URL_CHECK_TIMEOUT = max(3, int(os.getenv("COURSE_CATALOG_URL_CHECK_TIMEOUT", "12") or "12"))
+COURSE_URL_CHECK_WORKERS = max(1, min(16, int(os.getenv("COURSE_CATALOG_URL_CHECK_WORKERS", "8") or "8")))
 
 
 def ai_available() -> bool:
@@ -367,13 +376,19 @@ def _grounded_generate(prompt: str, model_names: list[str] | str, usage_source: 
             )
             response = client.models.generate_content(model=model_name, contents=prompt, config=config)
             text = (getattr(response, "text", "") or "").strip()
-            if not text:
-                continue
+            # Meter BEFORE the empty-text guard. Google has already billed this call —
+            # tokens plus every search the model ran — and a grounded response that comes
+            # back empty is the expensive case, not the free one. Recording after the
+            # `continue` below is how those calls used to vanish from the ledger.
             try:
                 from app import ai_usage
-                ai_usage.record_gemini_usage(usage_source, model_name, response)
+                ai_usage.record_gemini_usage(
+                    usage_source, model_name, response, status="ok" if text else "empty",
+                )
             except Exception:
                 pass
+            if not text:
+                continue
             return text, _extract_grounding_urls(response), _extract_grounding_domains(response)
         except Exception as exc:  # noqa: BLE001 — try the next candidate (404/quota/etc.)
             last_exc = exc
@@ -539,6 +554,114 @@ def _clean_intakes(value) -> Optional[str]:
     if not s:
         return None
     return json.dumps([p.strip()[:30] for p in re.split(r"[,;/]+", s) if p.strip()][:6])
+
+
+# ---------------------------------------------------------------------------
+# Link liveness
+#
+# A course_url is model-authored free text. The same-domain rule proves only that the
+# host belongs to the university — the path is a guess, and university sites re-slug
+# program pages every admissions cycle, so even a URL that was correct when written
+# rots. Verdicts are deliberately three-valued: a link is dropped only when the server
+# positively says the page is gone. Oxford, Melbourne and QUT all 403 a bot while
+# serving fine in a browser, so treating "not 200" as "dead" would delete good links.
+# ---------------------------------------------------------------------------
+
+_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
+# Soft 404s: a 200 whose <title> announces the miss. Matched against the TITLE ONLY —
+# a body-wide search hits the "404" in nav/footer/search widgets on live pages.
+_SOFT_404_TITLE_MARKERS = (
+    "not found", "404", "page unavailable", "page no longer available",
+    "seite nicht gefunden", "410 gone",
+)
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.I | re.S)
+
+
+def probe_url(url: str) -> str:
+    """One link verdict: "live" | "dead" | "unknown".
+
+    "dead" means the server answered and the page is not there (404/410, a soft 404,
+    or a deep path bounced to the site root). Blocks, throttling, TLS failures, 5xx
+    and timeouts are "unknown" — we keep those links rather than delete a working
+    page because a bot was refused.
+    """
+    try:
+        import requests
+    except Exception:  # noqa: BLE001 — checking is best-effort, never fatal
+        return "unknown"
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": _BROWSER_UA, "Accept": "text/html,application/xhtml+xml"},
+            timeout=COURSE_URL_CHECK_TIMEOUT,
+            allow_redirects=True,
+            stream=True,
+        )
+    except Exception:  # noqa: BLE001 — DNS/TLS/timeout: unproven, so not "dead"
+        return "unknown"
+    try:
+        if resp.status_code in (404, 410):
+            return "dead"
+        if resp.status_code >= 400:
+            return "unknown"
+        # Bounced to the homepage: a deep program path that lands on "/" is the other
+        # way sites say "no such page" (they 302 to root instead of serving a 404).
+        try:
+            asked = (urlparse(url).path or "/").rstrip("/")
+            landed = (urlparse(resp.url).path or "/").rstrip("/")
+            if asked and not landed:
+                return "dead"
+        except Exception:
+            pass
+        head = b""
+        for chunk in resp.iter_content(8192):
+            head += chunk
+            if len(head) >= 32_768:
+                break
+        title_match = _TITLE_RE.search(head.decode("utf-8", "ignore"))
+        if title_match:
+            title = re.sub(r"\s+", " ", title_match.group(1)).strip().lower()
+            if any(marker in title for marker in _SOFT_404_TITLE_MARKERS):
+                return "dead"
+        return "live"
+    finally:
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+
+def probe_urls(urls) -> dict[str, str]:
+    """{url: verdict} for a batch, checked concurrently. Empty when checking is off,
+    which makes every caller fall back to its pre-check behaviour."""
+    unique = [u for u in dict.fromkeys(u for u in urls if u)]
+    if not unique or not COURSE_URL_CHECK_ENABLED:
+        return {}
+    if len(unique) == 1:
+        return {unique[0]: probe_url(unique[0])}
+    from concurrent.futures import ThreadPoolExecutor
+    workers = min(COURSE_URL_CHECK_WORKERS, len(unique))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return dict(zip(unique, pool.map(probe_url, unique)))
+
+
+def pick_live_url(candidates, verdicts: dict[str, str]) -> Optional[str]:
+    """First candidate the probe confirmed live; else the first merely-unproven one;
+    else None. Ordering the candidates [new guess, previously stored] is what keeps a
+    known-good link when the model's fresh guess for the same course is broken."""
+    unproven = None
+    for url in candidates:
+        if not url:
+            continue
+        verdict = verdicts.get(url, "unknown")
+        if verdict == "live":
+            return url
+        if verdict == "unknown" and unproven is None:
+            unproven = url
+    return unproven
 
 
 # ---------------------------------------------------------------------------
@@ -1171,6 +1294,15 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
     }
     now = datetime.now(timezone.utc)
     upserted = 0
+
+    def _on_site(candidate: Optional[str]) -> Optional[str]:
+        """Host check only — proves the link belongs to this university, not that the
+        page exists. Also scrubs any pre-validation legacy value off a stored row."""
+        return candidate if candidate and site_domain and _registrable_domain(candidate) == site_domain else None
+
+    # (row, [new guess, previously stored]) — resolved in one batched liveness pass
+    # after the loop so a university's ~10 links are fetched concurrently, not serially.
+    pending_urls: list[tuple[models.CourseCatalogCourse, list[Optional[str]]]] = []
     items = data.get("courses")
     for item in (items if isinstance(items, list) else [])[:16]:
         if not isinstance(item, dict):
@@ -1206,13 +1338,9 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
         row.toefl_requirement = _clean_text(item.get("toefl_requirement"), 80) or row.toefl_requirement
         row.gre_gmat_requirement = _clean_text(item.get("gre_gmat_requirement"), 80) or row.gre_gmat_requirement
         row.entry_requirements = _clean_text(item.get("entry_requirements"), 400) or row.entry_requirements
-        course_url = _clean_url(item.get("course_url"))
-        # Strict same-domain rule (also scrubs any pre-validation legacy value).
-        row.course_url = (
-            course_url
-            if course_url and site_domain and _registrable_domain(course_url) == site_domain
-            else None
-        )
+        # row.course_url is still the PREVIOUS value here — kept as the fallback
+        # candidate so a link we already confirmed survives a broken fresh guess.
+        pending_urls.append((row, [_on_site(_clean_url(item.get("course_url"))), _on_site(row.course_url)]))
         # Keep the SQL-filterable numerics in step with the text they're parsed from.
         apply_course_derived_fields(row)
         row.is_active = True
@@ -1222,6 +1350,19 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
     if upserted == 0:
         # Profile-only responses shouldn't count as a verified refresh of the courses.
         raise RuntimeError(f"Catalog refresh for {uni.name}: no usable courses in response")
+
+    # Resolve every course link against the live server in one concurrent batch: a
+    # confirmed-404 path is dropped rather than published as an official program page.
+    # ~10-14 fetches adds a couple of seconds to a call that already takes 45-95s.
+    verdicts = probe_urls([u for _row, cands in pending_urls for u in cands if u])
+    dropped = 0
+    for row, candidates in pending_urls:
+        chosen = pick_live_url(candidates, verdicts)
+        if any(candidates) and not chosen:
+            dropped += 1
+        row.course_url = chosen
+    if dropped:
+        logger.info("Catalog refresh %s: dropped %d dead course link(s)", uni.name, dropped)
 
     # Prune drift: a course the model hasn't re-confirmed across ~2 re-verification
     # cycles is likely renamed/discontinued — deactivate it (the upsert path revives
@@ -1531,12 +1672,20 @@ def catalog_stats(db: Session) -> dict:
 def _client_profile_block(client) -> str:
     """Compact dossier facts for personalization. Includes scalar stage_data fields
     (that's where consultants record academics/budget — there are no typed columns)."""
+    from app import enterprise_catalog
+
+    stage = enterprise_catalog.stage_brief(
+        getattr(client, "destination_country_code", None), getattr(client, "status", None)
+    ) or {}
+    stage_text = str(stage.get("label") or "").strip() or "Not recorded"
+    stage_note = str(stage.get("description") or "").strip()
     lines = [
         f"- Name: {client.full_name}",
         f"- Nationality / home country: {client.nationality or 'Not recorded'}",
         f"- Destination: {client.destination_country_name or client.destination_country_code or 'Not recorded'}",
         f"- Visa type: {client.visa_type or 'Student'}",
         f"- Target intake: {client.intake or 'Not recorded'}",
+        f"- Current case stage: {stage_text}" + (f" ({stage_note})" if stage_note else ""),
     ]
     if getattr(client, "target_date", None):
         lines.append(f"- Target date: {client.target_date}")
@@ -1559,6 +1708,54 @@ def _client_profile_block(client) -> str:
                     label = str(field_key).replace("_", " ").strip()[:60]
                     lines.append(f"- {label}: {text_value}")
                     added += 1
+    return "\n".join(lines)
+
+
+SHORTLIST_CONTEXT_ROWS = 40
+
+_SHORTLIST_STATUS_TEXT = {
+    "considering": "on the shortlist, not applied yet",
+    "applied": "applied — awaiting the university's decision",
+    "admitted": "ADMITTED — the student already holds this offer",
+    "rejected": "REJECTED the student's application",
+}
+
+
+def _client_shortlist_block(client) -> str:
+    """Universities already on this client's shortlist, with each row's outcome.
+
+    Course Finder is billed per run and staff re-run it deep into a case, so without this
+    the paid shortlist re-suggests a university that already admitted — or already
+    rejected — this exact student.
+    """
+    try:
+        session = object_session(client)
+        if session is None:
+            return ""
+        rows = (
+            session.query(models.EnterpriseClientUniversity)
+            .filter(
+                models.EnterpriseClientUniversity.organization_id == client.organization_id,
+                models.EnterpriseClientUniversity.client_id == client.id,
+            )
+            .order_by(models.EnterpriseClientUniversity.created_at.desc())
+            .limit(SHORTLIST_CONTEXT_ROWS)
+            .all()
+        )
+    except Exception:
+        # recommend_courses is documented never to raise — a shortlist we cannot read
+        # degrades the prompt, it must not fail the paid call.
+        logger.warning("Course Finder: could not read the client's shortlist", exc_info=True)
+        return ""
+    lines = []
+    for row in rows:
+        name = (row.university_name or "").strip()
+        if not name:
+            continue
+        program = (row.program or "").strip()
+        status = (row.status or "considering").strip().lower()
+        outcome = _SHORTLIST_STATUS_TEXT.get(status, status or "on the shortlist")
+        lines.append(f"- {name}" + (f" — {program}" if program else "") + f" [{outcome}]")
     return "\n".join(lines)
 
 
@@ -1624,8 +1821,15 @@ def recommend_courses(
     catalog_based = catalog_count >= RECOMMEND_MIN_CATALOG_ROWS
 
     profile_lines = []
+    shortlist_block = ""
     if client is not None:
         profile_lines.append("STUDENT PROFILE (from the consultancy's case record):\n" + _client_profile_block(client))
+        shortlist_block = _client_shortlist_block(client)
+        if shortlist_block:
+            profile_lines.append(
+                "UNIVERSITIES ALREADY ON THIS STUDENT'S SHORTLIST (with their outcomes):\n"
+                + shortlist_block
+            )
     request_lines = [
         f"- Destination country: {destination_country}",
         f"- Field of study: {field_of_study or discipline or 'Not specified'}",
@@ -1686,7 +1890,15 @@ def recommend_courses(
         + source_rules
         + f"- Return up to {max_results} recommendations ranked best-fit first, mixing reach/match/safety when possible.\n"
         "- Only programs in the destination country.\n"
-        f"- Any application_deadline you state MUST be after today ({rec_today.strftime('%B %d, %Y')}) — "
+        + ("- NEVER recommend a university already listed on the student's shortlist above — one that "
+           "already admitted or already rejected this student must not come back as a suggestion. "
+           "Shortlist around them and say in the summary how this set complements what they hold.\n"
+           if shortlist_block else "")
+        + ("- Respect the student's current case stage above: if they are already past choosing "
+           "universities, treat this as an additional or backup shortlist and say so in the summary "
+           "rather than presenting it as their first set of options.\n"
+           if client is not None else "")
+        + f"- Any application_deadline you state MUST be after today ({rec_today.strftime('%B %d, %Y')}) — "
         "a student cannot apply to a closed cycle. If the next cycle's date isn't known, use \"N/A\".\n"
         "- URLs must be real official university domains, starting with https:// — never invent one; \"N/A\" instead.\n"
         f"- Return STRICTLY this JSON object, no prose, no ``` fences:\n{schema}\n"
@@ -1711,6 +1923,7 @@ def recommend_courses(
         data, grounded, _urls, _domains, model_name = _generate_json(prompt, usage_source, prefer_grounded=not catalog_based)
         items = (data or {}).get("recommendations")
         recommendations = []
+        unverified_urls: list[str] = []
         for item in (items if isinstance(items, list) else [])[:max_results]:
             if not isinstance(item, dict):
                 continue
@@ -1724,11 +1937,20 @@ def recommend_courses(
             rec_key = (normalize_key(uni_name), normalize_course_key(course_name_value))
             in_catalog = rec_key in catalog_keys
             if in_catalog:
+                # Already domain-checked AND liveness-checked at write time.
                 course_url = catalog_course_urls.get(rec_key)
                 website_url = catalog_site_urls.get(rec_key[0])
             else:
-                course_url = _clean_url(item.get("course_url"))
+                # Off-catalog rows are pure model output — they used to be published
+                # with nothing but a scheme check, so they could be dead AND on some
+                # other party's domain. Same host rule as the catalog writer; the
+                # liveness pass runs below, batched across the whole shortlist.
                 website_url = _clean_url(item.get("website_url"))
+                course_url = _clean_url(item.get("course_url"))
+                site_dom = _registrable_domain(website_url)
+                if course_url and site_dom and _registrable_domain(course_url) != site_dom:
+                    course_url = None
+                unverified_urls.extend(u for u in (course_url, website_url) if u)
             recommendations.append({
                 "university_name": uni_name,
                 "course_name": course_name_value,
@@ -1749,6 +1971,16 @@ def recommend_courses(
                 "qs_world_rank": _clean_rank(item.get("qs_world_rank")),
                 "in_catalog": in_catalog,
             })
+        # One batched liveness pass over the off-catalog links only — catalog links
+        # were already proven at write time, and this is a latency-sensitive paid call.
+        if unverified_urls:
+            verdicts = probe_urls(unverified_urls)
+            for rec in recommendations:
+                if rec["in_catalog"]:
+                    continue
+                for field in ("course_url", "website_url"):
+                    if rec[field] and verdicts.get(rec[field]) == "dead":
+                        rec[field] = None
         return {
             "available": True,
             "summary": _clean_text((data or {}).get("summary"), 800),

@@ -1548,3 +1548,281 @@ body.admin-modal-open {
 
 /* Center the "no data yet" states in their columns. */
 #adminAnalyticsTabPanel .insights-col .table-empty { padding: 2.2rem 1rem; font-size: 13px; line-height: 1.6; }
+
+/* --- AI Costs: date-range filter --------------------------------------- */
+/* Scoped to #adminAiTabPanel where the class is generic, so nothing here can
+   bleed into other tabs' cards or tables. */
+.ai-range-card {
+    border: 1px solid #d7e4f5;
+    border-radius: 16px;
+    background: linear-gradient(160deg, rgba(99, 102, 241, 0.07), rgba(14, 165, 233, 0.05));
+    padding: 0.85rem 0.95rem;
+    margin-bottom: 0.9rem;
+}
+
+.ai-range-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.ai-range-head h3 {
+    margin: 0;
+    font-size: 1rem;
+    color: #0f172a;
+}
+
+.ai-range-head p {
+    margin: 0.2rem 0 0;
+    font-size: 0.82rem;
+    color: #475569;
+    max-width: 620px;
+}
+
+.ai-range-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.ai-preset-btn {
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+    color: #1f2937;
+    border-radius: 999px;
+    padding: 0.32rem 0.72rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+.ai-preset-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(15, 23, 42, 0.1);
+}
+
+.ai-preset-btn.is-active {
+    background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+    border-color: transparent;
+    color: #ffffff;
+    box-shadow: 0 6px 16px rgba(99, 102, 241, 0.26);
+}
+
+.ai-range-form {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-top: 0.8rem;
+    padding-top: 0.75rem;
+    border-top: 1px dashed rgba(148, 163, 184, 0.5);
+}
+
+.ai-range-form .finance-field {
+    min-width: 165px;
+}
+
+.ai-range-form .table-btn {
+    min-height: 2.35rem;
+    padding: 0 1rem;
+    font-size: 0.8rem;
+}
+
+.ai-range-form .coupon-form-error {
+    align-self: center;
+}
+
+.ai-range-metric {
+    background: linear-gradient(160deg, rgba(124, 58, 237, 0.12), rgba(236, 72, 153, 0.08));
+    border-color: #d8d4f5;
+}
+
+.ai-fixed-caption {
+    margin: 1rem 0 0.4rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #64748b;
+}
+
+.ai-daily-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+}
+
+.ai-daily-toggle input {
+    width: 0.95rem;
+    height: 0.95rem;
+    accent-color: var(--brand-a);
+    cursor: pointer;
+}
+
+.ai-daily-table-wrap {
+    max-height: 26rem;
+    overflow-y: auto;
+}
+
+#adminAiTabPanel .ai-daily-empty-row td {
+    color: #94a3b8;
+}
+
+#adminAiTabPanel .ai-daily-total-row th {
+    position: sticky;
+    bottom: 0;
+    background: #f1f5f9;
+    border-top: 1px solid #cbd5e1;
+    font-size: 0.82rem;
+    color: #0f172a;
+}
+
+/* --- AI cost timeline (SVG column chart) --- */
+/* Container is sized to include the x-axis band, so the axis labels are never
+   clipped into a nested scrollbar. */
+#adminAiTimelineChart.ai-chart {
+    position: relative;
+    display: block;
+    gap: 0;
+    padding: 0.55rem 0.7rem 0.45rem;
+    min-height: 316px;
+}
+
+#adminAiTimelineChart.ai-chart:focus-visible {
+    outline: 2px solid var(--brand-a);
+    outline-offset: -2px;
+    border-radius: 12px;
+}
+
+.ai-chart-svg {
+    display: block;
+    overflow: visible;
+}
+
+/* Refetch holds the previous render at reduced opacity — no skeleton, no jump. */
+#adminAiTabPanel .is-refreshing {
+    opacity: 0.5;
+    transition: opacity 0.15s ease;
+}
+
+.ai-chart-axis-text {
+    fill: #71717a;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.ai-chart-peak {
+    fill: #18181b;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.ai-chart-bar {
+    transition: fill 0.12s ease;
+}
+
+.ai-chart-bar.is-active {
+    fill: #4338ca;
+}
+
+.ai-chart-hit {
+    cursor: crosshair;
+}
+
+.ai-chart-tip {
+    position: absolute;
+    z-index: 3;
+    transform: translate(-50%, calc(-100% - 10px));
+    pointer-events: none;
+    display: grid;
+    gap: 0.1rem;
+    white-space: nowrap;
+    padding: 0.45rem 0.65rem;
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: #18181b;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.24);
+}
+
+/* `display: grid` above outranks the UA's [hidden] rule — restore it explicitly. */
+.ai-chart-tip[hidden] {
+    display: none;
+}
+
+.ai-chart-tip strong {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #ffffff;
+}
+
+.ai-chart-tip span {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #d4d4d8;
+}
+
+.ai-chart-tip.flip-left {
+    transform: translate(calc(-100% + 14px), calc(-100% - 10px));
+}
+
+.ai-chart-tip.flip-right {
+    transform: translate(-14px, calc(-100% - 10px));
+}
+
+/* The feature list runs to a dozen-plus rows and would otherwise stretch the card far
+   past the chart beside it — cap it and scroll inside, with CSV for the full list. */
+#adminAiTabPanel .ai-scroll-list {
+    max-height: 19rem;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+
+#adminAiTabPanel .ai-scroll-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+#adminAiTabPanel .ai-scroll-list::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 999px;
+}
+
+/* Make room for the export button in each chart card's header. */
+#adminAiTabPanel .finance-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+#adminAiTabPanel .finance-card-header .ai-export-btn {
+    flex: none;
+    margin-top: 0.1rem;
+}
+
+.ai-export-btn {
+    white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+    .ai-range-head {
+        flex-direction: column;
+    }
+
+    /* One field per row, then Apply/Reset sharing the row below them. */
+    .ai-range-form .finance-field {
+        min-width: 0;
+        flex: 1 1 100%;
+    }
+
+    .ai-range-form .table-btn {
+        flex: 1 1 40%;
+    }
+}

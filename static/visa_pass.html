@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Visa Success Pass · Rilono</title>
+  <meta name="robots" content="noindex" />
   <link rel="icon" href="/static/logo.png" />
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   <style>
@@ -33,7 +34,8 @@
       border:1px solid var(--border);border-radius:var(--radius);padding:26px;margin-bottom:22px}
     .hero h1{margin:0 0 8px;font-size:26px}
     .hero p{margin:0;color:var(--muted);font-size:14px;line-height:1.6}
-    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:22px}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+    @media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}}
     @media(max-width:640px){.grid{grid-template-columns:1fr}}
     .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
     .card h3{margin:0 0 6px;font-size:14px}
@@ -224,17 +226,40 @@
       render();
     }
 
+    // Counters whose number is easy to misread. The SOP counter is shared by generate AND
+    // refine (routers/sop.py), so "3 left" is 3 AI actions — a draft plus two edits — not
+    // three finished drafts. Only shown while the number actually binds.
+    const QUOTA_NOTES = { sop_generator: "Generating or refining each use one" };
+
     function quotaCard(f){
+      if(!f) return "";                               // feature absent from the payload
       const unlimited = f.unlimited;
       const pct = unlimited?100:(f.limit>0?Math.min(100,Math.round((f.used/f.limit)*100)):(f.locked?100:0));
       const right = unlimited ? "Unlimited" :
         (f.limit<=0 ? '<span class="locked">Pass only</span>' : `${Math.max(f.limit-f.used,0)} of ${f.limit} left`);
+      const note = (!unlimited && f.limit>0 && QUOTA_NOTES[f.key])
+        ? `<div class="quota-sub" style="margin-top:3px;font-size:11px">${esc(QUOTA_NOTES[f.key])}</div>` : "";
       return `<div class="card">
         <h3>${esc(f.label)}</h3>
         <div class="quota-num">${unlimited?"∞":(f.limit<=0?"🔒":Math.max(f.limit-f.used,0))}</div>
-        <div class="quota-sub">${right}</div>
+        <div class="quota-sub">${right}</div>${note}
         <div class="bar"><span style="width:${pct}%"></span></div>
       </div>`;
+    }
+
+    // The free-plan quota sentence. Read defensively: a feature the API stops exposing (or
+    // that carries no numeric remaining) drops out of the list rather than rendering
+    // "undefined". Pass-only and unlimited features are left to the quota cards.
+    function freeQuotaLine(f){
+      const parts = [
+        ["red_flag_scan","red-flag scan","red-flag scans"],
+        ["university_shortlist","AI university shortlist","AI university shortlists"],
+        ["sop_generator","SOP draft or edit","SOP drafts or edits"],
+      ].filter(p=>{ const q=f&&f[p[0]]; return q && !q.unlimited && q.limit>0 && typeof q.remaining==="number"; })
+       .map(p=>{ const n=Math.max(f[p[0]].remaining,0); return n+" "+(n===1?p[1]:p[2]); });
+      if(!parts.length) return "You're on the free plan.";
+      const list = parts.length>1 ? parts.slice(0,-1).join(", ")+" and "+parts[parts.length-1] : parts[0];
+      return `You're on the free plan: ${list} left.`;
     }
 
     function render(){
@@ -252,7 +277,7 @@
         ? `<div class="hero"><h1>🎉 Your Visa Success Pass is active</h1>
             <p>${e.pass.days_left} days left. Unlimited document audits, and ${f.voice_interview.remaining} of ${f.voice_interview.limit} Rilono AI voice mock interviews remaining.</p></div>`
         : `<div class="hero"><h1>Everything you need to study abroad, unlocked</h1>
-            <p>You're on the free plan: ${f.red_flag_scan.remaining} red-flag scan left.
+            <p>${freeQuotaLine(f)}
             Unlock everything with a one-time <b>${esc(priceText)}</b> Visa Success Pass — valid ${e.pass.duration_days} days.</p></div>`;
 
       // UPI and NetBanking are INR-only rails: a buyer paying in USD is offered cards, so
@@ -292,6 +317,8 @@
         <div class="grid">
           ${quotaCard(f.red_flag_scan)}
           ${quotaCard(f.voice_interview)}
+          ${quotaCard(f.university_shortlist)}
+          ${quotaCard(f.sop_generator)}
         </div>
 
         <div class="section-title">Document Red-Flag scan</div>

@@ -6,7 +6,7 @@ accounts). The staff member authenticates as themselves; the selected client
 only shapes the context, so every message stays attributable to the staff user.
 
 Context = the client's CRM profile + org-uploaded client documents
-(extracted_text) + the visa-catalog journey for the client's destination.
+(extracted_text) + the consultancy's own case pipeline for the client's destination.
 Generation reuses the B2C chat model helpers (app/routers/ai_chat.py) so both
 copilots share provider selection, model candidates, and inline-attachment
 handling. Usage is recorded under the `enterprise_copilot_extension` source
@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app import ai_usage
-from app import visa_catalog
+from app import enterprise_catalog as catalog
 # Shared with the dashboard assistant so BOTH copilot surfaces meter identically —
 # one ledger row per model round-trip, attributed to the org, and a turn cost the
 # credit meter can weight.
@@ -70,6 +70,21 @@ def _iso(value) -> Optional[str]:
         return None
 
 
+def _case_status_text(client: models.EnterpriseClient) -> str:
+    """The stage as a human reads it, worded for the destination.
+
+    The raw key ('offer_accepted') is an internal identifier, and this block also feeds
+    the invite-link chat where the client reads the answer with no staff review — so the
+    label and its meaning go in, never the key.
+    """
+    brief = catalog.stage_brief(client.destination_country_code, client.status)
+    if not brief:
+        return _fmt(client.status)
+    label = str(brief.get("label") or "").strip() or _fmt(client.status)
+    description = str(brief.get("description") or "").strip()
+    return f"{label} — {description}" if description else label
+
+
 def _mask_passport(value) -> Optional[str]:
     """'M1234567' -> '•••• 567' — same masking as the client portal
     (_mask_passport_number in routers/enterprise.py): the invite-link surfaces
@@ -104,7 +119,7 @@ def build_client_profile_block(client: models.EnterpriseClient, *, for_client: b
         f"Visa type: {_fmt(client.visa_type)}",
         f"Intake: {_fmt(client.intake)}",
         f"Application reference: {_fmt(client.application_reference)}",
-        f"Case status: {_fmt(client.status)}",
+        f"Case status: {_case_status_text(client)}",
         f"Target date: {_fmt(_iso(client.target_date))}",
     ]
     if not for_client:
@@ -157,32 +172,36 @@ def build_client_documents_block(db: Session, organization_id: int, client_id: i
 
 
 def build_journey_block(client: models.EnterpriseClient) -> str:
-    """Stage guidance from the visa catalog — student cases only (the catalog is
-    a student-visa catalog; other categories get no stage scaffolding)."""
-    if (client.visa_category or "").strip().lower() != "student":
-        return ""
+    """The consultancy's OWN case pipeline, worded for the client's destination.
+
+    This is the same stage list the staff board, the client's journey view and the
+    stage case records run on — university phase included — so the Copilot coaches
+    against the pipeline the case actually moves through. (It previously injected the
+    separate B2C visa journey, which knows nothing about the university stages.)
+    An unknown destination resolves to the generic wording, never another country's.
+    """
     try:
-        # Only emit stages when the destination is actually in the catalog —
-        # resolve_selection() falls back to US/F-1 for unknown countries, which
-        # would present US stages as "this destination's" journey.
-        code = visa_catalog.normalize_country(client.destination_country_code)
-        if not code:
-            return ""
-        _, visa_key = visa_catalog.resolve_selection(code, client.visa_type)
-        stages = visa_catalog.journey_stages_for(code, visa_key)
+        stages = catalog.stages_for(client.destination_country_code)
     except Exception:
         return ""
     if not stages:
         return ""
+    current = catalog.normalize_stage(client.status)
     lines = []
-    for i, stage in enumerate(stages, 1):
-        label = stage.get("name") or stage.get("label") or stage.get("title") or f"Stage {i}"
-        next_step = str(stage.get("next_step") or "").strip()
-        lines.append(f"{i}. {label}" + (f" — next step: {next_step}" if next_step else ""))
+    step = 0
+    for stage in stages:
+        description = str(stage.get("description") or "").strip()
+        marker = "  ← THE CASE IS HERE NOW" if stage["key"] == current else ""
+        if stage.get("is_open"):
+            step += 1
+            prefix = f"{step}. {stage['label']}"
+        else:
+            prefix = f"- {stage['label']} (not a step — an end state)"
+        lines.append(prefix + (f" — {description}" if description else "") + marker)
     return (
-        "=== TYPICAL JOURNEY STAGES FOR THIS DESTINATION ===\n"
+        "=== CASE PIPELINE STAGES FOR THIS DESTINATION (in order) ===\n"
         + "\n".join(lines)
-        + "\n=== END JOURNEY STAGES ==="
+        + "\n=== END PIPELINE STAGES ==="
     )
 
 

@@ -23,6 +23,7 @@ from pydantic import BaseModel, EmailStr, Field
 from app.database import get_db, SessionLocal
 from app import models
 from app import money
+from app import brand_marks
 from app import enterprise_catalog as catalog
 from app import enterprise_access as access
 from app import enterprise_team as team_svc
@@ -133,6 +134,10 @@ ENTERPRISE_INVITE_PASSWORD_SETUP_EXPIRES_HOURS = max(
     1,
     int(os.getenv("ENTERPRISE_INVITE_PASSWORD_SETUP_EXPIRES_HOURS", "72")),
 )
+ENTERPRISE_BRAND_MARK_PATH = "/api/enterprise/public/brand-mark/"
+# Random stock photos we used to hand out as default logos. Kept only so the orgs still
+# carrying one in the database get a real mark instead — never re-issued.
+_LEGACY_PLACEHOLDER_LOGO_HOSTS = {"picsum.photos", "www.picsum.photos"}
 ENTERPRISE_LOGIN_RATE_LIMIT = int(os.getenv("ENTERPRISE_LOGIN_RATE_LIMIT", os.getenv("LOGIN_RATE_LIMIT", "12")))
 ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS = int(
     os.getenv("ENTERPRISE_LOGIN_RATE_WINDOW_SECONDS", os.getenv("LOGIN_RATE_WINDOW_SECONDS", "300"))
@@ -488,23 +493,44 @@ def enterprise_public_demo_request(
     return {"message": "Thanks! Our team will email you shortly to schedule your demo."}
 
 
+def _brand_mark_url(spec: str) -> str:
+    # Same-origin, like uploaded logos: one value that is correct on the apex, on every
+    # portal subdomain and on a developer's localhost, with no environment baked in.
+    return f"{ENTERPRISE_BRAND_MARK_PATH}{spec}.png"
+
+
+def _extract_brand_mark_spec(raw_logo_url: str | None) -> str | None:
+    """The design slug out of one of our own generated-mark URLs, absolute or relative.
+    None for anything else — an uploaded logo, an external URL, or a spec we no longer
+    render (a retired emblem must not 404 an org's logo)."""
+    path = urlparse(str(raw_logo_url or "").strip()).path
+    if not path.startswith(ENTERPRISE_BRAND_MARK_PATH) or not path.endswith(".png"):
+        return None
+    spec = path[len(ENTERPRISE_BRAND_MARK_PATH):-len(".png")]
+    return spec if brand_marks.parse_spec(spec) else None
+
+
 def _build_default_enterprise_logo_url(
     *,
     organization_id: int | None,
     company_name: str | None,
     subdomain_slug: str | None,
     randomize: bool = False,
+    current_logo_url: str | None = None,
 ) -> str:
-    seed_parts = [
-        f"org-{int(organization_id)}" if organization_id is not None else "org-pending",
-        (company_name or "").strip().lower(),
-        (subdomain_slug or "").strip().lower(),
-    ]
+    """A drawn study-abroad emblem — mortarboard, globe, campus — over a brand gradient.
+    The whole design is the filename, so nothing is stored and the same organization
+    keeps the same logo across requests and deploys."""
     if randomize:
-        seed_parts.append(secrets.token_hex(6))
-    seed_source = "|".join(seed_parts)
-    seed_hash = hashlib.sha256(seed_source.encode("utf-8")).hexdigest()[:20]
-    return f"https://picsum.photos/seed/rilono-org-{seed_hash}/256/256"
+        spec = brand_marks.random_spec(exclude=_extract_brand_mark_spec(current_logo_url))
+    else:
+        seed_source = "|".join([
+            f"org-{int(organization_id)}" if organization_id is not None else "org-pending",
+            (company_name or "").strip().lower(),
+            (subdomain_slug or "").strip().lower(),
+        ])
+        spec = brand_marks.spec_for_seed(seed_source)
+    return _brand_mark_url(spec)
 
 
 def _normalize_enterprise_logo_url_or_400(raw_logo_url: str | None) -> str | None:
@@ -534,8 +560,19 @@ def _resolve_enterprise_logo_url(organization: models.EnterpriseOrganization) ->
         if raw_logo.startswith("/api/enterprise/public/org-logo/"):
             return raw_logo
         parsed = urlparse(raw_logo)
-        if parsed.scheme in {"http", "https"} and parsed.netloc:
-            return raw_logo
+        if parsed.path.startswith(ENTERPRISE_BRAND_MARK_PATH):
+            # A generated mark is re-issued against this deployment's base URL: the design
+            # is the only part of the stored value worth keeping, and the origin baked into
+            # it may predate a BASE_URL change or come from another environment. A spec we
+            # no longer draw falls through to a fresh one rather than serving a dead 404.
+            mark_spec = _extract_brand_mark_spec(raw_logo)
+            if mark_spec:
+                return _brand_mark_url(mark_spec)
+        elif parsed.scheme in {"http", "https"} and parsed.netloc:
+            # Orgs created before we drew our own marks still hold a random stock photo
+            # here. Fall through and give them an emblem instead of a cat.
+            if parsed.netloc.split(":")[0].lower() not in _LEGACY_PLACEHOLDER_LOGO_HOSTS:
+                return raw_logo
 
     return _build_default_enterprise_logo_url(
         organization_id=getattr(organization, "id", None),
@@ -543,6 +580,16 @@ def _resolve_enterprise_logo_url(organization: models.EnterpriseOrganization) ->
         subdomain_slug=getattr(organization, "subdomain_slug", None),
         randomize=False,
     )
+
+
+def _absolute_enterprise_logo_url(organization: models.EnterpriseOrganization) -> str:
+    """The logo for consumers that render outside our origin — email clients and the
+    Chrome extension, where a same-origin path has nothing to resolve against. Every
+    email template drops the <img> entirely unless the src starts with http(s)."""
+    logo_url = _resolve_enterprise_logo_url(organization)
+    if logo_url.startswith(("http://", "https://")):
+        return logo_url
+    return f"{ENTERPRISE_PASSWORD_SETUP_BASE_URL}{logo_url}"
 
 
 def _normalize_enterprise_role(raw_role: str | None) -> str:
@@ -1888,6 +1935,7 @@ def enterprise_update_branding(
             company_name=new_company_name or organization.company_name,
             subdomain_slug=organization.subdomain_slug,
             randomize=True,
+            current_logo_url=organization.logo_url,
         )
         has_update = True
     elif payload.logo_url is not None:
@@ -1900,6 +1948,7 @@ def enterprise_update_branding(
                 company_name=new_company_name or organization.company_name,
                 subdomain_slug=organization.subdomain_slug,
                 randomize=True,
+                current_logo_url=organization.logo_url,
             )
         has_update = True
 
@@ -2012,6 +2061,27 @@ def enterprise_public_org_logo(org_id: int, filename: str):
         raise HTTPException(status_code=404, detail="Not found")
     return Response(
         content=data,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.get("/public/brand-mark/{spec}.png")
+def enterprise_public_brand_mark(spec: str):
+    """Draw the generated logo for an organization that has not uploaded one.
+
+    Unauthenticated and stateless by design: the spec in the path *is* the design, so
+    there is nothing to look up and nothing about the organization to leak. Same spec,
+    same bytes, forever — hence the immutable cache."""
+    if brand_marks.parse_spec(spec) is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    try:
+        png_bytes = brand_marks.render_png(spec)
+    except Exception:
+        logger.exception("Failed to render brand mark (spec=%s)", spec)
+        raise HTTPException(status_code=500, detail="Could not render the logo.")
+    return Response(
+        content=png_bytes,
         media_type="image/png",
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
     )
@@ -2725,10 +2795,102 @@ def _iso(value) -> Optional[str]:
         return str(value)
 
 
-def _apply_status_change(client: models.EnterpriseClient, new_status: str) -> None:
+def _stage_key_or_400(raw_stage: str | None) -> str:
+    """Validate a caller-supplied pipeline stage, or 400 naming the value.
+
+    Never normalize_stage() on a WRITE path: it coerces anything it doesn't recognise to
+    new_lead, so a stale browser tab or an importer sending a retired key would silently
+    rewind the case to the top of the pipeline, and there is no stage history to detect or
+    reverse it with. Reads still normalize — a row must render whatever it holds."""
+    key = str(raw_stage or "").strip().lower()
+    if key not in catalog.CLIENT_STAGE_KEYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{str(raw_stage or '').strip()}' is not a pipeline stage. Refresh the page and try again.",
+        )
+    return key
+
+
+# Where the ADMISSIONS milestone on the intake record lands when a case is MOVED to each
+# pipeline stage. Moving the case to a university stage is the counselor stating that the
+# phase has been reached, so the milestone follows the move (see _apply_status_change) —
+# but only on the move. The column stays staff-editable in its own right, because it also
+# records what the pipeline cannot say: a walk-in already holding an admit whose visa case
+# has legitimately not started yet.
+#
+# Keyed by stage KEY, never by position: inserting a stage must not re-map the others.
+# Everything from the visa phase onwards holds at doc_in_hand — the visa pipeline says
+# nothing further about admissions, and inventing a value would mean a key no other surface
+# knows. A stage absent from this map (on_hold) leaves the recorded value untouched.
+#
+# applications_sent is the one stage that does not settle on its mapped value: it spans both
+# "applied" and "admitted" (an admit is in hand, the offer is not accepted yet), and the
+# shortlist rows already record which it is. The value here is the no-shortlist floor —
+# _admission_stage_for() upgrades it, so "admitted" stays reachable.
+_ADMISSION_STAGE_BY_PIPELINE_STAGE = {
+    catalog.STAGE_NEW_LEAD: "exploring",
+    catalog.STAGE_SHORTLISTING: "shortlisting",
+    catalog.STAGE_APPLICATIONS_SENT: "applied",
+    catalog.STAGE_OFFER_ACCEPTED: "offer_accepted",
+    catalog.STAGE_DOCUMENTS: "doc_in_hand",
+    catalog.STAGE_SUBMITTED: "doc_in_hand",
+    catalog.STAGE_APPOINTMENT: "doc_in_hand",
+    catalog.STAGE_DECISION: "doc_in_hand",
+    catalog.STAGE_APPROVED: "doc_in_hand",
+    catalog.STAGE_REJECTED: "doc_in_hand",
+}
+
+
+def _has_admitted_university(db: Session, client: models.EnterpriseClient) -> bool:
+    """Whether any university on this client's shortlist has come back with an admit."""
+    client_id = getattr(client, "id", None)
+    if not client_id:
+        return False
+    return (
+        db.query(models.EnterpriseClientUniversity.id)
+        .filter(
+            models.EnterpriseClientUniversity.client_id == int(client_id),
+            models.EnterpriseClientUniversity.status == "admitted",
+        )
+        .first()
+    ) is not None
+
+
+def _admission_stage_for(
+    new_status: str,
+    client: models.EnterpriseClient,
+    db: Session,
+) -> Optional[str]:
+    """The admissions milestone implied by a pipeline stage, or None if the stage implies
+    nothing and the recorded value should stand.
+
+    `db` is required, not optional: the applications stage has to read the shortlist, and a
+    caller who omitted the session would silently downgrade an admit to "applied"."""
+    derived = _ADMISSION_STAGE_BY_PIPELINE_STAGE.get(new_status)
+    # Applications are out, but an admit may already be in hand and simply not accepted —
+    # which is exactly what "admitted" records, and the only place that fact lives.
+    if new_status == catalog.STAGE_APPLICATIONS_SENT and _has_admitted_university(db, client):
+        return "admitted"
+    return derived
+
+
+def _apply_status_change(
+    client: models.EnterpriseClient,
+    new_status: str,
+    db: Session,
+) -> None:
     """Set client.status while maintaining held_from_status: putting a case On Hold
     remembers the stage it was held FROM (so the UI can show its real position and
-    offer one-click Resume); moving to any other stage clears the marker."""
+    offer one-click Resume); moving to any other stage clears the marker.
+
+    An ACTUAL move — old stage != new stage — also advances the admissions milestone to
+    match, because moving the case is the counselor stating the phase has been reached. A
+    request that re-sends the stage the client already holds is not a move and leaves the
+    milestone exactly as recorded: `admission_stage` is staff-owned, it carries facts no
+    pipeline stage implies, and the Edit-client form sends the stage on every save, so
+    re-deriving here would rewrite the record on an unrelated edit.
+
+    `db` is required — see _admission_stage_for()."""
     old = client.status
     if new_status == catalog.STAGE_ON_HOLD:
         if old != catalog.STAGE_ON_HOLD:
@@ -2736,21 +2898,49 @@ def _apply_status_change(client: models.EnterpriseClient, new_status: str) -> No
     else:
         client.held_from_status = None
     client.status = new_status
+    if old == new_status:
+        return
+
+    derived = _admission_stage_for(new_status, client, db)
+    # The manual-only values (deferred) describe a state no stage implies, so derivation
+    # must never overwrite one — a deferred case still sits at the stage it reached.
+    if derived and not client_fields.is_manual_choice("admission_stage", client.admission_stage):
+        client.admission_stage = derived
+
+
+def _parse_stage_data(client: models.EnterpriseClient) -> tuple[dict, bool]:
+    """(stored, unreadable) — the stage-record object exactly as stored, and whether the
+    column could not be read as an object at all.
+
+    Write paths must use this rather than _load_stage_data: an unreadable column parses to
+    an empty dict, and building the next save on that would replace EVERY stage's records
+    with the one bucket being written. `stored` is returned unfiltered so buckets this code
+    doesn't recognise are carried through a save instead of dropped."""
+    raw = getattr(client, "stage_data", None)
+    if not raw:
+        return {}, False
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        logger.error(
+            "Client stage_data is not valid JSON (client_id=%s) — stored value left untouched",
+            getattr(client, "id", None), exc_info=True,
+        )
+        return {}, True
+    if not isinstance(parsed, dict):
+        logger.error(
+            "Client stage_data is not an object (client_id=%s, type=%s) — stored value left untouched",
+            getattr(client, "id", None), type(parsed).__name__,
+        )
+        return {}, True
+    return parsed, False
 
 
 def _load_stage_data(client: models.EnterpriseClient) -> dict:
-    """Parse the client's per-stage record JSON. Always returns a dict of dicts."""
-    raw = getattr(client, "stage_data", None)
-    if not raw:
-        return {}
-    try:
-        import json
-        parsed = json.loads(raw)
-    except Exception:
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    return {k: v for k, v in parsed.items() if isinstance(v, dict)}
+    """Parse the client's per-stage record JSON. Always returns a dict of dicts, so a
+    damaged column still renders as "nothing recorded" rather than breaking the page."""
+    stored, _unreadable = _parse_stage_data(client)
+    return {k: v for k, v in stored.items() if isinstance(v, dict)}
 
 
 # The intake record, grouped the way it is captured and displayed. Text/date/int fields
@@ -3043,8 +3233,11 @@ def enterprise_list_clients(
         base = base.filter(models.EnterpriseClient.branch_id == int(branch_id))
 
     query = base
-    if status_filter and status_filter in catalog.CLIENT_STAGE_KEYS:
-        query = query.filter(models.EnterpriseClient.status == status_filter)
+    if status_filter and status_filter.strip():
+        # Dropping an unrecognised stage here would return the whole workspace under a filter
+        # chip the UI still draws as active — a stale bookmark reading as "every client is at
+        # this stage". Same reason writes go through _stage_key_or_400: say what was wrong.
+        query = query.filter(models.EnterpriseClient.status == _stage_key_or_400(status_filter))
     normalized_category = catalog.normalize_category(category) if category else None
     if normalized_category:
         query = query.filter(models.EnterpriseClient.visa_category == normalized_category)
@@ -3389,7 +3582,7 @@ def enterprise_create_client(
         passport_number=(payload.passport_number or "").strip() or None,
         passport_expiry=_parse_iso_date_or_400(payload.passport_expiry, "Passport expiry"),
         application_reference=(payload.application_reference or "").strip() or None,
-        status=catalog.normalize_stage(payload.status) if payload.status else catalog.DEFAULT_CLIENT_STAGE,
+        status=_stage_key_or_400(payload.status) if payload.status else catalog.DEFAULT_CLIENT_STAGE,
         priority=catalog.normalize_priority(payload.priority),
         target_date=_parse_iso_date_or_400(payload.target_date, "Target date"),
         assigned_to_user_id=payload.assigned_to_user_id,
@@ -3405,6 +3598,10 @@ def enterprise_create_client(
         intake=payload.intake,
     )
     _apply_client_intake_fields(client, payload.model_dump())
+    # Normalizes held_from_status for a client opened straight onto a stage. The opening
+    # stage is not a move, so whatever admissions milestone the intake form captured — the
+    # walk-in who already holds an admit — is what stands.
+    _apply_status_change(client, client.status, db)
     _apply_client_branch(
         db, client, organization=organization, ctx=role.ctx,
         data=payload.model_dump(exclude_unset=True), creating=True,
@@ -3494,6 +3691,7 @@ def enterprise_update_client(
 
     data = payload.model_dump(exclude_unset=True)
     status_before_edit = client.status
+    admission_stage_before_edit = client.admission_stage
 
     if "full_name" in data:
         full_name = (data["full_name"] or "").strip()
@@ -3530,8 +3728,6 @@ def enterprise_update_client(
         client.target_date = _parse_iso_date_or_400(data["target_date"], "Target date")
     if "priority" in data:
         client.priority = catalog.normalize_priority(data["priority"])
-    if "status" in data and data["status"]:
-        _apply_status_change(client, catalog.normalize_stage(data["status"]))
     if "assigned_to_user_id" in data:
         new_assignee = data["assigned_to_user_id"]
         _assert_can_assign(
@@ -3540,6 +3736,20 @@ def enterprise_update_client(
         )
         client.assigned_to_user_id = new_assignee
     _apply_client_intake_fields(client, data)
+    # The Edit-client form sends every field on every save, so one request can carry both a
+    # deliberate milestone edit and a stage move — and _apply_status_change cannot tell an
+    # edited admission_stage from the one the form echoed back. Decide it here instead: a
+    # submitted value that actually changed the record is a staff edit, and it wins over the
+    # derivation for this request. A save that only moves the case still re-derives, and
+    # derivation still never overwrites a manual-only value (deferred).
+    admission_stage_edited = (
+        "admission_stage" in data and client.admission_stage != admission_stage_before_edit
+    )
+    staff_admission_stage = client.admission_stage
+    if "status" in data and data["status"]:
+        _apply_status_change(client, _stage_key_or_400(data["status"]), db)
+        if admission_stage_edited:
+            client.admission_stage = staff_admission_stage
     _apply_client_branch(
         db, client, organization=organization, ctx=role.ctx, data=data, creating=False,
     )
@@ -3573,11 +3783,9 @@ def enterprise_update_client_status(
         db=db, user=current_user, request=request, require_capability="clients.edit"
     )
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
-    new_status = payload.status.strip().lower()
-    if new_status not in catalog.CLIENT_STAGE_KEYS:
-        raise HTTPException(status_code=400, detail="Invalid status.")
+    new_status = _stage_key_or_400(payload.status)
     old_status = client.status
-    _apply_status_change(client, new_status)
+    _apply_status_change(client, new_status, db)
     db.commit()
     db.refresh(client)
     if new_status != old_status:
@@ -3628,22 +3836,40 @@ def enterprise_update_client_stage_data(
         raise HTTPException(status_code=400, detail="This stage has no record fields for this destination.")
 
     incoming = payload.values if isinstance(payload.values, dict) else {}
-    cleaned: dict[str, str] = {}
+    submitted: dict[str, str] = {}
     for key, value in incoming.items():
         if key not in allowed:
             continue
         text_value = ("" if value is None else str(value)).strip()
         if len(text_value) > 500:
             raise HTTPException(status_code=400, detail=f"'{key}' is too long (max 500 characters).")
-        if text_value:
-            cleaned[key] = text_value
+        submitted[key] = text_value
 
-    data = _load_stage_data(client)
-    if cleaned:
-        data[stage_key] = cleaned
+    data, unreadable = _parse_stage_data(client)
+    if unreadable:
+        # Writing now would rebuild the column from an empty dict and take every other
+        # stage's records with it. Refuse: the stored bytes stay on the row exactly as they
+        # are, recoverable, and the counselor is told instead of shown a false success.
+        raise HTTPException(
+            status_code=409,
+            detail="This client's saved case records can't be read, so saving would overwrite them. Contact support before editing this stage.",
+        )
+
+    # MERGE onto what is stored, never replace it: `allowed` covers only what the current
+    # catalog declares, so a replace would delete the keys it no longer names — including
+    # RETIRED_STAGE_FIELDS, whose values are still read by the backfill into the client
+    # columns. Only the keys the counselor actually submitted change; an empty one clears.
+    existing = data.get(stage_key)
+    bucket = dict(existing) if isinstance(existing, dict) else {}
+    for key, text_value in submitted.items():
+        if text_value:
+            bucket[key] = text_value
+        else:
+            bucket.pop(key, None)
+    if bucket:
+        data[stage_key] = bucket
     else:
         data.pop(stage_key, None)
-    import json
     client.stage_data = json.dumps(data) if data else None
     db.commit()
     db.refresh(client)
@@ -3812,7 +4038,7 @@ def _send_and_log_client_email(
         body_html=body_html,
         organization_name=organization.company_name,
         sender_name=current_user.full_name or current_user.email,
-        logo_url=_resolve_enterprise_logo_url(organization),
+        logo_url=_absolute_enterprise_logo_url(organization),
         reply_to=reply_to,
         # Always true now — Reply-To is a real person's inbox, so telling the client
         # they can reply is accurate rather than the lie it was while it bounced.
@@ -6056,7 +6282,7 @@ def _send_payment_request_email_safe(payment, organization, client_email, pay_ur
         pay_url=pay_url,
         invoice_number=payment.invoice_number or "",
         due_date_text=due,
-        logo_url=_resolve_enterprise_logo_url(organization),
+        logo_url=_absolute_enterprise_logo_url(organization),
     )
 
 
@@ -7318,7 +7544,7 @@ async def _alert_staff_of_inbound_reply(
         .first()
     )
     org_name = organization.company_name if organization else "your consultancy"
-    logo_url = _resolve_enterprise_logo_url(organization) if organization else None
+    logo_url = _absolute_enterprise_logo_url(organization) if organization else None
     for user in recipients:
         try:
             await run_in_threadpool(
@@ -7590,13 +7816,19 @@ def enterprise_credits_transactions(
     member_id: Optional[int] = None,
     client_id: Optional[int] = None,
     days: int = 0,
+    start: str = "",
+    end: str = "",
     q: str = "",
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
     """The credit ledger, filterable — this is the 'who / when / what / why' log
     behind the Credits → Analytics tab. Every filter is optional, so the plain
-    `?limit=N` call the wallet page has always made keeps working unchanged."""
+    `?limit=N` call the wallet page has always made keeps working unchanged.
+
+    `days` selects a preset window and `start`/`end` an explicit one, resolved by
+    the same helper the analytics endpoint uses so the ledger under a chart always
+    covers exactly the period the chart is drawing."""
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
     # The ceiling is high because the Analytics tab's CSV export pulls the whole
     # filtered ledger in one request rather than paging through it.
@@ -7638,9 +7870,11 @@ def enterprise_credits_transactions(
     if client_id is not None:
         query = query.filter(T.reference_type == "client", T.reference_id == int(client_id))
 
-    days = credits.normalize_analytics_days(days)
-    if days > 0:
-        query = query.filter(T.created_at >= datetime.utcnow() - timedelta(days=days))
+    window = credits.resolve_analytics_range(days=days, start=start, end=end)
+    if window["since"] is not None:
+        query = query.filter(T.created_at >= window["since"])
+    if window["until"] is not None:
+        query = query.filter(T.created_at <= window["until"])
 
     q = (q or "").strip()
     if q:
@@ -7695,6 +7929,14 @@ def enterprise_credits_transactions(
         "offset": offset,
         "limit": limit,
         "has_more": (offset + len(rows)) < total,
+        "range": {
+            "key": window["key"],
+            "custom": window["custom"],
+            "days": window["days"],
+            "label": window["label"],
+            "since": (window["since"].isoformat() if window["since"] else None),
+            "until": (window["until"].isoformat() if window["until"] else None),
+        },
     }
 
 
@@ -7702,17 +7944,27 @@ def enterprise_credits_transactions(
 def enterprise_credits_analytics(
     request: Request,
     days: int = credits.DEFAULT_ANALYTICS_DAYS,
+    start: str = "",
+    end: str = "",
+    bucket: str = "",
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
     """Spend analytics for the org's own wallet: where credits went, on which
-    clients, by whom, over time — plus burn rate, runway and free allowances."""
+    clients, by whom, over time — plus burn rate, runway and free allowances.
+
+    The window is either the `days` preset or an explicit `start`/`end` pair of
+    YYYY-MM-DD dates; `bucket` (day/week/month) overrides how the timeline and the
+    period-by-period table are grouped. A malformed or out-of-range value is
+    clamped by the resolver rather than rejected — a date picker mid-edit should
+    not 400 the whole tab."""
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="credits.view")
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "wallet": credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization)),
         "analytics": credits.spend_analytics(
-            db, organization.id, days=days, include_by_member=role.ctx.is_org_scope,
+            db, organization.id, days=days, start=start, end=end, bucket=bucket,
+            include_by_member=role.ctx.is_org_scope,
             ctx=role.ctx,
         ),
     }
@@ -9026,7 +9278,8 @@ def enterprise_copilot_extension_context(
             "id": organization.id,
             "company_name": organization.company_name,
             "subdomain_slug": (organization.subdomain_slug or "").strip().lower() or None,
-            "logo_url": _resolve_enterprise_logo_url(organization),
+            # Absolute: this one renders inside the extension, not on our origin.
+            "logo_url": _absolute_enterprise_logo_url(organization),
         },
         "role": role,
         "permissions": _enterprise_permissions_for_role(role),
@@ -10010,6 +10263,11 @@ def enterprise_client_deep_scan(
             documents=documents,
             current_date=datetime.utcnow().date().isoformat(),
         )
+        # The audit bills Gemini per document before it ever returns, so a None here
+        # means we have already spent real money: fail loudly rather than let the
+        # unpacking below raise a bare TypeError outside this handler.
+        if not isinstance(result, dict) or "risk_level" not in result:
+            raise RuntimeError(f"Deep Scan returned no audit payload (got {type(result).__name__})")
     except Exception:
         # No charge on any failure (the debit only happens after success below).
         logger.exception("Deep Scan failed (org_id=%s, client_id=%s)", organization.id, client.id)
@@ -10928,7 +11186,7 @@ def enterprise_create_interview_invite(
         allowed_count=invite.allowed_count,
         destination_country=client.destination_country_name,
         visa_type=client.visa_type,
-        logo_url=_resolve_enterprise_logo_url(organization),
+        logo_url=_absolute_enterprise_logo_url(organization),
     )
     message = (f"Sent {invite.allowed_count} mock interview(s) to {email}."
                if sent else f"Invite created but the email could not be sent right now. {err or ''}".strip())
@@ -11178,7 +11436,7 @@ def public_interview_feedback(payload: PublicInterviewFeedbackRequest, request: 
             visa_type=client.visa_type,
             decision_label=decision_label,
             feedback_markdown=feedback,
-            logo_url=_resolve_enterprise_logo_url(org),
+            logo_url=_absolute_enterprise_logo_url(org),
         )
         if not emailed:
             logger.warning("Interview report email failed for invite %s: %s", invite.id, err)
@@ -11412,7 +11670,7 @@ def enterprise_create_document_request(
         upload_url=link,
         document_types=doc_types,
         message=req.message,
-        logo_url=_resolve_enterprise_logo_url(organization),
+        logo_url=_absolute_enterprise_logo_url(organization),
     )
     message = (f"Document request sent to {email}."
                if sent else f"Request created but the email could not be sent right now. {err or ''}".strip())
@@ -12151,10 +12409,11 @@ def _portal_stage_records(client: models.EnterpriseClient) -> dict:
     """Per-stage recorded fields, resolved against the destination-aware catalog.
 
     Returns {stage_key: [{label, value, type}, …]} containing only fields with a
-    recorded value, in catalog order — the client sees exactly what staff filled in."""
+    recorded value, in this destination's stage order — the client sees exactly what
+    staff filled in."""
     data = _load_stage_data(client)
     out: dict[str, list] = {}
-    for stage in catalog.CLIENT_STAGES:
+    for stage in catalog.stages_for(client.destination_country_code):
         stage_key = stage["key"]
         recorded = data.get(stage_key) or {}
         if not recorded:
@@ -12244,13 +12503,18 @@ def _build_client_portal_payload(db: Session, share: models.EnterpriseClientPort
             "created_at": _iso(client.created_at),
             "updated_at": _iso(client.updated_at or client.created_at),
         },
-        "status": client.status,
+        # Normalized to match the stage brief beside it: shipping the raw key would let
+        # the student's status pill and their journey track disagree about the same case.
+        "status": catalog.normalize_stage(client.status),
         "stage": _stage_brief(client.status, client.destination_country_code),
-        "held_from_status": getattr(client, "held_from_status", None),
+        "held_from_status": catalog.normalize_stage(client.held_from_status) if getattr(client, "held_from_status", None) else None,
         "held_from_stage": _stage_brief(client.held_from_status, client.destination_country_code) if getattr(client, "held_from_status", None) else None,
+        # This portal is scoped to ONE client, so the stepper is worded and sequenced for that
+        # client's destination — the same resolution behind the status pill above, which
+        # otherwise reads differently from the step it is meant to be pointing at.
         "stages": [
-            {k: s[k] for k in ("key", "label", "description", "order", "color")}
-            for s in catalog.CLIENT_STAGES
+            {k: s[k] for k in ("key", "label", "description", "order", "color", "is_open", "is_terminal")}
+            for s in catalog.stages_for(client.destination_country_code)
         ],
         "stage_records": _portal_stage_records(client),
         "documents": [
@@ -12331,7 +12595,7 @@ def enterprise_create_portal_share(
         portal_url=link,
         destination_country=client.destination_country_name,
         visa_type=client.visa_type,
-        logo_url=_resolve_enterprise_logo_url(organization),
+        logo_url=_absolute_enterprise_logo_url(organization),
     )
     message = (f"Portal access sent to {email}."
                if sent else f"Share created but the email could not be sent right now. {err or ''}".strip())
@@ -12690,7 +12954,7 @@ def enterprise_create_copilot_invite(
         copilot_url=link,
         destination_country=client.destination_country_name,
         visa_type=client.visa_type,
-        logo_url=_resolve_enterprise_logo_url(organization),
+        logo_url=_absolute_enterprise_logo_url(organization),
     )
     message = (f"Copilot access sent to {email}."
                if sent else f"Invite created but the email could not be sent right now. {err or ''}".strip())
@@ -14962,7 +15226,7 @@ def enterprise_share_lead_form_email(
         form_url=link,
         sender_name=current_user.full_name or current_user.email,
         note=payload.note,
-        logo_url=_resolve_enterprise_logo_url(organization),
+        logo_url=_absolute_enterprise_logo_url(organization),
         reply_to=current_user.email,
     )
     message = (f"Form link sent to {str(payload.to_email).strip().lower()}."
@@ -15213,7 +15477,7 @@ def public_lead_form_submit(
                 lead_name=lead.full_name,
                 answers=[(a.get("label"), a.get("value")) for a in answers],
                 leads_url=leads_url,
-                logo_url=_resolve_enterprise_logo_url(org),
+                logo_url=_absolute_enterprise_logo_url(org),
                 lead_email=lead.email,
             )
         except Exception:

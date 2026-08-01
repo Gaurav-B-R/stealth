@@ -200,7 +200,7 @@
       var intro = info.form && info.form.intro_text;
       if(intro){ $("formIntro").textContent = intro; $("formIntro").classList.remove("hidden"); }
       var logo = (info.logo_url || "").trim();
-      if(logo && /^(https?:\/\/|\/api\/enterprise\/public\/org-logo\/)/.test(logo)){
+      if(logo && /^(https?:\/\/|\/api\/enterprise\/public\/(org-logo|brand-mark)\/)/.test(logo)){
         var img = document.createElement("img");
         img.src = logo; img.alt = "";
         img.onerror = function(){ this.style.display = "none"; };

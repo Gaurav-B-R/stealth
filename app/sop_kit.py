@@ -17,7 +17,6 @@ import re
 from sqlalchemy.orm import Session
 
 from app import models
-from app import ai_usage
 from app import visa_catalog
 from app.utils import gemini_service as gemini_utils
 
@@ -232,9 +231,14 @@ def _run_gemini(prompt: str, user_id: int) -> tuple[str, str]:
     last_error: Exception | None = None
     for model_name in _model_candidates():
         try:
-            model = gemini_utils.build_generative_model(model_name)
+            # Pass usage_source so build_generative_model's own instrumentation records
+            # this under "sop_generator". It previously defaulted to "document_ai" and the
+            # explicit record_gemini_usage below logged the SAME response a second time —
+            # double-counting SOP spend and mislabelling half of it as document AI.
+            model = gemini_utils.build_generative_model(
+                model_name, usage_source="sop_generator", user_id=user_id,
+            )
             response = model.generate_content(prompt)
-            ai_usage.record_gemini_usage("sop_generator", model_name, response, user_id=user_id)
             text = (getattr(response, "text", None) or "").strip()
             if text:
                 return text, model_name

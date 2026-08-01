@@ -313,6 +313,10 @@ button { font-family: inherit; cursor: pointer; }
 /* ---------- Generic cards / grids ---------- */
 .grid-2 { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; align-items: start; }
 .grid-2.even { grid-template-columns: 1fr 1fr; }
+/* An fr track is floored at its content's min-content width, so a card that cannot shrink
+   sizes the whole grid and pushes the page into a horizontal scroll. The cards inside are
+   responsible for staying readable as their column narrows. */
+.grid-2 > * { min-width: 0; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
 .card-head { padding: 18px 20px 0; display: flex; align-items: center; justify-content: space-between; }
 .card-head h3 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
@@ -321,18 +325,30 @@ button { font-family: inherit; cursor: pointer; }
 
 /* pipeline bars */
 .pipe-row { display: flex; align-items: center; gap: 12px; margin-bottom: 13px; }
-.pipe-row .pl { width: 132px; font-size: 13px; color: var(--text-2); flex: none; display: flex; align-items: center; gap: 8px; }
-.pipe-row .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.pipe-track { flex: 1; height: 9px; background: var(--bg-2); border-radius: 6px; overflow: hidden; }
+/* The label column is shared: it carries both the visa pipeline's stage names ("Offer
+   Accepted & Deposit Paid") and the workstream cards' admissions / English-test options,
+   which run longer still. Labels wrap rather than clip, and the two-line floor keeps every
+   row the same height whether or not its label wrapped. The track keeps a flex basis of its
+   own so a cramped row shrinks the label instead of collapsing the bar to nothing. */
+.pipe-row .pl {
+  flex: 0 1 224px; min-width: 0; display: flex; align-items: center; min-height: 2.7em;
+  font-size: 13px; line-height: 1.35; color: var(--text-2); overflow-wrap: anywhere;
+}
+.pipe-row .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; vertical-align: middle; margin-right: 8px; flex: none; }
+.pipe-track { flex: 1 1 60px; height: 9px; background: var(--bg-2); border-radius: 6px; overflow: hidden; }
 .pipe-fill { height: 100%; border-radius: 6px; transition: width .5s ease; }
 .pipe-row .pv { width: 30px; text-align: right; font-size: 13px; font-weight: 700; flex: none; }
 
 /* category chips */
-.cat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* Two chips per row while two fit, one below that: the 48% floor never leaves room for a
+   third, and visa-type names are long enough that a half-width column of them is unreadable
+   once this card's grid column drops under ~300px. */
+.cat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(max(120px, 48%), 1fr)); gap: 12px; }
 .cat-cell { display: flex; align-items: center; gap: 12px; padding: 13px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); }
 .cat-cell .ci { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-weight: 700; flex: none; }
+.cat-cell > div { min-width: 0; }
 .cat-cell .cv { font-size: 20px; font-weight: 750; line-height: 1; }
-.cat-cell .cl { font-size: 12px; color: var(--text-2); }
+.cat-cell .cl { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
 
 /* country landmark cards */
 .country-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 14px; }
@@ -481,9 +497,40 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .stage-step.done { color: #fff; border-color: transparent; }
 .stage-step:hover { border-color: var(--primary); }
 
-/* Visual journey tracker (client Overview) — connected stepper with done/current/upcoming */
-.jtrack { display: flex; align-items: flex-start; margin: 4px 0 2px; }
-.jtrack-step { flex: 1 1 0; min-width: 0; position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 2px; }
+/* Visual journey tracker (client Overview) — connected stepper with done/current/upcoming.
+   The pipeline is long (lead → shortlist → applications → offer → the whole visa run), so the
+   track scrolls sideways whenever the pane cannot hold every step at a readable width. Two
+   affordances say so: an always-drawn scrollbar (macOS overlay bars are invisible at rest, so
+   the steps past the edge were unfindable) and an inner shadow on whichever edge still has
+   track behind it — the shadow layers are scroll-attached and the cover layers local, so each
+   side shows only while there is something to scroll to. */
+/* padding-top clears the current/approved node's focus ring, which a scroll container clips. */
+.jtrack {
+  display: flex; align-items: flex-start; margin: 4px 0 2px; overflow-x: auto;
+  padding: 6px 0;
+  background-image:
+    linear-gradient(to right, var(--surface) 62%, rgba(15, 23, 42, 0)),
+    linear-gradient(to left, var(--surface) 62%, rgba(15, 23, 42, 0)),
+    linear-gradient(to right, rgba(15, 23, 42, .22), rgba(15, 23, 42, 0)),
+    linear-gradient(to left, rgba(15, 23, 42, .22), rgba(15, 23, 42, 0));
+  background-position: left center, right center, left center, right center;
+  background-size: 26px 100%, 26px 100%, 15px 100%, 15px 100%;
+  background-repeat: no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+.jtrack::-webkit-scrollbar { height: 9px; }
+.jtrack::-webkit-scrollbar-track { background: var(--bg-2); border-radius: 999px; }
+.jtrack::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+.jtrack::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+/* Same affordance for Firefox, which has no ::-webkit-scrollbar and would otherwise fall
+   back to the invisible overlay bar. Gated: where the pseudo-element exists, the standard
+   properties override it and take the reserved 9px track with them. */
+@supports not selector(::-webkit-scrollbar) {
+  .jtrack { scrollbar-width: thin; scrollbar-color: var(--border-strong) var(--bg-2); }
+}
+/* scroll-margin leaves a step's worth of context on either side when the current stage is
+   scrolled into view, so it never lands flush against the edge gradient. */
+.jtrack-step { flex: 1 0 72px; min-width: 72px; position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 2px; scroll-margin-inline: 76px; }
 .jtrack-step[data-jkey] { cursor: pointer; }
 /* Stage whose case-record panel is open */
 .jtrack-step.panel-open .jtrack-node { box-shadow: 0 0 0 4px rgba(99, 102, 241, .18); }
@@ -524,7 +571,7 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .jtrack-step.current .jtrack-node { border-color: var(--primary); color: var(--primary-600); box-shadow: 0 0 0 4px rgba(99,102,241,.16); }
 .jtrack-step.approved .jtrack-node { background: #10b981; border-color: #10b981; color: #fff; box-shadow: 0 0 0 4px rgba(16,185,129,.18); }
 .jtrack-step[data-jkey]:hover .jtrack-node { border-color: var(--primary); }
-.jtrack-label { margin-top: 8px; font-size: 11px; font-weight: 600; line-height: 1.28; color: var(--text-2); max-width: 94px; }
+.jtrack-label { margin-top: 8px; font-size: 11px; font-weight: 600; line-height: 1.28; color: var(--text-2); min-width: 0; max-width: 100%; overflow-wrap: break-word; }
 .jtrack-step.current .jtrack-label { color: var(--primary-600); font-weight: 700; }
 .jtrack-step.done .jtrack-label, .jtrack-step.approved .jtrack-label { color: var(--text); }
 
@@ -557,8 +604,7 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .jtrack-docchip.more { color: var(--muted); }
 
 @media (max-width: 640px) {
-  .jtrack { overflow-x: auto; padding-bottom: 6px; }
-  .jtrack-step { min-width: 76px; }
+  .jtrack-step { flex-basis: 76px; min-width: 76px; }
 }
 
 /* notes timeline */
@@ -700,10 +746,29 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 }
 .cr-range:hover { border-color: var(--border-strong); color: var(--text); }
 .cr-range.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+/* Custom window pickers + the grouping switch. The spacer pushes "Group by" to the
+   far end so the bar reads as two controls (which dates / how to slice them) rather
+   than one long row of pills. */
+.cr-rangespacer { flex: 1 1 auto; }
+.cr-custom { display: inline-flex; align-items: center; gap: 6px; }
+.cr-custom-sep { color: var(--muted); font-size: 12px; }
+.cr-input.cr-date { min-width: 0; padding: 6px 9px; font-size: 12.5px; }
+.cr-granwrap { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.cr-gran {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-2);
+  border-radius: 8px; padding: 5px 11px; font-size: 12px; font-weight: 650; cursor: pointer;
+  font-family: var(--font); transition: all .14s ease;
+}
+.cr-gran:hover { border-color: var(--border-strong); color: var(--text); }
+.cr-gran.active { background: var(--text); border-color: var(--text); color: #fff; }
 
 /* Spend timeline: a CSS bar chart, so it reflows with the card and needs no library. */
 .cr-chart-wrap { display: flex; gap: 10px; align-items: stretch; }
 .cr-chart-y { display: flex; flex-direction: column; justify-content: space-between; font-size: 11px; color: var(--muted); padding: 2px 0 0; flex: none; }
+/* The plot scrolls, the y-axis doesn't. A slot has a hard 2px floor, so a long
+   day-by-day range needs more width than the card has; without this the bars
+   painted over the page gutter instead of scrolling. */
+.cr-chart-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
 .cr-chart {
   flex: 1; display: flex; align-items: flex-end; gap: 2px; height: 168px;
   border-bottom: 1px solid var(--border); padding-bottom: 1px; min-width: 0;
@@ -717,11 +782,17 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
   max-width: 56px; margin: 0 auto;
 }
 .cr-bar-slot:hover .cr-bar { opacity: .72; }
+/* A bar with spend behind it drills into that period, so it has to look pressable. */
+.cr-bar-slot[data-crbar] { cursor: pointer; }
+.cr-bar-slot[data-crbar]:focus-visible { outline: 2px solid rgba(99, 102, 241, .45); outline-offset: 1px; border-radius: 4px; }
+.cr-bar-slot.active .cr-bar { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--primary); opacity: 1; }
 /* Zero-spend bucket: a flat tick on the baseline, not a gap — a chart that skips
    quiet days reads as continuous usage. (Class is prefixed: a bare `.empty`
    collides with the global empty-state block and inherits its 60px padding.) */
 .cr-bar.cr-bar-zero { background: var(--bg-2); height: 3px; border-radius: 2px; }
-.cr-chart-x { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); margin: 8px 0 0 34px; }
+/* Inside .cr-chart-scroll the labels sit directly under the plot they name, so they
+   need no y-axis offset of their own — the offset lives on the scroller's sibling. */
+.cr-chart-x { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); margin: 8px 0 0; }
 
 .cr-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; margin-bottom: 24px; }
 .cr-split-row { padding: 11px 0; border-bottom: 1px solid var(--border); }
@@ -740,6 +811,34 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .cr-chips { display: flex; gap: 5px; flex-wrap: wrap; max-width: 340px; }
 .cr-chip { font-size: 11.5px; font-weight: 650; padding: 3px 9px; border-radius: 20px; white-space: nowrap; }
 
+/* Period-by-period breakdown table */
+.cr-day-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-bottom: 0; }
+.cr-day-toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.cr-day-toggle input { accent-color: var(--primary); cursor: pointer; }
+.cr-day-tools #crDayExport { margin-left: auto; }
+.cr-day-warn {
+  font-size: 12.5px; color: var(--text-2); background: rgba(245, 158, 11, .1);
+  border-left: 3px solid var(--warning); border-radius: 0 8px 8px 0; padding: 9px 12px;
+}
+.cr-day-row { cursor: pointer; }
+.cr-day-row.active { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--primary); }
+.cr-day-share { min-width: 130px; }
+.cr-day-share .cr-sub { display: block; margin-top: 3px; }
+
+/* The ledger's "you are looking at one day inside the period" banner. */
+.cr-drill { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 0; }
+.cr-drill-chip {
+  display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 650;
+  background: rgba(99, 102, 241, .12); color: var(--primary-600);
+  border-radius: 999px; padding: 5px 8px 5px 12px;
+}
+.cr-drill-chip button {
+  border: none; background: rgba(99, 102, 241, .18); color: inherit; cursor: pointer;
+  width: 18px; height: 18px; border-radius: 50%; line-height: 1; font-size: 13px;
+  font-family: var(--font); display: grid; place-items: center;
+}
+.cr-drill-chip button:hover { background: var(--primary); color: #fff; }
+
 /* Ledger filter bar */
 .cr-filters { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }
 .cr-input {
@@ -756,6 +855,12 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
   .cr-tab { flex: 1 1 auto; text-align: center; }
   .cr-chips { max-width: 200px; }
   .cr-filters .cr-input { flex: 1 1 100%; min-width: 0; }
+  /* The spacer would otherwise strand "Group by" on the same wrapped line as a
+     half-width date picker; zero-height, it forces a clean break instead. */
+  .cr-rangespacer { flex-basis: 100%; height: 0; }
+  .cr-custom { width: 100%; }
+  .cr-custom .cr-input { flex: 1; min-width: 0; }
+  .cr-day-tools #crDayExport { margin-left: 0; }
 }
 
 /* ---------- Credit checkout / order-review modal ---------- */
@@ -2239,7 +2344,9 @@ body.ai-dock-open .toast-wrap { right: 444px; }
 .dash-money-sub { font-size: 11.5px; color: var(--text-2); }
 @media (max-width: 560px) { .dash-money-grid { grid-template-columns: 1fr; } }
 
-.dash-stale-hint { font-size: 11.5px; color: var(--muted); }
+/* Muted one-liner sitting opposite an <h3> in a .card-head. */
+.dash-stale-hint, .dash-head-hint { font-size: 11.5px; color: var(--muted); }
+@media (max-width: 560px) { .dash-head-hint { display: none; } }
 /* .prio capitalizes (it normally carries "high"/"low"); "31d quiet" is a sentence, not a label. */
 .dash-stale-age { background: #fff7ed; color: #c2410c; text-transform: none; }
 

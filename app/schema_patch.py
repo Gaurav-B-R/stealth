@@ -989,6 +989,184 @@ def ensure_enterprise_crm_tables():
             ):
                 conn.execute(text(stmt))
 
+    # --- the stage-vocabulary backfill + invariant (guarded) ---------------
+    # try/except sits OUTSIDE the `with`, so the DDL above is already committed and a backfill
+    # failure only rolls back the backfill. It must never abort startup: this runs inside
+    # main's startup path, where an exception takes the app down.
+    try:
+        with engine.begin() as conn:
+            _backfill_retired_client_stage_keys(conn)
+            _backfill_relocated_shortlisting_stage_keys(conn)
+            _report_unknown_client_stage_keys(conn)
+    except Exception as exc:  # noqa: BLE001 - never block startup on a data backfill
+        print(f"[schema_patch] client stage-key backfill skipped: {exc}")
+
+
+def _backfill_retired_client_stage_keys(conn):
+    """One-time rewrite of the stage keys an earlier vocabulary change left in the data.
+
+    `documents_pending` and `documents_collected` were the two halves of document collection
+    before it became the single `documents` stage ("Collecting Documents" covers gathering
+    AND holding them); no source file has mentioned either string since. Rows still carrying
+    them are counted by no stage rollup — the dashboards tally catalog keys only — so a large
+    slice of the book reads as missing from the pipeline.
+
+    Deliberately narrow: these two values are the only ones with a decided mapping, and
+    nothing may map to `submitted`, which would assert a filing that never happened. Any
+    other unrecognised value is reported by _report_unknown_client_stage_keys and left
+    exactly as stored — normalize_stage() coerces an unknown key to new_lead on read, and
+    rewriting on a guess would make that guess permanent.
+    """
+    from app import enterprise_catalog as catalog
+
+    retired_stage_keys = {
+        "documents_pending": catalog.STAGE_DOCUMENTS,
+        "documents_collected": catalog.STAGE_DOCUMENTS,
+    }
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS app_data_migrations ("
+        "migration_key VARCHAR PRIMARY KEY, "
+        "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
+    ))
+    marker = "enterprise_client_retired_stage_keys_v1"
+    if conn.execute(
+        text("SELECT 1 FROM app_data_migrations WHERE migration_key = :k"),
+        {"k": marker},
+    ).fetchone():
+        return
+
+    rewritten = 0
+    # held_from_status is the same vocabulary — a case put On Hold from a retired key resumes
+    # into it, so leaving that column behind would reintroduce the orphan on one click.
+    for column in ("status", "held_from_status"):
+        for old_key, new_key in retired_stage_keys.items():
+            result = conn.execute(
+                text(f"UPDATE enterprise_clients SET {column} = :new WHERE {column} = :old"),
+                {"new": new_key, "old": old_key},
+            )
+            rewritten += max(result.rowcount, 0)
+
+    conn.execute(
+        text("INSERT INTO app_data_migrations (migration_key) VALUES (:k)"),
+        {"k": marker},
+    )
+    if rewritten:
+        print(f"[schema_patch] remapped {rewritten} retired client stage value(s)")
+
+
+# The six per-destination university-choice answers the catalog used to collect at new_lead and
+# now declares under shortlisting — US, UK, AU, FR, IE and AE respectively. Spelled out rather
+# than diffed against the catalog: the catalog only says where a field lives NOW, so reading the
+# set from it would silently change what this one-time migration relocates the next time a field
+# moves. Anything else in the new_lead bucket is not this migration's business.
+_RELOCATED_SHORTLISTING_STAGE_KEYS = (
+    "intended_program_and_university",
+    "target_institutions",
+    "preferred_providers",
+    "target_programmes",
+    "intended_institution",
+    "licensed_institution_and_programme",
+)
+
+
+def _backfill_relocated_shortlisting_stage_keys(conn):
+    """One-time move of those six answers from each client's `new_lead` bucket to `shortlisting`.
+
+    Staff recorded the intended university on the lead record because shortlisting did not exist
+    as a stage yet. The case-record form renders only the fields the catalog declares for a
+    stage, so after the move the stored answer is invisible, and the portal's stage-record
+    resolver drops keys the destination catalog no longer declares — the next save of new_lead
+    writes the record back without them and the answer is gone for good.
+
+    A value already recorded under shortlisting always wins; in that case the new_lead copy is
+    left exactly where it is rather than dropped, so no reading of the two is ever discarded.
+    """
+    import json
+
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS app_data_migrations ("
+        "migration_key VARCHAR PRIMARY KEY, "
+        "applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)"
+    ))
+    marker = "enterprise_client_shortlisting_stage_keys_v1"
+    if conn.execute(
+        text("SELECT 1 FROM app_data_migrations WHERE migration_key = :k"),
+        {"k": marker},
+    ).fetchone():
+        return
+
+    rows = conn.execute(text(
+        "SELECT id, stage_data FROM enterprise_clients "
+        "WHERE stage_data IS NOT NULL AND stage_data <> ''"
+    )).mappings().all()
+
+    moved = 0
+    for row in rows:
+        try:
+            data = json.loads(row["stage_data"])
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        recorded = data.get("new_lead")
+        shortlisting = data.get("shortlisting") or {}
+        if not isinstance(recorded, dict) or not isinstance(shortlisting, dict):
+            continue
+        relocated = False
+        for key in _RELOCATED_SHORTLISTING_STAGE_KEYS:
+            value = recorded.get(key)
+            if value is None or not str(value).strip():
+                continue
+            existing = shortlisting.get(key)
+            if existing is not None and str(existing).strip():
+                continue
+            shortlisting[key] = recorded.pop(key)
+            relocated = True
+        if not relocated:
+            continue
+        data["shortlisting"] = shortlisting
+        conn.execute(
+            text("UPDATE enterprise_clients SET stage_data = :payload WHERE id = :row_id"),
+            {"payload": json.dumps(data), "row_id": row["id"]},
+        )
+        moved += 1
+
+    conn.execute(
+        text("INSERT INTO app_data_migrations (migration_key) VALUES (:k)"),
+        {"k": marker},
+    )
+    if moved:
+        print(f"[schema_patch] moved shortlisting case-record answers on {moved} client(s)")
+
+
+def _report_unknown_client_stage_keys(conn):
+    """Every startup: name any stored client stage value the catalog no longer knows.
+
+    The vocabulary is read from the catalog, never copied here — stage keys get added over
+    time and a list in this file would go stale on the next insertion, which is exactly how
+    the orphans above survived unnoticed. Reported only, not repaired: a value without a
+    decided mapping is a migration someone has to author.
+    """
+    from app import enterprise_catalog as catalog
+
+    unknown = []
+    for column in ("status", "held_from_status"):
+        rows = conn.execute(text(
+            f"SELECT {column} AS value, COUNT(*) AS total FROM enterprise_clients "
+            f"WHERE {column} IS NOT NULL AND {column} <> '' GROUP BY {column}"
+        )).mappings().all()
+        unknown.extend(
+            f"{column}={row['value']!r} ({row['total']} row(s))"
+            for row in rows
+            if row["value"] not in catalog.CLIENT_STAGE_KEYS
+        )
+    if unknown:
+        print(
+            "[schema_patch] WARNING: enterprise_clients holds stage values outside "
+            f"enterprise_catalog.CLIENT_STAGE_KEYS — {', '.join(unknown)}"
+        )
+
 
 # The 14 access-control columns added to enterprise_organization_members. "TS" is replaced by
 # the dialect's timestamp type. Every NOT NULL entry carries a CONSTANT default (SQLite refuses
@@ -2846,6 +3024,16 @@ def ensure_gemini_usage_table():
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_organization_id ON gemini_usage_events(organization_id)"))
             if "cached_tokens" not in cols:
                 conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0"))
+            # Google Search grounding is billed per request, not per token, so it needs
+            # its own columns — estimated_cost_usd stays the TOTAL (tokens + search) and
+            # pre-existing rows keep their meaning, with search columns defaulting to 0.
+            if "search_queries" not in cols:
+                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN search_queries INTEGER NOT NULL DEFAULT 0"))
+            if "search_cost_usd" not in cols:
+                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN search_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0"))
+            if "status" not in cols:
+                conn.execute(text("ALTER TABLE gemini_usage_events ADD COLUMN status VARCHAR NOT NULL DEFAULT 'ok'"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_gemini_usage_events_status ON gemini_usage_events(status)"))
             return
         if engine.dialect.name == "sqlite":
             conn.execute(text("""
@@ -2859,6 +3047,9 @@ def ensure_gemini_usage_table():
                     output_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tokens INTEGER NOT NULL DEFAULT 0,
                     cached_tokens INTEGER NOT NULL DEFAULT 0,
+                    search_queries INTEGER NOT NULL DEFAULT 0,
+                    search_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
+                    status VARCHAR NOT NULL DEFAULT 'ok',
                     estimated_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
                 )
@@ -2875,6 +3066,9 @@ def ensure_gemini_usage_table():
                     output_tokens INTEGER NOT NULL DEFAULT 0,
                     total_tokens INTEGER NOT NULL DEFAULT 0,
                     cached_tokens INTEGER NOT NULL DEFAULT 0,
+                    search_queries INTEGER NOT NULL DEFAULT 0,
+                    search_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
+                    status VARCHAR NOT NULL DEFAULT 'ok',
                     estimated_cost_usd NUMERIC(12,6) NOT NULL DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
                 )
