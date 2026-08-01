@@ -1,6 +1,6 @@
 # Rilono
 
-An AI-powered F1 student visa documentation assistant built with FastAPI and Python. Students can securely organize documents, receive AI guidance, and prepare for visa interviews with confidence.
+An AI-powered study-abroad platform built with FastAPI and Python. Students can securely organize documents, receive AI guidance, and prepare for visa interviews with confidence.
 
 ## Features
 

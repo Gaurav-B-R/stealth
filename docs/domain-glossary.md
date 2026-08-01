@@ -5,7 +5,7 @@ Last updated: 2026-03-25
 ## Product Terms
 
 `F1 journey stage`
-Sequential progress stage for a student visa workflow (for example: getting started, admission received, I-20 received, DS-160 filed, fees paid, visa, ready to fly).
+Sequential progress stage in a student's study-abroad journey (for example: getting started, admission received, I-20 received, DS-160 filed, fees paid, visa, ready to fly). The `F1` name is historical; stages now span all five country journeys.
 
 `Document catalog`
 The canonical list of supported document types stored in `document_type_catalog`, including labels, ordering, and stage metadata.

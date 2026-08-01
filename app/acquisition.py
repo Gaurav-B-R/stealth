@@ -133,7 +133,7 @@ HEARD_ABOUT_OPTIONS = [
     {"id": "tiktok", "label": "TikTok"},
     {"id": "reddit", "label": "Reddit"},
     {"id": "friend", "label": "Friend or colleague"},
-    {"id": "consultant", "label": "A visa consultant / agent"},
+    {"id": "consultant", "label": "A study-abroad consultant / agent"},
     {"id": "news_blog", "label": "News or blog article"},
     {"id": "other", "label": "Other"},
 ]

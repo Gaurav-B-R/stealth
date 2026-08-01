@@ -1,5 +1,5 @@
 /* ===========================================================================
-   Rilono Enterprise — Visa Consultancy CRM frontend
+   Rilono Enterprise — Study-Abroad Consultancy CRM frontend
    =========================================================================== */
 (function () {
   "use strict";
@@ -159,7 +159,7 @@
     "clients.create", "clients.edit", "clients.assign", "clients.set_branch", "clients.delete",
     "notes.write", "notes.moderate", "emails.send", "emails.send_bulk",
     "documents.upload", "documents.accept", "documents.delete", "documents.request",
-    "universities.manage", "calendar.manage", "interviews.run", "interviews.invite",
+    "universities.manage", "calendar.manage", "interviews.run", "interviews.invite", "copilot.invite",
     "portal.share", "ai.writing", "ai.deepscan", "ai.coursefinder", "ai.shortlist", "credits.spend",
   ]);
   const LEGACY_MANAGE_CAPS = new Set([
@@ -1246,6 +1246,12 @@
       return;
     }
     if (me.onboarding_required) { showOnboard(); return; }
+    // A different member signed in without a page reload (logout → login) — their AI
+    // assistant threads are private, so the previous member's transcript, thread id and
+    // cached history list must not survive into this session.
+    if (state.me && state.me.user && me.user && state.me.user.id !== me.user.id) {
+      state.aiHistory = []; state.aiConvId = null; state.aiConvs = null; state.aiMeter = null;
+    }
     state.me = me;
     state.perms = me.permissions || state.perms;
     applyAccessPayload(me);
@@ -1326,6 +1332,7 @@
     // a notification nothing ever sends is dead weight that reads as a missing feature.
     member_role_changed: "🔀", member_access_changed: "🔐",
     branch_created: "🏢", ownership_transferred: "👑",
+    lead_received: "🎯",
   };
 
   function notifAgo(iso) {
@@ -1378,6 +1385,7 @@
         const rt = el.dataset.rt, rid = parseInt(el.dataset.rid || "0", 10);
         closeNotifPanel();
         if (rt === "client" && rid) openClient(rid);
+        else if (rt === "lead") navigate("leads");
         else if (rt === "credits") navigate("credits");
         else if (rt === "branch") teamGoTab("branches");
         else if (rt === "team") navigate("team");
@@ -1435,7 +1443,7 @@
   // deep-links, bookmarks and browser back/forward all work inside the app. ----
   // "billing" removed: the plan-tier system is dormant (free CRM + credits is the model),
   // so the dead Plans page must not be reachable even by deep link. Code kept for reversibility.
-  const ROUTE_VIEWS = ["dashboard", "clients", "calendar", "coursefinder", "ai", "team", "credits", "finance", "support", "settings"];
+  const ROUTE_VIEWS = ["dashboard", "clients", "leads", "calendar", "coursefinder", "ai", "team", "credits", "finance", "support", "settings"];
   // The capability a whole view needs. A deep link, a bookmark or a Back press into a view
   // the member can't hold must paint one plain sentence — not the renderer's "Couldn't load"
   // after the API 403s.
@@ -1443,7 +1451,7 @@
     dashboard: "dashboard.view", clients: "clients.view", team: "team.view",
     credits: "credits.view", finance: "finance.view", settings: "settings.manage",
     billing: "billing.manage", coursefinder: "coursefinder.view", ai: "ai.assistant",
-    calendar: "calendar.view",
+    calendar: "calendar.view", leads: "clients.view",
   };
   const VIEW_DENIED_COPY = {
     dashboard: "You don't have permission to view the dashboard. Ask a workspace admin for access.",
@@ -1456,6 +1464,7 @@
     coursefinder: "You don't have permission to browse the course catalog. Ask a workspace admin for access.",
     ai: "You don't have permission to use the Rilono AI Assistant. Ask a workspace admin for access.",
     calendar: "You don't have permission to view the calendar. Ask a workspace admin for access.",
+    leads: "You don't have permission to view leads. Ask a workspace admin for access.",
   };
   // Nav items for views the member can't reach are removed outright (house rule: omit the
   // markup rather than show a control that only ever refuses).
@@ -1464,6 +1473,9 @@
     $$(".nav-item").forEach((b) => {
       const cap = NAV_CAPABILITY[b.dataset.view];
       if (cap) b.classList.toggle("hidden", !can(cap));
+      // Leads is workspace-scope only (see canSeeLeads) — omit the button rather than
+      // offer a section that can only refuse.
+      if (b.dataset.view === "leads") b.classList.toggle("hidden", !canSeeLeads());
     });
   }
   function viewToPath(view) {
@@ -1496,7 +1508,7 @@
     state.view = view;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
     $("#sidebar").classList.remove("open");
-    const titles = { dashboard: "Dashboard", clients: "Clients", calendar: "Calendar", coursefinder: "Course Finder", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", finance: "Finance", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
+    const titles = { dashboard: "Dashboard", clients: "Clients", leads: "Leads", calendar: "Calendar", coursefinder: "Course Finder", ai: "Rilono AI Assistant", team: "Team", credits: "Credits & Billing", finance: "Finance", support: "Help & Support", billing: "Plans & Billing", settings: "Settings" };
     $("#viewTitle").textContent = titles[view] || "";
     $("#globalSearchBox").style.display = view === "clients" || view === "dashboard" ? "" : "none";
     // Team's sub-tab travels in ?tab= — read it BEFORE syncUrl rewrites the address bar.
@@ -1511,6 +1523,7 @@
     }
     if (view === "dashboard") renderDashboard();
     else if (view === "clients") renderClients();
+    else if (view === "leads") renderLeads();
     else if (view === "calendar") renderCalendar();
     else if (view === "coursefinder") renderCourseFinder();
     else if (view === "ai") renderAIAssistant();
@@ -1733,6 +1746,26 @@
        <div class="pipe-track"><div class="pipe-fill" style="width:${(p.count / maxPipe) * 100}%;background:${p.color}"></div></div>
        <div class="pv">${p.count}</div></div>`).join("");
 
+    // Parallel workstreams: the admissions funnel + English-test readiness, from the
+    // intake columns every client already has. Same bar treatment as the visa pipeline.
+    const ADM_COLORS = { exploring: "#94a3b8", shortlisting: "#6366f1", applied: "#0ea5e9", admitted: "#8b5cf6", offer_accepted: "#f59e0b", doc_in_hand: "#10b981", deferred: "#64748b", "": "#cbd5e1" };
+    const ENG_COLORS = { score_available: "#10b981", booked: "#0ea5e9", result_awaited: "#6366f1", preparing: "#f59e0b", not_taken: "#ef4444", exempt_moi: "#14b8a6", exempt_provider: "#14b8a6", not_required: "#94a3b8", "": "#cbd5e1" };
+    const admList = d.admissions_pipeline || [];
+    // Admissions keeps every funnel step visible (zeros are signal); the test card only
+    // shows statuses that actually occur — eight mostly-empty rows would be noise.
+    const engList = (d.english_test_pipeline || []).filter((r) => r.count > 0);
+    state.dashAdmissions = admList;
+    state.dashEnglish = engList;
+    const wsRows = (list, colors, fn) => {
+      const max = Math.max(1, ...list.map((r) => r.count));
+      return list.map((r, i) =>
+        `<div class="pipe-row clickable" role="button" tabindex="0" onclick="__ent.${fn}(${i})"><div class="pl"><span class="dot" style="background:${colors[r.key] || "#94a3b8"}"></span>${esc(r.label)}</div>
+         <div class="pipe-track"><div class="pipe-fill" style="width:${(r.count / max) * 100}%;background:${colors[r.key] || "#94a3b8"}"></div></div>
+         <div class="pv">${r.count}</div></div>`).join("");
+    };
+    const admRows = admList.length ? wsRows(admList, ADM_COLORS, "viewAdmission") : `<div class="empty" style="padding:24px"><p>Add clients to see admissions progress.</p></div>`;
+    const engRows = engList.length ? wsRows(engList, ENG_COLORS, "viewEnglish") : `<div class="empty" style="padding:24px"><p>No English-test status recorded yet.</p></div>`;
+
     const vtCounts = d.visa_type_counts || [];
     state.dashVisaTypes = vtCounts.map((v) => v.visa_type);
     const vtCells = vtCounts.length ? vtCounts.map((vt, i) =>
@@ -1746,7 +1779,7 @@
         <span class="flag">${ct.flag_emoji || "🌐"}</span><span class="cnt">${ct.count}</span></div>
         <div class="country-meta"><b>${esc(ct.name)}</b><span>${esc(ct.landmark || "")}</span></div></div>`).join("");
 
-    const deadlines = d.upcoming_deadlines.length ? d.upcoming_deadlines.map((cl) => {
+    const deadlines = (d.upcoming_deadlines || []).length ? d.upcoming_deadlines.map((cl) => {
       const du = daysUntil(cl.target_date);
       const tag = du != null ? (du <= 7 ? `<span class="prio" style="background:#fee2e2;color:#b91c1c">${du}d</span>` : `<span class="prio" style="background:#eef0f8;color:#475569">${du}d</span>`) : "";
       return `<div class="member-row" style="cursor:pointer;padding:11px 0" onclick="__ent.openClient(${cl.id})">
@@ -1760,6 +1793,101 @@
         <div class="m-meta"><b>${esc(cl.full_name)}</b><span>${esc(cl.country.flag_emoji)} ${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}</span></div>
         ${statusPill(cl.stage)}</div>`).join("") : `<div class="empty" style="padding:24px"><p>No clients yet.</p></div>`;
 
+    // "What's next" — overdue + the next few days of reminders, tasks, key dates and passport
+    // expiries: the same feed the Calendar shows, on the screen people actually land on. The
+    // server omits it for a role without calendar.view, which keeps the client-deadline card.
+    const wn = d.whats_next;
+    const wnItem = (e) => `
+      <div class="cal-up-item ${e.overdue ? "overdue" : ""}" role="button" tabindex="0" onclick="__ent.dashEvent('${e.id}')">
+        <span class="cal-dot" style="background:${e.color}"></span>
+        <div class="cal-up-meta">
+          <b>${esc(e.title)}</b>
+          <span>${esc(e.type_label)}${e.client_name && e.source !== "client" ? " · " + esc(e.client_name) : ""}${e.attachment_count ? " · 📎 " + e.attachment_count : ""}</span>
+        </div>
+        <div class="cal-up-when ${e.overdue ? "overdue" : ""}">${esc(calRel(e.date, wn.today))}${e.time ? " · " + esc(e.time) : ""}</div>
+      </div>`;
+    // The card carries a few rows, never the whole feed — say so rather than quietly truncating.
+    const wnMore = (shown, total) => total > shown
+      ? `<div class="dash-wn-more" role="button" tabindex="0" onclick="__ent.go('calendar')">+${total - shown} more in Calendar →</div>` : "";
+    let whatsNextBody = "", overdueStrip = "";
+    if (wn) {
+      // Feed __ent.dashEvent's lookup, the same map the Calendar page fills.
+      (wn.overdue || []).concat(wn.upcoming || []).forEach((e) => { calEventsById[e.id] = e; });
+      const od = wn.overdue || [], upNext = wn.upcoming || [];
+      const todayItems = upNext.filter((e) => e.date === wn.today);
+      const laterItems = upNext.filter((e) => e.date !== wn.today);
+      let html = "";
+      if (od.length) html += `<div class="cal-up-label overdue">⚠ Overdue (${wn.overdue_total})</div>${od.map(wnItem).join("")}${wnMore(od.length, wn.overdue_total)}`;
+      if (todayItems.length) html += `<div class="cal-up-label">Today</div>${todayItems.map(wnItem).join("")}`;
+      if (laterItems.length) html += `<div class="cal-up-label">Next ${wn.horizon_days} days</div>${laterItems.map(wnItem).join("")}`;
+      if (upNext.length) html += wnMore(upNext.length, wn.upcoming_total);
+      whatsNextBody = html || `<div class="cal-up-empty">Nothing due in the next ${wn.horizon_days} days. You're all caught up. 🎉</div>`;
+
+      // A follow-up that aged out is the expensive miss, so it gets its own line at the top of
+      // the dashboard instead of waiting to be scrolled to.
+      if (wn.overdue_total) {
+        const oldest = od[0];
+        overdueStrip = `<div class="dash-due" role="button" tabindex="0" onclick="__ent.go('calendar')">
+          <span class="dash-due-ic">⚠</span>
+          <div class="dash-due-txt"><b>${wn.overdue_total} overdue ${wn.overdue_total === 1 ? "item needs" : "items need"} attention</b>
+            ${oldest ? `<span>Oldest: ${esc(oldest.title)} · ${esc(calRel(oldest.date, wn.today))}</span>` : ""}</div>
+          <span class="dash-due-go">Open calendar →</span>
+        </div>`;
+      }
+    }
+
+    // Money — invoiced but not collected. Grouped by currency and never summed across them
+    // (fmtMoney renders each in its own denomination; there is no FX anywhere in this app).
+    const fin = d.finance_snapshot;
+    const finFigure = (rows) => (rows || []).length
+      ? rows.map((r) => fmtMoney(r.amount_minor, r.currency)).join(" + ")
+      : "—";
+    const financeCard = fin ? `
+      <div class="card dash-money" role="button" tabindex="0" onclick="__ent.go('finance')">
+        <div class="card-head"><h3>Payments</h3><button class="link">Finance →</button></div>
+        <div class="card-body">
+          <div class="dash-money-grid">
+            <div class="dash-money-cell">
+              <span class="dash-money-lbl">Awaiting payment</span>
+              <b class="dash-money-val">${esc(finFigure(fin.outstanding))}</b>
+              <span class="dash-money-sub">${(fin.outstanding || []).reduce((n, r) => n + r.count, 0)} open request${(fin.outstanding || []).reduce((n, r) => n + r.count, 0) === 1 ? "" : "s"}</span>
+            </div>
+            <div class="dash-money-cell">
+              <span class="dash-money-lbl">Past due</span>
+              <b class="dash-money-val ${fin.overdue_count ? "is-bad" : ""}">${fin.overdue_count}</b>
+              <span class="dash-money-sub">${fin.overdue_count ? "chase these first" : "nothing overdue"}</span>
+            </div>
+            <div class="dash-money-cell">
+              <span class="dash-money-lbl">Collected this month</span>
+              <b class="dash-money-val is-good">${esc(finFigure(fin.collected_this_month))}</b>
+              <span class="dash-money-sub">${(fin.collected_this_month || []).reduce((n, r) => n + r.count, 0)} payment${(fin.collected_this_month || []).reduce((n, r) => n + r.count, 0) === 1 ? "" : "s"}</span>
+            </div>
+          </div>
+        </div>
+      </div>` : "";
+
+    // Needs attention — open cases nobody has touched in a fortnight. The one panel that
+    // answers "what is quietly rotting", which no count card can.
+    const st = d.stalled;
+    const staleRows = st && st.clients.length ? st.clients.map((cl) => `
+      <div class="member-row" style="cursor:pointer;padding:11px 0" onclick="__ent.openClient(${cl.id})">
+        <div class="cl-avatar" style="background:linear-gradient(135deg,${cl.country.gradient_from},${cl.country.gradient_to})">${esc(cl.country.flag_emoji || "🌐")}</div>
+        <div class="m-meta"><b>${esc(cl.full_name)}</b><span>${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}</span></div>
+        <span class="prio dash-stale-age">${cl.days_stale}d quiet</span>
+      </div>`).join("") : "";
+    const staleCard = st ? `
+      <div class="card"><div class="card-head"><h3>Needs attention</h3>
+        <span class="dash-stale-hint">No activity in ${st.days}+ days</span></div>
+        <div class="card-body">${staleRows
+          ? staleRows + (st.total > st.clients.length
+              ? `<div class="dash-wn-more" role="button" tabindex="0" onclick="__ent.viewClients({scope:'active',label:'Active cases'})">${st.truncated ? "+" : ""}${st.total - st.clients.length} more going quiet · see active cases →</div>`
+              : "")
+          : `<div class="cal-up-empty">Every open case has moved in the last ${st.days} days. 👏</div>`}</div></div>` : "";
+
+    const attentionRow = (financeCard || staleCard)
+      ? `<div class="${financeCard && staleCard ? "grid-2 even" : ""}" style="margin-bottom:24px">${financeCard}${staleCard}</div>`
+      : "";
+
     const dashBranchBar = branchFilterHtml("dashBranch")
       ? `<div class="toolbar" style="margin-bottom:16px"><div class="spacer"></div>${branchFilterHtml("dashBranch")}</div>` : "";
 
@@ -1772,24 +1900,27 @@
         ${kpiCard("linear-gradient(135deg,#10b981,#34d399)", "✅", "Approved", k.approved, k.approval_rate != null ? k.approval_rate + "% approval rate" : "View approved", "__ent.viewClients({status:'approved'})")}
         ${kpiCard("linear-gradient(135deg,#f59e0b,#f97316)", "🆕", "New this month", k.new_this_month, "this month", "__ent.viewClients({scope:'month',label:'New this month'})")}
       </div>
-      ${can("interviews.invite") ? `
-      <div class="dash-cta">
-        <div class="dash-cta-ic">🎤</div>
-        <div class="dash-cta-txt"><b>Send a mock visa interview</b><span>Email a student a secure link so they can practise on their own — Rilono AI plays the visa officer and you see every result here.</span></div>
-        <button class="btn btn-primary dash-cta-btn" onclick="__ent.sendInterview()">✉ Send mock interview</button>
-      </div>` : ""}
+      ${overdueStrip}
+      <div class="grid-2 even" style="margin-bottom:24px">
+        <div class="card"><div class="card-head"><h3>${wn ? "What's next" : "Upcoming deadlines"}</h3>${wn ? `<button class="link" onclick="__ent.go('calendar')">Calendar →</button>` : ""}</div>
+          <div class="card-body">${wn ? `<div class="cal-upcoming dash-wn">${whatsNextBody}</div>` : deadlines}</div></div>
+        <div class="card"><div class="card-head"><h3>Recent clients</h3><button class="link" onclick="__ent.go('clients')">All →</button></div><div class="card-body">${recent}</div></div>
+      </div>
+      ${attentionRow}
       <div class="grid-2">
-        <div class="card"><div class="card-head"><h3>Visa pipeline</h3><button class="link" onclick="__ent.go('clients')">View all →</button></div>
+        <div class="card"><div class="card-head"><h3>Client pipeline</h3><button class="link" onclick="__ent.go('clients')">View all →</button></div>
           <div class="card-body">${pipeRows}</div></div>
         <div class="card"><div class="card-head"><h3>By visa type</h3></div>
           <div class="card-body"><div class="cat-grid">${vtCells}</div></div></div>
       </div>
-      <div class="card" style="margin-top:20px"><div class="card-head"><h3>Destinations</h3></div>
-        <div class="card-body">${countryCards ? `<div class="country-grid">${countryCards}</div>` : `<div class="empty" style="padding:24px"><p>Add clients to see destination insights.</p></div>`}</div></div>
       <div class="grid-2 even" style="margin-top:20px">
-        <div class="card"><div class="card-head"><h3>Upcoming deadlines</h3></div><div class="card-body">${deadlines}</div></div>
-        <div class="card"><div class="card-head"><h3>Recent clients</h3><button class="link" onclick="__ent.go('clients')">All →</button></div><div class="card-body">${recent}</div></div>
-      </div>`;
+        <div class="card"><div class="card-head"><h3>University applications</h3></div>
+          <div class="card-body">${admRows}</div></div>
+        <div class="card"><div class="card-head"><h3>English tests</h3></div>
+          <div class="card-body">${engRows}</div></div>
+      </div>
+      <div class="card" style="margin-top:20px"><div class="card-head"><h3>Destinations</h3></div>
+        <div class="card-body">${countryCards ? `<div class="country-grid">${countryCards}</div>` : `<div class="empty" style="padding:24px"><p>Add clients to see destination insights.</p></div>`}</div></div>`;
 
     const dbf = $("#dashBranch");
     if (dbf) dbf.onchange = () => { state.filters.branch_id = dbf.value; renderDashboard(); };
@@ -1815,6 +1946,16 @@
     const vt = (state.dashVisaTypes || [])[i];
     if (!vt) { openClientsFiltered({}); return; }
     openClientsFiltered({ scope: { visaType: vt }, label: "Visa type · " + vt });
+  }
+  function viewAdmissionStage(i) {
+    const row = (state.dashAdmissions || [])[i];
+    if (!row) { openClientsFiltered({}); return; }
+    openClientsFiltered({ scope: { admissionStage: row.key }, label: "Admissions · " + row.label });
+  }
+  function viewEnglishStatus(i) {
+    const row = (state.dashEnglish || [])[i];
+    if (!row) { openClientsFiltered({}); return; }
+    openClientsFiltered({ scope: { englishStatus: row.key }, label: "English test · " + row.label });
   }
 
   // Dashboard/anywhere entry point: pick a student, then email them a mock-interview
@@ -2023,6 +2164,9 @@
     if (scope === "active") clients = clients.filter((c) => c.stage && c.stage.is_open);
     else if (scope === "month") { const ms = new Date(); ms.setDate(1); ms.setHours(0, 0, 0, 0); clients = clients.filter((c) => c.created_at && new Date(c.created_at) >= ms); }
     else if (scope && scope.visaType) clients = clients.filter((c) => (c.visa_type || "") === scope.visaType);
+    // `in` (not truthiness): the "Not recorded" bucket filters on the empty-string key.
+    else if (scope && "admissionStage" in scope) clients = clients.filter((c) => (c.admission_stage || "") === scope.admissionStage);
+    else if (scope && "englishStatus" in scope) clients = clients.filter((c) => (c.english_test_status || "") === scope.englishStatus);
     state.clients = clients;
     state.statusCounts = data.status_counts || {};
     $("#clientsBadge").textContent = data.total_clients;
@@ -2031,7 +2175,7 @@
     const hasFilter = q || state.filters.status || state.filters.country || state.filters.branch_id || state.dashScope;
     if (!clients.length) {
       const emptyTitle = q ? `No clients found for “${esc(q)}”` : (hasFilter ? "No matching clients" : "No clients yet");
-      const emptyHelp = q ? "Try another name, email, phone, city, course, branch, visa type, country, intake, lead source, or counselor." : (hasFilter ? "Try clearing your filters." : "Add your first visa client to get started.");
+      const emptyHelp = q ? "Try another name, email, phone, city, course, branch, visa type, country, intake, lead source, or counselor." : (hasFilter ? "Try clearing your filters." : "Add your first client to get started.");
       wrap.innerHTML = `<div class="empty"><div class="emoji">🗂️</div><h3>${emptyTitle}</h3>
         <p>${emptyHelp}</p>
         ${q ? `<button class="btn btn-ghost" onclick="__ent.clearSearch()">Clear search</button>` : ""}
@@ -2348,8 +2492,13 @@
   }
 
   /* ---------------- add / edit client form ---------------- */
-  function openClientForm(client) {
-    const isEdit = !!client;
+  // opts2 (all optional): { forceCreate, heading, onCreated } — the Leads convert flow
+  // reuses this whole form as a prefilled "Add client" (forceCreate keeps a truthy
+  // client object from flipping it into edit mode; onCreated(client) runs after a
+  // successful POST and may return true to take over post-save navigation).
+  function openClientForm(client, opts2) {
+    opts2 = opts2 || {};
+    const isEdit = !!client && !opts2.forceCreate;
     const members = teamMembersCache || [];
     const c = client || {};
     // "cform", not "cf" — the Course Finder view renders its own #cfCountry filter and both
@@ -2357,7 +2506,7 @@
     const opts = { prefix: "cform", members: members, formId: "clientForm", withStatus: true, withNote: !isEdit, withDpaConsent: !isEdit };
 
     openModal(`
-      <div class="modal-head"><h3>${isEdit ? "Edit client" : "Add new client"}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-head"><h3>${isEdit ? "Edit client" : esc(opts2.heading || "Add new client")}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
       <form id="clientForm">
       <div class="modal-body">
         ${clientFormFieldsHtml(c, opts)}
@@ -2396,6 +2545,12 @@
           const r = await api("/clients", { method: "POST", body });
           state.subscription = r.subscription || state.subscription; updatePlanChip();
           toast("Client added", "success");
+          if (opts2.onCreated && r.client) {
+            closeModal();
+            let handled = false;
+            try { handled = await opts2.onCreated(r.client); } catch (e2) { /* link-back is best-effort */ }
+            if (handled) return;
+          }
         }
         closeModal();
         if (isEdit && state.view === "clientPage" && state.activeClient === client.id) { openClient(client.id); }
@@ -2499,7 +2654,7 @@
     {
       key: "documents", icon: "📄", label: "Request documents",
       hint: "Ask for the files you're missing",
-      subject: "Documents needed for your {{destination}} visa application",
+      subject: "Documents needed for your {{destination}} application",
       body: "<p>Hi {{first_name}},</p><p>Your {{visa_type}} application is moving along nicely. To take the next step I need a few documents from you:</p><ul><li>Passport — photo page</li><li>Latest 6 months of bank statements</li><li>Academic transcripts and certificates</li></ul><p>You can reply to this email with the files attached, and I'll confirm as soon as they're in.</p>",
     },
     {
@@ -2591,6 +2746,7 @@
     const canRequestDocs = can("documents.request");
     const canDownloadDocs = can("documents.download");
     const canInviteInterview = can("interviews.invite");
+    const canInviteCopilot = can("copilot.invite");
     const canRunInterview = can("interviews.run");
     const canManageUnis = can("universities.manage");
     const canShortlistAi = can("ai.shortlist");
@@ -2603,6 +2759,10 @@
     const docs = data.documents || [];
     const pendingDocIds = new Set();  // docs uploaded this session, awaiting AI validation (for the "scanning…" badge)
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
+    // Client-facing copilot invite state. invite: undefined = not fetched yet,
+    // null = none exists. cp.link holds the raw link from the latest POST response
+    // only — it is never returned by a GET, so "Copy link" shows just in that window.
+    const cp = { invite: undefined, link: null, busy: false };
     const dr = { request: undefined };  // secure document-request state (lazy-loaded)
     // Email composer state. Kept on the client page (not inside renderEmails) so a
     // half-written message survives switching tabs and re-rendering the thread.
@@ -2641,13 +2801,13 @@
           ${canEdit ? `<button class="btn btn-soft btn-sm" id="cpEdit">Edit details</button>` : ""}
         </div>
         <div class="cp-hero cp-hero--${hero.key}" style="--cp-hero-fallback:${grad}"
-          aria-label="${esc(cl.destination_country_name)} visa case for ${esc(cl.full_name)}">
+          aria-label="${esc(cl.destination_country_name)} case for ${esc(cl.full_name)}">
           <div class="cp-destination-seal" aria-hidden="true">
             <span>Destination</span>
             <div class="cp-seal-code"><strong>${esc(hero.code)}</strong><small>${esc(cl.country.flag_emoji || "🌐")}</small></div>
           </div>
           <div class="cp-hmeta">
-            <div class="cp-kicker">Student visa dossier</div>
+            <div class="cp-kicker">Student dossier</div>
             <h1>${esc(cl.full_name)}</h1>
             <div class="cp-hsub">${esc(cl.destination_country_name)} · ${esc(cl.visa_type)}${cl.intake ? " · " + esc(cl.intake) : ""}</div>
           </div>
@@ -2661,6 +2821,7 @@
           <button class="cp-tab" data-tab="payments">💳 Payments</button>
           <button class="cp-tab" data-tab="universities">🎓 Universities</button>
           <button class="cp-tab" data-tab="interview">🎤 Interview</button>
+          <button class="cp-tab" data-tab="copilot">✨ Copilot</button>
           <button class="cp-tab" data-tab="writing">✍️ SOP &amp; LOR</button>
           <button class="cp-tab" data-tab="deepscan">🛡️ Deep Scan</button>
         </div>
@@ -2800,7 +2961,7 @@
       return stages.map(btn).join("") + (onHold ? btn(onHold) : "");
     }
 
-    // Visual journey tracker (mirrors the B2C stage stepper): the linear visa pipeline as
+    // Visual journey tracker (mirrors the B2C stage stepper): the linear client pipeline as
     // connected nodes with done / current / upcoming states, off-path Rejected & On-Hold
     // pills, and a document-readiness line built from the client's uploaded documents.
     function journeyTrackHtml(interactive, current, docs) {
@@ -2965,7 +3126,7 @@
       body.innerHTML = `
         ${canInviteInterview && pushInterview ? `<button class="btn btn-primary btn-block cp-iv-cta" id="ovSendIv">🎤 Send ${esc(ovFirst)} a mock interview</button>` : ""}
         <div class="cp-card">
-          <div class="cp-card-head"><h3>Visa journey</h3>${statusPill(cl.stage)}</div>
+          <div class="cp-card-head"><h3>Client journey</h3>${statusPill(cl.stage)}</div>
           <div id="ovStageFlow">${journeyTrackHtml(canEdit, cl.status, docs)}</div>
           <div id="ovStagePanel">${stagePanelHtml()}</div>
         </div>
@@ -3130,7 +3291,7 @@
       let pending = cl.status;  // selected-but-unsaved visa status — only applied on Save
       body.innerHTML = `
         <div class="cp-card">
-          <div class="cp-card-head"><h3>Visa status</h3><span class="cpe-hint">Pick a stage — saved with the form</span></div>
+          <div class="cp-card-head"><h3>Pipeline stage</h3><span class="cpe-hint">Pick a stage — saved with the form</span></div>
           <div class="stage-flow" id="cpeStageFlow">${stageStepsHtml(true, pending)}</div>
         </div>
         <div class="cp-card">
@@ -4569,6 +4730,176 @@
       try { ivRecog.start(); } catch (e) { ivRecog = null; btn.classList.remove("rec"); }
     }
 
+    /* ---- Copilot access tab ----
+       Client-facing AI copilot invite. Mirrors the interview-invite flow: secure
+       emailed link + one-time code. The raw link exists only in the POST response,
+       so "Copy link" appears only right after a send; a resend rotates the token
+       (the old link dies). */
+    function renderCopilot() {
+      body.innerHTML = `<div id="cpilWrap"></div>`;
+      if (cp.invite === undefined && canInviteCopilot) loadCopilotInvite();
+      drawCopilot();
+    }
+    async function loadCopilotInvite() {
+      // No state.activeClient guard here: the global ESC/backdrop dismiss nulls
+      // activeClient even while this page is still mounted, and bailing before
+      // cp.invite is assigned would leave the tab an eternal spinner. Storing
+      // the result is always safe; the DOM check gates the redraw (same shape
+      // as loadIvInvite on the interview tab).
+      try {
+        const r = await api(`/clients/${cl.id}/copilot/invite`);
+        cp.invite = r.invite || null;
+        if (r.config) cp.config = r.config;
+        if ($("#cpilWrap")) drawCopilot();
+      } catch (e) {
+        // Leave cp.invite undefined: a transient failure must NOT be cached as
+        // "no invite exists" — Send would then quietly rotate a live token.
+        const w = $("#cpilWrap");
+        if (w) {
+          w.innerHTML = `<div class="cp-card iv-hero">
+            <div class="iv-hero-head"><div class="iv-orb">✨</div><div><h3>Client copilot access</h3></div></div>
+            <p class="muted" style="margin:0 0 14px">Couldn't load the copilot status. Check your connection and try again.</p>
+            <button class="btn btn-soft btn-sm" id="cpilRetry">Retry</button></div>`;
+          const rt = $("#cpilRetry"); if (rt) rt.onclick = renderCopilot;
+        }
+      }
+    }
+    // The flat activation cost: the org's credit price list wins, then the server's
+    // copilot config from the GET, then a safe default.
+    function copilotCost() {
+      const cr = state.credits || {};
+      return ((cr.actions || []).find((a) => a.key === "copilot_client") || {}).credits || (cp.config && cp.config.cost_credits) || 20;
+    }
+    function drawCopilot() {
+      const w = $("#cpilWrap"); if (!w) return;
+      if (!canInviteCopilot) {
+        w.innerHTML = `<div class="cp-card iv-intro"><div class="iv-orb">✨</div><h3>Client copilot access</h3><p class="muted">You don't have permission to share copilot access. Ask a workspace admin.</p></div>`;
+        return;
+      }
+      w.innerHTML = cp.invite === undefined
+        ? '<div style="text-align:center;padding:18px 0"><span class="spinner"></span></div>'
+        : copilotHeroCard();
+      const sb = $("#cpSendBtn"); if (sb) sb.onclick = openCopilotSendModal;
+      const rs = $("#cpResend"); if (rs) rs.onclick = openCopilotSendModal;
+      const rv = $("#cpRevoke"); if (rv) rv.onclick = revokeCopilotInvite;
+      const cpy = $("#cpCopyLink"); if (cpy) cpy.onclick = async () => {
+        try { await navigator.clipboard.writeText(cp.link); toast("Link copied", "success"); }
+        catch (e) { toast("Couldn't copy — the emailed link still works", "error"); }
+      };
+    }
+    function copilotHeroCard() {
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const inv = cp.invite;
+      const cfg = cp.config || {};
+      const msgs = cfg.allowed_messages != null ? cfg.allowed_messages : 100;
+      const expDays = cfg.expires_days != null ? cfg.expires_days : 30;
+      const cost = copilotCost();
+      let inner;
+      if (!cl.email) {
+        inner = `<p class="iv-hero-sub">Add an email to ${esc(first)} (Edit details) to send them their copilot link.</p>
+          <button class="btn btn-primary btn-block" onclick="__ent.editClient(${cl.id})">Add an email</button>`;
+      } else if (inv && inv.live) {
+        const statusBadge = inv.unlocked
+          ? `<span class="iv-sv ok">✓ Activated${inv.unlocked_at ? " · " + fmtDate(inv.unlocked_at) : ""}</span>`
+          : `<span class="iv-sv" style="background:#eef2f7;color:#64748b">Not opened yet</span>`;
+        inner = `<p class="iv-hero-sub">A personal copilot link is with <b>${esc(inv.email)}</b> — ${esc(first)} can ask about their application any time (verified by a one-time code).</p>
+          <div class="iv-invite-status">
+            <div>${statusBadge}<br><span class="muted" style="display:inline-block;margin-top:7px">${esc(inv.used_messages)} of ${esc(inv.allowed_messages)} messages used · expires ${fmtDate(inv.expires_at)}<br>Sent${inv.created_at ? " " + fmtDate(inv.created_at) : ""}${inv.created_by_name ? " by " + esc(inv.created_by_name) : ""}</span></div>
+            <div class="row">${cp.link ? `<button class="btn btn-ghost btn-sm" id="cpCopyLink">Copy link</button>` : ""}<button class="btn btn-soft btn-sm" id="cpResend">Resend / new link</button><button class="btn btn-danger btn-sm" id="cpRevoke">Revoke</button></div>
+          </div>`;
+      } else {
+        inner = `<p class="iv-hero-sub muted">Give ${esc(first)} their own secure copilot chat about their application — a flat <b>${esc(cost)} credits</b> once they activate, valid ${esc(expDays)} days, up to ${esc(msgs)} messages.</p>
+          <button class="btn btn-primary btn-block" id="cpSendBtn">✨ Send copilot access to ${esc(first)}</button>`;
+      }
+      return `<div class="cp-card iv-hero">
+        <div class="iv-hero-head"><div class="iv-orb">✨</div>
+          <div><h3>Client copilot access</h3></div></div>
+        ${inner}
+      </div>`;
+    }
+    function openCopilotSendModal() {
+      const first = (cl.full_name || "the student").split(" ")[0];
+      const cr = state.credits || {};
+      const cfg = cp.config || {};
+      const cost = copilotCost();
+      const msgs = cfg.allowed_messages != null ? cfg.allowed_messages : 100;
+      const expDays = cfg.expires_days != null ? cfg.expires_days : 30;
+      const perInr = cr.credit_value_inr || 10;
+      const isInr = (cr.currency || "INR") === "INR";
+      const balance = (typeof cr.balance_credits === "number") ? cr.balance_credits : null;
+      const money = (credits) => isInr ? ` (≈ ${fmtInr(Math.round(credits * perInr))})` : "";
+      const enforced = !!cr.enforced;
+      const short = balance !== null && balance < cost;
+      const live = !!(cp.invite && cp.invite.live);
+      // A live, already-activated invite carries its paid unlock over to the new
+      // link (server-side) — resending is free, so nothing to block or price.
+      const carriesOver = live && !!cp.invite.unlocked;
+      // Block sending when credits are enforced and the wallet can't fund the
+      // activation — so the client never receives a link they can't use.
+      const blocked = enforced && short && !carriesOver;
+      openModal(`<div class="modal-head"><h3>Send copilot access to ${esc(first)}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+        <form id="cpSendForm"><div class="modal-body">
+          <p style="margin:0 0 16px;color:var(--text-2);font-size:14px;line-height:1.6">We'll email a secure link to <b>${esc(cl.email)}</b>. ${esc(first)} verifies with a one-time code, then can chat with the copilot about their own application — and only theirs.</p>
+          ${live ? `<p style="margin:0 0 12px;color:var(--warning,#f59e0b);font-size:13px;font-weight:600">⚠ This replaces the current link — the old one stops working.</p>` : ""}
+          <div id="cpCostNote" style="background:rgba(99,102,241,.07);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--text-2);line-height:1.5;margin:-2px 0 4px"></div>
+          <div id="cpSendErr" class="auth-error hidden"></div>
+        </div>
+        <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="cpSendSave">✨ Send copilot link</button></div></form>`);
+      const el = $("#cpCostNote");
+      if (el) {
+        let balanceLine = "";
+        if (balance !== null) {
+          if (blocked) {
+            balanceLine = `<div style="margin-top:6px;color:var(--warning,#f59e0b);font-weight:600">⚠ Wallet balance: ${balance} credits — not enough to send copilot access.
+              <button type="button" class="btn btn-soft btn-sm" style="margin-left:6px" onclick="__ent.closeModal();__ent.go('credits')">Top up wallet</button></div>`;
+          } else {
+            balanceLine = `<div style="margin-top:5px;color:var(--muted)">Wallet balance: ${balance} credits</div>`;
+          }
+        }
+        el.innerHTML =
+          (carriesOver
+            ? `<div>Already activated — resending a new link is <b>free</b>: ${esc(first)} keeps their remaining messages and expiry date.</div>`
+            : `<div>Flat <b>${esc(cost)} credits</b>${money(cost)} — charged only when ${esc(first)} first activates the link. Valid ${esc(expDays)} days · up to ${esc(msgs)} messages.</div>`) +
+          balanceLine;
+      }
+      const sv = $("#cpSendSave");
+      if (sv) { sv.disabled = blocked; sv.title = blocked ? "Top up your wallet to send this link" : ""; }
+      $("#cpSendForm").onsubmit = async (e) => {
+        e.preventDefault();
+        if (cp.busy) return;
+        cp.busy = true;
+        const btn = $("#cpSendSave"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+        try {
+          const r = await api(`/clients/${cl.id}/copilot/invite`, { method: "POST" });
+          cp.busy = false;
+          // Always record the result and close the modal — no activeClient
+          // guard: the invite WAS created, so the UI must reflect it even if a
+          // global dismiss nulled activeClient mid-request (interview-tab shape).
+          cp.invite = r.invite;
+          cp.link = r.link || null;
+          closeModal();
+          toast(r.message || "Copilot link sent", r.email_sent ? "success" : "error");
+          drawCopilot();
+        } catch (ex) {
+          cp.busy = false;
+          if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("credits"); return; }
+          const er = $("#cpSendErr"); if (er) { er.textContent = ex.message; er.classList.remove("hidden"); }
+          btn.disabled = false; btn.innerHTML = "✨ Send copilot link";
+        }
+      };
+    }
+    async function revokeCopilotInvite() {
+      const ok = await confirmModal("The client won't be able to use their copilot link anymore.", { title: "Revoke copilot access?", okText: "Revoke" });
+      if (!ok) return;
+      try {
+        await api(`/clients/${cl.id}/copilot/invite/revoke`, { method: "POST" });
+        cp.invite = null; cp.link = null;
+        toast("Copilot access revoked", "success");
+      } catch (ex) { toast(ex.message, "error"); }
+      drawCopilot();  // no-ops if the tab's DOM is gone (drawCopilot checks the wrap)
+    }
+
     /* ---- Payments tab: collected-from-this-client ledger + secure pay-link requests.
        Reads are member-visible; money actions (request / cancel / refund) are admin-only,
        enforced server-side and mirrored in the UI.
@@ -5929,6 +6260,7 @@
       else if (tab === "payments") renderPayments();
       else if (tab === "universities") renderUniversities();
       else if (tab === "interview") renderInterview();
+      else if (tab === "copilot") renderCopilot();
       else if (tab === "writing") renderWriting();
       else if (tab === "deepscan") renderDeepScan();
     }
@@ -10986,7 +11318,11 @@
       <div class="ai-wrap">
         <div class="ai-head">
           <div class="ai-orb">✨</div>
-          <div><h2>Rilono AI Assistant</h2><p>Ask anything about your clients, visa statuses and activity — I read your live portal data to answer.</p></div>
+          <div><h2>Rilono AI Assistant</h2><p>Ask anything about your clients, pipeline and activity — I read your live portal data to answer.</p></div>
+          <div class="ai-head-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="aiHistBtn">History</button>
+            <button type="button" class="btn btn-sm" id="aiNewBtn">New chat</button>
+          </div>
         </div>
         <div class="ai-thread" id="aiThread" data-ai-thread></div>
         <div class="ai-suggest" id="aiSuggest" data-ai-suggest></div>
@@ -11001,6 +11337,8 @@
     loadAiMeta();
     const ta = $("#aiInput");
     $("#aiForm").onsubmit = (e) => { e.preventDefault(); sendAi(ta.value); };
+    $("#aiNewBtn").onclick = () => startNewAiChat();
+    $("#aiHistBtn").onclick = () => openAiHistory();
     wireAiComposer(ta);
     ta.focus();
   }
@@ -11069,7 +11407,7 @@
     }
     return `<div class="ai-empty"><div class="ai-orb lg">✨</div>
       <h3>How can I help?</h3>
-      <p>I can answer questions about your clients, their visa progress, who needs attention, recent activity and your team's workload.</p></div>`;
+      <p>I can answer questions about your clients, their progress, who needs attention, recent activity and your team's workload.</p></div>`;
   }
 
   function renderAiThread() {
@@ -11137,7 +11475,14 @@
     if (!msg) { for (const el of inputs) { const v = (el.value || "").trim(); if (v) { msg = v; break; } } }
     if (!msg) return;
     ensureAiHistory();
-    const priorHistory = state.aiHistory.filter((m) => m.role === "user" || m.role === "model").slice(-12);
+    // Only the FIRST turn of a thread sends local history — a known thread replays its
+    // own server-side transcript, and stored answers can exceed the request schema's
+    // 6000-char per-turn cap (sending them back would 422 the whole message). The same
+    // cap is applied client-side for the first-turn payload.
+    const priorHistory = state.aiConvId ? [] : state.aiHistory
+      .filter((m) => (m.role === "user" || m.role === "model") && m.content)
+      .slice(-12)
+      .map((m) => ({ role: m.role, content: String(m.content).slice(0, 6000) }));
     state.aiHistory.push({ role: "user", content: msg });
     state.aiHistory.push({ role: "typing", content: "" });
     // Both composers hold the same conversation, so both drafts clear on send.
@@ -11145,9 +11490,15 @@
     setAiBusy(true);
     renderAiThread(); renderAiSuggestions();
     try {
-      const data = await api("/ai/chat", { method: "POST", body: { message: msg, history: priorHistory }, timeout: AI_API_TIMEOUT_MS });
+      // With a conversation_id the server replays its own stored transcript and
+      // ignores `history`; client_threads tells it this client understands saved
+      // threads (legacy SPAs without the flag stay fully stateless).
+      const data = await api("/ai/chat", { method: "POST", body: { message: msg, history: priorHistory, conversation_id: state.aiConvId || null, client_threads: true }, timeout: AI_API_TIMEOUT_MS });
       state.aiHistory = state.aiHistory.filter((m) => m.role !== "typing");
       state.aiHistory.push({ role: "model", content: data.answer || "(no answer)" });
+      // Remember the thread the server answered on (created on the first turn) and
+      // invalidate the cached history list — its order/preview just changed.
+      if (data.conversation_id) { state.aiConvId = data.conversation_id; state.aiConvs = null; }
       // Keep the credits chip in sync when a message debited the wallet.
       if (data.wallet) { state.credits = data.wallet; updatePlanChip(); }
       if (data.credits_meter) setAiMeter(data.credits_meter);
@@ -11159,7 +11510,18 @@
         state.aiHistory.push({ role: "model", content: ex.message || "You're out of Rilono Credits for the AI assistant. Top up to keep chatting." });
         toast(ex.message, "error");
         setAiBusy(false); renderAiThread(); markAiAnswerArrived();
-        navigate("credits");
+        // Spend-only roles can't open the credits view — don't navigate them into a wall.
+        if (can("credits.view")) navigate("credits");
+        return;
+      }
+      // The thread this tab was continuing no longer exists (deleted in another tab, or
+      // aged out). Clear the dead id — the next send starts a fresh thread that keeps
+      // the on-screen context — instead of 404ing on every retry forever.
+      if (ex.status === 404 && state.aiConvId) {
+        state.aiConvId = null;
+        state.aiConvs = null;
+        state.aiHistory.push({ role: "model", content: "This conversation was deleted elsewhere, so I've started a fresh one — please send that message again." });
+        setAiBusy(false); renderAiThread(); markAiAnswerArrived();
         return;
       }
       state.aiHistory.push({
@@ -11172,6 +11534,99 @@
       setAiBusy(false);
       renderAiThread();
     }
+  }
+
+  /* ------------------------------------------------------------------
+     SAVED THREADS — conversations persist server-side per member. The
+     shared state is state.aiConvId (the thread the next send continues)
+     and state.aiHistory (its transcript); "New chat" just clears both.
+     ------------------------------------------------------------------ */
+  function startNewAiChat() {
+    if (state.aiBusy) return;
+    state.aiConvId = null;
+    state.aiHistory = [];
+    renderAiThread(); renderAiSuggestions();
+    const ta = state.view === "ai" ? $("#aiInput") : (aiDock.mounted ? $("#aiDockInput", aiDock.root) : null);
+    if (ta && !ta.disabled) ta.focus();
+  }
+
+  async function loadAiConversation(id) {
+    if (state.aiBusy) return;
+    let data;
+    try { data = await api(`/ai/conversations/${id}`); }
+    catch (ex) { toast(ex.message || "Couldn't open that conversation.", "error"); return; }
+    state.aiConvId = data.conversation.id;
+    state.aiHistory = (data.messages || []).map((m) => ({ role: m.role === "user" ? "user" : "model", content: m.content || "" }));
+    renderAiThread(); renderAiSuggestions();
+    // Opened from the history modal on a non-assistant view → surface the dock so
+    // the loaded thread is actually visible somewhere.
+    if (state.view !== "ai" && aiDock.mounted && !aiDock.open) openAiDock();
+  }
+
+  async function openAiHistory() {
+    let convs = state.aiConvs;
+    if (!convs) {
+      try { const r = await api("/ai/conversations"); convs = r.conversations || []; state.aiConvs = convs; state.aiRetentionDays = r.retention_days; }
+      catch (ex) { toast(ex.message || "Couldn't load your chat history.", "error"); return; }
+    }
+    const retention = state.aiRetentionDays;
+    openModal(`<div class="modal-head"><h3>Chat history</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <div class="modal-body">
+        <div class="ai-hist-list" id="aiHistList"></div>
+        ${retention > 0 ? `<div class="ai-hist-note">Conversations are kept for ${retention} days, then deleted automatically.</div>` : ""}
+      </div>`);
+    renderAiHistoryList();
+  }
+
+  function renderAiHistoryList() {
+    const box = $("#aiHistList");
+    if (!box) return;
+    const convs = state.aiConvs || [];
+    if (!convs.length) {
+      box.innerHTML = `<div class="ai-hist-empty">No saved conversations yet — ask the assistant something and it'll appear here.</div>`;
+      return;
+    }
+    box.innerHTML = convs.map((c) => `
+      <div class="ai-hist-row${c.id === state.aiConvId ? " current" : ""}" data-id="${c.id}">
+        <button type="button" class="ai-hist-main">
+          <span class="ai-hist-title">${esc(c.title || "New conversation")}</span>
+          <span class="ai-hist-meta">${fmtDate(c.last_message_at)} · ${c.message_count} message${c.message_count === 1 ? "" : "s"}${c.id === state.aiConvId ? " · open now" : ""}</span>
+        </button>
+        <button type="button" class="ai-hist-del" title="Delete conversation" aria-label="Delete conversation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+        </button>
+      </div>`).join("");
+    $$(".ai-hist-row", box).forEach((row) => {
+      const id = Number(row.dataset.id);
+      $(".ai-hist-main", row).onclick = () => {
+        if (state.aiBusy) { toast("Wait for the current answer to finish first.", "error"); return; }
+        closeModal();
+        loadAiConversation(id);
+      };
+      $(".ai-hist-del", row).onclick = async () => {
+        // Deleting the thread that's mid-answer would strand the in-flight turn (the
+        // server falls back to a fresh thread, but the UI state would fork) — block it.
+        if (state.aiBusy) { toast("Wait for the current answer to finish first.", "error"); return; }
+        const conv = (state.aiConvs || []).find((c) => c.id === id);
+        const ok = await confirmModal(
+          `Delete “${(conv && conv.title) || "this conversation"}”? Its messages are removed for good.`,
+          { title: "Delete conversation", okText: "Delete" },
+        );
+        // confirmModal shares #modal with the history list, so EVERY exit path below
+        // reopens the list — cancelling a delete must not dump the user back on the page.
+        if (!ok) { openAiHistory(); return; }
+        try { await api(`/ai/conversations/${id}`, { method: "DELETE" }); }
+        catch (ex) { toast(ex.message || "Couldn't delete that conversation.", "error"); openAiHistory(); return; }
+        // Drop the row from the cache only if the cache still exists — when something
+        // else invalidated it to null meanwhile, leave it null so the reopen refetches
+        // instead of showing a fabricated empty list.
+        if (state.aiConvs) state.aiConvs = state.aiConvs.filter((c) => c.id !== id);
+        // Deleting the thread that's on screen clears the composer state too.
+        if (state.aiConvId === id) { state.aiConvId = null; state.aiHistory = []; renderAiThread(); renderAiSuggestions(); }
+        toast("Conversation deleted.", "success");
+        openAiHistory();
+      };
+    });
   }
 
   /* ------------------------------------------------------------------
@@ -11234,6 +11689,12 @@
           <span class="aidock-orb" aria-hidden="true">${AI_SPARKLE_ICON}</span>
           <span class="aidock-id"><b>Rilono AI</b><small id="aiDockSub">Answers from your live portal data</small></span>
           <span class="aidock-acts">
+            <button type="button" class="aidock-act" id="aiDockNew" title="New chat" aria-label="Start a new chat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button type="button" class="aidock-act" id="aiDockHist" title="Chat history" aria-label="Open chat history">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            </button>
             <button type="button" class="aidock-act" id="aiDockExpand" title="Open the full assistant" aria-label="Open the full assistant">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
             </button>
@@ -11265,6 +11726,8 @@
 
     $("#aiDockFab", root).onclick = () => (aiDock.open ? closeAiDock() : openAiDock());
     $("#aiDockMin", root).onclick = () => closeAiDock();
+    $("#aiDockNew", root).onclick = () => startNewAiChat();
+    $("#aiDockHist", root).onclick = () => openAiHistory();
     $("#aiDockExpand", root).onclick = () => navigate("ai");   // syncAiDockVisibility tucks the dock away
     const ta = $("#aiDockInput", root);
     $("#aiDockForm", root).onsubmit = (e) => { e.preventDefault(); sendAi(ta.value); };
@@ -11608,6 +12071,10 @@
      CALENDAR — timelines, deadlines & what's next
      ============================================================ */
   let calEventsById = {};
+  /* Set when the dashboard's "What's next" hands an event over. renderCalendar opens it once the
+     month has loaded, so the modal's Save / Mark done / Delete all re-render the Calendar page
+     they belong to instead of painting it over the dashboard the user was standing on. */
+  let calPendingOpen = null;
 
   /* Reference files on an event. Mirrors ENTERPRISE_CAL_ATTACH_* and ALLOWED_EXT in
      app/enterprise_calendar_files.py — the allow-list is spelled out again rather than shared
@@ -11750,6 +12217,10 @@
           <div class="cal-upcoming">${overdueBlock}${upcomingBlock}</div>
         </aside>
       </div>`;
+
+    // Arrived here from the dashboard's "What's next" — open the event now that the page behind
+    // it (and state.calTypes / state.calClients, which the modal needs) is fully loaded.
+    if (calPendingOpen) { const pendingId = calPendingOpen; calPendingOpen = null; calEvent(pendingId); }
   }
 
   function calPrev() { const c = calState(); const d = new Date(c.year, c.month - 1, 1); state.cal = { year: d.getFullYear(), month: d.getMonth() }; renderCalendar(); }
@@ -11762,7 +12233,19 @@
     const e = calEventsById[id];
     if (!e) return;
     if (e.source === "client" && e.client_id) { navigate("clients"); openClient(e.client_id); return; }
-    calEditModal(e);
+    calDetailModal(e);
+  }
+
+  // "Edit" on the detail card. Re-reads calEventsById rather than trusting a copy captured in
+  // an onclick string, so the form always opens on the event as the page last loaded it.
+  function calEditEvent(id) {
+    const e = calEventsById[id];
+    if (!e || !can("calendar.manage") || e.editable === false) return;
+    calEditModal(e, null, true);
+  }
+
+  function calOpenClient(clientId) {
+    closeModal(); navigate("clients"); openClient(clientId);
   }
 
   function calAdd(dateStr) {
@@ -11770,7 +12253,102 @@
     calEditModal(null, dateStr);
   }
 
-  function calEditModal(ev, presetDate) {
+  // "14:30" (what the server stores) → whatever 2:30 PM looks like where the reader is.
+  function calTimeLabel(t) {
+    const m = /^(\d{1,2}):([0-5]\d)$/.exec(String(t || "").trim());
+    if (!m) return "";
+    return new Date(2000, 0, 1, Number(m[1]), Number(m[2]))
+      .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  function calFullDate(iso) {
+    const d = iso ? calParse(iso) : null;
+    if (!d || isNaN(d)) return "No date";
+    return d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  }
+
+  /* Clicking an event answers "what is this?" before it offers "change it". Opening straight
+     into the form made every glance look like an edit, hid the notes and the client link behind
+     form controls, and parked Delete one stray click away from someone only checking a date. */
+  function calDetailModal(ev) {
+    const canManage = can("calendar.manage") && ev.editable !== false && !!ev.event_id;
+    // ev.color is a server-side constant, but it lands in a style attribute — keep it to a hex.
+    const color = /^#[0-9a-f]{3,8}$/i.test(String(ev.color || "")) ? ev.color : "#6366f1";
+    const timeLabel = calTimeLabel(ev.time);
+    const rel = ev.date ? calRel(ev.date, calYmd(new Date())) : "";
+    const isOverdue = !!ev.overdue && !ev.is_done;
+    const status = ev.is_done
+      ? `<span class="cal-dv-chip done">✓ Done</span>`
+      : isOverdue ? `<span class="cal-dv-chip overdue">⚠ Overdue</span>` : "";
+    const atts = ev.attachments || [];
+
+    const clientVal = ev.client_id
+      ? `<b>${esc(ev.client_name || "Client")}</b> <button type="button" class="cal-dv-link" onclick="__ent.calOpenClient(${Number(ev.client_id)})">Open profile →</button>`
+      : `<span class="cal-dv-empty">Not linked to a client</span>`;
+    const notifyRow = ev.client_id
+      ? `<div class="cal-dv-row"><div class="cal-dv-k">Email reminder</div><div class="cal-dv-v">${
+          ev.notify_client
+            ? `On — <b>${esc(ev.client_name || "the client")}</b> is emailed when this is due`
+            : `<span class="cal-dv-empty">Off — nothing is sent to the client</span>`}</div></div>`
+      : "";
+
+    openModal(`<div class="modal-head"><h3>Event details</h3><button class="x" onclick="__ent.closeModal()" aria-label="Close">×</button></div>
+      <div class="modal-body">
+        <div class="cal-dv-hero">
+          <div class="cal-dv-badges">
+            <span class="cal-dv-type"><span class="cal-dot" style="background:${color}"></span>${esc(ev.type_label || "Reminder")}</span>
+            ${status}
+          </div>
+          <h4 class="cal-dv-title ${ev.is_done ? "is-done" : ""}">${esc(ev.title || "Untitled")}</h4>
+          <div class="cal-dv-when ${isOverdue ? "overdue" : ""}">
+            <span class="cal-dv-when-ic">📅</span>
+            <b>${esc(calFullDate(ev.date))}${timeLabel ? " · " + esc(timeLabel) : ""}</b>
+            ${rel ? `<span class="cal-dv-rel">${esc(rel)}</span>` : ""}
+            ${timeLabel ? "" : `<span class="cal-dv-allday">No time set</span>`}
+          </div>
+        </div>
+        <div class="cal-dv-rows">
+          <div class="cal-dv-row"><div class="cal-dv-k">Client</div><div class="cal-dv-v">${clientVal}</div></div>
+          ${notifyRow}
+          ${ev.created_by_name ? `<div class="cal-dv-row"><div class="cal-dv-k">Added by</div><div class="cal-dv-v">${esc(ev.created_by_name)}</div></div>` : ""}
+        </div>
+        <div class="cal-dv-sec">
+          <div class="cal-dv-sec-h">Notes</div>
+          ${ev.notes
+            ? `<div class="cal-dv-notes">${esc(ev.notes)}</div>`
+            : `<div class="cal-dv-empty">No notes on this event.</div>`}
+        </div>
+        ${atts.length ? `<div class="cal-dv-sec">
+          <div class="cal-dv-sec-h">Reference files · ${atts.length}</div>
+          <div class="cal-att-list">${atts.map((a) => `
+            <div class="cal-att-chip">
+              <span class="cal-att-ic">${docIcon(a.filename)}</span>
+              <a class="cal-att-name" href="${esc(a.download_url)}" target="_blank" rel="noopener" title="${esc(a.filename)}">${esc(a.filename)}</a>
+              <span class="cal-att-meta">${esc(fmtSize(a.file_size))}</span>
+            </div>`).join("")}</div>
+        </div>` : ""}
+      </div>
+      <div class="modal-foot">
+        ${canManage ? `<button type="button" class="btn btn-danger btn-sm" onclick="__ent.calDelete(${ev.event_id})">Delete</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="__ent.calToggleDone(${ev.event_id}, ${ev.is_done ? "false" : "true"})">${ev.is_done ? "Mark not done" : "✓ Mark done"}</button>` : ""}
+        <div class="spacer" style="flex:1"></div>
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Close</button>
+        ${canManage ? `<button type="button" class="btn btn-primary" onclick="__ent.calEditEvent('${esc(ev.id)}')">Edit</button>` : ""}
+      </div>`);
+  }
+
+  // Dashboard "What's next" → wherever the item actually lives. A client key date opens the
+  // client; a manual event routes through the Calendar rather than opening its modal in place,
+  // because that modal's save/done/delete handlers all call renderCalendar().
+  function dashEvent(id) {
+    const e = calEventsById[id];
+    if (e && e.source === "client" && e.client_id) { navigate("clients"); openClient(e.client_id); return; }
+    calPendingOpen = e ? id : null;
+    navigate("calendar");
+  }
+
+  // `backToDetail` — the form was reached from the detail card, so Cancel returns there
+  // instead of dropping the reader out of the event they were only half done reading.
+  function calEditModal(ev, presetDate, backToDetail) {
     const types = state.calTypes || [{ key: "reminder", label: "Reminder" }];
     const isEdit = !!ev;
     // A viewer opening an event still sees (and can download) what's attached — the tray that
@@ -12056,6 +12634,16 @@
     $("#calCancelBtn").onclick = () => {
       if (!isEdit && calAtts.some((a) => a.id)) {
         api(`/calendar/attachments/drafts/${encodeURIComponent(calAttToken)}`, { method: "DELETE" }).catch(() => {});
+      }
+      // Files upload and unattach the moment they're picked or removed — Cancel can't put them
+      // back. Hand the detail card what is actually on the event now, not the list it opened with.
+      if (isEdit && backToDetail) {
+        ev.attachments = calAtts
+          .filter((a) => a.id && a.status === "done")
+          .map((a) => ({ id: a.id, filename: a.name, file_size: a.size, download_url: a.url }));
+        ev.attachment_count = ev.attachments.length;
+        calDetailModal(ev);
+        return;
       }
       closeModal();
     };
@@ -13587,6 +14175,571 @@
     }
   }
 
+  /* ============================================================
+     LEADS — branded lead-collection forms + inbox
+     Forms are built here, shared as /f/{token} links (public page:
+     static/lead_form.html), and every submission lands in the inbox
+     below, one click away from becoming a client.
+     ============================================================ */
+  const ld = { tab: "inbox", forms: null, leads: [], counts: {}, total: 0, status: "", formFilter: "", q: "", seq: 0, limit: 100 };
+  const LD_PAGE_SIZE = 100;
+  const LD_SCOPE_DENIED = "Leads are workspace-wide enquiries that aren't assigned to an office or counselor yet, so they're only visible to members whose access scope is the entire workspace. Ask a workspace admin.";
+  // Leads are unassigned enquiries with no branch or counselor, so there is nothing to
+  // scope them by — the backend restricts the inbox to workspace-scope members and the
+  // UI must agree, or the nav item leads straight to a 403.
+  function canSeeLeads() {
+    const a = state.access;
+    if (!a) return true;                              // pre-access-control server
+    const scope = String(a.data_scope || "all");
+    return scope === "all" || !!a.is_admin_like || !state.caps;
+  }
+  const LD_STATUSES = ["new", "contacted", "converted", "closed"];
+  const LD_TYPE_LABELS = { text: "Text", email: "Email", phone: "Phone", textarea: "Paragraph", select: "Dropdown", date: "Date", number: "Number", checkbox: "Checkbox" };
+  const LD_DEFAULT_FIELDS = [
+    { label: "Full name", type: "text", required: true },
+    { label: "Email", type: "email", required: true },
+    { label: "Phone / WhatsApp", type: "phone", required: false },
+    { label: "Which country are you interested in?", type: "select", required: false, options: ["USA", "UK", "Canada", "Australia", "Germany", "Other"] },
+    { label: "Anything you'd like to tell us?", type: "textarea", required: false },
+  ];
+
+  function ldStatusLabel(s) { return { new: "New", contacted: "Contacted", converted: "Converted", closed: "Closed" }[s] || s; }
+
+  async function renderLeads() {
+    const c = $("#content");
+    if (!canSeeLeads()) { c.innerHTML = deniedCard(LD_SCOPE_DENIED); return; }
+    c.innerHTML = '<div class="center-load"><div class="spinner dark"></div></div>';
+    try {
+      const d = await api("/lead-forms");
+      if (state.view !== "leads") return;
+      applyAccessPayload(d);
+      ld.forms = d.forms || [];
+    } catch (ex) {
+      if (state.view !== "leads") return;
+      c.innerHTML = errBox(ex);
+      return;
+    }
+    ldDraw();
+  }
+
+  async function ldRefreshForms() {
+    try {
+      const d = await api("/lead-forms");
+      if (state.view !== "leads") return;
+      applyAccessPayload(d);
+      ld.forms = d.forms || [];
+      ldDraw();
+    } catch (e) { /* next full render reloads */ }
+  }
+
+  function ldDraw() {
+    if (state.view !== "leads") return;
+    const c = $("#content");
+    const forms = ld.forms || [];
+    const totalLeads = forms.reduce((s, f) => s + (f.total_leads || 0), 0);
+    const newLeads = forms.reduce((s, f) => s + (f.new_leads || 0), 0);
+    c.innerHTML = `
+      <div class="ld-hero">
+        <div>
+          <h2><i>🎯</i>Leads</h2>
+          <p>Build branded enquiry forms, share the link anywhere — email, WhatsApp, Instagram bio, a QR on a flyer — and every submission lands here, one click away from becoming a client. ${infoTip("The public form page carries <b>your</b> company name and logo (set them in Settings → Branding), with only a small “Powered by Rilono” line at the bottom. Each form's link keeps working until you pause the form or generate a new link.", "About lead forms")}</p>
+        </div>
+        <div class="ld-hero-stats">
+          <div class="ld-stat"><b>${forms.length}</b><span>Forms</span></div>
+          <div class="ld-stat"><b>${totalLeads}</b><span>Leads collected</span></div>
+          <div class="ld-stat"><b>${newLeads}</b><span>New</span></div>
+        </div>
+      </div>
+      <div class="ld-tabs">
+        <button class="ld-tab ${ld.tab === "inbox" ? "active" : ""}" data-ldtab="inbox"><i>📥</i>Lead Inbox</button>
+        <button class="ld-tab ${ld.tab === "forms" ? "active" : ""}" data-ldtab="forms"><i>🧾</i>Forms</button>
+      </div>
+      <div id="ldPanel"></div>`;
+    $$(".ld-tab", c).forEach((b) => b.onclick = () => { ld.tab = b.dataset.ldtab; ldDraw(); });
+    if (ld.tab === "inbox") ldDrawInbox(); else ldDrawForms();
+  }
+
+  /* ---------------- inbox ---------------- */
+  function ldChipsHtml() {
+    const cts = ld.counts || {};
+    const all = LD_STATUSES.reduce((s, k) => s + (cts[k] || 0), 0);
+    const defs = [["", "All", all]].concat(LD_STATUSES.map((k) => [k, ldStatusLabel(k), cts[k] || 0]));
+    return defs.map(([k, label, n]) => `<button class="chip ${ld.status === k ? "active" : ""}" data-ldst="${k}">${label} <span class="c-count">${n}</span></button>`).join("");
+  }
+
+  function ldDrawInbox() {
+    const panel = $("#ldPanel");
+    if (!panel) return;
+    const forms = ld.forms || [];
+    // A filter pointing at a deleted form renders as "All forms" while still filtering —
+    // clear it so the empty state can't lie about which filters are active.
+    if (ld.formFilter && !forms.some((f) => String(f.id) === String(ld.formFilter))) ld.formFilter = "";
+    panel.innerHTML = `
+      <div class="toolbar">
+        <div id="ldChips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+        <select class="select-mini" id="ldFormFilter">
+          <option value="">All forms</option>
+          ${forms.map((f) => `<option value="${f.id}" ${String(ld.formFilter) === String(f.id) ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+        </select>
+        <input class="select-mini ld-search" id="ldSearch" type="search" placeholder="Search name, email, phone…" value="${esc(ld.q)}"/>
+      </div>
+      <div id="ldListWrap"><div class="center-load"><div class="spinner dark"></div></div></div>`;
+    $("#ldFormFilter").onchange = () => { ld.formFilter = $("#ldFormFilter").value; ld.limit = LD_PAGE_SIZE; ldLoadLeads(); };
+    let debounce = null;
+    $("#ldSearch").oninput = () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => { ld.q = $("#ldSearch").value.trim(); ld.limit = LD_PAGE_SIZE; ldLoadLeads(); }, 350);
+    };
+    ldLoadLeads();
+  }
+
+  async function ldLoadLeads() {
+    const wrap = $("#ldListWrap");
+    if (!wrap) return;
+    const seq = ++ld.seq;
+    const params = new URLSearchParams();
+    if (ld.status) params.set("status_filter", ld.status);
+    if (ld.formFilter) params.set("form_id", ld.formFilter);
+    if (ld.q) params.set("q", ld.q);
+    params.set("limit", String(Math.min(ld.limit || LD_PAGE_SIZE, 200)));
+    let d;
+    try {
+      d = await api("/leads?" + params.toString());
+    } catch (ex) {
+      if (seq === ld.seq && state.view === "leads" && $("#ldListWrap")) $("#ldListWrap").innerHTML = errBox(ex);
+      return;
+    }
+    if (seq !== ld.seq || state.view !== "leads" || !$("#ldListWrap")) return;
+    applyAccessPayload(d);
+    ld.leads = d.leads || []; ld.counts = d.counts || {}; ld.total = d.total || 0;
+    const chips = $("#ldChips");
+    if (chips) {
+      chips.innerHTML = ldChipsHtml();
+      $$(".chip", chips).forEach((b) => b.onclick = () => { ld.status = b.dataset.ldst; ld.limit = LD_PAGE_SIZE; ldLoadLeads(); });
+    }
+    const listWrap = $("#ldListWrap");
+    if (!ld.leads.length) {
+      const filtered = !!(ld.status || ld.q || ld.formFilter);
+      const hasForms = (ld.forms || []).length > 0;
+      listWrap.innerHTML = `<div class="empty"><div class="emoji">📥</div>
+        <h3>${filtered ? "No leads match" : "No leads yet"}</h3>
+        <p>${filtered ? "No lead matches the filters you've set." : (hasForms ? "Share a form link to start collecting enquiries." : "Create your first lead form and share the link to start collecting enquiries.")}</p>
+        ${filtered ? '<button class="btn btn-soft btn-sm" id="ldEmptyClear">Clear filters</button>' : ""}
+        ${!filtered && !hasForms && can("clients.edit") ? '<button class="btn btn-primary btn-sm" id="ldEmptyCreate">+ Create a form</button>' : ""}
+        ${!filtered && hasForms ? '<button class="btn btn-soft btn-sm" id="ldEmptyForms">See my forms</button>' : ""}</div>`;
+      const b = $("#ldEmptyCreate");
+      if (b) b.onclick = () => { ld.tab = "forms"; ldDraw(); ldOpenBuilder(null); };
+      const sf = $("#ldEmptyForms");
+      if (sf) sf.onclick = () => { ld.tab = "forms"; ldDraw(); };
+      // "Try clearing the filters" with nothing to click is a dead end — make it an action.
+      const cf = $("#ldEmptyClear");
+      if (cf) cf.onclick = () => { ld.status = ""; ld.q = ""; ld.formFilter = ""; ld.limit = LD_PAGE_SIZE; ldDrawInbox(); };
+      return;
+    }
+    listWrap.innerHTML = `<div class="card"><table class="client-table">
+      <thead><tr><th>Lead</th><th>Form</th><th>Received</th><th>Status</th></tr></thead>
+      <tbody>${ld.leads.map((l, i) => `
+        <tr class="ld-row" data-ldi="${i}">
+          <td><div class="ld-cell-name">${esc(l.full_name || "—")}</div><div class="ld-cell-sub">${esc([l.email, l.phone].filter(Boolean).join(" · ") || "no contact details")}</div></td>
+          <td>${esc(l.form_name || "—")}</td>
+          <td>${esc(fmtDateTime(l.created_at) || "")}</td>
+          <td><span class="ld-pill ${esc(l.status)}">${esc(ldStatusLabel(l.status))}</span></td>
+        </tr>`).join("")}</tbody></table></div>`
+      + (ld.leads.length < ld.total
+        ? `<div class="ld-more">Showing ${ld.leads.length} of ${ld.total} leads <button class="btn btn-ghost btn-sm" id="ldMore">Load more</button></div>`
+        : "");
+    $$(".ld-row", listWrap).forEach((tr) => tr.onclick = () => ldOpenLead(ld.leads[Number(tr.dataset.ldi)]));
+    const more = $("#ldMore");
+    // The server clamps at 200, so past that the window slides instead of growing.
+    if (more) more.onclick = () => { ld.limit = Math.min((ld.limit || LD_PAGE_SIZE) + LD_PAGE_SIZE, 200); ldLoadLeads(); };
+  }
+
+  function ldOpenLead(lead) {
+    if (!lead) return;
+    const canEdit = can("clients.edit");
+    const canConvert = can("clients.create");
+    const name = lead.full_name || "Lead";
+    // #drawer is a bare flex column — content must bring the app's hero/body/footer
+    // structure with it, or every child stretches edge-to-edge with no padding.
+    openDrawer(`
+      <div class="drawer-hero ld-dh">
+        <button class="x" id="ldDetailClose" aria-label="Close">×</button>
+        <div class="dh-top">
+          <div class="dh-avatar" style="background:${avatarColor(name)}">${esc(initials(name))}</div>
+          <div style="min-width:0">
+            <h2>${esc(name)}</h2>
+            <div class="dh-sub">via ${esc(lead.form_name || "a deleted form")} · ${esc(fmtDateTime(lead.created_at) || "")}</div>
+          </div>
+        </div>
+        <div class="ld-dh-chips">
+          <span class="ld-pill ${esc(lead.status)}">${esc(ldStatusLabel(lead.status))}</span>
+          ${lead.email ? `<a class="ld-dh-chip" href="mailto:${encodeURIComponent(lead.email)}" title="Email this lead"><i>✉️</i>${esc(lead.email)}</a>` : ""}
+          ${lead.phone ? `<a class="ld-dh-chip" href="tel:${encodeURIComponent(lead.phone.replace(/[^\d+]/g, ""))}" title="Call this lead"><i>📞</i>${esc(lead.phone)}</a>` : ""}
+        </div>
+      </div>
+      <div class="drawer-body">
+        <div class="cp-sub-label">What they told you</div>
+        <div class="ld-detail-kv">
+          ${(lead.answers || []).map((a) => `<div class="it${a.type === "textarea" || String(a.value || "").length > 80 ? " wide" : ""}"><label>${esc(a.label)}</label><div>${esc(a.value)}</div></div>`).join("")
+            || '<div class="ld-detail-empty">No answers recorded.</div>'}
+        </div>
+        ${lead.source ? `<div class="ld-detail-meta"><i>🌐</i> Came from <b>${esc(lead.source)}</b></div>` : ""}
+        ${lead.converted_client_id ? '<div class="ld-detail-meta"><i>✅</i> Already converted into a client.</div>' : ""}
+      </div>
+      <div class="ld-detail-actions">
+        ${canConvert && lead.status !== "converted" ? '<button class="btn btn-primary btn-sm" id="ldConvertBtn">Convert to client →</button>' : ""}
+        ${lead.converted_client_id ? '<button class="btn btn-soft btn-sm" id="ldOpenClientBtn">Open client</button>' : ""}
+        ${canEdit ? `<label class="ld-status-pick">Status
+          <select class="select-mini" id="ldStatusSel" title="Lead status">${LD_STATUSES.map((s) => `<option value="${s}" ${lead.status === s ? "selected" : ""}>${ldStatusLabel(s)}</option>`).join("")}</select></label>` : ""}
+        ${canEdit ? '<button class="btn btn-danger btn-sm" id="ldDeleteBtn" style="margin-left:auto">Delete</button>' : ""}
+      </div>`);
+    $("#ldDetailClose").onclick = closeDrawer;
+    const conv = $("#ldConvertBtn");
+    if (conv) conv.onclick = () => ldConvert(lead);
+    const oc = $("#ldOpenClientBtn");
+    if (oc) oc.onclick = () => { closeDrawer(); openClient(lead.converted_client_id); };
+    const sel = $("#ldStatusSel");
+    if (sel) sel.onchange = async () => {
+      try {
+        const r = await api(`/leads/${lead.id}/status`, { method: "PATCH", body: { status: sel.value } });
+        lead.status = (r.lead && r.lead.status) || sel.value;
+        toast("Lead updated", "success");
+        ldLoadLeads(); ldRefreshFormCounters();
+      } catch (ex) { toast(ex.message, "error"); }
+    };
+    const del = $("#ldDeleteBtn");
+    if (del) del.onclick = async () => {
+      closeDrawer();
+      if (!(await confirmModal("This lead and their submitted details will be permanently removed.", { title: "Delete lead?", okText: "Delete" }))) return;
+      try {
+        await api(`/leads/${lead.id}`, { method: "DELETE" });
+        toast("Lead deleted", "success");
+        ldLoadLeads(); ldRefreshFormCounters();
+      } catch (ex) { toast(ex.message, "error"); }
+    };
+  }
+
+  // Refresh the per-form counters (and hero stats) without repainting the inbox list.
+  async function ldRefreshFormCounters() {
+    try {
+      const d = await api("/lead-forms");
+      if (state.view !== "leads") return;
+      ld.forms = d.forms || ld.forms;
+    } catch (e) { /* cosmetic only */ }
+  }
+
+  async function ldConvert(lead) {
+    closeDrawer();
+    await ensureTeam();   // the intake form reads teamMembersCache for the counselor picker
+    const pseudo = {
+      full_name: lead.full_name || "",
+      email: lead.email || "",
+      phone: lead.phone || "",
+      lead_source: "website",
+      lead_source_detail: String(lead.form_name || "Lead form").slice(0, 120),
+    };
+    // Soft destination match: a "country"/"destination" answer that names a catalog
+    // country pre-picks it; anything fuzzier stays with the counselor.
+    const countries = (state.catalog && state.catalog.countries) || [];
+    for (const a of (lead.answers || [])) {
+      const hay = (String(a.label || "") + " " + String(a.key || "")).toLowerCase();
+      if (!/countr|destination/.test(hay)) continue;
+      const val = String(a.value || "").trim().toLowerCase();
+      const hit = countries.find((ct) => val && (String(ct.name || "").toLowerCase() === val || String(ct.code || "").toLowerCase() === val));
+      if (hit) { pseudo.destination_country_code = hit.code; break; }
+    }
+    openClientForm(pseudo, {
+      forceCreate: true,
+      heading: "Convert lead to client",
+      onCreated: async (client) => {
+        try {
+          await api(`/leads/${lead.id}/mark-converted`, { method: "POST", body: { client_id: client.id } });
+        } catch (e) { /* the client exists either way — linking back is best-effort */ }
+        toast("Lead converted to client", "success");
+        openClient(client.id);
+        return true;
+      },
+    });
+    // Carry the full submission into the first note so nothing is lost in translation.
+    const noteEl = document.querySelector("#clientForm [name=initial_note]");
+    if (noteEl && !noteEl.value) {
+      noteEl.value = `From lead form "${lead.form_name || ""}" (${fmtDateTime(lead.created_at) || ""}):\n` +
+        (lead.answers || []).map((a) => `${a.label}: ${a.value}`).join("\n");
+    }
+  }
+
+  /* Inline SVG rather than emoji: at 30px an emoji ⏸/🗑 renders washed-out and
+     can't pick up the button's hover colour (or the red danger state). */
+  const LD_ICON = {
+    pause: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></svg>',
+    play: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>',
+    rotate: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4.5V10H15"/></svg>',
+    trash: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 4h4M9 7v12M15 7v12M6 7l1 13h10l1-13"/></svg>',
+  };
+
+  /* ---------------- forms ---------------- */
+  function ldDrawForms() {
+    const panel = $("#ldPanel");
+    if (!panel) return;
+    const forms = ld.forms || [];
+    const canEdit = can("clients.edit");
+    panel.innerHTML = `
+      <div class="toolbar">
+        <div style="font-weight:800">${forms.length ? `${forms.length} form${forms.length === 1 ? "" : "s"}` : ""}</div>
+        ${canEdit ? '<button class="btn btn-primary btn-sm" id="ldNewForm" style="margin-left:auto">+ New form</button>' : ""}
+      </div>
+      ${forms.length
+        ? `<div class="ld-form-grid">${forms.map((f, i) => ldFormCardHtml(f, i, canEdit)).join("")}</div>`
+        : `<div class="empty"><div class="emoji">🧾</div><h3>No forms yet</h3><p>Create a branded form, then share its link over email, WhatsApp or social media to collect enquiries.</p>${canEdit ? '<button class="btn btn-primary btn-sm" id="ldEmptyForm">+ Create your first form</button>' : ""}</div>`}`;
+    const nb = $("#ldNewForm"); if (nb) nb.onclick = () => ldOpenBuilder(null);
+    const eb = $("#ldEmptyForm"); if (eb) eb.onclick = () => ldOpenBuilder(null);
+    $$("[data-ldact]", panel).forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        const f = (ld.forms || [])[Number(b.dataset.ldfi)];
+        if (!f) return;
+        const act = b.dataset.ldact;
+        if (act === "copy") ldCopyLink(f);
+        else if (act === "open") window.open(f.link, "_blank", "noopener");
+        else if (act === "share") ldOpenShare(f);
+        else if (act === "edit") ldOpenBuilder(f);
+        else if (act === "pause") ldTogglePause(f);
+        else if (act === "rotate") ldRotate(f);
+        else if (act === "del") ldDeleteForm(f);
+      };
+    });
+  }
+
+  function ldFormCardHtml(f, i, canEdit) {
+    const fieldCount = (f.fields || []).length;
+    return `<div class="card ${f.is_active ? "" : "ld-paused"}"><div class="card-body ld-form-card">
+      <div class="ld-form-top">
+        <div style="min-width:0">
+          <h4>${esc(f.name)}</h4>
+          <div class="ld-form-meta">${f.total_leads || 0} lead${(f.total_leads || 0) === 1 ? "" : "s"}${f.new_leads ? ` · <b>${f.new_leads} new</b>` : ""} · ${fieldCount} field${fieldCount === 1 ? "" : "s"}</div>
+        </div>
+        <span class="ld-form-badges">
+          <span class="ld-pill ${f.is_active ? "converted" : "closed"}">${f.is_active ? "Live" : "Paused"}</span>
+          ${canEdit ? `<span class="ld-act-quiet">
+            <button class="lf-b-mini" data-ldact="pause" data-ldfi="${i}" title="${f.is_active ? "Pause this form" : "Resume this form"}" aria-label="${f.is_active ? "Pause form" : "Resume form"}">${f.is_active ? LD_ICON.pause : LD_ICON.play}</button>
+            <button class="lf-b-mini" data-ldact="rotate" data-ldfi="${i}" title="Generate a new link — the current one stops working" aria-label="New link">${LD_ICON.rotate}</button>
+            <button class="lf-b-mini danger" data-ldact="del" data-ldfi="${i}" title="Delete this form (collected leads are kept)" aria-label="Delete form">${LD_ICON.trash}</button>
+          </span>` : ""}
+        </span>
+      </div>
+      <div class="ld-link-row">
+        <input type="text" readonly value="${esc(f.link)}" onclick="this.select()" aria-label="Shareable form link"/>
+        <button class="btn btn-soft btn-sm" data-ldact="copy" data-ldfi="${i}">Copy</button>
+      </div>
+      <div class="ld-form-actions">
+        <button class="btn btn-ghost btn-sm" data-ldact="open" data-ldfi="${i}">Preview</button>
+        ${canEdit && can("emails.send") ? `<button class="btn btn-ghost btn-sm" data-ldact="share" data-ldfi="${i}"><i>✉️</i>Email link</button>` : ""}
+        ${canEdit ? `<button class="btn btn-ghost btn-sm" data-ldact="edit" data-ldfi="${i}">Edit fields</button>` : ""}
+      </div>
+    </div></div>`;
+  }
+
+  async function ldCopyLink(f) {
+    try {
+      await navigator.clipboard.writeText(f.link);
+      toast("Link copied", "success");
+    } catch (e) {
+      promptModal("Copy this link:", { title: "Form link", value: f.link, okText: "Done" });
+    }
+  }
+
+  function ldPatchForm(updated) {
+    if (!updated) return;
+    const idx = (ld.forms || []).findIndex((x) => x.id === updated.id);
+    if (idx >= 0) {
+      // Mutation responses don't recount leads — keep the counters we had.
+      updated.total_leads = ld.forms[idx].total_leads;
+      updated.new_leads = ld.forms[idx].new_leads;
+      ld.forms[idx] = updated;
+    } else {
+      ld.forms = [updated].concat(ld.forms || []);
+    }
+    ldDraw();
+  }
+
+  async function ldTogglePause(f) {
+    try {
+      const r = await api(`/lead-forms/${f.id}`, { method: "PATCH", body: { is_active: !f.is_active } });
+      ldPatchForm(r.form);
+      toast(r.form && r.form.is_active ? "Form is live again" : "Form paused — its link now shows a “not accepting responses” notice", "success");
+    } catch (ex) { toast(ex.message, "error"); }
+  }
+
+  async function ldRotate(f) {
+    if (!(await confirmModal("Anyone holding the current link will see “link invalid”. You'll get a fresh link to share.", { title: "Generate a new link?", okText: "New link" }))) return;
+    try {
+      const r = await api(`/lead-forms/${f.id}/rotate-link`, { method: "POST" });
+      ldPatchForm(r.form);
+      if (r.form) ldCopyLink(r.form);
+    } catch (ex) { toast(ex.message, "error"); }
+  }
+
+  async function ldDeleteForm(f) {
+    if (!(await confirmModal(`"${f.name}" will stop accepting responses and its link will die. Leads already collected stay in the inbox.`, { title: "Delete this form?", okText: "Delete" }))) return;
+    try {
+      await api(`/lead-forms/${f.id}`, { method: "DELETE" });
+      toast("Form deleted", "success");
+      await ldRefreshForms();
+    } catch (ex) { toast(ex.message, "error"); }
+  }
+
+  function ldOpenShare(f) {
+    openModal(`
+      <div class="modal-head"><h3>Email this form link</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="ldShareForm">
+      <div class="modal-body">
+        <div class="ld-share-what">
+          <span class="ld-share-label">Sending</span>
+          <b>${esc(f.title || f.name)}</b>
+          <span class="ld-share-url">${esc(f.link)}</span>
+        </div>
+        <div class="field"><label>Send to</label><input type="email" name="to_email" required placeholder="prospect@email.com"/></div>
+        <div class="field"><label>Add a note (optional)</label><textarea name="note" maxlength="400" style="min-height:70px" placeholder="Hi! Fill this in and we'll get back to you within a day."></textarea></div>
+        <p class="mw-hint">The email carries your company name and logo, and replies come straight to your inbox.</p>
+        <div id="ldShareErr" class="auth-error hidden"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="ldShareBtn">Send</button>
+      </div></form>`);
+    $("#ldShareForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const fEl = e.target; const btn = $("#ldShareBtn"); const err = $("#ldShareErr");
+      err.classList.add("hidden");
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const r = await api(`/lead-forms/${f.id}/share-email`, {
+          method: "POST",
+          body: { to_email: fEl.elements.to_email.value.trim(), note: fEl.elements.note.value.trim() || null },
+        });
+        closeModal();
+        toast(r.message || "Sent", r.email_sent === false ? "error" : "success");
+      } catch (ex) {
+        err.textContent = ex.message; err.classList.remove("hidden");
+      } finally { btn.disabled = false; btn.textContent = "Send"; }
+    };
+  }
+
+  /* ---------------- form builder ---------------- */
+  function ldOpenBuilder(form) {
+    const isEdit = !!form;
+    // Work on a deep copy — cancel must leave the card untouched.
+    const draft = JSON.parse(JSON.stringify(isEdit ? (form.fields || []) : LD_DEFAULT_FIELDS));
+    const myEmail = (state.me && state.me.user && state.me.user.email) || "";
+    openModal(`
+      <div class="modal-head"><h3>${isEdit ? "Edit form" : "New lead form"}</h3><button class="x" onclick="__ent.closeModal()">×</button></div>
+      <form id="ldBuildForm">
+      <div class="modal-body">
+        <div class="lf-b-sec"><span class="cp-sub-label">The basics</span></div>
+        <div class="lf-b-grid">
+          <div class="field"><label>Form name (internal) *</label><input name="name" required maxlength="80" value="${esc(isEdit ? form.name : "")}" placeholder="e.g. Website enquiries"/><div class="hint">Only your team sees this.</div></div>
+          <div class="field"><label>Public title</label><input name="title" maxlength="120" value="${esc(isEdit ? form.title || "" : "")}" placeholder="e.g. Start your study-abroad journey"/><div class="hint">The heading on the shared page. Defaults to “Get in touch”.</div></div>
+          <div class="field span2"><label>Intro text (shown under the title)</label><textarea name="intro_text" maxlength="600" style="min-height:70px" placeholder="Tell us a little about your plans and we'll get back to you within 24 hours.">${esc(isEdit ? form.intro_text || "" : "")}</textarea></div>
+        </div>
+        <div class="lf-b-sec"><span class="cp-sub-label">What you're asking for</span><span class="lf-b-count" id="ldFieldCount"></span></div>
+        <div id="ldFieldList" class="lf-b-list"></div>
+        <button type="button" class="lf-b-add" id="ldAddField">+ Add a field</button>
+        <div class="lf-b-sec"><span class="cp-sub-label">After they submit</span></div>
+        <div class="lf-b-grid">
+          <div class="field"><label>Submit button label</label><input name="submit_label" maxlength="40" value="${esc(isEdit ? form.submit_label || "" : "")}" placeholder="Submit"/></div>
+          <div class="field"><label>Email me each new lead at</label><input type="email" name="notify_email" maxlength="200" value="${esc(isEdit ? form.notify_email || "" : myEmail)}" placeholder="Leave empty for no email alerts"/></div>
+          <div class="field span2"><label>Thank-you message</label><input name="success_message" maxlength="400" value="${esc(isEdit ? form.success_message || "" : "")}" placeholder="Thanks! Your details were sent — the team will get back to you shortly."/></div>
+        </div>
+        <div id="ldBuildErr" class="auth-error hidden"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="ldBuildSave">${isEdit ? "Save changes" : "Create form"}</button>
+      </div></form>`, { wide: true });
+
+    function drawFields() {
+      const count = $("#ldFieldCount");
+      if (count) count.textContent = draft.length + (draft.length === 1 ? " field" : " fields") + " · max 20";
+      $("#ldFieldList").innerHTML = draft.map((f, i) => `
+        <div class="lf-b-field">
+          <div class="lf-b-row">
+            <span class="lf-b-num">${i + 1}</span>
+            <input class="lf-b-label" type="text" data-lf="label" data-i="${i}" maxlength="120" value="${esc(f.label)}" placeholder="Field label — e.g. Full name"/>
+            <select class="lf-b-type" data-lf="type" data-i="${i}">${Object.keys(LD_TYPE_LABELS).map((t) => `<option value="${t}" ${f.type === t ? "selected" : ""}>${LD_TYPE_LABELS[t]}</option>`).join("")}</select>
+            <label class="lf-b-req" title="Make this field mandatory"><input type="checkbox" data-lf="required" data-i="${i}" ${f.required ? "checked" : ""}/><span>Required</span></label>
+            <span class="lf-b-tools">
+              <button type="button" class="lf-b-mini" data-lf="up" data-i="${i}" title="Move up" aria-label="Move up" ${i === 0 ? "disabled" : ""}>↑</button>
+              <button type="button" class="lf-b-mini" data-lf="down" data-i="${i}" title="Move down" aria-label="Move down" ${i === draft.length - 1 ? "disabled" : ""}>↓</button>
+              <button type="button" class="lf-b-mini danger" data-lf="del" data-i="${i}" title="Remove field" aria-label="Remove field">✕</button>
+            </span>
+          </div>
+          ${f.type === "select" ? `<div class="lf-b-opts"><label>Dropdown choices <span>(comma-separated)</span></label><input type="text" data-lf="options" data-i="${i}" value="${esc((f.options || []).join(", "))}" placeholder="USA, UK, Canada"/></div>` : ""}
+        </div>`).join("");
+      $$("#ldFieldList [data-lf]").forEach((el) => {
+        const i = Number(el.dataset.i);
+        const kind = el.dataset.lf;
+        if (el.tagName === "INPUT" && el.type === "text") {
+          // The field rows live inside the builder <form>; Enter would implicitly submit
+          // and publish a half-built form. Add a field instead.
+          el.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); if (kind === "label") $("#ldAddField").click(); } };
+        }
+        if (kind === "label") el.oninput = () => { draft[i].label = el.value; };
+        else if (kind === "type") el.onchange = () => { draft[i].type = el.value; if (el.value === "select" && !draft[i].options) draft[i].options = []; drawFields(); };
+        else if (kind === "required") el.onchange = () => { draft[i].required = el.checked; };
+        else if (kind === "options") el.oninput = () => { draft[i].options = el.value.split(",").map((s) => s.trim()).filter(Boolean); };
+        else if (kind === "up") el.onclick = () => { if (i > 0) { const t = draft[i - 1]; draft[i - 1] = draft[i]; draft[i] = t; drawFields(); } };
+        else if (kind === "down") el.onclick = () => { if (i < draft.length - 1) { const t = draft[i + 1]; draft[i + 1] = draft[i]; draft[i] = t; drawFields(); } };
+        else if (kind === "del") el.onclick = () => { draft.splice(i, 1); drawFields(); };
+      });
+    }
+    drawFields();
+    $("#ldAddField").onclick = () => {
+      if (draft.length >= 20) { toast("A form can have at most 20 fields", "error"); return; }
+      draft.push({ label: "", type: "text", required: false });
+      drawFields();
+      const inputs = $$('#ldFieldList [data-lf="label"]');
+      const last = inputs[inputs.length - 1];
+      if (last) last.focus();
+    };
+
+    $("#ldBuildForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const fEl = e.target; const btn = $("#ldBuildSave"); const err = $("#ldBuildErr");
+      err.classList.add("hidden");
+      // fEl.elements[...] rather than fEl.name — "name" collides with the form's own
+      // built-in name property and would read "" instead of the input.
+      const gv = (n) => (fEl.elements[n] ? String(fEl.elements[n].value || "").trim() : "");
+      const body = {
+        name: gv("name"),
+        title: gv("title") || null,
+        intro_text: gv("intro_text") || null,
+        fields: draft
+          .map((f) => ({ label: String(f.label || "").trim(), type: f.type, required: !!f.required, options: f.type === "select" ? (f.options || []) : undefined }))
+          .filter((f) => f.label),
+        submit_label: gv("submit_label") || null,
+        success_message: gv("success_message") || null,
+        notify_email: gv("notify_email") || null,
+      };
+      if (!body.fields.length) {
+        err.textContent = "Add at least one field (labels can't be empty).";
+        err.classList.remove("hidden");
+        return;
+      }
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const r = isEdit
+          ? await api(`/lead-forms/${form.id}`, { method: "PATCH", body })
+          : await api("/lead-forms", { method: "POST", body });
+        closeModal();
+        toast(isEdit ? "Form updated" : "Form created — the link is ready to share", "success");
+        if (isEdit) ldPatchForm(r.form);
+        else { ld.tab = "forms"; await ldRefreshForms(); if (r.form) ldCopyLink(r.form); }
+      } catch (ex) {
+        err.textContent = ex.message; err.classList.remove("hidden");
+      } finally { btn.disabled = false; btn.textContent = isEdit ? "Save changes" : "Create form"; }
+    };
+  }
+
   window.__ent = {
     go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
     closeModal, closeDrawer, removeMember, checkout, setCycle,
@@ -13599,9 +14752,12 @@
     saveBank: saveLinkedAccount, refreshBank: refreshLinkedAccount,
     finAdd: finAddEntry, finTab: finGoTab,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
+    viewAdmission: viewAdmissionStage, viewEnglish: viewEnglishStatus,
     viewInterview: viewInterviewSession, sendInterview: openSendInterviewPicker,
     setUniStatus, removeUni,
     calPrev, calNext, calToday, calSetMonth, calSetYear, calEvent, calAdd, calDelete, calToggleDone,
+    calEditEvent, calOpenClient,
+    dashEvent,
   };
 
   /* ============================================================

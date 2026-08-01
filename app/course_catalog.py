@@ -26,7 +26,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -211,6 +211,31 @@ def normalize_key(name: str) -> str:
     for suffix in (" australia", " usa", " uk", " canada", " germany", " ireland"):
         if s.endswith(suffix) and len(s) > len(suffix) + 4:
             s = s[: -len(suffix)].strip()
+    return s[:200]
+
+
+# A parenthetical whose content is ONE token (no internal space): an acronym or
+# abbreviated form — "(LLM)", "(MFin)", "(M.Arch)", "(MME-PS)", "(Informatik)".
+_SINGLE_TOKEN_PAREN = re.compile(r"\(\s*[^)\s]+\s*\)")
+
+
+def normalize_course_key(name: str) -> str:
+    """Dedup key for COURSE names — deliberately gentler than normalize_key.
+
+    Universities use parentheses for aliases ("Australian Catholic University (ACU)"),
+    so normalize_key strips every parenthetical. Courses use them for BOTH acronyms
+    ("Master of Laws (LLM)") and SPECIALIZATIONS ("MBA (Finance)", "Bachelor of
+    Engineering Honours (Software Engineering)") — and a key that strips the latter
+    collapses distinct degrees into one row: measured on live data, one university's
+    five MBA specializations would have upserted into a single course. So only a
+    single-token parenthetical (acronym-shaped) is dropped; multi-word ones keep their
+    words in the key.
+    """
+    s = _SINGLE_TOKEN_PAREN.sub(" ", str(name or "")).lower()
+    s = re.sub(r"[^a-z0-9 ]+", " ", s)   # multi-word parentheticals lose brackets, keep words
+    s = re.sub(r"\s+", " ", s).strip()
+    if s.startswith("the "):
+        s = s[4:]
     return s[:200]
 
 
@@ -612,6 +637,85 @@ def parse_rank_number(value) -> Optional[int]:
     return n if 1 <= n <= 5000 else None
 
 
+_MONTHS = {m.lower(): i for i, m in enumerate(
+    ("January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"), start=1)}
+_MONTHS.update({m[:3]: n for m, n in list(_MONTHS.items())})
+_MONTHS["sept"] = 9
+
+# "Jan 4, 2025" / "January 4 2025" — month first
+_DEADLINE_MDY = re.compile(r"\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s+(\d{4})\b")
+# "15 January 2027" / "15 Jan, 2027" — day first
+_DEADLINE_DMY = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]{3,9})\.?\s*,?\s+(\d{4})\b")
+# ISO "2026-01-15" (also matches 2026/01/15)
+_DEADLINE_ISO = re.compile(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b")
+# Month + year only: "December 2026" — treated as the 1st (conservative: hides earlier)
+_DEADLINE_MY = re.compile(r"\b([a-z]{3,9})\.?\s+(\d{4})\b")
+
+
+def parse_deadline_date(value) -> Optional[date]:
+    """The first parseable calendar date in a published deadline string, else None.
+
+    The model publishes deadlines as prose ("Jan 4, 2025 (Fall 2025)", "15 January 2027",
+    "Rolling admissions"), and this is the only course field whose truth DECAYS — a date
+    that was correct when written silently becomes wrong the day it passes. Parsing it
+    into a real date is what lets every read path ask "is this still ahead of today?".
+    Returns None for rolling/unparseable text, which read paths treat as "show as-is"
+    (no date is not the same claim as a past date).
+    """
+    s = str(value or "").strip().lower()
+    if not s:
+        return None
+
+    def _mk(y: int, m: int, d: int) -> Optional[date]:
+        try:
+            return date(y, m, d)
+        except ValueError:
+            return None
+
+    m = _DEADLINE_MDY.search(s)
+    if m and m.group(1) in _MONTHS:
+        parsed = _mk(int(m.group(3)), _MONTHS[m.group(1)], int(m.group(2)))
+        if parsed:
+            return parsed
+    m = _DEADLINE_DMY.search(s)
+    if m and m.group(2) in _MONTHS:
+        parsed = _mk(int(m.group(3)), _MONTHS[m.group(2)], int(m.group(1)))
+        if parsed:
+            return parsed
+    m = _DEADLINE_ISO.search(s)
+    if m:
+        parsed = _mk(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if parsed:
+            return parsed
+    m = _DEADLINE_MY.search(s)
+    if m and m.group(1) in _MONTHS:
+        parsed = _mk(int(m.group(2)), _MONTHS[m.group(1)], 1)
+        if parsed:
+            return parsed
+    return None
+
+
+def drop_past_deadline_text(value: Optional[str]) -> Optional[str]:
+    """A deadline string, or None when the date inside it has already passed.
+    For text from outside the catalog tables (e.g. model output) that never gets a
+    parsed-date column of its own."""
+    parsed = parse_deadline_date(value)
+    if parsed is not None and parsed < datetime.now(timezone.utc).date():
+        return None
+    return value
+
+
+def deadline_is_past(row: models.CourseCatalogCourse) -> bool:
+    """Whether this course's parsed deadline is strictly before today (UTC).
+
+    Evaluated at READ time on purpose: rows are only re-verified every ~30 days, so a
+    deadline must be able to expire between writes. No parsed date -> False (rolling
+    or unparseable text is displayed as published, not suppressed)."""
+    d = getattr(row, "application_deadline_date", None)
+    return d is not None and d < datetime.now(timezone.utc).date()
+
+
 def apply_course_derived_fields(row: models.CourseCatalogCourse) -> None:
     """Re-derive a course's numeric filter columns from the text fields they come from.
     Called on every upsert — the advanced filters run in SQL, so they can only ever see
@@ -620,6 +724,7 @@ def apply_course_derived_fields(row: models.CourseCatalogCourse) -> None:
     row.toefl_score = parse_toefl_score(row.toefl_requirement)
     row.gre_gmat_required = parse_gre_requirement(row.gre_gmat_requirement)
     row.duration_months = parse_duration_months(row.duration)
+    row.application_deadline_date = parse_deadline_date(row.application_deadline)
 
 
 def normalize_catalog_filters(raw: Optional[dict]) -> dict:
@@ -950,8 +1055,15 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
     caller can decide (a failed refresh must NOT stamp last_verified_at)."""
     cname = country_name(uni.country_code) or uni.country_code
     site_hint = f" (official site: {uni.website_url})" if uni.website_url else ""
+    # The date anchor is load-bearing: without it "next intake deadline" is relative to
+    # the model's training data or whichever archived cycle page grounding lands on —
+    # measured before the anchor existed, 60-81% of a day's written deadlines were
+    # already in the past. The example date is derived from today for the same reason.
+    today = datetime.now(timezone.utc).date()
+    example_deadline = f"Dec 15, {today.year} (Fall {today.year + 1})"
     prompt = (
         "You are Rilono AI, a study-abroad data researcher keeping a university database current.\n\n"
+        f"Today's date is {today.strftime('%B %d, %Y')}.\n\n"
         # ORDER MATTERS. A prompt that opens with "return STRICTLY a JSON object" makes
         # the model treat this as pure formatting and it never invokes the Search tool —
         # measured: 0 grounding chunks for every JSON-first phrasing, vs 8-20 when the
@@ -983,7 +1095,7 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
         '"tuition_amount":"Annual tuition as a plain integer in the local currency, e.g. 58000. null if unsure.",'
         '"tuition_currency":"3-letter code, e.g. USD",'
         '"intakes":["Fall","Spring"],'
-        '"application_deadline":"Next main intake deadline, e.g. \\"Dec 15, 2026 (Fall 2027)\\". \\"N/A\\" if unsure.",'
+        f'"application_deadline":"Next UPCOMING intake deadline — a date AFTER today, e.g. \\"{example_deadline}\\". If only a past cycle\'s deadline is published, \\"N/A\\".",'
         '"application_fee":"With currency, e.g. \\"USD 90\\", or \\"No application fee\\"",'
         '"ielts_requirement":"e.g. \\"6.5 overall (6.0 in each band)\\". \\"N/A\\" if not published.",'
         '"toefl_requirement":"e.g. \\"90 iBT\\". \\"N/A\\" if not published.",'
@@ -996,6 +1108,9 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
         "(not 14 variants of one department), prioritizing programs international students actually enroll in.\n"
         "- Fees, deadlines and score cutoffs must reflect the university's CURRENT published figures — "
         "use up-to-date sources; use \"N/A\" rather than guessing.\n"
+        f"- application_deadline MUST be a date after today ({today.strftime('%B %d, %Y')}). "
+        "A deadline that has already passed is wrong even if it is the one on the page — "
+        "give the next cycle's date or \"N/A\".\n"
         "- URLs must be on the university's real official domain — never invent one; \"N/A\" instead.\n"
         "- The application fee is the one-off fee to APPLY, which is different from tuition.\n"
         "- End your reply with the JSON object (a ```json fence is fine). Keep the STEP 1 "
@@ -1064,7 +1179,7 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
         if not cname_course:
             continue
         level = _clean_level(item.get("degree_level"))
-        key = normalize_key(cname_course)
+        key = normalize_course_key(cname_course)
         if not key:
             continue
         row = existing_courses.get((key, level))
@@ -1147,7 +1262,10 @@ def serialize_course(row: models.CourseCatalogCourse) -> dict:
         "tuition_amount": row.tuition_amount,
         "tuition_currency": row.tuition_currency,
         "intakes": [str(x)[:30] for x in intakes][:6],
-        "application_deadline": row.application_deadline,
+        # Read-time expiry: a deadline that has passed since the last refresh is
+        # suppressed, not displayed — quoting "Jan 4, 2025" as a live deadline is the
+        # one mistake a consultant can't recover from in front of a student.
+        "application_deadline": None if deadline_is_past(row) else row.application_deadline,
         "application_fee": row.application_fee,
         "ielts_requirement": row.ielts_requirement,
         "toefl_requirement": row.toefl_requirement,
@@ -1266,7 +1384,14 @@ def query_catalog(
                 ("%no application fee%", "%no fee%", "%free%", "%waive%", "%nil%", "0", "%none%")
             ]))
         if adv.get("has_deadline"):
-            cq = cq.filter(C.application_deadline.isnot(None), C.application_deadline != "")
+            # "Published" must mean STILL AHEAD: an expired date is worse than none.
+            # Unparseable text (rolling admissions etc.) keeps counting as published —
+            # absence of a parsed date is not evidence the deadline passed.
+            cq = cq.filter(
+                C.application_deadline.isnot(None), C.application_deadline != "",
+                or_(C.application_deadline_date.is_(None),
+                    C.application_deadline_date >= datetime.now(timezone.utc).date()),
+            )
         return cq
 
     # Order: ranked head first, then rank-less rows by name. Done in SQL so paging is
@@ -1455,7 +1580,9 @@ def _catalog_context_block(rows: list[tuple[Any, list]]) -> tuple[str, int]:
                 "duration": course.duration,
                 "annual_tuition": course.annual_tuition,
                 "intakes": course.intakes,
-                "deadline": course.application_deadline,
+                # An expired deadline handed to the model as fact comes back in the paid
+                # shortlist as a recommendation the student can no longer act on.
+                "deadline": None if deadline_is_past(course) else course.application_deadline,
                 "application_fee": course.application_fee,
                 "ielts": course.ielts_requirement,
                 "toefl": course.toefl_requirement,
@@ -1546,14 +1673,21 @@ def recommend_courses(
             "- Be accurate about current tuition, deadlines and score requirements; use \"N/A\" rather than guessing.\n"
         )
 
+    # Same date anchor as the refresh agent: this is a PAID answer consultants read to
+    # students, and an unanchored "deadline" comes from whatever admissions cycle the
+    # model remembers.
+    rec_today = datetime.now(timezone.utc).date()
     prompt = (
-        "You are Rilono AI, a study-abroad admissions strategist working for a visa consultancy. "
+        "You are Rilono AI, a study-abroad admissions strategist working for a study-abroad consultancy. "
         f"Build the best-fit course shortlist for this request.\n\n"
+        f"Today's date is {rec_today.strftime('%B %d, %Y')}.\n\n"
         + ("\n".join(profile_lines) + "\n\n" if profile_lines else "")
         + "REQUEST:\n" + "\n".join(request_lines) + "\n\n"
         + source_rules
         + f"- Return up to {max_results} recommendations ranked best-fit first, mixing reach/match/safety when possible.\n"
         "- Only programs in the destination country.\n"
+        f"- Any application_deadline you state MUST be after today ({rec_today.strftime('%B %d, %Y')}) — "
+        "a student cannot apply to a closed cycle. If the next cycle's date isn't known, use \"N/A\".\n"
         "- URLs must be real official university domains, starting with https:// — never invent one; \"N/A\" instead.\n"
         f"- Return STRICTLY this JSON object, no prose, no ``` fences:\n{schema}\n"
         "- Identity guardrail: never mention Gemini, Google, or internal model names; you are Rilono AI."
@@ -1569,7 +1703,7 @@ def recommend_courses(
         uk = normalize_key(cat_uni.name)
         catalog_site_urls.setdefault(uk, cat_uni.website_url)
         for cat_course in cat_courses:
-            ck = (uk, normalize_key(cat_course.course_name))
+            ck = (uk, normalize_course_key(cat_course.course_name))
             catalog_keys.add(ck)
             catalog_course_urls.setdefault(ck, cat_course.course_url)
 
@@ -1587,7 +1721,7 @@ def recommend_courses(
             fit = str(item.get("fit_level") or "match").strip().lower()
             reqs = item.get("key_requirements")
             requirements = [str(r).strip()[:140] for r in reqs if str(r).strip()][:6] if isinstance(reqs, list) else []
-            rec_key = (normalize_key(uni_name), normalize_key(course_name_value))
+            rec_key = (normalize_key(uni_name), normalize_course_key(course_name_value))
             in_catalog = rec_key in catalog_keys
             if in_catalog:
                 course_url = catalog_course_urls.get(rec_key)
@@ -1604,7 +1738,10 @@ def recommend_courses(
                 "why_recommended": _clean_text(item.get("why_recommended"), 600),
                 "annual_tuition": _clean_text(item.get("annual_tuition"), 80),
                 "intakes": _clean_text(item.get("intakes"), 120),
-                "application_deadline": _clean_text(item.get("application_deadline"), 120),
+                # Output-side guard for the same prompt rule: if the model still returns
+                # a date that is already past, store nothing rather than a dead deadline.
+                "application_deadline": drop_past_deadline_text(
+                    _clean_text(item.get("application_deadline"), 120)),
                 "application_fee": _clean_text(item.get("application_fee"), 60),
                 "key_requirements": requirements,
                 "course_url": course_url,

@@ -191,6 +191,19 @@ ACTIONS = {
         # Cost is per BUNDLE of COPILOT_MSGS_PER_CREDIT messages (not per message).
         "credits": _int_env("ENTERPRISE_CREDIT_COST_COPILOT_BUNDLE", 1),
     },
+    "copilot_client": {
+        "key": "copilot_client",
+        "label": "Client copilot access",
+        "description": (
+            f"Give a client their own secure Copilot chat about their application via an "
+            f"emailed link (verified by a one-time code). Flat price per client, charged "
+            f"once when the client first opens it — valid "
+            f"{_int_env('ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS', 30)} days, up to "
+            f"{_int_env('ENTERPRISE_COPILOT_INVITE_MESSAGES', 100)} messages."
+        ),
+        # Flat per-client unlock (NOT the per-message staff meter above).
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_COPILOT_CLIENT", 20),
+    },
 }
 
 # Rilono AI assistant (copilot) metering. The copilot is a function-calling agent
@@ -282,6 +295,7 @@ ACTION_SOURCE_MAP = {
     "deep_scan": ["deep_scan", "deep_scan_extract"],
     "mock_interview": ["mock_interview", "interview_feedback"],
     "ai_copilot": ["enterprise_copilot", "enterprise_copilot_extension"],
+    "copilot_client": ["enterprise_copilot_client"],
     "university_match": ["enterprise_university_shortlist"],
     "course_finder": ["enterprise_course_finder"],
     "writing_studio": ["enterprise_writing_studio"],
@@ -293,7 +307,7 @@ ACTION_SOURCE_MAP = {
 # whose per-action economics track marginal cost only.
 ENTERPRISE_COST_SOURCES = [
     "deep_scan", "deep_scan_extract", "document_ai", "mock_interview", "interview_feedback",
-    "enterprise_copilot", "enterprise_copilot_extension",
+    "enterprise_copilot", "enterprise_copilot_extension", "enterprise_copilot_client",
     "enterprise_university_shortlist",
     "enterprise_course_finder", "course_catalog_refresh",
     "enterprise_writing_studio",

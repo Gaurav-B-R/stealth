@@ -28,7 +28,7 @@ JOBS: list[dict] = [
         "employment_type": "INTERN",  # schema.org JobPosting value
         "tagline": "Red-team our AI, break our workflows, and help catch bugs before a "
                    "student's visa ever depends on them.",
-        "about": "Rilono is an AI-powered immigration tech startup. We use advanced AI to audit "
+        "about": "Rilono is an AI-powered study-abroad tech startup. We use advanced AI to audit "
                  "complex financial documents, conduct voice mock interviews, and prevent visa "
                  "rejections for international students.",
         "role": "We are looking for a detail-oriented AI Product Tester Intern with a “hacker” "
@@ -37,7 +37,7 @@ JOBS: list[dict] = [
         "responsibilities": [
             {
                 "title": "AI Red-Teaming",
-                "body": "Chat with our AI Visa Bot, intentionally trying to trick it, confuse it, "
+                "body": "Chat with Rilono AI, intentionally trying to trick it, confuse it, "
                         "or make it generate inaccurate responses.",
             },
             {
@@ -76,7 +76,7 @@ JOBS: list[dict] = [
         "employment_type": "INTERN",  # schema.org JobPosting value
         "tagline": "Architect our digital growth — audit our channels, spot the gaps, and build "
                    "campaigns that turn international students and consultancies into a community.",
-        "about": "Rilono is an AI-powered immigration tech startup. We use advanced AI to help "
+        "about": "Rilono is an AI-powered study-abroad tech startup. We use advanced AI to help "
                  "international students secure their study visas and provide smart CRM tools for "
                  "study abroad consultancies.",
         "role": "We are looking for a highly strategic Social Media Marketing Intern to architect "

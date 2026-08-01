@@ -1,5 +1,5 @@
 /* ===========================================================================
-   Rilono Enterprise — Visa Consultancy CRM
+   Rilono Enterprise — Study-Abroad Consultancy CRM
    Premium light-theme dashboard design system
    =========================================================================== */
 
@@ -287,9 +287,16 @@ button { font-family: inherit; cursor: pointer; }
 .plan-banner.warn { background: linear-gradient(135deg, rgba(245,158,11,.14), rgba(239,68,68,.1)); border-color: rgba(245,158,11,.3); }
 .plan-banner .pb-icon { width: 38px; height: 38px; border-radius: 11px; background: var(--grad); color: #fff; display: grid; place-items: center; flex: none; font-size: 18px; }
 .plan-banner.warn .pb-icon { background: linear-gradient(135deg, #f59e0b, #ef4444); }
-.plan-banner .pb-text { flex: 1; font-size: 14px; }
+.plan-banner .pb-text { flex: 1; min-width: 0; font-size: 14px; }
 .plan-banner .pb-text b { font-size: 14.5px; }
 .plan-banner .pb-text span { color: var(--text-2); }
+/* On a phone the two action buttons squeezed the message into a ~110px column that
+   wrapped one or two words per line. Let the row wrap and give the text its own line. */
+@media (max-width: 640px) {
+  .plan-banner { flex-wrap: wrap; }
+  .plan-banner .pb-text { flex: 1 1 calc(100% - 52px); }
+  .plan-banner .btn { flex: 1 1 auto; }
+}
 
 /* ---------- KPI cards ---------- */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-bottom: 24px; }
@@ -975,6 +982,21 @@ button.set-url:hover { border-color: var(--primary); color: var(--primary-600); 
 .ai-head { display: flex; gap: 14px; align-items: center; }
 .ai-head h2 { font-size: 18px; font-weight: 750; margin: 0; }
 .ai-head p { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+.ai-head-actions { margin-left: auto; display: flex; gap: 8px; flex: none; align-self: flex-start; }
+
+/* Saved-thread history (modal list shared by the full view and the dock) */
+.ai-hist-list { display: flex; flex-direction: column; gap: 6px; max-height: 380px; overflow-y: auto; }
+.ai-hist-row { display: flex; align-items: stretch; gap: 6px; }
+.ai-hist-main { flex: 1; min-width: 0; text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.ai-hist-main:hover { border-color: var(--primary); background: rgba(99, 102, 241, .06); }
+.ai-hist-row.current .ai-hist-main { border-color: var(--primary); background: rgba(99, 102, 241, .08); }
+.ai-hist-title { font-size: 13.5px; font-weight: 650; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-hist-meta { font-size: 12px; color: var(--muted); }
+.ai-hist-del { flex: none; width: 38px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; display: grid; place-items: center; transition: all .15s ease; }
+.ai-hist-del svg { width: 15px; height: 15px; }
+.ai-hist-del:hover { border-color: #ef4444; color: #ef4444; background: rgba(239, 68, 68, .07); }
+.ai-hist-empty { padding: 26px 14px; text-align: center; font-size: 13px; color: var(--muted); }
+.ai-hist-note { margin-top: 10px; font-size: 12px; color: var(--muted); text-align: center; }
 .ai-orb { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; font-size: 22px; background: linear-gradient(135deg, #6366f1, #8b5cf6); box-shadow: 0 8px 22px rgba(99, 102, 241, .3); flex: none; }
 .ai-orb.lg { width: 64px; height: 64px; font-size: 30px; border-radius: 18px; margin: 0 auto 14px; }
 .ai-thread { flex: 1; overflow-y: auto; padding: 8px 4px; display: flex; flex-direction: column; gap: 14px; }
@@ -2016,15 +2038,9 @@ body.ai-dock-open .toast-wrap { right: 444px; }
 .iv-prev-note { font-size: 12px; }
 .iv-prev-free { color: #047857; background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.25); font-weight: 700; padding: 3px 9px; border-radius: 999px; }
 
-/* Overview quick-send CTA + dashboard highlight card */
+/* Overview quick-send CTA */
 .cp-iv-cta { margin-bottom: 18px; padding: 13px; font-size: 14.5px; }
-.dash-cta { display: flex; align-items: center; gap: 16px; padding: 18px 22px; margin-bottom: 24px; border-radius: var(--radius); border: 1px solid rgba(99,102,241,.28); background: linear-gradient(120deg, rgba(99,102,241,.10), rgba(139,92,246,.06)); box-shadow: 0 10px 30px rgba(99,102,241,.10); }
-.dash-cta-ic { width: 48px; height: 48px; border-radius: 14px; flex: none; display: grid; place-items: center; font-size: 24px; background: var(--grad); box-shadow: 0 8px 22px rgba(99,102,241,.30); }
-.dash-cta-txt { flex: 1; min-width: 0; }
-.dash-cta-txt b { display: block; font-size: 15.5px; font-weight: 750; }
-.dash-cta-txt span { display: block; color: var(--text-2); font-size: 13px; line-height: 1.5; margin-top: 3px; }
-.dash-cta-btn { flex: none; white-space: nowrap; }
-@media (max-width: 640px) { .dash-cta { flex-direction: column; align-items: flex-start; } .dash-cta-btn { width: 100%; } .iv-preview-row { flex-direction: column; align-items: flex-start; } }
+@media (max-width: 640px) { .iv-preview-row { flex-direction: column; align-items: flex-start; } }
 
 .iv-slist { display: grid; gap: 8px; }
 .iv-srow { display: flex; align-items: center; gap: 14px; padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; transition: border-color .15s, box-shadow .15s; }
@@ -2191,6 +2207,42 @@ body.ai-dock-open .toast-wrap { right: 444px; }
 .cal-up-when { font-size: 11.5px; font-weight: 700; color: var(--muted); white-space: nowrap; }
 .cal-up-when.overdue { color: var(--danger); }
 .cal-up-empty { font-size: 13px; color: var(--muted); padding: 16px 4px; text-align: center; }
+
+/* Dashboard "What's next" — the same feed, in a card instead of the calendar's sticky rail.
+   Shorter than the rail (it sits beside Recent clients) and topped by an overdue alert line. */
+.dash-wn { max-height: 344px; }
+.dash-wn-more { font-size: 12px; font-weight: 700; color: var(--primary); cursor: pointer; padding: 8px; border-radius: var(--radius-sm); }
+.dash-wn-more:hover { background: #f6f7fb; }
+.dash-due {
+    display: flex; align-items: center; gap: 14px; margin-bottom: 24px; padding: 13px 18px; cursor: pointer;
+    border-radius: var(--radius); border: 1px solid rgba(239, 68, 68, .28);
+    background: linear-gradient(120deg, rgba(239, 68, 68, .10), rgba(249, 115, 22, .05));
+    transition: border-color .15s, box-shadow .15s;
+}
+.dash-due:hover { border-color: rgba(239, 68, 68, .5); box-shadow: 0 8px 24px rgba(239, 68, 68, .12); }
+.dash-due-ic { flex: none; width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; font-size: 17px; color: #fff; background: linear-gradient(135deg, #ef4444, #f97316); }
+.dash-due-txt { flex: 1; min-width: 0; }
+.dash-due-txt b { display: block; font-size: 14px; font-weight: 750; color: var(--danger); }
+.dash-due-txt span { display: block; font-size: 12.5px; color: var(--text-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-due-go { flex: none; font-size: 12.5px; font-weight: 700; color: var(--danger); white-space: nowrap; }
+@media (max-width: 640px) { .dash-due { flex-wrap: wrap; } .dash-due-go { width: 100%; text-align: right; } }
+
+/* Dashboard "Payments" roll-up and "Needs attention" list. */
+.dash-money { cursor: pointer; transition: border-color .15s, box-shadow .15s; }
+.dash-money:hover { border-color: var(--border-strong); box-shadow: 0 8px 24px rgba(15, 23, 42, .07); }
+.dash-money-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.dash-money-cell { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.dash-money-lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.dash-money-val { font-size: 21px; font-weight: 750; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.dash-money-val.is-good { color: #047857; }
+.dash-money-val.is-bad { color: var(--danger); }
+.dash-money-sub { font-size: 11.5px; color: var(--text-2); }
+@media (max-width: 560px) { .dash-money-grid { grid-template-columns: 1fr; } }
+
+.dash-stale-hint { font-size: 11.5px; color: var(--muted); }
+/* .prio capitalizes (it normally carries "high"/"low"); "31d quiet" is a sentence, not a label. */
+.dash-stale-age { background: #fff7ed; color: #c2410c; text-transform: none; }
+
 .cal-form-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 @media (max-width: 560px) { .cal-form-row { grid-template-columns: 1fr; } }
 
@@ -2279,6 +2331,51 @@ a.cal-att-name:hover { color: var(--primary-600); text-decoration: underline; }
 .cal-att-chip.is-error .cal-att-meta { color: var(--danger); font-weight: 600; }
 /* Upload progress, drawn as a hairline along the bottom edge of the chip. */
 .cal-att-bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--primary); transition: width .2s; }
+
+/* ---- Event details: the read-only card an event opens into, with Edit a click away.
+   cal-dv- prefixed throughout — bare .title/.row/.chip names bleed across this stylesheet. ---- */
+.cal-dv-hero { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.cal-dv-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cal-dv-type {
+  display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 700; color: var(--text-2);
+  background: var(--surface-2); border: 1px solid var(--border);
+}
+.cal-dv-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
+.cal-dv-chip.done { background: rgba(16, 185, 129, .13); color: #047857; }
+.cal-dv-chip.overdue { background: rgba(239, 68, 68, .12); color: var(--danger); }
+.cal-dv-title {
+  margin: 12px 0 9px; font-size: 20px; line-height: 1.32; letter-spacing: -.02em;
+  font-weight: 700; color: var(--text); word-break: break-word;
+}
+.cal-dv-title.is-done { text-decoration: line-through; color: var(--text-2); }
+.cal-dv-when { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text-2); }
+.cal-dv-when b { color: var(--text); font-weight: 650; }
+.cal-dv-when-ic { font-size: 12.5px; opacity: .75; }
+.cal-dv-when.overdue b { color: var(--danger); }
+.cal-dv-rel {
+  font-size: 11.5px; font-weight: 700; color: var(--text-2);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px;
+}
+.cal-dv-when.overdue .cal-dv-rel { background: rgba(239, 68, 68, .12); border-color: transparent; color: var(--danger); }
+.cal-dv-allday { font-size: 11.8px; color: var(--muted); }
+.cal-dv-rows { margin-top: 14px; }
+.cal-dv-row { display: grid; grid-template-columns: 138px minmax(0, 1fr); gap: 12px; padding: 10px 0; font-size: 13.5px; align-items: start; }
+.cal-dv-row + .cal-dv-row { border-top: 1px dashed var(--border); }
+.cal-dv-k { color: var(--muted); font-size: 12.5px; font-weight: 650; padding-top: 1px; }
+.cal-dv-v { color: var(--text); min-width: 0; word-break: break-word; line-height: 1.55; }
+.cal-dv-v b { font-weight: 650; }
+.cal-dv-empty { color: var(--muted); font-size: 13px; }
+.cal-dv-link { background: none; border: none; padding: 0 0 0 2px; font: inherit; font-weight: 650; color: var(--primary-600); cursor: pointer; }
+.cal-dv-link:hover { text-decoration: underline; }
+.cal-dv-sec { margin-top: 18px; }
+.cal-dv-sec-h { font-size: 11.5px; font-weight: 750; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin-bottom: 9px; }
+.cal-dv-notes {
+  font-size: 13.8px; line-height: 1.7; color: var(--text); white-space: pre-wrap; word-break: break-word;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+}
+.cal-dv-sec .cal-att-list { margin-top: 0; }
+@media (max-width: 560px) { .cal-dv-row { grid-template-columns: minmax(0, 1fr); gap: 2px; } }
 
 /* ===================== Help & Support =====================
    One composer with two modes (help / feature idea), self-serve answers in the
@@ -3646,3 +3743,180 @@ span.cap-state:hover { border-color: var(--border-strong); }
   .al-detail-grid span:first-child { margin-top: 0; }
 }
 .fin-vs { color: var(--muted); font-size: 11.5px; }
+
+/* ============================================================
+   Leads — lead-collection forms + inbox (all classes ld-/lf- prefixed;
+   bare generics like .card/.empty are shared primitives, never redefined)
+   ============================================================ */
+.ld-hero { background: linear-gradient(135deg, #4338ca 0%, #7c3aed 100%); border-radius: var(--radius); color: #fff; padding: 22px 26px; margin-bottom: 16px; display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap; align-items: center; }
+/* Emoji as a flex item: a literal space next to a colour-emoji glyph renders
+   almost invisibly, so the icon reads as glued to the word. */
+.ld-hero h2 { font-size: 21px; margin-bottom: 4px; display: flex; align-items: center; gap: 9px; }
+.ld-hero h2 i, .ld-tab i { font-style: normal; }
+.ld-hero p { font-size: 13.5px; opacity: .92; max-width: 620px; line-height: 1.55; }
+.ld-hero-stats { display: flex; gap: 22px; }
+.ld-stat { text-align: center; }
+.ld-stat b { display: block; font-size: 22px; }
+.ld-stat span { font-size: 11.5px; opacity: .85; }
+.ld-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.ld-tab { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: 999px; padding: 9px 18px; font-weight: 700; font-size: 13.5px; color: var(--text-2); cursor: pointer; font-family: inherit; }
+.ld-tab.active { background: var(--text); color: #fff; border-color: var(--text); }
+.ld-row { cursor: pointer; }
+.ld-search { flex: 1 1 230px; min-width: 190px; max-width: 340px; }
+/* Lead names/emails are anonymous-visitor input — one unbroken 120-char "name"
+   would otherwise stretch the table and clip the Status column. */
+.ld-cell-name { font-weight: 700; overflow-wrap: anywhere; }
+.ld-cell-sub { font-size: 12px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.ld-more { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 14px; font-size: 13px; color: var(--text-2); }
+.ld-pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; }
+.ld-pill.new { background: rgba(99, 102, 241, .12); color: #4f46e5; }
+.ld-pill.contacted { background: rgba(245, 158, 11, .14); color: #b45309; }
+.ld-pill.converted { background: rgba(16, 185, 129, .13); color: #047857; }
+.ld-pill.closed { background: rgba(100, 116, 139, .13); color: #475569; }
+.ld-form-card { display: flex; flex-direction: column; gap: 10px; }
+.ld-form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(370px, 1fr)); gap: 14px; }
+.ld-form-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.ld-form-top .ld-pill { flex: none; }
+.ld-form-top h4 { font-size: 15.5px; }
+.ld-form-meta { font-size: 12.5px; color: var(--muted); }
+.ld-link-row { display: flex; gap: 8px; align-items: center; background: var(--surface-2, #f8fafc); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.ld-link-row input { flex: 1; border: none; background: transparent; font-size: 12.5px; color: var(--text-2); font-family: inherit; outline: none; min-width: 0; }
+/* Primary verbs on the left, destructive/lifecycle icons pushed right — six equal
+   ghost buttons wrapped into a ragged block and gave Delete the same weight as Preview. */
+.ld-form-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 2px; }
+.ld-form-actions .btn i { font-style: normal; }
+/* Lifecycle actions (pause / new link / delete) live in the card header as quiet
+   icons: as full-width ghost buttons they wrapped into a ragged second row and gave
+   Delete the same visual weight as Preview. */
+.ld-form-badges { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.ld-act-quiet { display: inline-flex; gap: 2px; align-items: center; padding-left: 6px; margin-left: 2px; border-left: 1px solid var(--border); }
+.ld-act-quiet .lf-b-mini { width: 28px; height: 28px; }
+.ld-act-quiet .lf-b-mini svg { display: block; }
+.ld-paused { opacity: .65; }
+/* Lead drawer: hero (gradient) + scrolling body + pinned action bar, matching the
+   app's .drawer-* shell. Answers are cards, not floating text — a 620px drawer with
+   three short answers reads as broken when they just hang in white space. */
+.ld-dh { background: var(--grad); }
+.ld-dh .dh-sub { overflow-wrap: anywhere; }
+.ld-dh-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
+.ld-dh-chips .ld-pill { background: #fff; padding: 6px 12px; font-size: 12px; }
+.ld-dh-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 12px; border-radius: 999px;
+  background: rgba(255, 255, 255, .16); border: 1px solid rgba(255, 255, 255, .28); color: #fff;
+  font-size: 12.5px; font-weight: 650; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+a.ld-dh-chip:hover { background: rgba(255, 255, 255, .28); }
+.ld-dh-chip i, .ld-detail-meta i { font-style: normal; flex: none; }
+.ld-detail-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-bottom: 14px; }
+/* flex column + margin-top:auto so values line up across a row even when one
+   label wraps to two lines. */
+.ld-detail-kv .it { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px; min-width: 0; display: flex; flex-direction: column; }
+.ld-detail-kv .it > div { margin-top: auto; }
+.ld-detail-kv .it.wide { grid-column: 1 / -1; }
+.ld-detail-kv .it label { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 800; margin-bottom: 4px; }
+.ld-detail-kv .it div { font-size: 14.5px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.ld-detail-empty { grid-column: 1 / -1; font-size: 13.5px; color: var(--muted); }
+.ld-detail-meta { font-size: 12.5px; color: var(--text-2); background: var(--surface-2); border-radius: 10px; padding: 9px 13px; margin-top: 8px; overflow-wrap: anywhere; }
+.ld-detail-sub { font-size: 12.5px; color: var(--muted); }
+.ld-detail-actions {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: none;
+  padding: 14px 24px; border-top: 1px solid var(--border); background: var(--surface);
+}
+.ld-status-pick { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 650; color: var(--text-2); }
+/* Which form am I sending? — an org with several forms can't tell from the title alone. */
+.ld-share-what { background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px; margin-bottom: 16px; }
+.ld-share-label { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 800; margin-bottom: 3px; }
+.ld-share-what b { font-size: 14.5px; }
+.ld-share-url { display: block; font-size: 12px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
+/* Builder (inside the wide modal).
+   Every control here is styled explicitly: the row inputs sit OUTSIDE a .field
+   wrapper (they're a flex row, not a stacked label+input), so the global
+   `.field input` rules never reach them and they'd render as raw browser chrome. */
+.lf-b-sec { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 4px 0 12px; }
+.lf-b-sec .cp-sub-label { margin-bottom: 0; }
+.lf-b-count { font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.lf-b-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
+.lf-b-grid > .span2 { grid-column: 1 / -1; }
+
+.lf-b-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.lf-b-field {
+  border: 1px solid var(--border); border-radius: 14px; padding: 11px 12px; background: var(--surface);
+  box-shadow: var(--shadow-sm); transition: border-color .15s, box-shadow .15s;
+}
+.lf-b-field:hover { border-color: var(--border-strong); }
+.lf-b-field:focus-within { border-color: var(--primary); box-shadow: 0 0 0 4px rgba(99, 102, 241, .10); }
+.lf-b-row { display: flex; gap: 9px; align-items: center; }
+.lf-b-num {
+  flex: none; width: 24px; height: 24px; border-radius: 8px; background: var(--surface-2); color: var(--muted);
+  font-size: 11.5px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+}
+.lf-b-label, .lf-b-type, .lf-b-opts input {
+  font-family: inherit; color: var(--text); background: var(--surface); outline: none;
+  border: 1.5px solid var(--border-strong); border-radius: 10px; transition: border-color .15s, box-shadow .15s;
+}
+.lf-b-label { flex: 1 1 auto; min-width: 0; padding: 10px 13px; font-size: 14.5px; font-weight: 600; }
+.lf-b-label::placeholder { font-weight: 500; color: var(--muted); }
+.lf-b-type {
+  flex: 0 0 auto; width: 138px; padding: 10px 32px 10px 12px; font-size: 13.5px; font-weight: 600;
+  color: var(--text-2); cursor: pointer; appearance: none; -webkit-appearance: none; background: var(--surface-2)
+    url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394a3b8' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")
+    no-repeat right 11px center;
+}
+.lf-b-label:focus, .lf-b-type:focus, .lf-b-opts input:focus {
+  border-color: var(--primary); box-shadow: 0 0 0 4px rgba(99, 102, 241, .14);
+}
+/* Required reads as a pill you switch on, not a stray checkbox floating in a row. */
+.lf-b-req { flex: none; cursor: pointer; user-select: none; }
+.lf-b-req input { position: absolute; opacity: 0; width: 0; height: 0; }
+.lf-b-req span {
+  display: inline-flex; align-items: center; gap: 6px; padding: 8px 13px; border-radius: 999px;
+  border: 1.5px solid var(--border-strong); background: var(--surface); white-space: nowrap;
+  font-size: 12.5px; font-weight: 700; color: var(--muted); transition: all .15s;
+}
+.lf-b-req span::before { content: "✓"; font-size: 11px; opacity: .3; }
+.lf-b-req:hover span { border-color: var(--muted); }
+.lf-b-req input:checked + span { border-color: var(--primary); background: rgba(99, 102, 241, .1); color: var(--primary-600); }
+.lf-b-req input:checked + span::before { opacity: 1; }
+.lf-b-req input:focus-visible + span { box-shadow: 0 0 0 4px rgba(99, 102, 241, .14); }
+
+.lf-b-tools { display: flex; gap: 2px; flex: none; }
+.lf-b-mini {
+  border: none; background: transparent; border-radius: 8px; width: 30px; height: 30px; cursor: pointer;
+  font-size: 13px; line-height: 1; color: var(--muted); flex: none; font-family: inherit;
+  display: flex; align-items: center; justify-content: center; transition: background .15s, color .15s;
+}
+.lf-b-mini:hover { background: var(--surface-2); color: var(--text); }
+.lf-b-mini.danger:hover { background: rgba(239, 68, 68, .1); color: var(--danger); }
+.lf-b-mini:disabled { opacity: .25; cursor: default; background: transparent; color: var(--muted); }
+
+.lf-b-opts { margin: 10px 0 2px 33px; }
+.lf-b-opts label { display: block; font-size: 11.5px; font-weight: 700; color: var(--text-2); margin-bottom: 5px; }
+.lf-b-opts label span { font-weight: 500; color: var(--muted); }
+.lf-b-opts input { width: 100%; padding: 9px 12px; font-size: 13.5px; background: var(--surface-2); border-style: dashed; }
+.lf-b-opts input:focus { border-style: solid; }
+
+.lf-b-add {
+  width: 100%; margin-bottom: 22px; padding: 12px; border: 1.5px dashed var(--border-strong); border-radius: 12px;
+  background: var(--surface-2); font-family: inherit; font-size: 13.5px; font-weight: 700; color: var(--text-2);
+  cursor: pointer; transition: all .15s;
+}
+.lf-b-add:hover { border-color: var(--primary); color: var(--primary-600); background: rgba(99, 102, 241, .06); }
+
+@media (max-width: 720px) {
+  .lf-b-grid { grid-template-columns: 1fr; }
+  /* Wrapping a flex row here strands the arrows on a third line with a dead gap —
+     lay the three parts out explicitly instead: label, then type + tools, then the
+     Required pill full-width (easier to hit with a thumb than an inline chip). */
+  .lf-b-row {
+    display: grid; gap: 8px; align-items: center;
+    grid-template-columns: 24px minmax(0, 1fr) auto;
+    grid-template-areas: "num label label" "type type tools" "req req req";
+  }
+  .lf-b-num { grid-area: num; }
+  .lf-b-label { grid-area: label; }
+  .lf-b-type { grid-area: type; width: auto; }
+  .lf-b-tools { grid-area: tools; }
+  .lf-b-req { grid-area: req; }
+  .lf-b-req span { width: 100%; justify-content: center; padding-top: 9px; padding-bottom: 9px; }
+  .lf-b-opts { margin-left: 0; }
+}

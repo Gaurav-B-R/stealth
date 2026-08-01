@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="robots" content="noindex" />
+  <title>Get in touch</title>
+  <link rel="icon" href="/static/logo.png" />
+  <style>
+    :root{
+      --grad:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);
+      --primary:#6366f1;--primary-600:#4f46e5;--text:#0f172a;--text-2:#475569;--muted:#94a3b8;
+      --surface:#fff;--surface-2:#f8fafc;--border:#e7e9f3;--border-strong:#d6d9ea;--danger:#ef4444;--ok:#10b981;
+      --radius:16px;--radius-sm:11px;
+      --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:var(--font);color:var(--text);
+      background:
+        radial-gradient(900px 500px at 15% -5%,rgba(99,102,241,.16),transparent 60%),
+        radial-gradient(800px 480px at 90% 0%,rgba(124,58,237,.12),transparent 55%),
+        #eef0f8;
+      min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:28px 16px;
+    }
+    .wrap{width:100%;max-width:640px}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+      box-shadow:0 18px 48px rgba(15,23,42,.14);overflow:hidden}
+    .hero{background:var(--grad);color:#fff;padding:24px 28px}
+    .hero img{height:44px;width:44px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;
+      border:1px solid rgba(255,255,255,.35);background:#fff}
+    .eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.92;font-weight:700}
+    .hero h1{font-size:23px;margin-top:7px;line-height:1.3;overflow-wrap:anywhere}
+    .hero p{margin-top:8px;font-size:14px;line-height:1.6;opacity:.92;overflow-wrap:anywhere}
+    .body{padding:24px 28px}
+    .field{display:flex;flex-direction:column;gap:6px;margin-bottom:15px}
+    .field label{font-size:.84rem;font-weight:700;color:var(--text-2);overflow-wrap:anywhere}
+    .field label .req{color:var(--danger)}
+    .input,select.input,textarea.input{
+      width:100%;font-family:var(--font);font-size:15px;color:var(--text);
+      background:var(--surface-2);border:1.5px solid var(--border-strong);border-radius:var(--radius-sm);
+      padding:12px 14px;outline:none;transition:border-color .12s, box-shadow .12s;
+    }
+    .input:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+    textarea.input{min-height:96px;resize:vertical}
+    select.input{appearance:none;-webkit-appearance:none;
+      background-image:url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394a3b8' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat:no-repeat;background-position:right 14px center;padding-right:38px}
+    .check{display:flex;align-items:flex-start;gap:10px;margin-bottom:15px;font-size:14.5px;color:var(--text-2);cursor:pointer;overflow-wrap:anywhere}
+    .check input{width:17px;height:17px;margin-top:2px;accent-color:var(--primary);flex:none}
+    /* Honeypot: parked off-screen — real people never see it, autofill/bots do. */
+    .hp-wrap{position:absolute;left:-9999px;top:-9999px;height:1px;width:1px;overflow:hidden}
+    .btn{
+      width:100%;display:flex;align-items:center;justify-content:center;gap:9px;
+      background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border:none;border-radius:12px;
+      padding:14px;font-size:15.5px;font-weight:800;font-family:var(--font);cursor:pointer;
+      box-shadow:0 10px 26px rgba(79,70,229,.35);transition:transform .1s, box-shadow .12s;
+    }
+    .btn:hover{transform:translateY(-1px)}
+    .btn:disabled{opacity:.65;cursor:default;transform:none}
+    .err{background:rgba(239,68,68,.08);color:#b91c1c;border:1px solid rgba(239,68,68,.25);
+      border-radius:var(--radius-sm);padding:11px 14px;font-size:14px;margin-bottom:15px;overflow-wrap:anywhere}
+    .state{padding:52px 28px;text-align:center}
+    .state .icon{font-size:44px;margin-bottom:8px}
+    .state h2{font-size:20px;margin-bottom:8px}
+    .state.ok h2{color:#047857}
+    .state p{color:var(--text-2);font-size:14.5px;line-height:1.65;max-width:420px;margin:0 auto;overflow-wrap:anywhere}
+    .tick{width:62px;height:62px;border-radius:50%;background:rgba(16,185,129,.12);color:var(--ok);
+      display:flex;align-items:center;justify-content:center;font-size:30px;margin:0 auto 14px}
+    .foot{padding:14px;text-align:center;font-size:11.5px;color:var(--muted);
+      border-top:1px solid var(--border);background:#f8fafc}
+    .foot a{color:var(--muted);text-decoration:underline}
+    .spinner{width:16px;height:16px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;
+      border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
+    .spinner.dark{border-color:rgba(99,102,241,.25);border-top-color:var(--primary);width:26px;height:26px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .load-wrap{display:flex;justify-content:center;padding:70px 0}
+    .ts-wrap{display:flex;justify-content:center;margin-bottom:14px}
+    .hidden{display:none !important}
+    @media(max-width:640px){
+      body{padding:14px 10px}
+      .hero{padding:20px 20px}
+      .body{padding:20px 20px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div id="loading" class="load-wrap"><div class="spinner dark"></div></div>
+
+      <div id="stateView" class="state hidden">
+        <div class="icon" id="stateIcon"></div>
+        <h2 id="stateTitle"></h2>
+        <p id="stateText"></p>
+      </div>
+
+      <div id="formView" class="hidden">
+        <div class="hero" id="heroBox">
+          <div class="eyebrow" id="orgName"></div>
+          <h1 id="formTitle"></h1>
+          <p id="formIntro" class="hidden"></p>
+        </div>
+        <div class="body">
+          <form id="leadForm" novalidate>
+            <div id="fieldsBox"></div>
+            <div class="hp-wrap" aria-hidden="true">
+              <label>Website <input type="text" name="website" id="hpWebsite" tabindex="-1" autocomplete="off" /></label>
+            </div>
+            <div id="tsWrap" class="ts-wrap hidden"><div id="tsWidget"></div></div>
+            <div id="formErr" class="err hidden"></div>
+            <button type="submit" class="btn" id="submitBtn">Submit</button>
+          </form>
+        </div>
+      </div>
+
+      <div id="successView" class="state ok hidden">
+        <div class="tick">✓</div>
+        <h2>Sent!</h2>
+        <p id="successText"></p>
+      </div>
+
+      <div class="foot">
+        Powered by Rilono<br>
+        <span style="display:inline-block;margin-top:4px">
+          <a href="/privacy" target="_blank" rel="noopener">Privacy</a> ·
+          <a href="/terms" target="_blank" rel="noopener">Terms</a>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    "use strict";
+    var token = (location.pathname.split("/f/")[1] || "").split(/[/?#]/)[0];
+    var API = "/api/enterprise/public/forms";
+    var info = null;
+
+    function $(id){ return document.getElementById(id); }
+    function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+
+    // Same sanitizer trio as portal.html — never surface backend internals.
+    function publicError(msg, status, fallback){
+      var internal=/(?:traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
+      msg = String(msg||"");
+      if(!msg || msg.length>300 || status>=500 || internal.test(msg)){
+        if(status===404) return fallback||"This form link is invalid or has been replaced.";
+        if(status===408||status===504) return "The request timed out. Please try again.";
+        if(status===429) return "Too many requests from your network. Please try again in a little while.";
+        return fallback||"Sorry, something went wrong. Please try again.";
+      }
+      return msg;
+    }
+    function apiError(r, d, fallback){
+      var ex = new Error(publicError(d && d.detail, r.status, fallback));
+      ex.publicSafe = true; ex.status = r.status;
+      return ex;
+    }
+    function safeError(ex, fallback){
+      return (ex && ex.publicSafe && ex.message) ? ex.message : (fallback || "Sorry, something went wrong. Please try again.");
+    }
+
+    function showState(kind, icon, title, text){
+      $("loading").classList.add("hidden");
+      $("formView").classList.add("hidden");
+      $("successView").classList.add("hidden");
+      var v = $("stateView");
+      v.classList.remove("hidden");
+      v.className = "state " + kind;
+      $("stateIcon").textContent = icon;
+      $("stateTitle").textContent = title;
+      $("stateText").textContent = text;
+    }
+
+    function fieldHtml(f, i){
+      var id = "lf_" + i;
+      var req = f.required ? ' <span class="req">*</span>' : "";
+      var label = '<label for="'+id+'">'+esc(f.label)+req+'</label>';
+      var ph = f.placeholder ? ' placeholder="'+esc(f.placeholder)+'"' : "";
+      var dataKey = ' data-key="'+esc(f.key)+'" data-type="'+esc(f.type)+'"';
+      if(f.type === "textarea")
+        return '<div class="field">'+label+'<textarea class="input lf-input" id="'+id+'"'+dataKey+ph+'></textarea></div>';
+      if(f.type === "select"){
+        var opts = '<option value="">'+(f.placeholder?esc(f.placeholder):"Choose…")+'</option>' +
+          (f.options||[]).map(function(o){ return '<option value="'+esc(o)+'">'+esc(o)+'</option>'; }).join("");
+        return '<div class="field">'+label+'<select class="input lf-input" id="'+id+'"'+dataKey+'>'+opts+'</select></div>';
+      }
+      if(f.type === "checkbox")
+        return '<label class="check"><input type="checkbox" class="lf-input" id="'+id+'"'+dataKey+' /> <span>'+esc(f.label)+(f.required?' <span class="req">*</span>':"")+'</span></label>';
+      var typeAttr = {email:"email", phone:"tel", date:"date", number:"number"}[f.type] || "text";
+      var extra = f.type === "phone" ? ' inputmode="tel"' : "";
+      return '<div class="field">'+label+'<input type="'+typeAttr+'" class="input lf-input" id="'+id+'"'+dataKey+ph+extra+' /></div>';
+    }
+
+    function renderForm(){
+      var org = info.organization_name || "Your consultancy";
+      document.title = (info.form && info.form.title ? info.form.title + " — " : "") + org;
+      $("orgName").textContent = org;
+      $("formTitle").textContent = (info.form && info.form.title) || "Get in touch";
+      var intro = info.form && info.form.intro_text;
+      if(intro){ $("formIntro").textContent = intro; $("formIntro").classList.remove("hidden"); }
+      var logo = (info.logo_url || "").trim();
+      if(logo && /^(https?:\/\/|\/api\/enterprise\/public\/org-logo\/)/.test(logo)){
+        var img = document.createElement("img");
+        img.src = logo; img.alt = "";
+        img.onerror = function(){ this.style.display = "none"; };
+        $("heroBox").insertBefore(img, $("heroBox").firstChild);
+      }
+      if(info.closed){
+        showState("", "⏸️", "Not accepting responses", "This form is currently paused. Please contact " + org + " directly.");
+        return;
+      }
+      var fields = (info.form && info.form.fields) || [];
+      $("fieldsBox").innerHTML = fields.map(fieldHtml).join("");
+      if(info.turnstile_site_key) mountTurnstile(info.turnstile_site_key);
+      $("submitBtn").textContent = (info.form && info.form.submit_label) || "Submit";
+      $("loading").classList.add("hidden");
+      $("formView").classList.remove("hidden");
+    }
+
+    var tsWidgetId = null;
+    function mountTurnstile(siteKey){
+      $("tsWrap").classList.remove("hidden");
+      var render = function(){
+        if(!window.turnstile || tsWidgetId !== null) return;
+        try{ tsWidgetId = window.turnstile.render("#tsWidget", { sitekey: siteKey, theme: "light" }); }catch(e){}
+      };
+      if(window.turnstile){ render(); return; }
+      var sc = document.createElement("script");
+      sc.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      sc.async = true; sc.defer = true;
+      sc.onload = render;
+      document.head.appendChild(sc);
+    }
+    function turnstileToken(){
+      try{ return (window.turnstile && tsWidgetId !== null) ? (window.turnstile.getResponse(tsWidgetId) || "") : ""; }
+      catch(e){ return ""; }
+    }
+    function turnstileReset(){
+      try{ if(window.turnstile && tsWidgetId !== null) window.turnstile.reset(tsWidgetId); }catch(e){}
+    }
+
+    function collectSource(){
+      try{
+        var bits = [];
+        var qs = new URLSearchParams(location.search);
+        ["utm_source","utm_medium","utm_campaign","ref"].forEach(function(k){
+          var v = qs.get(k); if(v) bits.push(k + "=" + v);
+        });
+        if(!bits.length && document.referrer) bits.push("ref:" + document.referrer);
+        return bits.join(" ").slice(0, 200) || null;
+      }catch(e){ return null; }
+    }
+
+    $("leadForm").onsubmit = function(e){
+      e.preventDefault();
+      var errBox = $("formErr");
+      errBox.classList.add("hidden");
+      var answers = {};
+      var missing = null;
+      var fields = (info.form && info.form.fields) || [];
+      var inputs = document.querySelectorAll(".lf-input");
+      Array.prototype.forEach.call(inputs, function(el){
+        var key = el.getAttribute("data-key");
+        var type = el.getAttribute("data-type");
+        var val = type === "checkbox" ? (el.checked ? "Yes" : "") : String(el.value || "").trim();
+        answers[key] = val;
+      });
+      for(var i = 0; i < fields.length; i++){
+        var f = fields[i];
+        if(f.required && !(answers[f.key] || "").trim()){ missing = f.label; break; }
+        if(f.type === "email" && (answers[f.key]||"").trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(answers[f.key].trim())){
+          missing = null; errBox.textContent = 'Please enter a valid email for "' + f.label + '".';
+          errBox.classList.remove("hidden"); return;
+        }
+      }
+      if(missing){
+        errBox.textContent = '"' + missing + '" is required.';
+        errBox.classList.remove("hidden");
+        return;
+      }
+      var btn = $("submitBtn");
+      var oldLabel = btn.textContent;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Sending…';
+      fetch(API + "/" + encodeURIComponent(token) + "/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers: answers, website: $("hpWebsite").value || null, source: collectSource(), cf_turnstile_token: turnstileToken() || null })
+      }).then(function(r){
+        return r.json().catch(function(){ return null; }).then(function(d){
+          if(!r.ok) throw apiError(r, d, "We couldn't send your details. Please try again.");
+          return d;
+        });
+      }).then(function(d){
+        $("formView").classList.add("hidden");
+        $("successText").textContent = (d && d.message) || "Thanks! Your details were sent.";
+        $("successView").classList.remove("hidden");
+        try{ window.scrollTo({ top: 0, behavior: "smooth" }); }catch(e){ window.scrollTo(0,0); }
+      }).catch(function(ex){
+        turnstileReset();   // a challenge token is single-use — a retry needs a fresh one
+        errBox.textContent = safeError(ex, "We couldn't send your details. Please check your connection and try again.");
+        errBox.classList.remove("hidden");
+      }).finally(function(){
+        btn.disabled = false;
+        btn.textContent = oldLabel;
+      });
+    };
+
+    if(!token){
+      showState("", "🔗", "Invalid link", "This form link looks incomplete. Please use the exact link you were sent.");
+    } else {
+      fetch(API + "/" + encodeURIComponent(token)).then(function(r){
+        return r.json().catch(function(){ return null; }).then(function(d){
+          if(!r.ok) throw apiError(r, d);
+          return d;
+        });
+      }).then(function(d){
+        info = d || {};
+        renderForm();
+      }).catch(function(ex){
+        showState("", "🔗", "Link unavailable", safeError(ex, "This form link is invalid or has been replaced. Please ask for a new link."));
+      });
+    }
+  </script>
+</body>
+</html>

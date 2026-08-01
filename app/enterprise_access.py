@@ -115,7 +115,7 @@ ALL_CAPABILITIES: tuple[dict, ...] = (
     _cap("clients.delete", "Delete clients",
          "Permanently delete a client and everything attached.", _CAP_CLIENTS, dangerous=True),
     _cap("catalog.view", "View dropdown data",
-         "Visa, country and stage option lists. Everyone needs this.", _CAP_CLIENTS),
+         "Country, visa and stage option lists. Everyone needs this.", _CAP_CLIENTS),
 
     # --- Case work ---------------------------------------------------------
     _cap("notes.view", "View notes",
@@ -142,6 +142,8 @@ ALL_CAPABILITIES: tuple[dict, ...] = (
          "Email a client a self-serve mock interview link.", _CAP_CASEWORK),
     _cap("portal.share", "Share client portal",
          "Email a client a view-only portal link.", _CAP_CASEWORK),
+    _cap("copilot.invite", "Share client copilot",
+         "Email a client their own Copilot chat link. Spends credits.", _CAP_CASEWORK),
 
     # --- Communication -----------------------------------------------------
     _cap("emails.view", "View email history",
@@ -298,6 +300,7 @@ IMPLIES: dict[str, frozenset[str]] = {
     "interviews.run": frozenset({"interviews.view"}),
     "interviews.invite": frozenset({"interviews.view", "emails.send"}),
     "portal.share": frozenset({"clients.view", "emails.send"}),
+    "copilot.invite": frozenset({"clients.view", "emails.send"}),
     "finance.manage": frozenset({"finance.view"}),
     "finance.refund": frozenset({"finance.manage"}),
     "finance.books_manage": frozenset({"finance.books"}),
@@ -548,6 +551,7 @@ _BRANCH_MANAGER_CAPS = (
     "calendar.view", "calendar.manage",
     "universities.view", "universities.manage", "coursefinder.view",
     "interviews.view", "interviews.run", "interviews.invite", "portal.share",
+    "copilot.invite",
     "emails.view", "emails.send", "emails.send_bulk",
     "documents.view", "documents.download", "documents.upload", "documents.accept",
     "documents.request",
@@ -566,6 +570,7 @@ _COUNSELLOR_CAPS = (
     "calendar.view", "calendar.manage",
     "universities.view", "universities.manage", "coursefinder.view",
     "interviews.view", "interviews.run", "interviews.invite", "portal.share",
+    "copilot.invite",
     "emails.view", "emails.send",
     "documents.view", "documents.download", "documents.upload", "documents.accept",
     "documents.request",

@@ -88,7 +88,7 @@
         <div class="hero">
           <div class="eyebrow" id="vOrg">Your consultancy</div>
           <h1>📄 Upload your documents</h1>
-          <div class="sub">Securely send the documents requested for your visa application.</div>
+          <div class="sub">Securely send the documents requested for your application.</div>
         </div>
         <div class="body">
           <p class="lead" id="vLead"></p>
@@ -168,7 +168,7 @@
       function renderVerify(){
         $("vOrg").textContent=info.organization_name||"Your consultancy";
         var n=(info.items||[]).length;
-        $("vLead").innerHTML="Hi <b>"+esc(info.client_first_name)+"</b>, "+esc(info.organization_name||"your consultancy")+" has requested <b>"+n+" document"+(n===1?"":"s")+"</b> for your visa application.";
+        $("vLead").innerHTML="Hi <b>"+esc(info.client_first_name)+"</b>, "+esc(info.organization_name||"your consultancy")+" has requested <b>"+n+" document"+(n===1?"":"s")+"</b> for your application.";
         $("vEmail").textContent=info.masked_email||"your email";
         show("verifyView");
       }

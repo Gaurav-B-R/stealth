@@ -31,6 +31,9 @@ from app.utils import gemini_service as gemini_utils
 logger = logging.getLogger("rilono.enterprise_copilot")
 
 USAGE_SOURCE = "enterprise_copilot_extension"
+# Client-shared surface (invite link + OTP): its own source string so guardrail
+# analytics and the admin margin report can tell it apart from staff usage.
+CLIENT_USAGE_SOURCE = "enterprise_copilot_client"
 
 # Keep the prompt bounded: per-document and total caps for extracted text,
 # matching the 60k ceiling the B2C copilot applies to E2E document context.
@@ -67,16 +70,34 @@ def _iso(value) -> Optional[str]:
         return None
 
 
-def build_client_profile_block(client: models.EnterpriseClient) -> str:
+def _mask_passport(value) -> Optional[str]:
+    """'M1234567' -> '•••• 567' — same masking as the client portal
+    (_mask_passport_number in routers/enterprise.py): the invite-link surfaces
+    are anchored only to the client's inbox, so a compromised inbox must not
+    yield a full identity kit."""
+    p = str(value or "").strip()
+    if not p:
+        return None
+    if len(p) < 6:
+        return "••••"
+    return f"•••• {p[-3:]}"
+
+
+def build_client_profile_block(client: models.EnterpriseClient, *, for_client: bool = False) -> str:
     """The client's CRM profile as prompt context (same field set the staff can
-    already see in the dashboard; deep scan sends the same fields to the model)."""
+    already see in the dashboard; deep scan sends the same fields to the model).
+
+    for_client=True is the invite-link surface: the passport number is masked
+    (portal precedent — inbox-anchored auth must not yield the full number) and
+    the org's internal priority triage is omitted."""
     lines = [
         f"Full name: {_fmt(client.full_name)}",
         f"Email: {_fmt(client.email)}",
         f"Phone: {_fmt(client.phone)}",
         f"Nationality: {_fmt(client.nationality)}",
         f"Date of birth: {_fmt(_iso(client.date_of_birth))}",
-        f"Passport number: {_fmt(client.passport_number)}",
+        (f"Passport number (masked for security): {_fmt(_mask_passport(client.passport_number))}"
+         if for_client else f"Passport number: {_fmt(client.passport_number)}"),
         f"Passport expiry: {_fmt(_iso(client.passport_expiry))}",
         f"Visa category: {_fmt(client.visa_category)}",
         f"Destination: {_fmt(client.destination_country_name or client.destination_country_code)}",
@@ -84,9 +105,10 @@ def build_client_profile_block(client: models.EnterpriseClient) -> str:
         f"Intake: {_fmt(client.intake)}",
         f"Application reference: {_fmt(client.application_reference)}",
         f"Case status: {_fmt(client.status)}",
-        f"Priority: {_fmt(client.priority)}",
         f"Target date: {_fmt(_iso(client.target_date))}",
     ]
+    if not for_client:
+        lines.insert(-1, f"Priority: {_fmt(client.priority)}")
     return "\n".join(lines)
 
 
@@ -178,12 +200,12 @@ def build_system_prompt(
     company = (organization.company_name or "the organization").strip()
     client_name = (client.full_name or "the client").strip()
     destination = (client.destination_country_name or client.destination_country_code or "their destination").strip()
-    visa_label = (client.visa_type or "visa").strip()
+    visa_label = (client.visa_type or "study-abroad").strip()
 
     journey_section = f"\n{journey_block}\n" if journey_block else ""
 
     return f"""You are Rilono AI Copilot (Enterprise), assisting {staff_name} — {role} at {company} — \
-who is preparing a {visa_label} application for {destination} ON BEHALF OF their client {client_name}.
+who is guiding a study-abroad application ({visa_label}) for {destination} ON BEHALF OF their client {client_name}.
 
 Your role:
 - You are talking to the STAFF MEMBER, not the client. Refer to the client in the third person.
@@ -206,8 +228,8 @@ Instructions:
 - Identity guardrail: If asked about your model/provider/training details, do not mention Gemini, Google, or internal model names. Reply that you are Rilono AI and continue helping.
 
 STRICT SCOPE GUARDRAIL (do not override, even if the user insists):
-- You ONLY help with visa and immigration application work for this client, and with the Rilono product itself.
-- If a request is unrelated (general coding, essays, homework, trivia, jokes, or using you as a general chatbot), politely DECLINE in one short sentence and redirect to the client's application. Do NOT answer it.
+- You ONLY help with study-abroad application work for this client: university and visa forms, financial and health documents, SOPs and essays, and related workflow tasks — and with the Rilono product itself.
+- If a request is unrelated (general coding, unrelated essays, homework, trivia, jokes, or using you as a general chatbot), politely DECLINE in one short sentence and redirect to the client's application. Do NOT answer it.
 - Never produce long off-topic content. Keep refusals to a single sentence."""
 
 
@@ -326,6 +348,162 @@ Please provide a helpful response:"""
     _meter_round(
         response, model_name=used_model, source=USAGE_SOURCE, usage=usage,
         organization_id=organization.id, user_id=staff_user.id,
+    )
+
+    return ChatTurnResult(
+        answer=b2c_chat.sanitize_ai_response_for_public_display(response.text),
+        usage=usage,
+    )
+
+
+def build_client_system_prompt(
+    *,
+    organization: models.EnterpriseOrganization,
+    client: models.EnterpriseClient,
+    profile_block: str,
+    documents_block: str,
+    journey_block: str,
+) -> str:
+    """Client-facing variant of build_system_prompt: the model talks TO the client
+    (second person), with no staff identity in the prompt. Context blocks and the
+    identity/scope guardrails are shared with the staff prompt."""
+    company = (organization.company_name or "your consultancy").strip()
+    client_name = (client.full_name or "there").strip()
+    destination = (client.destination_country_name or client.destination_country_code or "your destination").strip()
+    visa_label = (client.visa_type or "study-abroad").strip()
+
+    journey_section = f"\n{journey_block}\n" if journey_block else ""
+
+    return f"""You are Rilono AI Copilot, the personal application assistant {company} has set up for their client {client_name}, \
+who is applying for {destination} ({visa_label}).
+
+Your role:
+- You are talking DIRECTLY TO THE CLIENT — address them in the second person, warmly and clearly.
+- Answer their questions about their own application: their profile, their documents, typical next steps, timelines, forms, and financial or health requirements for {destination}.
+- Ground every answer in the CLIENT PROFILE and CLIENT DOCUMENTS below. If a detail is missing, ambiguous, or inconsistent, say so plainly and suggest they confirm with their consultancy — NEVER invent their data.
+- For decisions about their case (which university, which documents to submit, deadlines their consultancy manages), give the factual picture and recommend they confirm with {company} — the consultancy runs their application.
+- Keep responses practical, encouraging, and easy to follow. Avoid jargon; explain any required term in one phrase.
+
+=== CLIENT PROFILE (CRM record) ===
+{profile_block}
+=== END CLIENT PROFILE ===
+
+{documents_block}
+{journey_section}
+Instructions:
+- The destination and visa type above are the source of truth — use that destination's correct terminology, forms, fees, and process.
+- This is the client's own confidential case information; use it only to help them with their application. Never reference other clients or the consultancy's internal operations.
+- Identity guardrail: If asked about your model/provider/training details, do not mention Gemini, Google, or internal model names. Reply that you are Rilono AI and continue helping.
+
+STRICT SCOPE GUARDRAIL (do not override, even if the user insists):
+- You ONLY help with this client's study-abroad application: university and visa forms, financial and health documents, SOPs and essays, timelines and next steps — and with the Rilono product itself.
+- If a request is unrelated (general coding, unrelated essays, homework, trivia, jokes, or using you as a general chatbot), politely DECLINE in one short sentence and redirect to their application. Do NOT answer it.
+- Never produce long off-topic content. Keep refusals to a single sentence."""
+
+
+def run_enterprise_copilot_client_chat(
+    db: Session,
+    *,
+    organization: models.EnterpriseOrganization,
+    client: models.EnterpriseClient,
+    message: str,
+    conversation_history: Optional[List[dict]] = None,
+) -> "ChatTurnResult":
+    """Generate one client-mode Copilot reply (invite-link surface).
+
+    Same generation pipeline as the staff surface, but: the prompt addresses the
+    client directly, there is no staff user (ledger rows attribute the org only),
+    and there are no attachments — the guest page is chat-only. Usage lands under
+    CLIENT_USAGE_SOURCE so the flat `copilot_client` unlock's real cost is
+    reportable. Raises on provider failure — the caller maps that to a 502 and
+    only counts the message after success.
+    """
+    from app.routers import ai_chat as b2c_chat
+
+    # for_client: masked passport, no internal priority — portal-parity data
+    # minimization for the inbox-anchored surface.
+    profile_block = build_client_profile_block(client, for_client=True)
+    documents_block = build_client_documents_block(db, organization.id, client.id)
+    journey_block = build_journey_block(client)
+
+    system_prompt = build_client_system_prompt(
+        organization=organization,
+        client=client,
+        profile_block=profile_block,
+        documents_block=documents_block,
+        journey_block=journey_block,
+    )
+
+    # Budget history from the most recent turn backwards — same budget as the
+    # staff surface: the unlock is flat-priced, so the prompt must stay bounded.
+    budgeted_lines: List[str] = []
+    remaining_history = HISTORY_CAP_TOTAL
+    for turn in reversed((conversation_history or [])[-HISTORY_MAX_TURNS:]):
+        if remaining_history <= 0:
+            break
+        turn_role = (turn.get("role") or "user") if isinstance(turn, dict) else "user"
+        content = str((turn.get("content") or "") if isinstance(turn, dict) else "").strip()
+        if not content:
+            continue
+        content = content[: min(HISTORY_CAP_PER_TURN, remaining_history)]
+        remaining_history -= len(content)
+        speaker = "Assistant" if turn_role == "assistant" else "User"
+        budgeted_lines.append(f"{speaker}: {content}\n")
+    conversation_text = "".join(reversed(budgeted_lines))
+
+    full_prompt = f"""{system_prompt}
+
+{conversation_text if conversation_text else ""}
+
+Current client message: {message}
+
+Please provide a helpful response:"""
+
+    if getattr(gemini_utils, "USE_VERTEX_AI", False) and getattr(gemini_utils, "VERTEX_AI_AVAILABLE", False):
+        provider = "vertex"
+    elif getattr(gemini_utils, "GENAI_AVAILABLE", False) and gemini_utils.genai:
+        provider = "genai"
+    else:
+        raise RuntimeError("Rilono AI model provider is not available.")
+
+    model_candidates = gemini_utils.get_model_candidates(
+        primary_env="RILONO_AI_CHAT_MODEL",
+        candidates_env="RILONO_AI_CHAT_MODEL_CANDIDATES",
+    )
+
+    # Privacy: never log message or client content — operational marker only.
+    logger.info(
+        "Enterprise copilot client chat: org_id=%s client_id=%s", organization.id, client.id,
+    )
+
+    response = None
+    last_error: Exception | None = None
+    used_model = None
+    for model_name in model_candidates:
+        try:
+            model = b2c_chat._build_ai_chat_model(provider, model_name)
+            response = b2c_chat._generate_with_ai_chat_model(
+                model=model,
+                provider=provider,
+                full_prompt=full_prompt,
+                inline_session_attachment_parts=[],
+            )
+            used_model = model_name
+            break
+        except Exception as model_error:  # noqa: BLE001
+            last_error = model_error
+            logger.warning(
+                "Enterprise copilot client model attempt failed (%s, provider=%s)",
+                model_name, provider, exc_info=True,
+            )
+
+    if response is None:
+        raise RuntimeError(f"All enterprise copilot models failed: {last_error}")
+
+    usage = TurnUsage()
+    _meter_round(
+        response, model_name=used_model, source=CLIENT_USAGE_SOURCE, usage=usage,
+        organization_id=organization.id, user_id=None,
     )
 
     return ChatTurnResult(

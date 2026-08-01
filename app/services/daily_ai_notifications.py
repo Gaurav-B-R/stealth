@@ -202,7 +202,7 @@ def _build_analysis_prompt(user: models.User, profile_json_raw: str, document_pa
     else:
         documents_raw_text = "No extracted document files found for this user."
 
-    return f"""You are Rilono's proactive AI student-visa assistant for a student applying to {country_name}.
+    return f"""You are Rilono's proactive AI study-abroad assistant for a student applying to {country_name}.
 This student is pursuing a {country_name} student visa ({visa_label}). Tailor EVERYTHING —
 terminology, documents, stages, fees, forms and next steps — to {country_name} and this visa type.
 Analyze the user's full raw profile JSON and raw extracted document files.
@@ -359,10 +359,10 @@ def _process_single_user(user_id: int, model: Any, model_name: str, r2_client) -
             return False
 
         jc = _journey_context(user)
-        subject = (decision.email_subject or f"Action needed for your {jc['country_name']} student visa plan").strip()[:140]
+        subject = (decision.email_subject or f"Action needed for your {jc['country_name']} study-abroad plan").strip()[:140]
         in_app_message = (decision.in_app_message or subject).strip()[:180]
         if not in_app_message:
-            in_app_message = f"New action item in your {jc['country_name']} student visa journey."
+            in_app_message = f"New action item in your {jc['country_name']} study-abroad journey."
 
         create_user_notification(
             session,

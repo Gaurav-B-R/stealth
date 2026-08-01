@@ -201,7 +201,7 @@ def send_verification_email(
         
         <div style="text-align: center; margin-top: 30px; padding: 20px; color: #9ca3af; font-size: 12px;">
             <p style="margin: 0;">© 2026 Rilono. All rights reserved.</p>
-            <p style="margin: 5px 0 0 0;">Your F1 Visa Documentation Companion</p>
+            <p style="margin: 5px 0 0 0;">Your Study-Abroad Companion</p>
             <p style="margin: 5px 0 0 0;">Rilono · Bengaluru, Karnataka, India</p>
         </div>
     </body>
@@ -380,9 +380,9 @@ def send_student_welcome_email(
     first = escape((full_name or "").strip().split(" ")[0] or "there")
     dest = escape((destination_country_name or "").strip())
     intro = (
-        f"You're all set to plan your {dest} student-visa journey with Rilono."
+        f"You're all set to plan your {dest} study-abroad journey with Rilono."
         if dest else
-        "You're all set — Rilono is now your AI copilot for the whole student-visa journey."
+        "You're all set — Rilono is now your AI copilot for the whole study-abroad journey."
     )
     dash_url = base_url.rstrip("/") + "/dashboard"
     features = (
@@ -399,7 +399,7 @@ def send_student_welcome_email(
       <div style="max-width:560px;margin:0 auto;padding:28px 18px">
         <div style="background:#fff;border:1px solid #e7e9f3;border-radius:16px;overflow:hidden">
           <div style="background:linear-gradient(135deg,#6366f1,#a855f7,#ec4899);padding:30px 26px;color:#fff">
-            <div style="font-size:13px;opacity:.9;font-weight:600">Rilono · AI student-visa platform</div>
+            <div style="font-size:13px;opacity:.9;font-weight:600">Rilono · AI study-abroad platform</div>
             <div style="font-size:23px;font-weight:800;margin-top:6px">Welcome to Rilono, {first}! 🎉</div>
           </div>
           <div style="padding:24px 26px">
@@ -423,7 +423,7 @@ def send_student_welcome_email(
         params = {
             "from": f"{RESEND_FROM_NAME} <{_resolve_resend_from_email()}>",
             "to": [to_email],
-            "subject": "Welcome to Rilono 🎉 Your student-visa copilot is ready",
+            "subject": "Welcome to Rilono 🎉 Your study-abroad copilot is ready",
             "html": html_content,
         }
         email_response = resend.Emails.send(params)
@@ -457,7 +457,7 @@ def send_enterprise_welcome_email(
     portal_open = portal + "/enterprise"
     features = (
         _welcome_feature_row("🗂️", "Clients & pipeline in one place",
-                             "Track every student, document, visa stage and deadline — with team roles and assignment.")
+                             "Track every student, document, stage and deadline — with team roles and assignment.")
         + _welcome_feature_row("✨", "Rilono AI copilot",
                                "Ask your live portal anything, spot who needs attention, and draft emails — grounded in your data.")
         + _welcome_feature_row("🎤", "Mock interviews & Deep Scans",
@@ -897,7 +897,7 @@ def send_university_change_email(email: str, new_university: str, change_token: 
         
         <div style="text-align: center; margin-top: 30px; padding: 20px; color: #9ca3af; font-size: 12px;">
             <p style="margin: 0;">© 2026 Rilono. All rights reserved.</p>
-            <p style="margin: 5px 0 0 0;">Your F1 Student Visa Assistant</p>
+            <p style="margin: 5px 0 0 0;">Your Study-Abroad Companion</p>
             <p style="margin: 5px 0 0 0;">Rilono · Bengaluru, Karnataka, India</p>
         </div>
     </body>
@@ -2225,7 +2225,7 @@ def send_enterprise_client_email(
               </tr>
               <tr>
                 <td style="padding:16px 28px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px;line-height:1.6;">
-                  This message was sent by {safe_org} regarding your visa application.{reply_hint_html}
+                  This message was sent by {safe_org} regarding your application.{reply_hint_html}
                 </td>
               </tr>
             </table>
@@ -2523,7 +2523,7 @@ def send_enterprise_payment_request_email(
     safe_org = escape(org_label)
     safe_name = escape(name)
     safe_url = escape(pay_url)
-    safe_desc = escape((description or "Visa service payment").strip())
+    safe_desc = escape((description or "Service payment").strip())
     currency_code = (currency or "").strip().upper() or "INR"
     # Prefer the (amount_minor, currency) pair: app.money owns the exponent and the symbol,
     # so this email and the pay page cannot disagree. The legacy string is already in major
@@ -2587,7 +2587,7 @@ def send_enterprise_payment_request_email(
     """
     text_content = (
         f"Hi {name},\n\n{org_label} has requested a payment from you.\n\n"
-        f"{(description or 'Visa service payment').strip()}"
+        f"{(description or 'Service payment').strip()}"
         f"{f' ({invoice_number})' if (invoice_number or '').strip() else ''}\n"
         f"Amount: {amount_text}\n"
         f"{f'Due by: {due_date_text}' if (due_date_text or '').strip() else ''}\n\n"
@@ -2995,7 +2995,7 @@ def send_enterprise_document_request_email(
         logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
                       'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
 
-    subject = f"{org_label} needs {count_text} for your visa application"
+    subject = f"{org_label} needs {count_text} for your application"
     html_content = f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
     <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
@@ -3009,7 +3009,7 @@ def send_enterprise_document_request_email(
             </td></tr>
             <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
               <p style="margin:0 0 14px;">Hi {safe_name},</p>
-              <p style="margin:0 0 16px;">{safe_org} has requested the following document{"s" if count != 1 else ""} for your visa application. You can upload them securely using the button below.</p>
+              <p style="margin:0 0 16px;">{safe_org} has requested the following document{"s" if count != 1 else ""} for your application. You can upload them securely using the button below.</p>
               {note_block}
               <div style="background:#eef2ff;color:#3730a3;padding:14px 16px;border-radius:10px;font-size:14px;margin-bottom:20px;">
                 <b>Please upload:</b>
@@ -3026,7 +3026,7 @@ def send_enterprise_document_request_email(
     </body></html>
     """
     text_content = (
-        f"Hi {name},\n\n{org_label} has requested the following document(s) for your visa application:\n"
+        f"Hi {name},\n\n{org_label} has requested the following document(s) for your application:\n"
         f"{items_text}\n{note_text}\nUpload securely here: {upload_url}\n\n"
         "For your security, you'll confirm a one-time code sent to this email before uploading. "
         "This link is personal to you.\n"
@@ -3137,7 +3137,7 @@ def send_enterprise_portal_share_email(
         logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
                       'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
 
-    subject = f"Track your {destination_country} visa application — {org_label}"
+    subject = f"Track your {destination_country} application — {org_label}"
     html_content = f"""
     <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
     <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
@@ -3147,7 +3147,7 @@ def send_enterprise_portal_share_email(
             <tr><td style="padding:26px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
               {logo_block}
               <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
-              <h1 style="margin:8px 0 0 0;font-size:23px;">🧭 Your visa application portal</h1>
+              <h1 style="margin:8px 0 0 0;font-size:23px;">🧭 Your application portal</h1>
             </td></tr>
             <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
               <p style="margin:0 0 14px;">Hi {safe_name},</p>
@@ -3168,7 +3168,7 @@ def send_enterprise_portal_share_email(
     </body></html>
     """
     text_content = (
-        f"Hi {name},\n\n{org_label} has shared your visa application portal with you.\n"
+        f"Hi {name},\n\n{org_label} has shared your application portal with you.\n"
         f"Track your {destination_country or 'visa'} {visa_type or ''} application — stages, details, documents, "
         f"universities and payments — at:\n{portal_url}\n\n"
         "For your security, you'll confirm a one-time code sent to this email before viewing. "
@@ -3226,6 +3226,141 @@ def send_enterprise_portal_code_email(
     </body></html>
     """
     text_content = f"{org_label}\n\nYour application portal verification code is: {code}\nThis code expires in 15 minutes.\n"
+    try:
+        params = {
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def send_enterprise_copilot_invite_email(
+    *,
+    to_email: str,
+    client_name: Optional[str],
+    organization_name: str,
+    copilot_url: str,
+    destination_country: str,
+    visa_type: str,
+    logo_url: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email a client a secure link to chat with their consultancy's AI copilot about their application."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = _sanitize_header_text(organization_name) or "Your consultancy"
+    name = (client_name or "").strip() or "there"
+    safe_org = escape(org_label)
+    safe_name = escape(name)
+    safe_url = escape(copilot_url)
+    safe_country = escape(destination_country or "")
+    safe_visa = escape(visa_type or "")
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
+                      'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
+
+    subject = f"Ask questions about your {destination_country} application — {org_label}"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:26px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
+              {logo_block}
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
+              <h1 style="margin:8px 0 0 0;font-size:23px;">✨ Your personal application copilot</h1>
+            </td></tr>
+            <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
+              <p style="margin:0 0 14px;">Hi {safe_name},</p>
+              <p style="margin:0 0 18px;"><b>{safe_org}</b> has set up a personal copilot for your
+                <b>{safe_country}</b> application ({safe_visa}). Ask it about your documents, your next steps
+                and your timelines — any time, in plain language, and it answers from your own application file.</p>
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto 18px;"><tr><td align="center" style="border-radius:12px;background:linear-gradient(135deg,#4f46e5,#7c3aed);">
+                <a href="{safe_url}" style="display:inline-block;padding:13px 30px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;">Open my copilot &rarr;</a>
+              </td></tr></table>
+              <p style="margin:0;font-size:13px;color:#64748b;">🔒 For your security, clicking the link asks for a one-time code sent to this email.
+                This link is personal to you — please don't share it. For anything the copilot can't answer,
+                contact {safe_org}.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        f"Hi {name},\n\n{org_label} has set up a personal copilot for your "
+        f"{destination_country or ''} application ({visa_type or ''}).\n"
+        f"Ask about your documents, next steps and timelines any time at:\n{copilot_url}\n\n"
+        "For your security, clicking the link asks for a one-time code sent to this email. "
+        "This link is personal to you — please don't share it.\n"
+    )
+    try:
+        params = {
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def send_enterprise_copilot_code_email(
+    *,
+    to_email: str,
+    client_name: Optional[str],
+    organization_name: str,
+    code: str,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email the one-time verification code for the client copilot."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+    org_label = _sanitize_header_text(organization_name) or "Your consultancy"
+    safe_org = escape(org_label)
+    safe_code = escape(str(code))
+    subject = f"{code} is your copilot verification code"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="520" cellspacing="0" cellpadding="0" style="max-width:520px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:28px;color:#0f172a;text-align:center;">
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;">{safe_org}</div>
+              <p style="margin:14px 0 8px;font-size:15px;">Your copilot verification code is:</p>
+              <div style="font-size:34px;font-weight:800;letter-spacing:.18em;color:#4338ca;margin:6px 0 14px;">{safe_code}</div>
+              <p style="margin:0;font-size:13px;color:#64748b;">This code expires in 15 minutes. If you didn't request it, you can ignore this email.</p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = f"{org_label}\n\nYour copilot verification code is: {code}\nThis code expires in 15 minutes.\n"
     try:
         params = {
             "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
@@ -3627,7 +3762,7 @@ def send_proactive_assistant_email(
         print("ERROR: Cannot send proactive assistant email - Resend not configured")
         return False
 
-    safe_subject = (subject or "").strip()[:140] or "Rilono Student Visa Update"
+    safe_subject = (subject or "").strip()[:140] or "Rilono Study-Abroad Update"
     sanitized_body = _sanitize_ai_email_html(html_body)
     manage_url = f"{base_url.rstrip('/')}/dashboard"
     safe_unsubscribe_url = escape((unsubscribe_url or "").strip())
@@ -4061,3 +4196,183 @@ def send_enterprise_support_request_email(
     except Exception as e:
         print(f"Error sending enterprise support email: {str(e)}")
         return False
+
+
+def send_enterprise_lead_form_link_email(
+    *,
+    to_email: str,
+    organization_name: str,
+    form_title: str,
+    form_url: str,
+    sender_name: Optional[str] = None,
+    note: Optional[str] = None,
+    logo_url: Optional[str] = None,
+    reply_to: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Email an org's public lead-collection form link to a recipient (a prospect,
+    a partner, a school counselor…). Org-branded like the portal-share email; the
+    optional note is staff-typed plain text (escaped, never rendered as HTML)."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = _sanitize_header_text(organization_name) or "Your consultancy"
+    title_label = _sanitize_header_text(form_title) or "Get in touch"
+    safe_org = escape(org_label)
+    safe_title = escape(title_label)
+    safe_url = escape(form_url)
+    sender_label = _sanitize_header_text(sender_name or "")
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (f'<img src="{escape(clean_logo)}" alt="{safe_org}" '
+                      'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
+    note_block = ""
+    clean_note = re.sub(r"\s+", " ", str(note or "")).strip()[:400]
+    if clean_note:
+        note_block = (f'<div style="margin:0 0 18px;padding:12px 16px;background:#f8fafc;border:1px solid #e2e8f0;'
+                      f'border-radius:10px;color:#334155;font-size:14px;">{escape(clean_note)}</div>')
+
+    subject = f"{title_label} — {org_label}"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:26px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
+              {logo_block}
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
+              <h1 style="margin:8px 0 0 0;font-size:23px;">{safe_title}</h1>
+            </td></tr>
+            <tr><td style="padding:28px;color:#0f172a;font-size:15px;line-height:1.7;">
+              <p style="margin:0 0 14px;">Hi there,</p>
+              <p style="margin:0 0 18px;"><b>{safe_org}</b>{(" — " + escape(sender_label)) if sender_label else ""} has shared a short form with you.
+                It only takes a minute to fill in, and the team will get back to you right after.</p>
+              {note_block}
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto 18px;"><tr><td align="center" style="border-radius:12px;background:linear-gradient(135deg,#4f46e5,#7c3aed);">
+                <a href="{safe_url}" style="display:inline-block;padding:13px 30px;color:#fff;text-decoration:none;font-weight:700;font-size:15px;">Open the form &rarr;</a>
+              </td></tr></table>
+              <p style="margin:0;font-size:13px;color:#64748b;">If the button doesn't work, copy this link into your browser:<br>
+                <a href="{safe_url}" style="color:#6366f1;word-break:break-all;">{safe_url}</a></p>
+            </td></tr>
+          </table>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    text_content = (
+        f"Hi there,\n\n{org_label} has shared a short form with you: {title_label}.\n"
+        + (f"\n\"{clean_note}\"\n" if clean_note else "")
+        + f"\nFill it in here:\n{form_url}\n"
+    )
+    try:
+        params = {
+            "from": f"{org_label} via Rilono <{_resolve_enterprise_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        clean_reply_to = (reply_to or "").strip()
+        if clean_reply_to and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", clean_reply_to):
+            params["reply_to"] = clean_reply_to
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]
+
+
+def send_enterprise_new_lead_email(
+    *,
+    to_email: str,
+    organization_name: str,
+    form_name: str,
+    lead_name: Optional[str],
+    answers: list,
+    leads_url: str,
+    logo_url: Optional[str] = None,
+    lead_email: Optional[str] = None,
+) -> tuple[bool, Optional[str], Optional[str]]:
+    """Alert an org inbox that a new lead arrived through their public form.
+
+    answers is a list of (label, value) pairs — every value is submitter-typed and
+    gets CR/LF-stripped + escaped before rendering. Reply-To is set to the lead's
+    submitted email (regex-validated) so staff can answer with one Reply."""
+    if not RESEND_API_KEY:
+        return False, None, "Email service is not configured."
+    recipient = (to_email or "").strip().lower()
+    if not recipient:
+        return False, None, "Recipient email is missing."
+
+    org_label = _sanitize_header_text(organization_name) or "Your consultancy"
+    form_label = _sanitize_header_text(form_name) or "Lead form"
+    name_label = _sanitize_header_text(lead_name or "") or "New lead"
+    safe = lambda v: escape(re.sub(r"[\r\n]+", " ", str(v or "")).strip()[:300])
+    rows = "".join(
+        f'<tr><td style="padding:7px 0;color:#64748b;font-size:13px;width:150px;vertical-align:top;">{safe(label)}</td>'
+        f'<td style="padding:7px 0;font-weight:600;font-size:14px;color:#0f172a;word-break:break-word;">{safe(value)}</td></tr>'
+        for label, value in (answers or [])[:24]
+    )
+    logo_block = ""
+    clean_logo = (logo_url or "").strip()
+    if clean_logo.startswith(("http://", "https://")):
+        logo_block = (f'<img src="{escape(clean_logo)}" alt="{escape(org_label)}" '
+                      'style="height:40px;width:40px;border-radius:10px;object-fit:cover;margin-bottom:10px;display:block;">')
+
+    subject = f"🎯 New lead: {name_label} — {form_label}"
+    html_content = f"""
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f1f5f9;padding:24px 12px;">
+        <tr><td align="center">
+          <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+            <tr><td style="padding:24px 28px;background:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);color:#fff;">
+              {logo_block}
+              <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9;">{escape(org_label.upper())}</div>
+              <h1 style="margin:8px 0 0 0;font-size:22px;">🎯 New lead received</h1>
+              <div style="margin-top:6px;font-size:13px;opacity:.9;">via "{escape(form_label)}"</div>
+            </td></tr>
+            <tr><td style="padding:26px 28px;color:#0f172a;font-size:15px;line-height:1.6;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">{rows}</table>
+              <table role="presentation" cellspacing="0" cellpadding="0" style="margin:22px auto 4px;"><tr><td align="center" style="border-radius:12px;background:linear-gradient(135deg,#4f46e5,#7c3aed);">
+                <a href="{escape(leads_url)}" style="display:inline-block;padding:12px 26px;color:#fff;text-decoration:none;font-weight:700;font-size:14px;">Open lead inbox &rarr;</a>
+              </td></tr></table>
+            </td></tr>
+          </table>
+          <p style="max-width:600px;text-align:center;color:#94a3b8;font-size:11px;margin:14px auto 0;">
+            Sent by Rilono Enterprise because this address receives lead alerts for {escape(org_label)}.</p>
+        </td></tr>
+      </table>
+    </body></html>
+    """
+    def _flat(v, cap):
+        return re.sub(r"[\r\n]+", " ", str(v or "")).strip()[:cap]
+    text_content = (
+        f"New lead via \"{form_label}\" — {org_label}\n\n"
+        + "\n".join(f"{_flat(l, 100)}: {_flat(v, 300)}" for l, v in (answers or [])[:24])
+        + f"\n\nOpen the lead inbox: {leads_url}\n"
+    )
+    try:
+        params = {
+            "from": f"{org_label} via Rilono <{_resolve_transactional_from_email()}>",
+            "to": [recipient],
+            "subject": subject,
+            "html": html_content,
+            "text": text_content,
+        }
+        clean_lead_email = (lead_email or "").strip()
+        if clean_lead_email and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", clean_lead_email):
+            params["reply_to"] = clean_lead_email
+        email_response = resend.Emails.send(params)
+        email_id = _extract_resend_email_id(email_response)
+        if email_id:
+            return True, email_id, None
+        return False, None, "Email provider did not confirm delivery."
+    except Exception as e:
+        return False, None, str(e)[:500]

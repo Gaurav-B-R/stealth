@@ -17,10 +17,12 @@ disabled) because enabling them is irreversible and production runs on Postgres 
 per the checklist on each constant once the real oldest-row ages have been checked there.
 Until then the periods are met operationally, which is exactly how the DPA describes them.
 
-Note this module sweeps ONLY models.Document (the B2C `documents` table) and
-models.EnterprisePaymentEvent. Enterprise Client Data — enterprise_client_documents and
-enterprise_client_email_attachments — is NOT covered by any automated sweep. The DPA says so
-explicitly; do not add a period to that document without also building the sweep.
+Note this module sweeps ONLY models.Document (the B2C `documents` table),
+models.EnterprisePaymentEvent, and the saved Rilono AI Assistant threads
+(enterprise_ai_conversations / enterprise_ai_messages). Enterprise Client Data —
+enterprise_client_documents and enterprise_client_email_attachments — is NOT covered by any
+automated sweep. The DPA says so explicitly; do not add a period to that document without
+also building the sweep.
 
 If you change a period here, update the DPA / privacy policy to match — the disclosed period
 and the enforced period must agree.
@@ -67,6 +69,16 @@ PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS = int(
     os.getenv("PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS", "0") or "0"
 )
 PAYMENT_EVENT_REDACTION_BATCH = int(os.getenv("PAYMENT_EVENT_REDACTION_BATCH", "1000") or "1000")
+
+# Saved Rilono AI Assistant threads (enterprise_ai_conversations + their messages) age out
+# after this window — the exact period the assistant's History dialog discloses to the member
+# ("Conversations are kept for N days, then deleted automatically"). Unlike the two sweeps
+# above this one defaults ON: the tables shipped WITH that promise, so there is no legacy
+# production data older than the window to be surprised by. The router reads the same env
+# variable (app/routers/enterprise.py) for the dialog text and its opportunistic per-member
+# purge; this sweep is the global backstop that honours the promise for members who never
+# open History again.
+ENTERPRISE_AI_CHAT_RETENTION_DAYS = int(os.getenv("ENTERPRISE_AI_CHAT_RETENTION_DAYS", "90") or "90")
 
 
 def _resolve_r2():
@@ -167,16 +179,59 @@ def run_payment_event_payload_redaction_sweep(retention_days: Optional[int] = No
     return {"status": "ok", "redacted": redacted, "cutoff": cutoff.isoformat()}
 
 
+def run_enterprise_ai_chat_retention_sweep(retention_days: Optional[int] = None) -> dict:
+    """Hard-delete saved AI assistant threads whose last message is older than the
+    retention window. Messages first, then conversations — never relies on DB-level
+    FK cascade (SQLite dev DBs don't enforce it)."""
+    days = ENTERPRISE_AI_CHAT_RETENTION_DAYS if retention_days is None else retention_days
+    if days <= 0:
+        return {"status": "disabled"}
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    db = SessionLocal()
+    deleted = 0
+    try:
+        ids = [
+            cid for (cid,) in db.query(models.EnterpriseAiConversation.id)
+            .filter(models.EnterpriseAiConversation.last_message_at < cutoff)
+            .all()
+        ]
+        if ids:
+            db.query(models.EnterpriseAiMessage).filter(
+                models.EnterpriseAiMessage.conversation_id.in_(ids)
+            ).delete(synchronize_session=False)
+            deleted = (
+                db.query(models.EnterpriseAiConversation)
+                .filter(models.EnterpriseAiConversation.id.in_(ids))
+                .delete(synchronize_session=False)
+            ) or 0
+        db.commit()
+        if deleted:
+            logger.info(
+                "retention: deleted %s enterprise AI conversation(s) idle for over %s day(s)",
+                deleted, days,
+            )
+    except Exception:
+        db.rollback()
+        logger.exception("retention: enterprise AI conversation sweep failed")
+    finally:
+        db.close()
+    return {"status": "ok", "deleted": deleted, "cutoff": cutoff.isoformat()}
+
+
 class DocumentRetentionScheduler:
     def __init__(self) -> None:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
-        if DOCUMENT_RETENTION_DAYS <= 0 and PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS <= 0:
+        if (
+            DOCUMENT_RETENTION_DAYS <= 0
+            and PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS <= 0
+            and ENTERPRISE_AI_CHAT_RETENTION_DAYS <= 0
+        ):
             logger.info(
                 "Retention sweeps disabled (DOCUMENT_RETENTION_DAYS=0, "
-                "PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS=0)."
+                "PAYMENT_EVENT_PAYLOAD_RETENTION_DAYS=0, ENTERPRISE_AI_CHAT_RETENTION_DAYS=0)."
             )
             return
         if self._thread and self._thread.is_alive():
@@ -204,6 +259,10 @@ class DocumentRetentionScheduler:
                 run_payment_event_payload_redaction_sweep()
             except Exception:
                 logger.exception("retention: unexpected error in payload-redaction loop")
+            try:
+                run_enterprise_ai_chat_retention_sweep()
+            except Exception:
+                logger.exception("retention: unexpected error in AI-conversation sweep loop")
             self._stop_event.wait(DOCUMENT_RETENTION_SWEEP_INTERVAL_SECONDS)
 
 

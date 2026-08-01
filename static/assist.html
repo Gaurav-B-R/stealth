@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your application copilot</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="/static/logo.png" />
+  <style>
+    :root{
+      --grad:linear-gradient(135deg,#4338ca 0%,#7c3aed 100%);
+      --primary:#6366f1;--primary-600:#4f46e5;--text:#0f172a;--text-2:#475569;--muted:#94a3b8;
+      --surface:#fff;--surface-2:#f8fafc;--border:#e7e9f3;--border-strong:#d6d9ea;--danger:#ef4444;
+      --radius:16px;--radius-sm:11px;--font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    }
+    *{box-sizing:border-box}html,body{margin:0;padding:0}
+    body{font-family:var(--font);color:var(--text);background:
+      radial-gradient(900px 500px at 15% -5%,rgba(99,102,241,.16),transparent 60%),
+      radial-gradient(800px 480px at 90% 0%,rgba(124,58,237,.12),transparent 55%),#eef0f8;
+      min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:28px 16px;-webkit-font-smoothing:antialiased;}
+    .wrap{width:100%;max-width:680px;}
+    .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:18px;color:#312e81;font-weight:800;font-size:15px;}
+    .brand img{height:30px;width:30px;border-radius:8px;object-fit:cover}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 18px 48px rgba(15,23,42,.14);overflow:hidden;}
+    .hero{background:var(--grad);color:#fff;padding:24px 28px;}
+    .hero .eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;opacity:.9}
+    .hero h1{margin:8px 0 0;font-size:22px;}
+    .hero .sub{margin:6px 0 0;opacity:.92;font-size:14px}
+    .body{padding:26px 28px;}
+    .muted{color:var(--muted)} .t2{color:var(--text-2)}
+    .lead{color:var(--text-2);line-height:1.65;font-size:15px;margin:0 0 18px}
+    .pill{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:6px 13px;font-size:13px;font-weight:700;margin-bottom:18px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1.5px solid transparent;border-radius:var(--radius-sm);
+      font-family:var(--font);font-size:15px;font-weight:700;padding:13px 22px;cursor:pointer;transition:box-shadow .15s,transform .08s,background .15s;}
+    .btn:active{transform:translateY(1px)} .btn:disabled{opacity:.6;cursor:not-allowed}
+    .btn-primary{background:var(--grad);color:#fff;box-shadow:0 8px 22px rgba(99,102,241,.32)}
+    .btn-primary:hover{box-shadow:0 12px 28px rgba(99,102,241,.42)}
+    .btn-ghost{background:var(--surface);color:var(--text);border-color:var(--border-strong);font-size:13.5px;padding:9px 14px}
+    .input{width:100%;font-family:var(--font);font-size:16px;color:var(--text);background:var(--surface-2);border:1.5px solid var(--border-strong);
+      border-radius:var(--radius-sm);padding:13px 15px;outline:none;transition:border-color .15s,box-shadow .15s}
+    .input:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+    .code-input{letter-spacing:.32em;text-align:center;font-size:24px;font-weight:700}
+    .row{display:flex;gap:10px;flex-wrap:wrap}
+    .err{background:rgba(239,68,68,.08);color:#b91c1c;border:1px solid rgba(239,68,68,.22);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:14px}
+    .ok{background:rgba(16,185,129,.1);color:#047857;border:1px solid rgba(16,185,129,.28);border-radius:10px;padding:10px 13px;font-size:13.5px;margin-bottom:14px}
+    .cap{background:#fffbeb;color:#b45309;border:1px solid #fde68a;border-radius:10px;padding:10px 13px;font-size:13.5px;margin-top:12px}
+    .hidden{display:none!important}
+    .center{text-align:center}
+    .spinner{width:18px;height:18px;border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;display:inline-block;animation:spin .7s linear infinite}
+    .spinner.dark{border-color:rgba(99,102,241,.25);border-top-color:var(--primary)}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .load-wrap{display:flex;justify-content:center;padding:60px 0}
+    /* chat */
+    .iv-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+    .iv-head .ttl{font-weight:700;font-size:14px}
+    .iv-head .pill{margin:0}
+    .thread{display:flex;flex-direction:column;gap:13px;background:#f5f6fb;border:1px solid var(--border);border-radius:12px;padding:16px;max-height:55vh;overflow-y:auto}
+    .msg{display:flex;gap:9px;max-width:88%}
+    .msg.user{align-self:flex-end;flex-direction:row-reverse}
+    .av{width:30px;height:30px;border-radius:50%;background:var(--grad);display:grid;place-items:center;font-size:15px;flex:none}
+    .bubble{background:#fff;border:1px solid var(--border);border-radius:14px;padding:10px 13px;font-size:14.5px;line-height:1.55}
+    .msg.user .bubble{background:var(--primary);color:#fff;border-color:transparent}
+    .bubble p{margin:5px 0}.bubble ul{margin:5px 0;padding-left:18px}.bubble .h{font-weight:700;margin:10px 0 4px}
+    .typing i{width:7px;height:7px;background:var(--muted);border-radius:50%;display:inline-block;margin:0 1px;animation:blink 1.2s infinite}
+    .typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+    @keyframes blink{0%,80%,100%{opacity:.3}40%{opacity:1}}
+    .inrow{display:flex;gap:9px;align-items:flex-end;margin-top:14px}
+    .inrow textarea{flex:1;resize:none;font-family:var(--font);font-size:16px;background:var(--surface-2);border:1.5px solid var(--border-strong);border-radius:var(--radius-sm);padding:11px 14px;outline:none;max-height:130px;line-height:1.5}
+    .inrow textarea:focus{border-color:var(--primary);background:#fff;box-shadow:0 0 0 4px rgba(99,102,241,.14)}
+    .foot{text-align:center;margin-top:16px;color:var(--muted);font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><img src="/static/logo.png" alt="" onerror="this.style.display='none'"> Powered by Rilono</div>
+    <div class="card">
+      <div id="loading" class="load-wrap"><span class="spinner dark"></span></div>
+
+      <!-- invalid -->
+      <div id="invalidView" class="hidden">
+        <div class="hero"><div class="eyebrow">Application copilot</div><h1 id="invalidTitle">Link unavailable</h1></div>
+        <div class="body"><p class="lead" id="invalidMsg">This copilot link is invalid or has expired. Please ask your consultancy for a new link.</p></div>
+      </div>
+
+      <!-- verify -->
+      <div id="verifyView" class="hidden">
+        <div class="hero">
+          <div class="eyebrow" id="vOrg">Your consultancy</div>
+          <h1>✨ Your application copilot</h1>
+          <div class="sub" id="vSub">Instant answers about your application.</div>
+        </div>
+        <div class="body">
+          <p class="lead" id="vLead"></p>
+          <span class="pill" id="vRemain"></span>
+          <div id="vError" class="err hidden"></div>
+          <div id="vMsg" class="ok hidden"></div>
+
+          <div id="vStep1">
+            <p class="t2" style="font-size:14px;margin:0 0 14px">To confirm it's you, we'll email a 6-digit code to <b id="vEmail"></b>.</p>
+            <button class="btn btn-primary" id="sendCodeBtn">Send verification code</button>
+          </div>
+
+          <div id="vStep2" class="hidden">
+            <label class="t2" style="font-size:13px;font-weight:600;display:block;margin-bottom:8px">Enter the 6-digit code</label>
+            <input class="input code-input" id="codeInput" inputmode="numeric" maxlength="6" placeholder="••••••" />
+            <div class="row" style="margin-top:14px">
+              <button class="btn btn-primary" id="verifyBtn">Verify &amp; start chatting</button>
+              <button class="btn btn-ghost" id="resendBtn">Resend code</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- chat -->
+      <div id="chatView" class="hidden">
+        <div class="hero">
+          <div class="eyebrow" id="cOrg">Your consultancy</div>
+          <h1>✨ Your application copilot</h1>
+          <div class="sub" id="cSub"></div>
+        </div>
+        <div class="body">
+          <div class="iv-head">
+            <div class="ttl">💬 Ask about your application</div>
+            <span class="pill" id="cRemain"></span>
+          </div>
+          <div class="thread" id="thread"></div>
+          <div id="capBanner" class="cap hidden">You've used all your included messages. Please contact your consultancy if you need more.</div>
+          <div class="inrow" id="inRow">
+            <textarea id="msgInput" rows="1" maxlength="8000" placeholder="Ask about your application…"></textarea>
+            <button class="btn btn-primary" id="sendBtn">Send</button>
+          </div>
+          <div id="cError" class="err hidden" style="margin-top:10px"></div>
+        </div>
+      </div>
+    </div>
+    <div class="foot">🔒 This link is personal to you. Don't share it.<br>
+      <a href="/privacy" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Privacy Policy</a> ·
+      <a href="/terms" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">Terms</a>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var token = location.pathname.split("/").filter(Boolean).pop();
+      var API = "/api/enterprise/public/copilot";
+      var SS_KEY = "rilono_assist_session_" + token.slice(0, 10);
+      var HIST_KEY = SS_KEY + "_h";
+      var $ = function (id) { return document.getElementById(id); };
+      var info = null, sessionToken = null, history = [], busy = false, capped = false, remaining = null, pendingVerifyError = null;
+
+      function show(id) { ["loading","invalidView","verifyView","chatView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
+      function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+      function fmt(text){ var t=esc(text).replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>"); var lines=t.split(/\n/),html="",inList=false;
+        function cl(){ if(inList){html+="</ul>";inList=false;} }
+        for(var i=0;i<lines.length;i++){ var line=lines[i].replace(/\s+$/,""); var h=line.match(/^\s*#{1,4}\s+(.*)$/);
+          if(h){cl();html+='<div class="h">'+h[1]+"</div>";continue;}
+          var m=line.match(/^\s*[-*•]\s+(.*)$/); if(m){ if(!inList){html+="<ul>";inList=true;} html+="<li>"+m[1]+"</li>"; }
+          else { cl(); if(line.trim()==="")continue; html+="<p>"+line+"</p>"; } }
+        cl(); return html||"<p></p>"; }
+      function publicError(status, detail, fallback){
+        var msg=typeof detail==="string"?detail.trim().replace(/\s+/g," "):"";
+        var internal=/(?:gemini|generative\s*ai|vertex\s*ai|openai|anthropic|claude|model(?:s)?\/|\bmodel\b.*(?:not\s+found|unavailable|deprecated|retired|no\s+longer\s+available)|failed\s+to\s+generate|api[_ -]?key|traceback|stack\s*trace|sqlalchemy|psycopg|postgres(?:ql)?|database\s+(?:error|exception)|internal\s+server\s+error|exception\b|\/app\/|\.py\b.*line\s+\d+)/i;
+        if(!msg||msg.length>300||status>=500||internal.test(msg)){
+          if(status===404)return fallback||"This link is invalid or has expired.";
+          if(status===408||status===504)return "The request timed out. Please try again.";
+          if(status===422)return "That message couldn't be sent — it may be too long. Try shortening it.";
+          if(status===429)return "Too many requests. Please wait a moment and try again.";
+          return fallback||"Sorry, we encountered an error. Please try again shortly.";
+        }
+        return msg;
+      }
+      function apiError(r,d,fallback){ var ex=new Error(publicError(r.status,d&&(d.detail||d.message),fallback)); ex.status=r.status; ex.publicSafe=true; return ex; }
+      function safeError(ex,fallback){ return ex&&ex.publicSafe&&ex.message?ex.message:(fallback||"Sorry, we encountered an error. Please try again shortly."); }
+      function api(path, body){ return fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})})
+        .then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw apiError(r,d); return d; }); }); }
+
+      // Inline error display — no jarring native alert() on this branded client page.
+      function showErr(id,msg){ var e=$(id); if(e){ e.textContent=msg||"Something went wrong. Please try again."; e.classList.remove("hidden"); } }
+      function hideErr(id){ var e=$(id); if(e) e.classList.add("hidden"); }
+
+      /* ---------- session + history persistence ---------- */
+      function clearSession(){ sessionToken=null; try{ sessionStorage.removeItem(SS_KEY); }catch(e){} }
+      // Turns are capped at 8k chars (server limit is higher; the model only reads
+      // 4k/turn anyway) so one very long reply can never make later sends fail.
+      function trimTurns(arr){ return arr.map(function(m){ return {role:m.role, content:String(m.content==null?"":m.content).slice(0,8000)}; }); }
+      function saveHistory(){ try{ sessionStorage.setItem(HIST_KEY, JSON.stringify(trimTurns(history.slice(-200)))); }catch(e){} }
+      function loadHistory(){ history=[]; try{ var raw=sessionStorage.getItem(HIST_KEY);
+        if(raw){ var h=JSON.parse(raw); if(Object.prototype.toString.call(h)==="[object Array]") history=h.slice(-200); } }catch(e){ history=[]; } }
+
+      /* ---------- load & verify flow ---------- */
+      function boot(){
+        fetch(API+"/"+encodeURIComponent(token)).then(function(r){ return r.json().catch(function(){return null;}).then(function(d){ if(!r.ok) throw apiError(r,d,"This link is invalid or has expired."); return d; }); })
+          .then(function(d){ info=d; renderVerify(); })
+          .catch(function(ex){ $("invalidMsg").textContent=safeError(ex,"This link is invalid or has expired."); show("invalidView"); });
+      }
+      function load(){
+        // A still-valid session (page refresh) skips the OTP gate entirely.
+        var stored = null;
+        try { stored = sessionStorage.getItem(SS_KEY); } catch (e) {}
+        if (stored) {
+          sessionToken = stored;
+          api("/session",{session_token:stored}).then(function(d){
+            info=d; if(typeof d.remaining_messages==="number") remaining=d.remaining_messages;
+            loadHistory(); renderChat();
+          }).catch(function(ex){
+            // Only an auth-shaped answer means the session is really dead. A
+            // transient failure (offline, 429, 5xx) must NOT discard a valid
+            // 24h session — a refresh retries with the same token.
+            if(ex && (ex.status===401||ex.status===403||ex.status===404)){ clearSession(); boot(); return; }
+            var t=$("invalidTitle"); if(t) t.textContent="Connection problem";
+            $("invalidMsg").textContent="We couldn't reach your copilot just now. Check your connection and refresh this page to try again.";
+            show("invalidView");
+          });
+        } else boot();
+      }
+
+      function renderVerify(){
+        $("vOrg").textContent=info.organization_name||"Your consultancy";
+        $("vSub").textContent="Instant answers about your "+(info.destination_country?info.destination_country+" ":"")+"application.";
+        $("vLead").innerHTML="Hi <b>"+esc(info.client_first_name)+"</b>, "+esc(info.organization_name||"your consultancy")+" has set up a personal AI copilot for your <b>"+esc(info.destination_country||"study-abroad")+"</b> application"+(info.visa_type?" ("+esc(info.visa_type)+")":"")+". Ask it about your documents, timelines and next steps — any time.";
+        if(typeof info.remaining_messages==="number") remaining=info.remaining_messages;
+        var pillText = info.exhausted ? "No messages remaining on this link"
+          : (typeof info.remaining_messages==="number" ? info.remaining_messages+" message"+(info.remaining_messages===1?"":"s")+" included" : "");
+        $("vRemain").textContent=pillText;
+        $("vRemain").classList.toggle("hidden", !pillText);
+        $("vEmail").textContent=info.masked_email||"your email";
+        $("vStep1").classList.toggle("hidden", !!info.exhausted);
+        $("vStep2").classList.add("hidden");
+        $("codeInput").value="";
+        hideErr("vMsg");
+        if(pendingVerifyError){ showErr("vError", pendingVerifyError); pendingVerifyError=null; } else hideErr("vError");
+        show("verifyView");
+      }
+
+      $("sendCodeBtn").onclick=function(){ var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Sending…';
+        api("/"+encodeURIComponent(token)+"/send-code").then(function(d){
+          if(d && d.sent===false){ $("vError").textContent="We couldn't send the code right now. Please try again in a moment."; $("vError").classList.remove("hidden"); return; }
+          $("vError").classList.add("hidden");
+          $("vStep1").classList.add("hidden"); $("vStep2").classList.remove("hidden");
+          $("vMsg").textContent="We sent a 6-digit code to "+(d.masked_email||info.masked_email)+"."; $("vMsg").classList.remove("hidden"); $("codeInput").focus();
+        }).catch(function(ex){ $("vError").textContent=safeError(ex); $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
+      $("resendBtn").onclick=function(){ $("vError").classList.add("hidden"); $("sendCodeBtn").click(); };
+      $("verifyBtn").onclick=function(){ var code=($("codeInput").value||"").trim(); $("vError").classList.add("hidden");
+        if(code.length<4){ $("vError").textContent="Enter the 6-digit code."; $("vError").classList.remove("hidden"); return; }
+        var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Verifying…';
+        // A 402 here means the consultancy can't activate access right now — the server's
+        // message is client-safe and flows through publicError into #vError below.
+        api("/"+encodeURIComponent(token)+"/verify",{code:code}).then(function(d){
+          sessionToken=d.session_token;
+          try { sessionStorage.setItem(SS_KEY, sessionToken); } catch (e) {}
+          info=info||{};
+          if(d.client_first_name) info.client_first_name=d.client_first_name;
+          if(d.destination_country) info.destination_country=d.destination_country;
+          if(d.visa_type) info.visa_type=d.visa_type;
+          if(typeof d.remaining_messages==="number") remaining=d.remaining_messages;
+          loadHistory(); renderChat();
+        }).catch(function(ex){ $("vError").textContent=safeError(ex); $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.innerHTML="Verify &amp; start chatting"; }); };
+      $("codeInput").addEventListener("keydown",function(e){ if(e.key==="Enter") $("verifyBtn").click(); });
+
+      /* ---------- chat ---------- */
+      function updatePill(){ var p=$("cRemain");
+        if(remaining==null){ p.classList.add("hidden"); return; }
+        p.classList.remove("hidden");
+        p.textContent = remaining<=0 ? "No messages left" : (remaining+" message"+(remaining===1?"":"s")+" left"); }
+      function applyCap(){ capped=true; remaining=0; updatePill();
+        $("capBanner").classList.remove("hidden");
+        $("msgInput").disabled=true; $("sendBtn").disabled=true; }
+
+      function renderChat(){
+        $("cOrg").textContent=(info&&info.organization_name)||"Your consultancy";
+        $("cSub").textContent=((info&&info.destination_country)||"")+((info&&info.visa_type)?" · "+info.visa_type:"");
+        hideErr("cError");
+        capped=false;
+        $("capBanner").classList.add("hidden");
+        $("msgInput").disabled=false; $("sendBtn").disabled=false;
+        updatePill();
+        if((info&&info.exhausted)||(remaining!==null&&remaining<=0)) applyCap();
+        drawThread();
+        show("chatView");
+        if(!capped){ try{ $("msgInput").focus(); }catch(e){} }
+      }
+
+      // The greeting is client-side (never sent to the API) so it always renders at the
+      // top of the thread rather than living in the persisted history array.
+      function welcomeHtml(){ var name=(info&&info.client_first_name)||"there"; var country=(info&&info.destination_country)||"study-abroad";
+        return '<div class="msg bot"><div class="av">✨</div><div class="bubble"><p>Hi <b>'+esc(name)+'</b>! Ask me anything about your <b>'+esc(country)+'</b> application — your documents, your timeline, or what to do next.</p></div></div>'; }
+      function bubble(m){ var bot=m.role!=="user";
+        return '<div class="msg '+(bot?"bot":"user")+'">'+(bot?'<div class="av">✨</div>':"")+'<div class="bubble">'+(bot?fmt(m.content):esc(m.content).replace(/\n/g,"<br>"))+"</div></div>"; }
+      function drawThread(){ var t=$("thread"); var typing=busy?'<div class="msg bot"><div class="av">✨</div><div class="bubble"><span class="typing"><i></i><i></i><i></i></span></div></div>':"";
+        t.innerHTML=welcomeHtml()+history.map(bubble).join("")+typing; t.scrollTop=t.scrollHeight; }
+      function autosize(a){ a.style.height="auto"; a.style.height=Math.min(a.scrollHeight,130)+"px"; }
+
+      function sendMsg(){ var a=$("msgInput"); var v=(a.value||"").trim(); if(!v||busy||capped)return; hideErr("cError");
+        if(v.length>8000){ showErr("cError","That message is a little long — please keep it under 8,000 characters."); return; }
+        var prior=history.slice(); history.push({role:"user",content:v}); a.value=""; a.style.height="auto"; busy=true; drawThread();
+        api("/chat",{session_token:sessionToken,message:v,history:trimTurns(prior)}).then(function(d){
+          history.push({role:"assistant",content:d.reply});
+          if(typeof d.remaining_messages==="number") remaining=d.remaining_messages;
+          saveHistory(); updatePill();
+          if(remaining!==null&&remaining<=0) applyCap();
+        }).catch(function(ex){
+          history.pop(); saveHistory(); // message not consumed — drop the unanswered turn
+          if(ex.status===401){ // session expired: back through the OTP gate, keep their draft
+            clearSession();
+            a.value=v; autosize(a);
+            pendingVerifyError="Your session has expired — please verify your email again to keep chatting.";
+            if(info&&info.masked_email){ renderVerify(); } else { show("loading"); boot(); }
+            return;
+          }
+          if(ex.status===403){ applyCap(); return; } // message cap reached
+          a.value=v; autosize(a); // retryable — restore their draft
+          showErr("cError", safeError(ex));
+        }).finally(function(){ busy=false; drawThread();
+          if(!capped && !$("chatView").classList.contains("hidden") && !$("msgInput").disabled){ try{ $("msgInput").focus(); }catch(e){} } });
+      }
+      $("sendBtn").onclick=sendMsg;
+      $("msgInput").addEventListener("keydown",function(e){ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendMsg(); } });
+      $("msgInput").addEventListener("input",function(){ autosize(this); });
+
+      load();
+    })();
+  </script>
+</body>
+</html>

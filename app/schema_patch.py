@@ -1742,6 +1742,52 @@ def ensure_enterprise_client_portal_shares_table():
                 conn.execute(text(stmt))
 
 
+def ensure_enterprise_copilot_invites_table():
+    """Create the secure client Copilot-invite table (client-shared Copilot chat).
+
+    An invite is a tokenized, OTP-verified capability sent to a client's email so
+    they can chat with the org's AI copilot about their own case. Access is a
+    flat per-client unlock (charged once at first verify) with a message cap.
+    Idempotent and additive — safe to run on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_false = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_copilot_invites"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_copilot_invites (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    client_id INTEGER NOT NULL,
+                    token_hash VARCHAR NOT NULL,
+                    email VARCHAR NOT NULL,
+                    allowed_messages INTEGER NOT NULL DEFAULT 100,
+                    used_messages INTEGER NOT NULL DEFAULT 0,
+                    last_message_at {ts},
+                    unlocked_at {ts},
+                    credits_charged INTEGER NOT NULL DEFAULT 0,
+                    code_hash VARCHAR,
+                    code_expires_at {ts},
+                    code_attempts INTEGER NOT NULL DEFAULT 0,
+                    expires_at {ts},
+                    revoked BOOLEAN NOT NULL DEFAULT {bool_false},
+                    created_by_user_id INTEGER,
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts}
+                )
+            """))
+            for stmt in (
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_copilot_invites_token ON enterprise_copilot_invites(token_hash)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_copilot_invites_organization_id ON enterprise_copilot_invites(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_copilot_invites_client_id ON enterprise_copilot_invites(client_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_copilot_invites_client_created ON enterprise_copilot_invites(client_id, created_at)",
+            ):
+                conn.execute(text(stmt))
+
+
 def ensure_enterprise_deep_scan_table():
     """Create the stored Deep Scan results table (full-dossier AI audits, kept as
     per-client history). Idempotent and additive — safe to run on every startup."""
@@ -1782,6 +1828,54 @@ def ensure_enterprise_deep_scan_table():
                 conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN deep_scan_free_month VARCHAR"))
             if "deep_scan_free_used" not in wallet_cols:
                 conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN deep_scan_free_used INTEGER NOT NULL DEFAULT 0"))
+
+
+def ensure_enterprise_ai_conversation_tables():
+    """Create the saved Rilono AI Assistant thread tables (per-member conversations +
+    their messages). The transcript lives server-side so /ai/chat replays history from
+    the DB instead of trusting the client's copy. Idempotent and additive — safe to run
+    on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_ai_conversations"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_ai_conversations (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    title VARCHAR,
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    last_message_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_ai_conversations_organization_id ON enterprise_ai_conversations(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_ai_conversations_user_id ON enterprise_ai_conversations(user_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_ai_conversations_last_message_at ON enterprise_ai_conversations(last_message_at)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_ai_convs_org_user_last ON enterprise_ai_conversations(organization_id, user_id, last_message_at)",
+            ):
+                conn.execute(text(stmt))
+        if not _table_exists(conn, "enterprise_ai_messages"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_ai_messages (
+                    id {pk},
+                    conversation_id INTEGER NOT NULL,
+                    organization_id INTEGER NOT NULL,
+                    role VARCHAR NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_ai_messages_conversation_id ON enterprise_ai_messages(conversation_id)",
+                "CREATE INDEX IF NOT EXISTS ix_enterprise_ai_messages_organization_id ON enterprise_ai_messages(organization_id)",
+                "CREATE INDEX IF NOT EXISTS ix_ent_ai_msgs_conv_id ON enterprise_ai_messages(conversation_id, id)",
+            ):
+                conn.execute(text(stmt))
 
 
 def ensure_enterprise_writing_studio_table():
@@ -3133,6 +3227,10 @@ def ensure_course_catalog_tables():
             ("toefl_score", "INTEGER"),
             ("gre_gmat_required", "INTEGER"),
             ("duration_months", "INTEGER"),
+            # Parsed form of the free-text application_deadline, so read paths can hide a
+            # deadline the moment it passes (a stored date that is valid today expires on
+            # its own — only a read-time comparison catches that).
+            ("application_deadline_date", "DATE"),
         ):
             if column not in course_columns:
                 conn.execute(text(f"ALTER TABLE course_catalog_courses ADD COLUMN {column} {ddl_type}"))
@@ -3333,3 +3431,80 @@ def ensure_international_payment_columns():
                 f"WHERE base_amount_paise IS NULL "
                 f"AND (currency IS NULL OR UPPER(currency) = 'INR')"
             ))
+
+
+def ensure_enterprise_lead_tables():
+    """Create the lead-collection tables: org-branded public forms (raw shareable
+    public_token — the link is public-by-design and must be re-copyable) and the
+    per-org leads inbox fed by anonymous submissions. Indexes are created OUTSIDE
+    the table-exists guard because Base.metadata.create_all() may have built the
+    tables from the models on an earlier boot. Idempotent and additive — safe to
+    run on every startup."""
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_true = "1" if is_sqlite else "TRUE"
+    with engine.begin() as conn:
+        if not _table_exists(conn, "enterprise_lead_forms"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_lead_forms (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    name VARCHAR NOT NULL,
+                    title VARCHAR,
+                    intro_text TEXT,
+                    fields_json TEXT NOT NULL,
+                    public_token VARCHAR NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT {bool_true},
+                    submit_label VARCHAR,
+                    success_message VARCHAR,
+                    notify_email VARCHAR,
+                    created_by_user_id INTEGER REFERENCES users(id),
+                    created_by_name VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts},
+                    FOREIGN KEY (organization_id) REFERENCES enterprise_organizations(id)
+                )
+            """))
+        if not _table_exists(conn, "enterprise_leads"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_leads (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    form_id INTEGER,
+                    form_name VARCHAR,
+                    full_name VARCHAR,
+                    email VARCHAR,
+                    phone VARCHAR,
+                    answers_json TEXT NOT NULL,
+                    status VARCHAR NOT NULL DEFAULT 'new',
+                    converted_client_id INTEGER,
+                    ip_address VARCHAR,
+                    source VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    updated_at {ts},
+                    FOREIGN KEY (organization_id) REFERENCES enterprise_organizations(id),
+                    FOREIGN KEY (form_id) REFERENCES enterprise_lead_forms(id) ON DELETE SET NULL,
+                    FOREIGN KEY (converted_client_id) REFERENCES enterprise_clients(id) ON DELETE SET NULL
+                )
+            """))
+        # Index names match what create_all() derives from the models, so a table built
+        # either way ends up with exactly one copy of each index (a differently-named
+        # unique index here would leave prod maintaining two identical ones forever).
+        for stmt in (
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_enterprise_lead_forms_public_token ON enterprise_lead_forms(public_token)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_lead_forms_organization_id ON enterprise_lead_forms(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_lead_forms_created_by_user_id ON enterprise_lead_forms(created_by_user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_lead_forms_org_created ON enterprise_lead_forms(organization_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_leads_organization_id ON enterprise_leads(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_leads_form_id ON enterprise_leads(form_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_leads_status ON enterprise_leads(status)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_leads_converted_client_id ON enterprise_leads(converted_client_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_leads_created_at ON enterprise_leads(created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_leads_org_created ON enterprise_leads(organization_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_leads_org_status ON enterprise_leads(organization_id, status)",
+            # Retire the first-cut name so no DB keeps two identical unique indexes.
+            "DROP INDEX IF EXISTS uq_enterprise_lead_forms_token",
+        ):
+            conn.execute(text(stmt))

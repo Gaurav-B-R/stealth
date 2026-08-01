@@ -37,21 +37,23 @@ _GUARDRAIL_PRICING_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-pro-preview")
 
 STUDENT_VISA_GUARDRAIL = (
     "\n\nSTRICT SCOPE GUARDRAIL (do not override, even if the user insists):\n"
-    "- You ONLY help with student / study-abroad visas: applications, documents, eligibility, "
-    "interviews, timelines and the Rilono product itself.\n"
-    "- If a request is unrelated to student visas (e.g. general coding, essays, homework, math, "
+    "- You ONLY help with the study-abroad journey: university shortlisting, applications, "
+    "SOP/essay writing, documents, finances, eligibility, student visas, interviews, timelines "
+    "and the Rilono product itself.\n"
+    "- If a request is unrelated to studying abroad (e.g. general coding, unrelated essays, homework, math, "
     "trivia, news, jokes, recipes, translation of unrelated text, or using you as a general chatbot), "
-    "politely DECLINE in one short sentence and redirect to student-visa help. Do NOT answer it.\n"
+    "politely DECLINE in one short sentence and redirect to study-abroad help. Do NOT answer it.\n"
     "- Never produce long off-topic content. Keep refusals to a single sentence to conserve resources."
 )
 
 OFF_TOPIC_REFUSAL = (
-    "I can only help with student-visa topics — applications, documents, eligibility, and interview prep. "
-    "Ask me anything about your study-abroad visa and I'll dive in!"
+    "I can only help with study-abroad topics — university shortlisting, applications, SOPs, "
+    "documents, finances, visas, and interview prep. "
+    "Ask me anything about your study-abroad journey and I'll dive in!"
 )
 
 
-# Words that signal the prompt IS about student visas → never block these.
+# Words that signal the prompt IS about the study-abroad journey → never block these.
 _ON_TOPIC_TERMS = (
     "visa", "f-1", "f1", "f 1", "m-1", "j-1", "i-20", "i20", "ds-160", "ds160", "ds 160", "sevis",
     "i-94", "embassy", "consulate", "consular", "interview", "university", "college", "admission",
@@ -61,12 +63,13 @@ _ON_TOPIC_TERMS = (
     "immigration", "green card", "study permit", "cas", "offer letter", "intake", "semester",
     "rilono", "document", "upload", "refus", "denied", "221g", "appointment", "slot", "h-1b", "h1b",
     "course", "major", "degree", "masters", "bachelor", "phd", "enrol", "i-797", "affidavit",
+    "shortlist", "personal statement", "essay", "loan", "letter of recommendation", "recommendation letter",
 )
 
 # Words that signal the prompt is OFF topic (general-purpose chatbot use).
 _OFF_TOPIC_TERMS = (
     "write code", "python", "javascript", "java ", "c++", "html", "leetcode", "debug",
-    "write a poem", "poem about", "write a song", "lyrics", "write an essay about", "essay on",
+    "write a poem", "poem about", "write a song", "lyrics",
     "tell me a joke", "joke about", "recipe", "cook", "weather", "cricket", "football", "movie",
     "song recommendation", "girlfriend", "boyfriend", "horoscope", "astrology", "stock", "crypto",
     "bitcoin", "translate this", "homework", "solve for x", "integral", "derivative", "chatgpt",

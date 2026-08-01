@@ -154,7 +154,7 @@
             (info.organization_name || "your consultancy") + " directly.");
           return;
         }
-        $("payDesc").textContent = info.description || "Visa service payment";
+        $("payDesc").textContent = info.description || "Service payment";
         $("payAmount").textContent = inr(info.amount_paise);
         $("payInv").textContent = info.invoice_number || "";
         if (info.due_date) {
@@ -186,7 +186,7 @@
           key: info.razorpay_key_id,
           order_id: info.razorpay_order_id,
           name: info.organization_name || "Payment",
-          description: info.description || "Visa service payment",
+          description: info.description || "Service payment",
           // Razorpay rejects international card payments sent with dummy contact details
           // ("Your international payment will fail if you send us a dummy email id and
           // phone number of the customer"), so send the real values and omit empties

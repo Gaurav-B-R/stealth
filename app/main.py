@@ -52,7 +52,9 @@ from app.schema_patch import (
     ensure_enterprise_interview_invite_columns,
     ensure_enterprise_document_request_tables,
     ensure_enterprise_client_portal_shares_table,
+    ensure_enterprise_copilot_invites_table,
     ensure_enterprise_deep_scan_table,
+    ensure_enterprise_ai_conversation_tables,
     ensure_enterprise_writing_studio_table,
     ensure_enterprise_refunds_table,
     ensure_enterprise_payments_tables,
@@ -80,6 +82,7 @@ from app.schema_patch import (
     ensure_e2e_encryption_columns,
     ensure_subscription_payments_user_id_nullable,
     ensure_course_catalog_tables,
+    ensure_enterprise_lead_tables,
 )
 from app.document_catalog import ensure_default_document_type_catalog
 from app.au_universities import seed_au_universities
@@ -110,7 +113,7 @@ _docs_enabled = (
 
 app = FastAPI(
     title=APP_NAME,
-    description="AI-powered F1 student visa documentation assistant",
+    description="AI-powered study-abroad platform",
     version=APP_VERSION,
     docs_url="/docs" if _docs_enabled else None,
     redoc_url="/redoc" if _docs_enabled else None,
@@ -298,7 +301,9 @@ def startup_backfill_subscriptions():
     ensure_enterprise_interview_invite_columns()
     ensure_enterprise_document_request_tables()
     ensure_enterprise_client_portal_shares_table()
+    ensure_enterprise_copilot_invites_table()
     ensure_enterprise_deep_scan_table()
+    ensure_enterprise_ai_conversation_tables()
     ensure_enterprise_writing_studio_table()
     ensure_enterprise_credit_tables()
     ensure_enterprise_refunds_table()
@@ -329,6 +334,7 @@ def startup_backfill_subscriptions():
     ensure_gemini_usage_table()
     ensure_ai_optimization_events_table()
     ensure_course_catalog_tables()
+    ensure_enterprise_lead_tables()
     db = SessionLocal()
     try:
         ensure_default_document_type_catalog(db)
@@ -475,28 +481,28 @@ _SPA_ROUTE_META = {
     "/us-f1-visa": {"title": _F1_TITLE, "description": _F1_DESCRIPTION, "canonical": f"{SITE_ORIGIN}/us-f1-visa"},
     "/products/us-f1-visa": {"title": _F1_TITLE, "description": _F1_DESCRIPTION, "canonical": f"{SITE_ORIGIN}/us-f1-visa"},
     "/pricing": {
-        "title": "Pricing — Student Visa Plans & Visa Success Pass · Rilono",
+        "title": "Pricing — Plans & Visa Success Pass · Rilono",
         "description": "See Rilono's simple pricing: a free tier plus the one-time Visa Success Pass for unlimited AI document validation, red-flag scans and mock interviews.",
         "canonical": f"{SITE_ORIGIN}/pricing",
     },
     "/about-us": {
-        "title": "About Rilono — AI Student Visa Guidance for US, UK, Canada & Australia",
-        "description": "Rilono helps students prepare confident, well-documented visa applications with AI guidance across the US, UK, Canada and Australia.",
+        "title": "About Rilono — AI Study-Abroad Guidance for US, UK, Canada, Australia & Germany",
+        "description": "Rilono helps students run their whole study-abroad journey — universities, SOPs, documents, finances, interviews and visas — with AI guidance across the US, UK, Canada, Australia and Germany.",
         "canonical": f"{SITE_ORIGIN}/about-us",
     },
     "/contact": {
-        "title": "Contact Rilono — Support for Students & Visa Consultancies",
-        "description": "Get in touch with the Rilono team for help with your student-visa journey or the Rilono Enterprise platform for consultancies.",
+        "title": "Contact Rilono — Support for Students & Study-Abroad Consultancies",
+        "description": "Get in touch with the Rilono team for help with your study-abroad journey or the Rilono Enterprise platform for consultancies.",
         "canonical": f"{SITE_ORIGIN}/contact",
     },
     "/privacy": {
         "title": "Privacy Policy · Rilono",
-        "description": "How Rilono collects, encrypts, uses and protects your personal and document data across our student-visa platform.",
+        "description": "How Rilono collects, encrypts, uses and protects your personal and document data across our study-abroad platform.",
         "canonical": f"{SITE_ORIGIN}/privacy",
     },
     "/terms": {
         "title": "Terms & Conditions · Rilono",
-        "description": "The terms and conditions governing your use of Rilono's AI student-visa guidance platform.",
+        "description": "The terms and conditions governing your use of Rilono's AI study-abroad guidance platform.",
         "canonical": f"{SITE_ORIGIN}/terms",
     },
     "/refund-policy": {
@@ -506,7 +512,7 @@ _SPA_ROUTE_META = {
     },
     "/delivery-policy": {
         "title": "Service Delivery Policy · Rilono",
-        "description": "How and when Rilono delivers access to its digital student-visa guidance services after purchase.",
+        "description": "How and when Rilono delivers access to its digital study-abroad guidance services after purchase.",
         "canonical": f"{SITE_ORIGIN}/delivery-policy",
     },
     "/dpa": {
@@ -516,13 +522,13 @@ _SPA_ROUTE_META = {
     },
     "/login": {
         "title": "Log in · Rilono",
-        "description": "Log in to your Rilono account to continue your student-visa journey.",
+        "description": "Log in to your Rilono account to continue your study-abroad journey.",
         "canonical": f"{SITE_ORIGIN}/login",
         "noindex": True,
     },
     "/register": {
         "title": "Create your account · Rilono",
-        "description": "Create a free Rilono account and start preparing your student-visa application with AI guidance.",
+        "description": "Create a free Rilono account and start preparing your study-abroad application with AI guidance.",
         "canonical": f"{SITE_ORIGIN}/register",
         "noindex": True,
     },
@@ -549,7 +555,7 @@ _SPA_ROUTE_META = {
         "canonical": f"{SITE_ORIGIN}/news", "noindex": True,
     },
     "/copilot": {
-        "title": "AI Copilot · Rilono", "description": "Use Rilono Copilot for your visa journey.",
+        "title": "AI Copilot · Rilono", "description": "Use Rilono Copilot for your study-abroad journey.",
         "canonical": f"{SITE_ORIGIN}/copilot", "noindex": True,
     },
     "/sop": {
@@ -1038,11 +1044,32 @@ async def read_client_portal(token: str):
     raise HTTPException(status_code=404, detail="Not found")
 
 
+@app.get("/assist/{token}")
+async def read_client_copilot_invite(token: str):
+    """Serve the public client-facing Copilot chat page (token validated client-side via
+    /api/enterprise/public/copilot/{token}). Path is /assist because bare /copilot
+    already serves the B2C SPA."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "assist.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
 @app.get("/pay/{token}")
 async def read_public_pay_page(token: str):
     """Serve the public student pay page for an enterprise payment request
     (token validated client-side via /api/enterprise/pay/{token})."""
     html_path = os.path.join(os.path.dirname(__file__), "..", "static", "pay.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path)
+    raise HTTPException(status_code=404, detail="Not found")
+
+
+@app.get("/f/{token}")
+async def read_public_lead_form(token: str):
+    """Serve an org's public branded lead-collection form (token validated
+    client-side via /api/enterprise/public/forms/{token})."""
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "lead_form.html")
     if os.path.exists(html_path):
         return FileResponse(html_path)
     raise HTTPException(status_code=404, detail="Not found")

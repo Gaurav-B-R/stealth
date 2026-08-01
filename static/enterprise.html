@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rilono Enterprise — Visa Client CRM</title>
-  <meta name="description" content="The all-in-one platform for visa consultancies to manage clients, track visa status, and grow." />
+  <title>Rilono Enterprise — Study-Abroad Client CRM</title>
+  <meta name="description" content="The all-in-one platform for study-abroad consultancies to manage clients, track every case, and grow." />
   <meta name="robots" content="noindex" />
   <link rel="icon" href="/static/logo.png" />
-  <link rel="stylesheet" href="/static/enterprise.css?v=20260730a" />
+  <link rel="stylesheet" href="/static/enterprise.css?v=20260731f" />
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 <body>
@@ -20,8 +20,8 @@
         <b>Rilono&nbsp;Enterprise</b>
       </div>
       <div class="auth-hero-body">
-        <h1>Run your entire student-visa practice — with a Rilono AI assistant.</h1>
-        <p>Manage every applicant, track each student visa end-to-end, send updates, and just ask the built-in Rilono AI about your portal — built for education consultancies. The core CRM is free; premium AI runs on pay-as-you-go credits.</p>
+        <h1>Run your entire study-abroad practice — with a Rilono AI assistant.</h1>
+        <p>Manage every applicant, track each student's journey end-to-end, send updates, and just ask the built-in Rilono AI about your portal — built for education consultancies. The core CRM is free; premium AI runs on pay-as-you-go credits.</p>
         <ul class="auth-points">
           <li><span class="tick">✓</span> ✨ Rilono AI assistant — ask anything about your clients &amp; statuses</li>
           <li><span class="tick">✓</span> Visual pipeline from lead to approval</li>
@@ -41,7 +41,7 @@
         <form id="signupForm" autocomplete="on">
           <div class="field">
             <label>Consultancy / company name</label>
-            <input name="company_name" placeholder="e.g. Bangalore Visa Experts" required />
+            <input name="company_name" placeholder="e.g. Bangalore Overseas Education" required />
           </div>
           <div class="field">
             <label>Choose your portal URL</label>
@@ -218,13 +218,17 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
           Clients <span class="badge" id="clientsBadge">0</span>
         </button>
+        <button class="nav-item" data-view="leads">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/></svg>
+          Leads <span class="ai-pill">New</span>
+        </button>
         <button class="nav-item" data-view="coursefinder">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c0 1.7 2.7 3 6 3s6-1.3 6-3v-5"/><path d="M22 10v6"/></svg>
-          Course Finder <span class="ai-pill">New</span>
+          Course Finder
         </button>
         <button class="nav-item" data-view="ai">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.9L12 15l-1.9-4.1L5.5 9l4.6-1.4L12 3z"/><path d="M19 14l.8 2 2 .8-2 .8L19 20l-.8-2.4-2-.8 2-.8L19 14z"/></svg>
-          Rilono AI Assistant <span class="ai-pill">New</span>
+          Rilono AI Assistant
         </button>
         <button class="nav-item" data-view="team">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
@@ -304,6 +308,6 @@
 
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   <script src="/static/uk-maintenance-calc.js?v=20260712b"></script>
-  <script src="/static/enterprise.js?v=20260730a"></script>
+  <script src="/static/enterprise.js?v=20260731f"></script>
 </body>
 </html>

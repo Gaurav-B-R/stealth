@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>My Visa Application · Rilono</title>
+  <title>My Application · Rilono</title>
   <meta name="robots" content="noindex" />
   <link rel="icon" href="/static/logo.png" />
   <style>
@@ -186,7 +186,7 @@
       <div id="verifyView" class="hidden">
         <div class="hero">
           <div class="eyebrow" id="vOrg">Your consultancy</div>
-          <h1>🧭 Your visa application portal</h1>
+          <h1>🧭 Your application portal</h1>
           <div class="sub" id="vSub">Track your application every step of the way.</div>
         </div>
         <div class="body">
@@ -452,16 +452,16 @@
         $("gateCard").classList.add("hidden");
         var pv=$("portalView");
         pv.innerHTML=
-          '<div class="p-topbar">'+logoImg+'<div><div class="org">'+esc(org.name||"Your consultancy")+'</div><div class="tagline">Your visa application portal</div></div>'+
+          '<div class="p-topbar">'+logoImg+'<div><div class="org">'+esc(org.name||"Your consultancy")+'</div><div class="tagline">Your application portal</div></div>'+
             '<span class="p-view-badge">👁 View-only</span></div>'+
           '<div class="p-hero" style="'+heroStyle+'">'+
             '<div class="p-seal"><span>Destination</span><div><strong>'+esc(code==="GB"?"UK":code||"—")+'</strong><small>'+esc((c.country&&c.country.flag_emoji)||"🌐")+'</small></div></div>'+
             '<div class="hstatus">'+statusPill(data.stage)+'</div>'+
-            '<div class="kicker">Student visa dossier</div>'+
+            '<div class="kicker">Student dossier</div>'+
             '<h1>'+esc(c.full_name||"")+'</h1>'+
             '<div class="hsub">'+esc(c.destination_country_name||"")+' · '+esc(c.visa_type||"")+(c.intake?" · "+esc(c.intake):"")+'</div>'+
           '</div>'+
-          '<div class="p-card"><h2>Your visa journey</h2><p class="sub">Where your application is right now — updated by '+esc(org.name||"your consultancy")+'.</p>'+journeyHtml()+'</div>'+
+          '<div class="p-card"><h2>Your journey</h2><p class="sub">Where your application is right now — updated by '+esc(org.name||"your consultancy")+'.</p>'+journeyHtml()+'</div>'+
           '<div class="p-card"><h2>Stage by stage</h2><p class="sub">Tap a stage to see the details recorded for it.</p>'+stageDetailsHtml()+'</div>'+
           '<div class="p-card"><h2>Your details</h2><p class="sub">The profile information on file for your application.</p>'+profileHtml()+'</div>'+
           '<div class="p-card"><h2>Documents on file ('+(data.documents||[]).length+')</h2><p class="sub">Documents your consultancy holds for this application.</p>'+documentsHtml()+'</div>'+

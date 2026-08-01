@@ -548,6 +548,25 @@ def delete_account(
     except Exception:
         logger.exception("delete_account: failed to de-link payment records for user_id=%s", current_user.id)
 
+    # The user's saved enterprise AI-assistant threads (a B2C member can also belong to a
+    # consultancy workspace) are NOT covered by the users-table cascade — delete them
+    # explicitly, messages first, or the dangling FK breaks the user delete on Postgres.
+    try:
+        _ai_conv_ids = [
+            cid for (cid,) in db.query(models.EnterpriseAiConversation.id).filter(
+                models.EnterpriseAiConversation.user_id == current_user.id
+            ).all()
+        ]
+        if _ai_conv_ids:
+            db.query(models.EnterpriseAiMessage).filter(
+                models.EnterpriseAiMessage.conversation_id.in_(_ai_conv_ids)
+            ).delete(synchronize_session=False)
+            db.query(models.EnterpriseAiConversation).filter(
+                models.EnterpriseAiConversation.id.in_(_ai_conv_ids)
+            ).delete(synchronize_session=False)
+    except Exception:
+        logger.exception("delete_account: failed to purge enterprise AI threads for user_id=%s", current_user.id)
+
     # Verified — delete the user explicitly; other related data is removed by cascade.
     db.delete(current_user)
     db.commit()

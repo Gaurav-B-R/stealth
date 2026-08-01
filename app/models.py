@@ -395,7 +395,7 @@ class EnterpriseStudent(Base):
 
 
 class EnterpriseClient(Base):
-    """A visa client/applicant managed by an enterprise organization (any visa category)."""
+    """A client/applicant managed by an enterprise organization (any visa category)."""
     __tablename__ = "enterprise_clients"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -525,6 +525,12 @@ class EnterpriseClient(Base):
     )
     interview_invites = relationship(
         "EnterpriseInterviewInvite",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    copilot_invites = relationship(
+        "EnterpriseCopilotInvite",
         back_populates="client",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -749,6 +755,49 @@ class EnterpriseClientDeepScan(Base):
     )
 
 
+class EnterpriseAiConversation(Base):
+    """One saved thread with the Rilono AI Assistant (the org-scoped dashboard copilot).
+
+    Threads are PER MEMBER, not per org — a consultant's chat history is their own
+    scratchpad, and making it org-readable would be a surveillance surface nobody asked
+    for. The transcript is the authoritative conversation state: /ai/chat replays it
+    server-side, so a client can no longer hand the model a fabricated prior turn.
+    Rows are hard-deleted (thread delete, retention sweep, member offboarding) — they
+    carry client PII, so there is no soft-delete/archive state to leak from.
+    """
+    __tablename__ = "enterprise_ai_conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String, nullable=True)  # first user message, truncated — never a model call
+    message_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_message_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_ent_ai_convs_org_user_last", "organization_id", "user_id", "last_message_at"),
+    )
+
+
+class EnterpriseAiMessage(Base):
+    """One turn of a saved assistant thread ({role: user|model}). Deleted explicitly with
+    its conversation — deletion never relies on DB-level FK cascade (SQLite dev DBs don't
+    enforce it)."""
+    __tablename__ = "enterprise_ai_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("enterprise_ai_conversations.id"), nullable=False, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    role = Column(String, nullable=False)  # user | model
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_ent_ai_msgs_conv_id", "conversation_id", "id"),
+    )
+
+
 class EnterpriseClientWritingDraft(Base):
     """One AI-drafted admissions document for a client — a Statement of Purpose or a
     Letter of Recommendation — from the enterprise Writing Studio.
@@ -940,6 +989,47 @@ class EnterpriseClientPortalShare(Base):
 
     __table_args__ = (
         Index("ix_ent_portal_shares_client_created", "client_id", "created_at"),
+    )
+
+
+class EnterpriseCopilotInvite(Base):
+    """A secure email invite giving a client their own Copilot chat about their case.
+
+    Mirrors the interview-invite / portal-share security model: a high-entropy
+    capability token (stored hashed) plus a one-time email code (OTP) the client
+    must confirm, after which a short-lived signed session token (scope
+    "ent_copilot") authorizes the public chat endpoint. Access is a flat
+    per-client unlock: the org wallet is charged once when the client first
+    verifies (unlocked_at), and the message counters cap total usage.
+    """
+    __tablename__ = "enterprise_copilot_invites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)  # hashed capability token
+    email = Column(String, nullable=False)  # client email the link was sent to
+    allowed_messages = Column(Integer, nullable=False, default=100)
+    used_messages = Column(Integer, nullable=False, default=0)  # answered chat messages
+    last_message_at = Column(DateTime(timezone=True), nullable=True)
+    # Flat unlock: set when the client first verifies and the org wallet is charged.
+    unlocked_at = Column(DateTime(timezone=True), nullable=True)
+    credits_charged = Column(Integer, nullable=False, default=0)
+    # One-time email verification (OTP) — same scheme as EnterpriseInterviewInvite.
+    code_hash = Column(String, nullable=True)
+    code_expires_at = Column(DateTime(timezone=True), nullable=True)
+    code_attempts = Column(Integer, nullable=False, default=0)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    revoked = Column(Boolean, nullable=False, default=False)
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    client = relationship("EnterpriseClient", back_populates="copilot_invites")
+
+    __table_args__ = (
+        Index("ix_ent_copilot_invites_client_created", "client_id", "created_at"),
     )
 
 
@@ -2031,6 +2121,11 @@ class CourseCatalogCourse(Base):
     tuition_currency = Column(String, nullable=True)   # e.g. USD|GBP|CAD|AUD|EUR
     intakes = Column(Text, nullable=True)              # JSON list, e.g. ["Fall","Spring"]
     application_deadline = Column(String, nullable=True)
+    # Parsed from application_deadline on write (apply_course_derived_fields). NULL when
+    # the text holds no parseable date ("Rolling admissions"). Read paths compare this
+    # against today so an expired deadline is never displayed as current — the text
+    # column alone can't do that, and 374 live rows once shipped already-past deadlines.
+    application_deadline_date = Column(Date, nullable=True)
     application_fee = Column(String, nullable=True)    # one-off fee to apply (≠ tuition)
     ielts_requirement = Column(String, nullable=True)
     toefl_requirement = Column(String, nullable=True)
@@ -2104,4 +2199,70 @@ class EnterpriseCourseFinderRec(Base):
 
     __table_args__ = (
         Index("ix_ent_course_finder_recs_org_created", "organization_id", "created_at"),
+    )
+
+
+class EnterpriseLeadForm(Base):
+    """An org-branded public lead-collection form (shared as a link / by email).
+
+    public_token is stored RAW (not hashed, unlike portal/pay tokens) on purpose:
+    the link is public-by-design — it only reveals the form definition and org
+    branding, grants no data access, and the org must be able to re-copy the same
+    link from the UI at any time. Pausing (is_active) or rotating the token kills
+    the old link. The field schema lives in fields_json as a JSON list of
+    {key,label,type,required,placeholder,options} objects (house JSON-in-Text style).
+    """
+    __tablename__ = "enterprise_lead_forms"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)              # internal name shown in the console
+    title = Column(String, nullable=True)              # public heading (falls back to name)
+    intro_text = Column(Text, nullable=True)           # public intro paragraph
+    fields_json = Column(Text, nullable=False)         # JSON list of field definitions
+    public_token = Column(String, nullable=False, unique=True, index=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    submit_label = Column(String, nullable=True)
+    success_message = Column(String, nullable=True)
+    notify_email = Column(String, nullable=True)       # optional "new lead" alert inbox
+    created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    created_by_name = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_ent_lead_forms_org_created", "organization_id", "created_at"),
+    )
+
+
+class EnterpriseLead(Base):
+    """One public form submission (a lead) in an org's inbox.
+
+    Leads outlive their form (form_id SET NULL + form_name snapshot — collected
+    contacts are business data) and link to the client they become on conversion.
+    answers_json is a JSON list of {key,label,type,value} preserving the form's
+    field order at submission time; name/email/phone are denormalized copies of
+    the matching answers so the inbox list and convert-to-client prefill never
+    parse JSON in a query loop.
+    """
+    __tablename__ = "enterprise_leads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    form_id = Column(Integer, ForeignKey("enterprise_lead_forms.id", ondelete="SET NULL"), nullable=True, index=True)
+    form_name = Column(String, nullable=True)          # snapshot for display after form deletion
+    full_name = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    answers_json = Column(Text, nullable=False)        # JSON list of {key,label,type,value}
+    status = Column(String, nullable=False, default="new", index=True)  # new|contacted|converted|closed
+    converted_client_id = Column(Integer, ForeignKey("enterprise_clients.id", ondelete="SET NULL"), nullable=True, index=True)
+    ip_address = Column(String, nullable=True)
+    source = Column(String, nullable=True)             # referrer / utm hint captured by the public page
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_ent_leads_org_created", "organization_id", "created_at"),
+        Index("ix_ent_leads_org_status", "organization_id", "status"),
     )

@@ -68,6 +68,8 @@ from app.email_service import send_enterprise_interview_invite_email, send_enter
 from app.email_service import send_enterprise_interview_report_email
 from app.email_service import send_enterprise_document_request_email, send_enterprise_document_request_code_email
 from app.email_service import send_enterprise_portal_share_email, send_enterprise_portal_code_email
+from app.email_service import send_enterprise_copilot_invite_email, send_enterprise_copilot_code_email
+from app.email_service import send_enterprise_lead_form_link_email, send_enterprise_new_lead_email
 from app.email_service import send_enterprise_payment_request_email
 from app.email_service import send_enterprise_payment_dispute_alert_email
 from app.email_service import generate_verification_token, DEFAULT_PUBLIC_BASE_URL
@@ -3699,6 +3701,14 @@ def enterprise_delete_client(
     for key in storage_keys:
         enterprise_storage.delete_document(key)
 
+    # Leads that became this client outlive it (an enquiry is its own record), so detach
+    # them explicitly rather than trusting ON DELETE SET NULL — the sqlite sandbox never
+    # enforces foreign keys, and a dangling id leaves an "Open client" button that 404s.
+    db.query(models.EnterpriseLead).filter(
+        models.EnterpriseLead.organization_id == organization.id,
+        models.EnterpriseLead.converted_client_id == client.id,
+    ).update({"converted_client_id": None}, synchronize_session=False)
+
     db.delete(client)
     db.commit()
     return {
@@ -4353,6 +4363,26 @@ def enterprise_email_clients_bulk(
     }
 
 
+# Dashboard "What's next": how far ahead it looks, and how many rows the card carries before
+# it defers to the Calendar. Shorter than the Calendar's own 21-day horizon on purpose — this
+# is the "what am I doing today" panel, not the planning view.
+DASH_WHATS_NEXT_HORIZON_DAYS = 7
+DASH_WHATS_NEXT_LIMIT = 6
+
+# "Needs attention": an open case nobody has touched in this many days. SCAN_LIMIT bounds the
+# candidate set the roll-up walks — a workspace with thousands of cold leads must not turn the
+# dashboard into a full-table scan, so the count is reported as a floor past that point.
+DASH_STALE_DAYS = 14
+DASH_STALE_LIMIT = 6
+DASH_STALE_SCAN_LIMIT = 200
+
+# A payment request that has been raised but not yet met. Mirrors client_payment_totals() in
+# enterprise_payments.py — "created" is the only unpaid-and-still-live status; cancelled and
+# failed are dead, and everything at or above "paid" is money in.
+DASH_PAYMENT_OPEN_STATUS = "created"
+DASH_PAYMENT_COLLECTED_STATUSES = ("paid", "transferred", "settled", "partially_refunded")
+
+
 def _dash_scope(query, branch_id):
     """Apply the dashboard's optional office filter to an already scope-filtered aggregate."""
     if branch_id:
@@ -4439,6 +4469,32 @@ def enterprise_dashboard(
         {"visa_type": vt or "—", "count": int(count)} for vt, count in visa_type_rows
     ]
 
+    # Parallel workstreams — where the ADMISSIONS side of every case stands, independent of
+    # the visa pipeline above. Both are intake columns (enterprise_client_fields), so they
+    # exist on every client from day one; option order is the funnel order.
+    def _intake_choice_counts(column, field_key: str) -> list[dict]:
+        raw = dict(
+            _dash_scope(_scoped_agg(column, func.count(models.EnterpriseClient.id)), branch_id)
+            .group_by(column)
+            .all()
+        )
+        rows = [
+            {"key": opt["key"], "label": opt["label"], "count": int(raw.pop(opt["key"], 0))}
+            for opt in client_fields.CLIENT_PROFILE_OPTIONS[field_key]
+        ]
+        # Whatever is left is NULL or a legacy value — one honest bucket, not a silent drop.
+        unrecorded = sum(int(v) for v in raw.values())
+        if unrecorded:
+            rows.append({"key": "", "label": "Not recorded", "count": unrecorded})
+        return rows
+
+    admissions_pipeline = _intake_choice_counts(
+        models.EnterpriseClient.admission_stage, "admission_stage"
+    )
+    english_test_pipeline = _intake_choice_counts(
+        models.EnterpriseClient.english_test_status, "english_test_status"
+    )
+
     # Top destination countries
     country_rows = (
         _dash_scope(
@@ -4469,19 +4525,52 @@ def enterprise_dashboard(
     member_names = _org_member_name_map(db, org_id)
     _sensitive = ctx.has("clients.view_sensitive")
 
-    # Upcoming deadlines (target_date today or later), nearest first
     today = date.today()
-    upcoming = (
-        base
-        .filter(
-            models.EnterpriseClient.target_date.isnot(None),
-            models.EnterpriseClient.target_date >= today,
-            models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+
+    # "What's next" — the Calendar's overdue + upcoming feed, folded into the dashboard so a
+    # follow-up that has quietly aged out is visible on the screen people actually land on.
+    # Same 30-day look-back as the Calendar and the sidebar badge, so the overdue count agrees
+    # across all three; a shorter forward horizon because this is the daily-driver view.
+    whats_next = None
+    if ctx.has("calendar.view"):
+        horizon_days = DASH_WHATS_NEXT_HORIZON_DAYS
+        window = _collect_calendar_events(
+            db, org_id,
+            today - timedelta(days=30), today + timedelta(days=horizon_days),
+            include_done=False, ctx=ctx, branch_id=branch_id,
         )
-        .order_by(models.EnterpriseClient.target_date.asc())
-        .limit(8)
-        .all()
-    )
+        wn_overdue = [e for e in window if e.get("overdue")]
+        wn_upcoming = [
+            e for e in window
+            if not e.get("overdue") and (e["date"] or "") >= today.isoformat()
+        ]
+        whats_next = {
+            "today": today.isoformat(),
+            "horizon_days": horizon_days,
+            # Totals are the honest counts; the lists are trimmed for the card, which links
+            # out to the Calendar for the rest.
+            "overdue_total": len(wn_overdue),
+            "upcoming_total": len(wn_upcoming),
+            "overdue": wn_overdue[:DASH_WHATS_NEXT_LIMIT],
+            "upcoming": wn_upcoming[:DASH_WHATS_NEXT_LIMIT],
+        }
+
+    # Upcoming deadlines (target_date today or later), nearest first. Only built as the fallback
+    # for a role that can see the dashboard but not the calendar — Finance, or a custom role
+    # without calendar.view — since "What's next" already carries client key dates.
+    upcoming = []
+    if whats_next is None:
+        upcoming = (
+            base
+            .filter(
+                models.EnterpriseClient.target_date.isnot(None),
+                models.EnterpriseClient.target_date >= today,
+                models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+            )
+            .order_by(models.EnterpriseClient.target_date.asc())
+            .limit(8)
+            .all()
+        )
 
     # Recent clients
     recent = (
@@ -4489,6 +4578,129 @@ def enterprise_dashboard(
         .limit(6)
         .all()
     )
+
+    # ---- Needs attention: open cases that have stopped moving ----------------------------
+    # "Moving" is deliberately wider than the client row's own updated_at. A counsellor who logs
+    # a note, sends an email or takes in a document is working the case even though the record
+    # itself never changed — counting only updated_at would flag the busiest files as stale.
+    # The row's own timestamp is the OUTER bound (activity can only make a case look fresher),
+    # so filtering on it first gives a superset the activity pass then narrows.
+    stale_cutoff = now - timedelta(days=DASH_STALE_DAYS)
+    client_touched_at = func.coalesce(
+        models.EnterpriseClient.updated_at, models.EnterpriseClient.created_at
+    )
+    stale_candidates = (
+        base
+        .filter(
+            models.EnterpriseClient.status.in_(open_stage_keys or {""}),
+            client_touched_at < stale_cutoff,
+        )
+        .order_by(client_touched_at.asc())
+        .limit(DASH_STALE_SCAN_LIMIT)
+        .all()
+    )
+
+    def _naive(ts):
+        """Postgres hands back tz-aware datetimes and SQLite naive ones; `now` is naive."""
+        if ts is None:
+            return None
+        return ts.replace(tzinfo=None) if getattr(ts, "tzinfo", None) else ts
+
+    stale_rows: list[tuple[models.EnterpriseClient, int]] = []
+    if stale_candidates:
+        candidate_ids = [c.id for c in stale_candidates]
+        last_touch: dict[int, datetime] = {}
+        for activity_model in (
+            models.EnterpriseClientNote,
+            models.EnterpriseClientEmail,
+            models.EnterpriseClientDocument,
+        ):
+            for cid, ts in (
+                db.query(activity_model.client_id, func.max(activity_model.created_at))
+                .filter(
+                    activity_model.organization_id == org_id,
+                    activity_model.client_id.in_(candidate_ids),
+                )
+                .group_by(activity_model.client_id)
+                .all()
+            ):
+                ts = _naive(ts)
+                if ts is not None and (cid not in last_touch or ts > last_touch[cid]):
+                    last_touch[cid] = ts
+        for client in stale_candidates:
+            own = _naive(client.updated_at) or _naive(client.created_at)
+            latest = max([t for t in (own, last_touch.get(client.id)) if t is not None], default=None)
+            if latest is None or latest >= stale_cutoff:
+                continue
+            stale_rows.append((client, max(0, (now - latest).days)))
+        stale_rows.sort(key=lambda pair: pair[1], reverse=True)
+
+    stalled = {
+        "days": DASH_STALE_DAYS,
+        "total": len(stale_rows),
+        # Past the scan limit the total is a floor, not the truth — say so rather than
+        # letting the card imply it counted everything.
+        "truncated": len(stale_candidates) >= DASH_STALE_SCAN_LIMIT,
+        "clients": [
+            {
+                **_serialize_client(client, member_names, include_sensitive=_sensitive),
+                "days_stale": days,
+            }
+            for client, days in stale_rows[:DASH_STALE_LIMIT]
+        ],
+    }
+
+    # ---- Money: what has been invoiced and not yet collected ------------------------------
+    # Gated on finance.view, so a counsellor without the Finance section never sees org revenue.
+    # Totals are grouped by currency and never summed across them — there is no FX rate here,
+    # and inventing one is how a report ends up off by an order of magnitude.
+    finance_snapshot = None
+    if ctx.has("finance.view"):
+        payments_q = db.query(models.EnterpriseStudentPayment).filter(
+            models.EnterpriseStudentPayment.organization_id == org_id
+        )
+        # A payment inherits its client's scope. Orphaned rows (client deleted, client_id NULL)
+        # stay workspace-scope only — the same rule _get_org_payment_or_404 enforces.
+        if branch_id or getattr(ctx, "scope_kind", "all") != "all":
+            visible_ids = {int(row[0]) for row in base.with_entities(models.EnterpriseClient.id).all()}
+            payments_q = payments_q.filter(
+                models.EnterpriseStudentPayment.client_id.in_(visible_ids or {-1})
+            )
+
+        def _money_by_currency(query):
+            return [
+                {
+                    "currency": (currency or "INR").upper(),
+                    "count": int(count or 0),
+                    "amount_minor": int(total or 0),
+                }
+                for currency, count, total in (
+                    query.with_entities(
+                        models.EnterpriseStudentPayment.currency,
+                        func.count(models.EnterpriseStudentPayment.id),
+                        func.sum(models.EnterpriseStudentPayment.amount_paise),
+                    )
+                    .group_by(models.EnterpriseStudentPayment.currency)
+                    .all()
+                )
+            ]
+
+        open_payments = payments_q.filter(
+            models.EnterpriseStudentPayment.status == DASH_PAYMENT_OPEN_STATUS
+        )
+        finance_snapshot = {
+            "outstanding": _money_by_currency(open_payments),
+            "overdue_count": open_payments.filter(
+                models.EnterpriseStudentPayment.due_date.isnot(None),
+                models.EnterpriseStudentPayment.due_date < today,
+            ).count(),
+            "collected_this_month": _money_by_currency(
+                payments_q.filter(
+                    models.EnterpriseStudentPayment.status.in_(DASH_PAYMENT_COLLECTED_STATUSES),
+                    models.EnterpriseStudentPayment.paid_at >= month_start,
+                )
+            ),
+        }
 
     pipeline = []
     for stage in catalog.CLIENT_STAGES:
@@ -4515,9 +4727,14 @@ def enterprise_dashboard(
             "new_this_month": new_this_month,
         },
         "pipeline": pipeline,
+        "admissions_pipeline": admissions_pipeline,
+        "english_test_pipeline": english_test_pipeline,
         "category_counts": category_counts,
         "visa_type_counts": visa_type_counts,
         "top_countries": top_countries,
+        "whats_next": whats_next,
+        "stalled": stalled,
+        "finance_snapshot": finance_snapshot,
         "upcoming_deadlines": [
             _serialize_client(c, member_names, include_sensitive=_sensitive) for c in upcoming
         ],
@@ -4543,6 +4760,9 @@ CALENDAR_EVENT_TYPES = {
 DEFAULT_CALENDAR_EVENT_TYPE = "reminder"
 CALENDAR_DERIVED_TYPES = {
     "client_deadline": {"label": "Key date / deadline", "color": "#f97316"},
+    # Same colour as the manual "Follow-up" event type: to the person reading the calendar these
+    # are the same kind of thing, one typed into the intake form and one into a reminder.
+    "client_followup": {"label": "Follow-up due",       "color": "#8b5cf6"},
     "passport_expiry": {"label": "Passport expires",    "color": "#f59e0b"},
 }
 CALENDAR_MAX_RANGE_DAYS = int(os.getenv("ENTERPRISE_CALENDAR_MAX_RANGE_DAYS", "100"))
@@ -4627,7 +4847,7 @@ def _serialize_calendar_derived_event(kind: str, client: models.EnterpriseClient
 
 def _collect_calendar_events(
     db: Session, organization_id: int, start: date, end: date,
-    *, include_done: bool = True, ctx=None,
+    *, include_done: bool = True, ctx=None, branch_id: Optional[int] = None,
 ) -> list[dict]:
     member_names = _org_member_name_map(db, organization_id)
 
@@ -4645,6 +4865,28 @@ def _collect_calendar_events(
                 ctx,
             ).all()
         }
+
+    # The dashboard's office filter narrows the same three sources by branch: an event belongs to
+    # the office its client sits in. A standalone reminder has no office of its own, so it stays
+    # with whoever wrote it rather than disappearing the moment a branch is picked.
+    branch_client_ids: set[int] | None = None
+    if branch_id:
+        branch_client_ids = {
+            int(row[0])
+            for row in scope_client_query(
+                db.query(models.EnterpriseClient.id).filter(
+                    models.EnterpriseClient.organization_id == organization_id,
+                    models.EnterpriseClient.branch_id == int(branch_id),
+                ),
+                ctx,
+            ).all()
+        }
+
+    def _branch_scope(query):
+        """Narrow a derived-event query (which selects clients) to the requested office."""
+        if branch_id:
+            return query.filter(models.EnterpriseClient.branch_id == int(branch_id))
+        return query
 
     manual_q = (
         db.query(models.EnterpriseCalendarEvent)
@@ -4664,6 +4906,18 @@ def _collect_calendar_events(
                     models.EnterpriseCalendarEvent.client_id.is_(None),
                     models.EnterpriseCalendarEvent.created_by_user_id == ctx.user_id,
                 ),
+            )
+        )
+    if branch_client_ids is not None:
+        own_standalone = models.EnterpriseCalendarEvent.client_id.is_(None)
+        if ctx is not None:
+            own_standalone = and_(
+                own_standalone, models.EnterpriseCalendarEvent.created_by_user_id == ctx.user_id
+            )
+        manual_q = manual_q.filter(
+            or_(
+                models.EnterpriseCalendarEvent.client_id.in_(branch_client_ids or {-1}),
+                own_standalone,
             )
         )
 
@@ -4698,7 +4952,7 @@ def _collect_calendar_events(
 
     # Derived: client key dates (target_date) — skip terminal cases
     for client in (
-        scope_client_query(
+        _branch_scope(scope_client_query(
             db.query(models.EnterpriseClient).filter(
                 models.EnterpriseClient.organization_id == organization_id,
                 models.EnterpriseClient.target_date.isnot(None),
@@ -4707,14 +4961,33 @@ def _collect_calendar_events(
                 models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
             ),
             ctx,
-        )
+        ))
         .all()
     ):
         events.append(_serialize_calendar_derived_event("client_deadline", client, client.target_date))
 
+    # Derived: the "Next follow-up" date a counsellor sets on the intake record. Same skip of
+    # decided cases as the key date — an approved or refused applicant needs no chasing.
+    for client in (
+        _branch_scope(scope_client_query(
+            db.query(models.EnterpriseClient).filter(
+                models.EnterpriseClient.organization_id == organization_id,
+                models.EnterpriseClient.next_followup_date.isnot(None),
+                models.EnterpriseClient.next_followup_date >= start,
+                models.EnterpriseClient.next_followup_date <= end,
+                models.EnterpriseClient.status.notin_([catalog.STAGE_APPROVED, catalog.STAGE_REJECTED]),
+            ),
+            ctx,
+        ))
+        .all()
+    ):
+        events.append(
+            _serialize_calendar_derived_event("client_followup", client, client.next_followup_date)
+        )
+
     # Derived: passport expiries in range (any active client)
     for client in (
-        scope_client_query(
+        _branch_scope(scope_client_query(
             db.query(models.EnterpriseClient).filter(
                 models.EnterpriseClient.organization_id == organization_id,
                 models.EnterpriseClient.passport_expiry.isnot(None),
@@ -4722,7 +4995,7 @@ def _collect_calendar_events(
                 models.EnterpriseClient.passport_expiry <= end,
             ),
             ctx,
-        )
+        ))
         .all()
     ):
         events.append(_serialize_calendar_derived_event("passport_expiry", client, client.passport_expiry))
@@ -5779,7 +6052,7 @@ def _send_payment_request_email_safe(payment, organization, client_email, pay_ur
         # owns the exponent and the symbol, so this email matches the pay page exactly.
         amount_minor=int(payment.amount_paise or 0),
         currency=(payment.currency or "INR"),
-        description=payment.description or "Visa service payment",
+        description=payment.description or "Service payment",
         pay_url=pay_url,
         invoice_number=payment.invoice_number or "",
         due_date_text=due,
@@ -8344,7 +8617,143 @@ class EnterpriseAIChatTurn(BaseModel):
 
 class EnterpriseAIChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
+    # Legacy stateless clients only (SPA loaded before threads shipped). When
+    # `conversation_id` is present the transcript is replayed from the DB and this
+    # field is IGNORED — client-supplied history was a context-poisoning surface
+    # (a fabricated "earlier you confirmed…" turn fed straight to the tool agent).
     history: Optional[list[EnterpriseAIChatTurn]] = None
+    conversation_id: Optional[int] = None
+    # Sent (true) by clients that understand saved threads. A legacy SPA loaded before
+    # threads shipped never sends it — and must NOT get a thread-per-message dribble of
+    # single-exchange rows, so persistence only starts once the client opts in.
+    client_threads: bool = False
+
+
+# Saved assistant threads: per-member scratchpad, hard-deleted on retention/offboarding.
+ENTERPRISE_AI_CHAT_RETENTION_DAYS = int(os.getenv("ENTERPRISE_AI_CHAT_RETENTION_DAYS", "90"))
+ENTERPRISE_AI_CONVERSATION_LIST_LIMIT = 50
+ENTERPRISE_AI_CONVERSATION_MESSAGES_LIMIT = 200
+ENTERPRISE_AI_TITLE_MAX = 80
+# Parity with the old client-supplied history cap (EnterpriseAIChatTurn.content) —
+# persistence must not silently grow the prompt the credit meter was tuned against.
+ENTERPRISE_AI_HISTORY_TURN_CHARS = 6000
+
+
+def _serialize_ai_conversation(conv: models.EnterpriseAiConversation) -> dict:
+    return {
+        "id": conv.id,
+        "title": conv.title or "New conversation",
+        "message_count": int(conv.message_count or 0),
+        "created_at": conv.created_at.isoformat() if conv.created_at else None,
+        "last_message_at": conv.last_message_at.isoformat() if conv.last_message_at else None,
+    }
+
+
+def _get_own_ai_conversation_or_404(
+    db: Session, *, organization_id: int, user_id: int, conversation_id: int
+) -> models.EnterpriseAiConversation:
+    """Fetch a thread scoped to BOTH the org and the member — threads are private, so
+    another member's id (or another org's) is indistinguishable from a missing one."""
+    conv = (
+        db.query(models.EnterpriseAiConversation)
+        .filter(
+            models.EnterpriseAiConversation.id == int(conversation_id),
+            models.EnterpriseAiConversation.organization_id == int(organization_id),
+            models.EnterpriseAiConversation.user_id == int(user_id),
+        )
+        .first()
+    )
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return conv
+
+
+def _refetch_ai_conversation(
+    db: Session, conv: models.EnterpriseAiConversation
+) -> Optional[models.EnterpriseAiConversation]:
+    """Fresh SELECT of a thread row (None if it no longer exists). Used to re-check a
+    thread after a long model call before appending to it — appending to a row deleted
+    mid-request raises StaleDataError at commit."""
+    return (
+        db.query(models.EnterpriseAiConversation)
+        .filter(
+            models.EnterpriseAiConversation.id == conv.id,
+            models.EnterpriseAiConversation.organization_id == conv.organization_id,
+            models.EnterpriseAiConversation.user_id == conv.user_id,
+        )
+        .first()
+    )
+
+
+def _delete_ai_conversations(db: Session, conversation_ids: list[int]) -> None:
+    """Messages first, then threads — never relies on DB-level FK cascade (SQLite dev
+    DBs don't enforce it). Caller commits."""
+    if not conversation_ids:
+        return
+    db.query(models.EnterpriseAiMessage).filter(
+        models.EnterpriseAiMessage.conversation_id.in_(conversation_ids)
+    ).delete(synchronize_session=False)
+    db.query(models.EnterpriseAiConversation).filter(
+        models.EnterpriseAiConversation.id.in_(conversation_ids)
+    ).delete(synchronize_session=False)
+
+
+def _purge_stale_ai_conversations(db: Session, *, organization_id: int, user_id: int) -> None:
+    """Rolling retention for one member's threads, run opportunistically when they list
+    their history — these rows carry client PII into the prod DB, so old transcripts
+    age out instead of accumulating forever. Caller commits."""
+    if ENTERPRISE_AI_CHAT_RETENTION_DAYS <= 0:
+        return
+    cutoff = datetime.now(dt_timezone.utc) - timedelta(days=ENTERPRISE_AI_CHAT_RETENTION_DAYS)
+    stale_ids = [
+        cid for (cid,) in db.query(models.EnterpriseAiConversation.id).filter(
+            models.EnterpriseAiConversation.organization_id == int(organization_id),
+            models.EnterpriseAiConversation.user_id == int(user_id),
+            models.EnterpriseAiConversation.last_message_at < cutoff,
+        ).all()
+    ]
+    _delete_ai_conversations(db, stale_ids)
+
+
+def _load_ai_conversation_history(db: Session, conv: models.EnterpriseAiConversation) -> list[dict]:
+    """Rebuild the model-facing history from the stored transcript: the most recent
+    MAX_HISTORY_TURNS messages, oldest first, each capped at the same per-turn size the
+    old client-supplied history had."""
+    rows = (
+        db.query(models.EnterpriseAiMessage.role, models.EnterpriseAiMessage.content)
+        .filter(models.EnterpriseAiMessage.conversation_id == conv.id)
+        .order_by(models.EnterpriseAiMessage.id.desc())
+        .limit(enterprise_ai.MAX_HISTORY_TURNS)
+        .all()
+    )
+    return [
+        {"role": role, "content": (content or "")[:ENTERPRISE_AI_HISTORY_TURN_CHARS]}
+        for role, content in reversed(rows)
+    ]
+
+
+def _append_ai_turn(
+    db: Session,
+    conv: models.EnterpriseAiConversation,
+    *,
+    user_message: str,
+    model_answer: str,
+) -> None:
+    """Persist one exchange onto a thread. Caller commits (alongside the meter, so a
+    metered answer and its transcript land atomically)."""
+    now = datetime.now(dt_timezone.utc)
+    db.add(models.EnterpriseAiMessage(
+        conversation_id=conv.id, organization_id=conv.organization_id,
+        role="user", content=user_message, created_at=now,
+    ))
+    db.add(models.EnterpriseAiMessage(
+        conversation_id=conv.id, organization_id=conv.organization_id,
+        role="model", content=model_answer, created_at=now,
+    ))
+    # SQL-side increment, not read-modify-write — two tabs answering on the same thread
+    # concurrently must not lose one tab's count.
+    conv.message_count = models.EnterpriseAiConversation.message_count + 2
+    conv.last_message_at = now
 
 
 @router.get("/ai/meta")
@@ -8382,17 +8791,44 @@ def enterprise_ai_chat(
             detail="The AI assistant isn't available right now. Please try again later.",
         )
 
+    # Resolve the thread FIRST: an id the member doesn't own must 404 before any
+    # metering or model work happens.
+    conv = None
+    if payload.conversation_id is not None:
+        conv = _get_own_ai_conversation_or_404(
+            db, organization_id=organization.id, user_id=current_user.id,
+            conversation_id=payload.conversation_id,
+        )
+
     # Cost guardrail: reject obviously off-topic prompts before spending model tokens.
     # (A refused off-topic message is free — it doesn't touch the copilot meter.)
     if ai_guardrails.is_off_topic(payload.message):
         ai_guardrails.record_block(source="enterprise_copilot", detail="enterprise")
-        return {"answer": ai_guardrails.OFF_TOPIC_REFUSAL, "permissions": _enterprise_permissions_for_role(role)}
+        # An EXISTING thread keeps the exchange so its transcript reads coherently on
+        # reload; a refusal never creates a new thread. Re-fetch before appending: the
+        # thread may have been deleted since the request started (another tab, the
+        # retention sweep) and persisting onto the dead row raises StaleDataError.
+        if conv is not None:
+            conv = _refetch_ai_conversation(db, conv)
+        if conv is not None:
+            _append_ai_turn(db, conv, user_message=payload.message.strip()[:4000],
+                            model_answer=ai_guardrails.OFF_TOPIC_REFUSAL)
+            db.commit()
+        response = {"answer": ai_guardrails.OFF_TOPIC_REFUSAL, "permissions": _enterprise_permissions_for_role(role)}
+        if conv is not None:
+            response["conversation_id"] = conv.id
+        return response
 
     # Meter the copilot: free daily allowance, then 1 credit per bundle of messages.
     # Block a paid message the wallet can't cover BEFORE spending any Gemini tokens.
     credits.copilot_precheck_or_402(db, organization.id)
 
-    history = [turn.model_dump() for turn in (payload.history or [])]
+    # A known thread replays its own server-side transcript; the request's history is
+    # only honoured for legacy stateless clients that predate saved threads.
+    if conv is not None:
+        history = _load_ai_conversation_history(db, conv)
+    else:
+        history = [turn.model_dump() for turn in (payload.history or [])]
     try:
         turn = enterprise_ai.run_enterprise_ai_chat(
             db=db,
@@ -8411,7 +8847,37 @@ def enterprise_ai_chat(
         )
     answer = turn.answer
 
-    # Answered successfully → record the turn against the meter (may debit a credit).
+    # Answered successfully → persist the exchange, then record the turn against the
+    # meter (may debit a credit); record_copilot_message commits, so the transcript and
+    # its metering land together. A failed answer persists nothing.
+    prompt_text = payload.message.strip()[:4000]
+    persist = True
+    if conv is not None:
+        # The model call took many seconds — the thread may have been deleted meanwhile
+        # (another tab, the retention sweep, member offboarding). Persisting onto the
+        # dead row would raise StaleDataError at commit, 500ing a successful answer AND
+        # rolling back its metering. Re-fetch; if it's gone, fall through to a fresh
+        # thread carrying this exchange (the response's conversation_id tells the
+        # client where the conversation now lives).
+        conv = _refetch_ai_conversation(db, conv)
+    else:
+        # No thread requested: only clients that understand saved threads get one.
+        # A legacy stateless SPA (no client_threads flag) would otherwise dribble one
+        # single-exchange thread per message into History.
+        persist = bool(payload.client_threads)
+    if persist:
+        if conv is None:
+            conv = models.EnterpriseAiConversation(
+                organization_id=organization.id,
+                user_id=current_user.id,
+                # Title = first message truncated. Never a model call — a flash call per
+                # new thread is real money against the meter for what a substring does.
+                title=prompt_text[:ENTERPRISE_AI_TITLE_MAX],
+            )
+            db.add(conv)
+            db.flush()  # assign conv.id before the messages reference it
+        _append_ai_turn(db, conv, user_message=prompt_text, model_answer=answer)
+
     # The turn's REAL cost — summed across every tool round-trip, not just the last one —
     # decides its message weight, so a six-tool answer can't be sold at a one-call price.
     meter = credits.record_copilot_message(
@@ -8422,9 +8888,89 @@ def enterprise_ai_chat(
         "permissions": _enterprise_permissions_for_role(role),
         "credits_meter": meter,
     }
+    if conv is not None:
+        response["conversation_id"] = conv.id
+        response["conversation"] = _serialize_ai_conversation(conv)
     if meter.get("credits_charged"):
         response["wallet"] = credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
     return response
+
+
+@router.get("/ai/conversations")
+def enterprise_ai_conversation_list(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """The member's OWN saved assistant threads, newest first. Listing is also when the
+    rolling retention sweep runs — threads past the retention window are hard-deleted."""
+    _, organization, _role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability=("ai.assistant", "credits.spend"),
+    )
+    _purge_stale_ai_conversations(db, organization_id=organization.id, user_id=current_user.id)
+    db.commit()
+    rows = (
+        db.query(models.EnterpriseAiConversation)
+        .filter(
+            models.EnterpriseAiConversation.organization_id == organization.id,
+            models.EnterpriseAiConversation.user_id == current_user.id,
+        )
+        .order_by(models.EnterpriseAiConversation.last_message_at.desc())
+        .limit(ENTERPRISE_AI_CONVERSATION_LIST_LIMIT)
+        .all()
+    )
+    return {
+        "conversations": [_serialize_ai_conversation(c) for c in rows],
+        "retention_days": ENTERPRISE_AI_CHAT_RETENTION_DAYS,
+    }
+
+
+@router.get("/ai/conversations/{conversation_id}")
+def enterprise_ai_conversation_detail(
+    conversation_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability=("ai.assistant", "credits.spend"),
+    )
+    conv = _get_own_ai_conversation_or_404(
+        db, organization_id=organization.id, user_id=current_user.id, conversation_id=conversation_id,
+    )
+    rows = (
+        db.query(models.EnterpriseAiMessage)
+        .filter(models.EnterpriseAiMessage.conversation_id == conv.id)
+        .order_by(models.EnterpriseAiMessage.id.desc())
+        .limit(ENTERPRISE_AI_CONVERSATION_MESSAGES_LIMIT)
+        .all()
+    )
+    return {
+        "conversation": _serialize_ai_conversation(conv),
+        "messages": [
+            {"role": m.role, "content": m.content,
+             "created_at": m.created_at.isoformat() if m.created_at else None}
+            for m in reversed(rows)
+        ],
+    }
+
+
+@router.delete("/ai/conversations/{conversation_id}")
+def enterprise_ai_conversation_delete(
+    conversation_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, _role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability=("ai.assistant", "credits.spend"),
+    )
+    conv = _get_own_ai_conversation_or_404(
+        db, organization_id=organization.id, user_id=current_user.id, conversation_id=conversation_id,
+    )
+    _delete_ai_conversations(db, [conv.id])
+    db.commit()
+    return {"message": "Conversation deleted."}
 
 
 # ===========================================================================
@@ -8897,7 +9443,7 @@ def _ent_client_profile_context(client) -> str:
     if not lines:
         return ""
     text = (
-        "This is the visa applicant (client) this document was uploaded for. Cross-check the "
+        "This is the client this document was uploaded for. Cross-check the "
         "document against this profile — including that the document actually belongs to this "
         "person:\n" + "\n".join(lines)
     )
@@ -11929,6 +12475,526 @@ def public_portal_data(payload: PublicPortalDataRequest, request: Request, db: S
 
 
 # ===========================================================================
+# Copilot client invite — the client's own Copilot chat about their case
+#
+# Staff share the org's AI copilot with a client as a secure emailed link
+# (page served at /assist/{token}). The client verifies an OTP sent to their
+# own email, then chats about THEIR case only. Security model mirrors
+# interview invites / portal shares (hashed capability token + OTP + short-
+# lived signed session token, scope "ent_copilot", re-checked per request).
+# Billing is a flat per-client unlock: the org wallet is charged once when
+# the client first verifies (never for links that are ignored), and the
+# invite's message counters cap total usage — the staff copilot's per-message
+# meter is deliberately NOT shared with this surface. Context never includes
+# staff notes; the client only sees their own CRM profile and documents.
+# ===========================================================================
+
+ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS = int(os.getenv("ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS", "30"))
+ENTERPRISE_COPILOT_SESSION_HOURS = int(os.getenv("ENTERPRISE_COPILOT_SESSION_HOURS", "24"))
+ENTERPRISE_COPILOT_INVITE_MESSAGES = int(os.getenv("ENTERPRISE_COPILOT_INVITE_MESSAGES", "100"))
+COPILOT_CLIENT_ACTION_KEY = "copilot_client"
+
+
+class PublicCopilotVerifyRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=10)
+
+
+class PublicCopilotSessionRequest(BaseModel):
+    session_token: str = Field(..., min_length=10, max_length=4000)
+
+
+class PublicCopilotTurn(BaseModel):
+    role: str = Field(..., max_length=16)
+    # Generous: our own replies land back here and are not length-capped at
+    # generation time. Rejecting a stored reply would 422 every later turn
+    # (a bricked session). The engine budgets history to 4k/turn anyway.
+    content: str = Field(..., max_length=20000)
+
+
+class PublicCopilotChatRequest(BaseModel):
+    session_token: str = Field(..., min_length=10, max_length=4000)
+    message: str = Field(..., min_length=1, max_length=8000)
+    history: Optional[List[PublicCopilotTurn]] = None
+
+
+def _build_copilot_invite_url(subdomain_slug, token: str, request: Request | None) -> str:
+    subdomain = str(subdomain_slug or "").strip().lower()
+    base = None
+    if subdomain:
+        host = f"{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+        port = _request_port_for_local_enterprise_url(request)
+        if port:
+            host = f"{host}:{port}"
+        base = f"{ENTERPRISE_PORTAL_SCHEME}://{host}"
+    if not base:
+        base = ENTERPRISE_PASSWORD_SETUP_BASE_URL
+    # /assist because bare /copilot already serves the B2C SPA (main.py).
+    return f"{base.rstrip('/')}/assist/{token}"
+
+
+def _copilot_invite_is_live(invite: models.EnterpriseCopilotInvite) -> bool:
+    if invite.revoked:
+        return False
+    if invite.expires_at:
+        exp = invite.expires_at.replace(tzinfo=None) if getattr(invite.expires_at, "tzinfo", None) else invite.expires_at
+        if exp < datetime.utcnow():
+            return False
+    return True
+
+
+def _copilot_invite_remaining(invite: models.EnterpriseCopilotInvite) -> int:
+    return max(0, int(invite.allowed_messages or 0) - int(invite.used_messages or 0))
+
+
+def _serialize_copilot_invite_status(invite: models.EnterpriseCopilotInvite | None) -> Optional[dict]:
+    if not invite:
+        return None
+    return {
+        "id": invite.id,
+        "email": invite.email,
+        "allowed_messages": int(invite.allowed_messages or 0),
+        "used_messages": int(invite.used_messages or 0),
+        "remaining_messages": _copilot_invite_remaining(invite),
+        "unlocked": bool(invite.unlocked_at),
+        "unlocked_at": _iso(invite.unlocked_at),
+        "last_message_at": _iso(invite.last_message_at),
+        "revoked": bool(invite.revoked),
+        "live": _copilot_invite_is_live(invite),
+        "created_by_name": invite.created_by_name,
+        "created_at": _iso(invite.created_at),
+        "expires_at": _iso(invite.expires_at),
+    }
+
+
+def _copilot_invite_config() -> dict:
+    """What a NEW invite would cost/allow — shown in the staff send modal."""
+    return {
+        "allowed_messages": ENTERPRISE_COPILOT_INVITE_MESSAGES,
+        "expires_days": ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS,
+        "cost_credits": credits.action_cost(COPILOT_CLIENT_ACTION_KEY),
+    }
+
+
+def _latest_client_copilot_invite(db: Session, organization_id: int, client_id: int):
+    return (
+        db.query(models.EnterpriseCopilotInvite)
+        .filter(
+            models.EnterpriseCopilotInvite.organization_id == int(organization_id),
+            models.EnterpriseCopilotInvite.client_id == int(client_id),
+        )
+        .order_by(models.EnterpriseCopilotInvite.created_at.desc(), models.EnterpriseCopilotInvite.id.desc())
+        .first()
+    )
+
+
+def _issue_copilot_session_token(invite_id: int) -> str:
+    return create_access_token(
+        data={"sub": f"entcp:{int(invite_id)}", "scope": "ent_copilot", "cp": int(invite_id)},
+        expires_delta=timedelta(hours=ENTERPRISE_COPILOT_SESSION_HOURS),
+    )
+
+
+def _decode_copilot_session_token(token: str) -> int:
+    try:
+        payload = jose_jwt.decode(token, AUTH_SECRET_KEY, algorithms=[AUTH_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Your copilot session has expired. Please verify your email again.")
+    if payload.get("scope") != "ent_copilot" or not payload.get("cp"):
+        raise HTTPException(status_code=401, detail="Invalid copilot session.")
+    return int(payload["cp"])
+
+
+def _public_copilot_invite_or_404(db: Session, token: str) -> models.EnterpriseCopilotInvite:
+    token_hash = hash_token((token or "").strip())
+    invite = (
+        db.query(models.EnterpriseCopilotInvite)
+        .filter(models.EnterpriseCopilotInvite.token_hash == token_hash)
+        .first()
+    )
+    if not invite or not _copilot_invite_is_live(invite):
+        raise HTTPException(status_code=404, detail="This copilot link is invalid or has expired.")
+    return invite
+
+
+def _public_load_copilot_context(db: Session, session_token: str):
+    invite_id = _decode_copilot_session_token(session_token)
+    invite = db.query(models.EnterpriseCopilotInvite).filter(models.EnterpriseCopilotInvite.id == invite_id).first()
+    if not invite or not _copilot_invite_is_live(invite):
+        raise HTTPException(status_code=401, detail="This copilot link is no longer active.")
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == invite.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This copilot is no longer available.")
+    return invite, client, org
+
+
+# ---- Staff endpoints ------------------------------------------------------
+
+@router.post("/clients/{client_id}/copilot/invite")
+def enterprise_create_copilot_invite(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="copilot.invite"
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    email = (client.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="Add an email to this client before sharing their copilot.")
+
+    # "Charged once per client" is the promise (price-list copy + send modal):
+    # a resend while a PAID window is still live must carry the entitlement
+    # over — same unlock, same counters, same expiry — not restart a fresh
+    # 30-day window that would charge the org a second time at verify.
+    prior = _latest_client_copilot_invite(db, organization.id, client.id)
+    carry_over = bool(prior and prior.unlocked_at and _copilot_invite_is_live(prior))
+
+    if not carry_over:
+        # Affordability gate only — the flat unlock is charged when the client
+        # first verifies, so an ignored link never costs the org anything.
+        credits.enforce_units_or_402(db, organization.id, COPILOT_CLIENT_ACTION_KEY, 1)
+
+    # Supersede any prior invites for this client — one live link at a time.
+    db.query(models.EnterpriseCopilotInvite).filter(
+        models.EnterpriseCopilotInvite.client_id == client.id,
+        models.EnterpriseCopilotInvite.revoked.is_(False),
+    ).update({"revoked": True})
+
+    raw_token = generate_verification_token()
+    invite = models.EnterpriseCopilotInvite(
+        organization_id=organization.id,
+        client_id=client.id,
+        token_hash=hash_token(raw_token),
+        email=email,
+        allowed_messages=(prior.allowed_messages if carry_over else ENTERPRISE_COPILOT_INVITE_MESSAGES),
+        used_messages=(prior.used_messages if carry_over else 0),
+        unlocked_at=(prior.unlocked_at if carry_over else None),
+        credits_charged=(prior.credits_charged if carry_over else 0),
+        expires_at=(prior.expires_at if carry_over
+                    else datetime.utcnow() + timedelta(days=ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS)),
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.full_name or current_user.email,
+    )
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+
+    link = _build_copilot_invite_url(organization.subdomain_slug, raw_token, request)
+    sent, _mid, err = send_enterprise_copilot_invite_email(
+        to_email=email,
+        client_name=client.full_name,
+        organization_name=organization.company_name,
+        copilot_url=link,
+        destination_country=client.destination_country_name,
+        visa_type=client.visa_type,
+        logo_url=_resolve_enterprise_logo_url(organization),
+    )
+    message = (f"Copilot access sent to {email}."
+               if sent else f"Invite created but the email could not be sent right now. {err or ''}".strip())
+    return {
+        "message": message,
+        "email_sent": sent,
+        # Returned once for copy/WhatsApp convenience. Opening it still requires the
+        # OTP sent to the client's own email, so the link alone grants nothing.
+        "link": link,
+        "invite": _serialize_copilot_invite_status(invite),
+        "config": _copilot_invite_config(),
+        "permissions": _enterprise_permissions_for_role(role),
+    }
+
+
+@router.get("/clients/{client_id}/copilot/invite")
+def enterprise_get_copilot_invite(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="clients.view")
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    invite = _latest_client_copilot_invite(db, organization.id, client.id)
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "invite": _serialize_copilot_invite_status(invite),
+        "config": _copilot_invite_config(),
+    }
+
+
+@router.post("/clients/{client_id}/copilot/invite/revoke")
+def enterprise_revoke_copilot_invite(
+    client_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="copilot.invite"
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    # No refund: an un-activated invite was never charged, and an activated one
+    # was consumed (mirrors interview invites — nothing is escrowed).
+    db.query(models.EnterpriseCopilotInvite).filter(
+        models.EnterpriseCopilotInvite.client_id == client.id,
+        models.EnterpriseCopilotInvite.revoked.is_(False),
+    ).update({"revoked": True})
+    db.commit()
+    return {"message": "Copilot access revoked.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ---- Public (client-facing, token-scoped, no staff auth) ------------------
+
+@router.get("/public/copilot/{token}")
+def public_copilot_info(token: str, db: Session = Depends(get_db)):
+    invite = _public_copilot_invite_or_404(db, token)
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == invite.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This copilot link is no longer available.")
+    remaining = _copilot_invite_remaining(invite)
+    return {
+        "organization_name": org.company_name,
+        "logo_url": _resolve_enterprise_logo_url(org),
+        "client_first_name": (client.full_name or "there").split(" ")[0],
+        "destination_country": client.destination_country_name,
+        "visa_type": client.visa_type,
+        "masked_email": _mask_email(invite.email),
+        "remaining_messages": remaining,
+        "exhausted": remaining <= 0,
+        "unlocked": bool(invite.unlocked_at),
+        "expires_at": _iso(invite.expires_at),
+    }
+
+
+@router.post("/public/copilot/{token}/send-code")
+def public_copilot_send_code(token: str, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.copilot_code",
+        limit=ENTERPRISE_CODE_RATE_LIMIT, window_seconds=ENTERPRISE_CODE_RATE_WINDOW, extra_key=hash_token(token)[:16],
+    )
+    invite = _public_copilot_invite_or_404(db, token)
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == invite.organization_id).first()
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
+    if not org or not client:
+        raise HTTPException(status_code=404, detail="This copilot link is no longer available.")
+
+    code = f"{_secrets.randbelow(900000) + 100000:06d}"
+    invite.code_hash = hash_token(code)
+    invite.code_expires_at = datetime.utcnow() + timedelta(minutes=ENTERPRISE_INTERVIEW_CODE_EXPIRES_MIN)
+    invite.code_attempts = 0
+    db.commit()
+
+    sent, _mid, err = send_enterprise_copilot_code_email(
+        to_email=invite.email, client_name=client.full_name, organization_name=org.company_name, code=code,
+    )
+    if not sent:
+        logger.warning("Copilot code email failed for invite %s: %s", invite.id, err)
+    return {"sent": bool(sent), "masked_email": _mask_email(invite.email)}
+
+
+@router.post("/public/copilot/{token}/verify")
+def public_copilot_verify(token: str, payload: PublicCopilotVerifyRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.copilot_verify",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW, extra_key=hash_token(token)[:16],
+    )
+    invite = _public_copilot_invite_or_404(db, token)
+    client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
+    org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == invite.organization_id).first()
+    if not client or not org:
+        raise HTTPException(status_code=404, detail="This copilot link is no longer available.")
+    if not invite.code_hash or not invite.code_expires_at:
+        raise HTTPException(status_code=400, detail="Please request a verification code first.")
+    code_exp = invite.code_expires_at.replace(tzinfo=None) if getattr(invite.code_expires_at, "tzinfo", None) else invite.code_expires_at
+    if code_exp < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That code has expired. Please request a new one.")
+    if int(invite.code_attempts or 0) >= ENTERPRISE_INTERVIEW_CODE_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please request a new code.")
+
+    invite.code_attempts = int(invite.code_attempts or 0) + 1
+    if hash_token((payload.code or "").strip()) != invite.code_hash:
+        db.commit()
+        raise HTTPException(status_code=400, detail="That code is incorrect. Please try again.")
+
+    # First successful verify = activation: charge the flat unlock. The code is
+    # NOT consumed on a broke wallet (only the attempt is), so the client can
+    # retry the same code once the consultancy tops up. Client-safe wording —
+    # never mention credits or the org's wallet to the client.
+    if not invite.unlocked_at and not credits.can_afford(db, invite.organization_id, COPILOT_CLIENT_ACTION_KEY):
+        db.commit()  # persist the attempt increment
+        raise HTTPException(status_code=402, detail="Your copilot isn't available right now. Please contact your consultancy.")
+
+    # Verified — consume the code (single-use) and issue the session token.
+    invite.code_hash = None
+    invite.code_expires_at = None
+    if not invite.unlocked_at:
+        # Claim the unlock ATOMICALLY: a conditional UPDATE means concurrent
+        # verifies of the same code (two tabs, a scripted burst) or a verify
+        # racing a staff revoke can never charge twice — charge_action's row
+        # lock serializes wallet math but does not deduplicate unlocks.
+        claimed = db.query(models.EnterpriseCopilotInvite).filter(
+            models.EnterpriseCopilotInvite.id == invite.id,
+            models.EnterpriseCopilotInvite.unlocked_at.is_(None),
+            models.EnterpriseCopilotInvite.revoked.is_(False),
+        ).update({
+            "unlocked_at": datetime.utcnow(),
+            "credits_charged": int(credits.action_cost(COPILOT_CLIENT_ACTION_KEY) or 0),
+        }, synchronize_session=False)
+        if claimed:
+            try:
+                # commit=False: the debit, ledger row and unlock land in ONE commit.
+                credits.charge_action(
+                    db, invite.organization_id, COPILOT_CLIENT_ACTION_KEY,
+                    reference_type="client", reference_id=invite.client_id,
+                    description=f"Client copilot access — {client.full_name}",
+                    commit=False,
+                )
+            except HTTPException:
+                # Wallet drained between can_afford and the locked debit: roll the
+                # claim back (invite stays locked-but-unpaid otherwise) and keep
+                # the staff-facing top-up copy away from the client.
+                db.rollback()
+                raise HTTPException(status_code=402, detail="Your copilot isn't available right now. Please contact your consultancy.")
+        else:
+            # Another request claimed the unlock, or staff revoked mid-verify.
+            db.expire(invite)
+            if not _copilot_invite_is_live(invite):
+                db.rollback()
+                raise HTTPException(status_code=401, detail="This copilot link is no longer active.")
+            # Already unlocked by the concurrent verify — proceed without charging,
+            # but re-consume the code in case the expire reloaded it.
+            invite.code_hash = None
+            invite.code_expires_at = None
+    db.commit()
+    return {
+        "session_token": _issue_copilot_session_token(invite.id),
+        "session_hours": ENTERPRISE_COPILOT_SESSION_HOURS,
+        "client_first_name": (client.full_name or "there").split(" ")[0],
+        "destination_country": client.destination_country_name,
+        "visa_type": client.visa_type,
+        "remaining_messages": _copilot_invite_remaining(invite),
+    }
+
+
+@router.post("/public/copilot/session")
+def public_copilot_session(payload: PublicCopilotSessionRequest, request: Request, db: Session = Depends(get_db)):
+    """Session probe: lets the page restore a stored session without re-verifying.
+    Re-checks invite liveness (revoke/expiry take effect immediately)."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.copilot_public",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
+    )
+    invite, client, org = _public_load_copilot_context(db, payload.session_token)
+    remaining = _copilot_invite_remaining(invite)
+    return {
+        "organization_name": org.company_name,
+        "logo_url": _resolve_enterprise_logo_url(org),
+        "client_first_name": (client.full_name or "there").split(" ")[0],
+        "destination_country": client.destination_country_name,
+        "visa_type": client.visa_type,
+        "remaining_messages": remaining,
+        "exhausted": remaining <= 0,
+    }
+
+
+@router.post("/public/copilot/chat")
+def public_copilot_chat(payload: PublicCopilotChatRequest, request: Request, db: Session = Depends(get_db)):
+    """One client copilot turn. Stateless like the staff extension surface — the
+    page resends its history each turn; nothing is stored server-side.
+
+    Order is load-bearing: liveness → provider → free guardrail → RESERVE a
+    capped message atomically (so parallel requests can't all pass a stale cap
+    check and burst past allowed_messages) → generate → release the reservation
+    if the model fails (a failed call must not consume the client's messages)."""
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.copilot_public",
+        limit=ENTERPRISE_PUBLIC_RATE_LIMIT, window_seconds=ENTERPRISE_PUBLIC_RATE_WINDOW,
+    )
+    invite, client, org = _public_load_copilot_context(db, payload.session_token)
+
+    if not enterprise_copilot.is_provider_available():
+        raise HTTPException(status_code=503, detail="Your copilot is temporarily unavailable. Please try again shortly.")
+    if not invite.unlocked_at:
+        # Session tokens are only minted after verify (which unlocks), so this is
+        # a defensive guard — e.g. staff re-sent a link mid-session.
+        raise HTTPException(status_code=401, detail="This copilot link is no longer active.")
+
+    remaining = _copilot_invite_remaining(invite)
+    if remaining <= 0:
+        raise HTTPException(status_code=403, detail="You've used all the messages included with your copilot. Please contact your consultancy.")
+
+    message = (payload.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Please type a message.")
+    history = [{"role": t.role, "content": t.content} for t in (payload.history or [])]
+
+    # Free off-topic guardrail — refusals never consume a capped message. The
+    # newest user history turn is screened TOGETHER with the message (not
+    # instead of it) so a short "continue" can't smuggle an off-topic ask,
+    # while an on-topic follow-up after a refused turn isn't re-refused: the
+    # guardrail's on-topic whitelist wins over off-topic terms, so the new
+    # message's own topicality always counts.
+    latest_user_turn = ""
+    for turn in reversed(history):
+        if (turn.get("role") or "") != "assistant":
+            latest_user_turn = str(turn.get("content") or "")
+            break
+    if ai_guardrails.is_off_topic(message) or (
+        len(message) < 200 and latest_user_turn
+        and ai_guardrails.is_off_topic(f"{message}\n{latest_user_turn}")
+    ):
+        ai_guardrails.record_block(source=enterprise_copilot.CLIENT_USAGE_SOURCE, detail="enterprise_client_link")
+        return {"reply": ai_guardrails.OFF_TOPIC_REFUSAL, "remaining_messages": remaining}
+
+    # Reserve the message BEFORE the model call: a conditional atomic increment
+    # is the actual cap — the read-only check above is just a fast client-safe
+    # error. Without this, N parallel requests all see remaining==1 and each
+    # gets a full (Rilono-funded) generation.
+    reserved = db.query(models.EnterpriseCopilotInvite).filter(
+        models.EnterpriseCopilotInvite.id == invite.id,
+        models.EnterpriseCopilotInvite.used_messages < models.EnterpriseCopilotInvite.allowed_messages,
+    ).update({
+        "used_messages": models.EnterpriseCopilotInvite.used_messages + 1,
+        "last_message_at": datetime.utcnow(),
+    }, synchronize_session=False)
+    if not reserved:
+        db.rollback()
+        raise HTTPException(status_code=403, detail="You've used all the messages included with your copilot. Please contact your consultancy.")
+    db.commit()
+
+    try:
+        turn_result = enterprise_copilot.run_enterprise_copilot_client_chat(
+            db,
+            organization=org,
+            client=client,
+            message=message,
+            conversation_history=history,
+        )
+    except Exception:
+        # Release the reservation — a failed model call must not consume one of
+        # the client's capped messages (house invariant: never charge for a
+        # failed AI action). Floor at 0 defensively.
+        try:
+            db.query(models.EnterpriseCopilotInvite).filter(
+                models.EnterpriseCopilotInvite.id == invite.id,
+                models.EnterpriseCopilotInvite.used_messages > 0,
+            ).update({
+                "used_messages": models.EnterpriseCopilotInvite.used_messages - 1,
+            }, synchronize_session=False)
+            db.commit()
+        except Exception:
+            logger.exception("Failed to release copilot message reservation (invite_id=%s)", invite.id)
+        logger.exception("Client copilot chat failed (org_id=%s client_id=%s)", org.id, client.id)
+        raise HTTPException(status_code=502, detail="Your copilot ran into a problem answering that. Please try again.")
+
+    # Fresh remaining after the pre-reserved increment.
+    db.expire(invite)
+    return {"reply": turn_result.answer, "remaining_messages": _copilot_invite_remaining(invite)}
+
+
+# ===========================================================================
 # Course Finder (workspace section)
 #
 # Browse Rilono's shared universities/courses catalog (maintained by the
@@ -13434,3 +14500,723 @@ def enterprise_access_log(
         db, organization=organization, ctx=role.ctx, limit=limit, offset=offset,
         action=action, target_user_id=target_user_id, days=days,
     )
+
+
+# ============================================================================
+# Lead collection forms — org-branded public forms + a per-org leads inbox.
+#
+# The shareable link (/f/{token}) stores its token RAW (unlike portal/pay
+# hashes) on purpose: it is public-by-design — it reveals only the form
+# definition + org branding and grants no data access — and the org must be
+# able to re-copy the exact same link from the console at any time. Pausing
+# the form or rotating the link kills the old URL.
+# ============================================================================
+
+_LEAD_FIELD_TYPES = {"text", "email", "phone", "textarea", "select", "date", "number", "checkbox"}
+_LEAD_STATUSES = ("new", "contacted", "converted", "closed")
+_LEAD_FORM_MAX_FIELDS = 20
+# Flood control, deliberately fail-SOFT: past the daily cap a form keeps accepting
+# (a genuine prospect must never be turned away because a spammer got there first)
+# but stops firing alert emails, so a proxy-rotating bot can't spend the shared
+# transactional sender's reputation. Only the far-higher hard ceiling 429s.
+_LEAD_FORM_DAILY_CAP = int(os.getenv("ENTERPRISE_LEAD_FORM_DAILY_CAP", "300"))
+_LEAD_FORM_HARD_CAP = int(os.getenv("ENTERPRISE_LEAD_FORM_HARD_CAP", "3000"))
+_LEAD_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+
+def _build_lead_form_url(subdomain_slug, token: str, request: Request | None) -> str:
+    subdomain = str(subdomain_slug or "").strip().lower()
+    base = None
+    if subdomain:
+        host = f"{subdomain}.{ENTERPRISE_ROOT_DOMAIN}"
+        port = _request_port_for_local_enterprise_url(request)
+        if port:
+            host = f"{host}:{port}"
+        base = f"{ENTERPRISE_PORTAL_SCHEME}://{host}"
+    if not base:
+        base = ENTERPRISE_PASSWORD_SETUP_BASE_URL
+    return f"{base.rstrip('/')}/f/{token}"
+
+
+def _normalize_lead_form_fields(raw) -> list[dict]:
+    """Validate + normalize a staff-built field list. Keys are derived server-side
+    from labels (never client-supplied) so the submit endpoint can trust them."""
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(status_code=400, detail="Add at least one field to the form.")
+    if len(raw) > _LEAD_FORM_MAX_FIELDS:
+        raise HTTPException(status_code=400, detail=f"A form can have at most {_LEAD_FORM_MAX_FIELDS} fields.")
+    fields: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="Invalid field definition.")
+        label = str(item.get("label") or "").strip()[:120]
+        if not label:
+            raise HTTPException(status_code=400, detail="Every field needs a label.")
+        ftype = str(item.get("type") or "text").strip().lower()
+        if ftype not in _LEAD_FIELD_TYPES:
+            ftype = "text"
+        key = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")[:40] or "field"
+        base_key, n = key, 2
+        while key in seen:
+            key = f"{base_key}_{n}"
+            n += 1
+        seen.add(key)
+        field: dict = {"key": key, "label": label, "type": ftype, "required": bool(item.get("required"))}
+        placeholder = str(item.get("placeholder") or "").strip()[:120]
+        if placeholder:
+            field["placeholder"] = placeholder
+        if ftype == "select":
+            options = [str(o or "").strip()[:80] for o in (item.get("options") or []) if str(o or "").strip()]
+            options = options[:24]
+            if len(options) < 2:
+                raise HTTPException(status_code=400, detail=f'Dropdown "{label}" needs at least 2 options.')
+            field["options"] = options
+        fields.append(field)
+    return fields
+
+
+def _parse_lead_form_fields(form: models.EnterpriseLeadForm) -> list[dict]:
+    try:
+        fields = json.loads(form.fields_json or "[]")
+        return fields if isinstance(fields, list) else []
+    except Exception:
+        return []
+
+
+def _validate_lead_answers(fields: list[dict], raw_answers) -> tuple[list[dict], dict]:
+    """Check a public submission against the form's field spec. Returns the ordered
+    answer list to store and the denormalized contact info (name/email/phone)."""
+    answers = raw_answers if isinstance(raw_answers, dict) else {}
+    out: list[dict] = []
+    contact = {"name": None, "email": None, "phone": None}
+    first_text_value = None
+    for f in fields:
+        key = f.get("key")
+        ftype = f.get("type") or "text"
+        raw_v = answers.get(key)
+        if ftype == "checkbox":
+            value = "Yes" if raw_v in (True, "true", "on", "yes", "Yes", 1, "1") else ""
+        else:
+            value = str(raw_v if raw_v is not None else "").strip()
+        value = value[:5000 if ftype == "textarea" else 300]
+        if f.get("required") and not value:
+            raise HTTPException(status_code=400, detail=f'"{f.get("label")}" is required.')
+        if not value:
+            continue
+        if ftype == "email" and not _LEAD_EMAIL_RE.fullmatch(value):
+            raise HTTPException(status_code=400, detail=f'Please enter a valid email for "{f.get("label")}".')
+        # A bot posting straight at the endpoint doesn't see the <select>; hold answers
+        # to the choices the org actually published, or the inbox fills with free text
+        # in a column the consultancy believes is constrained.
+        if ftype == "select" and value not in (f.get("options") or []):
+            raise HTTPException(status_code=400, detail=f'Please choose one of the listed options for "{f.get("label")}".')
+        if ftype == "number":
+            try:
+                float(value.replace(",", ""))
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f'"{f.get("label")}" must be a number.')
+        out.append({"key": key, "label": f.get("label"), "type": ftype, "value": value})
+        if ftype == "email" and not contact["email"]:
+            contact["email"] = value.lower()[:200]
+        elif ftype == "phone" and not contact["phone"]:
+            contact["phone"] = value[:40]
+        elif ftype == "text":
+            if first_text_value is None:
+                first_text_value = value
+            if not contact["name"] and "name" in (str(key) + str(f.get("label") or "").lower()):
+                contact["name"] = value[:120]
+    if not out:
+        raise HTTPException(status_code=400, detail="Please fill in the form before submitting.")
+    if not contact["name"] and first_text_value:
+        contact["name"] = first_text_value[:120]
+    return out, contact
+
+
+def _require_lead_access(db, user, request, *, capability: str):
+    """Membership gate for every lead surface.
+
+    A lead is an unassigned enquiry — it has no branch and no counselor yet, so
+    there is nothing to scope it by. Rather than quietly hand a branch- or
+    caseload-scoped member the whole workspace's contact details (every other
+    client surface narrows to their scope), the inbox is workspace-scope only.
+    """
+    membership, organization, role = _require_enterprise_membership(
+        db=db, user=user, request=request, require_capability=capability
+    )
+    ctx = role.ctx
+    if not (ctx.is_admin_like or ctx.is_org_scope):
+        raise HTTPException(
+            status_code=403,
+            detail="Leads cover the whole workspace, so they're only visible to members whose access scope is the entire workspace. Ask a workspace admin.",
+        )
+    return membership, organization, role
+
+
+def _get_org_lead_form_or_404(db: Session, organization_id: int, form_id: int) -> models.EnterpriseLeadForm:
+    form = (
+        db.query(models.EnterpriseLeadForm)
+        .filter(
+            models.EnterpriseLeadForm.id == int(form_id),
+            models.EnterpriseLeadForm.organization_id == int(organization_id),
+        )
+        .first()
+    )
+    if not form:
+        raise HTTPException(status_code=404, detail="Form not found.")
+    return form
+
+
+def _get_org_lead_or_404(db: Session, organization_id: int, lead_id: int) -> models.EnterpriseLead:
+    lead = (
+        db.query(models.EnterpriseLead)
+        .filter(
+            models.EnterpriseLead.id == int(lead_id),
+            models.EnterpriseLead.organization_id == int(organization_id),
+        )
+        .first()
+    )
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found.")
+    return lead
+
+
+def _serialize_lead_form(
+    form: models.EnterpriseLeadForm,
+    organization: models.EnterpriseOrganization,
+    request: Request | None,
+    *,
+    total_leads: int = 0,
+    new_leads: int = 0,
+) -> dict:
+    return {
+        "id": form.id,
+        "name": form.name,
+        "title": form.title or form.name,
+        "intro_text": form.intro_text,
+        "fields": _parse_lead_form_fields(form),
+        "is_active": bool(form.is_active),
+        "submit_label": form.submit_label,
+        "success_message": form.success_message,
+        "notify_email": form.notify_email,
+        "link": _build_lead_form_url(organization.subdomain_slug, form.public_token, request),
+        "total_leads": int(total_leads or 0),
+        "new_leads": int(new_leads or 0),
+        "created_by_name": form.created_by_name,
+        "created_at": _iso(form.created_at),
+    }
+
+
+def _serialize_lead(lead: models.EnterpriseLead) -> dict:
+    try:
+        answers = json.loads(lead.answers_json or "[]")
+        if not isinstance(answers, list):
+            answers = []
+    except Exception:
+        answers = []
+    return {
+        "id": lead.id,
+        "form_id": lead.form_id,
+        "form_name": lead.form_name,
+        "full_name": lead.full_name,
+        "email": lead.email,
+        "phone": lead.phone,
+        "answers": answers,
+        "status": lead.status or "new",
+        "converted_client_id": lead.converted_client_id,
+        "source": lead.source,
+        "created_at": _iso(lead.created_at),
+    }
+
+
+class EnterpriseLeadFormBody(BaseModel):
+    name: str = Field(..., min_length=2, max_length=80)
+    title: Optional[str] = Field(default=None, max_length=120)
+    intro_text: Optional[str] = Field(default=None, max_length=600)
+    fields: list = Field(default_factory=list)
+    submit_label: Optional[str] = Field(default=None, max_length=40)
+    success_message: Optional[str] = Field(default=None, max_length=400)
+    notify_email: Optional[str] = Field(default=None, max_length=200)
+    is_active: Optional[bool] = None
+
+
+class EnterpriseLeadFormPatchBody(BaseModel):
+    """Partial update — every field optional, so a pause toggle can send only
+    `is_active`. (Reusing the create body here made `name` required and 422'd
+    every partial PATCH before the handler ever ran.)"""
+    name: Optional[str] = Field(default=None, min_length=2, max_length=80)
+    title: Optional[str] = Field(default=None, max_length=120)
+    intro_text: Optional[str] = Field(default=None, max_length=600)
+    fields: Optional[list] = None
+    submit_label: Optional[str] = Field(default=None, max_length=40)
+    success_message: Optional[str] = Field(default=None, max_length=400)
+    notify_email: Optional[str] = Field(default=None, max_length=200)
+    is_active: Optional[bool] = None
+
+
+class EnterpriseLeadFormShareEmailBody(BaseModel):
+    to_email: EmailStr
+    note: Optional[str] = Field(default=None, max_length=400)
+
+
+class EnterpriseLeadStatusBody(BaseModel):
+    status: str = Field(..., max_length=20)
+
+
+class EnterpriseLeadMarkConvertedBody(BaseModel):
+    client_id: int
+
+
+class PublicLeadSubmitBody(BaseModel):
+    answers: dict = Field(default_factory=dict)
+    # Honeypot — real visitors never see or fill this input. Bots that do get a
+    # cheerful success response and nothing stored.
+    website: Optional[str] = Field(default=None, max_length=200)
+    source: Optional[str] = Field(default=None, max_length=200)
+    cf_turnstile_token: Optional[str] = Field(default=None, max_length=4000)
+
+
+def _clean_lead_notify_email(value) -> Optional[str]:
+    email = str(value or "").strip().lower()
+    if not email:
+        return None
+    if not _LEAD_EMAIL_RE.fullmatch(email):
+        raise HTTPException(status_code=400, detail="The notification email address doesn't look valid.")
+    return email[:200]
+
+
+@router.get("/lead-forms")
+def enterprise_list_lead_forms(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.view")
+    forms = (
+        db.query(models.EnterpriseLeadForm)
+        .filter(models.EnterpriseLeadForm.organization_id == organization.id)
+        .order_by(models.EnterpriseLeadForm.created_at.desc(), models.EnterpriseLeadForm.id.desc())
+        .all()
+    )
+    totals = dict(
+        db.query(models.EnterpriseLead.form_id, func.count(models.EnterpriseLead.id))
+        .filter(models.EnterpriseLead.organization_id == organization.id, models.EnterpriseLead.form_id.isnot(None))
+        .group_by(models.EnterpriseLead.form_id)
+        .all()
+    )
+    fresh = dict(
+        db.query(models.EnterpriseLead.form_id, func.count(models.EnterpriseLead.id))
+        .filter(
+            models.EnterpriseLead.organization_id == organization.id,
+            models.EnterpriseLead.form_id.isnot(None),
+            models.EnterpriseLead.status == "new",
+        )
+        .group_by(models.EnterpriseLead.form_id)
+        .all()
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "forms": [
+            _serialize_lead_form(
+                f, organization, request,
+                total_leads=totals.get(f.id, 0), new_leads=fresh.get(f.id, 0),
+            )
+            for f in forms
+        ],
+    }
+
+
+@router.post("/lead-forms")
+def enterprise_create_lead_form(
+    payload: EnterpriseLeadFormBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.edit")
+    fields = _normalize_lead_form_fields(payload.fields)
+    form = models.EnterpriseLeadForm(
+        organization_id=organization.id,
+        name=(payload.name or "").strip()[:80],
+        title=(payload.title or "").strip()[:120] or None,
+        intro_text=(payload.intro_text or "").strip()[:600] or None,
+        fields_json=json.dumps(fields),
+        public_token=generate_verification_token(),
+        is_active=payload.is_active if payload.is_active is not None else True,
+        submit_label=(payload.submit_label or "").strip()[:40] or None,
+        success_message=(payload.success_message or "").strip()[:400] or None,
+        notify_email=_clean_lead_notify_email(payload.notify_email),
+        created_by_user_id=current_user.id,
+        created_by_name=(current_user.full_name or current_user.email or "")[:120] or None,
+    )
+    db.add(form)
+    db.commit()
+    db.refresh(form)
+    return {
+        "message": "Form created. Share the link to start collecting leads.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "form": _serialize_lead_form(form, organization, request),
+    }
+
+
+@router.patch("/lead-forms/{form_id}")
+def enterprise_update_lead_form(
+    form_id: int,
+    payload: EnterpriseLeadFormPatchBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.edit")
+    form = _get_org_lead_form_or_404(db, organization.id, form_id)
+    data = payload.model_dump(exclude_unset=True)
+    if "name" in data:
+        form.name = (payload.name or "").strip()[:80] or form.name
+    if "title" in data:
+        form.title = (payload.title or "").strip()[:120] or None
+    if "intro_text" in data:
+        form.intro_text = (payload.intro_text or "").strip()[:600] or None
+    if "fields" in data:
+        form.fields_json = json.dumps(_normalize_lead_form_fields(payload.fields))
+    if "submit_label" in data:
+        form.submit_label = (payload.submit_label or "").strip()[:40] or None
+    if "success_message" in data:
+        form.success_message = (payload.success_message or "").strip()[:400] or None
+    if "notify_email" in data:
+        form.notify_email = _clean_lead_notify_email(payload.notify_email)
+    if "is_active" in data and payload.is_active is not None:
+        form.is_active = bool(payload.is_active)
+    db.commit()
+    db.refresh(form)
+    return {
+        "message": "Form updated.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "form": _serialize_lead_form(form, organization, request),
+    }
+
+
+@router.post("/lead-forms/{form_id}/rotate-link")
+def enterprise_rotate_lead_form_link(
+    form_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Mint a fresh link. The old URL stops resolving immediately — the recovery
+    path if a link ends up somewhere the org regrets."""
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.edit")
+    form = _get_org_lead_form_or_404(db, organization.id, form_id)
+    form.public_token = generate_verification_token()
+    db.commit()
+    db.refresh(form)
+    return {
+        "message": "New link generated. The old link no longer works.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "form": _serialize_lead_form(form, organization, request),
+    }
+
+
+@router.delete("/lead-forms/{form_id}")
+def enterprise_delete_lead_form(
+    form_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.delete")
+    form = _get_org_lead_form_or_404(db, organization.id, form_id)
+    # Detach leads explicitly (not via FK ON DELETE) — the sqlite sandbox never
+    # enforces foreign keys, and collected leads must survive their form.
+    db.query(models.EnterpriseLead).filter(
+        models.EnterpriseLead.organization_id == organization.id,
+        models.EnterpriseLead.form_id == form.id,
+    ).update({"form_id": None}, synchronize_session=False)
+    db.delete(form)
+    db.commit()
+    return {"message": "Form deleted. Collected leads were kept.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+@router.post("/lead-forms/{form_id}/share-email")
+def enterprise_share_lead_form_email(
+    form_id: int,
+    payload: EnterpriseLeadFormShareEmailBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_lead_access(db, current_user, request, capability=("clients.edit", "emails.send"))
+    form = _get_org_lead_form_or_404(db, organization.id, form_id)
+    if not form.is_active:
+        raise HTTPException(status_code=400, detail="This form is paused — resume it before sharing.")
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.lead_form_share", limit=30, window_seconds=3600,
+        extra_key=f"org:{organization.id}",
+    )
+    link = _build_lead_form_url(organization.subdomain_slug, form.public_token, request)
+    sent, _mid, err = send_enterprise_lead_form_link_email(
+        to_email=str(payload.to_email),
+        organization_name=organization.company_name,
+        # Same rule as the public page: the internal name never reaches an outsider's
+        # subject line.
+        form_title=(form.title or "").strip() or "Get in touch",
+        form_url=link,
+        sender_name=current_user.full_name or current_user.email,
+        note=payload.note,
+        logo_url=_resolve_enterprise_logo_url(organization),
+        reply_to=current_user.email,
+    )
+    message = (f"Form link sent to {str(payload.to_email).strip().lower()}."
+               if sent else f"The email could not be sent right now. {err or ''}".strip())
+    return {"message": message, "email_sent": sent, "permissions": _enterprise_permissions_for_role(role)}
+
+
+@router.get("/leads")
+def enterprise_list_leads(
+    request: Request,
+    status_filter: Optional[str] = None,
+    form_id: Optional[int] = None,
+    q: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.view")
+    base = db.query(models.EnterpriseLead).filter(models.EnterpriseLead.organization_id == organization.id)
+    counts = dict(
+        db.query(models.EnterpriseLead.status, func.count(models.EnterpriseLead.id))
+        .filter(models.EnterpriseLead.organization_id == organization.id)
+        .group_by(models.EnterpriseLead.status)
+        .all()
+    )
+    if status_filter and status_filter in _LEAD_STATUSES:
+        base = base.filter(models.EnterpriseLead.status == status_filter)
+    if form_id:
+        base = base.filter(models.EnterpriseLead.form_id == int(form_id))
+    needle = (q or "").strip()
+    if needle:
+        like = f"%{needle}%"
+        base = base.filter(or_(
+            models.EnterpriseLead.full_name.ilike(like),
+            models.EnterpriseLead.email.ilike(like),
+            models.EnterpriseLead.phone.ilike(like),
+        ))
+    total = base.count()
+    leads = (
+        base.order_by(models.EnterpriseLead.created_at.desc(), models.EnterpriseLead.id.desc())
+        .offset(max(0, int(offset)))
+        .limit(min(max(1, int(limit)), 200))
+        .all()
+    )
+    return {
+        "permissions": _enterprise_permissions_for_role(role),
+        "leads": [_serialize_lead(l) for l in leads],
+        "total": int(total),
+        "counts": {s: int(counts.get(s, 0)) for s in _LEAD_STATUSES},
+    }
+
+
+@router.patch("/leads/{lead_id}/status")
+def enterprise_update_lead_status(
+    lead_id: int,
+    payload: EnterpriseLeadStatusBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.edit")
+    lead = _get_org_lead_or_404(db, organization.id, lead_id)
+    new_status = (payload.status or "").strip().lower()
+    if new_status not in _LEAD_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid lead status.")
+    lead.status = new_status
+    db.commit()
+    return {
+        "message": "Lead updated.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "lead": _serialize_lead(lead),
+    }
+
+
+@router.post("/leads/{lead_id}/mark-converted")
+def enterprise_mark_lead_converted(
+    lead_id: int,
+    payload: EnterpriseLeadMarkConvertedBody,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Link a lead to the client it became. The client itself is created through the
+    standard POST /clients flow (billing gates, consent attestation and all) — this
+    endpoint only records the outcome on the lead."""
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.create")
+    lead = _get_org_lead_or_404(db, organization.id, lead_id)
+    client = _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
+    lead.status = "converted"
+    lead.converted_client_id = client.id
+    db.commit()
+    return {
+        "message": "Lead marked as converted.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "lead": _serialize_lead(lead),
+    }
+
+
+@router.delete("/leads/{lead_id}")
+def enterprise_delete_lead(
+    lead_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    _, organization, role = _require_lead_access(db, current_user, request, capability="clients.delete")
+    lead = _get_org_lead_or_404(db, organization.id, lead_id)
+    db.delete(lead)
+    db.commit()
+    return {"message": "Lead deleted.", "permissions": _enterprise_permissions_for_role(role)}
+
+
+# ---- Public (anonymous, token-scoped) --------------------------------------
+
+def _public_lead_form_or_404(db: Session, token: str) -> models.EnterpriseLeadForm:
+    clean = (token or "").strip()
+    if not clean or len(clean) > 80:
+        raise HTTPException(status_code=404, detail="This form link is invalid.")
+    form = (
+        db.query(models.EnterpriseLeadForm)
+        .filter(models.EnterpriseLeadForm.public_token == clean)
+        .first()
+    )
+    if not form:
+        raise HTTPException(status_code=404, detail="This form link is invalid.")
+    return form
+
+
+@router.get("/public/forms/{token}")
+def public_lead_form_info(token: str, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.lead_form_view", limit=30, window_seconds=300,
+        extra_key=hash_token((token or "").strip())[:16],
+    )
+    form = _public_lead_form_or_404(db, token)
+    org = (
+        db.query(models.EnterpriseOrganization)
+        .filter(models.EnterpriseOrganization.id == form.organization_id)
+        .first()
+    )
+    if not org:
+        raise HTTPException(status_code=404, detail="This form link is invalid.")
+    closed = not bool(form.is_active)
+    return {
+        "organization_name": org.company_name,
+        "logo_url": _resolve_enterprise_logo_url(org),
+        "closed": closed,
+        # Only the site key (public by definition) — never the secret.
+        "turnstile_site_key": (os.getenv("TURNSTILE_SITE_KEY", "").strip() if _is_turnstile_required() else ""),
+        "form": {
+            # The form's `name` is the org's internal label ("Instagram junk leads") and
+            # must never surface to a prospect — an unset public title falls back to a
+            # neutral heading instead.
+            "title": (form.title or "").strip() or "Get in touch",
+            "intro_text": form.intro_text,
+            "fields": [] if closed else _parse_lead_form_fields(form),
+            "submit_label": form.submit_label or "Submit",
+            "success_message": form.success_message,
+        },
+    }
+
+
+@router.post("/public/forms/{token}/submit")
+def public_lead_form_submit(
+    token: str,
+    payload: PublicLeadSubmitBody,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.lead_form_submit", limit=10, window_seconds=3600,
+        extra_key=hash_token((token or "").strip())[:16],
+    )
+    form = _public_lead_form_or_404(db, token)
+    if not form.is_active:
+        raise HTTPException(status_code=400, detail="This form is no longer accepting responses.")
+    org = (
+        db.query(models.EnterpriseOrganization)
+        .filter(models.EnterpriseOrganization.id == form.organization_id)
+        .first()
+    )
+    if not org:
+        raise HTTPException(status_code=404, detail="This form link is invalid.")
+
+    success_message = form.success_message or "Thanks! Your details were sent — the team will get back to you shortly."
+
+    # Honeypot tripped: pretend success, store nothing.
+    if (payload.website or "").strip():
+        return {"message": success_message}
+
+    turnstile_token = (payload.cf_turnstile_token or "").strip()
+    if _is_turnstile_required() and not is_request_ip_whitelisted(request):
+        if not turnstile_token or not verify_turnstile_token(turnstile_token, extract_client_ip(request) if request else None):
+            raise HTTPException(status_code=400, detail="Security verification failed. Please reload the page and try again.")
+
+    # Rolling 24h volume check. Deliberately fail-soft: a proxy-rotating bot must not
+    # be able to shut a paying org's form to real prospects, so past the daily cap we
+    # keep accepting and only mute the alert emails (which go out over the shared
+    # transactional domain). Only the far-higher hard ceiling refuses outright.
+    since = datetime.utcnow() - timedelta(hours=24)
+    recent = int((
+        db.query(func.count(models.EnterpriseLead.id))
+        .filter(models.EnterpriseLead.form_id == form.id, models.EnterpriseLead.created_at >= since)
+        .scalar()
+    ) or 0)
+    if recent >= _LEAD_FORM_HARD_CAP:
+        raise HTTPException(status_code=429, detail="This form is receiving too many responses right now. Please try again later.")
+    flooded = recent >= _LEAD_FORM_DAILY_CAP
+
+    fields = _parse_lead_form_fields(form)
+    answers, contact = _validate_lead_answers(fields, payload.answers)
+
+    lead = models.EnterpriseLead(
+        organization_id=org.id,
+        form_id=form.id,
+        form_name=form.name,
+        full_name=contact["name"],
+        email=contact["email"],
+        phone=contact["phone"],
+        answers_json=json.dumps(answers),
+        status="new",
+        ip_address=(extract_client_ip(request) if request else None),
+        source=(payload.source or "").strip()[:200] or None,
+    )
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+
+    # Everything below is best-effort — the lead is already safe in the inbox.
+    notif.notify_org(
+        db, org.id, type="lead_received",
+        title=f"New lead: {lead.full_name or 'Someone'} via {form.name}",
+        body=(lead.email or lead.phone or None),
+        actor_user_id=None, reference_type="lead", reference_id=lead.id,
+        recipient_capability="clients.view", commit=True,
+    )
+    if form.notify_email and not flooded:
+        try:
+            leads_url = (
+                (_build_enterprise_portal_url(org.subdomain_slug) or f"{DEFAULT_PUBLIC_BASE_URL.rstrip('/')}/enterprise")
+                + "/leads"
+            )
+            send_enterprise_new_lead_email(
+                to_email=form.notify_email,
+                organization_name=org.company_name,
+                form_name=form.name,
+                lead_name=lead.full_name,
+                answers=[(a.get("label"), a.get("value")) for a in answers],
+                leads_url=leads_url,
+                logo_url=_resolve_enterprise_logo_url(org),
+                lead_email=lead.email,
+            )
+        except Exception:
+            logger.exception("New-lead alert email failed (lead=%s)", lead.id)
+
+    return {"message": success_message}

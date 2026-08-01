@@ -51,7 +51,7 @@ PLANS = {
         "features": [
             "Up to 25 clients",
             "2 team seats",
-            "Full visa pipeline & notes",
+            "Full client pipeline & notes",
             "Client emails",
         ],
     },
@@ -68,7 +68,7 @@ PLANS = {
         "features": [
             "Up to 150 active clients",
             "3 team seats",
-            "Visa pipeline, notes & reminders",
+            "Client pipeline, notes & reminders",
             "Send client emails",
             "Dashboard analytics",
         ],

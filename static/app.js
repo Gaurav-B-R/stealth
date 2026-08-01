@@ -801,7 +801,7 @@ const CURRENCY_MINOR_UNIT_EXPONENT = {
 let isNavigating = false; // Flag to prevent recursive navigation
 
 const APP_ROUTE_TITLES = Object.freeze({
-    '/': 'Rilono — AI-Powered Student Visa Platform · US, UK, Canada, Australia & Germany',
+    '/': 'Rilono — AI-Powered Study-Abroad Platform · US, UK, Canada, Australia & Germany',
     '/us-f1-visa': 'F1 Student Visa Guidance | DS-160, I-20, Documents & Interview | Rilono AI',
     '/products/us-f1-visa': 'F1 Student Visa Guidance | DS-160, I-20, Documents & Interview | Rilono AI',
     '/login': 'Log in · Rilono',
@@ -823,9 +823,9 @@ const APP_ROUTE_TITLES = Object.freeze({
     '/settings': 'Settings · Rilono',
     '/referral': 'Referral Program · Rilono',
     '/subscription': 'Your Subscription · Rilono',
-    '/pricing': 'Pricing — Student Visa Plans & Visa Success Pass · Rilono',
-    '/about-us': 'About Rilono — AI Student Visa Guidance for US, UK, Canada & Australia',
-    '/contact': 'Contact Rilono — Support for Students & Visa Consultancies',
+    '/pricing': 'Pricing — Plans & Visa Success Pass · Rilono',
+    '/about-us': 'About Rilono — AI Study-Abroad Guidance for US, UK, Canada, Australia & Germany',
+    '/contact': 'Contact Rilono — Support for Students & Study-Abroad Consultancies',
     '/privacy': 'Privacy Policy · Rilono',
     '/terms': 'Terms & Conditions · Rilono',
     '/refund-policy': 'Refund Policy · Rilono',
@@ -3278,7 +3278,7 @@ async function showOnboardingWizard() {
       <div style="width:min(560px,100%);background:#ffffff;border:1px solid #e2e8f0;border-radius:20px;box-shadow:0 30px 90px rgba(0,0,0,.6);overflow:hidden;color:#0f172a">
         <div style="padding:26px 28px 8px">
           <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:700">Welcome to Rilono</div>
-          <h2 style="margin:8px 0 4px;font-size:24px;font-weight:800;color:#0f172a">Let's personalize your visa journey</h2>
+          <h2 style="margin:8px 0 4px;font-size:24px;font-weight:800;color:#0f172a">Let's personalize your study-abroad journey</h2>
           <p style="margin:0;font-size:14px;color:#64748b">Tell us where you're headed. You can change this anytime in settings.</p>
         </div>
         <div id="onbBody" style="padding:18px 28px 4px">
@@ -4054,22 +4054,20 @@ async function deleteShortlistUniversity(id) {
 
 // Per-destination heading for the dashboard journey tracker.
 const JOURNEY_HEADINGS = {
-    US: '🛂 Your F-1 Visa Journey',
-    UK: '🛂 Your UK Student Visa Journey',
-    CA: '🛂 Your Study Permit Journey',
-    AU: '🛂 Your Student Visa Journey',
-    DE: '🛂 Your German Student Visa Journey',
+    US: '🎓 Your US study-abroad journey',
+    UK: '🎓 Your UK study-abroad journey',
+    CA: '🎓 Your Canada study-abroad journey',
+    AU: '🎓 Your Australia study-abroad journey',
+    DE: '🎓 Your Germany study-abroad journey',
 };
 function updateVisaJourneyHeading() {
     const el = document.getElementById('visaJourneyHeading');
     if (!el) return;
     const code = (currentUser && currentUser.destination_country_code) || 'US';
-    el.textContent = JOURNEY_HEADINGS[code] || '🛂 Your Visa Journey';
+    el.textContent = JOURNEY_HEADINGS[code] || '🎓 Your study-abroad journey';
 }
 
-// Per-destination labels for the sidebar nav, the interviews-section heading, and
-// the AI assistant copy. US keeps its F-1 wording; other countries adapt.
-const VISA_NAV_LABEL = { US: 'F-1 Visa', UK: 'UK Student Visa', CA: 'Canada Study Permit', AU: 'Australia Student Visa', DE: 'German Student Visa' };
+// Per-destination phrases for the AI assistant copy. US keeps its F-1 wording; other countries adapt.
 const VISA_JOURNEY_PHRASE = { US: 'F-1 visa', UK: 'UK student visa', CA: 'Canada study permit', AU: 'Australia student visa', DE: 'German student visa' };
 function currentVisaJourneyPhrase() {
     const code = (currentUser && currentUser.destination_country_code) || 'US';
@@ -4121,7 +4119,7 @@ const COPILOT_TAB_COPY = {
 function updateVisaSectionLabels() {
     const code = (currentUser && currentUser.destination_country_code) || 'US';
     const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
-    const label = `${VISA_NAV_LABEL[code] || 'Student Visa'} (Interviews)`;
+    const label = 'Interview Prep';
     setText('visaNavLabel', label);
     setText('visaSectionHeading', label);
 
@@ -5659,8 +5657,8 @@ function renderMarketingEmailPreference() {
     const btn = document.getElementById('profileMarketingEmailsToggleBtn');
     if (text) {
         text.textContent = subscribed
-            ? "You're subscribed to product tips, visa updates and occasional offers. You can unsubscribe anytime."
-            : "Get product tips, visa updates and occasional offers by email. You can unsubscribe anytime.";
+            ? "You're subscribed to product tips, journey updates and occasional offers. You can unsubscribe anytime."
+            : "Get product tips, journey updates and occasional offers by email. You can unsubscribe anytime.";
     }
     if (btn) {
         btn.disabled = false;
@@ -14039,7 +14037,7 @@ function displayDocuments(documents) {
 
     const summaryLine = `
         <div style="margin-bottom: 0.9rem; color: var(--text-secondary); font-size: 0.86rem;">
-            Your full document checklist for the visa journey — items you've uploaded appear first.
+            Your full document checklist for your journey — items you've uploaded appear first.
         </div>
     `;
 
@@ -14585,7 +14583,7 @@ function getMainChatWelcomeMarkup() {
         <div class="rilono-ai-message assistant">
             <div class="message-avatar"><svg viewBox="0 0 24 24" width="18" height="18" class="ai-sparkle"><use href="#icon-ai-sparkle"></use></svg></div>
             <div class="message-bubble">
-                <p><strong>Welcome! I'm Rilono AI.</strong> I'm here to guide your ${currentVisaJourneyPhrase()} journey with practical, step-by-step help.</p>
+                <p><strong>Welcome! I'm Rilono AI.</strong> I'm here to guide your study-abroad journey with practical, step-by-step help.</p>
                 <p>I can help you with:</p>
                 <p>• What to upload next (document checklist)</p>
                 <p>• Profile and visa-stage gaps you should fix first</p>
@@ -15344,7 +15342,7 @@ For specific guidance on any step, feel free to ask! I can also help you track w
         return `I'm Rilono AI, and I'm here to help you with:
 
 ✅ Document requirements and checklists
-✅ Visa application guidance
+✅ Study-abroad application guidance
 ✅ Profile completion tracking
 ✅ Answering questions about your uploaded documents
 ✅ General visa process information
@@ -15354,16 +15352,16 @@ You can ask me about:
 • Your profile completion status
 • Visa application steps
 • Document requirements
-• Any other questions about your visa journey
+• Any other questions about your study-abroad journey
 
 What would you like to know?`;
     } else {
         return `I understand you're asking about "${userMessage}". 
 
-I'm here to help with your visa documentation and application process. I can assist with:
+I'm here to help with your study-abroad documentation and application process. I can assist with:
 • Document requirements and checklists
 • Profile completion status
-• Visa application guidance
+• Study-abroad application guidance
 • Questions about your uploaded documents
 
 Could you be more specific about what you need help with? Or try one of the quick action buttons below!`;
@@ -15864,7 +15862,7 @@ function handleGalleryKeyPress(e) {
 // Floating Chat Popup Messages Logic
 // ==============================================
 const floatingChatMessages = [
-    "Hey! I'm Rilono AI Assistant. Let's talk about your F-1 Visa journey.",
+    "Hey! I'm Rilono AI Assistant. Let's talk about your study-abroad journey.",
     "Need help tracking your document progress?",
     "I can validate your enrolment and financial documents instantly.",
     "Ready to practise? Let's run through your likely visa questions."

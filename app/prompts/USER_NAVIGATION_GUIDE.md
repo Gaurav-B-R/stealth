@@ -18,11 +18,11 @@ This guide helps users navigate the Rilono web app UI quickly.
 ## Dashboard Left Menu
 - `Overview` : Journey status, document health summary, and embedded AI chat
 - `Documents` : Upload and manage documents, validation status, stage mapping
-- `F1-Visa (Interviews)` :
+- `Interview Prep` :
   - `F-1 Visa Interview Prep (Rilono AI)`
   - `F1 Mock Interview (Rilono AI)`
   - `Recent F1 Interview Experiences`
-- `News` : Latest F1 visa-related updates
+- `News` : Latest visa and student updates
 - `Rilono AI` : Full chat workspace
 
 ## Top-Right User Menu

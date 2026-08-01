@@ -2651,6 +2651,23 @@ def deactivate_member(
             )
         ) or 0
 
+    # The member's private AI-assistant threads leave with them: they were never
+    # org-visible, and an offboarded account must not leave a client-PII transcript
+    # behind. Deliberately NOT restored on reactivate — the purge is the point.
+    _ai_conv_ids = [
+        cid for (cid,) in db.query(models.EnterpriseAiConversation.id).filter(
+            models.EnterpriseAiConversation.organization_id == org_id,
+            models.EnterpriseAiConversation.user_id == int(membership.user_id),
+        ).all()
+    ]
+    if _ai_conv_ids:
+        db.query(models.EnterpriseAiMessage).filter(
+            models.EnterpriseAiMessage.conversation_id.in_(_ai_conv_ids)
+        ).delete(synchronize_session=False)
+        db.query(models.EnterpriseAiConversation).filter(
+            models.EnterpriseAiConversation.id.in_(_ai_conv_ids)
+        ).delete(synchronize_session=False)
+
     membership.is_active = False
     membership.status = MEMBER_STATUS_SUSPENDED
     membership.deactivated_at = _utcnow()
