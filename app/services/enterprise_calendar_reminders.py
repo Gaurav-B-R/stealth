@@ -9,6 +9,15 @@ deadlines, the client's creator).
 Mirrors app.services.daily_ai_notifications: a background thread polls and, once past the
 scheduled UTC time, runs the job exactly once per day (idempotency via
 enterprise_calendar_reminder_runs.run_date).
+
+Two different clocks are in play here, deliberately:
+
+  * WHEN the job runs is global — once per UTC day, at HOUR_UTC:MINUTE_UTC — because
+    `run_date` is uniquely indexed, so one run covers every org. Per-org delivery times
+    need that constraint widened to (run_date, organization_id) first.
+  * WHAT it says is per-org: "today", "overdue" and the printed clock times are all resolved
+    in the org's own zone (app.enterprise_time). Grading a workspace west of UTC against the
+    run's UTC date labelled tomorrow's appointment "Today" for most of its afternoon.
 """
 
 from __future__ import annotations
@@ -24,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from app.database import SessionLocal
 from app import models
 from app import enterprise_catalog as catalog
+from app import enterprise_time as ent_time
 from app.email_service import (
     send_enterprise_calendar_digest_email,
     send_enterprise_client_calendar_reminder_email,
@@ -207,7 +217,7 @@ def _is_active_member(db, organization_id: int, user_id: int) -> bool:
     )
 
 
-def _notify_linked_clients(db, org, today: date, floor: date) -> int:
+def _notify_linked_clients(db, org, today: date, floor: date, tz_label: str) -> int:
     """Email clients who were @-mentioned (with notify-on) when their reminder comes due.
 
     Sent at most once per event (dedup via client_notified_at) so an overdue reminder
@@ -247,7 +257,10 @@ def _notify_linked_clients(db, org, today: date, floor: date) -> int:
                 org_name=org.company_name or "Your consultancy",
                 title=ev.title,
                 when_label=when_label,
-                event_time=ev.event_time,
+                # The student is very often in a different country to the consultancy, so a
+                # bare "14:00" is the one place this ambiguity actually costs someone a slot.
+                # No configured office zone → no label, rather than a guess dressed as fact.
+                event_time=(f"{ev.event_time} {tz_label}".strip() if ev.event_time else None),
                 notes=ev.notes,
             )
             if ok:
@@ -293,8 +306,6 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
                 db.rollback()
                 return {"status": "skipped", "reason": "already_ran_for_today", "run_date": run_date.isoformat()}
 
-        today = run_date
-        floor = today - timedelta(days=OVERDUE_DAYS)
         emailed = 0
         considered = 0
         clients_emailed = 0
@@ -304,9 +315,17 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
             org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == org_id).first()
             if not org:
                 continue
+            # "Today" is the ORG's date, not the run's UTC date. A workspace west of UTC is
+            # still on the previous calendar day when this job fires, so grading its events
+            # against `run_date` labelled tomorrow's appointment "Today" and today's own
+            # items "1 day overdue" — the digest was wrong for exactly the offices whose
+            # evening it was. The job still runs once per UTC day (delivery time is global);
+            # this fixes what the email says, not yet when it lands.
+            _org_tz, today, org_tz_label = ent_time.org_clock(db, org_id)
+            floor = today - timedelta(days=OVERDUE_DAYS)
             # Notify @-mentioned clients whose reminders are due (once each).
             try:
-                clients_emailed += _notify_linked_clients(db, org, today, floor)
+                clients_emailed += _notify_linked_clients(db, org, today, floor, org_tz_label)
             except Exception:
                 logger.exception("Client notification pass failed (org=%s)", org_id)
                 db.rollback()
@@ -329,6 +348,7 @@ def run_calendar_reminder_job(force: bool = False) -> dict:
                         overdue_items=overdue,
                         today_items=today_items,
                         portal_url=_org_portal_url(org),
+                        timezone_label=org_tz_label,
                     )
                     if ok:
                         emailed += 1

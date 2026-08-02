@@ -1304,7 +1304,7 @@ body.ai-dock-open .toast-wrap { right: 444px; }
 .cp-hero--de { --cp-hero-image: url('/static/assets/enterprise/client-banners/de.jpg'); --cp-accent: #fbbf24; --cp-accent-glow: rgba(245, 158, 11, .24); --cp-hero-overlay: linear-gradient(90deg, rgba(11, 13, 19, .97) 0%, rgba(24, 23, 27, .91) 41%, rgba(24, 20, 21, .45) 70%, rgba(12, 10, 12, .13) 100%); }
 .cp-hero--ie { --cp-hero-image: url('/static/assets/enterprise/client-banners/ie.jpg'); --cp-accent: #86efac; --cp-accent-glow: rgba(34, 197, 94, .29); --cp-hero-overlay: linear-gradient(90deg, rgba(3, 28, 24, .97) 0%, rgba(5, 43, 34, .90) 41%, rgba(5, 34, 28, .44) 70%, rgba(3, 20, 18, .12) 100%); }
 .cp-hero--fr { --cp-hero-image: url('/static/assets/enterprise/client-banners/fr.jpg'); --cp-accent: #bfdbfe; --cp-accent-glow: rgba(37, 99, 235, .30); --cp-hero-overlay: linear-gradient(90deg, rgba(4, 16, 46, .97) 0%, rgba(6, 28, 74, .90) 41%, rgba(6, 24, 62, .45) 70%, rgba(3, 14, 38, .13) 100%); }
-.cp-hero--es { --cp-accent: #fdba74; --cp-accent-glow: rgba(185, 28, 28, .30); --cp-hero-overlay: linear-gradient(90deg, rgba(38, 8, 6, .97) 0%, rgba(60, 13, 9, .90) 41%, rgba(48, 11, 8, .45) 70%, rgba(28, 7, 5, .13) 100%); }
+.cp-hero--es { --cp-hero-image: url('/static/assets/enterprise/client-banners/es.jpg'); --cp-accent: #fdba74; --cp-accent-glow: rgba(185, 28, 28, .30); --cp-hero-overlay: linear-gradient(90deg, rgba(38, 8, 6, .97) 0%, rgba(60, 13, 9, .90) 41%, rgba(48, 11, 8, .45) 70%, rgba(28, 7, 5, .13) 100%); }
 .cp-hero--nl { --cp-accent: #bae6fd; --cp-accent-glow: rgba(14, 165, 233, .30); --cp-hero-overlay: linear-gradient(90deg, rgba(3, 20, 34, .97) 0%, rgba(4, 31, 51, .90) 41%, rgba(4, 25, 42, .45) 70%, rgba(2, 14, 26, .13) 100%); }
 .cp-hero--ae { --cp-hero-image: url('/static/assets/enterprise/client-banners/ae.jpg'); --cp-accent: #fcd34d; --cp-accent-glow: rgba(217, 119, 6, .28); --cp-hero-overlay: linear-gradient(90deg, rgba(28, 15, 4, .97) 0%, rgba(45, 25, 7, .90) 41%, rgba(36, 20, 6, .45) 70%, rgba(20, 11, 3, .13) 100%); }
 .cp-hero--intl { --cp-accent: #c4b5fd; --cp-accent-glow: rgba(139, 92, 246, .28); }
@@ -1422,6 +1422,31 @@ body.ai-dock-open .toast-wrap { right: 444px; }
 .doc-up-row .select-mini { min-width: 220px; }
 .doc-file { flex: 1; min-width: 200px; font-size: 13px; color: var(--text-2); }
 .doc-hint { font-size: 12px; color: var(--muted); margin-top: 12px; }
+
+/* Upload-time opt-in for the billed Rilono AI scan. Styled as a distinct panel, not a
+   stray checkbox, because ticking it spends the agency's credits — the price sits on the
+   same row as the choice so it can never be agreed to without being seen. */
+.doc-scan-opt {
+  display: flex; align-items: flex-start; gap: 11px; margin-top: 14px; padding: 11px 13px;
+  border: 1.5px solid rgba(99, 102, 241, .32); border-radius: 11px;
+  background: rgba(99, 102, 241, .05); cursor: pointer;
+}
+.doc-scan-opt:hover { border-color: rgba(99, 102, 241, .5); background: rgba(99, 102, 241, .08); }
+.doc-scan-opt.disabled { cursor: not-allowed; border-color: var(--border-strong); background: rgba(100, 116, 139, .06); }
+.doc-scan-opt.disabled:hover { border-color: var(--border-strong); background: rgba(100, 116, 139, .06); }
+.doc-scan-opt input[type="checkbox"] { flex: none; width: 17px; height: 17px; margin-top: 1px; accent-color: var(--primary); cursor: inherit; }
+.doc-scan-opt-txt { flex: 1; min-width: 0; display: block; font-size: 13px; line-height: 1.45; color: var(--text); }
+.doc-scan-opt-txt b { font-weight: 700; }
+.doc-scan-opt-sub { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
+.doc-scan-price {
+  flex: none; align-self: center; white-space: nowrap; font-size: 11.5px; font-weight: 800;
+  color: var(--primary-600, #4f46e5); background: rgba(99, 102, 241, .13);
+  border: 1px solid rgba(99, 102, 241, .3); padding: 3px 10px; border-radius: 999px;
+}
+.doc-scan-opt.disabled .doc-scan-price { color: #475569; background: rgba(100, 116, 139, .12); border-color: rgba(100, 116, 139, .3); }
+/* Per-document scan / re-scan action on the document card. */
+.doc-scan-row { margin-top: 8px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.doc-scan-note { font-size: 11.5px; color: var(--muted); }
 
 /* Searchable, destination-scoped document-type picker */
 .docsel { position: relative; min-width: 300px; flex: 1; max-width: 420px; }
@@ -2298,6 +2323,8 @@ body.ai-dock-open .toast-wrap { right: 444px; }
 .cal-more { font-size: 11px; color: var(--muted); font-weight: 600; padding-left: 2px; }
 .cal-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .cal-legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
+/* Sits apart from the type keys — it qualifies the grid's bare clock times, it isn't one more colour. */
+.cal-legend-tz { margin-left: auto; font-size: 12px; color: var(--text-2); font-weight: 650; }
 .cal-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
 .cal-side { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: 0 2px 10px rgba(15,23,42,.05); position: sticky; top: 16px; }
 .cal-side h3 { margin: 0 0 12px; font-size: 15px; }
@@ -3501,6 +3528,10 @@ a.cal-att-name:hover { color: var(--primary-600); text-decoration: underline; }
 
 .tm-hint { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
 .tm-hint b { color: var(--text-2); font-weight: 650; }
+/* Office time zone saved before the field became a picker — it reads as configured but
+   resolves to nothing, so it has to look like a problem, not a footnote. */
+/* Needs to out-specify `.field .hint`, which otherwise repaints it muted grey. */
+.field .hint.tm-tz-warn { color: var(--warning); font-weight: 650; }
 
 /* ---------- Ownership-transfer confirmation code (Team → ⋯ → Transfer ownership) ---------- */
 .tm-otp-input {
@@ -3923,6 +3954,24 @@ a.ld-dh-chip:hover { background: rgba(255, 255, 255, .28); }
 .ld-detail-kv .it label { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 800; margin-bottom: 4px; }
 .ld-detail-kv .it div { font-size: 14.5px; font-weight: 550; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
 .ld-detail-empty { grid-column: 1 / -1; font-size: 13.5px; color: var(--muted); }
+/* Files a prospect attached: same card language as the answer grid, but a single
+   full-width column — a filename plus its field label needs the room. */
+.ld-files { display: flex; flex-direction: column; gap: 8px; margin-bottom: 6px; }
+.ld-file {
+  display: flex; align-items: center; gap: 11px; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 13px;
+}
+.ld-file-i { flex: none; font-size: 17px; line-height: 1; }
+.ld-file-n { flex: 1; min-width: 0; font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+.ld-file-n span { display: block; font-size: 11.5px; font-weight: 500; color: var(--muted); margin-top: 2px; }
+.ld-file-lock { flex: none; font-size: 13px; opacity: .55; }
+/* Paperclip on the inbox row, so "did they send documents?" is answerable without
+   opening every lead. */
+.ld-clip {
+  display: inline-flex; align-items: center; gap: 2px; margin-left: 7px; vertical-align: middle;
+  font-size: 11px; font-weight: 700; color: var(--text-2);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px;
+}
 .ld-detail-meta { font-size: 12.5px; color: var(--text-2); background: var(--surface-2); border-radius: 10px; padding: 9px 13px; margin-top: 8px; overflow-wrap: anywhere; }
 .ld-detail-sub { font-size: 12.5px; color: var(--muted); }
 .ld-detail-actions {
@@ -4001,6 +4050,19 @@ a.ld-dh-chip:hover { background: rgba(255, 255, 255, .28); }
 .lf-b-opts label span { font-weight: 500; color: var(--muted); }
 .lf-b-opts input { width: 100%; padding: 9px 12px; font-size: 13.5px; background: var(--surface-2); border-style: dashed; }
 .lf-b-opts input:focus { border-style: solid; }
+/* File fields swap the comma-separated options input for a count picker; it reuses
+   the .lf-b-type chrome so both selects in a row read as the same control. */
+.lf-b-maxfiles {
+  font-family: inherit; color: var(--text-2); font-size: 13.5px; font-weight: 600; cursor: pointer;
+  border: 1.5px solid var(--border-strong); border-radius: 10px; outline: none;
+  padding: 9px 32px 9px 12px; appearance: none; -webkit-appearance: none;
+  background: var(--surface-2)
+    url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394a3b8' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E")
+    no-repeat right 11px center;
+  transition: border-color .15s, box-shadow .15s;
+}
+.lf-b-maxfiles:focus { border-color: var(--primary); box-shadow: 0 0 0 4px rgba(99, 102, 241, .14); }
+.lf-b-opts .hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
 
 .lf-b-add {
   width: 100%; margin-bottom: 22px; padding: 12px; border: 1.5px dashed var(--border-strong); border-radius: 12px;

@@ -380,6 +380,7 @@ def record_tts_usage(source: str, voice_name: str, characters: int, *,
 SOURCE_LABELS = {
     "mock_interview_tts": "Mock interview — officer neural voice (TTS)",
     "document_ai": "Document AI (validation & extraction)",
+    "enterprise_document_scan": "Document scan & validate (per document, billed)",
     "student_ai_chat": "Student AI chat (website)",
     "student_ai_chat_copilot": "Student AI chat — Rilono Copilot (Chrome extension)",
     "enterprise_copilot": "Enterprise AI assistant",

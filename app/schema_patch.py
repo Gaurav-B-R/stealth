@@ -854,6 +854,7 @@ def ensure_enterprise_crm_tables():
                     validation_message TEXT,
                     extracted_fields TEXT,
                     validated_at {ts},
+                    validation_credits_charged INTEGER NOT NULL DEFAULT 0,
                     manually_accepted_at {ts},
                     manually_accepted_by VARCHAR,
                     uploaded_by_user_id INTEGER,
@@ -887,6 +888,11 @@ def ensure_enterprise_crm_tables():
                 conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN manually_accepted_at TIMESTAMP"))
             if "manually_accepted_by" not in doc_cols:
                 conn.execute(text("ALTER TABLE enterprise_client_documents ADD COLUMN manually_accepted_by VARCHAR"))
+            if "validation_credits_charged" not in doc_cols:
+                conn.execute(text(
+                    "ALTER TABLE enterprise_client_documents "
+                    "ADD COLUMN validation_credits_charged INTEGER NOT NULL DEFAULT 0"
+                ))
 
         # --- enterprise_interview_sessions ------------------------------------
         if not _table_exists(conn, "enterprise_interview_sessions"):
@@ -3629,8 +3635,10 @@ def ensure_international_payment_columns():
 
 def ensure_enterprise_lead_tables():
     """Create the lead-collection tables: org-branded public forms (raw shareable
-    public_token — the link is public-by-design and must be re-copyable) and the
-    per-org leads inbox fed by anonymous submissions. Indexes are created OUTSIDE
+    public_token — the link is public-by-design and must be re-copyable), the
+    per-org leads inbox fed by anonymous submissions, and the files those
+    submissions attach (staged before the lead exists, swept if abandoned).
+    Indexes are created OUTSIDE
     the table-exists guard because Base.metadata.create_all() may have built the
     tables from the models on an earlier boot. Idempotent and additive — safe to
     run on every startup."""
@@ -3683,6 +3691,28 @@ def ensure_enterprise_lead_tables():
                     FOREIGN KEY (converted_client_id) REFERENCES enterprise_clients(id) ON DELETE SET NULL
                 )
             """))
+        if not _table_exists(conn, "enterprise_lead_uploads"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_lead_uploads (
+                    id {pk},
+                    organization_id INTEGER NOT NULL,
+                    form_id INTEGER,
+                    lead_id INTEGER,
+                    field_key VARCHAR NOT NULL,
+                    field_label VARCHAR,
+                    upload_token VARCHAR NOT NULL,
+                    original_filename VARCHAR NOT NULL,
+                    storage_key VARCHAR NOT NULL,
+                    file_size INTEGER,
+                    mime_type VARCHAR,
+                    ip_address VARCHAR,
+                    converted_document_id INTEGER,
+                    created_at {ts} DEFAULT {now_default} NOT NULL,
+                    FOREIGN KEY (organization_id) REFERENCES enterprise_organizations(id),
+                    FOREIGN KEY (form_id) REFERENCES enterprise_lead_forms(id) ON DELETE SET NULL,
+                    FOREIGN KEY (lead_id) REFERENCES enterprise_leads(id) ON DELETE CASCADE
+                )
+            """))
         # Index names match what create_all() derives from the models, so a table built
         # either way ends up with exactly one copy of each index (a differently-named
         # unique index here would leave prod maintaining two identical ones forever).
@@ -3698,6 +3728,13 @@ def ensure_enterprise_lead_tables():
             "CREATE INDEX IF NOT EXISTS ix_enterprise_leads_created_at ON enterprise_leads(created_at)",
             "CREATE INDEX IF NOT EXISTS ix_ent_leads_org_created ON enterprise_leads(organization_id, created_at)",
             "CREATE INDEX IF NOT EXISTS ix_ent_leads_org_status ON enterprise_leads(organization_id, status)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_enterprise_lead_uploads_upload_token ON enterprise_lead_uploads(upload_token)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_lead_uploads_organization_id ON enterprise_lead_uploads(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_lead_uploads_form_id ON enterprise_lead_uploads(form_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_lead_uploads_lead_id ON enterprise_lead_uploads(lead_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_lead_uploads_created_at ON enterprise_lead_uploads(created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_lead_uploads_lead ON enterprise_lead_uploads(lead_id, id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_lead_uploads_staged ON enterprise_lead_uploads(form_id, lead_id, created_at)",
             # Retire the first-cut name so no DB keeps two identical unique indexes.
             "DROP INDEX IF EXISTS uq_enterprise_lead_forms_token",
         ):

@@ -34,6 +34,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
+from zoneinfo import available_timezones
 
 from fastapi import HTTPException
 from sqlalchemy import and_, false, func, or_
@@ -88,12 +89,46 @@ ACTION_LABELS: dict[str, str] = {
 
 # Free-text fields on a branch that are NOT charset-restricted display names. They are
 # rendered as plain text and never used as an identifier, so they only need control
-# characters stripped and a length cap.
+# characters stripped and a length cap. `timezone` is deliberately NOT here — it is the
+# one office field that has to survive being fed to a date library, so it gets validated
+# against the tz database by _clean_timezone below.
 _BRANCH_TEXT_LIMITS: dict[str, int] = {
     "city": 80,
     "state_region": 80,
     "address_line": 200,
-    "timezone": 60,
+}
+
+# An office time zone is an IANA name ("Asia/Kolkata"), checked against the tz database the
+# runtime actually ships so a stored value is always something ZoneInfo() can load later.
+# Matched case-insensitively and stored canonically, because the value is compared as a
+# string. If a slim image carries no tz database at all, `_TZ_NAMES` comes back empty and
+# validation degrades to length-capped free text — a host missing tzdata must not turn
+# every real zone into a 422.
+try:
+    _TZ_NAMES: frozenset[str] = frozenset(available_timezones())
+except Exception:  # pragma: no cover — no tz database on this host
+    _TZ_NAMES = frozenset()
+_TZ_CANONICAL: dict[str, str] = {name.lower(): name for name in _TZ_NAMES}
+
+# Browsers disagree on which spelling of a renamed zone they offer: older ICU lists
+# "Asia/Calcutta" and has no "Asia/Kolkata" at all, newer ICU is the other way round. Both
+# are links to identical rules, so this is not a correctness fix — it stops the same office
+# being stored two different ways depending on who filled the form, and stops an Indian
+# consultancy being filed under "Calcutta". Mirrors TZ_MODERN in static/enterprise.js;
+# deliberately partial, because a rename it misses is cosmetic rather than wrong.
+_TZ_RENAMED: dict[str, str] = {
+    "asia/calcutta": "Asia/Kolkata",
+    "asia/rangoon": "Asia/Yangon",
+    "asia/saigon": "Asia/Ho_Chi_Minh",
+    "asia/katmandu": "Asia/Kathmandu",
+    "asia/dacca": "Asia/Dhaka",
+    "asia/thimbu": "Asia/Thimphu",
+    "europe/kiev": "Europe/Kyiv",
+    "america/godthab": "America/Nuuk",
+    "america/buenos_aires": "America/Argentina/Buenos_Aires",
+    "atlantic/faeroe": "Atlantic/Faroe",
+    "pacific/ponape": "Pacific/Pohnpei",
+    "pacific/truk": "Pacific/Chuuk",
 }
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
@@ -155,6 +190,31 @@ def _clean_email(value) -> str | None:
     if not _EMAIL_SHAPE.match(text) or len(text) > 200:
         raise HTTPException(status_code=422, detail="That doesn't look like an email address.")
     return text
+
+
+def _clean_timezone(value) -> str | None:
+    """Validate an office time zone. Returns the canonically-cased IANA name, or None.
+
+    Rejects rather than silently keeps: a zone the runtime can't load is worse than no
+    zone at all, because it reads as configured while behaving as unset.
+    """
+    text = _clean_text(value, 60)
+    if text is None:
+        return None
+    if not _TZ_NAMES:
+        return text
+    # Only modernise when this runtime's tz database actually carries the new name — an
+    # older image that only ships "Asia/Calcutta" must not start 422ing on it.
+    renamed = _TZ_RENAMED.get(text.lower())
+    if renamed and renamed in _TZ_NAMES:
+        return renamed
+    canonical = _TZ_CANONICAL.get(text.lower())
+    if canonical is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"“{text}” isn't a time zone we recognise. Pick one like “Asia/Kolkata”.",
+        )
+    return canonical
 
 
 def _int_or_none(value) -> int | None:
@@ -1171,6 +1231,8 @@ def _apply_branch_fields(branch, data: dict) -> dict:
     for field, limit in _BRANCH_TEXT_LIMITS.items():
         if field in data:
             _set(field, _clean_text(data.get(field), limit))
+    if "timezone" in data:
+        _set("timezone", _clean_timezone(data.get("timezone")))
     if "country_code" in data:
         raw = str(data.get("country_code") or "").strip().upper()
         _set("country_code", (raw[:2] or None))

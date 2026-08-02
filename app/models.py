@@ -706,14 +706,19 @@ class EnterpriseClientDocument(Base):
     # and only re-run when the document's text actually changes.
     deep_scan_facts = Column(Text, nullable=True)
     deep_scan_facts_hash = Column(String, nullable=True)
-    # Per-document AI validation, populated by the background worker right after upload.
+    # Per-document AI validation. This is a BILLED action (credits action "document_scan"),
+    # so it only runs when staff ask for it — at upload time or later from the document card.
     # validation_status: "valid" | "invalid" (AI red-flagged: bad/expired doc OR a material
-    # conflict with the client profile/other docs — never auto-filled) | "error" | NULL (= still scanning).
+    # conflict with the client profile/other docs — never auto-filled) | "error"
+    #   | "not_scanned" (never requested — storing a document is free) | NULL (= scan in flight).
     # extracted_fields: JSON — {fields, autofill:{filled,conflicts}, cross_validation_flags}.
     validation_status = Column(String, nullable=True, index=True)
     validation_message = Column(Text, nullable=True)
     extracted_fields = Column(Text, nullable=True)
     validated_at = Column(DateTime(timezone=True), nullable=True)
+    # What the last successful scan of THIS document actually cost, so a re-scan's debit is
+    # auditable against the wallet ledger without joining back through the transaction log.
+    validation_credits_charged = Column(Integer, nullable=False, default=0, server_default="0")
     # Human override: staff reviewed a document the AI flagged and accepted it themselves.
     # validation_status is flipped to "valid" so downstream logic is unchanged, but these
     # two columns keep the provenance honest — the UI must never call such a document
@@ -2275,4 +2280,43 @@ class EnterpriseLead(Base):
     __table_args__ = (
         Index("ix_ent_leads_org_created", "organization_id", "created_at"),
         Index("ix_ent_leads_org_status", "organization_id", "status"),
+    )
+
+
+class EnterpriseLeadUpload(Base):
+    """A file attached to a public lead-form submission (mirrors the email-composer's
+    draft-attachment pattern).
+
+    Rows are created by the public upload endpoint BEFORE the lead exists
+    (lead_id is null = staged, still uploading) and are bound to the lead when it
+    submits; staged rows past their TTL are swept. upload_token is the opaque
+    handle the anonymous browser holds between staging and submit — it is the only
+    thing that can claim the row, so it is unguessable and single-use.
+
+    The row outlives its form (form_id SET NULL, field_label snapshot) exactly like
+    the lead does, and converted_document_id records the client document the file
+    was COPIED into on conversion, so a re-run can't duplicate it and deleting the
+    lead later never breaks the client's locker.
+    """
+    __tablename__ = "enterprise_lead_uploads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, index=True)
+    form_id = Column(Integer, ForeignKey("enterprise_lead_forms.id", ondelete="SET NULL"), nullable=True, index=True)
+    lead_id = Column(Integer, ForeignKey("enterprise_leads.id", ondelete="CASCADE"), nullable=True, index=True)
+    field_key = Column(String, nullable=False)
+    field_label = Column(String, nullable=True)        # snapshot for display after form edits
+    upload_token = Column(String, nullable=False, unique=True, index=True)
+    original_filename = Column(String, nullable=False)
+    storage_key = Column(String, nullable=False)       # private object key (not a public URL)
+    file_size = Column(Integer, nullable=True)
+    mime_type = Column(String, nullable=True)
+    ip_address = Column(String, nullable=True)
+    converted_document_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_ent_lead_uploads_lead", "lead_id", "id"),
+        # The sweep's own lookup: this form's still-unclaimed staged rows, oldest first.
+        Index("ix_ent_lead_uploads_staged", "form_id", "lead_id", "created_at"),
     )

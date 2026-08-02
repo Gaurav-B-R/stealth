@@ -3862,10 +3862,14 @@ def send_enterprise_calendar_digest_email(
     overdue_items: list,
     today_items: list,
     portal_url: str = DEFAULT_PUBLIC_BASE_URL,
+    timezone_label: str = "",
 ) -> bool:
     """
     Send a staff member their daily calendar digest: items due today + overdue.
     Each item is a dict: {title, type_label, when_label, time, client_name, overdue, color}.
+
+    `timezone_label` ("IST", "BST") is the org's operating zone — item times are wall-clock
+    in it, and a digest read on the road is exactly where an unlabelled "14:00" misleads.
     Returns False (no-op) when Resend isn't configured.
     """
     if not RESEND_API_KEY:
@@ -3873,6 +3877,8 @@ def send_enterprise_calendar_digest_email(
         return False
     if not to_email:
         return False
+
+    tz_suffix = (timezone_label or "").strip()
 
     def _rows(items: list) -> str:
         out = []
@@ -3883,7 +3889,8 @@ def send_enterprise_calendar_digest_email(
                 meta += f" · {it['client_name']}"
             when = it.get("when_label") or ""
             if it.get("time"):
-                when = f"{when} · {it['time']}" if when else it["time"]
+                clock = f"{it['time']} {tz_suffix}" if tz_suffix else it["time"]
+                when = f"{when} · {clock}" if when else clock
             out.append(
                 f'<tr>'
                 f'<td style="padding:10px 12px;border-bottom:1px solid #eef0f6;vertical-align:top;width:6px">'

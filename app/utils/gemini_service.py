@@ -334,10 +334,16 @@ def validate_and_extract_document(
     related_documents_context: Optional[str] = None,
     destination_country_code: Optional[str] = None,
     destination_summary: Optional[str] = None,
+    usage_source: str = "document_ai",
 ) -> Optional[dict]:
     """
     Validate document type and extract information using Gemini AI.
     Returns a JSON dict with validation result and extracted information, or None if extraction fails.
+
+    `usage_source` names the cost bucket every model call here is logged under. It defaults
+    to the shared "document_ai" bucket (the B2C student app), but the enterprise CRM passes
+    its own source so a BILLED per-document scan can be told apart in the margin report from
+    the free text extraction that also runs on upload.
     
     Response format:
     {
@@ -362,7 +368,13 @@ def validate_and_extract_document(
             primary_env="GEMINI_DOCUMENT_MODEL",
             candidates_env="GEMINI_DOCUMENT_MODEL_CANDIDATES",
         )
-        
+
+        # Every model call below goes through this so the caller's cost bucket is applied
+        # once, here — a file-type branch that forgot to pass it would silently book a
+        # billed enterprise scan against the shared B2C source.
+        def _gen(model_names, content):
+            return _generate_content_with_fallback(model_names, content, usage_source=usage_source)
+
         evaluation_date_value = (current_date_for_evaluation or "").strip() or datetime.now().isoformat()
         profile_context_value = (student_profile_context or "").strip()
         related_docs_context_value = (related_documents_context or "").strip()
@@ -545,11 +557,11 @@ Remember: Output ONLY the JSON object, nothing else."""
                 image.save(img_bytes, format='JPEG')
                 img_bytes.seek(0)
                 image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
-                response = _generate_content_with_fallback(
+                response = _gen(
                     document_model_candidates, [validation_prompt, image_part]
                 )
             else:
-                response = _generate_content_with_fallback(
+                response = _gen(
                     document_model_candidates, [validation_prompt, image]
                 )
             
@@ -584,7 +596,7 @@ Remember: Output ONLY the JSON object, nothing else."""
                     with open(tmp_path, 'rb') as f:
                         pdf_data = f.read()
                     pdf_part = Part.from_data(pdf_data, mime_type="application/pdf")
-                    response = _generate_content_with_fallback(
+                    response = _gen(
                         document_model_candidates, [validation_prompt, pdf_part]
                     )
                 else:
@@ -603,7 +615,7 @@ Remember: Output ONLY the JSON object, nothing else."""
                         raise Exception(f"File processing failed: {pdf_file.state}")
                     
                     print("✅ PDF uploaded, generating content...")
-                    response = _generate_content_with_fallback(
+                    response = _gen(
                         document_model_candidates, [validation_prompt, pdf_file]
                     )
                     
@@ -639,7 +651,7 @@ Remember: Output ONLY the JSON object, nothing else."""
             print("-"*80)
             print("⏳ Waiting for Gemini response...")
             
-            response = _generate_content_with_fallback(document_model_candidates, prompt)
+            response = _gen(document_model_candidates, prompt)
             response_text = response.text.strip()
             
             print("✅ RECEIVED RESPONSE FROM GEMINI:")
@@ -668,11 +680,11 @@ Remember: Output ONLY the JSON object, nothing else."""
                     image.save(img_bytes, format='JPEG')
                     img_bytes.seek(0)
                     image_part = Part.from_data(img_bytes.read(), mime_type="image/jpeg")
-                    response = _generate_content_with_fallback(
+                    response = _gen(
                         document_model_candidates, [validation_prompt, image_part]
                     )
                 else:
-                    response = _generate_content_with_fallback(
+                    response = _gen(
                         document_model_candidates, [validation_prompt, image]
                     )
                 response_text = response.text.strip()

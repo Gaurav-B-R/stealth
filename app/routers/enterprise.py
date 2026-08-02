@@ -27,6 +27,7 @@ from app import brand_marks
 from app import enterprise_catalog as catalog
 from app import enterprise_access as access
 from app import enterprise_team as team_svc
+from app import enterprise_time as ent_time
 from app import enterprise_client_fields as client_fields
 from app import enterprise_billing as billing
 from app import enterprise_credits as credits
@@ -4751,7 +4752,7 @@ def enterprise_dashboard(
     member_names = _org_member_name_map(db, org_id)
     _sensitive = ctx.has("clients.view_sensitive")
 
-    today = date.today()
+    org_tz, today, org_tz_label = ent_time.org_clock(db, org_id)
 
     # "What's next" — the Calendar's overdue + upcoming feed, folded into the dashboard so a
     # follow-up that has quietly aged out is visible on the screen people actually land on.
@@ -4763,7 +4764,7 @@ def enterprise_dashboard(
         window = _collect_calendar_events(
             db, org_id,
             today - timedelta(days=30), today + timedelta(days=horizon_days),
-            include_done=False, ctx=ctx, branch_id=branch_id,
+            include_done=False, ctx=ctx, branch_id=branch_id, today=today,
         )
         wn_overdue = [e for e in window if e.get("overdue")]
         wn_upcoming = [
@@ -4772,6 +4773,8 @@ def enterprise_dashboard(
         ]
         whats_next = {
             "today": today.isoformat(),
+            "timezone": org_tz,
+            "timezone_label": org_tz_label,
             "horizon_days": horizon_days,
             # Totals are the honest counts; the lists are trimmed for the card, which links
             # out to the Calendar for the rest.
@@ -5017,10 +5020,14 @@ def _serialize_calendar_manual_event(
     ev: models.EnterpriseCalendarEvent,
     client_name: str | None,
     attachments: list[dict] | None = None,
+    *,
+    today: date,
 ) -> dict:
     cfg = CALENDAR_EVENT_TYPES.get(ev.event_type, CALENDAR_EVENT_TYPES[DEFAULT_CALENDAR_EVENT_TYPE])
     ev_date = ev.event_date
-    overdue = bool(ev_date and ev_date < date.today() and not ev.is_done)
+    # `today` is the org's date, passed in rather than read here: date.today() is the server
+    # process's zone, which for an org west of it flips a tomorrow event to overdue.
+    overdue = bool(ev_date and ev_date < today and not ev.is_done)
     # Reference files ride along on the event so the edit modal can render them with no extra
     # round-trip. `attachments` is passed in already batch-loaded — never looked up per event,
     # which on a 100-day month view would be a guaranteed N+1 (see cal_files.lists_by_event).
@@ -5048,9 +5055,9 @@ def _serialize_calendar_manual_event(
     }
 
 
-def _serialize_calendar_derived_event(kind: str, client: models.EnterpriseClient, when) -> dict:
+def _serialize_calendar_derived_event(kind: str, client: models.EnterpriseClient, when, *, today: date) -> dict:
     cfg = CALENDAR_DERIVED_TYPES[kind]
-    overdue = bool(when and when < date.today())
+    overdue = bool(when and when < today)
     return {
         "id": f"{kind}-{client.id}",
         "event_id": None,
@@ -5074,7 +5081,12 @@ def _serialize_calendar_derived_event(kind: str, client: models.EnterpriseClient
 def _collect_calendar_events(
     db: Session, organization_id: int, start: date, end: date,
     *, include_done: bool = True, ctx=None, branch_id: Optional[int] = None,
+    today: Optional[date] = None,
 ) -> list[dict]:
+    # Every "overdue" flag below is decided against the ORG's date, resolved once here so a
+    # single response can't grade two events against two different notions of today.
+    if today is None:
+        today = ent_time.org_today(db, organization_id)
     member_names = _org_member_name_map(db, organization_id)
 
     # The calendar is three separate sources — manual events, client key dates and passport
@@ -5171,7 +5183,7 @@ def _collect_calendar_events(
     )
     events = [
         _serialize_calendar_manual_event(
-            ev, _client_name(ev.client_id), attachments_by_event.get(ev.id)
+            ev, _client_name(ev.client_id), attachments_by_event.get(ev.id), today=today
         )
         for ev in manual_events
     ]
@@ -5190,7 +5202,7 @@ def _collect_calendar_events(
         ))
         .all()
     ):
-        events.append(_serialize_calendar_derived_event("client_deadline", client, client.target_date))
+        events.append(_serialize_calendar_derived_event("client_deadline", client, client.target_date, today=today))
 
     # Derived: the "Next follow-up" date a counsellor sets on the intake record. Same skip of
     # decided cases as the key date — an approved or refused applicant needs no chasing.
@@ -5208,7 +5220,7 @@ def _collect_calendar_events(
         .all()
     ):
         events.append(
-            _serialize_calendar_derived_event("client_followup", client, client.next_followup_date)
+            _serialize_calendar_derived_event("client_followup", client, client.next_followup_date, today=today)
         )
 
     # Derived: passport expiries in range (any active client)
@@ -5224,7 +5236,7 @@ def _collect_calendar_events(
         ))
         .all()
     ):
-        events.append(_serialize_calendar_derived_event("passport_expiry", client, client.passport_expiry))
+        events.append(_serialize_calendar_derived_event("passport_expiry", client, client.passport_expiry, today=today))
 
     events.sort(key=lambda e: (e["date"] or "", e["time"] or "99:99", e["title"] or ""))
     return events
@@ -5266,7 +5278,7 @@ def enterprise_calendar(
 ):
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="calendar.view")
 
-    today = date.today()
+    org_tz, today, org_tz_label = ent_time.org_clock(db, organization.id)
     if start:
         start_date = _parse_iso_date_or_400(start, "start")
     else:
@@ -5282,12 +5294,17 @@ def enterprise_calendar(
     if (end_date - start_date).days > CALENDAR_MAX_RANGE_DAYS:
         raise HTTPException(status_code=400, detail=f"Date range too large (max {CALENDAR_MAX_RANGE_DAYS} days).")
 
-    events = _collect_calendar_events(db, organization.id, start_date, end_date, ctx=role.ctx)
+    events = _collect_calendar_events(db, organization.id, start_date, end_date, ctx=role.ctx, today=today)
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "start": start_date.isoformat(),
         "end": end_date.isoformat(),
         "today": today.isoformat(),
+        # Event times are wall-clock in this zone. The client prints the label next to them —
+        # without it "14:30" means a different moment to every reader. Both are null/"" until
+        # an office sets a zone, so the UI shows a bare time rather than asserting UTC.
+        "timezone": org_tz,
+        "timezone_label": org_tz_label,
         "event_types": _calendar_event_types_payload(),
         "events": events,
     }
@@ -5303,17 +5320,19 @@ def enterprise_calendar_upcoming(
     """The 'what's next' feed: overdue + the next N days of deadlines and reminders."""
     _, organization, role = _require_enterprise_membership(db=db, user=current_user, request=request, require_capability="calendar.view")
     days = max(1, min(int(days or 14), 90))
-    today = date.today()
+    org_tz, today, org_tz_label = ent_time.org_clock(db, organization.id)
     # Look back 30 days so overdue items still surface, forward `days`.
     window = _collect_calendar_events(
         db, organization.id, today - timedelta(days=30), today + timedelta(days=days),
-        include_done=False, ctx=role.ctx,
+        include_done=False, ctx=role.ctx, today=today,
     )
     overdue = [e for e in window if e.get("overdue")]
     upcoming = [e for e in window if not e.get("overdue") and (e["date"] or "") >= today.isoformat()]
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "today": today.isoformat(),
+        "timezone": org_tz,
+        "timezone_label": org_tz_label,
         "horizon_days": days,
         "overdue": overdue,
         "upcoming": upcoming[:40],
@@ -5406,7 +5425,9 @@ def enterprise_calendar_create_event(
     return {
         "message": "Event added.",
         "permissions": _enterprise_permissions_for_role(role),
-        "event": _serialize_calendar_manual_event(ev, client_name, attachments),
+        "event": _serialize_calendar_manual_event(
+            ev, client_name, attachments, today=ent_time.org_today(db, organization.id)
+        ),
     }
 
 
@@ -5498,6 +5519,7 @@ def enterprise_calendar_update_event(
         "event": _serialize_calendar_manual_event(
             ev, client_name,
             [cal_files.serialize(r) for r in cal_files.for_event(db, organization.id, ev.id)],
+            today=ent_time.org_today(db, organization.id),
         ),
     }
 
@@ -9468,6 +9490,17 @@ ENTERPRISE_DOC_EXT_MIME = {
 }
 
 
+def _document_scan_pricing(db: Session, organization_id: int) -> dict:
+    """What one document scan costs this org right now, for the upload card and the
+    per-document Scan button (so the price is shown before the credit is spent)."""
+    return {
+        "action_key": ENTERPRISE_DOC_SCAN_ACTION_KEY,
+        "cost_credits": credits.action_cost(ENTERPRISE_DOC_SCAN_ACTION_KEY),
+        "can_afford": credits.can_afford(db, organization_id, ENTERPRISE_DOC_SCAN_ACTION_KEY),
+        "ai_available": gemini_service.is_ai_configured(),
+    }
+
+
 def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
     extracted = None
     if doc.extracted_fields:
@@ -9494,10 +9527,12 @@ def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
         "uploaded_by_name": doc.uploaded_by_name,
         "created_at": _iso(doc.created_at),
         "download_url": f"/api/enterprise/clients/{doc.client_id}/documents/{doc.id}/download",
-        # AI validation (null status = still scanning in the background).
+        # AI validation. null = a scan is running right now; "not_scanned" = never asked
+        # for (the document is stored, which is free, and can be scanned on demand later).
         "validation_status": doc.validation_status,
         "validation_message": doc.validation_message,
         "validated_at": _iso(doc.validated_at),
+        "validation_credits_charged": int(doc.validation_credits_charged or 0),
         # Human-in-the-loop override (staff accepted a document Rilono AI flagged).
         "manually_accepted": manually_accepted,
         "manually_accepted_by": accepted_by,
@@ -9532,7 +9567,27 @@ def enterprise_list_client_documents(
         "permissions": _enterprise_permissions_for_role(role),
         "document_types": list(catalog.STUDENT_DOCUMENT_TYPES),
         "documents": [_serialize_client_document(d) for d in rows],
+        # So the upload card and every Scan button can price themselves without a second call.
+        "scan_pricing": _document_scan_pricing(db, organization.id),
+        # A scan is debited by the background worker, AFTER the upload/scan response has
+        # already been sent — so this list (which the UI polls for the verdict) is where the
+        # post-charge balance actually becomes visible. Without it the sidebar badge would
+        # keep showing the pre-scan balance until the next full page load.
+        "wallet": (
+            credits.wallet_state(db, organization.id, currency=_resolve_charge_currency(None, organization))
+            if role.ctx.has("credits.view") else None
+        ),
     }
+
+
+def _ent_parse_bool_form(value, default: bool = False) -> bool:
+    """Parse a checkbox value out of multipart form data. FormData carries strings, so an
+    unparsed truthy check would read "false" as True and silently bill an opted-out scan."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 @router.post("/clients/{client_id}/documents")
@@ -9540,10 +9595,13 @@ async def enterprise_upload_client_document(
     client_id: int,
     request: Request,
     document_type: str = Form("Other"),
+    scan: str = Form("true"),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
+    """Store a document (free) and, when `scan` is set, run the billed Rilono AI
+    scan & validate on it (credits action "document_scan")."""
     _, organization, role = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability="documents.upload"
     )
@@ -9551,6 +9609,20 @@ async def enterprise_upload_client_document(
 
     if not enterprise_storage.is_configured():
         raise HTTPException(status_code=503, detail="Document storage is not configured.")
+
+    # Scanning debits the wallet, so it needs credits.spend on top of documents.upload —
+    # a member who may file documents but not spend the org's money simply stores the file.
+    # Silently degrading (rather than 403ing) is deliberate: the upload itself is allowed,
+    # and the response reports scan_requested so the UI can say why nothing was scanned.
+    want_scan = _ent_parse_bool_form(scan, default=True)
+    if want_scan and not role.ctx.has("credits.spend"):
+        want_scan = False
+    if want_scan and not gemini_service.is_ai_configured():
+        want_scan = False
+    # Block an unaffordable scan BEFORE storing anything, so the member gets a clean 402
+    # with the file still on their machine rather than a stored-but-unscanned surprise.
+    if want_scan:
+        credits.enforce_action_or_402(db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY)
 
     original = _safe_filename(file.filename)
     ext = os.path.splitext(original)[1].lower()
@@ -9591,14 +9663,19 @@ async def enterprise_upload_client_document(
     db.commit()
     db.refresh(doc)
 
-    # Extract the document's text in the background so the AI copilot can read it,
-    # without slowing down the upload response.
-    _start_document_text_extraction(doc.id, data, original, file.content_type)
+    # Text extraction (free) always runs so the copilot can read the document; the billed
+    # scan only when asked for. Both happen in the background so neither slows the upload.
+    _start_document_processing(
+        doc.id, data, original, file.content_type,
+        validate=want_scan, charge_user_id=current_user.id,
+    )
 
     return {
-        "message": "Document uploaded.",
+        "message": "Document uploaded." + (" Rilono AI is scanning it." if want_scan else ""),
         "permissions": _enterprise_permissions_for_role(role),
         "document": _serialize_client_document(doc),
+        "scan_requested": want_scan,
+        "scan_pricing": _document_scan_pricing(db, organization.id),
     }
 
 
@@ -9668,6 +9745,18 @@ _ENT_VALIDATION_DOCS_CHARS = 12000
 _ENT_VALIDATION_MAX_RELATED_DOCS = 6
 _ENT_VALIDATION_TEXT_PER_DOC_CHARS = 1800
 
+# The per-document scan is a billed premium action. The usage source is deliberately NOT
+# the shared "document_ai" bucket the free text extraction uses, so the admin margin report
+# can weigh this action's real Gemini cost against the credits it actually earned.
+ENTERPRISE_DOC_SCAN_ACTION_KEY = "document_scan"
+ENTERPRISE_DOC_SCAN_USAGE_SOURCE = "enterprise_document_scan"
+# A re-scan re-reads the file from storage and re-bills, so it gets its own limit — without
+# one, one member holding down "Re-scan" is an unbounded Gemini bill.
+ENTERPRISE_DOC_SCAN_RATE_LIMIT = int(os.getenv("ENTERPRISE_DOC_SCAN_RATE_LIMIT", "30") or "30")
+ENTERPRISE_DOC_SCAN_RATE_WINDOW_SECONDS = int(
+    os.getenv("ENTERPRISE_DOC_SCAN_RATE_WINDOW_SECONDS", "3600") or "3600"
+)
+
 
 def _ent_client_profile_context(client) -> str:
     """Compact snapshot of the client profile for AI cross-validation at upload time."""
@@ -9704,8 +9793,16 @@ def _ent_client_profile_context(client) -> str:
 
 
 def _ent_related_documents_context(db: Session, client, exclude_document_id) -> str:
-    """Bounded snapshots of the client's OTHER documents so the AI can cross-validate names,
-    dates, numbers, universities and timelines across everything on file."""
+    """Bounded snapshots of the client's already-VALIDATED documents, so the AI can
+    cross-validate names, dates, numbers, universities and timelines across everything
+    that has itself been checked.
+
+    Only "valid" rows are used as the reference set. A document that Rilono AI red-flagged
+    (wrong person, expired, forged) or that was never scanned is not evidence — feeding it
+    in lets one bad document silently shape the verdict on every document uploaded after
+    it. Staff-accepted rows stay in (a human vouched for them) but keep the explicit
+    "MANUALLY APPROVED" label below so the model never reads them as AI-verified.
+    """
     if client is None:
         return ""
     try:
@@ -9714,6 +9811,7 @@ def _ent_related_documents_context(db: Session, client, exclude_document_id) -> 
             .filter(
                 models.EnterpriseClientDocument.client_id == client.id,
                 models.EnterpriseClientDocument.id != int(exclude_document_id or 0),
+                models.EnterpriseClientDocument.validation_status == "valid",
             )
             .order_by(models.EnterpriseClientDocument.created_at.desc())
             .limit(_ENT_VALIDATION_MAX_RELATED_DOCS)
@@ -9724,11 +9822,12 @@ def _ent_related_documents_context(db: Session, client, exclude_document_id) -> 
         return ""
     blocks, used = [], 0
     for index, doc in enumerate(rows, start=1):
-        # A staff override is stored as "valid" — say so explicitly, so the model does not
-        # read a human-accepted document as one Rilono AI itself cleared.
-        status_label = (doc.validation_status or "not scanned").upper()
+        # Every row here is "valid" (the query filters on it). A staff override is ALSO
+        # stored as "valid" — say so explicitly, so the model does not read a human-accepted
+        # document as one Rilono AI itself cleared.
+        status_label = "VALIDATED BY RILONO AI"
         if doc.manually_accepted_by or doc.manually_accepted_at:
-            status_label = f"{status_label} — MANUALLY APPROVED BY STAFF, NOT AI-VALIDATED"
+            status_label = "MANUALLY APPROVED BY STAFF, NOT AI-VALIDATED"
         header = (
             f"\n--- PRIOR DOCUMENT {index}: {(doc.document_type or 'document').upper()} "
             f"({doc.original_filename}) [{status_label}] ---\n"
@@ -9807,11 +9906,30 @@ def _ent_autofill_profile(db: Session, client: models.EnterpriseClient, document
     return {"filled": filled, "conflicts": conflicts}
 
 
-def _start_document_text_extraction(document_id: int, data: bytes, filename: str, mime_type: str | None) -> None:
-    """Background: extract the document's text (for the AI copilot) AND run Rilono AI validation
-    + structured extraction. When a validated identity document (passport) comes in, empty client
-    profile fields are auto-filled — differences are flagged, never overwritten. Used by both the
-    staff upload and the client secure-link upload."""
+def _start_document_processing(
+    document_id: int,
+    data: bytes,
+    filename: str,
+    mime_type: str | None,
+    *,
+    validate: bool,
+    charge_user_id: int | None = None,
+) -> None:
+    """Background work for a newly stored document, in two halves.
+
+    ALWAYS (free): extract the document's text, so the AI copilot can read it and Deep
+    Scan has something to map over. Storing a document must never cost credits — that is
+    the CRM, not a premium AI action.
+
+    ONLY when `validate` (billed, credits action "document_scan"): run Rilono AI's
+    validation + structured extraction, cross-checked against the client profile and their
+    already-validated documents, and auto-fill empty profile fields from a passed identity
+    document. The caller must already have run credits.enforce_action_or_402 — this worker
+    debits the wallet *after* a successful scan, so a failed scan is never billed.
+
+    Used by the staff upload, the client secure-link upload (never validates — no
+    authenticated member to bill) and the on-demand re-scan endpoint.
+    """
     def _worker():
         import json
         from datetime import timezone
@@ -9833,7 +9951,7 @@ def _start_document_text_extraction(document_id: int, data: bytes, filename: str
                 .first()
             )
 
-            # 1) Full-text extraction for the copilot (best-effort).
+            # 1) Full-text extraction for the copilot (best-effort, never billed).
             try:
                 extracted = gemini_service.extract_text_from_document(
                     data, filename, mime_type or "application/octet-stream"
@@ -9843,6 +9961,15 @@ def _start_document_text_extraction(document_id: int, data: bytes, filename: str
             except Exception:
                 logger.exception("Enterprise doc text extraction failed (document_id=%s)", document_id)
 
+            # The scan was not asked for: keep the document, skip the paid half. An explicit
+            # "not_scanned" (rather than NULL) lets the UI tell "never scanned" apart from
+            # "scan still running" and offer the Scan button on exactly the former.
+            if not validate:
+                row.validation_status = "not_scanned"
+                row.validation_message = None
+                db2.commit()
+                return
+
             # 2) Validate the document + extract structured identity fields.
             destination_code = client.destination_country_code if client is not None else None
             destination_summary = (
@@ -9850,7 +9977,7 @@ def _start_document_text_extraction(document_id: int, data: bytes, filename: str
             )
             validation = None
             try:
-                # Hand the AI the client's profile + their other documents: the AI decides,
+                # Hand the AI the client's profile + their VALIDATED documents: the AI decides,
                 # per document type and destination, what to cross-check (identity, dates,
                 # funds, study plan, …) and FAILS the validation itself on any material
                 # conflict — e.g. a passport that belongs to a different person.
@@ -9862,6 +9989,7 @@ def _start_document_text_extraction(document_id: int, data: bytes, filename: str
                     related_documents_context=_ent_related_documents_context(db2, client, row.id),
                     destination_country_code=destination_code,
                     destination_summary=destination_summary,
+                    usage_source=ENTERPRISE_DOC_SCAN_USAGE_SOURCE,
                 )
             except Exception:
                 logger.exception("Enterprise doc validation failed (document_id=%s)", document_id)
@@ -9915,6 +10043,37 @@ def _start_document_text_extraction(document_id: int, data: bytes, filename: str
 
             if payload:
                 row.extracted_fields = json.dumps(payload)[:100000]
+
+            # Bill only a scan that actually returned a verdict. "error" means Rilono AI
+            # could not read the document — the agency gets that for free, same invariant
+            # every other AI action here holds (a failed action is never charged).
+            if row.validation_status in {"valid", "invalid"}:
+                charging_user = (
+                    db2.query(models.User).filter(models.User.id == int(charge_user_id)).first()
+                    if charge_user_id else None
+                )
+                try:
+                    credits.charge_action(
+                        db2, row.organization_id, ENTERPRISE_DOC_SCAN_ACTION_KEY,
+                        user=charging_user, reference_type="client", reference_id=row.client_id,
+                        description=(
+                            f"Document scan — {row.document_type}"
+                            + (f" · {client.full_name}" if client is not None else "")
+                        ),
+                        commit=False,
+                    )
+                    row.validation_credits_charged = credits.action_cost(ENTERPRISE_DOC_SCAN_ACTION_KEY)
+                except Exception:
+                    # The wallet was drained by a concurrent action between this scan's
+                    # pre-check and here. The Gemini call is already paid for, so keep the
+                    # result rather than discarding work — but record 0 charged so the
+                    # ledger and this row never disagree about what was actually billed.
+                    logger.warning(
+                        "Document scan completed but could not be charged (document_id=%s, org_id=%s)",
+                        document_id, row.organization_id, exc_info=True,
+                    )
+                    row.validation_credits_charged = 0
+
             db2.commit()
         except Exception:
             logger.exception("Background document processing failed (document_id=%s)", document_id)
@@ -9922,6 +10081,79 @@ def _start_document_text_extraction(document_id: int, data: bytes, filename: str
             db2.close()
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+@router.post("/clients/{client_id}/documents/{document_id}/scan")
+def enterprise_scan_client_document(
+    client_id: int,
+    document_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Billed: run Rilono AI's scan & validate on ONE already-stored document.
+
+    Serves both halves of the opt-in — a document uploaded without a scan, and a re-scan of
+    one already checked (useful once more of the client's dossier has been validated, since
+    the cross-validation reference set grows as documents pass). Priced per run either way.
+    """
+    _, organization, role = _require_enterprise_membership(
+        db=db, user=current_user, request=request,
+        require_capability=("documents.upload", "credits.spend"),
+    )
+    client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    _enforce_rate_limit_or_429(
+        request, scope="enterprise.document_scan",
+        limit=ENTERPRISE_DOC_SCAN_RATE_LIMIT,
+        window_seconds=ENTERPRISE_DOC_SCAN_RATE_WINDOW_SECONDS,
+        extra_key=str(current_user.id),
+    )
+
+    doc = (
+        db.query(models.EnterpriseClientDocument)
+        .filter(
+            models.EnterpriseClientDocument.id == int(document_id),
+            models.EnterpriseClientDocument.client_id == client.id,
+            models.EnterpriseClientDocument.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if doc.validation_status is None:
+        # NULL means a scan is already in flight; a second one would bill twice for the
+        # same document and race the first worker's write.
+        raise HTTPException(status_code=409, detail="Rilono AI is already scanning this document.")
+    if not gemini_service.is_ai_configured():
+        raise HTTPException(status_code=503, detail="Document scanning isn't available right now.")
+
+    # Block before spending anything — same order as every other billed action here.
+    credits.enforce_action_or_402(db, organization.id, ENTERPRISE_DOC_SCAN_ACTION_KEY)
+
+    try:
+        data = enterprise_storage.fetch_document(doc.storage_key)
+    except Exception:
+        logger.exception("Failed to fetch document for scan (document_id=%s)", doc.id)
+        raise HTTPException(status_code=502, detail="Could not retrieve the document right now.")
+
+    # Hand the worker a clean slate: a re-scan that fails must not leave the previous
+    # verdict on screen looking like the new one. NULL marks the scan as in flight.
+    doc.validation_status = None
+    doc.validation_message = None
+    db.commit()
+    db.refresh(doc)
+
+    _start_document_processing(
+        doc.id, data, doc.original_filename, doc.mime_type,
+        validate=True, charge_user_id=current_user.id,
+    )
+
+    return {
+        "message": "Rilono AI is scanning this document.",
+        "permissions": _enterprise_permissions_for_role(role),
+        "document": _serialize_client_document(doc),
+        "scan_pricing": _document_scan_pricing(db, organization.id),
+    }
 
 
 @router.get("/clients/{client_id}/documents/{document_id}/download")
@@ -11881,8 +12113,12 @@ async def public_document_request_upload(
             reference_type="client", reference_id=client.id, commit=True,
         )
 
-    # Extract text in the background so the AI copilot can read the new document.
-    _start_document_text_extraction(doc.id, data, original, file.content_type)
+    # Extract text in the background so the AI copilot can read the new document. The
+    # billed scan deliberately does NOT run here: this endpoint is reached by a student
+    # holding an emailed link, with no authenticated member and no capability check, so
+    # auto-scanning would let an outsider spend the agency's credits at will (and, by
+    # re-uploading, without limit). Staff scan these from the document card instead.
+    _start_document_processing(doc.id, data, original, file.content_type, validate=False)
 
     return {
         "message": "Uploaded.",
@@ -14776,7 +15012,7 @@ def enterprise_access_log(
 # the form or rotating the link kills the old URL.
 # ============================================================================
 
-_LEAD_FIELD_TYPES = {"text", "email", "phone", "textarea", "select", "date", "number", "checkbox"}
+_LEAD_FIELD_TYPES = {"text", "email", "phone", "textarea", "select", "date", "number", "checkbox", "file"}
 _LEAD_STATUSES = ("new", "contacted", "converted", "closed")
 _LEAD_FORM_MAX_FIELDS = 20
 # Flood control, deliberately fail-SOFT: past the daily cap a form keeps accepting
@@ -14786,6 +15022,24 @@ _LEAD_FORM_MAX_FIELDS = 20
 _LEAD_FORM_DAILY_CAP = int(os.getenv("ENTERPRISE_LEAD_FORM_DAILY_CAP", "300"))
 _LEAD_FORM_HARD_CAP = int(os.getenv("ENTERPRISE_LEAD_FORM_HARD_CAP", "3000"))
 _LEAD_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+
+# ---- File-upload fields ----------------------------------------------------
+# A lead-form upload is the only place in the product where a wholly ANONYMOUS
+# visitor writes bytes into the org's bucket, so every limit here is deliberately
+# tighter than the staff document uploader's:
+#   * a smaller per-file ceiling (a prospect sends a passport page, not a dataset),
+#   * a bounded number of file FIELDS per form, so an org can't publish a surface
+#     that lets one visitor stage 20 × 5 files,
+#   * a per-form 24h upload ceiling on top of the per-IP rate limit, so rotating
+#     proxies can't run up an org's storage bill,
+#   * a short TTL on staged (never-submitted) files, swept opportunistically.
+# The extension allowlist is shared with client documents on purpose — these files
+# become client documents on conversion and must pass the same bar.
+_LEAD_UPLOAD_MAX_BYTES = int(os.getenv("ENTERPRISE_LEAD_UPLOAD_MAX_BYTES", str(10 * 1024 * 1024)))
+_LEAD_UPLOAD_MAX_PER_FIELD = int(os.getenv("ENTERPRISE_LEAD_UPLOAD_MAX_PER_FIELD", "5"))
+_LEAD_FORM_MAX_FILE_FIELDS = int(os.getenv("ENTERPRISE_LEAD_FORM_MAX_FILE_FIELDS", "5"))
+_LEAD_UPLOAD_FORM_DAILY_CAP = int(os.getenv("ENTERPRISE_LEAD_UPLOAD_FORM_DAILY_CAP", "400"))
+_LEAD_UPLOAD_STAGED_TTL_HOURS = int(os.getenv("ENTERPRISE_LEAD_UPLOAD_STAGED_TTL_HOURS", "6"))
 
 
 def _build_lead_form_url(subdomain_slug, token: str, request: Request | None) -> str:
@@ -14811,6 +15065,7 @@ def _normalize_lead_form_fields(raw) -> list[dict]:
         raise HTTPException(status_code=400, detail=f"A form can have at most {_LEAD_FORM_MAX_FIELDS} fields.")
     fields: list[dict] = []
     seen: set[str] = set()
+    file_fields = 0
     for item in raw:
         if not isinstance(item, dict):
             raise HTTPException(status_code=400, detail="Invalid field definition.")
@@ -14836,8 +15091,44 @@ def _normalize_lead_form_fields(raw) -> list[dict]:
             if len(options) < 2:
                 raise HTTPException(status_code=400, detail=f'Dropdown "{label}" needs at least 2 options.')
             field["options"] = options
+        if ftype == "file":
+            file_fields += 1
+            if file_fields > _LEAD_FORM_MAX_FILE_FIELDS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"A form can ask for at most {_LEAD_FORM_MAX_FILE_FIELDS} file uploads.",
+                )
+            try:
+                max_files = int(item.get("max_files") or 1)
+            except (TypeError, ValueError):
+                max_files = 1
+            field["max_files"] = max(1, min(max_files, _LEAD_UPLOAD_MAX_PER_FIELD))
         fields.append(field)
     return fields
+
+
+def _drop_storage_keys(keys, *, context: str) -> None:
+    """Delete blobs whose rows are already gone. Always called AFTER the commit:
+    dropping bytes first would, on a failed commit, leave surviving rows pointing
+    at nothing. delete_document is best-effort and never raises."""
+    for key in keys or []:
+        if key:
+            enterprise_storage.delete_document(key)
+    if keys:
+        logger.info("Dropped %s lead storage object(s) for %s", len(keys), context)
+
+
+def _lead_file_fields(fields: list[dict]) -> dict[str, dict]:
+    """The form's file fields, keyed. Used by both the staged upload endpoint (to
+    reject a key that isn't actually a file field) and the submit validator."""
+    return {f.get("key"): f for f in fields if (f.get("type") or "") == "file" and f.get("key")}
+
+
+def _lead_field_max_files(field: dict) -> int:
+    try:
+        return max(1, min(int(field.get("max_files") or 1), _LEAD_UPLOAD_MAX_PER_FIELD))
+    except (TypeError, ValueError):
+        return 1
 
 
 def _parse_lead_form_fields(form: models.EnterpriseLeadForm) -> list[dict]:
@@ -14848,10 +15139,25 @@ def _parse_lead_form_fields(form: models.EnterpriseLeadForm) -> list[dict]:
         return []
 
 
-def _validate_lead_answers(fields: list[dict], raw_answers) -> tuple[list[dict], dict]:
+def _validate_lead_answers(
+    fields: list[dict],
+    raw_answers,
+    uploads_by_key: Optional[dict] = None,
+    *,
+    uploads_enabled: bool = True,
+) -> tuple[list[dict], dict]:
     """Check a public submission against the form's field spec. Returns the ordered
-    answer list to store and the denormalized contact info (name/email/phone)."""
+    answer list to store and the denormalized contact info (name/email/phone).
+
+    File answers are NOT read out of `raw_answers` — the browser only ever sends
+    opaque upload tokens, and the caller resolves those to real staged rows before
+    calling here. `uploads_by_key` is that resolved map, so a token the visitor
+    invented can never become an answer. When storage is unconfigured the whole
+    upload surface is down; a required file field then degrades to optional rather
+    than making a paying org's form unsubmittable (same fail-soft rule as the
+    daily flood cap)."""
     answers = raw_answers if isinstance(raw_answers, dict) else {}
+    uploads_by_key = uploads_by_key or {}
     out: list[dict] = []
     contact = {"name": None, "email": None, "phone": None}
     first_text_value = None
@@ -14859,6 +15165,22 @@ def _validate_lead_answers(fields: list[dict], raw_answers) -> tuple[list[dict],
         key = f.get("key")
         ftype = f.get("type") or "text"
         raw_v = answers.get(key)
+        if ftype == "file":
+            rows = uploads_by_key.get(key) or []
+            if not rows:
+                if f.get("required") and uploads_enabled:
+                    raise HTTPException(status_code=400, detail=f'Please attach a file for "{f.get("label")}".')
+                continue
+            # The stored value is the human-readable filename list: it is what the
+            # alert email, the inbox preview and the convert-to-client note render.
+            # The files themselves are addressed through enterprise_lead_uploads.
+            out.append({
+                "key": key,
+                "label": f.get("label"),
+                "type": ftype,
+                "value": ", ".join(r.original_filename for r in rows)[:500],
+            })
+            continue
         if ftype == "checkbox":
             value = "Yes" if raw_v in (True, "true", "on", "yes", "Yes", 1, "1") else ""
         else:
@@ -14971,7 +15293,7 @@ def _serialize_lead_form(
     }
 
 
-def _serialize_lead(lead: models.EnterpriseLead) -> dict:
+def _serialize_lead(lead: models.EnterpriseLead, files: Optional[list] = None) -> dict:
     try:
         answers = json.loads(lead.answers_json or "[]")
         if not isinstance(answers, list):
@@ -14986,11 +15308,116 @@ def _serialize_lead(lead: models.EnterpriseLead) -> dict:
         "email": lead.email,
         "phone": lead.phone,
         "answers": answers,
+        # Never the storage key — the bytes are only reachable through the
+        # capability-gated download endpoint, same rule as client documents.
+        "files": [
+            {
+                "id": u.id,
+                "field_key": u.field_key,
+                "field_label": u.field_label,
+                "filename": u.original_filename,
+                "file_size": u.file_size,
+                "converted_document_id": u.converted_document_id,
+            }
+            for u in (files or [])
+        ],
         "status": lead.status or "new",
         "converted_client_id": lead.converted_client_id,
         "source": lead.source,
         "created_at": _iso(lead.created_at),
     }
+
+
+def _lead_files_map(db: Session, organization_id: int, lead_ids: list[int]) -> dict:
+    """Attached files for a page of leads, in one query (the inbox lists up to 200)."""
+    if not lead_ids:
+        return {}
+    rows = (
+        db.query(models.EnterpriseLeadUpload)
+        .filter(
+            models.EnterpriseLeadUpload.organization_id == int(organization_id),
+            models.EnterpriseLeadUpload.lead_id.in_(lead_ids),
+        )
+        .order_by(models.EnterpriseLeadUpload.id.asc())
+        .all()
+    )
+    out: dict = {}
+    for row in rows:
+        out.setdefault(row.lead_id, []).append(row)
+    return out
+
+
+def _lead_files(db: Session, lead: models.EnterpriseLead) -> list:
+    return _lead_files_map(db, lead.organization_id, [lead.id]).get(lead.id, [])
+
+
+def _copy_lead_files_to_client(
+    db: Session,
+    *,
+    organization: models.EnterpriseOrganization,
+    lead: models.EnterpriseLead,
+    client: models.EnterpriseClient,
+) -> list[dict]:
+    """Copy a converted lead's attachments into the client's document locker.
+
+    The bytes are COPIED to a client-scoped key rather than re-pointed at the
+    lead's: deleting the lead afterwards drops its blobs, and a client document
+    must never dangle. `converted_document_id` makes this idempotent, so a lead
+    re-linked to another client can't duplicate the same file.
+
+    Returns the text-extraction jobs to start AFTER the caller commits (the worker
+    opens its own session and cannot see uncommitted rows). One unreadable file is
+    logged and skipped — a storage hiccup must not block the conversion itself.
+    """
+    if not enterprise_storage.is_configured():
+        return []
+    jobs: list[dict] = []
+    rows = (
+        db.query(models.EnterpriseLeadUpload)
+        .filter(
+            models.EnterpriseLeadUpload.organization_id == organization.id,
+            models.EnterpriseLeadUpload.lead_id == lead.id,
+            models.EnterpriseLeadUpload.converted_document_id.is_(None),
+        )
+        .order_by(models.EnterpriseLeadUpload.id.asc())
+        .all()
+    )
+    for row in rows:
+        try:
+            data = enterprise_storage.fetch_document(row.storage_key)
+        except Exception:
+            logger.exception("Lead file copy: could not read upload id=%s (lead=%s)", row.id, lead.id)
+            continue
+        ext = os.path.splitext(row.original_filename)[1].lower()
+        storage_key = f"enterprise/{organization.id}/clients/{client.id}/{uuid.uuid4().hex}{ext}"
+        try:
+            enterprise_storage.store_document(storage_key, data, content_type=row.mime_type)
+        except Exception:
+            logger.exception("Lead file copy: could not store copy of upload id=%s (lead=%s)", row.id, lead.id)
+            continue
+        doc = models.EnterpriseClientDocument(
+            organization_id=organization.id,
+            client_id=client.id,
+            document_type=catalog.normalize_document_type(row.field_label),
+            original_filename=row.original_filename,
+            storage_key=storage_key,
+            file_size=row.file_size,
+            mime_type=row.mime_type,
+            uploaded_by_user_id=None,
+            uploaded_by_name=f"{client.full_name} (attached to their enquiry)",
+        )
+        db.add(doc)
+        db.flush()
+        row.converted_document_id = doc.id
+        # Text extraction only — never the billed scan. Nobody chose to spend the
+        # org's credits here, exactly as with the client secure-link upload.
+        jobs.append({
+            "document_id": doc.id,
+            "data": data,
+            "filename": row.original_filename,
+            "mime_type": row.mime_type,
+        })
+    return jobs
 
 
 class EnterpriseLeadFormBody(BaseModel):
@@ -15195,8 +15622,28 @@ def enterprise_delete_lead_form(
         models.EnterpriseLead.organization_id == organization.id,
         models.EnterpriseLead.form_id == form.id,
     ).update({"form_id": None}, synchronize_session=False)
+    # Files already attached to a lead are detached with it. Files still STAGED on
+    # this form belong to a submission that will now never arrive, so they are the
+    # one thing here that is genuinely orphaned — take them with the form.
+    staged = (
+        db.query(models.EnterpriseLeadUpload)
+        .filter(
+            models.EnterpriseLeadUpload.organization_id == organization.id,
+            models.EnterpriseLeadUpload.form_id == form.id,
+            models.EnterpriseLeadUpload.lead_id.is_(None),
+        )
+        .all()
+    )
+    storage_keys = [u.storage_key for u in staged]
+    for u in staged:
+        db.delete(u)
+    db.query(models.EnterpriseLeadUpload).filter(
+        models.EnterpriseLeadUpload.organization_id == organization.id,
+        models.EnterpriseLeadUpload.form_id == form.id,
+    ).update({"form_id": None}, synchronize_session=False)
     db.delete(form)
     db.commit()
+    _drop_storage_keys(storage_keys, context=f"deleted form {form_id}")
     return {"message": "Form deleted. Collected leads were kept.", "permissions": _enterprise_permissions_for_role(role)}
 
 
@@ -15272,9 +15719,10 @@ def enterprise_list_leads(
         .limit(min(max(1, int(limit)), 200))
         .all()
     )
+    files_by_lead = _lead_files_map(db, organization.id, [l.id for l in leads])
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "leads": [_serialize_lead(l) for l in leads],
+        "leads": [_serialize_lead(l, files_by_lead.get(l.id)) for l in leads],
         "total": int(total),
         "counts": {s: int(counts.get(s, 0)) for s in _LEAD_STATUSES},
     }
@@ -15298,7 +15746,7 @@ def enterprise_update_lead_status(
     return {
         "message": "Lead updated.",
         "permissions": _enterprise_permissions_for_role(role),
-        "lead": _serialize_lead(lead),
+        "lead": _serialize_lead(lead, _lead_files(db, lead)),
     }
 
 
@@ -15312,18 +15760,85 @@ def enterprise_mark_lead_converted(
 ):
     """Link a lead to the client it became. The client itself is created through the
     standard POST /clients flow (billing gates, consent attestation and all) — this
-    endpoint only records the outcome on the lead."""
+    endpoint only records the outcome on the lead, and carries any files the
+    prospect attached into the new client's document locker."""
     _, organization, role = _require_lead_access(db, current_user, request, capability="clients.create")
     lead = _get_org_lead_or_404(db, organization.id, lead_id)
     client = _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
     lead.status = "converted"
     lead.converted_client_id = client.id
+    jobs = _copy_lead_files_to_client(db, organization=organization, lead=lead, client=client)
     db.commit()
+    for job in jobs:
+        _start_document_processing(
+            job["document_id"], job["data"], job["filename"], job["mime_type"], validate=False,
+        )
+    copied = len(jobs)
+    message = "Lead marked as converted."
+    if copied:
+        message += f" {copied} attached file{'s' if copied != 1 else ''} moved into the client's documents."
     return {
-        "message": "Lead marked as converted.",
+        "message": message,
         "permissions": _enterprise_permissions_for_role(role),
-        "lead": _serialize_lead(lead),
+        "lead": _serialize_lead(lead, _lead_files(db, lead)),
+        "documents_copied": copied,
     }
+
+
+@router.get("/leads/{lead_id}/files/{file_id}/download")
+def enterprise_download_lead_file(
+    lead_id: int,
+    file_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Stream a file a prospect attached to their enquiry.
+
+    Gated on documents.download, not the inbox's clients.view: these are passport
+    pages and bank letters exactly like client documents, so a member who may read
+    the inbox but not pull raw files still can't. Resolving the LEAD first is what
+    stops sequential file ids being walked against another lead."""
+    _, organization, role = _require_lead_access(db, current_user, request, capability="documents.download")
+    lead = _get_org_lead_or_404(db, organization.id, lead_id)
+    row = (
+        db.query(models.EnterpriseLeadUpload)
+        .filter(
+            models.EnterpriseLeadUpload.id == int(file_id),
+            models.EnterpriseLeadUpload.lead_id == lead.id,
+            models.EnterpriseLeadUpload.organization_id == organization.id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found.")
+
+    try:
+        data = enterprise_storage.fetch_document(row.storage_key)
+    except Exception:
+        logger.exception("Failed to fetch lead upload id=%s", row.id)
+        raise HTTPException(status_code=502, detail="Could not retrieve the file right now.")
+
+    # Content-Type from the VALIDATED extension, never the uploader-supplied mime —
+    # and here the uploader is an anonymous stranger, so this matters more than
+    # anywhere else in the product. Only known-safe visual types render inline.
+    ext = os.path.splitext(row.original_filename)[1].lower()
+    if ext in ENTERPRISE_DOC_INLINE_EXT:
+        disposition = "inline"
+        media_type = ENTERPRISE_DOC_EXT_MIME.get(ext, "application/octet-stream")
+    else:
+        disposition = "attachment"
+        media_type = "application/octet-stream"
+    filename = _safe_filename(row.original_filename)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 @router.delete("/leads/{lead_id}")
@@ -15335,8 +15850,18 @@ def enterprise_delete_lead(
 ):
     _, organization, role = _require_lead_access(db, current_user, request, capability="clients.delete")
     lead = _get_org_lead_or_404(db, organization.id, lead_id)
+    # Drop the attachment rows explicitly rather than relying on ON DELETE CASCADE
+    # (the sqlite sandbox never enforces FKs) and collect their keys — the blobs go
+    # only AFTER the commit, so a failed delete can't strand rows pointing at
+    # bytes that no longer exist. Files already copied into a client's locker are
+    # untouched: that copy is the client's document now.
+    uploads = _lead_files(db, lead)
+    storage_keys = [u.storage_key for u in uploads]
+    for u in uploads:
+        db.delete(u)
     db.delete(lead)
     db.commit()
+    _drop_storage_keys(storage_keys, context=f"lead {lead_id}")
     return {"message": "Lead deleted.", "permissions": _enterprise_permissions_for_role(role)}
 
 
@@ -15377,6 +15902,11 @@ def public_lead_form_info(token: str, request: Request, db: Session = Depends(ge
         "closed": closed,
         # Only the site key (public by definition) — never the secret.
         "turnstile_site_key": (os.getenv("TURNSTILE_SITE_KEY", "").strip() if _is_turnstile_required() else ""),
+        # Lets the page say "uploads are unavailable" instead of silently failing on
+        # every file pick when storage isn't configured. The form stays submittable.
+        "uploads_enabled": enterprise_storage.is_configured(),
+        "upload_max_bytes": _LEAD_UPLOAD_MAX_BYTES,
+        "upload_allowed_ext": sorted(ENTERPRISE_DOC_ALLOWED_EXT),
         "form": {
             # The form's `name` is the org's internal label ("Instagram junk leads") and
             # must never surface to a prospect — an unset public title falls back to a
@@ -15388,6 +15918,189 @@ def public_lead_form_info(token: str, request: Request, db: Session = Depends(ge
             "success_message": form.success_message,
         },
     }
+
+
+def _sweep_staged_lead_uploads(db: Session, *, form_id: int) -> list[str]:
+    """Mark this form's abandoned staged uploads for deletion (the visitor picked a
+    file and then closed the tab) and return their storage keys.
+
+    Opportunistic — it runs on the upload path, which is the only path that creates
+    these rows, so a form that stops receiving uploads has nothing left to sweep.
+    Rows only; the caller drops the blobs after the commit."""
+    cutoff = datetime.now(dt_timezone.utc) - timedelta(hours=_LEAD_UPLOAD_STAGED_TTL_HOURS)
+    keys: list[str] = []
+    try:
+        stale = (
+            db.query(models.EnterpriseLeadUpload)
+            .filter(
+                models.EnterpriseLeadUpload.form_id == int(form_id),
+                models.EnterpriseLeadUpload.lead_id.is_(None),
+                models.EnterpriseLeadUpload.created_at < cutoff,
+            )
+            .limit(50)
+            .all()
+        )
+        for row in stale:
+            keys.append(row.storage_key)
+            db.delete(row)
+    except Exception:
+        logger.exception("Staged lead-upload sweep failed (form_id=%s)", form_id)
+    return keys
+
+
+@router.post("/public/forms/{token}/upload")
+async def public_lead_form_upload(
+    token: str,
+    request: Request,
+    field_key: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Stage one file for a lead-form file field, before the form is submitted.
+
+    This is the only endpoint in the product where a wholly anonymous visitor
+    writes bytes into an org's bucket, so it is deliberately narrow: the field_key
+    must name a `file` field on THIS form, the extension and size bars are the
+    tight lead-form ones, and both a per-IP rate limit and a per-form 24h ceiling
+    apply. The row is created unbound (lead_id null) and is worthless until a
+    submission claims it with the opaque token returned here; anything never
+    claimed is swept after a few hours.
+
+    Turnstile deliberately does NOT gate this call — its token is single-use and is
+    spent at submit, which is the step that actually creates a record. The caps
+    above are what hold this endpoint.
+    """
+    _enforce_rate_limit_or_429(
+        request=request, scope="enterprise.lead_form_upload", limit=25, window_seconds=1800,
+        extra_key=hash_token((token or "").strip())[:16],
+    )
+    form = _public_lead_form_or_404(db, token)
+    if not form.is_active:
+        raise HTTPException(status_code=400, detail="This form is no longer accepting responses.")
+
+    field = _lead_file_fields(_parse_lead_form_fields(form)).get((field_key or "").strip())
+    if not field:
+        raise HTTPException(status_code=400, detail="This form doesn't ask for that file.")
+
+    if not enterprise_storage.is_configured():
+        raise HTTPException(status_code=503, detail="File uploads aren't available right now. Please submit without attaching.")
+
+    # Per-form ceiling on top of the per-IP limit: rotating proxies must not be able
+    # to run up a paying org's storage bill one IP at a time.
+    since = datetime.utcnow() - timedelta(hours=24)
+    recent = int((
+        db.query(func.count(models.EnterpriseLeadUpload.id))
+        .filter(
+            models.EnterpriseLeadUpload.form_id == form.id,
+            models.EnterpriseLeadUpload.created_at >= since,
+        )
+        .scalar()
+    ) or 0)
+    if recent >= _LEAD_UPLOAD_FORM_DAILY_CAP:
+        raise HTTPException(status_code=429, detail="This form is receiving too many files right now. Please try again later.")
+
+    original = _safe_filename(file.filename)
+    ext = os.path.splitext(original)[1].lower()
+    if ext not in ENTERPRISE_DOC_ALLOWED_EXT:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Allowed: PDF, images, Word/Excel, CSV, or text.",
+        )
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="That file is empty.")
+    if len(data) > _LEAD_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"That file is too large. Maximum size is {_LEAD_UPLOAD_MAX_BYTES // (1024 * 1024)} MB.",
+        )
+
+    swept = _sweep_staged_lead_uploads(db, form_id=form.id)
+
+    storage_key = f"enterprise/{form.organization_id}/leads/{uuid.uuid4().hex}{ext}"
+    try:
+        enterprise_storage.store_document(storage_key, data, content_type=file.content_type)
+    except Exception:
+        logger.exception("Failed to store lead-form upload (org_id=%s, form_id=%s)", form.organization_id, form.id)
+        raise HTTPException(status_code=502, detail="Could not upload that file right now. Please try again.")
+
+    row = models.EnterpriseLeadUpload(
+        organization_id=form.organization_id,
+        form_id=form.id,
+        lead_id=None,
+        field_key=field["key"],
+        field_label=(field.get("label") or "")[:120] or None,
+        upload_token=secrets.token_urlsafe(32),
+        original_filename=original,
+        storage_key=storage_key,
+        file_size=len(data),
+        mime_type=(file.content_type or None),
+        ip_address=(extract_client_ip(request) if request else None),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    _drop_storage_keys(swept, context=f"staged sweep on form {form.id}")
+
+    return {
+        "upload_token": row.upload_token,
+        "filename": row.original_filename,
+        "file_size": row.file_size,
+        "field_key": row.field_key,
+    }
+
+
+def _resolve_lead_upload_tokens(
+    db: Session,
+    *,
+    form: models.EnterpriseLeadForm,
+    fields: list[dict],
+    raw_answers,
+) -> tuple[dict, list[int]]:
+    """Turn the submission's opaque upload tokens into the staged rows they name.
+
+    Nothing here trusts the browser beyond the token itself: a row only counts if
+    it belongs to THIS form, to THIS field, and has not already been claimed by an
+    earlier submission. Returns the {field_key: [rows]} map for the answer
+    validator and the flat id list to bind once the lead exists.
+    """
+    answers = raw_answers if isinstance(raw_answers, dict) else {}
+    file_fields = _lead_file_fields(fields)
+    by_key: dict = {}
+    all_ids: list[int] = []
+    for key, field in file_fields.items():
+        raw_v = answers.get(key)
+        if raw_v is None or raw_v == "":
+            continue
+        tokens = raw_v if isinstance(raw_v, list) else [raw_v]
+        tokens = list(dict.fromkeys(str(t or "").strip() for t in tokens if str(t or "").strip()))
+        if not tokens:
+            continue
+        if len(tokens) > _lead_field_max_files(field):
+            raise HTTPException(
+                status_code=400,
+                detail=f'You can attach at most {_lead_field_max_files(field)} file(s) to "{field.get("label")}".',
+            )
+        rows = (
+            db.query(models.EnterpriseLeadUpload)
+            .filter(
+                models.EnterpriseLeadUpload.upload_token.in_(tokens),
+                models.EnterpriseLeadUpload.form_id == form.id,
+                models.EnterpriseLeadUpload.field_key == key,
+                models.EnterpriseLeadUpload.lead_id.is_(None),
+            )
+            .order_by(models.EnterpriseLeadUpload.id.asc())
+            .all()
+        )
+        if len(rows) != len(tokens):
+            raise HTTPException(
+                status_code=400,
+                detail=f'One of the files you attached to "{field.get("label")}" is no longer available. Please attach it again.',
+            )
+        by_key[key] = rows
+        all_ids += [r.id for r in rows]
+    return by_key, all_ids
 
 
 @router.post("/public/forms/{token}/submit")
@@ -15438,7 +16151,13 @@ def public_lead_form_submit(
     flooded = recent >= _LEAD_FORM_DAILY_CAP
 
     fields = _parse_lead_form_fields(form)
-    answers, contact = _validate_lead_answers(fields, payload.answers)
+    uploads_by_key, upload_ids = _resolve_lead_upload_tokens(
+        db, form=form, fields=fields, raw_answers=payload.answers
+    )
+    answers, contact = _validate_lead_answers(
+        fields, payload.answers, uploads_by_key,
+        uploads_enabled=enterprise_storage.is_configured(),
+    )
 
     lead = models.EnterpriseLead(
         organization_id=org.id,
@@ -15453,6 +16172,26 @@ def public_lead_form_submit(
         source=(payload.source or "").strip()[:200] or None,
     )
     db.add(lead)
+    if upload_ids:
+        # Claim the staged files in the SAME transaction as the lead, filtering on
+        # lead_id IS NULL again so two submissions racing on the same tokens can't
+        # both take them. A short count means the other one won — roll back rather
+        # than store a lead whose answers name files it doesn't own.
+        db.flush()
+        bound = (
+            db.query(models.EnterpriseLeadUpload)
+            .filter(
+                models.EnterpriseLeadUpload.id.in_(upload_ids),
+                models.EnterpriseLeadUpload.lead_id.is_(None),
+            )
+            .update({"lead_id": lead.id}, synchronize_session=False)
+        )
+        if bound != len(upload_ids):
+            db.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail="Your attached files are no longer available. Please attach them again and resubmit.",
+            )
     db.commit()
     db.refresh(lead)
 

@@ -23,3 +23,7 @@ requests>=2.31.0
 # Admin console → Investment Analytics "Export to Excel" (.xlsx). The export falls
 # back to CSV if this is ever missing, so a stale env degrades instead of erroring.
 openpyxl>=3.1.2
+# IANA tz database for zoneinfo (office time zones). Most images carry it in
+# /usr/share/zoneinfo already; pinning the wheel means a slim one can't silently strip
+# it and leave every office zone unvalidatable.
+tzdata>=2024.1

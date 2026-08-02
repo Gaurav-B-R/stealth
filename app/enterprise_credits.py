@@ -145,6 +145,17 @@ ACTIONS = {
         ),
         "credits": _int_env("ENTERPRISE_CREDIT_COST_DEEP_SCAN", 20),
     },
+    "document_scan": {
+        "key": "document_scan",
+        "label": "Document scan & validate",
+        "description": (
+            "Rilono AI reads ONE uploaded document — checks it is the right type, genuine "
+            "and still in date, then cross-validates it against the client's profile and "
+            "their already-validated documents, and auto-fills any empty profile fields it "
+            "can prove. Storing a document without a scan is always free."
+        ),
+        "credits": _int_env("ENTERPRISE_CREDIT_COST_DOCUMENT_SCAN", 1),
+    },
     "mock_interview": {
         "key": "mock_interview",
         "label": "AI mock visa interview",
@@ -293,6 +304,10 @@ def consume_deep_scan_free(db: Session, organization_id: int) -> None:
 # the admin report can compute real per-action margin from app.ai_usage.
 ACTION_SOURCE_MAP = {
     "deep_scan": ["deep_scan", "deep_scan_extract"],
+    # Only the BILLED validation call. The free text extraction that also runs on every
+    # upload stays on the shared "document_ai" source below, so it is never mistaken for
+    # revenue-bearing work in the per-action margin report.
+    "document_scan": ["enterprise_document_scan"],
     "mock_interview": ["mock_interview", "interview_feedback"],
     "ai_copilot": ["enterprise_copilot", "enterprise_copilot_extension"],
     "copilot_client": ["enterprise_copilot_client"],
@@ -306,7 +321,8 @@ ACTION_SOURCE_MAP = {
 # grounded agent): it belongs in the top-line margin but NOT in ACTION_SOURCE_MAP,
 # whose per-action economics track marginal cost only.
 ENTERPRISE_COST_SOURCES = [
-    "deep_scan", "deep_scan_extract", "document_ai", "mock_interview", "interview_feedback",
+    "deep_scan", "deep_scan_extract", "document_ai", "enterprise_document_scan",
+    "mock_interview", "interview_feedback",
     "enterprise_copilot", "enterprise_copilot_extension", "enterprise_copilot_client",
     "enterprise_university_shortlist",
     "enterprise_course_finder", "course_catalog_refresh",

@@ -1808,6 +1808,9 @@
     // expiries: the same feed the Calendar shows, on the screen people actually land on. The
     // server omits it for a role without calendar.view, which keeps the client-deadline card.
     const wn = d.whats_next;
+    // Keep the shared zone label in step here too — dashEvent opens the same detail modal as
+    // the Calendar page, and it must not print a time with the previous page's zone.
+    if (wn) { calTzLabel = wn.timezone_label || ""; calTodayYmd = wn.today || ""; }
     const wnItem = (e) => `
       <div class="cal-up-item ${e.overdue ? "overdue" : ""}" role="button" tabindex="0" onclick="__ent.dashEvent('${e.id}')">
         <span class="cal-dot" style="background:${e.color}"></span>
@@ -1815,7 +1818,7 @@
           <b>${esc(e.title)}</b>
           <span>${esc(e.type_label)}${e.client_name && e.source !== "client" ? " · " + esc(e.client_name) : ""}${e.attachment_count ? " · 📎 " + e.attachment_count : ""}</span>
         </div>
-        <div class="cal-up-when ${e.overdue ? "overdue" : ""}">${esc(calRel(e.date, wn.today))}${e.time ? " · " + esc(e.time) : ""}</div>
+        <div class="cal-up-when ${e.overdue ? "overdue" : ""}">${esc(calRel(e.date, wn.today))}${e.time ? " · " + esc(calClock(e.time)) : ""}</div>
       </div>`;
     // The card carries a few rows, never the whole feed — say so rather than quietly truncating.
     const wnMore = (shown, total) => total > shown
@@ -2792,6 +2795,10 @@
     const hero = clientHeroTheme(cl);
     const docs = data.documents || [];
     const pendingDocIds = new Set();  // docs uploaded this session, awaiting AI validation (for the "scanning…" badge)
+    // Price + affordability of ONE document scan, refreshed from every documents payload
+    // so the button never quotes a stale price after a top-up or a wallet drain.
+    let scanPricing = data.scan_pricing || null;
+    const canSpendCredits = can("credits.spend");
     const iv = { started: false, history: [], finished: false, feedback: null, busy: false, voiceOn: false, sessions: null, spoken: 0 };
     // Client-facing copilot invite state. invite: undefined = not fetched yet,
     // null = none exists. cp.link holds the raw link from the latest POST response
@@ -3480,6 +3487,10 @@
         try { fresh = await api("/clients/" + cl.id + "/documents"); } catch (e) { return; }
         const arr = fresh.documents || [];
         docs.splice(0, docs.length, ...arr);
+        if (fresh.scan_pricing) scanPricing = fresh.scan_pricing;
+        // The scan's debit happens in the background worker, so this poll is the first
+        // moment the new balance exists — push it to the sidebar badge as it lands.
+        if (fresh.wallet) { state.credits = fresh.wallet; updatePlanChip(); }
         const found = arr.find((x) => x.id === docId);
         const done = found && found.validation_status;
         if (done) pendingDocIds.delete(docId);
@@ -3495,6 +3506,10 @@
             toast("✅ " + found.document_type + " validated by Rilono AI", "success");
           } else if (found.validation_status === "invalid") {
             toast("⚠ Rilono AI flagged the " + found.document_type + " — see the document card", "error");
+          } else if (found.validation_status === "error") {
+            // A scan that returned no verdict is never charged, so say so — otherwise it
+            // reads as a credit spent on nothing.
+            toast("Rilono AI couldn't read the " + found.document_type + " — you haven't been charged.", "error");
           }
           return;
         }
@@ -3504,6 +3519,23 @@
     }
 
     function renderDocs() {
+      // Scanning is the billed half of an upload, so the choice is made here, with the
+      // price visible, before a credit is spent. Storing the file is always free.
+      const scanCost = scanPricing ? scanPricing.cost_credits : null;
+      const scanUnaffordable = !!(scanPricing && !scanPricing.can_afford);
+      const scanUnavailable = !!(scanPricing && !scanPricing.ai_available);
+      const scanOfferable = canUploadDocs && canSpendCredits && !scanUnavailable;
+      const scanToggle = scanOfferable ? `
+        <label class="doc-scan-opt${scanUnaffordable ? " disabled" : ""}" for="docScanChk">
+          <input type="checkbox" id="docScanChk" ${scanUnaffordable ? "disabled" : "checked"} />
+          <span class="doc-scan-opt-txt">
+            <b>Scan &amp; validate with Rilono AI</b>
+            <span class="doc-scan-opt-sub">${scanUnaffordable
+              ? "Not enough credits — the document will still be stored. Top up in Credits to scan it."
+              : `Checks the document is genuine, current and the right type, then cross-checks it against ${esc(cl.full_name)}’s profile and their already-validated documents.`}</span>
+          </span>
+          ${scanCost != null ? `<span class="doc-scan-price">${scanCost} credit${scanCost === 1 ? "" : "s"}</span>` : ""}
+        </label>` : "";
       const uploader = canUploadDocs ? `
         <div class="cp-card doc-upload">
           <div class="cp-sub-label">Upload a document</div>
@@ -3520,7 +3552,9 @@
                 placeholder="What is this document? e.g. Police clearance certificate, Name-change affidavit…" />
             </div>
           </div>
-          <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB</div>
+          ${scanToggle}
+          <div class="doc-hint">🔒 Encrypted at rest · PDF, images, Word/Excel, CSV or text · up to 25 MB${
+            scanOfferable ? " · uploading is free" : ""}</div>
         </div>` : "";
       const docValInfo = (d) => {
         const s = d.validation_status;
@@ -3534,9 +3568,15 @@
         }
         if (s === "valid") return { cls: "ok", txt: "✓ Validated by Rilono AI", msg: "" };
         if (s === "invalid") return { cls: "warn", txt: "⚠ Needs review", msg: d.validation_message || "" };
-        if (s === "error") return { cls: "muted", txt: "Not auto-scanned", msg: d.validation_message || "" };
-        if (!s && pendingDocIds.has(d.id)) return { cls: "pending", txt: "◌ Rilono AI is validating…", msg: "" };
-        return null;  // pre-existing document with no validation record
+        if (s === "error") return { cls: "muted", txt: "Scan failed", msg: d.validation_message || "" };
+        // A scan this tab kicked off is genuinely in flight. A NULL status WITHOUT a live
+        // poll is a document whose worker died mid-scan (or a legacy row) — call that "not
+        // scanned" and let staff re-run it, rather than spinning "scanning…" forever.
+        if (pendingDocIds.has(d.id)) return { cls: "pending", txt: "◌ Rilono AI is scanning…", msg: "" };
+        // Stored but never scanned — the scan wasn't asked for (or it came in via the
+        // client's secure link, which never auto-scans). Not a failure, so it reads neutral.
+        if (s === "not_scanned" || !s) return { cls: "muted", txt: "Not scanned", msg: "" };
+        return null;
       };
       const list = docs.length ? `<div class="doc-list">${docs.map((d) => {
         const v = docValInfo(d);
@@ -3580,6 +3620,19 @@
           : cvfNote;
         const acceptRow = (canAcceptDocs && (d.validation_status === "invalid" || d.validation_status === "error"))
           ? `<div class="doc-accept-row"><button class="btn btn-soft btn-sm doc-accept" data-id="${d.id}">✓ Checked it myself — accept anyway</button></div>` : "";
+        // Scan on demand: for a document stored without one, and re-scan for one already
+        // checked — a re-scan is worth offering because the cross-validation reference set
+        // grows as the client's other documents pass. Both cost the same, so both say so.
+        const scanned = !!d.validated_at && d.validation_status !== "not_scanned";
+        const scanRow = (scanOfferable && !pendingDocIds.has(d.id))
+          ? `<div class="doc-scan-row">
+              <button class="btn ${scanned ? "btn-soft" : "btn-primary"} btn-sm doc-scan" data-id="${d.id}"
+                ${scanUnaffordable ? "disabled" : ""}>
+                ${scanned ? "↻ Re-scan with Rilono AI" : "✦ Scan &amp; validate with Rilono AI"}${
+                  scanCost != null ? ` · ${scanCost} credit${scanCost === 1 ? "" : "s"}` : ""}
+              </button>
+              ${scanUnaffordable ? `<span class="doc-scan-note">Not enough credits</span>` : ""}
+            </div>` : "";
         // Downloading raw files (passports, bank letters) is its own capability — without
         // it the filename stays visible but never becomes a link to the file.
         const nameCell = canDownloadDocs
@@ -3591,7 +3644,7 @@
           <div class="doc-meta">
             ${nameCell}
             <div class="doc-sub">${esc(d.document_type)} · ${fmtSize(d.file_size)} · ${esc(d.uploaded_by_name || "")} · ${fmtDate(d.created_at)}</div>
-            ${valRow}${afRow}${cfRow}${cvfRow}${acceptRow}
+            ${valRow}${afRow}${cfRow}${cvfRow}${acceptRow}${scanRow}
           </div>
           ${canDownloadDocs ? `<a class="doc-act" href="${d.download_url}" target="_blank" rel="noopener" title="View / download">⬇</a>` : ""}
           ${canDeleteDocs ? `<button class="doc-act doc-del" data-id="${d.id}" title="Delete">✕</button>` : ""}
@@ -3664,23 +3717,59 @@
             const detail = ($("#docOtherDetail")?.value || "").trim();
             if (detail) chosenType = "Other — " + detail;   // stored & shown everywhere
           }
+          const chk = $("#docScanChk");
+          const wantScan = !!(chk && chk.checked && !chk.disabled);
           const fd = new FormData();
           fd.append("file", fileEl.files[0]);
           fd.append("document_type", chosenType);
+          fd.append("scan", wantScan ? "true" : "false");
           const btn = $("#docUploadBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Uploading…';
           try {
             const res = await fetch(API + "/clients/" + cl.id + "/documents", { method: "POST", credentials: "include", body: fd });
             const out = await res.json().catch(() => null);
             if (!res.ok) throw makePublicApiError(res, out, "We couldn't upload this document. Please try again.");
             docs.unshift(out.document);
-            if (out.document && out.document.id) pendingDocIds.add(out.document.id);
+            // Only poll when a scan is actually running — otherwise the badge would sit on
+            // "scanning…" for a document nobody asked to scan.
+            if (out.scan_requested && out.document && out.document.id) pendingDocIds.add(out.document.id);
+            if (out.scan_pricing) scanPricing = out.scan_pricing;
             tabCount("documents", docs.length);
-            toast("Document uploaded — Rilono AI is validating…", "success");
+            toast(out.scan_requested
+              ? "Document uploaded — Rilono AI is scanning…"
+              : "Document uploaded. You can scan it any time from its card.", "success");
             renderDocs();
-            if (out.document && out.document.id) pollDocValidation(out.document.id);
+            if (out.scan_requested && out.document && out.document.id) pollDocValidation(out.document.id);
           } catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Upload document"; }
         };
       }
+
+      // Scan / re-scan one document. Confirmed first because it always spends a credit —
+      // unlike upload, where the price was agreed on the card before the file went up.
+      $$(".doc-scan", body).forEach((b) => b.onclick = async () => {
+        const id = parseInt(b.dataset.id, 10);
+        const d = docs.find((x) => x.id === id);
+        const already = d && !!d.validated_at && d.validation_status !== "not_scanned";
+        const price = scanCost != null ? `${scanCost} credit${scanCost === 1 ? "" : "s"}` : "credits";
+        const ok = await confirmModal(
+          (already
+            ? "Rilono AI will scan this document again and replace the current verdict."
+            : "Rilono AI will read this document and cross-check it against the client's profile and their already-validated documents.")
+          + ` This costs ${price}.`,
+          { title: already ? "Re-scan document?" : "Scan document?", okText: already ? "Re-scan" : "Scan" });
+        if (!ok) return;
+        b.disabled = true; b.innerHTML = '<span class="spinner"></span> Starting…';
+        try {
+          const r = await api("/clients/" + cl.id + "/documents/" + id + "/scan", { method: "POST" });
+          if (r.scan_pricing) scanPricing = r.scan_pricing;
+          if (r.document) { const i = docs.findIndex((x) => x.id === id); if (i >= 0) docs.splice(i, 1, r.document); }
+          pendingDocIds.add(id);
+          renderDocs();
+          pollDocValidation(id);
+        } catch (ex) {
+          toast(ex.message, "error");
+          renderDocs();   // restore the button (and any refreshed price) after a 402/409
+        }
+      });
 
       // Delete and "accept anyway" are separate capabilities from uploading, so their
       // wiring lives outside the uploader block — the buttons simply don't exist
@@ -8163,6 +8252,144 @@
     return all.find((b) => b.id === id) || null;
   }
 
+  // ---- Office time zones ---------------------------------------------------
+  // The server validates the office zone against the IANA tz database, so the picker has
+  // to emit real zone names — a free-text box let "IST" and "GMT+5:30" through, which look
+  // configured and load as nothing. Intl ships the whole list natively (ES2022); the
+  // fallback covers the older browsers where supportedValuesOf is missing.
+  const TZ_FALLBACK = [
+    "Asia/Kolkata", "Asia/Dubai", "Asia/Karachi", "Asia/Dhaka", "Asia/Kathmandu",
+    "Asia/Colombo", "Asia/Singapore", "Asia/Manila", "Asia/Tokyo", "Asia/Shanghai",
+    "Europe/London", "Europe/Dublin", "Europe/Paris", "Europe/Berlin", "Europe/Madrid",
+    "Europe/Amsterdam", "Europe/Lisbon", "Europe/Rome", "Europe/Zurich", "Europe/Moscow",
+    "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+    "America/Toronto", "America/Vancouver", "America/Sao_Paulo",
+    "Australia/Sydney", "Australia/Melbourne", "Australia/Perth", "Australia/Brisbane",
+    "Pacific/Auckland", "Africa/Lagos", "Africa/Nairobi", "Africa/Johannesburg", "UTC",
+  ];
+
+  // Older browser ICU still reports the PRE-rename IANA names — Chrome here lists
+  // "Asia/Calcutta" and has no "Asia/Kolkata" at all — while newer ICU reports the modern
+  // ones. Left alone, the string in the database would depend on whose laptop created the
+  // office, and an Indian consultancy would be offered "Calcutta". Both spellings are links
+  // to the same rules, so this map only buys one stable, non-archaic value; a rename it
+  // misses is cosmetic, never wrong.
+  const TZ_MODERN = {
+    "Asia/Calcutta": "Asia/Kolkata",
+    "Asia/Rangoon": "Asia/Yangon",
+    "Asia/Saigon": "Asia/Ho_Chi_Minh",
+    "Asia/Katmandu": "Asia/Kathmandu",
+    "Asia/Dacca": "Asia/Dhaka",
+    "Asia/Thimbu": "Asia/Thimphu",
+    "Europe/Kiev": "Europe/Kyiv",
+    "America/Godthab": "America/Nuuk",
+    "America/Buenos_Aires": "America/Argentina/Buenos_Aires",
+    "Atlantic/Faeroe": "Atlantic/Faroe",
+    "Pacific/Ponape": "Pacific/Pohnpei",
+    "Pacific/Truk": "Pacific/Chuuk",
+  };
+
+  function tzModern(name) {
+    const mapped = TZ_MODERN[name];
+    // Only move to the modern name if this browser can actually format it — an ICU too old
+    // to know "Asia/Kolkata" must keep offering the spelling it does know.
+    return mapped && tzIsValid(mapped) ? mapped : name;
+  }
+
+  function tzIsValid(name) {
+    if (!name) return false;
+    try { new Intl.DateTimeFormat("en-US", { timeZone: name }); return true; } catch (e) { return false; }
+  }
+
+  function tzBrowser() {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { return ""; }
+  }
+
+  function tzOffsetLabel(name) {
+    try {
+      const part = new Intl.DateTimeFormat("en-US", { timeZone: name, timeZoneName: "shortOffset" })
+        .formatToParts(new Date()).find((p) => p.type === "timeZoneName");
+      return part ? part.value : "";
+    } catch (e) { return ""; }
+  }
+
+  // ~600 zones × one Intl formatter each is a visible pause, so the markup is built once
+  // per page load and the current value applied to the live <select> afterwards. Offsets
+  // are therefore a snapshot — good enough for a label, and a DST flip mid-session only
+  // misprints the hint, never the stored value.
+  let _tzOptionsHtml = null;
+  let _tzListIsFallback = false;
+
+  function tzOptionsHtml() {
+    if (_tzOptionsHtml !== null) return _tzOptionsHtml;
+    let names;
+    try { names = Intl.supportedValuesOf("timeZone"); } catch (e) { names = null; }
+    if (!names || !names.length) { names = TZ_FALLBACK.slice(); _tzListIsFallback = true; }
+    const groups = new Map();
+    const seen = new Set(["UTC"]);   // rendered separately below
+    names.forEach((raw) => {
+      const n = tzModern(raw);
+      if (seen.has(n)) return;   // both spellings present on some ICU builds
+      seen.add(n);
+      const region = n.indexOf("/") > 0 ? n.slice(0, n.indexOf("/")) : "Other";
+      if (!groups.has(region)) groups.set(region, []);
+      groups.get(region).push(n);
+    });
+    // supportedValuesOf omits UTC, which is a legitimate answer for an org that would
+    // rather not pick a city — offer it up top rather than stranded in "Other".
+    let html = `<option value="">Not set</option><option value="UTC">UTC</option>`;
+    Array.from(groups.keys()).sort().forEach((region) => {
+      const opts = groups.get(region).sort().map((n) => {
+        const off = tzOffsetLabel(n);
+        const city = (n.indexOf("/") > 0 ? n.slice(region.length + 1) : n).replace(/_/g, " ");
+        return `<option value="${esc(n)}">${esc(city)}${off ? " · " + esc(off) : ""}</option>`;
+      }).join("");
+      html += `<optgroup label="${esc(region.replace(/_/g, " "))}">${opts}</optgroup>`;
+    });
+    _tzOptionsHtml = html;
+    return html;
+  }
+
+  /** Point a freshly-rendered office <select> at `stored`. Returns a note to show under the
+   *  field, "" when the value landed cleanly.
+   *
+   *  What counts as valid is membership in the option list, NOT whether Intl accepts it:
+   *  Chrome takes CLDR abbreviations the server's tz database has never heard of ("IST",
+   *  "PST", and "EST" — which it resolves to America/Panama, almost certainly not what
+   *  anyone meant). Gating on Intl would show those as selected and then 422 on save. */
+  function tzApplyValue(sel, stored, isEdit) {
+    const raw = (stored || "").trim() || (isEdit ? "" : tzBrowser());
+    if (!raw) return "";
+    const has = (v) => v && Array.prototype.some.call(sel.options, (o) => o.value === v);
+    const want = tzModern(raw);
+    if (has(want)) { sel.value = want; return ""; }
+
+    // On an ICU too old for supportedValuesOf the list is TZ_FALLBACK, so a legitimate zone
+    // will often be missing. Carry it over rather than accusing the office of bad data.
+    if (_tzListIsFallback && tzIsValid(want)) {
+      const opt = document.createElement("option");
+      opt.value = want;
+      opt.textContent = want.replace(/_/g, " ");
+      sel.insertBefore(opt, sel.options[1] || null);
+      sel.value = want;
+      return "";
+    }
+
+    // Free text left over from before this was a picker. Interpret it where Intl can, but
+    // say so out loud — the reading is a guess, and a wrong guess about a time zone is the
+    // kind of thing nobody notices until a reminder fires on the wrong day.
+    let resolved = "";
+    try {
+      resolved = tzModern(Intl.DateTimeFormat(undefined, { timeZone: want }).resolvedOptions().timeZone || "");
+    } catch (e) { resolved = ""; }
+    if (has(resolved)) {
+      sel.value = resolved;
+      return `Saved as “${raw}” — reading that as ${resolved.replace(/_/g, " ")}. Change it if that's wrong.`;
+    }
+    sel.value = "";
+    return `Saved as “${raw}”, which isn't a zone we can resolve. Pick the office's zone — saving now clears it.`;
+  }
+
   function tmOpenBranchEditor(branchId) {
     const b = branchId ? (tmBranchById(branchId) || {}) : {};
     openModal(`<div class="modal-head"><h3>${branchId ? "Edit office" : "Add an office"}</h3>
@@ -8180,7 +8407,9 @@
           <div class="field span3"><label>Address</label><input name="address_line" maxlength="200" value="${esc(b.address_line || "")}"/></div>
           <div class="field"><label>Phone</label><input name="phone" inputmode="tel" maxlength="32" value="${esc(b.phone || "")}"/></div>
           <div class="field"><label>Email</label><input type="email" name="email" maxlength="120" value="${esc(b.email || "")}"/></div>
-          <div class="field"><label>Time zone</label><input name="timezone" maxlength="60" value="${esc(b.timezone || "")}" placeholder="Asia/Kolkata"/></div>
+          <div class="field"><label>Time zone</label>
+            <select name="timezone" id="tmBranchTz">${tzOptionsHtml()}</select>
+            <div class="hint" id="tmBranchTzHint"></div></div>
         </div>
         ${branchId ? `<div class="tm-hint">Renaming an office updates it on every client filed under it.</div>` : ""}
         <div id="tmBranchError" class="auth-error hidden"></div>
@@ -8188,6 +8417,11 @@
         <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
         <button type="submit" class="btn btn-primary" id="tmBranchSubmit">${branchId ? "Save office" : "Add office"}</button>
       </div></form>`, { wide: true });
+    const tzWarning = tzApplyValue($("#tmBranchTz"), b.timezone, !!branchId);
+    const tzHint = $("#tmBranchTzHint");
+    tzHint.textContent = tzWarning
+      || (branchId ? "" : "Pre-filled from your device — change it if this office sits elsewhere.");
+    tzHint.classList.toggle("tm-tz-warn", !!tzWarning);
     $("#tmBranchForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#tmBranchSubmit"); const err = $("#tmBranchError");
@@ -12537,6 +12771,15 @@
      CALENDAR — timelines, deadlines & what's next
      ============================================================ */
   let calEventsById = {};
+  // The org's operating zone, short form ("IST", "BST"). Event times are wall-clock in it,
+  // so anywhere a clock time is shown on its own it needs this beside it. Filled from the
+  // /calendar payload and reused by calDetailModal, which the dashboard also opens.
+  let calTzLabel = "";
+  // …and the org's own date, for the same reason. A "Today"/"Yesterday" label worked out from
+  // the reader's clock disagrees with the server's `overdue` flag for anyone in a different
+  // zone — the detail modal was rendering "⚠ Overdue" and "Today" side by side.
+  let calTodayYmd = "";
+  const calClock = (t) => (t ? (calTzLabel ? `${t} ${calTzLabel}` : t) : "");
   /* Set when the dashboard's "What's next" hands an event over. renderCalendar opens it once the
      month has loaded, so the modal's Save / Mark done / Delete all re-render the Calendar page
      they belong to instead of painting it over the dashboard the user was standing on. */
@@ -12599,6 +12842,8 @@
     applyAccessPayload(data);
     const canEdit = can("calendar.manage");
     state.calTypes = data.event_types || [];
+    calTzLabel = data.timezone_label || "";
+    calTodayYmd = data.today || "";
     const today = data.today;
 
     calEventsById = {};
@@ -12649,7 +12894,7 @@
           <b>${esc(e.title)}</b>
           <span>${esc(e.type_label)}${e.client_name && e.source !== "client" ? " · " + esc(e.client_name) : ""}${e.attachment_count ? " · 📎 " + e.attachment_count : ""}</span>
         </div>
-        <div class="cal-up-when ${e.overdue ? "overdue" : ""}">${esc(calRel(e.date, today))}${e.time ? " · " + esc(e.time) : ""}</div>
+        <div class="cal-up-when ${e.overdue ? "overdue" : ""}">${esc(calRel(e.date, today))}${e.time ? " · " + esc(calClock(e.time)) : ""}</div>
       </div>`;
     const overdueBlock = (up.overdue || []).length
       ? `<div class="cal-up-label overdue">⚠ Overdue (${up.overdue.length})</div>${up.overdue.map(upItem).join("")}` : "";
@@ -12676,7 +12921,10 @@
             ${dows.map((d) => `<div class="cal-dow">${d}</div>`).join("")}
             ${cells}
           </div>
-          <div class="cal-legend">${legend}</div>
+          <div class="cal-legend">${legend}${
+            // The grid chips stay bare — a zone on every one of them is noise at that density.
+            // Saying it once here is what makes those bare times unambiguous.
+            calTzLabel ? `<span class="cal-legend-tz">All times ${esc(calTzLabel)}</span>` : ""}</div>
         </div>
         <aside class="cal-side">
           <h3>What's next</h3>
@@ -12719,12 +12967,15 @@
     calEditModal(null, dateStr);
   }
 
-  // "14:30" (what the server stores) → whatever 2:30 PM looks like where the reader is.
+  // "14:30" (what the server stores) → whatever 2:30 PM looks like where the reader is, with
+  // the org's zone appended. Only the 12h/24h PRESENTATION follows the reader's locale — the
+  // digits are the org's wall clock either way, which is exactly why the zone has to be said.
   function calTimeLabel(t) {
     const m = /^(\d{1,2}):([0-5]\d)$/.exec(String(t || "").trim());
     if (!m) return "";
-    return new Date(2000, 0, 1, Number(m[1]), Number(m[2]))
+    const shown = new Date(2000, 0, 1, Number(m[1]), Number(m[2]))
       .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return calTzLabel ? `${shown} ${calTzLabel}` : shown;
   }
   function calFullDate(iso) {
     const d = iso ? calParse(iso) : null;
@@ -12740,7 +12991,7 @@
     // ev.color is a server-side constant, but it lands in a style attribute — keep it to a hex.
     const color = /^#[0-9a-f]{3,8}$/i.test(String(ev.color || "")) ? ev.color : "#6366f1";
     const timeLabel = calTimeLabel(ev.time);
-    const rel = ev.date ? calRel(ev.date, calYmd(new Date())) : "";
+    const rel = ev.date ? calRel(ev.date, calTodayYmd || calYmd(new Date())) : "";
     const isOverdue = !!ev.overdue && !ev.is_done;
     const status = ev.is_done
       ? `<span class="cal-dv-chip done">✓ Done</span>`
@@ -13244,6 +13495,13 @@
       q: "Documents and data privacy",
       a: "Client documents are stored encrypted and are reachable only by members of your organization. We don't open a client's files to investigate a problem without asking you first — a screenshot of what you're seeing is almost always enough.",
       keys: ["document", "upload", "file", "privacy", "security", "encrypt", "confidential", "gdpr", "data", "delete", "passport"],
+    },
+    {
+      id: "docscan",
+      q: "Scanning and validating a document",
+      a: "<b>Uploading a document is always free.</b> Ticking <b>Scan &amp; validate with Rilono AI</b> on the upload card is the paid part: Rilono AI reads that one document, checks it is the right type, genuine and still in date, then cross-checks it against the client's profile and their <i>already-validated</i> documents — so a document that was flagged can never quietly become the yardstick for the next one. A passed identity document also auto-fills empty profile fields; anything that differs is flagged for you, never overwritten. You can also scan any stored document later from its card, or re-scan one once more of the dossier has been validated. A scan that fails to return a verdict isn't charged. Documents a student sends through a secure request link are stored unscanned — scan them yourself when you're ready.",
+      view: "credits", cta: "See what it costs",
+      keys: ["scan", "validate", "validation", "document", "credit", "cost", "charge", "verify", "check", "passport", "fake", "expired", "auto-fill", "autofill", "re-scan"],
     },
     {
       id: "stuck",
@@ -14660,7 +14918,12 @@
     return scope === "all" || !!a.is_admin_like || !state.caps;
   }
   const LD_STATUSES = ["new", "contacted", "converted", "closed"];
-  const LD_TYPE_LABELS = { text: "Text", email: "Email", phone: "Phone", textarea: "Paragraph", select: "Dropdown", date: "Date", number: "Number", checkbox: "Checkbox" };
+  const LD_TYPE_LABELS = { text: "Text", email: "Email", phone: "Phone", textarea: "Paragraph", select: "Dropdown", date: "Date", number: "Number", checkbox: "Checkbox", file: "File upload" };
+  // Mirrors _LEAD_FORM_MAX_FILE_FIELDS / _LEAD_UPLOAD_MAX_PER_FIELD on the server.
+  // The server is the authority — this only keeps the builder from offering a
+  // shape it would reject.
+  const LD_MAX_FILE_FIELDS = 5;
+  const LD_MAX_FILES_PER_FIELD = 5;
   const LD_DEFAULT_FIELDS = [
     { label: "Full name", type: "text", required: true },
     { label: "Email", type: "email", required: true },
@@ -14806,7 +15069,9 @@
       <thead><tr><th>Lead</th><th>Form</th><th>Received</th><th>Status</th></tr></thead>
       <tbody>${ld.leads.map((l, i) => `
         <tr class="ld-row" data-ldi="${i}">
-          <td><div class="ld-cell-name">${esc(l.full_name || "—")}</div><div class="ld-cell-sub">${esc([l.email, l.phone].filter(Boolean).join(" · ") || "no contact details")}</div></td>
+          <td><div class="ld-cell-name">${esc(l.full_name || "—")}${
+            (l.files || []).length ? `<span class="ld-clip" title="${l.files.length} attached file${l.files.length === 1 ? "" : "s"}">📎${l.files.length > 1 ? ` ${l.files.length}` : ""}</span>` : ""
+          }</div><div class="ld-cell-sub">${esc([l.email, l.phone].filter(Boolean).join(" · ") || "no contact details")}</div></td>
           <td>${esc(l.form_name || "—")}</td>
           <td>${esc(fmtDateTime(l.created_at) || "")}</td>
           <td><span class="ld-pill ${esc(l.status)}">${esc(ldStatusLabel(l.status))}</span></td>
@@ -14824,6 +15089,10 @@
     if (!lead) return;
     const canEdit = can("clients.edit");
     const canConvert = can("clients.create");
+    // Raw files are gated on documents.download, not the inbox's clients.view —
+    // an enquiry attachment is a passport page like any other.
+    const canDownload = can("documents.download");
+    const files = lead.files || [];
     const name = lead.full_name || "Lead";
     // #drawer is a bare flex column — content must bring the app's hero/body/footer
     // structure with it, or every child stretches edge-to-edge with no padding.
@@ -14846,9 +15115,21 @@
       <div class="drawer-body">
         <div class="cp-sub-label">What they told you</div>
         <div class="ld-detail-kv">
-          ${(lead.answers || []).map((a) => `<div class="it${a.type === "textarea" || String(a.value || "").length > 80 ? " wide" : ""}"><label>${esc(a.label)}</label><div>${esc(a.value)}</div></div>`).join("")
+          ${(lead.answers || []).filter((a) => a.type !== "file").map((a) => `<div class="it${a.type === "textarea" || String(a.value || "").length > 80 ? " wide" : ""}"><label>${esc(a.label)}</label><div>${esc(a.value)}</div></div>`).join("")
             || '<div class="ld-detail-empty">No answers recorded.</div>'}
         </div>
+        ${files.length ? `
+          <div class="cp-sub-label" style="margin-top:18px">Files they attached</div>
+          <div class="ld-files">
+            ${files.map((f) => `
+              <div class="ld-file">
+                <span class="ld-file-i">📄</span>
+                <span class="ld-file-n">${esc(f.filename)}<span>${esc(f.field_label || "Attachment")}${f.file_size ? ` · ${fmtSize(f.file_size)}` : ""}</span></span>
+                ${canDownload ? `<button class="btn btn-soft btn-sm" data-ldfile="${f.id}">Download</button>`
+                  : '<span class="ld-file-lock" title="Your role can\'t download files">🔒</span>'}
+              </div>`).join("")}
+          </div>
+          ${lead.status === "converted" ? "" : '<div class="ld-detail-meta"><i>📥</i> These move into the client\'s documents when you convert this lead.</div>'}` : ""}
         ${lead.source ? `<div class="ld-detail-meta"><i>🌐</i> Came from <b>${esc(lead.source)}</b></div>` : ""}
         ${lead.converted_client_id ? '<div class="ld-detail-meta"><i>✅</i> Already converted into a client.</div>' : ""}
       </div>
@@ -14860,6 +15141,15 @@
         ${canEdit ? '<button class="btn btn-danger btn-sm" id="ldDeleteBtn" style="margin-left:auto">Delete</button>' : ""}
       </div>`);
     $("#ldDetailClose").onclick = closeDrawer;
+    $$("[data-ldfile]").forEach((btn) => {
+      btn.onclick = async () => {
+        const old = btn.textContent;
+        btn.disabled = true; btn.textContent = "…";
+        try { await downloadFile(`${API}/leads/${lead.id}/files/${btn.dataset.ldfile}/download`); }
+        catch (ex) { toast(ex.message, "error"); }
+        finally { btn.disabled = false; btn.textContent = old; }
+      };
+    });
     const conv = $("#ldConvertBtn");
     if (conv) conv.onclick = () => ldConvert(lead);
     const oc = $("#ldOpenClientBtn");
@@ -14918,10 +15208,14 @@
       forceCreate: true,
       heading: "Convert lead to client",
       onCreated: async (client) => {
+        let copied = 0;
         try {
-          await api(`/leads/${lead.id}/mark-converted`, { method: "POST", body: { client_id: client.id } });
+          const r = await api(`/leads/${lead.id}/mark-converted`, { method: "POST", body: { client_id: client.id } });
+          copied = r.documents_copied || 0;
         } catch (e) { /* the client exists either way — linking back is best-effort */ }
-        toast("Lead converted to client", "success");
+        toast(copied
+          ? `Lead converted — ${copied} attached file${copied === 1 ? "" : "s"} filed under Documents`
+          : "Lead converted to client", "success");
         openClient(client.id);
         return true;
       },
@@ -15140,6 +15434,12 @@
             </span>
           </div>
           ${f.type === "select" ? `<div class="lf-b-opts"><label>Dropdown choices <span>(comma-separated)</span></label><input type="text" data-lf="options" data-i="${i}" value="${esc((f.options || []).join(", "))}" placeholder="USA, UK, Canada"/></div>` : ""}
+          ${f.type === "file" ? `<div class="lf-b-opts"><label>How many files <span>(they can attach up to this many)</span></label>
+            <select class="lf-b-maxfiles" data-lf="max_files" data-i="${i}">${
+              Array.from({ length: LD_MAX_FILES_PER_FIELD }, (_, n) => n + 1).map((n) =>
+                `<option value="${n}" ${Number(f.max_files || 1) === n ? "selected" : ""}>${n} file${n === 1 ? "" : "s"}</option>`).join("")
+            }</select>
+            <div class="hint">PDF, images, Word/Excel, CSV or text · max 10 MB each. Files land on the lead and move into the client's documents when you convert them.</div></div>` : ""}
         </div>`).join("");
       $$("#ldFieldList [data-lf]").forEach((el) => {
         const i = Number(el.dataset.i);
@@ -15150,9 +15450,23 @@
           el.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); if (kind === "label") $("#ldAddField").click(); } };
         }
         if (kind === "label") el.oninput = () => { draft[i].label = el.value; };
-        else if (kind === "type") el.onchange = () => { draft[i].type = el.value; if (el.value === "select" && !draft[i].options) draft[i].options = []; drawFields(); };
+        else if (kind === "type") el.onchange = () => {
+          // Guard the file-field cap here rather than letting the save 400 —
+          // switching a field back is a click, re-reading an error is not.
+          if (el.value === "file" && draft[i].type !== "file"
+              && draft.filter((d) => d.type === "file").length >= LD_MAX_FILE_FIELDS) {
+            toast(`A form can ask for at most ${LD_MAX_FILE_FIELDS} file uploads`, "error");
+            el.value = draft[i].type;
+            return;
+          }
+          draft[i].type = el.value;
+          if (el.value === "select" && !draft[i].options) draft[i].options = [];
+          if (el.value === "file" && !draft[i].max_files) draft[i].max_files = 1;
+          drawFields();
+        };
         else if (kind === "required") el.onchange = () => { draft[i].required = el.checked; };
         else if (kind === "options") el.oninput = () => { draft[i].options = el.value.split(",").map((s) => s.trim()).filter(Boolean); };
+        else if (kind === "max_files") el.onchange = () => { draft[i].max_files = Number(el.value) || 1; };
         else if (kind === "up") el.onclick = () => { if (i > 0) { const t = draft[i - 1]; draft[i - 1] = draft[i]; draft[i] = t; drawFields(); } };
         else if (kind === "down") el.onclick = () => { if (i < draft.length - 1) { const t = draft[i + 1]; draft[i + 1] = draft[i]; draft[i] = t; drawFields(); } };
         else if (kind === "del") el.onclick = () => { draft.splice(i, 1); drawFields(); };
@@ -15180,7 +15494,13 @@
         title: gv("title") || null,
         intro_text: gv("intro_text") || null,
         fields: draft
-          .map((f) => ({ label: String(f.label || "").trim(), type: f.type, required: !!f.required, options: f.type === "select" ? (f.options || []) : undefined }))
+          .map((f) => ({
+            label: String(f.label || "").trim(),
+            type: f.type,
+            required: !!f.required,
+            options: f.type === "select" ? (f.options || []) : undefined,
+            max_files: f.type === "file" ? (Number(f.max_files) || 1) : undefined,
+          }))
           .filter((f) => f.label),
         submit_label: gv("submit_label") || null,
         success_message: gv("success_message") || null,

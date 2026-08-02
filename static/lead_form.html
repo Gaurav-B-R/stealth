@@ -48,6 +48,26 @@
       background-repeat:no-repeat;background-position:right 14px center;padding-right:38px}
     .check{display:flex;align-items:flex-start;gap:10px;margin-bottom:15px;font-size:14.5px;color:var(--text-2);cursor:pointer;overflow-wrap:anywhere}
     .check input{width:17px;height:17px;margin-top:2px;accent-color:var(--primary);flex:none}
+    /* File fields: a labelled dropzone + a list of staged files, each removable
+       until the form is actually submitted. */
+    .drop{display:flex;align-items:center;gap:10px;width:100%;background:var(--surface-2);
+      border:1.5px dashed var(--border-strong);border-radius:var(--radius-sm);padding:13px 14px;
+      font-size:14.5px;color:var(--text-2);cursor:pointer;transition:border-color .12s,background .12s}
+    .drop:hover,.drop.over{border-color:var(--primary);background:#fff}
+    .drop.busy{opacity:.6;cursor:default}
+    .drop .di{font-size:19px;flex:none}
+    .drop .dt{font-weight:700;color:var(--text)}
+    .drop .dh{display:block;font-weight:500;font-size:12.5px;color:var(--muted);margin-top:2px}
+    .drop input[type=file]{display:none}
+    .files{display:flex;flex-direction:column;gap:7px;margin-top:8px}
+    .file-row{display:flex;align-items:center;gap:9px;background:var(--surface-2);
+      border:1px solid var(--border);border-radius:10px;padding:8px 11px;font-size:13.5px}
+    .file-row .fn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .file-row .fs{color:var(--muted);font-size:12px;flex:none}
+    .file-row .fx{border:none;background:none;color:var(--muted);cursor:pointer;font-size:16px;
+      line-height:1;padding:2px 4px;flex:none}
+    .file-row .fx:hover{color:var(--danger)}
+    .file-row.err{border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.06);color:#b91c1c}
     /* Honeypot: parked off-screen — real people never see it, autofill/bots do. */
     .hp-wrap{position:absolute;left:-9999px;top:-9999px;height:1px;width:1px;overflow:hidden}
     .btn{
@@ -172,12 +192,46 @@
       $("stateText").textContent = text;
     }
 
+    // Files are uploaded the moment they're picked and held here as opaque tokens
+    // until submit — so a slow 8 MB scan never blocks the Send click, and the
+    // visitor can drop a wrong file and swap it before committing to anything.
+    var staged = {};        // { field_key: [{token, name, size}] }
+    var uploading = 0;      // in-flight uploads; submit waits for zero
+
+    function fmtSize(n){
+      n = Number(n) || 0;
+      if(n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+      if(n >= 1024) return Math.round(n / 1024) + " KB";
+      return n + " B";
+    }
+
+    function maxFilesFor(f){
+      var n = parseInt(f.max_files, 10);
+      return (isFinite(n) && n > 0) ? Math.min(n, 5) : 1;
+    }
+
     function fieldHtml(f, i){
       var id = "lf_" + i;
       var req = f.required ? ' <span class="req">*</span>' : "";
       var label = '<label for="'+id+'">'+esc(f.label)+req+'</label>';
       var ph = f.placeholder ? ' placeholder="'+esc(f.placeholder)+'"' : "";
       var dataKey = ' data-key="'+esc(f.key)+'" data-type="'+esc(f.type)+'"';
+      if(f.type === "file"){
+        var maxN = maxFilesFor(f);
+        if(!info.uploads_enabled){
+          return '<div class="field">'+label+
+            '<div class="drop busy"><span class="di">📎</span><span><span class="dt">Uploads are temporarily unavailable</span>'+
+            '<span class="dh">Please send this file by email once the team replies.</span></span></div></div>';
+        }
+        var hint = (maxN > 1 ? "Up to " + maxN + " files · " : "") +
+          "PDF, images, Word/Excel · max " + Math.round((info.upload_max_bytes || 10485760) / 1048576) + " MB each";
+        return '<div class="field">'+label+
+          '<label class="drop" data-drop="'+esc(f.key)+'"><span class="di">📎</span>'+
+          '<span><span class="dt">'+(f.placeholder ? esc(f.placeholder) : "Choose a file")+'</span>'+
+          '<span class="dh">'+esc(hint)+'</span></span>'+
+          '<input type="file" id="'+id+'" data-file-key="'+esc(f.key)+'"'+(maxN > 1 ? " multiple" : "")+' /></label>'+
+          '<div class="files" data-files="'+esc(f.key)+'"></div></div>';
+      }
       if(f.type === "textarea")
         return '<div class="field">'+label+'<textarea class="input lf-input" id="'+id+'"'+dataKey+ph+'></textarea></div>';
       if(f.type === "select"){
@@ -212,10 +266,98 @@
       }
       var fields = (info.form && info.form.fields) || [];
       $("fieldsBox").innerHTML = fields.map(fieldHtml).join("");
+      bindFileFields(fields);
       if(info.turnstile_site_key) mountTurnstile(info.turnstile_site_key);
       $("submitBtn").textContent = (info.form && info.form.submit_label) || "Submit";
       $("loading").classList.add("hidden");
       $("formView").classList.remove("hidden");
+    }
+
+    function drawFiles(key){
+      var box = document.querySelector('[data-files="' + (window.CSS && CSS.escape ? CSS.escape(key) : key) + '"]');
+      if(!box) return;
+      var rows = staged[key] || [];
+      box.innerHTML = rows.map(function(r, i){
+        if(r.error)
+          return '<div class="file-row err"><span class="fn">'+esc(r.name)+' — '+esc(r.error)+'</span>'+
+                 '<button type="button" class="fx" data-rm="'+esc(key)+'" data-i="'+i+'" aria-label="Dismiss">×</button></div>';
+        if(r.pending)
+          return '<div class="file-row"><span class="spinner dark" style="width:14px;height:14px;border-width:2px"></span>'+
+                 '<span class="fn">'+esc(r.name)+'</span><span class="fs">Uploading…</span></div>';
+        return '<div class="file-row"><span class="fs">✓</span><span class="fn">'+esc(r.name)+'</span>'+
+               '<span class="fs">'+esc(fmtSize(r.size))+'</span>'+
+               '<button type="button" class="fx" data-rm="'+esc(key)+'" data-i="'+i+'" aria-label="Remove '+esc(r.name)+'">×</button></div>';
+      }).join("");
+      Array.prototype.forEach.call(box.querySelectorAll("[data-rm]"), function(btn){
+        btn.onclick = function(){
+          // Local only: the staged row on the server is never claimed and gets
+          // swept, so there is nothing to un-send.
+          (staged[key] || []).splice(parseInt(btn.getAttribute("data-i"), 10), 1);
+          drawFiles(key);
+        };
+      });
+    }
+
+    function uploadOne(key, file, maxN){
+      var rows = staged[key] || (staged[key] = []);
+      if(rows.length >= maxN){
+        return Promise.resolve();   // silently ignore extras past the field's cap
+      }
+      var entry = { name: file.name, size: file.size, pending: true };
+      rows.push(entry);
+      drawFiles(key);
+      uploading++;
+      var fd = new FormData();
+      fd.append("field_key", key);
+      fd.append("file", file);
+      return fetch(API + "/" + encodeURIComponent(token) + "/upload", { method: "POST", body: fd })
+        .then(function(r){
+          return r.json().catch(function(){ return null; }).then(function(d){
+            if(!r.ok) throw apiError(r, d, "We couldn't upload that file. Please try again.");
+            return d;
+          });
+        }).then(function(d){
+          entry.pending = false;
+          entry.token = d.upload_token;
+          entry.size = d.file_size;
+          entry.name = d.filename || entry.name;
+        }).catch(function(ex){
+          entry.pending = false;
+          entry.error = safeError(ex, "Upload failed");
+        }).then(function(){
+          uploading--;
+          drawFiles(key);
+        });
+    }
+
+    function bindFileFields(fields){
+      var maxByKey = {};
+      fields.forEach(function(f){ if(f.type === "file") maxByKey[f.key] = maxFilesFor(f); });
+      Array.prototype.forEach.call(document.querySelectorAll("[data-file-key]"), function(input){
+        var key = input.getAttribute("data-file-key");
+        input.onchange = function(){
+          Array.prototype.forEach.call(input.files || [], function(file){
+            uploadOne(key, file, maxByKey[key] || 1);
+          });
+          input.value = "";   // let the same file be re-picked after a removal
+        };
+      });
+      // Drag-and-drop onto the label, which is the whole visible dropzone.
+      Array.prototype.forEach.call(document.querySelectorAll("[data-drop]"), function(zone){
+        var key = zone.getAttribute("data-drop");
+        ["dragenter","dragover"].forEach(function(evt){
+          zone.addEventListener(evt, function(e){ e.preventDefault(); zone.classList.add("over"); });
+        });
+        ["dragleave","drop"].forEach(function(evt){
+          zone.addEventListener(evt, function(e){ e.preventDefault(); zone.classList.remove("over"); });
+        });
+        zone.addEventListener("drop", function(e){
+          var files = (e.dataTransfer && e.dataTransfer.files) || [];
+          Array.prototype.forEach.call(files, function(file){
+            uploadOne(key, file, maxByKey[key] || 1);
+          });
+        });
+      });
     }
 
     var tsWidgetId = null;
@@ -266,8 +408,29 @@
         var val = type === "checkbox" ? (el.checked ? "Yes" : "") : String(el.value || "").trim();
         answers[key] = val;
       });
+      if(uploading > 0){
+        errBox.textContent = "Please wait — your files are still uploading.";
+        errBox.classList.remove("hidden");
+        return;
+      }
+      // File answers are the opaque tokens the upload endpoint handed back; a
+      // failed upload is dropped rather than sent, so the server never sees a
+      // token it didn't issue.
+      for(var k in staged){
+        if(!Object.prototype.hasOwnProperty.call(staged, k)) continue;
+        var toks = staged[k].filter(function(r){ return r.token; }).map(function(r){ return r.token; });
+        if(toks.length) answers[k] = toks;
+      }
       for(var i = 0; i < fields.length; i++){
         var f = fields[i];
+        if(f.type === "file"){
+          if(f.required && info.uploads_enabled && !(answers[f.key] || []).length){
+            errBox.textContent = 'Please attach a file for "' + f.label + '".';
+            errBox.classList.remove("hidden");
+            return;
+          }
+          continue;
+        }
         if(f.required && !(answers[f.key] || "").trim()){ missing = f.label; break; }
         if(f.type === "email" && (answers[f.key]||"").trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(answers[f.key].trim())){
           missing = null; errBox.textContent = 'Please enter a valid email for "' + f.label + '".';
