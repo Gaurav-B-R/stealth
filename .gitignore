@@ -52,6 +52,9 @@ build/
 # Local generated marketing previews
 /artifacts/rilono-homepage-video/
 
+# Scratch working files (banner candidates, crops, sources — never served)
+/tmp/
+
 # Local sandbox document storage (rilono-local preview / e2e sandbox)
 _docs_local/
 .aider*
