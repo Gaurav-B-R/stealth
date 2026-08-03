@@ -7,7 +7,7 @@
   <meta name="description" content="The all-in-one platform for study-abroad consultancies to manage clients, track every case, and grow." />
   <meta name="robots" content="noindex" />
   <link rel="icon" href="/static/logo.png" />
-  <link rel="stylesheet" href="/static/enterprise.css?v=20260731f" />
+  <link rel="stylesheet" href="/static/enterprise.css?v=20260802e" />
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
 </head>
 <body>
@@ -21,12 +21,12 @@
       </div>
       <div class="auth-hero-body">
         <h1>Run your entire study-abroad practice — with a Rilono AI assistant.</h1>
-        <p>Manage every applicant, track each student's journey end-to-end, send updates, and just ask the built-in Rilono AI about your portal — built for education consultancies. The core CRM is free; premium AI runs on pay-as-you-go credits.</p>
+        <p>Manage every applicant, track each student's journey end-to-end, send updates, and just ask the built-in Rilono AI about your portal — built for education consultancies. Start free for 14 days; plans from &#8377;2,999/month + GST include your team&rsquo;s monthly AI credits.</p>
         <ul class="auth-points">
           <li><span class="tick">✓</span> ✨ Rilono AI assistant — ask anything about your clients &amp; statuses</li>
           <li><span class="tick">✓</span> Visual pipeline from lead to approval</li>
           <li><span class="tick">✓</span> Notes, reminders &amp; one-click student emails</li>
-          <li><span class="tick">✓</span> Free core CRM — no card, no seat fees</li>
+          <li><span class="tick">✓</span> Free 14-day sandbox — no card required</li>
         </ul>
       </div>
       <div class="auth-flags">🇺🇸 🇨🇦 🇬🇧 🇦🇺 🇩🇪 🇮🇪 🇫🇷 🇪🇸 🇳🇱 🇦🇪</div>
@@ -36,7 +36,7 @@
       <!-- Sign up (secondary — reached via "Create free workspace" on the login card) -->
       <div id="signupCard" class="auth-card hidden">
         <h2>Create your free workspace</h2>
-        <p class="sub">Free core CRM for your whole team — no card required. Set up your consultancy in a minute.</p>
+        <p class="sub">Free 14-day sandbox for your whole team — no card required. Set up your consultancy in a minute.</p>
         <div id="signupError" class="auth-error hidden"></div>
         <form id="signupForm" autocomplete="on">
           <div class="field">
@@ -239,6 +239,10 @@
           Calendar <span class="badge" id="calendarBadge" style="display:none">0</span>
         </button>
         <div class="nav-label">Account</div>
+        <button class="nav-item" data-view="billing">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2Z"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><path d="M12 12v3"/></svg>
+          Plans &amp; Billing
+        </button>
         <button class="nav-item" data-view="credits">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
           Credits <span class="badge" id="creditsBadge">0</span>
@@ -308,6 +312,6 @@
 
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
   <script src="/static/uk-maintenance-calc.js?v=20260712b"></script>
-  <script src="/static/enterprise.js?v=20260731f"></script>
+  <script src="/static/enterprise.js?v=20260802f"></script>
 </body>
 </html>

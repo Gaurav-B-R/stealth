@@ -1248,7 +1248,10 @@ class EnterpriseSubscription(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(Integer, ForeignKey("enterprise_organizations.id"), nullable=False, unique=True, index=True)
-    plan = Column(String, nullable=False, default="trial")  # trial|starter|growth|scale
+    # sandbox|starter|growth|scale. Rows written before 2026-08-02 carry the retired
+    # "trial" key; enterprise_billing.normalize_plan_key maps it onto sandbox rather than
+    # rewriting history, so no backfill is required.
+    plan = Column(String, nullable=False, default="sandbox")
     status = Column(String, nullable=False, default="trialing")  # trialing|active|past_due|canceled
     trial_ends_at = Column(DateTime(timezone=True), nullable=True)
     current_period_end = Column(DateTime(timezone=True), nullable=True)
@@ -1267,8 +1270,24 @@ class EnterpriseSubscriptionPayment(Base):
     provider = Column(String, nullable=False, default="razorpay")
     plan = Column(String, nullable=False, default="starter")
     billing_cycle = Column(String, nullable=False, default="monthly")  # monthly|yearly
+    # `amount_paise` is the TOTAL charged — subtotal + tax — because that is what the
+    # Razorpay order was created for and reconciliation compares against the gateway.
+    # The tax-exclusive figures below let an invoice be reconstructed exactly:
+    #   original_amount_paise  list price, ex-GST, pre-discount
+    #   subtotal_paise         taxable value  (= list − discount)
+    #   tax_paise              GST charged on subtotal_paise
+    #   amount_paise           subtotal_paise + tax_paise   <- what was charged
     amount_paise = Column(Integer, nullable=False)
+    subtotal_paise = Column(Integer, nullable=True)
+    tax_paise = Column(Integer, nullable=False, default=0, server_default="0")
+    # Stamped per payment, not read from config at display time: a GST rate change must
+    # not retroactively rewrite what an old invoice says was charged.
+    tax_percent = Column(Numeric(5, 2), nullable=True)
+    tax_label = Column(String, nullable=True)  # 'GST' domestically, null on zero-rated exports
     currency = Column(String, nullable=False, default="INR")
+    # AI credits this payment entitles the org to for the period it opens. Snapshotted so
+    # a later change to the plan's allowance cannot alter what an org already bought.
+    included_credits = Column(Integer, nullable=False, default=0, server_default="0")
     razorpay_order_id = Column(String, nullable=False, unique=True, index=True)
     razorpay_payment_id = Column(String, nullable=True, unique=True, index=True)
     razorpay_subscription_id = Column(String, nullable=True, index=True)
@@ -1276,7 +1295,12 @@ class EnterpriseSubscriptionPayment(Base):
     # Per-account discount applied at checkout (admin-managed; see EnterpriseCoupon).
     coupon_code = Column(String, nullable=True, index=True)
     coupon_percent_off = Column(Numeric(5, 2), nullable=True)
-    original_amount_paise = Column(Integer, nullable=True)  # pre-discount amount
+    original_amount_paise = Column(Integer, nullable=True)  # pre-discount, ex-tax list price
+    # Running total refunded against this charge (minor units of `currency`), mirroring
+    # EnterpriseCreditPayment. Without it a plan refund has nowhere to be recorded at all,
+    # and build_revenue_analytics would keep counting a refunded subscription as revenue
+    # forever. Status moves to 'partially_refunded', then 'refunded' at the full amount.
+    refunded_amount_paise = Column(Integer, nullable=False, default=0, server_default="0")
     verified_at = Column(DateTime(timezone=True), nullable=True)
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -1284,12 +1308,19 @@ class EnterpriseSubscriptionPayment(Base):
 
 
 class EnterpriseCreditWallet(Base):
-    """Prepaid 'Rilono Credits' wallet for an organization (the B2B revenue model).
+    """'Rilono Credits' wallet for an organization — the AI metering unit (1 credit = ₹10).
 
-    Agencies top up via Razorpay and spend credits on premium Gemini features
-    (Deep Scan document audits, AI mock interviews). 1 credit = ₹10 (see
-    app/enterprise_credits.py). The core CRM is free up to a student limit; beyond
-    it a flat monthly infrastructure fee applies (tracked via infra_fee_paid_until).
+    Credits reach the wallet two ways, and both land in the SAME `balance_credits`:
+      * INCLUDED with the org's plan — 1,000/3,500/10,000 granted every billing period
+        (see app/enterprise_billing.py PLANS and enterprise_credits.sync_plan_credits).
+      * PURCHASED as a top-up pack via Razorpay, for overage.
+
+    One balance, because every spend path and every UI reads `balance_credits`; splitting
+    it would mean auditing ~20 call sites for "which bucket?" and getting one wrong means
+    charging a customer twice. The distinction that DOES matter — that a monthly allowance
+    should not compound forever — is carried by the three plan_credits_* columns below
+    instead, which is enough to expire the unspent remainder at each rollover without
+    ever touching purchased credits.
     """
     __tablename__ = "enterprise_credit_wallets"
 
@@ -1298,6 +1329,23 @@ class EnterpriseCreditWallet(Base):
     balance_credits = Column(Integer, nullable=False, default=0)
     lifetime_purchased_credits = Column(Integer, nullable=False, default=0)
     lifetime_spent_credits = Column(Integer, nullable=False, default=0)
+    # --- Plan-included credit allowance ------------------------------------------------
+    # `plan_credits_period` is the IDEMPOTENCY KEY: the billing period whose allowance has
+    # already been granted, as "<plan>:<period-start YYYY-MM-DD>". The grant runs lazily on
+    # wallet reads, so it fires on the first request after a renewal without a cron — and
+    # re-running it a thousand times in that same period is a no-op. Same shape as
+    # `deep_scan_free_month` below.
+    plan_credits_period = Column(String, nullable=True)
+    plan_credits_granted = Column(Integer, nullable=False, default=0, server_default="0")
+    # How much of THIS period's grant is still unspent. Debits decrement it alongside
+    # balance_credits (floored at 0, so spending purchased credits never drives it
+    # negative). At rollover this remainder is clawed back before the next grant, which is
+    # what makes "1,000/month" mean 1,000 per month rather than 12,000 by December.
+    plan_credits_remaining = Column(Integer, nullable=False, default=0, server_default="0")
+    # RETIRED 2026-08-02 with the ₹999/month infrastructure server fee, which the tiered
+    # plans replaced. Retained (not dropped) because historical `kind="infra_fee"` payment
+    # rows reference the period this column recorded, and the admin revenue report still
+    # reports that revenue. Nothing writes it any more.
     infra_fee_paid_until = Column(DateTime(timezone=True), nullable=True)
     # Rilono AI assistant (copilot) metering: a free daily allowance, then credits are
     # debited per bundle of messages (see app/enterprise_credits.py). `copilot_usage_date`

@@ -16,6 +16,7 @@ from app import models, schemas
 from app import ai_usage
 from app import acquisition
 from app import enterprise_credits
+from app import enterprise_billing
 from app import enterprise_coupons
 from app import enterprise_refunds
 from app import email_service
@@ -2265,6 +2266,25 @@ def enterprise_account_details_admin(
 
     credit_paid = _sum_collected("credits")
     infra_paid = _sum_collected("infra_fee")
+    # Plan subscriptions live in their OWN table, so a founder looking at a paying Growth
+    # account used to see "Total paid: ₹0" — the tiers are now the largest line and were
+    # invisible here. INR-only (the plan book is), and gross of GST because that is what
+    # actually left the customer's account.
+    SP = models.EnterpriseSubscriptionPayment
+    plan_paid = int(
+        db.query(func.coalesce(func.sum(SP.amount_paise - func.coalesce(SP.refunded_amount_paise, 0)), 0))
+        .filter(
+            SP.organization_id == org.id,
+            SP.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
+            func.upper(func.coalesce(SP.currency, "INR")) == "INR",
+        )
+        .scalar() or 0
+    )
+    plan_payment_count = int(
+        db.query(func.count(SP.id))
+        .filter(SP.organization_id == org.id, SP.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES))
+        .scalar() or 0
+    )
     verified_count = int(
         db.query(func.count(P.id))
         .filter(
@@ -2310,7 +2330,7 @@ def enterprise_account_details_admin(
     # --- refunds issued to this account ---
     refunds = enterprise_refunds.list_refunds(db, org.id)
     refunded_paise = enterprise_refunds.total_refunded_paise(db, org.id)
-    total_paid = credit_paid + infra_paid
+    total_paid = credit_paid + infra_paid + plan_paid
 
     # `enterprise_refunds.total_refunded_paise` sums EnterpriseRefund.amount_paise, and a
     # refund is recorded in the ORIGINAL payment's currency — so the moment this org has a
@@ -2361,6 +2381,10 @@ def enterprise_account_details_admin(
             "admins": admins,
         },
         "wallet": wallet,
+        # Which tier this org is on, its caps, and where it sits against them. The console
+        # showed only the retired infra fee before, so a founder looking at an account had
+        # no way to see what it actually pays every month.
+        "subscription": enterprise_billing.build_subscription_state(db, org.id),
         # Every *_paise total here is INR SETTLEMENT (base_amount_paise), which is what
         # makes it summable at all. `currency` says so explicitly so the console never has
         # to infer it. The refund-derived figures go null when they can't be stated in one
@@ -2369,6 +2393,9 @@ def enterprise_account_details_admin(
             "currency": "INR",
             "credit_revenue_paise": credit_paid,
             "credit_revenue_display": enterprise_credits.format_inr(credit_paid),
+            "plan_revenue_paise": plan_paid,
+            "plan_revenue_display": enterprise_credits.format_inr(plan_paid),
+            "plan_payment_count": plan_payment_count,
             "infra_revenue_paise": infra_paid,
             "infra_revenue_display": enterprise_credits.format_inr(infra_paid),
             "total_paid_paise": total_paid,

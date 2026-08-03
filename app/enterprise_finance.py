@@ -72,6 +72,7 @@ EXPENSE_CATEGORIES: dict[str, str] = {
     "student_refund": "Refunds to students",
     "rilono_platform": "Rilono platform fee",
     "rilono_credits": "Rilono AI credits",
+    "rilono_plan": "Rilono plan subscription",
     "rilono_infra": "Rilono infrastructure fee",
     "chargeback": "Chargebacks lost",
     "other_expense": "Other expense",
@@ -79,7 +80,7 @@ EXPENSE_CATEGORIES: dict[str, str] = {
 
 # Derived from platform data — shown in the books, never hand-entered.
 AUTO_INCOME_CATEGORIES = {"student_fee", "rilono_refund"}
-AUTO_EXPENSE_CATEGORIES = {"rilono_platform", "rilono_credits", "rilono_infra", "chargeback", "student_refund"}
+AUTO_EXPENSE_CATEGORIES = {"rilono_platform", "rilono_credits", "rilono_plan", "rilono_infra", "chargeback", "student_refund"}
 
 # Where a ledger row came from.
 SOURCE_MANUAL = "manual"
@@ -1129,6 +1130,48 @@ def _rilono_billing_rows(db: Session, org_id: int, start: Optional[date], end: d
             locked_reason="Billed by Rilono — see Credits & Billing for the receipt.",
         ))
 
+    # Rilono plan subscriptions. These live in a DIFFERENT table from credit top-ups
+    # (EnterpriseSubscriptionPayment), so before the tiered plans launched on 2026-08-02
+    # nothing here read it — and an org's own books would have shown their AI top-ups but
+    # not the monthly plan fee that is now their largest Rilono line.
+    S = models.EnterpriseSubscriptionPayment
+    sub_stamp = func.coalesce(S.verified_at, S.created_at)
+    sub_query = db.query(S).filter(
+        S.organization_id == org_id,
+        S.status.in_(("verified", "partially_refunded", "refunded")),
+    )
+    if start is not None:
+        sub_query = sub_query.filter(sub_stamp >= datetime.combine(start, datetime.min.time()))
+    sub_query = sub_query.filter(sub_stamp < datetime.combine(end + timedelta(days=1), datetime.min.time()))
+    for sp in sub_query.order_by(S.id.desc()).limit(MAX_CREDIT_ROWS).all():
+        occurred = _as_date(sp.verified_at) or _as_date(sp.created_at)
+        # The plan book is INR-only; anything else would be a bug, and booking cents as
+        # paise is exactly the error the credit loop above guards against.
+        if (sp.currency or "INR").strip().upper() != "INR":
+            continue
+        gross = _int(sp.amount_paise)
+        if not occurred or gross <= 0:
+            continue
+        label = str(sp.plan or "").replace("_", " ").title() or "Rilono"
+        tax = _int(sp.tax_paise)
+        rows.append(_row(
+            row_id=f"rilono-plan-{sp.id}",
+            kind="expense",
+            source=SOURCE_RILONO_CREDITS,
+            category="rilono_plan",
+            # The full charge INCLUDING GST is what left the bank account, so that is what
+            # the expense row is. `tax_paise` records the recoverable input-credit portion.
+            amount_paise=gross,
+            tax_paise=tax,
+            occurred_on=occurred,
+            description=f"Rilono {label} plan · monthly subscription",
+            counterparty="Rilono",
+            method="razorpay",
+            reference=sp.razorpay_payment_id or sp.razorpay_order_id,
+            editable=False,
+            locked_reason="Billed by Rilono — see Plans & Billing for the receipt.",
+        ))
+
     # Money Rilono sent back. Dated when the refund was issued rather than netted off the
     # original charge — netting would silently restate a month that was already closed.
     F = models.EnterpriseRefund
@@ -1231,7 +1274,7 @@ def summarize(rows: Iterable[dict]) -> dict:
         else:
             expense += amount
             expense_count += 1
-            if r["category"] in ("rilono_platform", "rilono_credits", "rilono_infra"):
+            if r["category"] in ("rilono_platform", "rilono_credits", "rilono_plan", "rilono_infra"):
                 rilono_cost += amount
         tax_collected += _int(r.get("tax_paise"))
     net = income - expense
@@ -1982,7 +2025,7 @@ def savings(db: Session, organization_id: int, rng: dict, *,
     # What Rilono actually cost them in the same period — straight from the book,
     # so the ROI figure can never disagree with the expense ledger.
     book_rows = build_book(db, org_id, rng, today=today, cache=cache)["rows"]
-    cost_by_category = {"rilono_credits": 0, "rilono_infra": 0, "rilono_platform": 0}
+    cost_by_category = {"rilono_credits": 0, "rilono_plan": 0, "rilono_infra": 0, "rilono_platform": 0}
     refunded_by_rilono = 0
     for r in book_rows:
         if r["kind"] == "expense" and r["category"] in cost_by_category:
@@ -2012,6 +2055,8 @@ def savings(db: Session, organization_id: int, rng: dict, *,
             "refunded_display": format_inr(refunded_by_rilono),
             "credits_paise": cost_by_category["rilono_credits"],
             "credits_display": format_inr(cost_by_category["rilono_credits"]),
+            "plan_paise": cost_by_category["rilono_plan"],
+            "plan_display": format_inr(cost_by_category["rilono_plan"]),
             "infra_paise": cost_by_category["rilono_infra"],
             "infra_display": format_inr(cost_by_category["rilono_infra"]),
             "platform_fee_paise": cost_by_category["rilono_platform"],

@@ -661,6 +661,57 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .plan-card .tagline { font-size: 13px; color: var(--text-2); margin-bottom: 16px; }
 .plan-card .price { font-size: 32px; font-weight: 780; letter-spacing: -0.02em; }
 .plan-card .price small { font-size: 14px; color: var(--muted); font-weight: 500; }
+/* Sandbox countdown / cap-reached / migration-ramp notice, painted above the main views.
+   Deliberately an inline strip rather than a modal: it must be impossible to miss and
+   equally impossible for it to block work. */
+.trial-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-left-width: 4px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.trial-banner > span { flex: 1; min-width: 240px; }
+.trial-banner b { color: var(--text); }
+.trial-banner-warn {
+  border-left-color: var(--warning, #f59e0b);
+  background: color-mix(in srgb, var(--warning, #f59e0b) 8%, var(--surface));
+}
+.trial-banner-danger {
+  border-left-color: var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger, #ef4444) 8%, var(--surface));
+}
+
+/* Tier prices are quoted EX-GST, so the card states the tax and the real charged total
+   directly under the headline price. A buyer must never first meet the larger number
+   inside the Razorpay modal. */
+.price-tax { font-size: 12px; font-weight: 600; color: var(--text-2); margin-top: 4px; }
+.price-note { font-size: 12px; font-weight: 700; color: var(--muted); margin-top: 2px; }
+
+/* The three numbers that actually differentiate the tiers: users, active clients and the
+   monthly AI credit allowance. Sits between the price and the feature list so the
+   comparison is one glance across cards rather than a read of four bullet lists. */
+.plan-caps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+}
+.plan-caps > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.plan-caps b { font-size: 17px; font-weight: 780; letter-spacing: -0.01em; }
+.plan-caps span { font-size: 10.5px; color: var(--muted); font-weight: 600; line-height: 1.25; }
+
 .plan-card ul { list-style: none; padding: 0; margin: 18px 0; flex: 1; }
 .plan-card ul li { font-size: 13.5px; color: var(--text-2); padding: 6px 0 6px 24px; position: relative; }
 .plan-card ul li::before { content: "✓"; position: absolute; left: 0; color: var(--success); font-weight: 800; }

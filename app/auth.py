@@ -184,10 +184,14 @@ def authenticate_user(db: Session, email: str, password: str):
     return user
 
 
-# Shown when an Enterprise (B2B) account tries to use the individual/B2C consumer app.
+# Shown when an Enterprise (B2B) account tries to use the individual/B2C consumer app. Says WHY
+# the credentials are being refused (the two products never share an account), so the user doesn't
+# read it as a broken password and retry. Mirrors ENTERPRISE_SIGNUP_EMAIL_TAKEN_DETAIL, which
+# turns the same person away in the opposite direction.
 ENTERPRISE_ACCOUNT_ON_B2C_DETAIL = (
-    "This email belongs to a Rilono Enterprise workspace. "
-    "Please sign in through your Enterprise portal instead."
+    "This email belongs to a Rilono Enterprise workspace, not a personal student account. "
+    "Sign in at your workspace's Enterprise portal instead — the same email can't be used "
+    "for a student account."
 )
 
 

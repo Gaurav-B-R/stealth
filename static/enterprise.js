@@ -24,6 +24,8 @@
     clients: [],
     statusCounts: {},
     filters: { status: "", category: "", country: "", q: "", branch_id: "" },
+    // Monthly-only since 2026-08-02 (no annual tier is sold); kept so the /billing
+    // request body stays shaped the way the server expects.
     billingCycle: "monthly",
     activeClient: null,
     cal: null,
@@ -1293,10 +1295,15 @@
   function updatePlanChip() {
     const s = state.subscription;
     const cr = state.credits;
-    if (cr && cr.balance_credits != null) {
+    // The chip leads with the TIER (that is the subscription the org is on) and adds the
+    // live credit balance when we have it, so one glance answers both "what am I paying
+    // for" and "can I run another AI action".
+    if (s && s.plan_label) {
+      const bal = cr && cr.balance_credits != null ? ` · ${cr.balance_credits} cr` : "";
+      $("#brandPlan").textContent = s.plan_label + bal;
+    } else if (cr && cr.balance_credits != null) {
       $("#brandPlan").textContent = cr.balance_credits + " credits";
     } else {
-      // No plan tiers exist — the platform is free CRM + pay-as-you-go credits.
       $("#brandPlan").textContent = "Rilono Credits";
     }
     if (s && s.clients_used != null) $("#clientsBadge").textContent = s.clients_used;
@@ -1442,9 +1449,10 @@
      ============================================================ */
   // ---- URL routing: keep the address bar in sync with the active view so refresh,
   // deep-links, bookmarks and browser back/forward all work inside the app. ----
-  // "billing" removed: the plan-tier system is dormant (free CRM + credits is the model),
-  // so the dead Plans page must not be reachable even by deep link. Code kept for reversibility.
-  const ROUTE_VIEWS = ["dashboard", "clients", "leads", "calendar", "coursefinder", "ai", "team", "credits", "finance", "support", "settings"];
+  // "billing" is live again (2026-08-02): the tiered plans — Self-serve sandbox / Starter /
+  // Growth / Scale — are the model, and the Plans page is where an org sees its seat and
+  // client caps, its monthly AI credit allowance, and upgrades.
+  const ROUTE_VIEWS = ["dashboard", "clients", "leads", "calendar", "coursefinder", "ai", "team", "credits", "billing", "finance", "support", "settings"];
   // The capability a whole view needs. A deep link, a bookmark or a Back press into a view
   // the member can't hold must paint one plain sentence — not the renderer's "Couldn't load"
   // after the API 403s.
@@ -1469,7 +1477,7 @@
   };
   // Nav items for views the member can't reach are removed outright (house rule: omit the
   // markup rather than show a control that only ever refuses).
-  const NAV_CAPABILITY = { credits: "credits.view", finance: "finance.view", team: "team.view" };
+  const NAV_CAPABILITY = { credits: "credits.view", billing: "billing.manage", finance: "finance.view", team: "team.view" };
   function applyNavCapabilities() {
     $$(".nav-item").forEach((b) => {
       const cap = NAV_CAPABILITY[b.dataset.view];
@@ -1669,9 +1677,47 @@
   };
   globalSearchClear.onclick = clearClientSearch;
 
+  // Painted at the top of Dashboard, Clients and Course Finder — the three views an org
+  // actually lives in. Without it the only warning that the sandbox is running out lives on
+  // Plans & Billing, a page a busy team never opens, so the first signal would be a 402 on
+  // the day it lapses. Stays silent for a healthy paid plan.
   function trialBanner() {
-    // Rilono Enterprise is free — no trial countdown or upgrade prompts.
-    return "";
+    const s = state.subscription;
+    if (!s || s.is_free_platform) return "";
+
+    // A pre-cutover org inside the migration ramp: caps are not enforced yet, but the date
+    // they start being enforced must be visible well before it arrives.
+    if (s.grandfathered) {
+      return `<div class="trial-banner trial-banner-warn">
+        <span><b>Choose a plan by ${s.grace_ends_at ? esc(fmtDate(s.grace_ends_at)) : "the deadline"}.</b>
+        Your workspace predates Rilono plans, so nothing is limited yet${s.over_cap ? " — including what you already have above the new caps, which you keep" : ""}.</span>
+        <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">See plans</button>
+      </div>`;
+    }
+    if (!s.is_sandbox) {
+      // Paid plan: only speak up when a cap is actually reached, since that is the moment
+      // adding a client or a teammate is about to fail.
+      if (s.can_add_client && s.can_add_seat) return "";
+      const what = !s.can_add_client ? "active clients" : "team seats";
+      return `<div class="trial-banner trial-banner-warn">
+        <span>You've reached your ${esc(s.plan_label)} plan's limit for <b>${what}</b>.</span>
+        <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">Upgrade</button>
+      </div>`;
+    }
+    if (s.trial_expired) {
+      return `<div class="trial-banner trial-banner-danger">
+        <span><b>Your 14-day sandbox has ended.</b> Everything here is intact and readable — choose a plan to start adding clients and teammates again.</span>
+        <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">Choose a plan</button>
+      </div>`;
+    }
+    const left = Number(s.trial_days_left);
+    // Only the last stretch, so the banner still reads as information rather than nagging.
+    if (!Number.isFinite(left) || left > 7) return "";
+    return `<div class="trial-banner trial-banner-warn">
+      <span><b>${left === 0 ? "Your sandbox ends today." : `${left} day${left === 1 ? "" : "s"} left in your sandbox.`}</b>
+      Plans start at ₹2,999/month + GST and include 1,000 AI credits a month.</span>
+      <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">See plans</button>
+    </div>`;
   }
 
   /* ---------------- Data Processing Agreement re-consent ---------------- */
@@ -8765,69 +8811,98 @@
     const sub = d.subscription;
     const canManage = can("billing.manage");
 
-    const usagePct = sub.max_clients === -1 ? 0 : Math.min(100, Math.round((sub.clients_used / Math.max(1, sub.max_clients)) * 100));
-    const cycle = state.billingCycle;
+    const pct = (used, max) => (max === -1 ? 0 : Math.min(100, Math.round((used / Math.max(1, max)) * 100)));
+    const cap = (v) => (v === -1 || v == null ? "∞" : Number(v).toLocaleString());
     state.billingCoupon = state.billingCoupon || null;
     state.billingPlans = d.plans || [];
     const bCoupon = state.billingCoupon;
-    const cyclSuffix = cycle === "yearly" ? "yr" : "mo";
 
+    // Prices are quoted EX-GST ("₹2,999/month + GST"), so the card shows the subtotal and
+    // names the tax rather than folding it in. The charged total is spelled out underneath
+    // so nobody meets it for the first time inside the Razorpay modal.
     const planPriceBlock = (p) => {
-      const display = cycle === "yearly" ? p.yearly_display : p.monthly_display;
-      const basePaise = cycle === "yearly" ? p.yearly_paise : p.monthly_paise;
-      if (!bCoupon || !basePaise) return `<div class="price">${display}<small>/${cyclSuffix}</small></div>`;
-      // The plan list price comes back pre-formatted in the plan's own currency
-      // (billing.py quotes plans in INR only), so the discounted figure has to be
-      // rendered in that same currency — otherwise the struck-through "was" price and
-      // the new price would be in two different currencies.
-      const discounted = Math.max(0, Math.round(basePaise * (100 - bCoupon.percent) / 100));
-      return `<div class="price">${fmtMoney(discounted, p.currency || "INR")}<small>/${cyclSuffix}</small><span class="price-was">${display}</span></div>
-        <div class="price-off">${esc(bCoupon.percent_display)} off applied</div>`;
+      if (p.is_free) return `<div class="price">${esc(p.monthly_display)}<small>/mo</small></div>
+        <div class="price-off" style="color:var(--text-2)">${esc(p.price_note)}</div>`;
+      const taxLine = p.tax_minor
+        ? `<div class="price-tax">+ ${esc(p.tax_label || "tax")} · ${esc(p.total_display)}/mo charged</div>` : "";
+      // `taxLine` already names the tax AND the charged total, so a separate "+ GST" note
+      // above it would say the same thing twice.
+      if (!bCoupon) return `<div class="price">${esc(p.monthly_display)}<small>/mo</small></div>${taxLine}`;
+      // Discount applies to the ex-tax subtotal — same order as the server's
+      // checkout_quote(), so the preview here and the order there always agree.
+      const sub2 = Math.max(0, Math.round(p.monthly_paise * (100 - bCoupon.percent) / 100));
+      const tax2 = Math.round(sub2 * (p.tax_percent || 0) / 100);
+      return `<div class="price">${fmtMoney(sub2, p.currency || "INR")}<small>/mo</small><span class="price-was">${esc(p.monthly_display)}</span></div>
+        <div class="price-off">${esc(bCoupon.percent_display)} off applied</div>
+        ${p.tax_percent ? `<div class="price-tax">+ ${esc(p.tax_label)} · ${esc(fmtMoney(sub2 + tax2, p.currency || "INR"))}/mo charged</div>` : ""}`;
     };
 
     const planCard = (p) => {
-      const isCurrent = sub.plan === p.key && !sub.is_trial;
+      const isCurrent = sub.plan === p.key;
+      const isSandbox = p.is_free;
       return `<div class="plan-card ${p.is_popular ? "popular" : ""} ${isCurrent ? "current-plan" : ""}">
         ${p.is_popular ? `<div class="pop-tag">Most popular</div>` : ""}
         <h3>${esc(p.label)}</h3><div class="tagline">${esc(p.tagline)}</div>
         ${planPriceBlock(p)}
+        <div class="plan-caps">
+          <div><b>${cap(p.max_seats)}</b><span>users</span></div>
+          <div><b>${cap(p.max_clients)}</b><span>active clients</span></div>
+          <div><b>${Number(p.included_credits).toLocaleString()}</b><span>AI credits${p.credits_recur ? "/mo" : " once"}</span></div>
+        </div>
         <ul>${p.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
         ${isCurrent ? `<div class="plan-current-tag">✓ Current plan</div>`
-          : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}')">${sub.is_trial ? "Start " + esc(p.label) : "Switch to " + esc(p.label)}</button>`
-            : `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to upgrade</div>`)}
+          : (isSandbox ? `<div class="plan-current-tag" style="color:var(--muted)">Where every workspace starts</div>`
+          : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}')">${sub.is_sandbox ? "Choose " + esc(p.label) : "Switch to " + esc(p.label)}</button>`
+            : `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to upgrade</div>`))}
       </div>`;
     };
 
+    const allowance = Number(sub.included_credits || 0);
     c.innerHTML = `
-      <div class="card" style="margin-bottom:24px"><div class="card-body" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div class="card" style="margin-bottom:24px"><div class="card-body" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
         <div style="flex:1;min-width:220px">
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Current plan</div>
-          <div style="font-size:24px;font-weight:760;margin:4px 0">${esc(sub.plan_label)} ${sub.is_trial ? `<span style="font-size:13px;color:var(--warning);font-weight:600">· ${sub.trial_expired ? "expired" : sub.trial_days_left + " days left"}</span>` : ""}</div>
-          <div style="font-size:13px;color:var(--text-2)">${sub.current_period_end && !sub.is_trial ? "Renews " + fmtDate(sub.current_period_end) : sub.trial_ends_at ? "Trial ends " + fmtDate(sub.trial_ends_at) : ""}</div>
+          <div style="font-size:24px;font-weight:760;margin:4px 0">${esc(sub.plan_label)} ${sub.is_sandbox ? `<span style="font-size:13px;color:var(--warning);font-weight:600">· ${sub.trial_expired ? "evaluation ended" : sub.trial_days_left + " days left"}</span>` : ""}</div>
+          <div style="font-size:13px;color:var(--text-2)">${
+            sub.current_period_end && !sub.is_sandbox ? "Renews " + fmtDate(sub.current_period_end)
+            : sub.trial_ends_at ? "Sandbox ends " + fmtDate(sub.trial_ends_at) : ""
+          }${sub.monthly_display && !sub.is_sandbox ? ` · ${esc(sub.monthly_display)}/mo${sub.tax_label ? " + " + esc(sub.tax_label) : ""}` : ""}</div>
         </div>
-        <div style="flex:1;min-width:220px">
-          <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-2)">Clients</span><b>${sub.clients_used} / ${sub.max_clients === -1 ? "∞" : sub.max_clients}</b></div>
-          <div class="usage-bar"><div class="usage-fill" style="width:${usagePct}%"></div></div>
-          <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:10px"><span style="color:var(--text-2)">Team seats</span><b>${sub.seats_used} / ${sub.max_seats === -1 ? "∞" : sub.max_seats}</b></div>
+        <div style="flex:1;min-width:240px">
+          <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-2)">Active clients</span><b>${sub.clients_used} / ${cap(sub.max_clients)}</b></div>
+          <div class="usage-bar"><div class="usage-fill" style="width:${pct(sub.clients_used, sub.max_clients)}%"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:10px"><span style="color:var(--text-2)">Team seats</span><b>${sub.seats_used} / ${cap(sub.max_seats)}</b></div>
+          <div class="usage-bar"><div class="usage-fill" style="width:${pct(sub.seats_used, sub.max_seats)}%"></div></div>
         </div>
+        ${allowance ? `<div style="flex:0 0 auto;min-width:170px;text-align:right">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">AI credits included</div>
+          <div style="font-size:24px;font-weight:760;margin:4px 0">${allowance.toLocaleString()}</div>
+          <div style="font-size:13px;color:var(--text-2)">${sub.credits_recur ? "every month" : "one-time"} · <a href="#" onclick="__ent.go('credits');return false">see balance</a></div>
+        </div>` : ""}
       </div></div>
-      <div style="text-align:center">
-        <div class="billing-toggle">
-          <button class="${cycle === "monthly" ? "active" : ""}" onclick="__ent.setCycle('monthly')">Monthly</button>
-          <button class="${cycle === "yearly" ? "active" : ""}" onclick="__ent.setCycle('yearly')">Yearly<span class="save">save ~17%</span></button>
+      ${sub.grandfathered ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--warning,#f59e0b)"><div class="card-body">
+        <b>Choose a plan by ${sub.grace_ends_at ? esc(fmtDate(sub.grace_ends_at)) : "the deadline"}</b>
+        <div style="font-size:13px;color:var(--text-2);margin-top:4px">
+          Your workspace was created before Rilono plans launched, so nothing is limited for now${sub.over_cap ? " — including the clients and seats already above these caps, which you keep either way" : ""}.
+          Pick a plan below before then and nothing changes for your team.
         </div>
-      </div>
+      </div></div>` : (sub.trial_expired ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--warning,#f59e0b)"><div class="card-body">
+        <b>Your 14-day sandbox evaluation has ended.</b>
+        <div style="font-size:13px;color:var(--text-2);margin-top:4px">Everything in your workspace is intact and readable. Choose a plan below to start adding clients and team members again.</div>
+      </div></div>` : "")}
       ${canManage && d.plans.length ? couponRow(bCoupon, "applyBillingCoupon", "removeBillingCoupon", "billingCouponInput", "plans") : ""}
       <div class="plan-grid">${d.plans.map(planCard).join("")}</div>
-      ${!d.plans.length ? "" : `<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:18px">Secure payments via Razorpay. Cancel anytime.</p>`}`;
+      ${!d.plans.length ? "" : `<p style="text-align:center;color:var(--muted);font-size:13px;margin-top:18px">
+        Prices are per month and exclusive of GST. Secure payments via Razorpay. Cancel anytime.<br>
+        Your plan's AI credits refresh each billing period; unused credits from the allowance don't carry over. Need more? Top up any time in <a href="#" onclick="__ent.go('credits');return false">Credits</a>.
+      </p>`}`;
   }
-  function setCycle(c) { state.billingCycle = c; renderBilling(); }
 
   async function applyBillingCoupon() {
     const input = $("#billingCouponInput");
     const code = ((input && input.value) || "").trim();
     if (!code) { toast("Enter a discount code.", "error"); return; }
-    const paid = (state.billingPlans || []).filter((p) => p.key !== "trial" && (p.monthly_paise > 0 || p.yearly_paise > 0));
+    const paid = (state.billingPlans || []).filter((p) => !p.is_free && p.monthly_paise > 0);
     if (!paid.length) { toast("No paid plans available for discounts.", "error"); return; }
     let res;
     try {
@@ -8848,12 +8923,20 @@
     if (res.action !== "checkout") { toast("Checkout unavailable.", "error"); return; }
     if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); return; }
 
+    // The Razorpay modal opens on `res.amount`, which is the GST-INCLUSIVE total. The
+    // subtotal shown on the plan card is deliberately smaller, so the description spells
+    // out the breakdown — meeting an unexplained larger number at the payment sheet is
+    // exactly how a correct charge gets reported as a billing bug.
+    const parts = [res.plan_label + " plan · monthly"];
+    if (res.tax_paise) {
+      parts.push(`${res.subtotal_display} + ${res.tax_label} ${res.tax_display} = ${res.total_display}`);
+    }
     const rzp = new Razorpay({
       key: res.razorpay_key_id,
       amount: res.amount,
       currency: res.currency,
       name: res.organization_name || "Rilono",
-      description: res.plan_label + " plan (" + res.billing_cycle + ")",
+      description: parts.join(" · "),
       order_id: res.order_id,
       prefill: checkoutPrefill(res.prefill),
       theme: { color: "#6366f1" },
@@ -8864,7 +8947,11 @@
             razorpay_payment_id: resp.razorpay_payment_id,
             razorpay_signature: resp.razorpay_signature,
           }});
-          state.subscription = v.subscription; updatePlanChip();
+          state.subscription = v.subscription;
+          // The plan grant lands during verify, so refresh the cached wallet too —
+          // otherwise the Credits page shows a stale balance until the next hard reload.
+          if (v.wallet) { state.credits = v.wallet; creditsUi.wallet = null; }
+          updatePlanChip();
           toast(v.message || "Plan activated!", "success");
           renderBilling();
         } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
@@ -8893,6 +8980,11 @@
 
   // Visual identity (badge label + accent colour) for one ledger entry.
   function creditTxnMeta(t) {
+    // reference_type is checked FIRST: a plan grant is written as type "bonus" and an
+    // expiry as type "adjustment", so matching on `type` first would label every monthly
+    // allowance "Bonus" and every forfeiture "Adjustment" — the ledger would never once
+    // name the plan that is now the main source of credits.
+    if (t.reference_type === "plan_credits") return { label: t.credits < 0 ? "Plan credits expired" : "Plan credits", color: t.credits < 0 ? "#94a3b8" : "#6366f1" };
     if (t.type === "topup") return { label: "Top-up", color: "#10b981" };
     if (t.type === "bonus") return { label: "Bonus", color: "#8b5cf6" };
     if (t.action_key === "infra_fee" || t.reference_type === "infra_payment") return { label: "Infra fee", color: "#0ea5e9" };
@@ -8998,46 +9090,55 @@
     creditsDraw();
   }
 
-  // Shell: infra banner + balance + tabs. The active tab paints into #crPanel.
+  // Shell: plan-allowance panel + balance + tabs. The active tab paints into #crPanel.
   function creditsDraw() {
     if (state.view !== "credits") return;
     const c = $("#content");
     const d = creditsUi.wallet || {};
     const w = d.wallet || {};
-    // The infrastructure fee is a subscription charge (server gate: billing.manage);
-    // buying credit packs is credits.purchase. Two different jobs, two capabilities.
-    const canPayInfra = can("billing.manage");
     const canBuy = can("credits.purchase");
-    const infra = w.infra_fee || {};
-    // The fee is quoted by the server in `infra.currency` and pre-formatted as
-    // `fee_display` — render that string rather than reformatting fee_paise, so the
-    // banner can never disagree with what the order is actually created in.
-    const infraPrice = infra.fee_display || fmtMoney(infra.fee_paise || 0, infra.currency || "INR");
+    const canManagePlan = can("billing.manage");
 
-    const infraBanner = (infra.over_free_limit || infra.fee_due)
-      ? `<div class="card" style="margin-bottom:18px;border-left:4px solid ${infra.is_current ? "var(--success,#10b981)" : "var(--warning,#f59e0b)"}">
-          <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-            <div style="flex:1;min-width:240px">
-              <div style="font-weight:700;margin-bottom:4px">Infrastructure server fee</div>
+    // Where credits COME FROM. The plan's monthly allowance is the primary source now;
+    // top-up packs below are overage. This panel replaced the ₹999 infrastructure-fee
+    // banner that stood here until 2026-08-02 — `w.infra_fee` is still sent but is pinned
+    // dormant, so nothing renders it any more.
+    const pc = w.plan_credits || {};
+    const included = Number(pc.included_credits || 0);
+    const left = Number(pc.remaining_this_period || 0);
+    const usedPct = included > 0 ? Math.min(100, Math.round(((included - left) / included) * 100)) : 0;
+    const planPanel = included > 0
+      ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--success,#10b981)">
+          <div class="card-body" style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+            <div style="flex:1;min-width:250px">
+              <div style="font-weight:700;margin-bottom:4px">${esc(pc.plan_label || "Your plan")} includes ${included.toLocaleString()} AI credits${pc.recurring ? " every month" : ""}</div>
               <div style="font-size:13px;color:var(--text-2)">
-                You have ${infra.clients_used} clients (free up to ${infra.free_student_limit}).
-                ${infra.is_current
-                  ? `Active until ${infra.paid_until ? fmtDate(infra.paid_until) : "—"}.`
-                  : `Activate the ${esc(infraPrice)}/month fee to keep adding clients.`}
+                ${left.toLocaleString()} of this ${pc.recurring ? "month's" : "grant's"} credits left.
+                ${pc.recurring && pc.renews_at ? `Refreshes ${fmtDate(pc.renews_at)}.` : ""}
+                ${pc.recurring && !pc.rollover ? " Unused plan credits don't carry over." : ""}
               </div>
+              <div class="usage-bar" style="margin-top:8px"><div class="usage-fill" style="width:${usedPct}%"></div></div>
             </div>
-            ${!infra.is_current && canPayInfra
-              ? `<button class="btn btn-primary" id="infraPayBtn">Activate ${esc(infraPrice)}/mo</button>`
-              : (infra.is_current ? `<span class="plan-current-tag" style="color:var(--success,#10b981)">✓ Active</span>` : "")}
+            ${canManagePlan ? `<button class="btn btn-ghost" onclick="__ent.go('billing')">Manage plan</button>` : ""}
           </div>
         </div>`
-      : "";
+      : (canManagePlan
+        ? `<div class="card" style="margin-bottom:18px;border-left:4px solid var(--warning,#f59e0b)">
+            <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+              <div style="flex:1;min-width:240px">
+                <div style="font-weight:700;margin-bottom:4px">Your plan doesn't include monthly AI credits</div>
+                <div style="font-size:13px;color:var(--text-2)">Starter, Growth and Scale include 1,000 / 3,500 / 10,000 credits every month. Right now you're paying per top-up.</div>
+              </div>
+              <button class="btn btn-primary" onclick="__ent.go('billing')">See plans</button>
+            </div>
+          </div>`
+        : "");
 
     const usage = (creditsUi.wallet || {}).usage || {};
     const spentAll = usage.total_spent_credits || 0;
 
     c.innerHTML = `
-      ${infraBanner}
+      ${planPanel}
       <div class="card cr-wallet"><div class="card-body cr-wallet-body">
         <div class="cr-wallet-main">
           <div class="cr-eyebrow">Rilono Credits balance</div>
@@ -9053,13 +9154,11 @@
       </div></div>
 
       <div class="cr-tabs">
-        <button class="cr-tab ${creditsUi.tab === "buy" ? "active" : ""}" data-crtab="buy">💳 Plans &amp; top-up</button>
+        <button class="cr-tab ${creditsUi.tab === "buy" ? "active" : ""}" data-crtab="buy">💳 Top up &amp; pricing</button>
         <button class="cr-tab ${creditsUi.tab === "analytics" ? "active" : ""}" data-crtab="analytics">📊 Usage analytics</button>
       </div>
       <div id="crPanel"></div>`;
 
-    const ip = $("#infraPayBtn");
-    if (ip) ip.onclick = () => activateInfraFee();
     const topBtn = $("#crTopUpBtn");
     if (topBtn) topBtn.onclick = () => {
       creditsUi.tab = "buy";
@@ -9088,6 +9187,16 @@
     const actions = w.actions || [];
     const freeTier = w.free_tier || {};
     const coupon = state.creditCoupon;
+    // How many of an action a credit total buys, priced from the SERVER's action list.
+    // These used to be hard-coded divisors (5 and 20) and had silently drifted: a Deep
+    // Scan is 20 credits, so a 100-credit pack was advertised as 20 audits when it buys 5.
+    // Reading w.actions means a price change in enterprise_credits.ACTIONS can never again
+    // leave the pack cards overstating what a pack does.
+    const actionUnits = (list, key, totalCredits) => {
+      const a = (list || []).find((x) => x && x.key === key);
+      const cost = a && Number(a.credits) > 0 ? Number(a.credits) : 0;
+      return cost ? Math.floor(Number(totalCredits || 0) / cost) : "—";
+    };
 
     // `amount_paise` on a package is the minor unit of the package's OWN currency (the
     // legacy field name survived the multi-currency migration), and `amount_display` is
@@ -9108,7 +9217,7 @@
         <ul>
           <li><b>${p.total_credits} credits</b>${p.bonus_credits ? ` <span style="color:var(--success,#10b981)">(+${p.bonus_credits} bonus)</span>` : ""}</li>
           <li>Worth ${fmtInr(p.value_inr)} of AI actions</li>
-          <li>≈ ${Math.floor(p.total_credits / 5)} Deep Scans or ${Math.floor(p.total_credits / 20)} interviews</li>
+          <li>≈ ${actionUnits(actions, "deep_scan", p.total_credits)} Deep Scans or ${actionUnits(actions, "mock_interview", p.total_credits)} interviews</li>
         </ul>
         ${canManage
           ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.topup('${p.key}')">Buy ${esc(p.label)}</button>`
@@ -9124,7 +9233,8 @@
     // What the agency gets without spending a credit — stated next to the prices
     // rather than buried in each action's description.
     const freeItems = [
-      freeTier.free_clients ? `<b>${freeTier.free_clients} clients</b> on the free CRM` : "",
+      // The active-client cap is the PLAN's, not a free-tier allowance — it belongs on
+      // Plans & Billing, not in the "what costs no credits" grid.
       freeTier.deep_scans_per_client
         ? `<b>First Deep Scan free</b> on every client<span class="cr-free-sub">up to ${freeTier.deep_scans_monthly_cap}/month</span>` : "",
       freeTier.interview_previews
@@ -9141,7 +9251,7 @@
       ${canManage ? couponRow(coupon, "applyCreditCoupon", "removeCreditCoupon", "creditCouponInput", "top-ups") : ""}
       <div class="plan-grid">${packages.map(pkgCard).join("")}</div>
       <p style="text-align:center;color:var(--muted);font-size:13px;margin:14px 0 28px">Secure top-ups via Razorpay (UPI, cards, NetBanking).${
-        pkgCurrencies(packages).length > 1 ? " Pick your billing currency at checkout." : ""} Credits never expire.</p>
+        pkgCurrencies(packages).length > 1 ? " Pick your billing currency at checkout." : ""} Purchased top-up credits never expire; your plan's monthly allowance refreshes each period.</p>
 
       <div class="card cr-free-card"><div class="card-body">
         <div class="cr-free-head">Included free ${infoTip(
@@ -9151,7 +9261,7 @@
       </div></div>
 
       <div class="card"><div class="card-head"><h3>What each AI action costs</h3>
-        <span class="cr-head-note">1 credit = ${esc(fmtInr(w.credit_value_inr || 10))} · credits never expire</span></div>
+        <span class="cr-head-note">1 credit = ${esc(fmtInr(w.credit_value_inr || 10))} · top-ups never expire</span></div>
         <div class="card-body">${actionRows || '<div class="muted">No billable actions configured.</div>'}</div></div>
 
       <div id="crPurchases" style="margin-top:26px"></div>`;
@@ -9196,14 +9306,17 @@
     const rowMoney = (r, minor, display) => (r.currency ? fmtMoney(minor, r.currency) : (display || ""));
     const body = rows.length ? rows.map((r) => `<tr>
         <td style="white-space:nowrap">${fmtDate(r.verified_at || r.created_at)}</td>
-        <td><b>${esc(r.label)}</b>${r.coupon_code ? `<div class="cr-sub">🎟 ${esc(r.coupon_code)}${r.coupon_percent_off ? ` · ${r.coupon_percent_off}% off` : ""}</div>` : ""}</td>
-        <td style="text-align:right">${r.kind === "credits" ? `+${r.total_credits}${r.bonus_credits ? ` <span class="cr-sub-inline">(${r.bonus_credits} bonus)</span>` : ""}` : "—"}</td>
+        <td><b>${esc(r.label)}</b>${r.coupon_code ? `<div class="cr-sub">🎟 ${esc(r.coupon_code)}${r.coupon_percent_off ? ` · ${r.coupon_percent_off}% off` : ""}</div>` : ""}${
+          r.tax_paise ? `<div class="cr-sub">incl. ${esc(r.tax_label || "tax")} ${esc(rowMoney(r, r.tax_paise, r.tax_display))}</div>` : ""}</td>
+        <td style="text-align:right">${
+          r.kind === "credits" ? `+${r.total_credits}${r.bonus_credits ? ` <span class="cr-sub-inline">(${r.bonus_credits} bonus)</span>` : ""}`
+          : (r.kind === "plan" && r.total_credits ? `+${r.total_credits} <span class="cr-sub-inline">included</span>` : "—")}</td>
         <td style="text-align:right;white-space:nowrap"><b>${esc(rowMoney(r, r.net_amount_paise, r.net_amount_display))}</b>${
           r.refunded_amount_paise ? `<div class="cr-sub">${esc(rowMoney(r, r.refunded_amount_paise, r.refunded_display))} refunded</div>` : ""}</td>
         <td>${statusPill(r.status)}</td>
         <td class="cr-sub" style="white-space:nowrap">${esc(r.created_by_name || "—")}<div>${esc(r.payment_reference || "")}</div></td>
       </tr>`).join("")
-      : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">No purchases yet — your first top-up will appear here.</td></tr>`;
+      : `<tr><td colspan="6" style="text-align:center;color:var(--muted);padding:22px">No purchases yet — your plan and any top-ups will appear here.</td></tr>`;
     // The header's "₹X paid" comes from the endpoint, which adds `collected_paise` across
     // rows and formats the result as INR. That is a true statement only while every row is
     // INR, so once the history is mixed — or single-currency but not INR — the money
@@ -11021,7 +11134,8 @@
       <div class="card-body">
         <div class="fin-facts">
           <div><span>AI credit top-ups</span><b>${fmtDisplay(cost.credits_paise, "INR")}</b></div>
-          <div><span>Infrastructure fee</span><b>${fmtDisplay(cost.infra_paise, "INR")}</b></div>
+          <div><span>Rilono plan</span><b>${fmtDisplay(cost.plan_paise != null ? cost.plan_paise : 0, "INR")}</b></div>
+          ${cost.infra_paise ? `<div><span>Infrastructure fee <em style="font-weight:400;color:var(--muted)">(retired)</em></span><b>${fmtDisplay(cost.infra_paise, "INR")}</b></div>` : ""}
           <div><span>Collection fee on payments</span><b>${fmtDisplay(cost.platform_fee_paise, "INR")}</b></div>
           <div><span>Total</span><b>${fmtDisplay(cost.total_paise, "INR")}</b></div>
         </div>
@@ -11131,7 +11245,7 @@
       <div style="font-size:13px;color:var(--text-2);line-height:1.65;margin-top:12px">
         Everything else works normally. You can still <b>record payments you collect yourself</b> on each client's
         Payments tab, and they book into your Income ledger exactly like online collections do. Credit top-ups and
-        the infrastructure fee are unaffected — those <b>are</b> charged in your own currency.
+        credit top-ups are unaffected — those <b>are</b> charged in your own currency.
       </div>
       <div style="font-size:12.5px;color:var(--muted);line-height:1.6;margin-top:12px">
         If your business <i>is</i> registered in India, change the company country in
@@ -11521,7 +11635,7 @@
         </div>
         <div class="co-note">${b.free
           ? "✓ This order is fully covered by your discount — no payment needed."
-          : "🔒 Secure payment via Razorpay · UPI, cards &amp; NetBanking"} · Credits never expire.</div>
+          : "🔒 Secure payment via Razorpay · UPI, cards &amp; NetBanking"} · Top-up credits never expire.</div>
         ${b.free ? "" : chargeNote(b.total, b.currency)}
       </div>
       <div class="modal-foot">
@@ -11620,19 +11734,6 @@
     rzp.open();
   }
 
-  // The infra fee's price ladder, same shape as a package's. `infra_fee_state` currently
-  // sends only the one currency it quoted (fee_paise + fee_display + currency); if it
-  // grows a `price_options` array this picks it up with no further change.
-  function infraOptions(infra) {
-    const opts = ((infra || {}).price_options || []).filter((o) => o && o.currency);
-    if (opts.length) return opts;
-    return [{
-      currency: (infra || {}).currency || "INR",
-      amount_minor: Number((infra || {}).fee_paise || 0),
-      display: (infra || {}).fee_display || fmtMoney((infra || {}).fee_paise, (infra || {}).currency || "INR"),
-    }];
-  }
-
   // Currency picker for a charge that has no order-review screen of its own. Resolves to
   // the chosen ISO code, or null if dismissed. Every price shown is the server's own
   // `display` string for that currency — nothing is converted here.
@@ -11687,58 +11788,6 @@
     });
   }
 
-  // Ask which currency to be billed in before creating the order — but only when there is
-  // a real choice. With a single quoted currency we send that currency EXPLICITLY rather
-  // than letting the server infer one from the org's country: the banner already showed a
-  // price, and the charge has to match the price the buyer was shown.
-  async function activateInfraFee() {
-    const infra = ((creditsUi.wallet || {}).wallet || {}).infra_fee || {};
-    const opts = infraOptions(infra);
-    // The currency the banner already quoted (infra.fee_display is rendered in it). The
-    // ladder is ordered INR-first, so it is NOT opts[0] for a non-Indian org — defaulting
-    // to opts[0] would open the picker on ₹999 under a banner that reads "$12.99/mo".
-    const quoted = curCode(infra.currency || opts[0].currency);
-    let currency = quoted;
-    if (opts.length > 1) {
-      currency = await pickChargeCurrency(opts, {
-        title: "Activate the infrastructure fee",
-        intro: "Billed monthly. Choose the currency you'd like to be charged in.",
-        selected: quoted,
-      });
-      if (!currency) return;   // dismissed
-    }
-    let res;
-    try { res = await api("/credits/infra/checkout", { method: "POST", body: { currency } }); }
-    catch (ex) { toast(ex.message, "error"); return; }
-    if (res.action === "contact_sales") { toast(res.message || "Please contact us.", "error"); return; }
-    if (res.action !== "checkout") { toast("Payment unavailable.", "error"); return; }
-    if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); return; }
-
-    const rzp = new Razorpay({
-      key: res.razorpay_key_id,
-      amount: res.amount,
-      currency: res.currency,
-      name: res.organization_name || "Rilono",
-      description: "Infrastructure server fee (monthly)",
-      order_id: res.order_id,
-      prefill: checkoutPrefill(res.prefill),
-      theme: { color: "#6366f1" },
-      handler: async function (resp) {
-        try {
-          const v = await api("/credits/infra/verify", { method: "POST", body: {
-            razorpay_order_id: resp.razorpay_order_id,
-            razorpay_payment_id: resp.razorpay_payment_id,
-            razorpay_signature: resp.razorpay_signature,
-          }});
-          state.credits = v.wallet; updatePlanChip();
-          toast(v.message || "Infrastructure fee activated.", "success");
-          renderCredits();
-        } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
-      },
-    });
-    rzp.on("payment.failed", () => toast("Payment was not completed.", "error"));
-    rzp.open();
-  }
 
   /* ============================================================
      SETTINGS
@@ -11792,12 +11841,20 @@
       ? "Amounts across this portal display in <b>INR (₹)</b>."
       : `Amounts display in <b>${esc(dc.code)}</b> — a ₹10,000 fee shows as ` +
         `<b>${esc(dc.symbol || "")}${(10000 * Number(dc.rate_from_inr || 0)).toLocaleString(undefined, { maximumFractionDigits: 0 })}</b> ` +
-        "at today's rate, refreshed daily. This is display only: credit top-ups and the infrastructure fee are " +
+        "at today's rate, refreshed daily. This is display only: credit top-ups are " +
         "charged in the currency you pick at checkout, and student payments you collect are always in INR.";
     const portalHost = (org.subdomain_slug || "") + "." + rootDomain();
     const membership = state.me.membership || {};
     const role = membership.role || "";
     const bal = state.credits && state.credits.balance_credits != null ? state.credits.balance_credits : null;
+    // Settings names the TIER the org is on. It used to say "Pay-as-you-go", which stopped
+    // being true when plans replaced the credits-only model.
+    const subx = state.subscription || {};
+    const planLabel = subx.plan_label || null;
+    const planPrice = subx.is_sandbox ? null : (subx.monthly_display || null);
+    const planTax = subx.tax_label || null;
+    const planIncl = Number(subx.included_credits || 0) || null;
+    const planRecur = !!subx.credits_recur;
     c.innerHTML = `
       <div class="settings-page">
         <div class="set-hero">
@@ -11812,7 +11869,7 @@
             <button type="button" class="set-url" id="copyPortalUrl" title="Copy portal URL">${ICON_GLOBE}<span>${esc(portalHost)}</span>${ICON_COPY}</button>
             <div class="set-facts">
               <span class="set-fact"><span class="sd"></span>${esc(role ? role.charAt(0).toUpperCase() + role.slice(1) : "Member")}</span>
-              <span class="set-fact">${bal != null ? `<b>${bal}</b> credits` : "Pay-as-you-go credits"}</span>
+              <span class="set-fact">${planLabel ? esc(planLabel) : "Rilono Credits"}${bal != null ? ` · <b>${bal}</b> cr` : ""}</span>
               <span class="set-fact">Showing amounts in <b>${esc(dc.code || "INR")}</b></span>
             </div>
           </div>
@@ -11873,7 +11930,8 @@
           <div class="card"><div class="card-body">
             <div class="set-rows">
               <div class="set-row"><span class="set-row-k">Portal URL</span><span class="set-row-v">${esc(portalHost)}</span></div>
-              <div class="set-row"><span class="set-row-k">Billing</span><span class="set-row-v">Pay-as-you-go${bal != null ? ` · ${bal} cr left` : ""} &nbsp;<button type="button" class="link" id="setGoCredits">Manage credits</button></span></div>
+              <div class="set-row"><span class="set-row-k">Plan</span><span class="set-row-v">${esc(planLabel || "—")}${planPrice ? ` · ${esc(planPrice)}/mo${planTax ? " + " + esc(planTax) : ""}` : ""} &nbsp;<button type="button" class="link" id="setGoBilling">Manage plan</button></span></div>
+              <div class="set-row"><span class="set-row-k">AI credits</span><span class="set-row-v">${bal != null ? `${bal} left` : "—"}${planIncl ? ` · ${planIncl.toLocaleString()} included${planRecur ? "/mo" : ""}` : ""} &nbsp;<button type="button" class="link" id="setGoCredits">Manage credits</button></span></div>
               <div class="set-row"><span class="set-row-k">Display currency</span><span class="set-row-v">${esc(curDesc)}</span></div>
               ${org.created_at ? `<div class="set-row"><span class="set-row-k">Workspace created</span><span class="set-row-v">${esc(fmtDate(org.created_at))}</span></div>` : ""}
             </div>
@@ -11897,6 +11955,8 @@
 
     $("#setSignout").onclick = () => { const b = $("#signoutBtn"); if (b) b.click(); };
     $("#setGoCredits").onclick = () => navigate("credits");
+    const goBilling = $("#setGoBilling");
+    if (goBilling) goBilling.onclick = () => navigate("billing");
     $("#copyPortalUrl").onclick = async () => {
       const url = org.portal_url || ("https://" + portalHost);
       // navigator.clipboard is undefined on insecure origins (local http portals),
@@ -13458,9 +13518,9 @@
     {
       id: "credits",
       q: "How do Rilono Credits work?",
-      a: "Every AI action — Deep Scan, Writing Studio drafts, mock-interview links, Course Finder shortlists — spends credits from your organization's shared wallet. <b>Credits</b> shows the balance, what each action costs and where the credits went, and any admin can top up there.",
+      a: "Every AI action — Deep Scan, Writing Studio drafts, mock-interview links, Course Finder shortlists — spends credits from your organization's shared wallet. Your plan puts credits in that wallet every month (1,000 on Starter, 3,500 on Growth, 10,000 on Scale), and any admin can top up for more. <b>Credits</b> shows the balance, what's left of this month's allowance, what each action costs and where the credits went. Unused plan credits don't carry into the next month; purchased top-ups never expire.",
       view: "credits", cta: "Open Credits",
-      keys: ["credit", "credits", "wallet", "balance", "top up", "topup", "recharge", "pricing", "cost", "ran out", "insufficient"],
+      keys: ["credit", "credits", "wallet", "balance", "top up", "topup", "recharge", "pricing", "cost", "ran out", "insufficient", "included", "allowance", "monthly"],
     },
     {
       id: "clients",
@@ -15528,13 +15588,13 @@
 
   window.__ent = {
     go: navigate, openClient, openClientForm: () => openClientForm(null), editClient, deleteClient, setStatus,
-    closeModal, closeDrawer, removeMember, checkout, setCycle,
+    closeModal, closeDrawer, removeMember, checkout,
     // Team sub-tabs. `changeRole` is gone on purpose: the legacy 3-option role <select>
     // it backed would silently convert a branch manager or a custom role into "editor".
     // Role changes now go through Edit access (PATCH /team/users/{id}/access).
     teamTab: teamGoTab,
     applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
-    topup: openCreditCheckout, activateInfra: activateInfraFee,
+    topup: openCreditCheckout,
     saveBank: saveLinkedAccount, refreshBank: refreshLinkedAccount,
     finAdd: finAddEntry, finTab: finGoTab,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,

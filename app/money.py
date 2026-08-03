@@ -248,7 +248,7 @@ def charm_minor(round_minor: int, currency: str = DEFAULT_CURRENCY) -> int:
 # Bump PRICE_BOOK_VERSION whenever a number below changes. It is stamped into the
 # Razorpay order notes and onto the payment row, so an in-flight price change stays
 # reconcilable after the fact.
-PRICE_BOOK_VERSION = "2026-07-30"
+PRICE_BOOK_VERSION = "2026-08-02"
 
 
 def _env_minor(env_key: str, default_minor: int) -> int:
@@ -306,7 +306,31 @@ PRICE_BOOK: dict[str, dict[str, int]] = {
         "AED": _env_minor("ENTERPRISE_CREDIT_ENTERPRISE_AED_MINOR", 23_900),
         "SGD": _env_minor("ENTERPRISE_CREDIT_ENTERPRISE_SGD_MINOR", 8_400),
     },
-    # B2B — monthly infrastructure server fee
+    # B2B — the monthly platform subscription tiers (app/enterprise_billing.py).
+    #
+    # INR-ONLY BY DESIGN, and that is a product decision rather than an oversight. The
+    # published tier card quotes rupees exclusive of GST; an owner-chosen ladder for the
+    # other seven launch currencies has not been set, and FX-converting at request time is
+    # exactly what the module docstring forbids. `price_options()` therefore returns a
+    # single INR option for these, and the plan checkout quotes INR to everyone — Razorpay
+    # accepts international cards against an INR order, so a foreign consultancy can still
+    # subscribe. Adding a currency later is one line per plan here plus nothing else.
+    #
+    # These are the EX-GST subtotals. GST is added at checkout (see gst_minor / quote_with_tax)
+    # and is never baked into the listed number, because the tier card says "+ GST".
+    "plan_starter": {
+        "INR": _env_minor("ENTERPRISE_STARTER_MONTHLY_PAISE", 299_900),    # ₹2,999/mo
+    },
+    "plan_growth": {
+        "INR": _env_minor("ENTERPRISE_GROWTH_MONTHLY_PAISE", 699_900),     # ₹6,999/mo
+    },
+    "plan_scale": {
+        "INR": _env_minor("ENTERPRISE_SCALE_MONTHLY_PAISE", 1_499_900),    # ₹14,999/mo
+    },
+    # B2B — monthly infrastructure server fee. RETIRED 2026-08-02 when the tiered plans
+    # above replaced it; kept in the book so historical `kind="infra_fee"` payment rows
+    # still resolve a price for the admin revenue report and for refund arithmetic.
+    # Nothing creates a new infra-fee order any more.
     "infra_fee": {
         "INR": _env_minor("ENTERPRISE_INFRA_FEE_PAISE", 99_900),   # ₹999/mo
         "USD": _env_minor("ENTERPRISE_INFRA_FEE_USD_MINOR", 1_299),
@@ -332,6 +356,73 @@ def price_minor(product: str, currency: str) -> int:
         return int(book[code])
     except KeyError:
         raise UnsupportedCurrency(f"{product} has no price for {code}.")
+
+
+# ---------------------------------------------------------------------------
+# GST (tax added on top of a listed price)
+# ---------------------------------------------------------------------------
+
+# The B2B tier card quotes "₹2,999/month + GST", i.e. the listed price is the EX-TAX
+# subtotal and GST is added at checkout. That makes three rules load-bearing:
+#
+#   1. THE LISTED PRICE IS NEVER THE CHARGED PRICE for a taxable order. Everything that
+#      renders a plan price must render the subtotal AND say "+ GST"; everything that
+#      creates a Razorpay order must send subtotal + tax. Mixing the two is how a
+#      customer gets an invoice that disagrees with the pricing page.
+#   2. TAX IS COMPUTED ON THE POST-DISCOUNT SUBTOTAL. A coupon reduces the taxable value,
+#      so discount first, then tax — never the reverse.
+#   3. GST APPLIES TO INR ONLY. A non-INR sale is an export of services (zero-rated under
+#      LUT), and the credit top-ups / Visa Pass are priced tax-inclusive and are not
+#      touched by any of this — only products passed through `quote_with_tax` are taxed.
+#
+# 18% is the standard Indian SaaS rate. Env-overridable so a rate change is config, not a
+# redeploy. `PRICE_BOOK_VERSION` covers the ex-tax numbers; the rate is stamped onto the
+# payment row separately so an old invoice stays reconstructable after a rate change.
+GST_PERCENT = Decimal(os.getenv("ENTERPRISE_GST_PERCENT", "18") or "18")
+
+# Currencies a domestic tax is charged in. Deliberately a tuple, not a boolean: adding a
+# second taxable jurisdiction later must be an explicit edit here.
+TAXABLE_CURRENCIES: tuple[str, ...] = ("INR",)
+
+
+def tax_percent_for(currency: str) -> Decimal:
+    """The tax rate applied to a taxable product in `currency`. 0 outside India."""
+    code = (currency or "").strip().upper()
+    return GST_PERCENT if code in TAXABLE_CURRENCIES else Decimal(0)
+
+
+def gst_minor(subtotal_minor: int, currency: str = DEFAULT_CURRENCY) -> int:
+    """Tax due on an ex-tax subtotal, in the same minor unit. Rounded half-up to the
+    minor unit — ₹2,999 @ 18% = ₹539.82 = 53982 paise."""
+    percent = tax_percent_for(currency)
+    if percent <= 0:
+        return 0
+    value = (Decimal(int(subtotal_minor or 0)) * percent) / Decimal(100)
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def quote_with_tax(subtotal_minor: int, currency: str = DEFAULT_CURRENCY) -> dict:
+    """The full checkout breakdown for a tax-exclusive price.
+
+    `total_minor` is the ONLY figure that may be sent to Razorpay, and `subtotal_minor`
+    is the only one that may be shown as the plan's list price. Returning both from one
+    place is what keeps the pricing page, the checkout modal and the order in agreement.
+    """
+    code = (currency or DEFAULT_CURRENCY).strip().upper()
+    subtotal = max(0, int(subtotal_minor or 0))
+    tax = gst_minor(subtotal, code)
+    percent = tax_percent_for(code)
+    return {
+        "currency": code,
+        "subtotal_minor": subtotal,
+        "subtotal_display": format_money(subtotal, code),
+        "tax_minor": tax,
+        "tax_display": format_money(tax, code),
+        "tax_percent": float(percent),
+        "tax_label": "GST" if code in TAXABLE_CURRENCIES else None,
+        "total_minor": subtotal + tax,
+        "total_display": format_money(subtotal + tax, code),
+    }
 
 
 def price_options(product: str) -> list[dict]:

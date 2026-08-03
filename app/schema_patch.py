@@ -952,7 +952,9 @@ def ensure_enterprise_crm_tables():
                 CREATE TABLE enterprise_subscriptions (
                     id {pk},
                     organization_id INTEGER NOT NULL,
-                    plan VARCHAR NOT NULL DEFAULT 'trial',
+                    -- 'sandbox' since 2026-08-02. Pre-existing rows keep 'trial';
+                    -- enterprise_billing.normalize_plan_key maps it, so no backfill runs.
+                    plan VARCHAR NOT NULL DEFAULT 'sandbox',
                     status VARCHAR NOT NULL DEFAULT 'trialing',
                     trial_ends_at {ts},
                     current_period_end {ts},
@@ -977,6 +979,12 @@ def ensure_enterprise_crm_tables():
                     plan VARCHAR NOT NULL DEFAULT 'starter',
                     billing_cycle VARCHAR NOT NULL DEFAULT 'monthly',
                     amount_paise INTEGER NOT NULL,
+                    subtotal_paise INTEGER,
+                    tax_paise INTEGER NOT NULL DEFAULT 0,
+                    tax_percent NUMERIC(5, 2),
+                    tax_label VARCHAR,
+                    included_credits INTEGER NOT NULL DEFAULT 0,
+                    refunded_amount_paise INTEGER NOT NULL DEFAULT 0,
                     currency VARCHAR NOT NULL DEFAULT 'INR',
                     razorpay_order_id VARCHAR NOT NULL,
                     razorpay_payment_id VARCHAR,
@@ -994,6 +1002,22 @@ def ensure_enterprise_crm_tables():
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_subscription_payments_payment ON enterprise_subscription_payments(razorpay_payment_id)",
             ):
                 conn.execute(text(stmt))
+
+        # Additive self-heal for an ALREADY-EXISTING payments table (the tiered-plan
+        # rollout of 2026-08-02 added GST + included-credit columns). Historical rows
+        # keep tax_paise = 0, which is correct: nothing before that date charged tax.
+        if _table_exists(conn, "enterprise_subscription_payments"):
+            sub_pay_cols = _get_table_columns(conn, "enterprise_subscription_payments")
+            for col, ddl in (
+                ("subtotal_paise", "INTEGER"),
+                ("tax_paise", "INTEGER NOT NULL DEFAULT 0"),
+                ("tax_percent", "NUMERIC(5, 2)"),
+                ("tax_label", "VARCHAR"),
+                ("included_credits", "INTEGER NOT NULL DEFAULT 0"),
+                ("refunded_amount_paise", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if col not in sub_pay_cols:
+                    conn.execute(text(f"ALTER TABLE enterprise_subscription_payments ADD COLUMN {col} {ddl}"))
 
     # --- the stage-vocabulary backfill + invariant (guarded) ---------------
     # try/except sits OUTSIDE the `with`, so the DDL above is already committed and a backfill
@@ -2624,6 +2648,9 @@ def ensure_enterprise_credit_tables():
                     balance_credits INTEGER NOT NULL DEFAULT 0,
                     lifetime_purchased_credits INTEGER NOT NULL DEFAULT 0,
                     lifetime_spent_credits INTEGER NOT NULL DEFAULT 0,
+                    plan_credits_period VARCHAR,
+                    plan_credits_granted INTEGER NOT NULL DEFAULT 0,
+                    plan_credits_remaining INTEGER NOT NULL DEFAULT 0,
                     infra_fee_paid_until {ts},
                     copilot_usage_date VARCHAR,
                     copilot_msgs_today INTEGER NOT NULL DEFAULT 0,
@@ -2638,16 +2665,22 @@ def ensure_enterprise_credit_tables():
                 "ON enterprise_credit_wallets(organization_id)"
             ))
         else:
-            # Existing wallets: add the copilot-metering + staff-preview columns idempotently.
+            # Existing wallets: add the copilot-metering, staff-preview and plan-allowance
+            # columns idempotently. plan_credits_* default to 0/NULL, which reads as "this
+            # period's allowance has not been granted yet" — so the first wallet access
+            # after deploy grants it. That is the intended behaviour, not a backfill gap.
             wallet_cols = _get_table_columns(conn, "enterprise_credit_wallets")
-            if "copilot_usage_date" not in wallet_cols:
-                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN copilot_usage_date VARCHAR"))
-            if "copilot_msgs_today" not in wallet_cols:
-                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN copilot_msgs_today INTEGER NOT NULL DEFAULT 0"))
-            if "copilot_unbilled_msgs" not in wallet_cols:
-                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN copilot_unbilled_msgs INTEGER NOT NULL DEFAULT 0"))
-            if "interview_staff_previews_used" not in wallet_cols:
-                conn.execute(text("ALTER TABLE enterprise_credit_wallets ADD COLUMN interview_staff_previews_used INTEGER NOT NULL DEFAULT 0"))
+            for col, ddl in (
+                ("copilot_usage_date", "VARCHAR"),
+                ("copilot_msgs_today", "INTEGER NOT NULL DEFAULT 0"),
+                ("copilot_unbilled_msgs", "INTEGER NOT NULL DEFAULT 0"),
+                ("interview_staff_previews_used", "INTEGER NOT NULL DEFAULT 0"),
+                ("plan_credits_period", "VARCHAR"),
+                ("plan_credits_granted", "INTEGER NOT NULL DEFAULT 0"),
+                ("plan_credits_remaining", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if col not in wallet_cols:
+                    conn.execute(text(f"ALTER TABLE enterprise_credit_wallets ADD COLUMN {col} {ddl}"))
 
         # --- enterprise_credit_transactions -----------------------------------
         if not _table_exists(conn, "enterprise_credit_transactions"):

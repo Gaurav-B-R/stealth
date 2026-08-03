@@ -207,7 +207,7 @@ ALL_CAPABILITIES: tuple[dict, ...] = (
     _cap("finance.export", "Export financial data",
          "Download ledgers and accounting exports.", _CAP_MONEY, dangerous=True),
     _cap("billing.manage", "Plans & subscription",
-         "Buy plans, pay the infrastructure fee, manage the subscription.", _CAP_MONEY,
+         "Choose and pay for the workspace plan, and manage the subscription.", _CAP_MONEY,
          dangerous=True),
 
     # --- Workspace ---------------------------------------------------------

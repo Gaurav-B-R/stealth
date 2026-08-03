@@ -1,30 +1,39 @@
 """
-Rilono Credits — the prepaid-wallet revenue model for Rilono Enterprise (B2B).
+Rilono Credits — the AI metering unit for Rilono Enterprise (B2B).
 
-Consultancies get the core CRM for free (up to a student limit), then:
-  1. Pay a flat monthly "Infrastructure Server Fee" once they pass the free
-     student limit (covers our hosting/data costs — they never lose money on us).
-  2. Prepay "Rilono Credits" (like an IRCTC / telecom top-up) and spend them on the
-     premium Gemini features. We charge by the *value* of the task to the agency,
-     not by the GCP compute cost — so margins are very high.
+A credit is what an AI action costs an agency. Credits reach a wallet two ways:
+
+  1. INCLUDED WITH THE PLAN. Every organization is on a tier (app/enterprise_billing.py)
+     and each tier carries a monthly allowance — 1,000 / 3,500 / 10,000 credits for
+     Starter / Growth / Scale, and a one-time 100 on the free sandbox. `sync_plan_credits`
+     grants it exactly once per billing period.
+  2. PURCHASED AS A TOP-UP for overage, via Razorpay, from PACKAGES below. A team that
+     burns its monthly allowance early buys more rather than being stopped.
+
+We charge by the *value* of the task to the agency, not by the GCP compute cost — so the
+margin per action is high, and `build_revenue_analytics` is what proves it, cross-checking
+real Gemini spend (from app.ai_usage) against plan + top-up revenue.
 
 Economics (all env-overridable):
   * 1 Rilono Credit = ₹10.
   * Top-up packages (Razorpay, charm-priced): Starter ₹999 → 100 cr; Pro ₹2,999 → 350 cr
     (50 bonus); Enterprise ₹4,999 → 650 cr (150 bonus).
-  * Deep Scan document audit  = 5 credits  (₹50).
-  * AI mock interview         = 20 credits (₹200).
+  * Deep Scan client audit = 20 credits; document scan = 1; mock interview = 20;
+    university match / course finder = 5 each; SOP-LOR draft = 1.
 
-This module owns the credit math, wallet operations, the ledger, infra-fee logic,
-and the admin revenue analytics that cross-references real Gemini cost (from the
-app.ai_usage tracker) against credit revenue to show our true margin.
+This module owns the credit math, wallet operations, the ledger, the plan-allowance grant,
+and the admin revenue analytics. Razorpay order creation / verification lives in the
+enterprise router; PRICES live in app/money.py. This module is the single source of truth
+for credit costs, balances and reporting.
 
-Razorpay order creation / verification lives in the enterprise router; this module
-is the single source of truth for prices, costs, balances and reporting.
+HISTORY (2026-08-02): the previous model — free CRM up to 50 students, then a flat ₹999/mo
+infrastructure server fee, with credits available only as prepaid top-ups — was replaced by
+the tiered plans. The infra fee is retired; see INFRA_FEE_RETIRED below for what remains.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_HALF_UP
@@ -37,6 +46,8 @@ from sqlalchemy.orm import Session
 from app import models
 from app import fx
 from app import money
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -52,10 +63,27 @@ PAISE_PER_CREDIT = int(os.getenv("ENTERPRISE_PAISE_PER_CREDIT", "1000") or "1000
 # Prepaid means never run Gemini at a loss; set false for a soft/track-only launch.
 ENFORCE = os.getenv("ENTERPRISE_CREDITS_ENFORCE", "true").strip().lower() in {"1", "true", "yes", "on"}
 
-# Core CRM is free up to this many active clients; beyond it the infra fee applies.
+# Whether the UNSPENT part of a period's included allowance carries into the next period.
+# Default OFF, which is what "1,000 credits/month" means to a buyer and what keeps the
+# deferred-liability line on the revenue report from compounding: at each rollover the
+# remainder of the old grant is clawed back before the new one lands. PURCHASED credits
+# are never touched by this — only the plan grant expires.
+PLAN_CREDITS_ROLLOVER = os.getenv("ENTERPRISE_PLAN_CREDITS_ROLLOVER", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+# --- RETIRED: the infrastructure server fee ------------------------------------------
+# Until 2026-08-02 the core CRM was free up to FREE_STUDENT_LIMIT active clients, after
+# which a flat ₹999/month "infrastructure server fee" unlocked more. The tiered plans in
+# app/enterprise_billing.py replaced both halves of that: a plan's `max_clients` is now the
+# client cap and the plan fee is the recurring charge.
+#
+# These constants and the infra_fee_* functions below survive for exactly two reasons:
+# historical `kind="infra_fee"` payment rows still need a price to render and refund
+# against, and the admin revenue report still reports that revenue bucket. NOTHING creates
+# a new infra-fee charge — `/credits/infra/checkout` returns 410 Gone.
 FREE_STUDENT_LIMIT = int(os.getenv("ENTERPRISE_FREE_STUDENT_LIMIT", "50") or "50")
 INFRA_FEE_PAISE = int(os.getenv("ENTERPRISE_INFRA_FEE_PAISE", "99900") or "99900")  # ₹999 / month
 INFRA_FEE_PERIOD_DAYS = int(os.getenv("ENTERPRISE_INFRA_FEE_PERIOD_DAYS", "30") or "30")
+INFRA_FEE_RETIRED = True
 
 # Used only to translate the USD figures from the Gemini cost tracker into INR for
 # the admin margin report. Cross-check against the actual GCP invoice & FX rate.
@@ -429,6 +457,200 @@ def active_client_count(db: Session, organization_id: int) -> int:
     )
 
 
+# ---------------------------------------------------------------------------
+# Plan-included credit allowance
+#
+# Each tier includes N credits per billing period. Granting them is LAZY and
+# IDEMPOTENT: `sync_plan_credits` runs on every wallet read and every spend, works out
+# which period the org is in, and grants only if that period's key differs from the one
+# already stamped on the wallet. There is no cron, so a renewal that lands while nobody is
+# looking still credits correctly on the next request, and a request storm at renewal
+# time grants once — the wallet row is locked for the read-modify-write.
+# ---------------------------------------------------------------------------
+
+def _period_start_for(sub, plan_key: str, *, now: Optional[datetime] = None) -> datetime:
+    """The start of the org's CURRENT billing period.
+
+    Paid tiers anchor to `current_period_end` (set at each verified payment) minus the
+    period length, so the allowance refreshes on the org's own renewal date rather than on
+    the 1st of the calendar month. A paid row with no period end yet — an org mid-upgrade,
+    or a legacy row — falls back to the calendar month, which is stable and never grants
+    twice. The sandbox anchors to its own creation so its one-time grant has a fixed key.
+    """
+    from app import enterprise_billing as billing
+
+    now = now or datetime.utcnow()
+    if plan_key in billing.PAID_PLAN_KEYS:
+        end = _naive(getattr(sub, "current_period_end", None))
+        if end:
+            start = end - timedelta(days=billing.PLAN_PERIOD_DAYS)
+            # A lapsed row whose period ended long ago must not keep re-granting an old
+            # period: walk forward so the key always describes the period containing `now`.
+            while start + timedelta(days=billing.PLAN_PERIOD_DAYS) <= now:
+                start = start + timedelta(days=billing.PLAN_PERIOD_DAYS)
+            return start
+        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    created = _naive(getattr(sub, "created_at", None)) or now
+    return created
+
+
+def plan_credits_period_key(sub, plan_key: str, *, now: Optional[datetime] = None) -> str:
+    """The idempotency key for one period's grant: "<plan>:<period-start>".
+
+    The plan is part of the key on purpose. An org that upgrades Starter → Growth mid-month
+    gets a NEW key, so the larger allowance is granted immediately rather than making them
+    wait for the next renewal for the tier they just paid for.
+    """
+    return f"{plan_key}:{_period_start_for(sub, plan_key, now=now):%Y-%m-%d}"
+
+
+def _previous_period_elapsed(wallet: models.EnterpriseCreditWallet) -> bool:
+    """Has the period whose grant is still sitting in the wallet actually ended?
+
+    The stored key is "<plan>:<period-start YYYY-MM-DD>" (or "<plan>:once"). A one-time
+    grant has no period and never expires. Otherwise the previous period ended
+    PLAN_PERIOD_DAYS after the start encoded in the key — so an upgrade or an early renewal,
+    which also change the key, do NOT count as an expiry.
+
+    An unparseable key returns False: failing towards "don't take credits away" is the only
+    safe direction when we cannot prove the period is over.
+    """
+    from app import enterprise_billing as billing
+
+    raw = str(wallet.plan_credits_period or "")
+    if not raw or raw.endswith(":once"):
+        return False
+    _, _, start_str = raw.rpartition(":")
+    try:
+        start = datetime.strptime(start_str, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return (start + timedelta(days=billing.PLAN_PERIOD_DAYS)) <= datetime.utcnow()
+
+
+def sync_plan_credits(
+    db: Session,
+    organization_id: int,
+    *,
+    commit: bool = True,
+) -> Optional[models.EnterpriseCreditTransaction]:
+    """Grant this billing period's included credits, exactly once. Returns the ledger row
+    if a grant happened, else None.
+
+    Safe to call on any path, at any frequency — it is a no-op once the current period's
+    key is stamped on the wallet.
+    """
+    from app import enterprise_billing as billing
+
+    if billing.ENTERPRISE_FREE:
+        # Billing disabled: no tier, so no allowance to grant.
+        return None
+
+    sub = billing.get_or_create_org_subscription(db, organization_id, commit=False)
+    plan_key = billing.effective_plan_key(sub)
+    allowance = billing.included_credits_for(plan_key)
+    recurring = billing.credits_recur_for(plan_key)
+
+    # A one-time allowance (the sandbox's 100 demo credits) is keyed to the org, not to a
+    # period — otherwise a sandbox left open for months would mint 100 credits every month.
+    period_key = (
+        plan_credits_period_key(sub, plan_key) if recurring else f"{plan_key}:once"
+    )
+
+    wallet = get_wallet_for_update(db, organization_id)
+    if (wallet.plan_credits_period or "") == period_key:
+        return None
+
+    granted_before = int(wallet.plan_credits_remaining or 0)
+    # Expiry is a TIME event, not a key-change event. The key also changes on an upgrade or
+    # an early renewal, and clawing back there would delete allowance the customer has
+    # already paid for and not yet used — the moment they gave us more money. So the
+    # remainder is only forfeited once the period it belonged to has actually elapsed.
+    expired = 0
+    if not PLAN_CREDITS_ROLLOVER and granted_before > 0 and _previous_period_elapsed(wallet):
+        # Claw back the unspent remainder of the PREVIOUS period's grant before the new one
+        # lands. Capped at the live balance so it can never eat purchased credits: if the
+        # org spent its allowance and then topped up, `plan_credits_remaining` is already 0
+        # and nothing is taken.
+        expired = min(granted_before, int(wallet.balance_credits))
+        if expired > 0:
+            wallet.balance_credits = int(wallet.balance_credits) - expired
+            _record_transaction(
+                db, wallet=wallet, txn_type="adjustment", credits=-expired,
+                action_key=None,
+                description=f"Unused monthly plan credits expired ({expired})",
+                reference_type="plan_credits",
+            )
+
+    wallet.plan_credits_period = period_key
+    wallet.plan_credits_granted = int(allowance)
+    wallet.plan_credits_remaining = int(allowance)
+
+    txn = None
+    if allowance > 0:
+        wallet.balance_credits = int(wallet.balance_credits) + int(allowance)
+        plan = billing.get_plan(plan_key) or {}
+        label = plan.get("label") or plan_key
+        txn = _record_transaction(
+            db, wallet=wallet, txn_type="bonus", credits=int(allowance), action_key=None,
+            description=(
+                f"{label} plan — {allowance:,} credits included this month" if recurring
+                else f"{label} — {allowance:,} demo credits"
+            ),
+            reference_type="plan_credits",
+        )
+
+    if commit:
+        db.commit()
+        if txn is not None:
+            db.refresh(txn)
+    return txn
+
+
+def _spend_from_wallet(wallet: models.EnterpriseCreditWallet, cost: int) -> None:
+    """Apply a debit of `cost` to a wallet's counters.
+
+    The ONLY place `balance_credits` is decremented for a spend. It also draws down
+    `plan_credits_remaining` first (floored at 0), which is what lets the next rollover
+    expire only the genuinely unused part of the allowance. Every debit path must go
+    through here — a path that decrements the balance directly would leave the allowance
+    counter overstated and expire credits the org had already spent.
+    """
+    cost = int(cost)
+    if cost <= 0:
+        return
+    wallet.balance_credits = int(wallet.balance_credits) - cost
+    wallet.plan_credits_remaining = max(0, int(wallet.plan_credits_remaining or 0) - cost)
+    wallet.lifetime_spent_credits = int(wallet.lifetime_spent_credits) + cost
+
+
+def plan_credits_state(db: Session, organization_id: int) -> dict:
+    """The allowance panel: what this tier includes, how much of it is left, and when it
+    refreshes. Read-only — call `sync_plan_credits` first if a grant may be due."""
+    from app import enterprise_billing as billing
+
+    wallet = get_or_create_wallet(db, organization_id, commit=False)
+    sub = billing.get_or_create_org_subscription(db, organization_id, commit=False)
+    plan_key = billing.effective_plan_key(sub)
+    allowance = billing.included_credits_for(plan_key)
+    recurring = billing.credits_recur_for(plan_key)
+    renews_at = None
+    if recurring:
+        start = _period_start_for(sub, plan_key)
+        renews_at = start + timedelta(days=billing.PLAN_PERIOD_DAYS)
+    return {
+        "plan": plan_key,
+        "plan_label": (billing.get_plan(plan_key) or {}).get("label"),
+        "included_credits": int(allowance),
+        "recurring": bool(recurring),
+        "remaining_this_period": int(wallet.plan_credits_remaining or 0),
+        "used_this_period": max(0, int(wallet.plan_credits_granted or 0) - int(wallet.plan_credits_remaining or 0)),
+        "rollover": PLAN_CREDITS_ROLLOVER,
+        "renews_at": renews_at,
+        "period_key": wallet.plan_credits_period,
+    }
+
+
 def _record_transaction(
     db: Session,
     *,
@@ -517,12 +739,48 @@ def apply_adjustment(
     return txn, delta
 
 
+def _sync_plan_credits_quietly(db: Session, organization_id: int, *, commit: bool = False) -> None:
+    """Grant any due plan allowance before a balance is read or spent.
+
+    Wrapped because this runs on hot read paths: an org whose allowance cannot be worked
+    out (a half-created subscription, a DB hiccup) must still be able to spend the credits
+    it already has, rather than have every AI action fail on the grant.
+
+    `commit` defaults to FALSE because the spend paths that call this are mid-transaction —
+    committing there would break the caller's atomicity by flushing a half-finished action
+    (a document row written but not yet charged for). Those callers commit the grant along
+    with their own work, so it still lands.
+
+    `wallet_state` passes commit=True: it is a response builder, called after the handler's
+    own commit, and it is the ONLY path a purely read-only organization ever takes. Without
+    it, an org that looks at its balance but never spends would recompute the same grant on
+    every request and never persist it.
+    """
+    try:
+        txn = sync_plan_credits(db, organization_id, commit=False)
+        if commit and txn is not None:
+            db.commit()
+    except Exception:
+        # Roll back before swallowing. A failed flush leaves the Session in a state where
+        # EVERY later statement raises PendingRollbackError, so silently continuing would
+        # convert a recoverable grant failure into a 500 on the caller's real work — an AI
+        # action the org has already been metered for, or a client create. Rolling back
+        # discards only the partial grant; the caller's own uncommitted work is not at risk
+        # because this runs before any of it (see the commit= docstring above).
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.exception("plan-credits: grant sync failed for org %s", organization_id)
+
+
 def can_afford(db: Session, organization_id: int, action_key: str) -> bool:
     if not ENFORCE:
         return True
     cost = action_cost(action_key)
     if cost <= 0:
         return True
+    _sync_plan_credits_quietly(db, organization_id)
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     return int(wallet.balance_credits) >= cost
 
@@ -534,6 +792,9 @@ def enforce_action_or_402(db: Session, organization_id: int, action_key: str) ->
     cost = action_cost(action_key)
     if cost <= 0:
         return
+    # A renewal that landed since the last request must credit BEFORE we refuse the action
+    # — otherwise a paid-up org gets a "top up your wallet" wall on the day it renewed.
+    _sync_plan_credits_quietly(db, organization_id)
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     if int(wallet.balance_credits) >= cost:
         return
@@ -543,7 +804,8 @@ def enforce_action_or_402(db: Session, organization_id: int, action_key: str) ->
         status_code=402,
         detail=(
             f"Not enough credits for {label}. It costs {cost} credits and your balance is "
-            f"{int(wallet.balance_credits)}. Top up your Rilono Credits wallet to continue."
+            f"{int(wallet.balance_credits)}. Your plan's monthly credits refresh on renewal — "
+            "top up your Rilono Credits wallet to continue now."
         ),
     )
 
@@ -556,6 +818,7 @@ def can_afford_units(db: Session, organization_id: int, action_key: str, units: 
     needed = action_cost(action_key) * units
     if needed <= 0:
         return True
+    _sync_plan_credits_quietly(db, organization_id)
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     return int(wallet.balance_credits) >= needed
 
@@ -572,6 +835,7 @@ def enforce_units_or_402(db: Session, organization_id: int, action_key: str, uni
     if cost_each <= 0:
         return
     needed = cost_each * units
+    _sync_plan_credits_quietly(db, organization_id)
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     balance = int(wallet.balance_credits)
     if balance >= needed:
@@ -603,13 +867,13 @@ def charge_action(
     cost = action_cost(action_key)
     if cost <= 0:
         return None
+    _sync_plan_credits_quietly(db, organization_id)
     wallet = get_wallet_for_update(db, organization_id)
     if ENFORCE and int(wallet.balance_credits) < cost:
         enforce_action_or_402(db, organization_id, action_key)
     action = get_action(action_key)
     balance_before = int(wallet.balance_credits)
-    wallet.balance_credits = balance_before - cost
-    wallet.lifetime_spent_credits = int(wallet.lifetime_spent_credits) + cost
+    _spend_from_wallet(wallet, cost)
     txn = _record_transaction(
         db, wallet=wallet, txn_type="debit", credits=-cost, action_key=action_key,
         description=(description or (action["label"] if action else action_key)),
@@ -733,8 +997,7 @@ def record_copilot_message(
             cost = (action_cost(COPILOT_ACTION_KEY) or 1) * bundles
             debit = min(cost, int(wallet.balance_credits))  # never overdraw below zero
             if debit > 0:
-                wallet.balance_credits = int(wallet.balance_credits) - debit
-                wallet.lifetime_spent_credits = int(wallet.lifetime_spent_credits) + debit
+                _spend_from_wallet(wallet, debit)
                 charged = debit
                 messages = bundles * COPILOT_MSGS_PER_CREDIT
                 txn = _record_transaction(
@@ -828,14 +1091,21 @@ def consume_staff_interview(
 
 
 # ---------------------------------------------------------------------------
-# Infrastructure server fee (₹999/mo once past the free student limit)
+# Infrastructure server fee — RETIRED 2026-08-02
+#
+# Replaced by the tiered plans (app/enterprise_billing.py): a plan's `max_clients` is the
+# client cap, and the plan fee is the recurring charge. What is left here is read-only
+# history — `is_current`/`fee_due` are pinned so no surface can ask anyone to pay it again,
+# and `enforce_infra_fee_or_402` no longer blocks anything. The functions themselves stay
+# because the admin revenue report, the refund tooling and historical purchase receipts all
+# still resolve `kind="infra_fee"` rows through them.
 # ---------------------------------------------------------------------------
 
 def infra_fee_state(db: Session, organization_id: int, *, currency: str | None = None) -> dict:
-    """Infra-fee status, priced in `currency` (defaults to INR).
+    """Legacy infra-fee status. `retired` is always True and `fee_due` always False.
 
-    The fee is a real charge, so it must be quoted from the same price book the checkout
-    will use — quoting ₹999 to an org that will be charged $12.99 makes the UI lie.
+    Kept so an old cached SPA bundle that still reads `wallet.infra_fee` renders a dormant
+    banner instead of throwing — and so the shape stays stable for the admin console.
     """
     try:
         code = money.normalize_currency(currency or CURRENCY, strict=True)
@@ -845,22 +1115,20 @@ def infra_fee_state(db: Session, organization_id: int, *, currency: str | None =
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     clients_used = active_client_count(db, organization_id)
     paid_until = _naive(wallet.infra_fee_paid_until)
-    is_current = bool(paid_until and paid_until >= datetime.utcnow())
-    over_free_limit = clients_used >= FREE_STUDENT_LIMIT
-    # The fee is "due" when they're at/over the free limit and not currently paid.
-    fee_due = over_free_limit and not is_current
     return {
+        "retired": True,
         "free_student_limit": FREE_STUDENT_LIMIT,
         "clients_used": clients_used,
-        "clients_remaining_free": max(0, FREE_STUDENT_LIMIT - clients_used),
-        "over_free_limit": over_free_limit,
-        # Minor units of `currency` — paise for INR, cents for USD.
+        "clients_remaining_free": 0,
+        # Pinned False/True: the client cap now lives on the plan, so no surface may ever
+        # again render "you are over the free limit, pay the infra fee".
+        "over_free_limit": False,
         "fee_paise": fee_minor,
         "fee_minor": fee_minor,
         "fee_display": money.format_money(fee_minor, code),
         "fee_period_days": INFRA_FEE_PERIOD_DAYS,
-        "is_current": is_current,
-        "fee_due": fee_due,
+        "is_current": True,
+        "fee_due": False,
         "paid_until": wallet.infra_fee_paid_until,
         "currency": code,
         "price_options": money.price_options("infra_fee"),
@@ -868,17 +1136,14 @@ def infra_fee_state(db: Session, organization_id: int, *, currency: str | None =
 
 
 def enforce_infra_fee_or_402(db: Session, organization_id: int) -> None:
-    """Block adding clients past the free limit until the infra fee is current."""
-    state = infra_fee_state(db, organization_id)
-    if not state["over_free_limit"] or state["is_current"]:
-        return
-    raise HTTPException(
-        status_code=402,
-        detail=(
-            f"You've reached the free limit of {FREE_STUDENT_LIMIT} students. "
-            f"Activate the {state['fee_display']}/month infrastructure server fee to keep adding clients."
-        ),
-    )
+    """No-op since 2026-08-02.
+
+    The client cap it used to guard is now `enterprise_billing.enforce_client_limit_or_402`,
+    which the same call sites invoke. Kept as a no-op rather than deleted so a call site
+    missed during the cutover fails open (client added) instead of raising ImportError at
+    request time — and so the diff that removes the last caller is a clean one.
+    """
+    return
 
 
 def mark_infra_fee_paid(
@@ -977,6 +1242,9 @@ def wallet_state(db: Session, organization_id: int, *, currency: str | None = No
         code = money.normalize_currency(currency or CURRENCY, strict=True)
     except money.UnsupportedCurrency:
         code = money.DEFAULT_CURRENCY
+    # Every entry into the Credits screen is also the moment a due allowance should land,
+    # so the balance the user is looking at is never one renewal behind.
+    _sync_plan_credits_quietly(db, organization_id, commit=True)
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     balance = int(wallet.balance_credits)
     return {
@@ -993,6 +1261,10 @@ def wallet_state(db: Session, organization_id: int, *, currency: str | None = No
         "enforced": ENFORCE,
         "low_balance": balance < (action_cost("mock_interview") or 1),
         "actions": actions_payload(),
+        # What the org's plan includes each month and how much of it is left. This is the
+        # primary "where do credits come from" panel now; top-ups are overage.
+        "plan_credits": plan_credits_state(db, organization_id),
+        # Retired — always dormant. Kept so a stale cached SPA bundle does not break.
         "infra_fee": infra_fee_state(db, organization_id, currency=code),
         "staff_interview_previews": {
             "free": INTERVIEW_FREE_STAFF_PREVIEWS,
@@ -1009,7 +1281,6 @@ def wallet_state(db: Session, organization_id: int, *, currency: str | None = No
             "copilot_msgs_daily": COPILOT_FREE_DAILY,
             "copilot_msgs_left_today": max(0, COPILOT_FREE_DAILY - _copilot_used_today(wallet)),
             "copilot_msgs_per_credit": COPILOT_MSGS_PER_CREDIT,
-            "free_clients": FREE_STUDENT_LIMIT,
         },
     }
 
@@ -1817,6 +2088,39 @@ def build_revenue_analytics(db: Session) -> dict:
 
     credit_gross_paise, credit_refunded_paise, credit_payment_count = _kind_money("credits")
     infra_gross_paise, infra_refunded_paise, infra_payment_count = _kind_money("infra_fee")
+
+    # --- Plan subscription revenue ----------------------------------------
+    # Plan payments live in a DIFFERENT table (EnterpriseSubscriptionPayment) from credit
+    # top-ups, because they always did — but before 2026-08-02 nothing was ever sold
+    # through it, so this report could ignore it. Now the tiers are the primary revenue
+    # line, and omitting them would report the platform's margin as if only top-ups
+    # existed. Net of GST: tax collected is remitted to the government, never revenue.
+    SP = models.EnterpriseSubscriptionPayment
+    plan_rows = (
+        db.query(SP.amount_paise, SP.tax_paise, SP.currency, SP.refunded_amount_paise)
+        .filter(SP.status.in_(REVENUE_PAYMENT_STATUSES))
+        .all()
+    )
+    plan_gross_paise = 0
+    plan_tax_paise = 0
+    plan_refunded_paise = 0
+    plan_payment_count = 0
+    for amount, tax, cur, refunded in plan_rows:
+        # The plan book is INR-only, so a non-INR row here would be a bug, not a sale;
+        # skip it rather than adding cents to paise.
+        if (cur or "INR").strip().upper() != "INR":
+            continue
+        plan_payment_count += 1
+        plan_gross_paise += max(0, _money_paise(amount) - _money_paise(tax))
+        plan_tax_paise += _money_paise(tax)
+        # A refund is issued against the gross charge, which included GST. Only the ex-tax
+        # portion was ever counted as revenue, so only that portion may be reversed out —
+        # subtracting the full refund would understate revenue by the tax we also returned.
+        gross = _money_paise(amount)
+        ref = min(_money_paise(refunded), gross)
+        if ref and gross > 0:
+            plan_refunded_paise += int(round(ref * (gross - _money_paise(tax)) / gross))
+    plan_revenue_paise = max(0, plan_gross_paise - plan_refunded_paise)
     # The `unsettled` count promised in _kind_money above: revenue-status foreign payments
     # that scored 0 because Razorpay's INR settlement figure has not landed on the row.
     # Without it the totals below are a confident rupee number that quietly omits real
@@ -1832,9 +2136,9 @@ def build_revenue_analytics(db: Session) -> dict:
     )
     credit_revenue_paise = max(0, credit_gross_paise - credit_refunded_paise)
     infra_revenue_paise = max(0, infra_gross_paise - infra_refunded_paise)
-    gross_revenue_paise = credit_gross_paise + infra_gross_paise
-    refunds_paise = credit_refunded_paise + infra_refunded_paise
-    total_revenue_paise = credit_revenue_paise + infra_revenue_paise
+    gross_revenue_paise = credit_gross_paise + infra_gross_paise + plan_gross_paise
+    refunds_paise = credit_refunded_paise + infra_refunded_paise + plan_refunded_paise
+    total_revenue_paise = credit_revenue_paise + infra_revenue_paise + plan_revenue_paise
 
     # --- Credits sold / spent / outstanding (deferred liability) -----------
     credits_sold = int(
@@ -1929,9 +2233,21 @@ def build_revenue_analytics(db: Session) -> dict:
             "credit_revenue_paise": credit_revenue_paise,
             "credit_revenue_display": format_inr(credit_revenue_paise),
             "credit_payment_count": credit_payment_count,
+            # Recurring plan subscriptions — the primary revenue line since 2026-08-02.
+            # Net of GST: `plan_tax_paise` is collected on behalf of the government and is
+            # deliberately excluded from every revenue and margin figure below.
+            "plan_revenue_paise": plan_revenue_paise,
+            "plan_revenue_display": format_inr(plan_revenue_paise),
+            "plan_payment_count": plan_payment_count,
+            "plan_tax_paise": plan_tax_paise,
+            "plan_tax_display": format_inr(plan_tax_paise),
+            "plan_refunded_paise": plan_refunded_paise,
+            "plan_refunded_display": format_inr(plan_refunded_paise),
+            # Retired ₹999/mo infrastructure fee — historical rows only, never grows.
             "infra_revenue_paise": infra_revenue_paise,
             "infra_revenue_display": format_inr(infra_revenue_paise),
             "infra_payment_count": infra_payment_count,
+            "infra_retired": INFRA_FEE_RETIRED,
             # Net revenue (after refunds) is the headline; gross + refunds shown for transparency.
             "gross_revenue_paise": gross_revenue_paise,
             "gross_revenue_display": format_inr(gross_revenue_paise),

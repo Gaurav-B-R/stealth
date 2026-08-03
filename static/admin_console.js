@@ -185,6 +185,8 @@ const refs = {
     revMarginHero: document.getElementById('adminRevMarginHero'),
     revTotal: document.getElementById('adminRevTotal'),
     revTotalSub: document.getElementById('adminRevTotalSub'),
+    revPlans: document.getElementById('adminRevPlans'),
+    revPlansSub: document.getElementById('adminRevPlansSub'),
     revCredits: document.getElementById('adminRevCredits'),
     revCreditsSub: document.getElementById('adminRevCreditsSub'),
     revInfra: document.getElementById('adminRevInfra'),
@@ -2740,8 +2742,13 @@ function renderEnterpriseRevenue(data) {
     const revUnsettled = Number(s.unsettled_payments || 0);
     setText(refs.revTotalSub, ((s.refunds_paise || 0) > 0
         ? `Net · ${moneyOr(s.gross_revenue_display, bookCurrency)} gross − ${moneyOr(s.refunds_display, bookCurrency)} refunds`
-        : 'Net of refunds · credits + infra fees')
+        : 'Net of refunds · plans + credits, ex-GST')
         + (revUnsettled > 0 ? ` · ${revUnsettled} not counted (awaiting INR settlement)` : ''));
+    // Plan revenue is reported NET of GST — the tax is collected for the government and
+    // is never ours. `plan_tax_display` is shown separately so the two are never conflated.
+    setText(refs.revPlans, moneyOr(s.plan_revenue_display, bookCurrency));
+    setText(refs.revPlansSub, `${(s.plan_payment_count || 0).toLocaleString()} payments`
+        + ((s.plan_tax_paise || 0) > 0 ? ` · ${moneyOr(s.plan_tax_display, bookCurrency)} GST collected` : ''));
     setText(refs.revCredits, moneyOr(s.credit_revenue_display, bookCurrency));
     setText(refs.revCreditsSub, `${(s.credit_payment_count || 0).toLocaleString()} payments`);
     setText(refs.revInfra, moneyOr(s.infra_revenue_display, bookCurrency));
@@ -3408,9 +3415,19 @@ function renderAccountDetails(data) {
     metaBits.push(`${Number(org.admins || 0)} admin${Number(org.admins) === 1 ? '' : 's'}`);
     if (org.created_by_name) metaBits.push(`created by ${escapeHtml(org.created_by_name)}`);
 
-    const infraStatus = infra.is_current
-        ? `Active until ${formatDateTime(infra.paid_until)}`
-        : (infra.over_free_limit ? 'Due (past free limit)' : 'Not required yet');
+    // The plan is what this org pays for now. The infra fee below is history: it is only
+    // rendered when this org actually paid it at some point, so live accounts show nothing.
+    const subx = data.subscription || {};
+    const capWord = (v) => (v === -1 || v == null ? '∞' : Number(v).toLocaleString());
+    const planBits = [`<b>${escapeHtml(subx.plan_label || '—')}</b>`];
+    if (subx.monthly_display && !subx.is_sandbox) {
+        planBits.push(`${escapeHtml(subx.monthly_display)}/mo${subx.tax_label ? ' + ' + escapeHtml(subx.tax_label) : ''}`);
+    }
+    planBits.push(`${Number(subx.clients_used || 0).toLocaleString()} / ${capWord(subx.max_clients)} clients`);
+    planBits.push(`${Number(subx.seats_used || 0).toLocaleString()} / ${capWord(subx.max_seats)} seats`);
+    if (subx.included_credits) planBits.push(`${Number(subx.included_credits).toLocaleString()} credits${subx.credits_recur ? '/mo' : ' once'}`);
+    if (subx.grandfathered) planBits.push('<em>grandfathered</em>');
+    else if (subx.trial_expired) planBits.push('<em>sandbox expired</em>');
 
     // The totals block is the INR SETTLEMENT of every payment (base_amount_paise), which is
     // what makes it addable at all — so it is labelled with the currency the server states.
@@ -3449,7 +3466,8 @@ function renderAccountDetails(data) {
                 <strong>${escapeHtml(moneyOr(totals.total_paid_display, totalsCurrency))}</strong>
                 <small>${escapeHtml(totalPaidSub)}</small></article>
         </div>
-        <p class="account-meta-line">Infrastructure fee: ${escapeHtml(infraStatus)} · ${Number(infra.clients_used || 0)} / ${Number(infra.free_student_limit || 0)} free students used</p>
+        <p class="account-meta-line">Plan: ${planBits.join(' · ')}</p>
+        ${Number(totals.infra_revenue_paise || 0) > 0 ? `<p class="account-meta-line">Infrastructure fee (retired): ${escapeHtml(moneyOr(totals.infra_revenue_display, totalsCurrency))} paid historically</p>` : ''}
         ${uncountedNote}${mixedRefundNote}`;
 
     const purchaseRows = purchases.length

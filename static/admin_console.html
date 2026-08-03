@@ -586,11 +586,12 @@
 
                     <div class="finance-hero" style="margin-top:28px;">
                         <div>
-                            <span class="finance-eyebrow">Rilono Credits · Prepaid Wallet</span>
+                            <span class="finance-eyebrow">Plans · Rilono Credits</span>
                             <h2>Enterprise Revenue Model</h2>
-                            <p>Prepaid credit top-ups + the monthly infrastructure fee, measured against the
+                            <p>Monthly plan subscriptions (net of GST) + credit top-ups, measured against the
                                real AI processing cost from the tracker above. Margins are estimated — cross-check the
-                               provider invoice and FX rate.</p>
+                               provider invoice and FX rate. The infrastructure fee was retired on 2 Aug 2026 and
+                               only appears here for accounts that paid it historically.</p>
                         </div>
                         <div class="finance-hero-stat">
                             <span>Gross Margin</span>
@@ -602,7 +603,12 @@
                         <article class="metric-card">
                             <span>Total Revenue</span>
                             <strong id="adminRevTotal">₹0</strong>
-                            <div id="adminRevTotalSub" class="metric-subtext">Credits + infra fees</div>
+                            <div id="adminRevTotalSub" class="metric-subtext">Plans + credits</div>
+                        </article>
+                        <article class="metric-card">
+                            <span>Plan Subscriptions</span>
+                            <strong id="adminRevPlans">₹0</strong>
+                            <div id="adminRevPlansSub" class="metric-subtext">0 payments</div>
                         </article>
                         <article class="metric-card">
                             <span>Credit Top-ups</span>
@@ -610,7 +616,7 @@
                             <div id="adminRevCreditsSub" class="metric-subtext">0 payments</div>
                         </article>
                         <article class="metric-card">
-                            <span>Infrastructure Fees</span>
+                            <span>Infrastructure Fees <em>(retired)</em></span>
                             <strong id="adminRevInfra">₹0</strong>
                             <div id="adminRevInfraSub" class="metric-subtext">0 payments</div>
                         </article>

@@ -155,8 +155,30 @@ ENTERPRISE_EMAIL_ATTACH_RATE_LIMIT = int(os.getenv("ENTERPRISE_EMAIL_ATTACH_RATE
 ENTERPRISE_EMAIL_ATTACH_RATE_WINDOW_SECONDS = int(
     os.getenv("ENTERPRISE_EMAIL_ATTACH_RATE_WINDOW_SECONDS", "3600")
 )
-ENTERPRISE_INVITE_ONLY_DETAIL = (
-    "Enterprise access is invite-only. Request access via Contact Sales."
+# Shown when an authenticated account belongs to no workspace — a personal B2C student account,
+# or someone who was never invited. Every raise site sits BEHIND a verified password (see
+# enterprise_login), so naming the B2C/B2B split here discloses nothing a caller doesn't already
+# own. Enterprise is self-serve (POST /signup), so the advice is invite-or-create, never sales.
+ENTERPRISE_NO_WORKSPACE_DETAIL = (
+    "This email isn't part of any Rilono workspace. A personal Rilono student account is separate "
+    "and can't sign in here. Ask your workspace admin to invite this email, or create a free "
+    "workspace with a different email."
+)
+# The offboarded teammate's version of that 403: they had access and it was switched off, so the
+# way back is their own admin, not signup. Kept verbatim in sync with the string
+# _require_enterprise_membership already raises for this state.
+ENTERPRISE_ACCESS_REVOKED_DETAIL = (
+    "Your access to this workspace has been turned off. Ask a workspace admin to restore it."
+)
+# Shown when workspace signup is attempted with an email that already has a Rilono account of
+# EITHER kind. The old copy said "please sign in instead", which is wrong (and a dead end) for the
+# common case: a B2C student account can't sign in to the portal, so the real fix is a different
+# email. Unlike the two above, this one IS pre-authentication and unavoidably confirms the email
+# is taken — so it must stay vague about WHICH product owns it.
+ENTERPRISE_SIGNUP_EMAIL_TAKEN_DETAIL = (
+    "This email already has a Rilono account, so it can't create a new workspace. If it's your "
+    "personal Rilono student account, sign up with a different work email — student accounts and "
+    "workspaces are always separate. If your workspace already exists, sign in instead."
 )
 ENTERPRISE_LOGO_URL_MAX_LENGTH = 2048
 ENTERPRISE_STUDENT_NAME_MAX_LENGTH = 160
@@ -860,11 +882,23 @@ def _has_enterprise_access(db: Session, user: models.User) -> bool:
 
 
 def _enforce_enterprise_access_or_403(db: Session, user: models.User) -> None:
+    """Gate the endpoints that only need "is this account in a workspace at all?".
+
+    Callers must have verified the password (or hold a session) first — the messages below
+    distinguish account states, which is only safe once the caller has proved ownership.
+    """
     if _has_enterprise_access(db, user):
         return
+    # Same distinction _require_enterprise_membership makes, so an offboarded teammate is sent
+    # to their admin instead of being told to create a workspace they already had.
+    if _has_deactivated_enterprise_membership(db, getattr(user, "id", None)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ENTERPRISE_ACCESS_REVOKED_DETAIL,
+        )
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail=ENTERPRISE_INVITE_ONLY_DETAIL,
+        detail=ENTERPRISE_NO_WORKSPACE_DETAIL,
     )
 
 
@@ -1093,7 +1127,7 @@ def _require_enterprise_membership(
         if _has_deactivated_enterprise_membership(db, user.id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Your access to this workspace has been turned off. Ask a workspace admin to restore it.",
+                detail=ENTERPRISE_ACCESS_REVOKED_DETAIL,
             )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -1573,15 +1607,11 @@ async def enterprise_login(
             )
 
     login_email = payload.email.lower().strip()
-    candidate_user = db.query(models.User).filter(models.User.email == login_email).first()
-    if not candidate_user:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=ENTERPRISE_INVITE_ONLY_DETAIL,
-        )
 
-    _enforce_enterprise_access_or_403(db, candidate_user)
-
+    # Password first. Every message below names a specific account state, so it may only be
+    # disclosed to a caller who has already proved they own the account — otherwise the form
+    # becomes an oracle for "which emails have a workspace". Mirrors the B2C rule in
+    # routers/auth.py, where the product-separation check likewise runs post-authentication.
     user = authenticate_user(db, login_email, payload.password)
     if not user:
         raise HTTPException(
@@ -1591,6 +1621,8 @@ async def enterprise_login(
 
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account is deactivated.")
+
+    _enforce_enterprise_access_or_403(db, user)
 
     user.last_login_at = datetime.utcnow()
     db.commit()
@@ -2707,6 +2739,7 @@ def _serialize_subscription_state(state: dict) -> dict:
         "plan_label": state["plan_label"],
         "status": state["status"],
         "is_trial": state["is_trial"],
+        "is_sandbox": state.get("is_sandbox", state["is_trial"]),
         "trial_expired": state["trial_expired"],
         "trial_days_left": state["trial_days_left"],
         "trial_ends_at": state["trial_ends_at"],
@@ -2717,6 +2750,20 @@ def _serialize_subscription_state(state: dict) -> dict:
         "seats_used": state["seats_used"],
         "can_add_client": state["can_add_client"],
         "can_add_seat": state["can_add_seat"],
+        "grandfathered": state.get("grandfathered", False),
+        "grace_ends_at": state.get("grace_ends_at"),
+        "over_cap": state.get("over_cap", False),
+        # Tier economics, so the plan chip and the credits panel need no second request.
+        "included_credits": state.get("included_credits", 0),
+        "credits_recur": state.get("credits_recur", False),
+        "currency": state.get("currency", billing.CURRENCY),
+        "monthly_minor": state.get("monthly_minor", 0),
+        "monthly_display": state.get("monthly_display"),
+        "tax_label": state.get("tax_label"),
+        "tax_percent": state.get("tax_percent"),
+        "total_minor": state.get("total_minor", 0),
+        "total_display": state.get("total_display"),
+        "is_free_platform": state.get("is_free_platform", False),
     }
 
 
@@ -3554,9 +3601,9 @@ def enterprise_create_client(
     _, organization, role = _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability="clients.create"
     )
+    # The active-client cap is the plan's (sandbox 10 / Starter 100 / Growth 500 /
+    # Scale 2,000). The infra-fee gate this used to sit beside was retired with the fee.
     billing.enforce_client_limit_or_402(db, organization.id)
-    # Free CRM up to the student limit; beyond it the monthly infra fee must be active.
-    credits.enforce_infra_fee_or_402(db, organization.id)
 
     full_name = (payload.full_name or "").strip()
     if len(full_name) < 2:
@@ -7186,6 +7233,53 @@ async def enterprise_route_webhook(request: Request, db: Session = Depends(get_d
     return {"status": "ok"}
 
 
+def _reconcile_plan_payment(db: Session, *, plan_row, entity: dict, order_id: str) -> dict:
+    """Activate a plan whose browser callback never arrived (abandoned 3DS, closed tab).
+
+    Mirrors /billing/verify exactly, including the same idempotency rule: the period is
+    only extended when this payment has not already been honoured, so a webhook racing the
+    browser callback activates once. `sync_plan_credits` is idempotent on its own key, so
+    the credit grant is safe to call unconditionally.
+    """
+    # Same guard as the credit path: never honour an order whose amount or currency does
+    # not match what we priced.
+    stored_currency = money.normalize_currency(plan_row.currency, strict=False)
+    if money.normalize_currency(entity.get("currency"), strict=False) != stored_currency:
+        logger.error("plan-webhook: currency mismatch order=%s stored=%s got=%s",
+                     order_id, stored_currency, entity.get("currency"))
+        return {"status": "mismatch"}
+    if int(entity.get("amount") or 0) != int(plan_row.amount_paise):
+        logger.error("plan-webhook: amount mismatch order=%s stored=%s got=%s",
+                     order_id, plan_row.amount_paise, entity.get("amount"))
+        return {"status": "mismatch"}
+
+    if plan_row.status == "verified":
+        return {"status": "ok"}
+
+    now = datetime.utcnow()
+    plan_row.razorpay_payment_id = str(entity.get("id") or "").strip() or None
+    plan_row.status = "verified"
+    plan_row.verified_at = now
+    plan_row.error_message = None
+
+    period_days = 365 if plan_row.billing_cycle == "yearly" else billing.PLAN_PERIOD_DAYS
+    sub = billing.get_or_create_org_subscription(db, plan_row.organization_id, commit=False)
+    sub.plan = plan_row.plan
+    sub.status = "active"
+    base = sub.current_period_end
+    if base is not None and getattr(base, "tzinfo", None):
+        base = base.replace(tzinfo=None)
+    start = base if (base and base > now) else now
+    sub.current_period_end = start + timedelta(days=period_days)
+    db.commit()
+
+    try:
+        credits.sync_plan_credits(db, plan_row.organization_id, commit=True)
+    except Exception:
+        logger.exception("plan-webhook: credit grant failed for org %s", plan_row.organization_id)
+    return {"status": "ok"}
+
+
 @router.post("/webhook/razorpay-credits")
 async def enterprise_credits_webhook(request: Request, db: Session = Depends(get_db)):
     """Reconcile credit / infra-fee payments that the browser never confirmed.
@@ -7238,6 +7332,18 @@ async def enterprise_credits_webhook(request: Request, db: Session = Depends(get
         query = query.with_for_update()
     payment_row = query.first()
     if not payment_row:
+        # Plan subscriptions live in their own table, and they need this safety net MORE
+        # than top-ups do: an abandoned 3DS redirect on a plan purchase leaves an org
+        # charged ₹3,538.82 with no plan and no credits. Handled here rather than in a
+        # second webhook so one Razorpay subscription covers every enterprise order.
+        plan_query = db.query(models.EnterpriseSubscriptionPayment).filter(
+            models.EnterpriseSubscriptionPayment.razorpay_order_id == order_id
+        )
+        if db.bind and db.bind.dialect.name != "sqlite":
+            plan_query = plan_query.with_for_update()
+        plan_row = plan_query.first()
+        if plan_row:
+            return _reconcile_plan_payment(db, plan_row=plan_row, entity=entity, order_id=order_id)
         # Not one of ours (B2C pass, Route collection, …) — ack so Razorpay stops retrying.
         return {"status": "ignored"}
 
@@ -7633,12 +7739,15 @@ def enterprise_billing_checkout(
     if not plan or plan["key"] not in billing.PAID_PLAN_KEYS:
         raise HTTPException(status_code=400, detail="Please choose a valid paid plan.")
     cycle = billing.normalize_billing_cycle(payload.billing_cycle)
-    base_amount = billing.plan_amount_paise(plan["key"], cycle)
-    if base_amount <= 0:
+    # Price and currency resolve together. Reading billing.CURRENCY here instead would let
+    # a misconfigured ENTERPRISE_PLAN_CURRENCY create a USD order for a rupee amount.
+    plan_currency = billing.resolve_plan_currency(plan["key"], billing.CURRENCY)
+    list_amount = billing.plan_price_minor(plan["key"], plan_currency)
+    if list_amount <= 0:
         raise HTTPException(status_code=400, detail="This plan is not available for online checkout.")
 
-    # Per-account discount code (admin-managed). Reduces the payable amount.
-    amount = base_amount
+    # Per-account discount code (admin-managed). It reduces the TAXABLE subtotal, so it is
+    # resolved before the GST quote below — never applied to a tax-inclusive figure.
     coupon_code = None
     coupon_percent = None
     raw_coupon = (payload.coupon_code or "").strip()
@@ -7648,7 +7757,16 @@ def enterprise_billing_checkout(
         )
         coupon_percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
         coupon_code = enterprise_coupons.normalize_code(coupon.code)
-        amount = enterprise_coupons.apply_to_amount_or_400(base_amount, coupon_percent)
+        # Validate the discount against the ex-tax subtotal (floor checks, 100%-off rules).
+        enterprise_coupons.apply_to_amount_or_400(list_amount, coupon_percent)
+
+    # list → discount → GST → total, in that order and in exactly one place.
+    quote = billing.checkout_quote(plan["key"], plan_currency, discount_percent=coupon_percent)
+    subtotal = quote["subtotal_minor"]
+    tax = quote["tax_minor"]
+    # The ONLY figure that may reach Razorpay. Sending `subtotal` here would undercharge
+    # every Indian customer by 18% and produce an invoice the pricing page contradicts.
+    amount = quote["total_minor"]
 
     if not _razorpay_enabled():
         return {
@@ -7659,7 +7777,7 @@ def enterprise_billing_checkout(
     receipt = f"reln_{organization.id}_{secrets.token_hex(6)}"[:40]
     order = _razorpay_request("POST", "/orders", {
         "amount": amount,
-        "currency": billing.CURRENCY,
+        "currency": plan_currency,
         "receipt": receipt,
         "notes": {
             "organization_id": str(organization.id),
@@ -7667,6 +7785,10 @@ def enterprise_billing_checkout(
             "billing_cycle": cycle,
             "user_id": str(current_user.id),
             "coupon_code": coupon_code or "",
+            "subtotal_paise": str(subtotal),
+            "tax_paise": str(tax),
+            "tax_label": quote["tax_label"] or "",
+            "price_book_version": money.PRICE_BOOK_VERSION,
         },
     })
     order_id = str(order.get("id") or "").strip()
@@ -7679,11 +7801,17 @@ def enterprise_billing_checkout(
         provider="razorpay",
         plan=plan["key"],
         billing_cycle=cycle,
-        amount_paise=amount,
-        original_amount_paise=base_amount,
+        amount_paise=amount,          # charged (incl. tax)
+        subtotal_paise=subtotal,      # taxable value
+        tax_paise=tax,
+        tax_percent=quote["tax_percent"],
+        tax_label=quote["tax_label"],
+        # Snapshotted so re-pricing the tier later cannot change what this order bought.
+        included_credits=billing.included_credits_for(plan["key"]),
+        original_amount_paise=list_amount,   # ex-tax list price, pre-discount
         coupon_code=coupon_code,
         coupon_percent_off=coupon_percent,
-        currency=billing.CURRENCY,
+        currency=plan_currency,
         razorpay_order_id=order_id,
         status="created",
     ))
@@ -7693,14 +7821,23 @@ def enterprise_billing_checkout(
         "action": "checkout",
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
         "order_id": order_id,
+        # `amount` is the charged total — the Razorpay modal must open on this.
         "amount": amount,
-        "original_amount": base_amount,
-        "discount_paise": base_amount - amount,
+        "original_amount": list_amount,
+        "subtotal": subtotal,
+        "discount_paise": list_amount - subtotal,
+        "tax_paise": tax,
+        "tax_label": quote["tax_label"],
+        "tax_percent": quote["tax_percent"],
+        "total_display": quote["total_display"],
+        "subtotal_display": quote["subtotal_display"],
+        "tax_display": quote["tax_display"],
         "coupon_code": coupon_code,
         "coupon_percent_off": float(coupon_percent) if coupon_percent is not None else None,
-        "currency": billing.CURRENCY,
+        "currency": plan_currency,
         "plan": plan["key"],
         "plan_label": plan["label"],
+        "included_credits": billing.included_credits_for(plan["key"]),
         "billing_cycle": cycle,
         "organization_name": organization.company_name,
         "prefill": {
@@ -7761,17 +7898,40 @@ def enterprise_billing_verify(
     payment_row.verified_at = now
     payment_row.error_message = None
 
-    period_days = 365 if payment_row.billing_cycle == "yearly" else 30
+    # Monthly only (billing.normalize_billing_cycle collapses everything to "monthly"), but
+    # an in-flight order created before that change may still carry "yearly" — honour it.
+    period_days = 365 if payment_row.billing_cycle == "yearly" else billing.PLAN_PERIOD_DAYS
     sub = billing.get_or_create_org_subscription(db, organization.id, commit=False)
     sub.plan = payment_row.plan
     sub.status = "active"
-    sub.current_period_end = now + timedelta(days=period_days)
+    # Stack rather than reset, so paying early never shortens the period already bought.
+    base = sub.current_period_end
+    if base is not None and getattr(base, "tzinfo", None):
+        base = base.replace(tzinfo=None)
+    start = base if (base and base > now) else now
+    sub.current_period_end = start + timedelta(days=period_days)
 
     db.commit()
 
+    # Grant this period's included AI credits. Runs AFTER the commit above so it reads the
+    # new period end and derives the right idempotency key; it is itself idempotent, and
+    # the lazy sync on every wallet read is the safety net if this ever fails.
+    granted = 0
+    try:
+        txn = credits.sync_plan_credits(db, organization.id, commit=True)
+        granted = int(txn.credits) if txn is not None else 0
+    except Exception:
+        logger.exception("plan-credits: grant after checkout failed for org %s", organization.id)
+
+    plan_label = (billing.get_plan(payment_row.plan) or {}).get("label", "Your")
+    message = f"Your {plan_label} plan is now active."
+    if granted > 0:
+        message += f" {granted:,} AI credits have been added to your wallet."
     return {
-        "message": f"Your {billing.get_plan(payment_row.plan)['label']} plan is now active.",
+        "message": message,
+        "credits_granted": granted,
         "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+        "wallet": credits.wallet_state(db, organization.id),
     }
 
 
@@ -8081,6 +8241,66 @@ def enterprise_credits_payments(
             "created_at": _iso(p.created_at),
             "verified_at": _iso(p.verified_at),
         })
+
+    # Plan subscription charges. They live in their own table, so before the tiered plans
+    # launched this receipt list showed only top-ups — an org would have been charged
+    # ₹3,538.82 every month with no receipt for it anywhere in the product.
+    SP = models.EnterpriseSubscriptionPayment
+    plan_rows = (
+        db.query(SP)
+        .filter(SP.organization_id == organization.id, SP.status != "created")
+        .order_by(SP.verified_at.desc().nullslast(), SP.id.desc())
+        .limit(limit)
+        .all()
+    )
+    plan_buyer_ids = {p.created_by_user_id for p in plan_rows if p.created_by_user_id} - set(buyer_names)
+    if plan_buyer_ids:
+        for uid, full_name, email in (
+            db.query(models.User.id, models.User.full_name, models.User.email)
+            .filter(models.User.id.in_(plan_buyer_ids)).all()
+        ):
+            buyer_names[uid] = full_name or email
+
+    for p in plan_rows:
+        pay_currency = money.normalize_currency(p.currency, strict=False)
+        amount = int(p.amount_paise or 0)
+        tax = int(p.tax_paise or 0)
+        if p.status in credits.REVENUE_PAYMENT_STATUSES:
+            collected_by_currency[pay_currency] = collected_by_currency.get(pay_currency, 0) + amount
+        plan_meta = billing.get_plan(p.plan) or {}
+        payments.append({
+            "id": p.id,
+            "kind": "plan",
+            "package_key": p.plan,
+            "label": f"{plan_meta.get('label', p.plan)} plan · monthly",
+            "credits": 0,
+            "bonus_credits": 0,
+            # Credits the plan period granted — shown in the same column as a top-up's, so
+            # the receipt list answers "what did this buy" the same way for both.
+            "total_credits": int(p.included_credits or 0),
+            "amount_paise": amount,
+            "currency": pay_currency,
+            "amount_display": money.format_money(amount, pay_currency),
+            "subtotal_paise": int(p.subtotal_paise or 0) or None,
+            "tax_paise": tax,
+            "tax_label": p.tax_label,
+            "tax_display": money.format_money(tax, pay_currency) if tax else None,
+            "original_amount_paise": p.original_amount_paise,
+            "coupon_code": p.coupon_code,
+            "coupon_percent_off": (float(p.coupon_percent_off) if p.coupon_percent_off is not None else None),
+            "status": p.status,
+            "refunded_amount_paise": 0,
+            "refunded_display": money.format_money(0, pay_currency),
+            "net_amount_paise": amount,
+            "net_amount_display": money.format_money(amount, pay_currency),
+            "payment_reference": p.razorpay_payment_id or p.razorpay_order_id,
+            "created_by_name": buyer_names.get(p.created_by_user_id),
+            "created_at": _iso(p.created_at),
+            "verified_at": _iso(p.verified_at),
+        })
+
+    # One list, newest first, regardless of which table a charge came from.
+    payments.sort(key=lambda r: (r.get("verified_at") or r.get("created_at") or ""), reverse=True)
 
     return {
         "permissions": perms,
@@ -8399,9 +8619,28 @@ def enterprise_infra_fee_checkout(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
-    _, organization, _ = _require_enterprise_membership(
+    """RETIRED 2026-08-02 — the ₹999/month infrastructure server fee no longer exists.
+
+    Kept as an explicit 410 rather than deleted: a browser running a cached SPA bundle
+    still has the "Activate ₹999/mo" button, and a 404 there would read as a bug. The
+    verify sibling below stays FUNCTIONAL so an order created moments before the cutover
+    can still be honoured — only new orders are refused.
+    """
+    _require_enterprise_membership(
         db=db, user=current_user, request=request, require_capability="billing.manage"
     )
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "The infrastructure server fee has been replaced by Rilono plans. "
+            "Open Plans & Billing to choose a plan — it includes your monthly AI credits."
+        ),
+    )
+
+
+def _retired_infra_fee_checkout_body(organization, current_user, payload, db):
+    # Dead code retained for one release so the retirement is a one-line revert if the
+    # rollout is halted. Nothing calls it.
     currency = _resolve_charge_currency(payload.currency if payload else None, organization)
     amount = money.price_minor("infra_fee", currency)
     if amount <= 0:
@@ -8645,7 +8884,7 @@ def enterprise_signup_send_code(
     if db.query(models.User).filter(models.User.email == email).first():
         raise HTTPException(
             status_code=409,
-            detail="An account with this email already exists. Please sign in instead.",
+            detail=ENTERPRISE_SIGNUP_EMAIL_TAKEN_DETAIL,
         )
 
     code = f"{secrets.randbelow(1_000_000):06d}"
@@ -8750,7 +8989,7 @@ async def enterprise_signup(
     if existing_user:
         raise HTTPException(
             status_code=409,
-            detail="An account with this email already exists. Please sign in instead.",
+            detail=ENTERPRISE_SIGNUP_EMAIL_TAKEN_DETAIL,
         )
 
     # The owner must prove the inbox before anything is created (or a subdomain claimed).

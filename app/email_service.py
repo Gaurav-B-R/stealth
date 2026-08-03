@@ -461,7 +461,7 @@ def send_enterprise_welcome_email(
         + _welcome_feature_row("✨", "Rilono AI copilot",
                                "Ask your live portal anything, spot who needs attention, and draft emails — grounded in your data.")
         + _welcome_feature_row("🎤", "Mock interviews & Deep Scans",
-                               "Run AI visa-officer simulations and cross-check client documents. Pay-as-you-go with prepaid Rilono Credits.")
+                               "Run AI visa-officer simulations and cross-check client documents — paid for with the Rilono Credits included in your plan.")
         + _welcome_feature_row("🌐", "Your own branded portal",
                                "Everything runs on your subdomain with your logo — your clients see your brand, not ours.")
     )
@@ -482,7 +482,8 @@ def send_enterprise_welcome_email(
             </div>
             <p style="margin:16px 0 0;color:#64748b;font-size:13px;line-height:1.6">
               <b>Next steps:</b> add your first student, invite your team, and explore the AI copilot.
-              The core CRM is free for up to 50 students. Want a walkthrough? Just reply to this email.</p>
+              You're on the free 14-day sandbox — 2 users, 10 active clients and 100 AI credits, no card.
+              Want a walkthrough? Just reply to this email.</p>
           </div>
         </div>
         <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:16px">
