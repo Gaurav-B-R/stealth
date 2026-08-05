@@ -1255,9 +1255,47 @@ class EnterpriseSubscription(Base):
     status = Column(String, nullable=False, default="trialing")  # trialing|active|past_due|canceled
     trial_ends_at = Column(DateTime(timezone=True), nullable=True)
     current_period_end = Column(DateTime(timezone=True), nullable=True)
+    # Razorpay Subscription (a MANDATE — standing permission to auto-charge), set when the
+    # org checks out on the recurring flow. Its presence is what makes the plan auto-renew;
+    # without it the org is on the legacy one-off order flow and must re-purchase by hand.
     razorpay_subscription_id = Column(String, nullable=True, index=True)
+    # Set when the customer cancels: the mandate stops at the end of the period they have
+    # already paid for, so cancelling never takes away time they bought. `current_period_end`
+    # still governs access; this only stops the NEXT charge.
+    cancel_at_period_end = Column(Boolean, nullable=False, default=False, server_default="0")
+    canceled_at = Column(DateTime(timezone=True), nullable=True)
+    # Last mandate state Razorpay reported (active|halted|paused|cancelled|completed). A
+    # halted mandate means the card is failing and dunning has started.
+    mandate_status = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class EnterpriseRazorpayPlan(Base):
+    """Cache of the Razorpay Plan objects backing each tier's recurring mandate.
+
+    Razorpay requires a Plan (an amount + interval) before a Subscription can reference it,
+    and it does NOT dedupe by name — creating one per checkout would litter the account with
+    identical plans and make reconciliation guesswork. The natural key is
+    (tier, currency, exact charged amount): a coupon that changes the amount legitimately
+    needs its own Razorpay plan, and keying on the amount gets that for free.
+
+    The amount stored here is the GST-INCLUSIVE total, because that is what Razorpay will
+    auto-charge every month.
+    """
+    __tablename__ = "enterprise_razorpay_plans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plan_key = Column(String, nullable=False, index=True)     # starter | growth | scale
+    currency = Column(String, nullable=False, default="INR")
+    amount_minor = Column(Integer, nullable=False)            # GST-inclusive charge per period
+    period = Column(String, nullable=False, default="monthly")
+    razorpay_plan_id = Column(String, nullable=False, unique=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("uq_ent_rzp_plan", "plan_key", "currency", "amount_minor", "period", unique=True),
+    )
 
 
 class EnterpriseSubscriptionPayment(Base):
@@ -1342,6 +1380,10 @@ class EnterpriseCreditWallet(Base):
     # negative). At rollover this remainder is clawed back before the next grant, which is
     # what makes "1,000/month" mean 1,000 per month rather than 12,000 by December.
     plan_credits_remaining = Column(Integer, nullable=False, default=0, server_default="0")
+    # When the ONE-TIME allowance (the sandbox's demo credits) was handed out. Durable, because
+    # plan_credits_period only remembers the latest key: sandbox -> paid -> lapse cycles it back
+    # to "sandbox:once" and would otherwise re-grant the demo credits on every lapse.
+    plan_credits_once_at = Column(DateTime(timezone=True), nullable=True)
     # RETIRED 2026-08-02 with the ₹999/month infrastructure server fee, which the tiered
     # plans replaced. Retained (not dropped) because historical `kind="infra_fee"` payment
     # rows reference the period this column recorded, and the admin revenue report still

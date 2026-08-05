@@ -875,9 +875,11 @@
   /* ---------------- landmark photo ---------------- */
   // Real bundled landmark photo per country. The parent .country-art carries a
   // gradient background, so if an image is ever missing it degrades gracefully.
+  const DESTINATION_PHOTO_CODES = new Set(["ae", "au", "ca", "de", "es", "fr", "ie", "nl", "uk", "us"]);
   function landmarkArt(country) {
     const code = String(country.code || "").toLowerCase();
-    return `<img class="lk-img" src="/static/destinations/${esc(code)}.jpg" alt="${esc(country.landmark || country.name || "")}" loading="lazy" onerror="this.style.display='none'">`;
+    const base = DESTINATION_PHOTO_CODES.has(code) ? "/static/destinations" : "/static/assets/enterprise/client-banners";
+    return `<img class="lk-img" src="${base}/${esc(code)}.jpg" alt="${esc(country.landmark || country.name || "")}" loading="lazy" onerror="this.style.display='none'">`;
   }
 
   /* ---------------- catalog lookups ---------------- */
@@ -1685,6 +1687,19 @@
     const s = state.subscription;
     if (!s || s.is_free_platform) return "";
 
+    // A LAPSED PAID PLAN outranks everything else here. The backend has already dropped this
+    // org to sandbox caps, so without this branch a consultancy that paid last month sees a
+    // "sandbox trial ending today" banner and is never told their plan expired or that
+    // renewing restores their seats, clients and monthly credits.
+    if (s.plan_lapsed) {
+      return `<div class="trial-banner trial-banner-warn">
+        <span><b>Your ${esc(s.lapsed_plan_label || "paid")} plan expired${s.lapsed_at ? " on " + esc(fmtDate(s.lapsed_at)) : ""}.</b>
+        You're on sandbox limits (${Number(s.max_seats)} seats, ${Number(s.max_clients)} clients) and monthly AI credits have stopped.
+        Everything already in your workspace is safe — renew to restore your plan.</span>
+        <button type="button" class="btn btn-sm btn-primary" onclick="__ent.go('billing')">Renew plan</button>
+      </div>`;
+    }
+
     // A pre-cutover org inside the migration ramp: caps are not enforced yet, but the date
     // they start being enforced must be visible well before it arrives.
     if (s.grandfathered) {
@@ -1792,26 +1807,6 @@
       `<div class="pipe-row clickable" role="button" tabindex="0" onclick="__ent.viewClients({status:'${p.key}'})"><div class="pl"><span class="dot" style="background:${p.color}"></span>${esc(p.label)}</div>
        <div class="pipe-track"><div class="pipe-fill" style="width:${(p.count / maxPipe) * 100}%;background:${p.color}"></div></div>
        <div class="pv">${p.count}</div></div>`).join("");
-
-    // Parallel workstreams: the admissions funnel + English-test readiness, from the
-    // intake columns every client already has. Same bar treatment as the visa pipeline.
-    const ADM_COLORS = { exploring: "#94a3b8", shortlisting: "#6366f1", applied: "#0ea5e9", admitted: "#8b5cf6", offer_accepted: "#f59e0b", doc_in_hand: "#10b981", deferred: "#64748b", "": "#cbd5e1" };
-    const ENG_COLORS = { score_available: "#10b981", booked: "#0ea5e9", result_awaited: "#6366f1", preparing: "#f59e0b", not_taken: "#ef4444", exempt_moi: "#14b8a6", exempt_provider: "#14b8a6", not_required: "#94a3b8", "": "#cbd5e1" };
-    const admList = d.admissions_pipeline || [];
-    // Admissions keeps every funnel step visible (zeros are signal); the test card only
-    // shows statuses that actually occur — eight mostly-empty rows would be noise.
-    const engList = (d.english_test_pipeline || []).filter((r) => r.count > 0);
-    state.dashAdmissions = admList;
-    state.dashEnglish = engList;
-    const wsRows = (list, colors, fn) => {
-      const max = Math.max(1, ...list.map((r) => r.count));
-      return list.map((r, i) =>
-        `<div class="pipe-row clickable" role="button" tabindex="0" onclick="__ent.${fn}(${i})"><div class="pl"><span class="dot" style="background:${colors[r.key] || "#94a3b8"}"></span>${esc(r.label)}</div>
-         <div class="pipe-track"><div class="pipe-fill" style="width:${(r.count / max) * 100}%;background:${colors[r.key] || "#94a3b8"}"></div></div>
-         <div class="pv">${r.count}</div></div>`).join("");
-    };
-    const admRows = admList.length ? wsRows(admList, ADM_COLORS, "viewAdmission") : `<div class="empty" style="padding:24px"><p>Add clients to see admissions progress.</p></div>`;
-    const engRows = engList.length ? wsRows(engList, ENG_COLORS, "viewEnglish") : `<div class="empty" style="padding:24px"><p>No English-test status recorded yet.</p></div>`;
 
     const vtCounts = d.visa_type_counts || [];
     state.dashVisaTypes = vtCounts.map((v) => v.visa_type);
@@ -1938,14 +1933,14 @@
     const staleCard = st ? `
       <div class="card"><div class="card-head"><h3>Needs attention</h3>
         <span class="dash-stale-hint">No activity in ${st.days}+ days</span></div>
-        <div class="card-body">${staleRows
+        <div class="card-body"><div class="dash-feed">${staleRows
           ? staleRows + (st.total > st.clients.length
               ? `<div class="dash-wn-more" role="button" tabindex="0" onclick="__ent.viewClients({scope:'active',label:'Active cases'})">${st.truncated ? "+" : ""}${st.total - st.clients.length} more going quiet · see active cases →</div>`
               : "")
-          : `<div class="cal-up-empty">Every open case has moved in the last ${st.days} days. 👏</div>`}</div></div>` : "";
+          : `<div class="cal-up-empty">Every open case has moved in the last ${st.days} days. 👏</div>`}</div></div></div>` : "";
 
     const attentionRow = (financeCard || staleCard)
-      ? `<div class="${financeCard && staleCard ? "grid-2 even" : ""}" style="margin-bottom:24px">${financeCard}${staleCard}</div>`
+      ? `<div class="dash-row${financeCard && staleCard ? " even" : ""}">${financeCard}${staleCard}</div>`
       : "";
 
     const dashBranchBar = branchFilterHtml("dashBranch")
@@ -1961,27 +1956,24 @@
         ${kpiCard("linear-gradient(135deg,#f59e0b,#f97316)", "🆕", "New this month", k.new_this_month, "this month", "__ent.viewClients({scope:'month',label:'New this month'})")}
       </div>
       ${overdueStrip}
-      <div class="grid-2 even" style="margin-bottom:24px">
+      <div class="dash-row even">
         <div class="card"><div class="card-head"><h3>${wn ? "What's next" : "Upcoming deadlines"}</h3>${wn ? `<button class="link" onclick="__ent.go('calendar')">Calendar →</button>` : ""}</div>
-          <div class="card-body">${wn ? `<div class="cal-upcoming dash-wn">${whatsNextBody}</div>` : deadlines}</div></div>
-        <div class="card"><div class="card-head"><h3>Recent clients</h3><button class="link" onclick="__ent.go('clients')">All →</button></div><div class="card-body">${recent}</div></div>
+          <div class="card-body">${wn ? `<div class="cal-upcoming dash-wn">${whatsNextBody}</div>` : `<div class="dash-feed">${deadlines}</div>`}</div></div>
+        <div class="card"><div class="card-head"><h3>Recent clients</h3><button class="link" onclick="__ent.go('clients')">All →</button></div>
+          <div class="card-body"><div class="dash-feed">${recent}</div></div></div>
       </div>
       ${attentionRow}
-      <div class="grid-2">
+      <div class="dash-row">
         <div class="card"><div class="card-head"><h3>Client pipeline</h3><button class="link" onclick="__ent.go('clients')">View all →</button></div>
-          <div class="card-body">${pipeRows}</div></div>
+          <div class="card-body"><div class="pipe-grid" style="--pipe-rows:${Math.ceil(d.pipeline.length / 2)}">${pipeRows}</div></div></div>
+      </div>
+      <div class="dash-row even">
         <div class="card"><div class="card-head"><h3>By visa type</h3></div>
           <div class="card-body"><div class="cat-grid">${vtCells}</div></div></div>
-      </div>
-      <div class="grid-2 even" style="margin-top:20px">
-        <div class="card"><div class="card-head"><h3>University applications</h3></div>
-          <div class="card-body">${admRows}</div></div>
-        <div class="card"><div class="card-head"><h3>English tests</h3></div>
-          <div class="card-body">${engRows}</div></div>
-      </div>
-      <div class="card" style="margin-top:20px"><div class="card-head"><h3>Client destinations</h3>
-        ${ctHint ? `<span class="dash-head-hint">${esc(ctHint)}</span>` : ""}</div>
-        <div class="card-body">${countryCards ? `<div class="country-grid">${countryCards}</div>` : `<div class="empty" style="padding:24px"><p>Add clients to see where they're applying.</p></div>`}</div></div>`;
+        <div class="card"><div class="card-head"><h3>Client destinations</h3>
+          ${ctHint ? `<span class="dash-head-hint">${esc(ctHint)}</span>` : ""}</div>
+          <div class="card-body">${countryCards ? `<div class="country-grid">${countryCards}</div>` : `<div class="empty" style="padding:24px"><p>Add clients to see where they're applying.</p></div>`}</div></div>
+      </div>`;
 
     const dbf = $("#dashBranch");
     if (dbf) dbf.onchange = () => { state.filters.branch_id = dbf.value; renderDashboard(); };
@@ -2008,17 +2000,6 @@
     if (!vt) { openClientsFiltered({}); return; }
     openClientsFiltered({ scope: { visaType: vt }, label: "Visa type · " + vt });
   }
-  function viewAdmissionStage(i) {
-    const row = (state.dashAdmissions || [])[i];
-    if (!row) { openClientsFiltered({}); return; }
-    openClientsFiltered({ scope: { admissionStage: row.key }, label: "Admissions · " + row.label });
-  }
-  function viewEnglishStatus(i) {
-    const row = (state.dashEnglish || [])[i];
-    if (!row) { openClientsFiltered({}); return; }
-    openClientsFiltered({ scope: { englishStatus: row.key }, label: "English test · " + row.label });
-  }
-
   // Dashboard/anywhere entry point: pick a student, then email them a mock-interview
   // link (the primary way the feature is used). Reuses the same invite endpoint.
   async function openSendInterviewPicker(preselectId) {
@@ -2225,9 +2206,6 @@
     if (scope === "active") clients = clients.filter((c) => c.stage && c.stage.is_open);
     else if (scope === "month") { const ms = new Date(); ms.setDate(1); ms.setHours(0, 0, 0, 0); clients = clients.filter((c) => c.created_at && new Date(c.created_at) >= ms); }
     else if (scope && scope.visaType) clients = clients.filter((c) => (c.visa_type || "") === scope.visaType);
-    // `in` (not truthiness): the "Not recorded" bucket filters on the empty-string key.
-    else if (scope && "admissionStage" in scope) clients = clients.filter((c) => (c.admission_stage || "") === scope.admissionStage);
-    else if (scope && "englishStatus" in scope) clients = clients.filter((c) => (c.english_test_status || "") === scope.englishStatus);
     state.clients = clients;
     state.statusCounts = data.status_counts || {};
     $("#clientsBadge").textContent = data.total_clients;
@@ -8864,9 +8842,17 @@
           <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Current plan</div>
           <div style="font-size:24px;font-weight:760;margin:4px 0">${esc(sub.plan_label)} ${sub.is_sandbox ? `<span style="font-size:13px;color:var(--warning);font-weight:600">· ${sub.trial_expired ? "evaluation ended" : sub.trial_days_left + " days left"}</span>` : ""}</div>
           <div style="font-size:13px;color:var(--text-2)">${
-            sub.current_period_end && !sub.is_sandbox ? "Renews " + fmtDate(sub.current_period_end)
+            sub.current_period_end && !sub.is_sandbox
+              // Say which of the two it is. "Renews" on a plan with no mandate is a promise
+              // the system does not keep — nothing auto-charges, and the org would lapse
+              // silently while believing it was covered.
+              ? (sub.auto_renews ? "Renews automatically on " + fmtDate(sub.current_period_end)
+                 : sub.cancel_at_period_end ? "Auto-renewal off — ends " + fmtDate(sub.current_period_end)
+                 : "Ends " + fmtDate(sub.current_period_end) + " — renew manually")
             : sub.trial_ends_at ? "Sandbox ends " + fmtDate(sub.trial_ends_at) : ""
           }${sub.monthly_display && !sub.is_sandbox ? ` · ${esc(sub.monthly_display)}/mo${sub.tax_label ? " + " + esc(sub.tax_label) : ""}` : ""}</div>
+          ${sub.mandate_status === "halted" ? `<div style="font-size:13px;color:var(--warning);margin-top:6px"><b>Your card was declined.</b> Update it and renew to keep your plan.</div>` : ""}
+          ${canManage && sub.auto_renews ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px;padding-left:0" onclick="__ent.cancelPlanRenewal()">Turn off auto-renewal</button>` : ""}
         </div>
         <div style="flex:1;min-width:240px">
           <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-2)">Active clients</span><b>${sub.clients_used} / ${cap(sub.max_clients)}</b></div>
@@ -8898,6 +8884,19 @@
       </p>`}`;
   }
 
+  async function cancelPlanRenewal() {
+    // Cancelling stops the NEXT charge only — the period already paid for is kept, so this
+    // is not destructive and does not need a scary confirmation.
+    if (!confirm("Turn off auto-renewal? Your plan stays active until the end of the period you've already paid for.")) return;
+    try {
+      const r = await api("/billing/cancel", { method: "POST", body: {} });
+      state.subscription = r.subscription;
+      updatePlanChip();
+      toast(r.message || "Auto-renewal is off.", "success");
+      renderBilling();
+    } catch (ex) { toast(ex.message, "error"); }
+  }
+
   async function applyBillingCoupon() {
     const input = $("#billingCouponInput");
     const code = ((input && input.value) || "").trim();
@@ -8920,6 +8919,17 @@
     try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: state.billingCycle, coupon_code: couponCode } }); }
     catch (ex) { toast(ex.message, "error"); return; }
     if (res.action === "contact_sales") { toast(res.message || "Please contact sales.", "error"); return; }
+    // A 100%-off coupon covers the whole charge, so there is no Razorpay step — the server
+    // has already activated the plan and granted the credits.
+    if (res.action === "activated") {
+      state.subscription = res.subscription;
+      if (res.wallet) { state.credits = res.wallet; creditsUi.wallet = null; }
+      state.billingCoupon = null;
+      updatePlanChip();
+      toast(res.message || "Plan activated!", "success");
+      renderBilling();
+      return;
+    }
     if (res.action !== "checkout") { toast("Checkout unavailable.", "error"); return; }
     if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); return; }
 
@@ -8931,19 +8941,26 @@
     if (res.tax_paise) {
       parts.push(`${res.subtotal_display} + ${res.tax_label} ${res.tax_display} = ${res.total_display}`);
     }
+    // Recurring checkout authorises a MANDATE, not a single charge, so Razorpay is opened on
+    // `subscription_id` instead of `order_id` — passing the wrong one silently produces a
+    // one-off payment and the plan never renews.
+    const isSub = res.checkout_mode === "subscription";
+    if (isSub) parts.push("auto-renews monthly");
     const rzp = new Razorpay({
       key: res.razorpay_key_id,
       amount: res.amount,
       currency: res.currency,
       name: res.organization_name || "Rilono",
       description: parts.join(" · "),
-      order_id: res.order_id,
+      ...(isSub ? { subscription_id: res.subscription_id } : { order_id: res.order_id }),
       prefill: checkoutPrefill(res.prefill),
       theme: { color: "#6366f1" },
       handler: async function (resp) {
         try {
           const v = await api("/billing/verify", { method: "POST", body: {
-            razorpay_order_id: resp.razorpay_order_id,
+            // The recurring row is keyed on the subscription id (Razorpay sends no order_id
+            // for a mandate), so that is what the server looks the payment up by.
+            razorpay_order_id: isSub ? res.subscription_id : resp.razorpay_order_id,
             razorpay_payment_id: resp.razorpay_payment_id,
             razorpay_signature: resp.razorpay_signature,
           }});
@@ -15594,11 +15611,11 @@
     // Role changes now go through Edit access (PATCH /team/users/{id}/access).
     teamTab: teamGoTab,
     applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
+    cancelPlanRenewal,
     topup: openCreditCheckout,
     saveBank: saveLinkedAccount, refreshBank: refreshLinkedAccount,
     finAdd: finAddEntry, finTab: finGoTab,
     viewClients: openClientsFiltered, viewVisaType, clearSearch: clearClientSearch,
-    viewAdmission: viewAdmissionStage, viewEnglish: viewEnglishStatus,
     viewInterview: viewInterviewSession, sendInterview: openSendInterviewPicker,
     setUniStatus, removeUni,
     calPrev, calNext, calToday, calSetMonth, calSetYear, calEvent, calAdd, calDelete, calToggleDone,

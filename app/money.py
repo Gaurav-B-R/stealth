@@ -401,6 +401,24 @@ def gst_minor(subtotal_minor: int, currency: str = DEFAULT_CURRENCY) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def tax_inclusive_net_minor(gross_minor: int, currency: str = DEFAULT_CURRENCY) -> int:
+    """Back GST out of a TAX-INCLUSIVE gross amount: 1180 -> 1000 at 18%.
+
+    The legacy B2B lines (credit top-ups, the retired infrastructure fee) were sold at a
+    single all-in price with no separate tax line, which under Indian GST means the price is
+    deemed inclusive of tax for a registered supplier. The tiered plans are the opposite —
+    quoted ex-GST with the tax added on top. Reporting the two side by side without this
+    conversion adds an ex-tax figure to a tax-inclusive one, overstating revenue and the
+    margin computed from it.
+    """
+    rate = tax_percent_for(currency)
+    if rate <= 0:
+        return int(gross_minor or 0)
+    gross = Decimal(int(gross_minor or 0))
+    net = gross / (Decimal(1) + rate / Decimal(100))
+    return int(net.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def quote_with_tax(subtotal_minor: int, currency: str = DEFAULT_CURRENCY) -> dict:
     """The full checkout breakdown for a tax-exclusive price.
 

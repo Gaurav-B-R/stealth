@@ -462,6 +462,10 @@ def ensure_enterprise_students_table():
         ))
 
 
+def _is_sqlite(conn) -> bool:
+    return conn.dialect.name == "sqlite"
+
+
 def _table_exists(conn, table_name: str) -> bool:
     if engine.dialect.name == "sqlite":
         result = conn.execute(
@@ -966,6 +970,35 @@ def ensure_enterprise_crm_tables():
             conn.execute(text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_subscriptions_org "
                 "ON enterprise_subscriptions(organization_id)"
+            ))
+
+        # --- enterprise_subscriptions: recurring-mandate columns -------------
+        if _table_exists(conn, "enterprise_subscriptions"):
+            sub_cols2 = _get_table_columns(conn, "enterprise_subscriptions")
+            for col, ddl in (
+                ("cancel_at_period_end", "BOOLEAN NOT NULL DEFAULT 0" if _is_sqlite(conn) else "BOOLEAN NOT NULL DEFAULT FALSE"),
+                ("canceled_at", "TIMESTAMP"),
+                ("mandate_status", "VARCHAR"),
+            ):
+                if col not in sub_cols2:
+                    conn.execute(text(f"ALTER TABLE enterprise_subscriptions ADD COLUMN {col} {ddl}"))
+
+        # --- enterprise_razorpay_plans (recurring mandate plan cache) --------
+        if not _table_exists(conn, "enterprise_razorpay_plans"):
+            conn.execute(text(f"""
+                CREATE TABLE enterprise_razorpay_plans (
+                    id {pk},
+                    plan_key VARCHAR NOT NULL,
+                    currency VARCHAR NOT NULL DEFAULT 'INR',
+                    amount_minor INTEGER NOT NULL,
+                    period VARCHAR NOT NULL DEFAULT 'monthly',
+                    razorpay_plan_id VARCHAR NOT NULL UNIQUE,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_ent_rzp_plan "
+                "ON enterprise_razorpay_plans (plan_key, currency, amount_minor, period)"
             ))
 
         # --- enterprise_subscription_payments ---------------------------------
@@ -2651,6 +2684,7 @@ def ensure_enterprise_credit_tables():
                     plan_credits_period VARCHAR,
                     plan_credits_granted INTEGER NOT NULL DEFAULT 0,
                     plan_credits_remaining INTEGER NOT NULL DEFAULT 0,
+                    plan_credits_once_at TIMESTAMP,
                     infra_fee_paid_until {ts},
                     copilot_usage_date VARCHAR,
                     copilot_msgs_today INTEGER NOT NULL DEFAULT 0,
@@ -2678,9 +2712,19 @@ def ensure_enterprise_credit_tables():
                 ("plan_credits_period", "VARCHAR"),
                 ("plan_credits_granted", "INTEGER NOT NULL DEFAULT 0"),
                 ("plan_credits_remaining", "INTEGER NOT NULL DEFAULT 0"),
+                ("plan_credits_once_at", "TIMESTAMP"),
             ):
                 if col not in wallet_cols:
                     conn.execute(text(f"ALTER TABLE enterprise_credit_wallets ADD COLUMN {col} {ddl}"))
+                    if col == "plan_credits_once_at":
+                        # Backfill: a wallet already carrying a ":once" key has HAD its
+                        # one-time grant. Without this the marker starts NULL for every
+                        # existing org, and the first sandbox->paid->lapse cycle after this
+                        # deploy would hand out the demo credits a second time.
+                        conn.execute(text(
+                            "UPDATE enterprise_credit_wallets SET plan_credits_once_at = created_at "
+                            "WHERE plan_credits_period LIKE '%:once'"
+                        ))
 
         # --- enterprise_credit_transactions -----------------------------------
         if not _table_exists(conn, "enterprise_credit_transactions"):

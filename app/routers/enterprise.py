@@ -2753,6 +2753,16 @@ def _serialize_subscription_state(state: dict) -> dict:
         "grandfathered": state.get("grandfathered", False),
         "grace_ends_at": state.get("grace_ends_at"),
         "over_cap": state.get("over_cap", False),
+        # A paid tier whose period ran out. Without these the UI shows a lapsed customer a
+        # fresh sandbox and never tells them why they lost their seats and credits.
+        "plan_lapsed": state.get("plan_lapsed", False),
+        "auto_renews": state.get("auto_renews", False),
+        "has_mandate": state.get("has_mandate", False),
+        "cancel_at_period_end": state.get("cancel_at_period_end", False),
+        "mandate_status": state.get("mandate_status"),
+        "lapsed_plan": state.get("lapsed_plan"),
+        "lapsed_plan_label": state.get("lapsed_plan_label"),
+        "lapsed_at": state.get("lapsed_at"),
         # Tier economics, so the plan chip and the credits panel need no second request.
         "included_credits": state.get("included_credits", 0),
         "credits_recur": state.get("credits_recur", False),
@@ -4743,32 +4753,6 @@ def enterprise_dashboard(
         {"visa_type": vt or "—", "count": int(count)} for vt, count in visa_type_rows
     ]
 
-    # Parallel workstreams — where the ADMISSIONS side of every case stands, independent of
-    # the visa pipeline above. Both are intake columns (enterprise_client_fields), so they
-    # exist on every client from day one; option order is the funnel order.
-    def _intake_choice_counts(column, field_key: str) -> list[dict]:
-        raw = dict(
-            _dash_scope(_scoped_agg(column, func.count(models.EnterpriseClient.id)), branch_id)
-            .group_by(column)
-            .all()
-        )
-        rows = [
-            {"key": opt["key"], "label": opt["label"], "count": int(raw.pop(opt["key"], 0))}
-            for opt in client_fields.CLIENT_PROFILE_OPTIONS[field_key]
-        ]
-        # Whatever is left is NULL or a legacy value — one honest bucket, not a silent drop.
-        unrecorded = sum(int(v) for v in raw.values())
-        if unrecorded:
-            rows.append({"key": "", "label": "Not recorded", "count": unrecorded})
-        return rows
-
-    admissions_pipeline = _intake_choice_counts(
-        models.EnterpriseClient.admission_stage, "admission_stage"
-    )
-    english_test_pipeline = _intake_choice_counts(
-        models.EnterpriseClient.english_test_status, "english_test_status"
-    )
-
     # Top destination countries
     country_rows = (
         _dash_scope(
@@ -5003,8 +4987,6 @@ def enterprise_dashboard(
             "new_this_month": new_this_month,
         },
         "pipeline": pipeline,
-        "admissions_pipeline": admissions_pipeline,
-        "english_test_pipeline": english_test_pipeline,
         "category_counts": category_counts,
         "visa_type_counts": visa_type_counts,
         "top_countries": top_countries,
@@ -7280,6 +7262,133 @@ def _reconcile_plan_payment(db: Session, *, plan_row, entity: dict, order_id: st
     return {"status": "ok"}
 
 
+def _sub_by_mandate(db: Session, subscription_id: str):
+    if not subscription_id:
+        return None
+    return (
+        db.query(models.EnterpriseSubscription)
+        .filter(models.EnterpriseSubscription.razorpay_subscription_id == subscription_id)
+        .first()
+    )
+
+
+def _handle_mandate_lifecycle(db: Session, *, event_name: str, event: dict) -> dict:
+    """Record a mandate state change. Never moves money; only decides whether it will again."""
+    entity = (((event.get("payload") or {}).get("subscription") or {}).get("entity")) or {}
+    subscription_id = str(entity.get("id") or "").strip()
+    sub = _sub_by_mandate(db, subscription_id)
+    if not sub:
+        return {"status": "ignored", "reason": "mandate_not_found"}
+
+    state = event_name.split(".", 1)[1]           # halted | cancelled | paused | activated | ...
+    sub.mandate_status = "active" if state in {"activated", "resumed"} else state
+    if state in {"cancelled", "completed", "halted", "paused"}:
+        # Stop auto-renewal. Access is NOT revoked here — `current_period_end` still governs
+        # that, so the customer keeps the time they already paid for and lapses naturally.
+        sub.cancel_at_period_end = True
+        if state in {"cancelled", "completed"} and sub.canceled_at is None:
+            sub.canceled_at = datetime.utcnow()
+    else:
+        sub.cancel_at_period_end = False
+        sub.canceled_at = None
+    db.commit()
+    logger.info("mandate: org=%s %s -> %s", sub.organization_id, subscription_id, sub.mandate_status)
+    return {"status": "ok", "mandate_status": sub.mandate_status}
+
+
+def _handle_subscription_charged(db: Session, *, event: dict, payment_entity: dict | None = None) -> dict:
+    """A recurring charge succeeded: extend the paid period and grant the month's credits.
+
+    Idempotent on the Razorpay payment id — Razorpay retries webhooks, and applying the same
+    renewal twice would hand out a second month of credits for one charge.
+    """
+    payload = event.get("payload") or {}
+    entity = payment_entity or ((payload.get("payment") or {}).get("entity")) or {}
+    sub_entity = ((payload.get("subscription") or {}).get("entity")) or {}
+    subscription_id = (
+        str(entity.get("subscription_id") or "").strip()
+        or str(sub_entity.get("id") or "").strip()
+    )
+    payment_id = str(entity.get("id") or "").strip()
+    if not subscription_id or not payment_id:
+        return {"status": "ignored", "reason": "missing_ids"}
+
+    sub = _sub_by_mandate(db, subscription_id)
+    seed_row = (
+        db.query(models.EnterpriseSubscriptionPayment)
+        .filter(models.EnterpriseSubscriptionPayment.razorpay_subscription_id == subscription_id)
+        .order_by(models.EnterpriseSubscriptionPayment.id.asc())
+        .first()
+    )
+    if sub is None and seed_row is None:
+        return {"status": "ignored", "reason": "mandate_not_found"}
+    org_id = int(sub.organization_id if sub is not None else seed_row.organization_id)
+
+    # IDEMPOTENCY: this exact charge may only be applied once.
+    if db.query(models.EnterpriseSubscriptionPayment).filter(
+        models.EnterpriseSubscriptionPayment.razorpay_payment_id == payment_id
+    ).first():
+        return {"status": "ok", "idempotent": True}
+
+    plan_key = billing.normalize_plan_key(seed_row.plan if seed_row else (sub.plan if sub else None))
+    if plan_key not in billing.PAID_PLAN_KEYS:
+        return {"status": "ignored", "reason": "not_a_paid_plan"}
+
+    amount = int(entity.get("amount") or 0)
+    currency = money.normalize_currency(entity.get("currency"), strict=False)
+    # Re-derive the tax split from the amount actually charged rather than copying the seed
+    # row: a price change between periods must not be reported with the old period's tax.
+    subtotal = money.tax_inclusive_net_minor(amount, currency) if amount else 0
+    tax = max(0, amount - subtotal)
+
+    db.add(models.EnterpriseSubscriptionPayment(
+        organization_id=org_id,
+        created_by_user_id=(seed_row.created_by_user_id if seed_row else None),
+        plan=plan_key,
+        billing_cycle="monthly",
+        amount_paise=amount,
+        subtotal_paise=subtotal,
+        tax_paise=tax,
+        tax_percent=(seed_row.tax_percent if seed_row else None),
+        tax_label=(seed_row.tax_label if seed_row else None),
+        included_credits=billing.included_credits_for(plan_key),
+        currency=currency,
+        # Each renewal needs its own unique "order" key; the payment id is unique per charge.
+        razorpay_order_id=payment_id,
+        razorpay_payment_id=payment_id,
+        razorpay_subscription_id=subscription_id,
+        status="verified",
+        verified_at=datetime.utcnow(),
+    ))
+
+    now = datetime.utcnow()
+    sub = billing.get_or_create_org_subscription(db, org_id, commit=False)
+    sub.plan = plan_key
+    sub.status = "active"
+    sub.razorpay_subscription_id = subscription_id
+    sub.mandate_status = "active"
+    # A successful charge means the mandate is healthy again. _handle_mandate_lifecycle sets
+    # cancel_at_period_end on "halted" (card declining); leaving it set after Razorpay
+    # recovers would tell a paying customer forever that their plan is about to stop.
+    # A genuine customer-initiated cancel re-arrives as subscription.cancelled and re-sets it.
+    sub.cancel_at_period_end = False
+    sub.canceled_at = None
+    base = sub.current_period_end
+    if base is not None and getattr(base, "tzinfo", None):
+        base = base.replace(tzinfo=None)
+    # Stack on the period already bought so a charge arriving early never shortens it.
+    start = base if (base and base > now) else now
+    sub.current_period_end = start + timedelta(days=billing.PLAN_PERIOD_DAYS)
+    db.commit()
+
+    try:
+        credits.sync_plan_credits(db, org_id, commit=True)
+    except Exception:
+        logger.exception("subscription-charged: credit grant failed for org %s", org_id)
+    logger.info("subscription-charged: org=%s renewed to %s", org_id, sub.current_period_end)
+    return {"status": "ok", "renewed_until": str(sub.current_period_end)}
+
+
 @router.post("/webhook/razorpay-credits")
 async def enterprise_credits_webhook(request: Request, db: Session = Depends(get_db)):
     """Reconcile credit / infra-fee payments that the browser never confirmed.
@@ -7317,12 +7426,33 @@ async def enterprise_credits_webhook(request: Request, db: Session = Depends(get
         event = json.loads(body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid webhook payload.")
-    if str(event.get("event") or "").strip() != "payment.captured":
+    event_name = str(event.get("event") or "").strip()
+
+    # A MANDATE LIFECYCLE CHANGE. "halted" means Razorpay gave up retrying a failing card;
+    # "cancelled"/"completed"/"paused" mean no further charge is coming. None of these move
+    # money, but all of them mean the plan must stop auto-renewing — and, critically, the org
+    # must lapse when its paid period runs out instead of keeping the tier forever.
+    if event_name in {"subscription.halted", "subscription.cancelled", "subscription.completed",
+                      "subscription.paused", "subscription.activated", "subscription.resumed"}:
+        return _handle_mandate_lifecycle(db, event_name=event_name, event=event)
+
+    # A RENEWAL CHARGE. This is what actually makes the subscription recurring: Razorpay
+    # auto-debits the mandate each month and tells us here. Without handling it the customer
+    # is charged and receives nothing — no extended period and no monthly credits.
+    if event_name == "subscription.charged":
+        return _handle_subscription_charged(db, event=event)
+
+    if event_name != "payment.captured":
         return {"status": "ignored"}
 
     entity = (((event.get("payload") or {}).get("payment") or {}).get("entity")) or {}
     order_id = str(entity.get("order_id") or "").strip()
     if not order_id:
+        # A subscription's FIRST charge arrives as payment.captured with a subscription_id
+        # and no order_id. Route it to the same renewal path so the mandate is recorded even
+        # when the buyer abandoned the browser callback.
+        if str(entity.get("subscription_id") or "").strip():
+            return _handle_subscription_charged(db, event=event, payment_entity=entity)
         return {"status": "ignored"}
 
     query = db.query(models.EnterpriseCreditPayment).filter(
@@ -7723,6 +7853,123 @@ def enterprise_billing_subscription(
     }
 
 
+AUTO_RENEW = os.getenv("ENTERPRISE_AUTO_RENEW", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+# How many billing cycles a mandate is authorised for. Razorpay requires a finite count;
+# ~10 years of monthly charges is effectively "until cancelled" while still bounded.
+RECURRING_TOTAL_COUNT = int(os.getenv("ENTERPRISE_RECURRING_TOTAL_COUNT", "120") or "120")
+
+
+def _ensure_razorpay_plan_id(db: Session, *, plan_key: str, currency: str, amount_minor: int) -> str:
+    """Get-or-create the Razorpay Plan backing this tier at this exact charged amount.
+
+    Keyed on (tier, currency, amount, period) so a coupon that changes the amount gets its
+    own plan automatically. Razorpay does not dedupe plans by name, so without this cache
+    every checkout would mint a duplicate plan and reconciliation would become guesswork.
+    """
+    period = "monthly"
+    existing = (
+        db.query(models.EnterpriseRazorpayPlan)
+        .filter(
+            models.EnterpriseRazorpayPlan.plan_key == plan_key,
+            models.EnterpriseRazorpayPlan.currency == currency,
+            models.EnterpriseRazorpayPlan.amount_minor == int(amount_minor),
+            models.EnterpriseRazorpayPlan.period == period,
+        )
+        .first()
+    )
+    if existing:
+        return existing.razorpay_plan_id
+
+    label = (billing.get_plan(plan_key) or {}).get("label", plan_key)
+    data = _razorpay_request("POST", "/plans", {
+        "period": period,
+        "interval": 1,
+        "item": {
+            "name": f"Rilono Enterprise — {label}",
+            # The customer-visible amount INCLUDES GST: this is what gets auto-charged.
+            "description": f"{label} plan, billed monthly (incl. tax)",
+            "amount": int(amount_minor),
+            "currency": currency,
+        },
+        "notes": {"plan_key": plan_key, "price_book_version": money.PRICE_BOOK_VERSION},
+    })
+    plan_id = str(data.get("id") or "").strip()
+    if not plan_id.startswith("plan_"):
+        raise HTTPException(status_code=502, detail="Could not set up the recurring plan.")
+    db.add(models.EnterpriseRazorpayPlan(
+        plan_key=plan_key, currency=currency, amount_minor=int(amount_minor),
+        period=period, razorpay_plan_id=plan_id,
+    ))
+    try:
+        db.commit()
+    except Exception:
+        # Another request created the same row concurrently — reuse theirs and drop ours.
+        db.rollback()
+        again = (
+            db.query(models.EnterpriseRazorpayPlan)
+            .filter(
+                models.EnterpriseRazorpayPlan.plan_key == plan_key,
+                models.EnterpriseRazorpayPlan.currency == currency,
+                models.EnterpriseRazorpayPlan.amount_minor == int(amount_minor),
+                models.EnterpriseRazorpayPlan.period == period,
+            )
+            .first()
+        )
+        if again:
+            return again.razorpay_plan_id
+        raise
+    return plan_id
+
+
+def _activate_free_plan(
+    db: Session, *, organization, user, plan: dict, cycle: str,
+    subtotal: int, tax: int, quote: dict, currency: str,
+    coupon_code: str | None, coupon_percent, list_amount: int,
+) -> None:
+    """Activate a paid tier that a 100%-off coupon has fully covered.
+
+    Writes the same rows a real payment would (a zero-amount, verified payment row for the
+    audit trail, the subscription period, and the credit grant) so a comped account is
+    indistinguishable downstream from a paying one — including lapsing on schedule.
+    """
+    now = datetime.utcnow()
+    period_days = 365 if cycle == "yearly" else billing.PLAN_PERIOD_DAYS
+    row = models.EnterpriseSubscriptionPayment(
+        organization_id=organization.id,
+        created_by_user_id=user.id,
+        plan=plan["key"],
+        billing_cycle=cycle,
+        amount_paise=0,
+        subtotal_paise=subtotal,
+        tax_paise=tax,
+        tax_percent=quote.get("tax_percent"),
+        tax_label=quote.get("tax_label"),
+        included_credits=int(plan.get("included_credits") or 0),
+        currency=currency,
+        razorpay_order_id=f"free_{organization.id}_{secrets.token_hex(8)}"[:40],
+        status="verified",
+        coupon_code=coupon_code,
+        coupon_percent_off=coupon_percent,
+        original_amount_paise=list_amount,
+        verified_at=now,
+    )
+    db.add(row)
+    sub = billing.get_or_create_org_subscription(db, organization.id, commit=False)
+    sub.plan = plan["key"]
+    sub.status = "active"
+    base = sub.current_period_end
+    if base is not None and getattr(base, "tzinfo", None):
+        base = base.replace(tzinfo=None)
+    start = base if (base and base > now) else now
+    sub.current_period_end = start + timedelta(days=period_days)
+    db.commit()
+    try:
+        credits.sync_plan_credits(db, organization.id, commit=True)
+    except Exception:
+        logger.exception("free-plan: credit grant failed for org %s", organization.id)
+
+
 @router.post("/billing/checkout")
 def enterprise_billing_checkout(
     payload: EnterpriseBillingCheckoutRequest,
@@ -7757,8 +8004,6 @@ def enterprise_billing_checkout(
         )
         coupon_percent = enterprise_coupons.parse_percent_off(coupon.percent_off)
         coupon_code = enterprise_coupons.normalize_code(coupon.code)
-        # Validate the discount against the ex-tax subtotal (floor checks, 100%-off rules).
-        enterprise_coupons.apply_to_amount_or_400(list_amount, coupon_percent)
 
     # list → discount → GST → total, in that order and in exactly one place.
     quote = billing.checkout_quote(plan["key"], plan_currency, discount_percent=coupon_percent)
@@ -7768,10 +8013,119 @@ def enterprise_billing_checkout(
     # every Indian customer by 18% and produce an invoice the pricing page contradicts.
     amount = quote["total_minor"]
 
+    # A fully-covering discount leaves nothing to charge. /coupons/validate already previews
+    # this as "free" and the UI renders ₹0/mo, so rejecting it here (the old
+    # apply_to_amount_or_400 floor check) meant the customer was shown a free plan and then
+    # hard-failed with a 400 at the moment they clicked pay. Activate it directly instead —
+    # this mirrors what the credits top-up path already does for a 100%-off coupon.
+    if amount < money.min_charge_minor(plan_currency):
+        _activate_free_plan(
+            db, organization=organization, user=current_user, plan=plan, cycle=cycle,
+            subtotal=subtotal, tax=tax, quote=quote, currency=plan_currency,
+            coupon_code=coupon_code, coupon_percent=coupon_percent, list_amount=list_amount,
+        )
+        return {
+            "action": "activated",
+            "free": True,
+            "message": f"Your {plan['label']} plan is now active.",
+            "subscription": _serialize_subscription_state(
+                billing.build_subscription_state(db, organization.id)
+            ),
+            "wallet": credits.wallet_state(db, organization.id),
+        }
+
     if not _razorpay_enabled():
         return {
             "action": "contact_sales",
             "message": "Online checkout is being enabled. Please contact sales to activate your plan.",
+        }
+
+    notes = {
+        "organization_id": str(organization.id),
+        "plan": plan["key"],
+        "billing_cycle": cycle,
+        "user_id": str(current_user.id),
+        "coupon_code": coupon_code or "",
+        "subtotal_paise": str(subtotal),
+        "tax_paise": str(tax),
+        "tax_label": quote["tax_label"] or "",
+        "price_book_version": money.PRICE_BOOK_VERSION,
+    }
+
+    # RECURRING PATH (the default). A Razorpay Subscription is a MANDATE: standing permission
+    # to auto-charge every month. The legacy /orders path below charges once and leaves the
+    # customer to remember to come back — which for a product sold as "₹2,999/month" means it
+    # silently stops billing after one month. Set ENTERPRISE_AUTO_RENEW=false to fall back.
+    if AUTO_RENEW:
+        # Any mandate this org already holds is superseded ONLY once the replacement is paid
+        # for — see the cancellation in /billing/verify. Razorpay charges every mandate it
+        # holds, so an org upgrading Starter -> Growth must not keep both; but opening a
+        # checkout is not a commitment to buy, and cancelling here would mean that merely
+        # opening the modal and closing it silently kills auto-renewal on the plan they are
+        # still paying for, with nothing to re-arm it.
+        rzp_plan_id = _ensure_razorpay_plan_id(
+            db, plan_key=plan["key"], currency=plan_currency, amount_minor=amount,
+        )
+        sub_data = _razorpay_request("POST", "/subscriptions", {
+            "plan_id": rzp_plan_id,
+            "total_count": RECURRING_TOTAL_COUNT,
+            "customer_notify": 1,
+            "quantity": 1,
+            "notes": notes,
+        })
+        subscription_id = str(sub_data.get("id") or "").strip()
+        if not subscription_id.startswith("sub_"):
+            raise HTTPException(status_code=502, detail="Could not start the subscription.")
+        # The payment row keys on razorpay_order_id (unique), and for the recurring flow the
+        # subscription id plays that role until the first charge arrives.
+        db.add(models.EnterpriseSubscriptionPayment(
+            organization_id=organization.id,
+            created_by_user_id=current_user.id,
+            plan=plan["key"],
+            billing_cycle=cycle,
+            amount_paise=amount,
+            subtotal_paise=subtotal,
+            tax_paise=tax,
+            tax_percent=quote.get("tax_percent"),
+            tax_label=quote.get("tax_label"),
+            included_credits=billing.included_credits_for(plan["key"]),
+            currency=plan_currency,
+            razorpay_order_id=subscription_id,
+            razorpay_subscription_id=subscription_id,
+            coupon_code=coupon_code,
+            coupon_percent_off=coupon_percent,
+            original_amount_paise=list_amount,
+            status="created",
+        ))
+        db.commit()
+        return {
+            "action": "checkout",
+            "checkout_mode": "subscription",
+            "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
+            "subscription_id": subscription_id,
+            "amount": amount,
+            "original_amount": list_amount,
+            "subtotal": subtotal,
+            "discount_paise": list_amount - subtotal,
+            "tax_paise": tax,
+            "tax_label": quote["tax_label"],
+            "tax_percent": quote["tax_percent"],
+            "total_display": quote["total_display"],
+            "subtotal_display": quote["subtotal_display"],
+            "tax_display": quote["tax_display"],
+            "coupon_code": coupon_code,
+            "coupon_percent_off": float(coupon_percent) if coupon_percent is not None else None,
+            "currency": plan_currency,
+            "plan": plan["key"],
+            "plan_label": plan["label"],
+            "included_credits": billing.included_credits_for(plan["key"]),
+            "billing_cycle": cycle,
+            "auto_renew": True,
+            "organization_name": organization.company_name,
+            "prefill": {
+                "name": current_user.full_name or "",
+                "email": current_user.email or "",
+            },
         }
 
     receipt = f"reln_{organization.id}_{secrets.token_hex(6)}"[:40]
@@ -7779,17 +8133,7 @@ def enterprise_billing_checkout(
         "amount": amount,
         "currency": plan_currency,
         "receipt": receipt,
-        "notes": {
-            "organization_id": str(organization.id),
-            "plan": plan["key"],
-            "billing_cycle": cycle,
-            "user_id": str(current_user.id),
-            "coupon_code": coupon_code or "",
-            "subtotal_paise": str(subtotal),
-            "tax_paise": str(tax),
-            "tax_label": quote["tax_label"] or "",
-            "price_book_version": money.PRICE_BOOK_VERSION,
-        },
+        "notes": notes,
     })
     order_id = str(order.get("id") or "").strip()
     if not order_id:
@@ -7819,6 +8163,8 @@ def enterprise_billing_checkout(
 
     return {
         "action": "checkout",
+        "checkout_mode": "order",
+        "auto_renew": False,
         "razorpay_key_id": os.getenv("RAZORPAY_KEY_ID", "").strip(),
         "order_id": order_id,
         # `amount` is the charged total — the Razorpay modal must open on this.
@@ -7844,6 +8190,47 @@ def enterprise_billing_checkout(
             "name": current_user.full_name or "",
             "email": current_user.email or "",
         },
+    }
+
+
+@router.post("/billing/cancel")
+def enterprise_billing_cancel(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_active_user),
+):
+    """Stop auto-renewal at the end of the period already paid for.
+
+    Deliberately NOT immediate: the customer bought this month, so they keep it. Only the
+    NEXT charge is cancelled. Access ends when `current_period_end` passes, exactly as it
+    would if they had simply not renewed.
+    """
+    _, organization, _ = _require_enterprise_membership(
+        db=db, user=current_user, request=request, require_capability="billing.manage"
+    )
+    sub = billing.get_or_create_org_subscription(db, organization.id, commit=False)
+    mandate_id = (sub.razorpay_subscription_id or "").strip()
+    if not mandate_id:
+        raise HTTPException(status_code=400, detail="This plan does not auto-renew, so there is nothing to cancel.")
+    if sub.cancel_at_period_end:
+        return {
+            "message": "Auto-renewal is already off.",
+            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+        }
+    try:
+        _razorpay_request("POST", f"/subscriptions/{mandate_id}/cancel", {"cancel_at_cycle_end": 1})
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("billing-cancel: Razorpay cancel failed for org %s", organization.id)
+        raise HTTPException(status_code=502, detail="Could not cancel the subscription right now.")
+
+    sub.cancel_at_period_end = True
+    sub.canceled_at = datetime.utcnow()
+    db.commit()
+    return {
+        "message": "Auto-renewal is off. Your plan stays active until the end of the current period.",
+        "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
     }
 
 
@@ -7881,9 +8268,20 @@ def enterprise_billing_verify(
             "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
         }
 
+    # THE TWO FLOWS SIGN DIFFERENT STRINGS, IN DIFFERENT ORDERS. A one-off order signs
+    # "<order_id>|<payment_id>"; a recurring mandate signs "<payment_id>|<subscription_id>".
+    # Applying the order formula to a mandate rejects every legitimate recurring payment and
+    # marks its row failed — the customer is charged and the plan never activates. The flow is
+    # read from the STORED row, never from the request, so a caller cannot choose the formula.
+    is_recurring = bool(payment_row.razorpay_subscription_id)
+    signed = (
+        f"{payload.razorpay_payment_id}|{payment_row.razorpay_subscription_id}"
+        if is_recurring
+        else f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}"
+    )
     expected_signature = hmac.new(
         key_secret.encode("utf-8"),
-        f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}".encode("utf-8"),
+        signed.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
     if not hmac.compare_digest(expected_signature, payload.razorpay_signature):
@@ -7892,8 +8290,33 @@ def enterprise_billing_verify(
         db.commit()
         raise HTTPException(status_code=400, detail="Invalid payment signature.")
 
+    # IDEMPOTENCY ACROSS BOTH PATHS, not just this one. The renewal webhook may have already
+    # applied THIS charge — it arrives first whenever the buyer closes the tab or the 3DS
+    # redirect is slow — and it records the charge as its own row keyed on the payment id,
+    # leaving this seed row still "created". The status check above therefore does not fire,
+    # and re-applying here would stack a second 30 days onto a period the webhook already
+    # extended and mint a second month of credits for one payment.
+    charge_id = payload.razorpay_payment_id.strip()
+    already = (
+        db.query(models.EnterpriseSubscriptionPayment)
+        .filter(
+            models.EnterpriseSubscriptionPayment.organization_id == organization.id,
+            models.EnterpriseSubscriptionPayment.razorpay_payment_id == charge_id,
+        )
+        .first()
+    )
+    if already is not None:
+        payment_row.status = "verified"
+        payment_row.verified_at = payment_row.verified_at or datetime.utcnow()
+        db.commit()
+        return {
+            "message": "This payment has already been applied.",
+            "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
+            "wallet": credits.wallet_state(db, organization.id),
+        }
+
     now = datetime.utcnow()
-    payment_row.razorpay_payment_id = payload.razorpay_payment_id.strip()
+    payment_row.razorpay_payment_id = charge_id
     payment_row.status = "verified"
     payment_row.verified_at = now
     payment_row.error_message = None
@@ -7904,6 +8327,29 @@ def enterprise_billing_verify(
     sub = billing.get_or_create_org_subscription(db, organization.id, commit=False)
     sub.plan = payment_row.plan
     sub.status = "active"
+    if is_recurring:
+        # NOW cancel the mandate this one replaces — the replacement is paid for, so there is
+        # no window in which the org has neither. Razorpay auto-debits EVERY mandate it holds,
+        # so leaving the old one live would charge an upgrading customer for both tiers every
+        # month. Immediate (not cycle-end) because access is governed by `current_period_end`,
+        # which this payment just extended.
+        superseded = (sub.razorpay_subscription_id or "").strip()
+        if superseded and superseded != payment_row.razorpay_subscription_id:
+            try:
+                _razorpay_request("POST", f"/subscriptions/{superseded}/cancel", {"cancel_at_cycle_end": 0})
+            except Exception:
+                # Already cancelled is fine. Anything else must not fail the sale the customer
+                # just paid for, but it MUST be loud: an uncancelled mandate is a double charge.
+                logger.exception(
+                    "billing: could not cancel superseded mandate %s for org %s — CHECK FOR DOUBLE BILLING",
+                    superseded, organization.id,
+                )
+        # Record the mandate so a renewal webhook can find this org, and clear any earlier
+        # cancellation — re-subscribing must not stay flagged to stop at period end.
+        sub.razorpay_subscription_id = payment_row.razorpay_subscription_id
+        sub.mandate_status = "active"
+        sub.cancel_at_period_end = False
+        sub.canceled_at = None
     # Stack rather than reset, so paying early never shortens the period already bought.
     base = sub.current_period_end
     if base is not None and getattr(base, "tzinfo", None):

@@ -63,6 +63,13 @@ PAISE_PER_CREDIT = int(os.getenv("ENTERPRISE_PAISE_PER_CREDIT", "1000") or "1000
 # Prepaid means never run Gemini at a loss; set false for a soft/track-only launch.
 ENFORCE = os.getenv("ENTERPRISE_CREDITS_ENFORCE", "true").strip().lower() in {"1", "true", "yes", "on"}
 
+# Were the legacy all-in prices (credit top-ups, the retired infra fee) inclusive of GST?
+# True is the correct default for a GST-registered supplier quoting a single price. This only
+# affects REPORTING — no customer is charged differently either way.
+LEGACY_PRICES_TAX_INCLUSIVE = os.getenv(
+    "ENTERPRISE_LEGACY_PRICES_TAX_INCLUSIVE", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+
 # Whether the UNSPENT part of a period's included allowance carries into the next period.
 # Default OFF, which is what "1,000 credits/month" means to a buyer and what keeps the
 # deferred-liability line on the revenue report from compounding: at each rollover the
@@ -444,9 +451,20 @@ def get_wallet_for_update(db: Session, organization_id: int) -> models.Enterpris
         db.query(models.EnterpriseCreditWallet)
         .filter(models.EnterpriseCreditWallet.organization_id == int(organization_id))
         .with_for_update()
+        .populate_existing()          # see below — without this the lock is decorative
         .first()
     )
-    return locked or get_or_create_wallet(db, organization_id, commit=False)
+    if locked is not None:
+        # THE LOCK ALONE IS NOT ENOUGH. The line above first put this row in the Session's
+        # identity map via get_or_create_wallet, and SQLAlchemy will NOT overwrite the
+        # attributes of an object it already holds unexpired — so the locked query returns
+        # the same Python object still carrying values read BEFORE the lock was acquired.
+        # The read-modify-write would then compute from a stale balance and write it back as
+        # an absolute value: exactly the lost update this function exists to prevent, and the
+        # window is long (a handler may load the wallet, spend 30-60s in a Gemini call, then
+        # debit). populate_existing() forces the locked SELECT's values onto the instance.
+        return locked
+    return get_or_create_wallet(db, organization_id, commit=False)
 
 
 def active_client_count(db: Session, organization_id: int) -> int:
@@ -483,11 +501,22 @@ def _period_start_for(sub, plan_key: str, *, now: Optional[datetime] = None) -> 
     if plan_key in billing.PAID_PLAN_KEYS:
         end = _naive(getattr(sub, "current_period_end", None))
         if end:
-            start = end - timedelta(days=billing.PLAN_PERIOD_DAYS)
-            # A lapsed row whose period ended long ago must not keep re-granting an old
-            # period: walk forward so the key always describes the period containing `now`.
-            while start + timedelta(days=billing.PLAN_PERIOD_DAYS) <= now:
-                start = start + timedelta(days=billing.PLAN_PERIOD_DAYS)
+            period = timedelta(days=billing.PLAN_PERIOD_DAYS)
+            start = end - period
+            # Legacy yearly rows cover far more than one period, so the anchor can start in
+            # the future; step back until it holds `now`.
+            while start > now:
+                start -= period
+            # Walk forward to the period containing `now`, but NEVER past the coverage that
+            # was actually paid for. `effective_plan_key` keeps a paid tier alive for
+            # PLAN_GRACE_DAYS after `current_period_end`; without the `< end` guard the key
+            # would tick over the moment the period ended and hand out a whole free monthly
+            # allowance inside that unpaid grace window — reintroducing exactly the
+            # mint-credits-forever bug that paid_period_expired() exists to kill. Holding the
+            # key at the last PAID period means the grace window grants nothing, and the next
+            # real payment (which moves `current_period_end`) is what opens the next grant.
+            while (start + period) <= now and (start + period) < end:
+                start += period
             return start
         return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     created = _naive(getattr(sub, "created_at", None)) or now
@@ -502,6 +531,19 @@ def plan_credits_period_key(sub, plan_key: str, *, now: Optional[datetime] = Non
     wait for the next renewal for the tier they just paid for.
     """
     return f"{plan_key}:{_period_start_for(sub, plan_key, now=now):%Y-%m-%d}"
+
+
+def _has_ever_paid(db: Session, organization_id: int) -> bool:
+    """Has this org ever completed a plan purchase? Used to deny the sandbox onboarding
+    grant to a lapsed paying customer, who is churning rather than evaluating."""
+    return db.query(
+        db.query(models.EnterpriseSubscriptionPayment)
+        .filter(
+            models.EnterpriseSubscriptionPayment.organization_id == int(organization_id),
+            models.EnterpriseSubscriptionPayment.status.in_(REVENUE_PAYMENT_STATUSES),
+        )
+        .exists()
+    ).scalar() or False
 
 
 def _previous_period_elapsed(wallet: models.EnterpriseCreditWallet) -> bool:
@@ -561,6 +603,20 @@ def sync_plan_credits(
     if (wallet.plan_credits_period or "") == period_key:
         return None
 
+    # "Once" must mean once per ORGANIZATION, not once per consecutive stretch on the plan.
+    # `plan_credits_period` only remembers the LATEST key, so sandbox -> paid -> lapse walks
+    # it sandbox:once -> starter:X -> sandbox:once and the equality guard above sees a
+    # different value each time. A paid customer who lapses would be handed the 100 demo
+    # credits again on every lapse cycle, unboundedly. This timestamp is the durable record.
+    # The sandbox grant is an ONBOARDING allowance for someone evaluating the product. An org
+    # that has already paid us and then lapsed is not evaluating — handing it 100 free credits
+    # rewards churn, and it is the one case where the wallet's "never granted" marker is
+    # legitimately empty (they went straight onto a paid tier and never held the sandbox).
+    if not recurring and wallet.plan_credits_once_at is None and _has_ever_paid(db, organization_id):
+        wallet.plan_credits_once_at = datetime.utcnow()
+
+    suppress_grant = not recurring and wallet.plan_credits_once_at is not None
+
     granted_before = int(wallet.plan_credits_remaining or 0)
     # Expiry is a TIME event, not a key-change event. The key also changes on an upgrade or
     # an early renewal, and clawing back there would delete allowance the customer has
@@ -582,9 +638,19 @@ def sync_plan_credits(
                 reference_type="plan_credits",
             )
 
+    # A suppressed one-time grant still ADVANCES the bookkeeping — it just hands out nothing.
+    # Returning early instead (before the claw-back above) would let a lapsing paid org keep
+    # its unspent monthly allowance forever: the counters would be zeroed without the matching
+    # credits ever leaving `balance_credits`.
+    if suppress_grant:
+        allowance = 0
+
     wallet.plan_credits_period = period_key
     wallet.plan_credits_granted = int(allowance)
     wallet.plan_credits_remaining = int(allowance)
+    if not recurring and int(allowance) > 0:
+        # Stamp the durable "the one-time grant has been used" marker.
+        wallet.plan_credits_once_at = datetime.utcnow()
 
     txn = None
     if allowance > 0:
@@ -729,6 +795,16 @@ def apply_adjustment(
     if delta < 0:
         delta = -min(-delta, int(wallet.balance_credits))  # never overdraw below 0
     wallet.balance_credits = int(wallet.balance_credits) + delta
+    if delta < 0:
+        # CLAMP, don't subtract. The only negative delta comes from issue_money_refund clawing
+        # back credits from a refunded TOP-UP, i.e. purchased credits — never plan credits. So
+        # subtracting the full claw-back from the plan bucket would shrink an allowance the
+        # refund never touched, and the next rollover would then under-expire. Clamping still
+        # guarantees the invariant that matters (the plan bucket can never exceed the balance,
+        # which is what makes a later expiry eat purchased credits), without stealing from it.
+        wallet.plan_credits_remaining = min(
+            int(wallet.plan_credits_remaining or 0), int(wallet.balance_credits)
+        )
     txn = _record_transaction(
         db, wallet=wallet, txn_type=txn_type, credits=delta, action_key=None,
         description=description, reference_type=reference_type, reference_id=reference_id, user=user,
@@ -757,20 +833,26 @@ def _sync_plan_credits_quietly(db: Session, organization_id: int, *, commit: boo
     every request and never persist it.
     """
     try:
-        txn = sync_plan_credits(db, organization_id, commit=False)
-        if commit and txn is not None:
+        # SAVEPOINT, not a bare rollback. A failed flush would otherwise leave the Session
+        # raising PendingRollbackError on every later statement, so this has to clean up —
+        # but `db.rollback()` here would discard the CALLER's uncommitted work too, and the
+        # callers are mid-transaction (a document row written, an AI action already metered).
+        # That trades a lost grant for lost customer work plus a charge for a vanished
+        # result. begin_nested() rolls back only what happened inside it and leaves the
+        # outer transaction intact and usable.
+        # "No ledger row" does NOT mean "nothing to persist". A period rollover that grants
+        # zero (a suppressed one-time grant, or a lapsed org) still advances
+        # plan_credits_period and can claw credits back. Those writes would be silently dropped
+        # on read-only paths, so the work would be redone on every request and the claw-back
+        # would never stick. The period marker is the reliable signal — db.dirty is already
+        # empty here because sync_plan_credits flushes before returning.
+        before_key = (get_or_create_wallet(db, organization_id, commit=False).plan_credits_period or "")
+        with db.begin_nested():
+            txn = sync_plan_credits(db, organization_id, commit=False)
+        after_key = (get_or_create_wallet(db, organization_id, commit=False).plan_credits_period or "")
+        if commit and (txn is not None or after_key != before_key):
             db.commit()
     except Exception:
-        # Roll back before swallowing. A failed flush leaves the Session in a state where
-        # EVERY later statement raises PendingRollbackError, so silently continuing would
-        # convert a recoverable grant failure into a 500 on the caller's real work — an AI
-        # action the org has already been metered for, or a client create. Rolling back
-        # discards only the partial grant; the caller's own uncommitted work is not at risk
-        # because this runs before any of it (see the commit= docstring above).
-        try:
-            db.rollback()
-        except Exception:
-            pass
         logger.exception("plan-credits: grant sync failed for org %s", organization_id)
 
 
@@ -2138,7 +2220,23 @@ def build_revenue_analytics(db: Session) -> dict:
     infra_revenue_paise = max(0, infra_gross_paise - infra_refunded_paise)
     gross_revenue_paise = credit_gross_paise + infra_gross_paise + plan_gross_paise
     refunds_paise = credit_refunded_paise + infra_refunded_paise + plan_refunded_paise
-    total_revenue_paise = credit_revenue_paise + infra_revenue_paise + plan_revenue_paise
+    # ALL THREE BUCKETS MUST BE ON THE SAME TAX BASIS or the total is meaningless. The plan
+    # bucket is already net of GST (the tax is a separate stamped line). The legacy credit
+    # and infra lines were sold at one all-in price with no tax line, which for a registered
+    # supplier means the price is deemed GST-INCLUSIVE — so the tax has to be backed out of
+    # them too. Adding an ex-tax figure to tax-inclusive ones overstated both revenue and the
+    # margin computed from it. Set ENTERPRISE_LEGACY_PRICES_TAX_INCLUSIVE=false if those
+    # older sales were genuinely outside GST.
+    credit_net_paise = (
+        money.tax_inclusive_net_minor(credit_revenue_paise, "INR")
+        if LEGACY_PRICES_TAX_INCLUSIVE else credit_revenue_paise
+    )
+    infra_net_paise = (
+        money.tax_inclusive_net_minor(infra_revenue_paise, "INR")
+        if LEGACY_PRICES_TAX_INCLUSIVE else infra_revenue_paise
+    )
+    legacy_tax_paise = (credit_revenue_paise - credit_net_paise) + (infra_revenue_paise - infra_net_paise)
+    total_revenue_paise = credit_net_paise + infra_net_paise + plan_revenue_paise
 
     # --- Credits sold / spent / outstanding (deferred liability) -----------
     credits_sold = int(
@@ -2230,8 +2328,13 @@ def build_revenue_analytics(db: Session) -> dict:
         "is_estimate": True,
         "credit_value_inr": paise_to_rupees(PAISE_PER_CREDIT),
         "summary": {
-            "credit_revenue_paise": credit_revenue_paise,
-            "credit_revenue_display": format_inr(credit_revenue_paise),
+            # NET of GST, on the same basis as plan revenue and total_revenue_paise — the
+            # buckets are meant to sum to the total, and mixing bases made them disagree on
+            # the same screen. The all-in figure is kept alongside for reconciliation.
+            "credit_revenue_paise": credit_net_paise,
+            "credit_revenue_display": format_inr(credit_net_paise),
+            "credit_gross_paise": credit_revenue_paise,
+            "credit_gross_display": format_inr(credit_revenue_paise),
             "credit_payment_count": credit_payment_count,
             # Recurring plan subscriptions — the primary revenue line since 2026-08-02.
             # Net of GST: `plan_tax_paise` is collected on behalf of the government and is
@@ -2244,8 +2347,10 @@ def build_revenue_analytics(db: Session) -> dict:
             "plan_refunded_paise": plan_refunded_paise,
             "plan_refunded_display": format_inr(plan_refunded_paise),
             # Retired ₹999/mo infrastructure fee — historical rows only, never grows.
-            "infra_revenue_paise": infra_revenue_paise,
-            "infra_revenue_display": format_inr(infra_revenue_paise),
+            "infra_revenue_paise": infra_net_paise,
+            "infra_revenue_display": format_inr(infra_net_paise),
+            "infra_gross_paise": infra_revenue_paise,
+            "infra_gross_display": format_inr(infra_revenue_paise),
             "infra_payment_count": infra_payment_count,
             "infra_retired": INFRA_FEE_RETIRED,
             # Net revenue (after refunds) is the headline; gross + refunds shown for transparency.
@@ -2253,6 +2358,8 @@ def build_revenue_analytics(db: Session) -> dict:
             "gross_revenue_display": format_inr(gross_revenue_paise),
             "refunds_paise": refunds_paise,
             "refunds_display": format_inr(refunds_paise),
+            "legacy_tax_paise": legacy_tax_paise,
+            "legacy_tax_display": format_inr(legacy_tax_paise),
             "total_revenue_paise": total_revenue_paise,
             "total_revenue_display": format_inr(total_revenue_paise),
             # >0 means the revenue figures above EXCLUDE that many foreign payments whose

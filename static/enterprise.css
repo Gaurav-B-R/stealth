@@ -30,6 +30,10 @@
   --radius-sm: 11px;
   --sidebar-w: 256px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* One gap for every dashboard row, and one ceiling for every scrolling feed card, so the
+     grid keeps a single rhythm instead of the per-card inline margins it grew by accident. */
+  --dash-gap: 20px;
+  --dash-feed-h: 344px;
 }
 
 * { box-sizing: border-box; }
@@ -299,7 +303,7 @@ button { font-family: inherit; cursor: pointer; }
 }
 
 /* ---------- KPI cards ---------- */
-.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px; margin-bottom: var(--dash-gap); }
 .kpi {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow-sm);
   position: relative; overflow: hidden;
@@ -1356,7 +1360,7 @@ body.ai-dock-open .toast-wrap { right: 444px; }
 .cp-hero--ie { --cp-hero-image: url('/static/assets/enterprise/client-banners/ie.jpg'); --cp-accent: #86efac; --cp-accent-glow: rgba(34, 197, 94, .29); --cp-hero-overlay: linear-gradient(90deg, rgba(3, 28, 24, .97) 0%, rgba(5, 43, 34, .90) 41%, rgba(5, 34, 28, .44) 70%, rgba(3, 20, 18, .12) 100%); }
 .cp-hero--fr { --cp-hero-image: url('/static/assets/enterprise/client-banners/fr.jpg'); --cp-accent: #bfdbfe; --cp-accent-glow: rgba(37, 99, 235, .30); --cp-hero-overlay: linear-gradient(90deg, rgba(4, 16, 46, .97) 0%, rgba(6, 28, 74, .90) 41%, rgba(6, 24, 62, .45) 70%, rgba(3, 14, 38, .13) 100%); }
 .cp-hero--es { --cp-hero-image: url('/static/assets/enterprise/client-banners/es.jpg'); --cp-accent: #fdba74; --cp-accent-glow: rgba(185, 28, 28, .30); --cp-hero-overlay: linear-gradient(90deg, rgba(38, 8, 6, .97) 0%, rgba(60, 13, 9, .90) 41%, rgba(48, 11, 8, .45) 70%, rgba(28, 7, 5, .13) 100%); }
-.cp-hero--nl { --cp-accent: #bae6fd; --cp-accent-glow: rgba(14, 165, 233, .30); --cp-hero-overlay: linear-gradient(90deg, rgba(3, 20, 34, .97) 0%, rgba(4, 31, 51, .90) 41%, rgba(4, 25, 42, .45) 70%, rgba(2, 14, 26, .13) 100%); }
+.cp-hero--nl { --cp-hero-image: url('/static/assets/enterprise/client-banners/nl.jpg'); --cp-accent: #bae6fd; --cp-accent-glow: rgba(14, 165, 233, .30); --cp-hero-overlay: linear-gradient(90deg, rgba(3, 20, 34, .97) 0%, rgba(4, 31, 51, .90) 41%, rgba(4, 25, 42, .45) 70%, rgba(2, 14, 26, .13) 100%); }
 .cp-hero--ae { --cp-hero-image: url('/static/assets/enterprise/client-banners/ae.jpg'); --cp-accent: #fcd34d; --cp-accent-glow: rgba(217, 119, 6, .28); --cp-hero-overlay: linear-gradient(90deg, rgba(28, 15, 4, .97) 0%, rgba(45, 25, 7, .90) 41%, rgba(36, 20, 6, .45) 70%, rgba(20, 11, 3, .13) 100%); }
 .cp-hero--intl { --cp-accent: #c4b5fd; --cp-accent-glow: rgba(139, 92, 246, .28); }
 .cp-destination-seal {
@@ -2391,13 +2395,52 @@ body.ai-dock-open .toast-wrap { right: 444px; }
 .cal-up-when.overdue { color: var(--danger); }
 .cal-up-empty { font-size: 13px; color: var(--muted); padding: 16px 4px; text-align: center; }
 
+/* ---------- Dashboard layout ----------
+   Every dashboard row is a grid whose cards share a bottom edge. The generic .grid-2 aligns
+   its tracks to the start, which is right for the form-beside-summary pairings elsewhere but
+   left the dashboard stepping raggedly down the page: a three-row card next to an eleven-row
+   one ended wherever its content ran out. Here the track stretches and .card-body takes the
+   slack, so a row is always a rectangle and the eye has a straight edge to follow. */
+.dash-row { display: grid; gap: var(--dash-gap); margin-bottom: var(--dash-gap); }
+.dash-row.even { grid-template-columns: 1fr 1fr; }
+/* See the .grid-2 note above: an fr track is floored at its content's min-content width. */
+.dash-row > * { min-width: 0; }
+.dash-row > .card { display: flex; flex-direction: column; }
+.dash-row > .card > .card-body { flex: 1 1 auto; }
+.dash-row:last-child { margin-bottom: 0; }
+/* Tiles keep their natural size and let the slack fall to the bottom of the card. Stretching
+   them to fill instead would make a four-tile card's rows swell to twice a six-tile card's. */
+.dash-row .cat-grid, .dash-row .country-grid { align-content: start; }
+
+/* The visa pipeline is a fixed eleven stages — a single column of them stands twice as tall
+   as anything that can sit beside it, which is what made the old row so lopsided. Given the
+   full width it runs in two columns instead: every stage stays visible, and the card no
+   longer dictates the height of its neighbour. renderDashboard sets --pipe-rows to half the
+   stage count so the funnel still reads top-to-bottom down each column rather than snaking
+   across. Below ~1024px the columns would be too narrow for the labels, so it folds back. */
+.pipe-grid {
+  display: grid; gap: 0 28px;
+  grid-template-rows: repeat(var(--pipe-rows, 6), auto);
+  grid-auto-flow: column; grid-auto-columns: 1fr;
+}
+@media (max-width: 1023px) {
+  .pipe-grid { grid-auto-flow: row; grid-template-rows: none; grid-auto-columns: auto; }
+}
+@media (max-width: 900px) {
+  .dash-row.even { grid-template-columns: 1fr; }
+}
+
+/* Feed cards scroll past a shared ceiling, so one busy workspace cannot stretch a row to
+   three screens while the card beside it holds four rows. */
+.dash-feed { max-height: var(--dash-feed-h); overflow-y: auto; }
+
 /* Dashboard "What's next" — the same feed, in a card instead of the calendar's sticky rail.
    Shorter than the rail (it sits beside Recent clients) and topped by an overdue alert line. */
-.dash-wn { max-height: 344px; }
+.dash-wn { max-height: var(--dash-feed-h); }
 .dash-wn-more { font-size: 12px; font-weight: 700; color: var(--primary); cursor: pointer; padding: 8px; border-radius: var(--radius-sm); }
 .dash-wn-more:hover { background: #f6f7fb; }
 .dash-due {
-    display: flex; align-items: center; gap: 14px; margin-bottom: 24px; padding: 13px 18px; cursor: pointer;
+    display: flex; align-items: center; gap: 14px; margin-bottom: var(--dash-gap); padding: 13px 18px; cursor: pointer;
     border-radius: var(--radius); border: 1px solid rgba(239, 68, 68, .28);
     background: linear-gradient(120deg, rgba(239, 68, 68, .10), rgba(249, 115, 22, .05));
     transition: border-color .15s, box-shadow .15s;

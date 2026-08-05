@@ -617,10 +617,31 @@ def build_subscription_state(db: Session, organization_id: int) -> dict:
         can_add_seat = True
     quote = checkout_quote(plan_key, CURRENCY)
 
+    # A LAPSED PAYING CUSTOMER IS NOT A NEW SANDBOX ORG. effective_plan_key drops them to
+    # sandbox limits, but without saying so every surface would present a consultancy that
+    # paid us last month as a fresh trial — "sandbox, ending today", renewal date hidden,
+    # status still reading "active" — and the one thing they need to know (your plan expired,
+    # renew to restore it) would appear nowhere. These fields carry that fact to the UI.
+    subscribed_plan_key = normalize_plan_key(sub.plan)
+    plan_lapsed = subscribed_plan_key in PAID_PLAN_KEYS and plan_key != subscribed_plan_key
+    lapsed_plan = PLANS.get(subscribed_plan_key) if plan_lapsed else None
+
     return {
         "plan": plan["key"],
         "plan_label": plan["label"],
-        "status": sub.status,
+        # "active" is the raw column and it is never written to anything else, so it must not
+        # be reported as the live state once the paid period has run out.
+        "status": "lapsed" if plan_lapsed else sub.status,
+        "plan_lapsed": plan_lapsed,
+        # Auto-renewal state. `auto_renews` is what the UI promises the customer; if it is
+        # False the plan will simply stop at `current_period_end` and they must act.
+        "auto_renews": bool(sub.razorpay_subscription_id) and not bool(sub.cancel_at_period_end),
+        "has_mandate": bool(sub.razorpay_subscription_id),
+        "cancel_at_period_end": bool(sub.cancel_at_period_end),
+        "mandate_status": sub.mandate_status,
+        "lapsed_plan": subscribed_plan_key if plan_lapsed else None,
+        "lapsed_plan_label": lapsed_plan["label"] if lapsed_plan else None,
+        "lapsed_at": sub.current_period_end if plan_lapsed else None,
         # `is_trial` keeps its name (the deployed SPA branches on it) and now means
         # "on the free sandbox tier".
         "is_trial": is_sandbox,

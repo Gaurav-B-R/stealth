@@ -2282,7 +2282,13 @@ def enterprise_account_details_admin(
     )
     plan_payment_count = int(
         db.query(func.count(SP.id))
-        .filter(SP.organization_id == org.id, SP.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES))
+        .filter(
+            SP.organization_id == org.id,
+            SP.status.in_(enterprise_credits.REVENUE_PAYMENT_STATUSES),
+            # Same INR filter as plan_paid above, or the count claims rows whose money was
+            # excluded from the total and the two figures disagree.
+            func.upper(func.coalesce(SP.currency, "INR")) == "INR",
+        )
         .scalar() or 0
     )
     verified_count = int(
