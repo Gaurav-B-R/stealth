@@ -480,6 +480,13 @@ class EnterpriseClient(Base):
     # per-destination), so what a counselor records at "Application Submitted" differs for a US
     # (DS-160 / SEVIS) vs a UK (CAS / IHS) case. Stored as JSON text like deep_scan_facts.
     stage_data = Column(Text, nullable=True)
+    # Which stages this case has actually SAT AT, so the journey can tell a stage that was
+    # worked through from one the case jumped straight over. JSON: {"<stage_key>": "<iso ts>"}
+    # of first arrival; a null value means "assumed reached" — seeded once for a case whose
+    # moves predate this column, because its real history is unknowable and calling those
+    # stages skipped would be a claim we cannot make. Append-only: moving a case backwards
+    # (reopening a refusal, resuming a hold) never removes a stage it once occupied.
+    stage_visits = Column(Text, nullable=True)
 
     # Consent: the staff member confirmed this client consented to having their
     # personal data processed by the organization through Rilono (the org is the

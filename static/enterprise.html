@@ -46,7 +46,11 @@
           <div class="field">
             <label>Choose your portal URL</label>
             <div class="subdomain-field">
-              <input name="subdomain_slug" placeholder="yourcompany" required />
+              <!-- The hint below already promises this format; without the pattern the only
+                   thing enforcing it was the server, so "My Company!" was submittable. -->
+              <input name="subdomain_slug" placeholder="yourcompany" required
+                     pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+                     title="Lowercase letters, numbers and hyphens — must start and end with a letter or number." />
               <span class="suffix" id="signupDomainSuffix">.rilono.com</span>
             </div>
             <div class="hint">Lowercase letters, numbers and hyphens. This is where your team signs in.</div>
@@ -188,9 +192,12 @@
           <div class="field">
             <label>Portal URL</label>
             <div class="subdomain-field">
-              <input name="subdomain_slug" placeholder="yourcompany" required />
+              <input name="subdomain_slug" placeholder="yourcompany" required
+                     pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?"
+                     title="Lowercase letters, numbers and hyphens — must start and end with a letter or number." />
               <span class="suffix" id="onboardDomainSuffix">.rilono.com</span>
             </div>
+            <div class="hint">Lowercase letters, numbers and hyphens. This is where your team signs in.</div>
           </div>
           <button type="submit" class="btn btn-primary btn-block btn-lg" id="onboardBtn">Finish setup</button>
         </form>

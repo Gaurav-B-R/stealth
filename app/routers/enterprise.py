@@ -28,7 +28,9 @@ from app import enterprise_catalog as catalog
 from app import enterprise_access as access
 from app import enterprise_team as team_svc
 from app import enterprise_time as ent_time
+from app import enterprise_dates as ent_dates
 from app import enterprise_client_fields as client_fields
+from app import enterprise_duplicates as dupes
 from app import enterprise_billing as billing
 from app import enterprise_credits as credits
 from app import enterprise_coupons
@@ -2635,6 +2637,10 @@ class EnterpriseClientCreateRequest(EnterpriseClientIntakeFields):
     # Staff attestation that the client consented to having their data processed
     # through Rilono. Enforced in the UI; recorded here as proof-of-consent.
     client_consent_confirmed: bool = False
+    # Set by the second submit, after the duplicate warning has been shown and read. The
+    # check still runs — the answer is used to leave a note on the new file instead of
+    # refusing it. See _assert_not_duplicate_client.
+    allow_duplicate: bool = False
 
 
 class EnterpriseClientUpdateRequest(EnterpriseClientIntakeFields):
@@ -2655,6 +2661,9 @@ class EnterpriseClientUpdateRequest(EnterpriseClientIntakeFields):
     application_reference: Optional[str] = Field(default=None, max_length=120)
     assigned_to_user_id: Optional[int] = None
     branch_id: Optional[int] = None
+    # As on the create payload: proceed even though the edited identity now collides
+    # with another file.
+    allow_duplicate: bool = False
 
 
 class EnterpriseClientStatusRequest(BaseModel):
@@ -2721,16 +2730,26 @@ class EnterpriseCreditVerifyRequest(BaseModel):
     razorpay_signature: str = Field(..., min_length=6, max_length=256)
 
 
-def _parse_iso_date_or_400(value: Optional[str], field_label: str) -> Optional[date]:
+def _parse_iso_date_or_400(
+    value: Optional[str], field_label: str, *, direction: Optional[str] = None
+) -> Optional[date]:
+    """Parse and BOUND a staff-entered date. Every client-record and calendar date lands here.
+
+    The sanity window is judged against the server's date rather than the org's: it spans 25
+    years, so a zone offset can't move a date across it, and this is called from paths that
+    have no organization in hand. `direction` is for the rare field whose direction is
+    unambiguous (a date of birth) — see `enterprise_dates` for why most fields get none.
+    """
     if value is None:
         return None
     raw = str(value).strip()
     if not raw:
         return None
     try:
-        return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+        parsed = datetime.strptime(raw[:10], "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(status_code=400, detail=f"{field_label} must be a valid date (YYYY-MM-DD).")
+    return ent_dates.validate(parsed, field_label, today=date.today(), direction=direction)
 
 
 def _serialize_subscription_state(state: dict) -> dict:
@@ -2936,6 +2955,8 @@ def _apply_status_change(
     client: models.EnterpriseClient,
     new_status: str,
     db: Session,
+    *,
+    creating: bool = False,
 ) -> None:
     """Set client.status while maintaining held_from_status: putting a case On Hold
     remembers the stage it was held FROM (so the UI can show its real position and
@@ -2948,14 +2969,26 @@ def _apply_status_change(
     pipeline stage implies, and the Edit-client form sends the stage on every save, so
     re-deriving here would rewrite the record on an unrelated edit.
 
+    Every arrival is also stamped into stage_visits, which is what lets the journey tracker
+    distinguish a stage the case worked through from one it jumped over. That stamp is taken
+    on EVERY call, including the re-send that isn't a move — the point is to record where the
+    case has stood, and an unrelated edit is still evidence it stands there now.
+
+    `creating` marks the opening stage of a brand-new client, where the stages before it were
+    never worked rather than merely unrecorded — see _record_stage_visit.
+
     `db` is required — see _admission_stage_for()."""
     old = client.status
+    old_held = getattr(client, "held_from_status", None)
     if new_status == catalog.STAGE_ON_HOLD:
         if old != catalog.STAGE_ON_HOLD:
             client.held_from_status = old if (old in catalog.CLIENT_STAGE_KEYS and old != catalog.STAGE_ON_HOLD) else None
     else:
         client.held_from_status = None
     client.status = new_status
+    _record_stage_visit(
+        client, new_status, previous=old, previous_held=old_held, creating=creating,
+    )
     if old == new_status:
         return
 
@@ -2999,6 +3032,187 @@ def _load_stage_data(client: models.EnterpriseClient) -> dict:
     damaged column still renders as "nothing recorded" rather than breaking the page."""
     stored, _unreadable = _parse_stage_data(client)
     return {k: v for k, v in stored.items() if isinstance(v, dict)}
+
+
+# --- Stage progress: which stages a case actually worked through -------------------------
+# The pipeline stage says where a case IS. On its own it cannot say how it got there, and
+# "everything before the current stage is complete" is a guess that reads as a fact — a case
+# opened straight at Collecting Documents, or jumped from New Lead to Awaiting Decision, has
+# green ticks on stages nobody ever touched. stage_visits records the arrivals so the journey
+# can mark those stages skipped instead.
+#
+# The one rule everything here serves: never report a skip that cannot be proved. A stage is
+# skipped only when the record can speak for it AND the case went past it without working it.
+# Anything older than the record is unknown, and unknown reads as it always did — complete.
+
+
+def _load_stage_progress(client: models.EnterpriseClient) -> dict:
+    """The case's recorded stage history: {"from": <stage_key|None>, "visits": {key: iso|None}}.
+
+    `from` is the earliest stage the record can speak for. Whatever happened before it happened
+    before the record existed, so it is UNKNOWN — never skipped. `visits` maps a stage to when
+    the case first arrived there; a null timestamp means it was already standing there when the
+    record began.
+
+    An absent or damaged column returns an empty record, which callers must read as "history
+    unknown" rather than "nothing was reached"."""
+    blank = {"from": None, "visits": {}}
+    raw = getattr(client, "stage_visits", None)
+    if not raw:
+        return blank
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        logger.error(
+            "Client stage_visits is not valid JSON (client_id=%s) — treated as untracked",
+            getattr(client, "id", None), exc_info=True,
+        )
+        return blank
+    if not isinstance(parsed, dict):
+        logger.error(
+            "Client stage_visits is not an object (client_id=%s, type=%s) — treated as untracked",
+            getattr(client, "id", None), type(parsed).__name__,
+        )
+        return blank
+    visits = parsed.get("visits")
+    if isinstance(visits, dict):
+        started = parsed.get("from")
+        return {
+            "from": (str(started) if started else None),
+            # Unrecognised keys are carried rather than dropped, for the same reason stage_data
+            # keeps its unknown buckets: a stage retired from the catalog still happened.
+            "visits": {str(k): (str(v) if v else None) for k, v in visits.items()},
+        }
+    # A record written before this shape existed is the bare visit map. The earliest stage it
+    # names is as far back as it can honestly speak for.
+    flat = {str(k): (str(v) if v else None) for k, v in parsed.items()}
+    linear = _linear_stage_keys(client)
+    placed = [k for k in linear if k in flat]
+    return {"from": (placed[0] if placed else None), "visits": flat}
+
+
+def _load_stage_visits(client: models.EnterpriseClient) -> dict:
+    """{stage_key: iso timestamp | None} — when this case first arrived at each stage it stood
+    at. Null where it was already there when the record began."""
+    return _load_stage_progress(client)["visits"]
+
+
+def _stages_reached(client: models.EnterpriseClient) -> list[str]:
+    """Every stage this case demonstrably worked through: the ones it stood at, plus any stage
+    a counselor filled the case record in for. That second half matters — recording a stage's
+    details without ever parking the case there is real work, and work that was done must never
+    be reported back to the org as skipped."""
+    reached = dict.fromkeys(_load_stage_visits(client))
+    for stage_key, values in _load_stage_data(client).items():
+        if any(str(value or "").strip() for value in values.values()):
+            reached.setdefault(stage_key, None)
+    return list(reached)
+
+
+def _linear_stage_keys(client: models.EnterpriseClient) -> list[str]:
+    """This destination's pipeline in order, minus the two stages that sit OFF it. A refusal
+    and a hold are states a case is in, not steps it walks through."""
+    return [
+        stage["key"]
+        for stage in catalog.stages_for(getattr(client, "destination_country_code", None))
+        if stage["key"] not in (catalog.STAGE_REJECTED, catalog.STAGE_ON_HOLD)
+    ]
+
+
+def _stage_anchor(status: str | None, held_from: str | None) -> str:
+    """The linear stage a case with this status stands at. Empty when it stands off the path —
+    refused, or held from a position that was never recorded."""
+    key = str(status or "").strip().lower()
+    if key == catalog.STAGE_ON_HOLD:
+        return str(held_from or "").strip().lower()
+    return key
+
+
+def _stages_behind(
+    client: models.EnterpriseClient, status: str | None, held_from: str | None,
+) -> list[str]:
+    """The stages this case has already gone PAST. Only these can have been skipped: a stage
+    ahead of the case has not been passed over, it simply has not happened yet."""
+    linear = _linear_stage_keys(client)
+    key = str(status or "").strip().lower()
+    if key == catalog.STAGE_REJECTED:
+        # A refused case is closed where it stopped, and the tracker has always drawn the whole
+        # pipeline behind it. Only the part up to the furthest stage it actually reached can be
+        # judged: nothing beyond that was passed over — it never happened at all, and calling it
+        # skipped would report a refusal as somebody's choice.
+        reached = set(_stages_reached(client))
+        last = max((i for i, k in enumerate(linear) if k in reached), default=-1)
+        return linear[: last + 1]
+    if key == catalog.STAGE_ON_HOLD:
+        key = str(held_from or "").strip().lower()   # "" for a hold with no recorded position
+    if key not in linear:
+        return []
+    return linear[: linear.index(key)]
+
+
+def _skipped_stage_keys(client: models.EnterpriseClient) -> list[str]:
+    """The stages this case went straight past: the ones behind it, within the span its record
+    can speak for, that it never worked.
+
+    Empty whenever the record is missing or cannot place itself — an unknown past is not a
+    skip. This is the ONE derivation; the staff journey, the client portal and Deep Scan all
+    render from it rather than each re-deriving what "skipped" means."""
+    progress = _load_stage_progress(client)
+    linear = _linear_stage_keys(client)
+    started = progress["from"]
+    if not progress["visits"] or started not in linear:
+        return []
+    floor = linear.index(started)
+    reached = set(_stages_reached(client))
+    behind = _stages_behind(client, client.status, getattr(client, "held_from_status", None))
+    return [
+        key for key in behind
+        if key not in reached and key in linear and linear.index(key) >= floor
+    ]
+
+
+def _record_stage_visit(
+    client: models.EnterpriseClient,
+    stage_key: str,
+    *,
+    previous: str | None = None,
+    previous_held: str | None = None,
+    creating: bool = False,
+) -> None:
+    """Stamp `stage_key` as a stage this case has stood at.
+
+    Append-only, first arrival wins: reopening a refusal or resuming a hold must not rewrite the
+    date the case originally reached a stage, and moving a case backwards must never erase one
+    it already worked through.
+
+    The first write also fixes how far back the record can speak — the difference between a case
+    that skipped a stage and one that simply predates the record:
+      * a brand-new client (`creating`) has no past at all. It begins at its opening stage, so
+        the whole pipeline is answerable and a walk-in opened halfway down really did skip
+        everything above it;
+      * an existing case starts from where it already stands, which also counts as reached;
+      * an existing case whose position cannot be placed — a hold taken before held_from_status
+        existed, or a stage key the catalog no longer carries — starts HERE. Under-reporting a
+        skip is a smaller lie than inventing one.
+    """
+    progress = _load_stage_progress(client)
+    visits = progress["visits"]
+    started = progress["from"]
+    if not visits:
+        linear = _linear_stage_keys(client)
+        if creating:
+            started = linear[0] if linear else stage_key
+        else:
+            anchor = _stage_anchor(previous, previous_held)
+            if anchor in linear:
+                started = anchor
+                visits.setdefault(anchor, None)
+            else:
+                started = stage_key if stage_key in linear else None
+    # Offset-qualified on purpose: this string is rendered by the browser with new Date(), which
+    # reads a bare timestamp as LOCAL time and would show the arrival a day early east of UTC.
+    visits.setdefault(stage_key, _iso(datetime.now(dt_timezone.utc)))
+    client.stage_visits = json.dumps({"from": started, "visits": visits})
 
 
 # The intake record, grouped the way it is captured and displayed. Text/date/int fields
@@ -3064,6 +3278,7 @@ def _serialize_client(
     assigned_name = None
     if client.assigned_to_user_id and member_names is not None:
         assigned_name = member_names.get(int(client.assigned_to_user_id))
+    stage_visits = _load_stage_visits(client)
     payload = {
         **_serialize_client_intake(client),
         "id": client.id,
@@ -3091,6 +3306,14 @@ def _serialize_client(
         # Per-stage case record: {"<stage_key>": {"<field_key>": value}}. Field definitions
         # come from the destination-aware catalog served by /catalog.
         "stage_data": _load_stage_data(client),
+        # How the case got to where it is. `stages_skipped` is the whole contract for the
+        # journey: a stage in it was gone past without being worked and is drawn as skipped
+        # instead of complete; everything else behind the case reads exactly as it always did.
+        # Deriving it here rather than in each renderer is what keeps the staff journey, the
+        # client portal and Deep Scan from disagreeing about what a skip is.
+        # `stage_visits` is only for showing WHEN a stage was reached.
+        "stage_visits": stage_visits,
+        "stages_skipped": _skipped_stage_keys(client),
         "assigned_to_user_id": client.assigned_to_user_id,
         "assigned_to_name": assigned_name,
         "branch_id": getattr(client, "branch_id", None),
@@ -3101,6 +3324,100 @@ def _serialize_client(
         payload.pop("passport_number", None)
         payload["passport_hidden"] = True
     return payload
+
+
+def _serialize_duplicate(match, *, in_scope: bool, member_names: dict[int, str]) -> dict:
+    """Render one possible-duplicate match for the warning dialog.
+
+    find_duplicates() searches the whole organization on purpose — the duplicate worth
+    catching is usually the one another office opened — so this is where the caller's
+    record scope is paid back. For a match they are not allowed to open we hand over no
+    id (the dialog must not offer a link into a file that would 404 on them) and mask the
+    contact details. The NAME stays: they just typed an email or number that matches it,
+    so it tells them nothing they don't already know, and without it the warning is
+    unactionable.
+    """
+    row = match.row
+    email = row.email or None
+    phone = row.phone or row.whatsapp_number or None
+    assigned_name = None
+    if row.assigned_to_user_id:
+        assigned_name = member_names.get(int(row.assigned_to_user_id))
+    return {
+        "id": int(row.id) if in_scope else None,
+        "in_scope": in_scope,
+        "full_name": row.full_name,
+        "email": (email if in_scope else (_mask_email(email) if email else None)),
+        "phone": (phone if in_scope else dupes.mask_phone(phone)),
+        "stage": _stage_brief(row.status, row.destination_country_code),
+        "destination_country_name": row.destination_country_name,
+        "branch_name": row.branch_name,
+        "assigned_to_name": assigned_name,
+        "created_at": _iso(row.created_at),
+        "reasons": match.reasons,
+        "reason_labels": [dupes.REASON_LABELS.get(r, r) for r in match.reasons],
+    }
+
+
+def _assert_not_duplicate_client(
+    db: Session,
+    *,
+    organization: models.EnterpriseOrganization,
+    ctx,
+    subject,
+    exclude_client_id: Optional[int] = None,
+    allow: bool = False,
+    hint: str = "Check the match before adding a second file.",
+) -> list:
+    """Soft-block a client that looks like one the organization already has.
+
+    409 rather than 400: the request is well-formed and the caller may legitimately want
+    it, they just have to say so twice. `allow=True` skips the block but NOT the search —
+    the create path uses the matches it gets back to leave a note on the file, which is
+    what makes a knowing duplicate distinguishable later from an accidental one.
+    """
+    matches = dupes.find_duplicates(
+        db,
+        organization_id=organization.id,
+        subject=subject,
+        exclude_client_id=exclude_client_id,
+    )
+    if not matches or allow:
+        return matches
+
+    member_names = _org_member_name_map(db, organization.id)
+    payload = [
+        _serialize_duplicate(m, in_scope=access.client_in_scope(m.row, ctx), member_names=member_names)
+        for m in matches
+    ]
+    lead = (
+        f"{payload[0]['full_name']} is already in your workspace."
+        if len(payload) == 1
+        else f"{len(payload)} clients in your workspace look like this person."
+    )
+    raise HTTPException(
+        status_code=409,
+        detail={"code": "duplicate_client", "message": f"{lead} {hint}", "duplicates": payload},
+    )
+
+
+def _duplicate_override_note(matches: list) -> str:
+    """Timeline entry for a file opened in full knowledge that it matched another.
+
+    Cheaper and more durable than a column: it survives on the record itself, so whoever
+    picks the case up later can see the second file was a decision rather than an accident.
+    """
+    parts = [
+        f"{m.row.full_name} (#{m.row.id}) — {', '.join(dupes.REASON_LABELS.get(r, r).lower() for r in m.reasons)}"
+        for m in matches[:3]
+    ]
+    more = len(matches) - len(parts)
+    return (
+        "Opened as a separate file despite a possible duplicate: "
+        + "; ".join(parts)
+        + (f", and {more} more" if more > 0 else "")
+        + "."
+    )
 
 
 def _serialize_note(note: models.EnterpriseClientNote) -> dict:
@@ -3636,7 +3953,9 @@ def enterprise_create_client(
         email=(str(payload.email).strip().lower() if payload.email else None),
         phone=(payload.phone or "").strip() or None,
         nationality=(payload.nationality or "").strip() or None,
-        date_of_birth=_parse_iso_date_or_400(payload.date_of_birth, "Date of birth"),
+        date_of_birth=_parse_iso_date_or_400(
+            payload.date_of_birth, "Date of birth", direction=ent_dates.NOT_FUTURE
+        ),
         passport_number=(payload.passport_number or "").strip() or None,
         passport_expiry=_parse_iso_date_or_400(payload.passport_expiry, "Passport expiry"),
         application_reference=(payload.application_reference or "").strip() or None,
@@ -3658,11 +3977,20 @@ def enterprise_create_client(
     _apply_client_intake_fields(client, payload.model_dump())
     # Normalizes held_from_status for a client opened straight onto a stage. The opening
     # stage is not a move, so whatever admissions milestone the intake form captured — the
-    # walk-in who already holds an admit — is what stands.
-    _apply_status_change(client, client.status, db)
+    # walk-in who already holds an admit — is what stands. `creating` says the same thing to
+    # the stage record: a walk-in opened at Collecting Documents never worked the stages
+    # before it, so they are skipped rather than quietly assumed complete.
+    _apply_status_change(client, client.status, db, creating=True)
     _apply_client_branch(
         db, client, organization=organization, ctx=role.ctx,
         data=payload.model_dump(exclude_unset=True), creating=True,
+    )
+    # Last gate before the row exists. It runs on the fully-built but still-unsaved object,
+    # so it matches on exactly the values that are about to be stored — and a 409 here
+    # leaves nothing behind.
+    duplicates = _assert_not_duplicate_client(
+        db, organization=organization, ctx=role.ctx, subject=client,
+        allow=payload.allow_duplicate,
     )
     db.add(client)
     db.flush()
@@ -3675,6 +4003,15 @@ def enterprise_create_client(
             author_user_id=current_user.id,
             author_name=current_user.full_name or current_user.email,
             body=initial_note,
+        ))
+    if duplicates:
+        # Only reachable with allow_duplicate — otherwise the check above raised.
+        db.add(models.EnterpriseClientNote(
+            organization_id=organization.id,
+            client_id=client.id,
+            author_user_id=current_user.id,
+            author_name=current_user.full_name or current_user.email,
+            body=_duplicate_override_note(duplicates),
         ))
 
     db.commit()
@@ -3750,6 +4087,12 @@ def enterprise_update_client(
     data = payload.model_dump(exclude_unset=True)
     status_before_edit = client.status
     admission_stage_before_edit = client.admission_stage
+    # Snapshot of the matchable identity, taken before anything is applied. The Edit form
+    # posts every field on every save, so "email in data" says nothing about whether the
+    # email actually changed — comparing the two fingerprints does, and it keeps a plain
+    # stage move on a client who shares a sibling's phone number from re-opening a
+    # duplicate question the org already settled.
+    identity_before_edit = dupes.fingerprint(client)
 
     if "full_name" in data:
         full_name = (data["full_name"] or "").strip()
@@ -3779,7 +4122,9 @@ def enterprise_update_client(
     if "application_reference" in data:
         client.application_reference = (data["application_reference"] or "").strip() or None
     if "date_of_birth" in data:
-        client.date_of_birth = _parse_iso_date_or_400(data["date_of_birth"], "Date of birth")
+        client.date_of_birth = _parse_iso_date_or_400(
+            data["date_of_birth"], "Date of birth", direction=ent_dates.NOT_FUTURE
+        )
     if "passport_expiry" in data:
         client.passport_expiry = _parse_iso_date_or_400(data["passport_expiry"], "Passport expiry")
     if "target_date" in data:
@@ -3811,6 +4156,14 @@ def enterprise_update_client(
     _apply_client_branch(
         db, client, organization=organization, ctx=role.ctx, data=data, creating=False,
     )
+
+    identity_after_edit = dupes.fingerprint(client)
+    if identity_after_edit != identity_before_edit:
+        _assert_not_duplicate_client(
+            db, organization=organization, ctx=role.ctx, subject=identity_after_edit,
+            exclude_client_id=client.id, allow=payload.allow_duplicate,
+            hint="Check the match before saving these details onto this file.",
+        )
 
     db.commit()
     db.refresh(client)
@@ -3868,6 +4221,39 @@ class EnterpriseStageDataUpdateRequest(BaseModel):
     values: dict = {}
 
 
+def _clean_stage_values(allowed: dict[str, dict], incoming) -> dict[str, str]:
+    """Coerce a submitted case-record payload to the values that may be stored.
+
+    Keys the catalog doesn't declare for this destination+stage are dropped (a stale or
+    tampered payload can't write arbitrary keys). An empty string is kept and means "clear
+    this field" — the caller pops it from the record.
+
+    A field the catalog calls a date is stored as one from here on: parsed, bounded and
+    normalized to YYYY-MM-DD. NEW WRITES ONLY. The case record is a JSON blob of free text,
+    and everything already saved in it stays exactly as it is — unread, unconverted, still
+    whatever a counsellor typed. That is the point of validating at this seam instead of
+    migrating: no existing value has to be interpreted for today's saves to come out clean.
+
+    No direction is imposed. These fields are a mix of issue dates, appointment dates,
+    deadlines and expiries across ten destinations; only the sanity window is true of all
+    of them (see `enterprise_dates`).
+    """
+    values = incoming if isinstance(incoming, dict) else {}
+    submitted: dict[str, str] = {}
+    for key, value in values.items():
+        field = allowed.get(key)
+        if field is None:
+            continue
+        text_value = ("" if value is None else str(value)).strip()
+        if len(text_value) > 500:
+            raise HTTPException(status_code=400, detail=f"'{key}' is too long (max 500 characters).")
+        if text_value and field.get("type") == "date":
+            parsed = _parse_iso_date_or_400(text_value, field.get("label") or key)
+            text_value = parsed.isoformat() if parsed else ""
+        submitted[key] = text_value
+    return submitted
+
+
 @router.patch("/clients/{client_id}/stage-data")
 def enterprise_update_client_stage_data(
     client_id: int,
@@ -3889,19 +4275,11 @@ def enterprise_update_client_stage_data(
 
     # Only fields defined for THIS client's destination + stage are accepted, so a stale or
     # tampered payload can't write arbitrary keys into the record.
-    allowed = {f["key"] for f in catalog.stage_fields_for(client.destination_country_code, stage_key)}
+    allowed = {f["key"]: f for f in catalog.stage_fields_for(client.destination_country_code, stage_key)}
     if not allowed:
         raise HTTPException(status_code=400, detail="This stage has no record fields for this destination.")
 
-    incoming = payload.values if isinstance(payload.values, dict) else {}
-    submitted: dict[str, str] = {}
-    for key, value in incoming.items():
-        if key not in allowed:
-            continue
-        text_value = ("" if value is None else str(value)).strip()
-        if len(text_value) > 500:
-            raise HTTPException(status_code=400, detail=f"'{key}' is too long (max 500 characters).")
-        submitted[key] = text_value
+    submitted = _clean_stage_values(allowed, payload.values)
 
     data, unreadable = _parse_stage_data(client)
     if unreadable:
@@ -5297,6 +5675,32 @@ class EnterpriseCalendarEventUpdate(BaseModel):
     is_done: Optional[bool] = None
 
 
+def _reject_backdated_client_notice(db: Session, organization_id: int, ev) -> None:
+    """Refuse to arm a client notification on a reminder that is already due.
+
+    Logging a past event is legitimate; doing it with client notification on is not. The
+    overnight digest sweeps `today - 14 days <= event_date <= today` for events that are
+    not done and not yet notified (see services/enterprise_calendar_reminders.py), so a
+    back-dated reminder with notify-on doesn't quietly record history — it emails the
+    student to say their own appointment is "6 days overdue".
+
+    Checked against the RESULTING row, because the update path can move the date and the
+    notify flag independently. Rows the job would skip anyway — already sent, marked done,
+    no linked client — are left alone so ordinary edits to old events still save.
+    """
+    if not (ev.notify_client and ev.client_id and not ev.is_done and ev.client_notified_at is None):
+        return
+    if ev.event_date and ev.event_date < ent_time.org_today(db, int(organization_id)):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This reminder is dated in the past, so notifying the client would email them "
+                "that it is already overdue. Switch off the client notification to log it, or "
+                "move it to today or later."
+            ),
+        )
+
+
 @router.get("/calendar")
 def enterprise_calendar(
     request: Request,
@@ -5413,7 +5817,7 @@ def enterprise_calendar_create_event(
     title = (payload.title or "").strip()
     if not title:
         raise HTTPException(status_code=400, detail="A title is required.")
-    event_date = _parse_iso_date_or_400(payload.event_date, "event_date")
+    event_date = _parse_iso_date_or_400(payload.event_date, "Event date")
     event_time = _parse_calendar_time_or_400(payload.event_time)
     if payload.client_id is not None:
         _get_org_client_or_404(db, organization.id, payload.client_id, ctx=role.ctx)
@@ -5432,6 +5836,7 @@ def enterprise_calendar_create_event(
         created_by_user_id=current_user.id,
         created_by_name=current_user.full_name or current_user.email,
     )
+    _reject_backdated_client_notice(db, organization.id, ev)
     db.add(ev)
     # flush, not commit: binding the draft uploads needs ev.id while still inside this
     # transaction, so a failed bind rolls the event back with it rather than leaving a
@@ -5512,7 +5917,7 @@ def enterprise_calendar_update_event(
             raise HTTPException(status_code=400, detail="A title is required.")
         ev.title = t[:200]
     if payload.event_date is not None:
-        ev.event_date = _parse_iso_date_or_400(payload.event_date, "event_date")
+        ev.event_date = _parse_iso_date_or_400(payload.event_date, "Event date")
     if payload.event_type is not None:
         ev.event_type = _normalize_calendar_event_type(payload.event_type)
     if payload.event_time is not None:
@@ -5534,6 +5939,7 @@ def enterprise_calendar_update_event(
     if payload.is_done is not None:
         ev.is_done = bool(payload.is_done)
 
+    _reject_backdated_client_notice(db, organization.id, ev)
     db.commit()
     db.refresh(ev)
     client_name = None
@@ -6787,6 +7193,32 @@ def enterprise_finance_savings(
     return payload
 
 
+def _validate_finance_entry_dates(db: Session, organization_id: int, payload) -> None:
+    """Bound the dates on a hand-recorded ledger entry.
+
+    `occurred_on` is an ACTUALS date: the books record what has already happened, and the
+    period report keys every figure off it, so a future one silently moves money out of the
+    month it belongs to.
+
+    `repeat_until` before the start used to be coerced to None by `apply_entry_fields` —
+    which the ledger reads as "repeat forever". That fails in the dangerous direction: the
+    user asked for the series to END and got an unbounded one, with a success response. The
+    coercion stays as a backstop; this turns the case into a 400 they can act on.
+    """
+    today = ent_time.org_today(db, int(organization_id))
+    occurred = ent_dates.validate(
+        payload.occurred_on, "The entry date", today=today,
+        direction=ent_dates.NOT_FUTURE,
+        future_hint=" The books record what has already happened.",
+    ) or today  # mirrors apply_entry_fields: no date given means today
+    until = ent_dates.validate(getattr(payload, "repeat_until", None), "The repeat-until date", today=today)
+    if getattr(payload, "repeat_monthly", False) and until and until < occurred:
+        raise HTTPException(
+            status_code=400,
+            detail="The repeat-until date can't be before the entry date.",
+        )
+
+
 @router.post("/finance/entries")
 def enterprise_finance_create_entry(
     payload: EnterpriseFinanceEntryRequest,
@@ -6806,6 +7238,7 @@ def enterprise_finance_create_entry(
             status_code=400,
             detail=f"Amount exceeds the per-entry limit of ₹{finance.MAX_AMOUNT_PAISE / 100:,.0f}.",
         )
+    _validate_finance_entry_dates(db, organization.id, payload)
     client = _finance_client_for_entry(db, organization.id, payload.client_id, ctx=role.ctx)
     entry = models.EnterpriseFinanceEntry(
         organization_id=organization.id,
@@ -6842,6 +7275,7 @@ def enterprise_finance_update_entry(
             status_code=400,
             detail=f"Amount exceeds the per-entry limit of ₹{finance.MAX_AMOUNT_PAISE / 100:,.0f}.",
         )
+    _validate_finance_entry_dates(db, organization.id, payload)
     entry = _get_org_finance_entry_or_404(db, organization.id, entry_id)
     client = _finance_client_for_entry(db, organization.id, payload.client_id, ctx=role.ctx)
     # The form always submits every field, so an empty client_id means "detach".
@@ -10366,21 +10800,32 @@ async def enterprise_upload_client_document(
 
 def _ent_flexible_parse_date(value):
     """Best-effort parse of a human-readable date (passport/ID dates come in many formats)
-    into a date. Prefers day-first (most passports). Returns None if unparseable."""
+    into a date. Prefers day-first (most passports). Returns None if unparseable.
+
+    An implausible result is treated as UNPARSEABLE rather than raising: this reads machine
+    output, and the caller's contract for None is "skip this field". The `fuzzy=True`
+    fallback below is what makes the check necessary — it will pull a date out of prose and
+    fill whatever components the text didn't supply, so a bad OCR read yields a confident,
+    wrong date rather than nothing.
+    """
     s = str(value or "").strip()
     if not s or s.lower() in {"null", "none", "n/a", "na", "not available", "unknown"}:
         return None
+    parsed = None
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%m/%d/%Y",
                 "%d %b %Y", "%d %B %Y", "%d-%b-%Y", "%d %b, %Y", "%b %d, %Y", "%B %d, %Y", "%Y/%m/%d"):
         try:
-            return datetime.strptime(s, fmt).date()
+            parsed = datetime.strptime(s, fmt).date()
+            break
         except ValueError:
             continue
-    try:
-        from dateutil import parser as _dateparser
-        return _dateparser.parse(s, dayfirst=True, fuzzy=True).date()
-    except Exception:
-        return None
+    if parsed is None:
+        try:
+            from dateutil import parser as _dateparser
+            parsed = _dateparser.parse(s, dayfirst=True, fuzzy=True).date()
+        except Exception:
+            return None
+    return parsed if ent_dates.is_sane(parsed) else None
 
 
 def _ent_clean_extracted(validation: dict) -> dict:
@@ -10414,7 +10859,10 @@ def _ent_profile_field_plan(document_type: str, fields: dict):
         return []
     return [  # (client attribute, human label, extracted value, kind)
         ("full_name", "Name", fields.get("name"), "text"),
-        ("date_of_birth", "Date of birth", fields.get("date_of_birth"), "date"),
+        # "past_date", not "date": a passport EXPIRY is legitimately in the future, a date of
+        # birth never is — and a fuzzy parse that loses the year defaults it to the current
+        # one, which is exactly how a plausible-looking future DOB gets written.
+        ("date_of_birth", "Date of birth", fields.get("date_of_birth"), "past_date"),
         ("nationality", "Nationality", fields.get("country"), "text"),
         ("passport_number", "Passport number", fields.get("document_number"), "text"),
         ("passport_expiry", "Passport expiry", fields.get("expiration_date"), "date"),
@@ -10547,12 +10995,18 @@ def _ent_autofill_profile(db: Session, client: models.EnterpriseClient, document
     def _disp(v):
         return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
+    is_date_kind = {"date", "past_date"}.__contains__
     for attr, label, raw_value, kind in _ent_profile_field_plan(document_type, fields):
         if not raw_value:
             continue
-        if kind == "date":
+        if is_date_kind(kind):
             new_value = _ent_flexible_parse_date(raw_value)
             if new_value is None:
+                continue
+            # Skip rather than 400: a counsellor can't fix an OCR misread by re-uploading,
+            # and blocking the upload would cost them the document scan they paid for. The
+            # field is simply left for them to type.
+            if kind == "past_date" and new_value > date.today() + timedelta(days=ent_dates.GRACE_DAYS):
                 continue
         else:
             new_value = str(raw_value).strip()
@@ -10562,7 +11016,7 @@ def _ent_autofill_profile(db: Session, client: models.EnterpriseClient, document
             setattr(client, attr, new_value)
             filled.append({"field": label, "value": _disp(new_value)})
         else:
-            if kind == "date":
+            if is_date_kind(kind):
                 same = (current == new_value)
             else:
                 same = (str(current).strip().lower() == new_value.strip().lower())
@@ -13438,6 +13892,11 @@ def _build_client_portal_payload(db: Session, share: models.EnterpriseClientPort
             for s in catalog.stages_for(client.destination_country_code)
         ],
         "stage_records": _portal_stage_records(client),
+        # The stages this case went past without going through, so the student's track shows a
+        # skipped step as skipped instead of ticking it complete — the same list the staff
+        # journey renders, or the two views tell contradictory stories. Just the keys: when each
+        # internal move happened is not the student's business.
+        "stages_skipped": _skipped_stage_keys(client),
         "documents": [
             {
                 "document_type": d.document_type,

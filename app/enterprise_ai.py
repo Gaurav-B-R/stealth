@@ -2440,6 +2440,23 @@ def _deep_scan_stage_scope(client) -> str:
     description = str(brief.get("description") or "").strip()
     if description:
         lines.append(f"What that stage means: {description}")
+    # Stages the case went straight past. Without this the audit reads their empty case
+    # records as staff sloppiness and reports work as "missing" that was deliberately never
+    # done — the same false alarm _PRE_VISA_STAGES exists to prevent, one step earlier.
+    try:
+        from app.routers import enterprise as _r
+        skipped = [_stage_label(k) for k in _r._skipped_stage_keys(client)]
+    except Exception:
+        logger.debug("Deep Scan skipped-stage scope unavailable", exc_info=True)
+        skipped = []
+    if skipped:
+        lines.append(
+            "Stages this case SKIPPED (it moved past them without going through them): "
+            + ", ".join(skipped)
+            + ". Their case records are empty by choice, not by oversight — do not report "
+            "those fields as missing or as a data-quality problem. A skip that looks "
+            "procedurally wrong for this destination is worth raising as a process finding."
+        )
     if effective in _PRE_VISA_STAGES:
         lines.append(
             "This client has NOT reached the visa phase. Visa-phase paperwork — the visa "

@@ -205,7 +205,8 @@
           theme: { color: "#0f766e" },
           modal: { ondismiss: function () { btn.disabled = false; btn.textContent = "Pay securely"; } },
           handler: function (resp) {
-            btn.textContent = "Confirming payment…";
+            // Money has already moved; hold the button for the whole verify round-trip.
+            btn.disabled = true; btn.textContent = "Confirming payment…";
             fetch("/api/enterprise/pay/" + encodeURIComponent(token) + "/verify", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -236,7 +237,12 @@
           btn.disabled = false; btn.textContent = "Pay securely";
         });
         rzp.open();
-        btn.disabled = false; btn.textContent = "Pay securely";
+        // Nothing is re-enabled here on purpose. This used to restore the button the instant
+        // the sheet opened, which undid the lock above and left "Pay securely" live behind
+        // the Razorpay overlay for the whole payment — a second click there opens a second
+        // checkout on the same order. The only two ways back are the student dismissing the
+        // sheet (modal.ondismiss) or the payment failing (payment.failed); both restore it
+        // themselves, and every other outcome ends on a showState() screen.
       }
 
       if (!token) {

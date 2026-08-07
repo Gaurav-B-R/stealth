@@ -134,17 +134,22 @@ button { font-family: inherit; cursor: pointer; }
   padding: 12px 18px; border-radius: var(--radius-sm); border: 1.5px solid transparent;
   font-size: 14.5px; font-weight: 650; transition: transform .08s, box-shadow .15s, background .15s, border-color .15s;
 }
-.btn:active { transform: translateY(1px); }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+/* A button that is disabled has to LOOK disabled, whatever its fill. Only .btn-primary
+   used to say so, which left a disabled ghost/soft/danger button lighting up on hover and
+   dipping on :active — reading as clickable while every click was silently dropped. Hence
+   the base rule here and the :not(:disabled) on each variant's hover below. */
+.btn:disabled { opacity: .55; cursor: not-allowed; box-shadow: none; }
 .btn-primary { background: var(--grad); color: #fff; box-shadow: 0 6px 18px rgba(99,102,241,.32); }
-.btn-primary:hover { box-shadow: 0 10px 26px rgba(99,102,241,.42); }
-.btn-primary:disabled { opacity: .6; cursor: not-allowed; box-shadow: none; }
+.btn-primary:hover:not(:disabled) { box-shadow: 0 10px 26px rgba(99,102,241,.42); }
+.btn-primary:disabled { opacity: .6; }
 .btn-block { width: 100%; }
 .btn-ghost { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
-.btn-ghost:hover { background: var(--surface-2); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); }
 .btn-soft { background: rgba(99,102,241,.1); color: var(--primary-600); }
-.btn-soft:hover { background: rgba(99,102,241,.18); }
+.btn-soft:hover:not(:disabled) { background: rgba(99,102,241,.18); }
 .btn-danger { background: rgba(239,68,68,.1); color: var(--danger); }
-.btn-danger:hover { background: rgba(239,68,68,.18); }
+.btn-danger:hover:not(:disabled) { background: rgba(239,68,68,.18); }
 .btn-sm { padding: 8px 13px; font-size: 13px; }
 .btn-lg { padding: 14px 22px; font-size: 16px; }
 
@@ -549,6 +554,8 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .stage-panel-head h4 { margin: 0; font-size: 15px; }
 .stage-panel-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); }
 .stage-panel-tag { flex: none; font-size: 11px; font-weight: 700; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; white-space: nowrap; }
+/* Dashed, to echo the dashed node the tracker drew for this same stage. */
+.stage-panel-tag-skip { border-style: dashed; border-color: var(--border-strong); }
 .stage-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .stage-field { display: flex; flex-direction: column; gap: 5px; }
 .stage-field label { font-size: 12px; font-weight: 700; color: var(--text); }
@@ -578,6 +585,23 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .jtrack-label { margin-top: 8px; font-size: 11px; font-weight: 600; line-height: 1.28; color: var(--text-2); min-width: 0; max-width: 100%; overflow-wrap: break-word; }
 .jtrack-step.current .jtrack-label { color: var(--primary-600); font-weight: 700; }
 .jtrack-step.done .jtrack-label, .jtrack-step.approved .jtrack-label { color: var(--text); }
+
+/* Skipped: the case went PAST this stage without ever going through it. It is neither a
+   tick (nobody did the work) nor an upcoming node (it is behind the case and will not come
+   round again), so it gets its own reading — a hollow dashed node with a dash where the
+   number or tick would sit, and a dashed rail leading into it. Scanning the track then shows
+   what was actually worked instead of a solid row of ticks the case never earned. */
+.jtrack-step.skipped::before {
+  background: repeating-linear-gradient(90deg, var(--border-strong) 0 5px, transparent 5px 10px);
+}
+.jtrack-step.skipped .jtrack-node { background: var(--bg-2); border-style: dashed; color: var(--muted); }
+.jtrack-step.skipped .jtrack-label { color: var(--muted); }
+.jtrack-skipnote { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-size: 12px; font-weight: 600; color: var(--muted); line-height: 1.45; }
+.jtrack-skipmark {
+  flex: none; margin-top: 1px; width: 18px; height: 18px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 11px; font-weight: 700;
+  background: var(--bg-2); border: 1.5px dashed var(--border-strong); color: var(--muted);
+}
 
 /* On Hold: the pipeline dims but the client's position stays visible; the paused
    node gets an amber ⏸ ring so "where were we?" is answerable at a glance. */
@@ -2805,7 +2829,7 @@ a.cal-att-name:hover { color: var(--primary-600); text-decoration: underline; }
 /* ---- Client dossier: Payments tab (Finance Phase 2) ---- */
 .btn-xs { padding: 5px 10px; font-size: 12px; border-radius: 8px; }
 .btn-xs.danger { color: var(--danger); border-color: rgba(185, 28, 28, .35); }
-.btn-xs.danger:hover { background: rgba(185, 28, 28, .06); }
+.btn-xs.danger:hover:not(:disabled) { background: rgba(185, 28, 28, .06); }
 .pay-chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .pay-chip { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; }
 .pay-chip .k { font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 700; }
@@ -4182,4 +4206,39 @@ a.ld-dh-chip:hover { background: rgba(255, 255, 255, .28); }
   .lf-b-req { grid-area: req; }
   .lf-b-req span { width: 100%; justify-content: center; padding-top: 9px; padding-bottom: 9px; }
   .lf-b-opts { margin-left: 0; }
+}
+
+/* ---------------- possible-duplicate warning (add / edit client) ----------------
+   Rendered inside the client form, just above its footer, when the server soft-blocks
+   a record that matches one the workspace already holds. Amber, not red: nothing has
+   failed and the next press of the same button goes through. Feature-prefixed (dupw-)
+   because this sits inside a modal body already full of generic .field/.card markup. */
+.dupw {
+  border: 1px solid rgba(245, 158, 11, .4); background: rgba(245, 158, 11, .07);
+  border-radius: var(--radius-sm); padding: 14px 16px; margin-bottom: 16px;
+}
+.dupw-head { display: flex; gap: 11px; align-items: flex-start; }
+.dupw-icon { font-size: 16px; line-height: 1.35; }
+.dupw-title { font-size: 14px; font-weight: 700; color: #92400e; }
+.dupw-sub { font-size: 12.5px; color: var(--text-2); line-height: 1.55; margin-top: 3px; }
+.dupw-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.dupw-row {
+  display: flex; gap: 12px; align-items: center; justify-content: space-between;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+}
+.dupw-row-main { min-width: 0; }
+.dupw-name { font-size: 13.5px; font-weight: 700; color: var(--text); }
+.dupw-contact { font-size: 12.5px; color: var(--text-2); margin-top: 2px; word-break: break-word; }
+.dupw-meta { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.dupw-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.dupw-chip {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .01em; padding: 2px 8px; border-radius: 999px;
+  background: rgba(245, 158, 11, .14); color: #92400e; border: 1px solid rgba(245, 158, 11, .32);
+}
+.dupw-open { flex-shrink: 0; }
+.dupw-locked { flex-shrink: 0; font-size: 11.5px; color: var(--muted); font-style: italic; }
+
+@media (max-width: 720px) {
+  .dupw-row { flex-direction: column; align-items: stretch; }
+  .dupw-open { width: 100%; }
 }

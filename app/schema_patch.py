@@ -731,6 +731,7 @@ def ensure_enterprise_crm_tables():
                     priority VARCHAR NOT NULL DEFAULT 'normal',
                     target_date DATE,
                     stage_data TEXT,
+                    stage_visits TEXT,
                     assigned_to_user_id INTEGER,
                     created_by_user_id INTEGER NOT NULL,
                     created_at {ts} DEFAULT {now_default} NOT NULL,
@@ -772,6 +773,12 @@ def ensure_enterprise_crm_tables():
         # Additive: per-stage, country-aware case record (JSON text).
         if "stage_data" not in client_cols:
             conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN stage_data TEXT"))
+        # Additive: the stages a case has actually occupied, so the journey tracker can show a
+        # jumped-over stage as skipped rather than complete. Deliberately NOT backfilled here:
+        # an existing case's real history is unknowable, so it is seeded (as "assumed reached")
+        # the first time that case's stage is written — see _record_stage_visit.
+        if "stage_visits" not in client_cols:
+            conn.execute(text("ALTER TABLE enterprise_clients ADD COLUMN stage_visits TEXT"))
 
         # Additive: the lead-intake record a consultancy keeps on every client — contact,
         # guardian, study plan, academic profile, tests, funding, lead source and the

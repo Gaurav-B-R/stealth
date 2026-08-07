@@ -49,6 +49,13 @@
     return String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+  // Today in the READER's zone, for min/max on date pickers. Local, not toISOString(),
+  // which is UTC and hands a counsellor in IST yesterday's date all evening. These are
+  // picker hints only — the server bounds every date against the ORG's calendar.
+  function isoToday() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
   function initials(name) {
     const p = String(name || "").trim().split(/\s+/);
     return ((p[0] || "")[0] || "") + ((p[1] || "")[0] || "") || (String(name || "?")[0] || "?");
@@ -445,11 +452,24 @@
         <button class="btn btn-ghost btn-sm" onclick="__ent.${removeFn}()">Remove</button>
       </div>`;
     }
+    // The Apply button carries an id so BOTH entry points — the click and the Enter key on
+    // the input — resolve the same node; withBusy's already-busy early return then guards
+    // the pair with one lock. Validity is synced from an inline oninput rather than
+    // bindValidity because renderCredits()/renderBilling() rebuild this row wholesale on
+    // every repaint, which would drop any listener attached from outside the markup.
     return `<div class="coupon-bar">
       <input id="${inputId}" class="coupon-input" placeholder="Have a discount code?" maxlength="40"
+        oninput="__ent.syncCouponApply('${inputId}')"
         onkeydown="if(event.key==='Enter'){event.preventDefault();__ent.${applyFn}();}" />
-      <button class="btn btn-primary btn-sm" onclick="__ent.${applyFn}()">Apply</button>
+      <button class="btn btn-primary btn-sm" id="${inputId}Apply" onclick="__ent.${applyFn}()" disabled title="Enter a discount code first">Apply</button>
     </div>`;
+  }
+
+  function syncCouponApply(inputId) {
+    const input = $("#" + inputId), btn = $("#" + inputId + "Apply");
+    if (!input || !btn || btn.dataset.busy === "1") return;
+    btn.disabled = input.value.trim() === "";
+    btn.title = btn.disabled ? "Enter a discount code first" : "";
   }
 
   function defaultApiErrorMessage(status, fallback) {
@@ -678,6 +698,110 @@
     el.innerHTML = (type === "success" ? "✓ " : type === "error" ? "⚠ " : "") + esc(msg);
     $("#toastWrap").appendChild(el);
     setTimeout(() => { el.style.opacity = "0"; el.style.transform = "translateY(8px)"; setTimeout(() => el.remove(), 250); }, 3400);
+  }
+
+  /* ---------------- submit guards ----------------
+     Two rules for every button that writes something, in one place.
+
+     (1) IN FLIGHT — from the click until the request settles, the button is unclickable.
+         That is not decoration. A second click on "Record payment" is a second row in the
+         org's books; on "✉ Send link" a second email and a second credit debited; on
+         "Add client" a duplicate student. `withBusy` is the re-entrancy guard itself: it
+         no-ops when the button is already busy, so a second path into the same handler
+         (Enter on a field, a stray programmatic call) cannot produce a duplicate write.
+         It restores on EVERY exit — success, error, early return, throw — which is the
+         part hand-rolled try/finally blocks keep getting wrong.
+
+     (2) NOT FILLED IN — a button whose required inputs are empty or invalid is disabled,
+         rather than clickable-and-then-scolding. `bindValidity` keeps that in sync as the
+         user edits. A dead button with no explanation is worse than the toast it replaces,
+         so the reason rides along as a tooltip; pass one.
+
+     The two compose. withBusy restores *through* the validity check rather than blindly
+     setting disabled=false, so a save that fails re-enables the button only as far as the
+     form currently deserves — and bindValidity stands down while a request is in flight so
+     the two never fight over the same property. */
+
+  /**
+   * Disable `btn` whenever `isValid()` is false and keep it in sync as the user edits.
+   *
+   * `watch` is either a container (form / modal body — events are delegated, so inputs
+   * that appear later, from a cascade or an async prefill, are covered) or an explicit
+   * array of elements. `hint` is the tooltip shown while the button is dead.
+   *
+   * Returns the sync function, also parked on `btn._syncValid`. Call it after changing an
+   * input from code — assigning `.value` fires no event, so nothing else will notice.
+   */
+  function bindValidity(btn, watch, isValid, hint) {
+    if (!btn) return () => {};
+    const sync = () => {
+      // Never fight withBusy: while the request is in flight the button stays disabled and
+      // keeps its busy label, whatever the inputs say now.
+      if (btn.dataset.busy === "1") return;
+      const ok = !!isValid();
+      btn.disabled = !ok;
+      if (hint) btn.title = ok ? "" : hint;
+    };
+    if (Array.isArray(watch)) {
+      watch.filter(Boolean).forEach((el) => { el.addEventListener("input", sync); el.addEventListener("change", sync); });
+    } else if (watch) {
+      // Delegated: `input` and `change` both bubble, so one pair of listeners on the
+      // container covers every field it will ever hold.
+      watch.addEventListener("input", sync);
+      watch.addEventListener("change", sync);
+    }
+    btn._syncValid = sync;
+    sync();
+    return sync;
+  }
+
+  /**
+   * Run `fn()` with `btn` locked and showing `busyLabel`, restoring it however `fn` ends.
+   *
+   * Returns `fn`'s result, or undefined when the button was already busy — that early
+   * return IS the duplicate-submit guard, so handlers can simply `await withBusy(...)`
+   * without their own flag. Pass "" for a spinner with no words.
+   *
+   * If `fn` navigates away or closes the modal, the button has left the DOM by the time we
+   * restore, and we leave it alone.
+   */
+  async function withBusy(btn, busyLabel, fn) {
+    if (!btn) return fn();
+    if (btn.dataset.busy === "1" || btn.disabled) return undefined;
+    const html = btn.innerHTML;
+    const minWidth = btn.style.minWidth;
+    const title = btn.title;
+    // Pin the current width so swapping in "⟳ Saving…" doesn't make the button (and the
+    // footer row it sits in) jump around mid-request.
+    const w = btn.getBoundingClientRect().width;
+    if (w) btn.style.minWidth = Math.ceil(w) + "px";
+    // The white spinner only reads on a solid gradient; on the soft/ghost/danger fills it
+    // would be invisible, so those get the dark one.
+    const spin = btn.classList.contains("btn-primary") || btn.dataset.spin === "light" ? "spinner" : "spinner dark";
+    btn.dataset.busy = "1";
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    btn.title = "";
+    btn.innerHTML = `<span class="${spin}"></span>${busyLabel ? " " + esc(busyLabel) : ""}`;
+    try {
+      return await fn();
+    } finally {
+      delete btn.dataset.busy;
+      btn.removeAttribute("aria-busy");
+      if (btn.isConnected) {
+        btn.innerHTML = html;
+        btn.style.minWidth = minWidth;
+        btn.title = title;
+        // Back through the validity gate, not straight to enabled: if the form is still
+        // half-filled the button has no business being clickable again.
+        if (btn._syncValid) btn._syncValid(); else btn.disabled = false;
+      }
+    }
+  }
+
+  /** True when every one of `els` has a non-blank value. The usual `isValid` for a form. */
+  function allFilled(els) {
+    return els.filter(Boolean).every((el) => String(el.value || "").trim() !== "");
   }
 
   /* ---------------- overlay / modal / drawer ---------------- */
@@ -939,8 +1063,11 @@
       err.classList.add("hidden"); ok.classList.add("hidden");
       const email = (f.email.value || "").trim();
       try {
-        const turnstileToken = await getEnterpriseTurnstileToken("forgot");
+        // Locked BEFORE the Turnstile await, not after: that await can span a fetch of the
+        // site key on a cold page, and every click landing in that window was its own
+        // password-reset email.
         btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
+        const turnstileToken = await getEnterpriseTurnstileToken("forgot");
         const payload = { email };
         if (turnstileToken) payload.cf_turnstile_token = turnstileToken;
         const res = await fetch("/api/auth/forgot-password", {
@@ -968,12 +1095,18 @@
     let pendingSignup = null;
 
     async function requestSignupCode(email, errEl, btn, busyLabel, idleLabel) {
+      // Shared by "Create my workspace" and "Resend code". The guard matters most for Resend:
+      // it sits on a card the user is already staring at waiting for a slow email, so
+      // double-tapping is the natural human response — and /signup/send-code allows only 6
+      // per hour, so a few stray taps lock a prospect out of signing up entirely.
+      if (btn.disabled) return false;
       errEl.classList.add("hidden");
       try {
         const body = { email };
+        // Locked before the Turnstile await, which can span a site-key fetch on a cold page.
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> ' + busyLabel;
         const turnstileToken = await getEnterpriseTurnstileToken("signup");
         if (turnstileToken) body.cf_turnstile_token = turnstileToken;
-        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> ' + busyLabel;
         const data = await api("/signup/send-code", { method: "POST", body });
         showSignupVerifyCard(email);
         if (data && data.dev_code) $("#signupVerifyForm").code.value = data.dev_code; // local sandbox only
@@ -1009,6 +1142,13 @@
         accepted_dpa: f.accept_dpa.checked,
         marketing_emails_consent: f.marketing_consent.checked,
       };
+      // `required` blocks an EMPTY field but accepts "   ". Catch that before spending one
+      // of the six-per-hour code sends on a request the server will refuse anyway.
+      if (!pendingSignup.company_name || !pendingSignup.full_name || !pendingSignup.subdomain_slug) {
+        err.textContent = "Please fill in your company name, your name and a portal URL.";
+        err.classList.remove("hidden");
+        return;
+      }
       await requestSignupCode(pendingSignup.email, err, btn, "Sending code…", "Create my workspace");
     };
 
@@ -1047,14 +1187,20 @@
       e.preventDefault();
       const f = e.target; const btn = $("#loginBtn");
       const err = $("#loginError"); err.classList.add("hidden");
+      // A portal redirect leaves this page entirely, so re-enabling the button on the way
+      // out just flashes a live "Sign in" over a page that is already navigating away.
+      let navigating = false;
       try {
         const body = { email: f.email.value.trim(), password: f.password.value };
+        // Locked before the Turnstile await — see #forgotForm above. Duplicate logins burn
+        // the enterprise.login rate-limit bucket and can lock the user out of their own
+        // workspace for the window.
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Signing in…';
         const turnstileToken = await getEnterpriseTurnstileToken("login");
         if (turnstileToken) body.cf_turnstile_token = turnstileToken;
-        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Signing in…';
         const data = await api("/login", { method: "POST", body });
         if (data.onboarding_required) { showOnboard(); return; }
-        if (redirectToPortalIfNeeded(data)) return;
+        if (redirectToPortalIfNeeded(data)) { navigating = true; return; }
         await boot({ fromAuthAction: true });
         // Confirm only once boot actually landed in the workspace — it can bounce back to the
         // auth screen (cookie/permission problems), which surfaces its own error instead.
@@ -1062,16 +1208,26 @@
       } catch (ex) {
         showLoginError(ex.message);
         resetEnterpriseTurnstile("login");
-      } finally { btn.disabled = false; btn.textContent = "Sign in"; }
+      } finally { if (!navigating) { btn.disabled = false; btn.textContent = "Sign in"; } }
     };
 
     $("#onboardForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#onboardBtn");
       const err = $("#onboardError"); err.classList.add("hidden");
+      const company = f.company_name.value.trim();
+      const slug = f.subdomain_slug.value.trim().toLowerCase();
+      // `required` stops an EMPTY field but happily accepts "   ", which the server then
+      // rejects — answer that here rather than spending a round trip on it.
+      if (!company || !slug) {
+        err.textContent = "Enter your company name and a portal URL.";
+        err.classList.remove("hidden");
+        (company ? f.subdomain_slug : f.company_name).focus();
+        return;
+      }
       btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Finishing…';
       try {
-        await api("/onboarding", { method: "POST", body: { company_name: f.company_name.value.trim(), subdomain_slug: f.subdomain_slug.value.trim().toLowerCase() } });
+        await api("/onboarding", { method: "POST", body: { company_name: company, subdomain_slug: slug } });
         await boot({ fromAuthAction: true });
       } catch (ex) {
         err.textContent = ex.message; err.classList.remove("hidden");
@@ -2098,9 +2254,16 @@
           : `<div style="margin-top:5px;color:var(--muted)">Wallet balance: ${balance} credits</div>`;
       }
       el.innerHTML = `<div>Costs up to <b>${total} credits</b>${money(total)} for ${n} interview${n === 1 ? "" : "s"} — <b>${mockCost}</b> credits each, charged only when an interview is actually taken.</div>` + balanceLine;
-      const sb = $("#sendIvSave"); if (sb) { sb.disabled = blocked; sb.title = blocked ? "Top up your wallet to send this link" : ""; }
+      // This runs on every keystroke in #sendIvCount — including while the invite is in
+      // flight, where it would happily un-disable the button mid-request and let a second
+      // invite (and a second credit hold) go out. withBusy owns the button while busy.
+      const sb = $("#sendIvSave");
+      if (sb && sb.dataset.busy !== "1") { sb.disabled = blocked; sb.title = blocked ? "Top up your wallet to send this link" : ""; }
     }
     const ic = $("#sendIvCount"); if (ic) ic.addEventListener("input", updateCost);
+    // Registering it as the button's validity sync means withBusy's finally restores the
+    // wallet-blocked state instead of blanket-enabling a button the balance can't afford.
+    const ivSaveBtn = $("#sendIvSave"); if (ivSaveBtn) ivSaveBtn._syncValid = updateCost;
     updateCost();
     $("#sendIvForm").onsubmit = async (e) => {
       e.preventDefault();
@@ -2111,16 +2274,16 @@
         return;
       }
       const n = Math.max(1, Math.min(20, parseInt($("#sendIvCount").value, 10) || 3));
-      const btn = $("#sendIvSave"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
-      try {
-        const r = await api(`/clients/${id}/interview/invite`, { method: "POST", body: { allowed_count: n } });
-        closeModal();
-        toast(r.message || "Mock interview link sent", r.email_sent ? "success" : "error");
-        if (state.activeClient === id) openClient(id);  // refresh the open profile
-      } catch (ex) {
-        const er = $("#sendIvErr"); er.textContent = ex.message; er.classList.remove("hidden");
-        btn.disabled = false; btn.innerHTML = "✉ Send link";
-      }
+      await withBusy($("#sendIvSave"), "Sending…", async () => {
+        try {
+          const r = await api(`/clients/${id}/interview/invite`, { method: "POST", body: { allowed_count: n } });
+          closeModal();
+          toast(r.message || "Mock interview link sent", r.email_sent ? "success" : "error");
+          if (state.activeClient === id) openClient(id);  // refresh the open profile
+        } catch (ex) {
+          const er = $("#sendIvErr"); er.textContent = ex.message; er.classList.remove("hidden");
+        }
+      });
     };
   }
 
@@ -2414,7 +2577,7 @@
         <div class="mw-grid">
           <div class="field"><label>Nationality</label><input name="nationality" value="${esc(c.nationality || "")}"/></div>
           <div class="field"><label>Gender</label>${profileSelect("gender", c.gender)}</div>
-          <div class="field"><label>Date of birth</label><input type="date" name="date_of_birth" value="${dval(c.date_of_birth)}"/></div>
+          <div class="field"><label>Date of birth</label><input type="date" name="date_of_birth" max="${isoToday()}" value="${dval(c.date_of_birth)}"/></div>
           <div class="field"><label>Passport number</label><input name="passport_number" value="${esc(c.passport_number || "")}"/></div>
           <div class="field"><label>Passport expiry</label><input type="date" name="passport_expiry" value="${dval(c.passport_expiry)}"/></div>
           <div class="field"><label>Application reference</label><input name="application_reference" value="${esc(c.application_reference || "")}"/></div>
@@ -2426,7 +2589,7 @@
 
       <div class="cp-sub-label">${opts.withNote ? "Notes &amp; consent" : "Consent"}</div>
       ${opts.withNote ? `<div class="field"><label>First note (optional)</label><textarea name="initial_note" style="min-height:70px" placeholder="e.g. Walk-in enquiry, father wants Canada, sister already in Toronto…"></textarea></div>` : ""}
-      ${opts.withDpaConsent ? `<div class="consent-field"><input type="checkbox" id="${p}Consent" name="client_consent_confirmed"/><label for="${p}Consent">This client has consented to their personal data being collected and processed through Rilono (see <a href="/dpa" target="_blank" rel="noopener">Data Processing Agreement</a>).</label></div>` : ""}
+      ${opts.withDpaConsent ? `<div class="consent-field"><input type="checkbox" id="${p}Consent" name="client_consent_confirmed" required/><label for="${p}Consent">This client has consented to their personal data being collected and processed through Rilono (see <a href="/dpa" target="_blank" rel="noopener">Data Processing Agreement</a>).</label></div>` : ""}
       <div class="field" style="margin-bottom:8px"><label>Consent to receive updates on</label></div>
       <div class="mw-checks">
         ${channels.map((ch) => `<label><input type="checkbox" name="marketing_consent_channels" value="${esc(ch.key)}" ${picked.indexOf(ch.key) !== -1 ? "checked" : ""}/>${esc(ch.label)}</label>`).join("")}
@@ -2552,6 +2715,58 @@
     return body;
   }
 
+  /* ---------------- possible-duplicate warning ----------------
+     The server soft-blocks a client that looks like one the workspace already holds
+     (POST/PATCH /clients -> 409 duplicate_client). This renders that answer INSIDE the
+     open client form rather than in a confirm dialog: the form is long and the typed
+     intake would be lost if a modal replaced it, and the warning belongs where the eye
+     already is — directly above the button that was just pressed. */
+  function duplicateMatchHtml(match) {
+    const meta = [
+      match.stage && match.stage.label,
+      match.destination_country_name,
+      match.branch_name,
+      match.assigned_to_name ? "with " + match.assigned_to_name : null,
+      match.created_at ? "added " + fmtDate(match.created_at) : null,
+    ].filter(Boolean);
+    const contact = [match.email, match.phone].filter(Boolean);
+    return `<div class="dupw-row">
+      <div class="dupw-row-main">
+        <div class="dupw-name">${esc(match.full_name || "Unnamed client")}</div>
+        ${contact.length ? `<div class="dupw-contact">${esc(contact.join(" · "))}</div>` : ""}
+        ${meta.length ? `<div class="dupw-meta">${esc(meta.join(" · "))}</div>` : ""}
+        <div class="dupw-chips">${(match.reason_labels || []).map((r) => `<span class="dupw-chip">${esc(r)}</span>`).join("")}</div>
+      </div>
+      ${match.in_scope && match.id
+        ? `<button type="button" class="btn btn-ghost btn-sm dupw-open" data-dup-open="${match.id}">Open file</button>`
+        /* No link out of here for a record this member's access scope doesn't cover —
+           the file would refuse to open anyway. Say who to ask instead. */
+        : `<span class="dupw-locked">Another team’s file</span>`}
+    </div>`;
+  }
+
+  function renderDuplicateWarning(box, detail, isEdit) {
+    const list = (detail && detail.duplicates) || [];
+    box.innerHTML = `
+      <div class="dupw-head">
+        <span class="dupw-icon">⚠️</span>
+        <div>
+          <div class="dupw-title">${list.length === 1 ? "This may already be one of your clients" : "This may already be in your workspace"}</div>
+          <div class="dupw-sub">${esc(detail.message || "")} ${isEdit ? "Save again to keep these details anyway." : "Press Add anyway to open a second file regardless."}</div>
+        </div>
+      </div>
+      <div class="dupw-list">${list.map(duplicateMatchHtml).join("")}</div>`;
+    box.classList.remove("hidden");
+    $$("[data-dup-open]", box).forEach((btn) => {
+      btn.onclick = () => {
+        const id = parseInt(btn.getAttribute("data-dup-open"), 10);
+        closeModal();
+        openClient(id);
+      };
+    });
+    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
   /* ---------------- add / edit client form ---------------- */
   // opts2 (all optional): { forceCreate, heading, onCreated } — the Leads convert flow
   // reuses this whole form as a prefilled "Add client" (forceCreate keeps a truthy
@@ -2571,6 +2786,7 @@
       <form id="clientForm">
       <div class="modal-body">
         ${clientFormFieldsHtml(c, opts)}
+        <div id="clientDupWarn" class="dupw hidden"></div>
         <div id="clientFormError" class="auth-error hidden"></div>
       </div>
       <div class="modal-foot">
@@ -2580,11 +2796,20 @@
 
     wireClientFormFields(c, opts);
 
+    // Flipped by a duplicate 409 and never unset: the second press of the same button is
+    // the acknowledgement the server is waiting for. Re-running the check after they have
+    // read it would only stop them saying yes.
+    let dupAcknowledged = false;
+    const saveLabel = () => (isEdit
+      ? (dupAcknowledged ? "Save anyway" : "Save changes")
+      : (dupAcknowledged ? "Add anyway" : "Add client"));
+
     $("#clientForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#clientSaveBtn"); const err = $("#clientFormError");
       err.classList.add("hidden");
       const body = collectClientFormBody(f);
+      if (dupAcknowledged) body.allow_duplicate = true;
       if (!isEdit) body.visa_category = "student";
       if (!isEdit && f.initial_note && f.initial_note.value.trim()) body.initial_note = f.initial_note.value.trim();
 
@@ -2619,8 +2844,14 @@
         else navigate("clients");
       } catch (ex) {
         if (ex.status === 402) { closeModal(); toast(ex.message, "error"); navigate("credits"); return; }
+        const detail = ex.status === 409 && ex.data ? ex.data.detail : null;
+        if (detail && detail.code === "duplicate_client") {
+          dupAcknowledged = true;
+          renderDuplicateWarning($("#clientDupWarn"), detail, isEdit);
+          return;
+        }
         err.textContent = ex.message; err.classList.remove("hidden");
-      } finally { btn.disabled = false; btn.innerHTML = isEdit ? "Save changes" : "Add client"; }
+      } finally { btn.disabled = false; btn.innerHTML = saveLabel(); }
     };
   }
 
@@ -3026,9 +3257,19 @@
       return stages.map(btn).join("") + (onHold ? btn(onHold) : "");
     }
 
+    // "Everything before the current stage is done" is an assumption the tracker used to draw
+    // as a fact. `stages_skipped` is the server's answer to it — the stages this case went past
+    // without working, worked out once against the record of where the case has actually stood
+    // (see _skipped_stage_keys). It is empty whenever that record cannot prove a skip, so a
+    // case older than the record, or one whose past cannot be placed, still reads as it always
+    // did. Everything on this page branches on this one list rather than re-deriving it.
+    function stageWasSkipped(stageKey) {
+      return (cl.stages_skipped || []).indexOf(stageKey) >= 0;
+    }
+
     // Visual journey tracker (mirrors the B2C stage stepper): the linear client pipeline as
-    // connected nodes with done / current / upcoming states, off-path Rejected & On-Hold
-    // pills, and a document-readiness line built from the client's uploaded documents.
+    // connected nodes with done / skipped / current / upcoming states, off-path Rejected &
+    // On-Hold pills, and a document-readiness line built from the client's uploaded documents.
     function journeyTrackHtml(interactive, current, docs) {
       const stages = stagesForClient(cl);
       if (!stages.length) return "";
@@ -3053,6 +3294,11 @@
       const reachedIdx = curIdx >= 0 ? curIdx
         : heldIdx >= 0 ? heldIdx
         : (isRejected || isOnHold) ? linear.length - 1 : -1;
+      // Behind the case, a stage is either WORKED THROUGH or JUMPED OVER — a tick on both is
+      // the tracker asserting work nobody did. See stageWasSkipped.
+      const visitedAt = (cl.stage_visits && typeof cl.stage_visits === "object") ? cl.stage_visits : {};
+      const behindCls = (key) => (stageWasSkipped(key) ? "skipped" : "done");
+      let skippedCount = 0;
 
       const nodes = linear.map((s, i) => {
         // The success node is the one keyed `approved` — not "whichever stage is terminal".
@@ -3060,24 +3306,34 @@
         // land in it and inherit the green tick without being a win.
         const isSuccess = s.key === "approved";
         let cls;
-        if (isRejected) cls = isSuccess ? "upcoming" : "done";  // walked the path, then refused
+        if (isRejected) cls = isSuccess ? "upcoming" : behindCls(s.key);  // walked the path, then refused
         else if (isOnHold) {
           if (heldIdx >= 0) {
-            cls = i < heldIdx ? "done" : (i === heldIdx ? "current paused" : "upcoming");
+            cls = i < heldIdx ? behindCls(s.key) : (i === heldIdx ? "current paused" : "upcoming");
           } else cls = "upcoming";                              // legacy hold — position unknown
         }
-        else if (i < curIdx) cls = "done";
+        else if (i < curIdx) cls = behindCls(s.key);
         else if (i === curIdx) cls = "current";
         else cls = "upcoming";
-        if (isSuccess && cls !== "upcoming" && !isOnHold) cls += " approved"; // success node
-        const inner = cls.indexOf("paused") >= 0 ? "⏸"
+        const isSkipped = cls === "skipped";
+        if (isSkipped) skippedCount += 1;
+        // The green tick is a WIN. A pipeline re-sequenced so the approval sits behind the
+        // case must not hand that tick to a stage the case never actually reached.
+        if (isSuccess && cls !== "upcoming" && !isSkipped && !isOnHold) cls += " approved";
+        const inner = isSkipped ? "–"
+          : cls.indexOf("paused") >= 0 ? "⏸"
           : cls.indexOf("done") >= 0 ? "✓"
           : (cls.indexOf("current") >= 0 && isSuccess ? "✓" : String(i + 1));
         const jk = interactive ? ` data-jkey="${s.key}"` : "";
-        // Amber dot on a reached stage whose required case-record fields are still empty.
-        const gaps = (interactive && i <= reachedIdx) ? stageMissingRequired(s.key).length : 0;
+        // Amber dot on a reached stage whose required case-record fields are still empty. A
+        // skipped stage is exempt: the case deliberately never did that work, and nagging for
+        // records nobody was ever going to enter is how a gap indicator gets ignored.
+        const gaps = (interactive && i <= reachedIdx && !isSkipped) ? stageMissingRequired(s.key).length : 0;
         const openCls = (openStageKey === s.key) ? " panel-open" : "";
+        const reachedOn = (!isSkipped && cls.indexOf("done") >= 0) ? fmtDate(visitedAt[s.key]) : null;
         const tip = gaps ? `${s.label} — ${gaps} required field${gaps === 1 ? "" : "s"} still empty`
+          : isSkipped ? `${s.label} — skipped: this case never went through this stage`
+          : (reachedOn && reachedOn !== "—") ? `${s.label} — reached ${reachedOn}`
           : s.label;
         return `<div class="jtrack-step ${cls}${openCls}"${jk} title="${esc(tip)}">
             <div class="jtrack-node">${inner}${gaps ? '<span class="jtrack-gap" aria-hidden="true"></span>' : ""}</div>
@@ -3119,8 +3375,15 @@
           ${dTypes.length > 6 ? `<span class="jtrack-docchip more">+${dTypes.length - 6}</span>` : ""}
         </div>`;
 
+      // A tick explains itself; a dashed node does not, and a gap in an otherwise solid chain
+      // reads as a bug until it is named. Only shown when there is something to name.
+      const skipNote = skippedCount
+        ? `<div class="jtrack-skipnote"><span class="jtrack-skipmark">–</span> ${skippedCount} stage${skippedCount === 1 ? "" : "s"} skipped — the case moved straight past ${skippedCount === 1 ? "it" : "them"}.${interactive ? " Recording a skipped stage's case details marks it done." : ""}</div>`
+        : "";
+
       return `<div class="jtrack${isOnHold ? " jtrack-held" : ""}">${nodes}</div>
         <div class="jtrack-alt">${altPill(rejected, isRejected)}${altPill(onHold, isOnHold)}${resumeBtn}</div>
+        ${skipNote}
         ${hint ? `<div class="cpe-hint jtrack-hint">${hint}</div>` : ""}
         ${docHtml}`;
     }
@@ -3148,6 +3411,8 @@
       const fields = stageFieldsFor(openStageKey);
       const vals = stageValuesFor(openStageKey);
       const isCurrent = cl.status === openStageKey;
+      // Same list the tracker used when it drew this stage as a dash.
+      const isSkipped = !isCurrent && stageWasSkipped(openStageKey);
 
       const body = fields.length ? `<div class="stage-fields">${fields.map((f) => {
         const raw = vals[f.key] == null ? "" : String(vals[f.key]);
@@ -3181,7 +3446,9 @@
       return `<div class="stage-panel" id="stagePanel">
           <div class="stage-panel-head">
             <div><h4>${esc(s.label)}</h4><p>${esc(s.description || "")}</p></div>
-            ${isCurrent ? "" : `<span class="stage-panel-tag">Not the current stage</span>`}
+            ${isCurrent ? "" : isSkipped
+              ? `<span class="stage-panel-tag stage-panel-tag-skip" title="The case moved past this stage without going through it">Skipped</span>`
+              : `<span class="stage-panel-tag">Not the current stage</span>`}
           </div>
           ${body}
           ${actions}
@@ -3316,7 +3583,9 @@
     function focusCurrentStage() {
       const track = $("#ovStageFlow .jtrack");
       if (!track || track.scrollWidth <= track.clientWidth + 1) return;
-      const reached = $$(".jtrack-step.done", track);
+      // Skipped counts as walked past here: the fallback wants the furthest node the case
+      // has GONE BY, and stopping at the last tick would scroll short of it.
+      const reached = $$(".jtrack-step.done, .jtrack-step.skipped", track);
       // `current paused` covers On Hold; a closed-as-rejected case has no current node, so
       // fall back to the furthest stage it walked.
       const node = $(".jtrack-step.current", track) || reached[reached.length - 1];
@@ -3570,7 +3839,7 @@
               <div class="docsel-menu hidden" id="docTypeMenu"></div>
             </div>
             <input type="file" id="docFile" class="doc-file" />
-            <button class="btn btn-primary btn-sm" id="docUploadBtn">Upload document</button>
+            <button class="btn btn-primary btn-sm" id="docUploadBtn" disabled>Upload document</button>
             <div id="docOtherWrap" class="docsel-other-wrap" style="display:none">
               <input type="text" id="docOtherDetail" class="docsel-input" maxlength="70" autocomplete="off"
                 placeholder="What is this document? e.g. Police clearance certificate, Name-change affidavit…" />
@@ -3733,6 +4002,11 @@
           dtInput.onkeydown = (e) => { if (e.key === "Escape") dtMenu.classList.add("hidden"); };
         }
 
+        // The document type is free to stay on its "Other" default, so the file is the only
+        // thing that makes this button meaningful — watch it and nothing else.
+        bindValidity($("#docUploadBtn"), [$("#docFile")],
+          () => { const f = $("#docFile"); return !!(f && f.files && f.files[0]); }, "Choose a file to upload");
+
         $("#docUploadBtn").onclick = async () => {
           const fileEl = $("#docFile");
           if (!fileEl.files || !fileEl.files[0]) { toast("Choose a file first", "error"); return; }
@@ -3747,23 +4021,26 @@
           fd.append("file", fileEl.files[0]);
           fd.append("document_type", chosenType);
           fd.append("scan", wantScan ? "true" : "false");
-          const btn = $("#docUploadBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Uploading…';
-          try {
-            const res = await fetch(API + "/clients/" + cl.id + "/documents", { method: "POST", credentials: "include", body: fd });
-            const out = await res.json().catch(() => null);
-            if (!res.ok) throw makePublicApiError(res, out, "We couldn't upload this document. Please try again.");
-            docs.unshift(out.document);
-            // Only poll when a scan is actually running — otherwise the badge would sit on
-            // "scanning…" for a document nobody asked to scan.
-            if (out.scan_requested && out.document && out.document.id) pendingDocIds.add(out.document.id);
-            if (out.scan_pricing) scanPricing = out.scan_pricing;
-            tabCount("documents", docs.length);
-            toast(out.scan_requested
-              ? "Document uploaded — Rilono AI is scanning…"
-              : "Document uploaded. You can scan it any time from its card.", "success");
-            renderDocs();
-            if (out.scan_requested && out.document && out.document.id) pollDocValidation(out.document.id);
-          } catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Upload document"; }
+          // withBusy restores through bindValidity, so a failed upload re-enables the button
+          // only while a file is still selected.
+          await withBusy($("#docUploadBtn"), "Uploading…", async () => {
+            try {
+              const res = await fetch(API + "/clients/" + cl.id + "/documents", { method: "POST", credentials: "include", body: fd });
+              const out = await res.json().catch(() => null);
+              if (!res.ok) throw makePublicApiError(res, out, "We couldn't upload this document. Please try again.");
+              docs.unshift(out.document);
+              // Only poll when a scan is actually running — otherwise the badge would sit on
+              // "scanning…" for a document nobody asked to scan.
+              if (out.scan_requested && out.document && out.document.id) pendingDocIds.add(out.document.id);
+              if (out.scan_pricing) scanPricing = out.scan_pricing;
+              tabCount("documents", docs.length);
+              toast(out.scan_requested
+                ? "Document uploaded — Rilono AI is scanning…"
+                : "Document uploaded. You can scan it any time from its card.", "success");
+              renderDocs();
+              if (out.scan_requested && out.document && out.document.id) pollDocValidation(out.document.id);
+            } catch (ex) { toast(ex.message, "error"); }
+          });
         };
       }
 
@@ -3800,12 +4077,17 @@
       // when the member can't hold them, and these loops then find nothing.
       $$(".doc-del", body).forEach((b) => b.onclick = async () => {
           const id = parseInt(b.dataset.id, 10);
+          // confirmModal closes the dialog before it resolves, and this ✕ lives in the page
+          // body rather than the modal — so without a lock it is clickable again the instant
+          // the user confirms, and stays that way for the whole DELETE.
+          if (b.disabled) return;
           if (!(await confirmModal("This document will be permanently deleted. This cannot be undone.", { title: "Delete document?", okText: "Delete" }))) return;
+          b.disabled = true;
           try {
             await api("/clients/" + cl.id + "/documents/" + id, { method: "DELETE" });
             const i = docs.findIndex((x) => x.id === id); if (i >= 0) docs.splice(i, 1);
             tabCount("documents", docs.length); toast("Document deleted", "success"); renderDocs();
-          } catch (ex) { toast(ex.message, "error"); }
+          } catch (ex) { toast(ex.message, "error"); if (b.isConnected) b.disabled = false; }
         });
         // Human override for AI red flags: staff checked the document themselves.
         $$(".doc-accept", body).forEach((b) => b.onclick = async () => {
@@ -3852,7 +4134,7 @@
       host.innerHTML = `<div class="cp-sub-label">📩 Request documents from client</div>${inner}`;
       const sb = $("#docReqSend"); if (sb) sb.onclick = openDocReqModal;
       const rs = $("#docReqResend"); if (rs) rs.onclick = openDocReqModal;
-      const rv = $("#docReqRevoke"); if (rv) rv.onclick = revokeDocReq;
+      const rv = $("#docReqRevoke"); if (rv) rv.onclick = () => revokeDocReq(rv);
     }
     async function loadDocReq() {
       try { const r = await api(`/clients/${cl.id}/document-requests`); dr.request = r.request || null; }
@@ -3877,7 +4159,11 @@
           <div id="docReqErr" class="auth-error hidden"></div>
         </div>
         <div class="modal-foot"><button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="docReqSave">✉ Send request</button></div></form>`);
+        <button type="submit" class="btn btn-primary" id="docReqSave" disabled>✉ Send request</button></div></form>`);
+      // Watch the form, not #docReqMsg — the note is explicitly optional. Delegated, so the
+      // ticks inside .docreq-checks are covered however the filter shows and hides them.
+      bindValidity($("#docReqSave"), $("#docReqForm"),
+        () => $$("#docReqForm input[type=checkbox]:checked").length > 0, "Select at least one document to request");
       const reqFilter = $("#docReqFilter");
       if (reqFilter) {
         reqFilter.oninput = () => {
@@ -3892,24 +4178,30 @@
         const picked = $$("#docReqForm input[type=checkbox]:checked").map((c) => c.value);
         const er = $("#docReqErr");
         if (!picked.length) { er.textContent = "Select at least one document to request."; er.classList.remove("hidden"); return; }
-        const btn = $("#docReqSave"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
-        try {
-          const r = await api(`/clients/${cl.id}/document-requests`, { method: "POST", body: { document_types: picked, message: ($("#docReqMsg").value || "").trim() || null } });
-          dr.request = r.request; closeModal(); toast(r.message || "Document request sent", r.email_sent ? "success" : "error"); drawDocReq();
-        } catch (ex) { er.textContent = ex.message; er.classList.remove("hidden"); btn.disabled = false; btn.innerHTML = "✉ Send request"; }
+        await withBusy($("#docReqSave"), "Sending…", async () => {
+          try {
+            const r = await api(`/clients/${cl.id}/document-requests`, { method: "POST", body: { document_types: picked, message: ($("#docReqMsg").value || "").trim() || null } });
+            dr.request = r.request; closeModal(); toast(r.message || "Document request sent", r.email_sent ? "success" : "error"); drawDocReq();
+          } catch (ex) { er.textContent = ex.message; er.classList.remove("hidden"); }
+        });
       };
     }
-    async function revokeDocReq() {
+    // Takes the button so the request can hold it: the card lives in the page body, not in
+    // the confirm dialog, so it survives confirmModal closing and would otherwise stay live
+    // for the whole POST — a second revoke on an already-revoked link 404s at the student.
+    async function revokeDocReq(btn) {
       if (!(await confirmModal("The student's upload link will stop working.", { title: "Revoke document request?", okText: "Revoke" }))) return;
-      try { await api(`/clients/${cl.id}/document-requests/revoke`, { method: "POST" }); dr.request = null; toast("Request revoked", "success"); drawDocReq(); }
-      catch (ex) { toast(ex.message, "error"); }
+      await withBusy(btn, "Revoking…", async () => {
+        try { await api(`/clients/${cl.id}/document-requests/revoke`, { method: "POST" }); dr.request = null; toast("Request revoked", "success"); drawDocReq(); }
+        catch (ex) { toast(ex.message, "error"); }
+      });
     }
 
     function renderNotes() {
       const add = canWriteNotes ? `<div class="cp-card note-add">
         <div class="cp-sub-label">Add a note</div>
         <textarea id="noteInput" placeholder="Log a call, a follow-up or a decision about ${esc(cl.full_name)}…"></textarea>
-        <button class="btn btn-primary btn-sm" id="noteSaveBtn">Add note</button></div>` : "";
+        <button class="btn btn-primary btn-sm" id="noteSaveBtn" disabled>Add note</button></div>` : "";
       // notes.moderate deletes anyone's note (incl. AI-generated); notes.write only their own.
       const myId = state.me && state.me.user ? state.me.user.id : null;
       const canDeleteNote = (n) => canModerateNotes || (canWriteNotes && myId != null && n.author_user_id === myId);
@@ -3917,12 +4209,19 @@
         `<div class="tl-item"><div class="tl-meta">${esc(n.author_name || "Team")} · ${fmtDateTime(n.created_at)}${canDeleteNote(n) ? `<button class="tl-del" data-note-id="${n.id}" title="Delete note" aria-label="Delete note">✕</button>` : ""}</div><div class="tl-body">${esc(n.body)}</div></div>`).join("")}</div>`
         : `<div class="empty" style="padding:30px"><div class="emoji">📝</div><h3>No notes yet</h3><p>Keep a running record of calls, follow-ups and decisions.</p></div>`;
       body.innerHTML = add + list;
-      if (canWriteNotes) $("#noteSaveBtn").onclick = async () => {
-        const v = $("#noteInput").value.trim(); if (!v) return;
-        const btn = $("#noteSaveBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-        try { const r = await api(`/clients/${cl.id}/notes`, { method: "POST", body: { body: v } }); data.notes.unshift(r.note); tabCount("notes", data.notes.length); renderNotes(); toast("Note added", "success"); }
-        catch (ex) { toast(ex.message, "error"); btn.disabled = false; btn.textContent = "Add note"; }
-      };
+      if (canWriteNotes) {
+        // This used to be a silent `if (!v) return` — the button looked live, ate the click
+        // and said nothing. Disabled-until-typed says the same thing without the dead click.
+        bindValidity($("#noteSaveBtn"), [$("#noteInput")],
+          () => $("#noteInput").value.trim() !== "", "Write a note first");
+        $("#noteSaveBtn").onclick = async () => {
+          const v = $("#noteInput").value.trim(); if (!v) return;
+          await withBusy($("#noteSaveBtn"), "", async () => {
+            try { const r = await api(`/clients/${cl.id}/notes`, { method: "POST", body: { body: v } }); data.notes.unshift(r.note); tabCount("notes", data.notes.length); renderNotes(); toast("Note added", "success"); }
+            catch (ex) { toast(ex.message, "error"); }
+          });
+        };
+      }
       $$(".tl-del", body).forEach((b) => b.onclick = async () => {
         const id = parseInt(b.dataset.noteId, 10);
         if (!(await confirmModal("This note will be permanently deleted.", { title: "Delete note?", okText: "Delete" }))) return;
@@ -3997,6 +4296,22 @@
         note.textContent = em.attachments.length
           ? `${em.attachments.length} file${em.attachments.length === 1 ? "" : "s"} · ${fmtSize(total)}` : "";
       }
+      emSyncSend();
+    }
+    /* Send is held only for attachment state — a file still uploading, or one that failed.
+       Subject and body keep their toasts: the body is a contenteditable whose emptiness is
+       not reliably observable (a stray <br> or an empty <div> from the browser both read as
+       content), so gating on it would strand a composed email behind a dead button. This
+       runs from emDrawAtts, which already fires on every upload start, tick, finish, failure
+       and removal — so the button tracks the uploads rather than waiting for a click. */
+    function emSyncSend() {
+      const btn = $("#emSendBtn");
+      if (!btn || em.busy) return;
+      const uploading = em.attachments.some((a) => a.status === "uploading");
+      const failed = em.attachments.some((a) => a.status === "error");
+      btn.disabled = uploading || failed;
+      btn.title = uploading ? "Waiting for attachments to finish uploading"
+        : failed ? "Remove the attachment that failed to upload, then send" : "";
     }
     async function emRemoveAttachment(uid) {
       const index = em.attachments.findIndex((a) => a.uid === uid);
@@ -4284,8 +4599,8 @@
       } catch (ex) {
         em.busy = false;
         toast(ex.message, "error");
-        btn.disabled = false;
         btn.innerHTML = `${EM_ICONS.send} Send email`;
+        emSyncSend();   // not a blanket re-enable — a failed attachment still holds the send
       }
     }
 
@@ -4702,23 +5017,31 @@
         el.innerHTML =
           `<div>Costs up to <b>${total} credits</b>${money(total)} for ${n} interview${n === 1 ? "" : "s"} — <b>${mockCost}</b> credits each, charged only when an interview is actually taken.</div>` +
           balanceLine;
+        // Runs on every keystroke in #ivCount, so it must stand down while the invite is in
+        // flight — otherwise typing in the count field un-disables the button mid-request.
         const sb = $("#ivSendSave");
-        if (sb) {
+        if (sb && sb.dataset.busy !== "1") {
           sb.disabled = blocked;
           sb.title = blocked ? "Top up your wallet to send this link" : "";
         }
       }
       const ic = $("#ivCount");
       if (ic) ic.addEventListener("input", updateIvCost);
+      // withBusy restores through this, so a failed send returns to the wallet-blocked
+      // state rather than being blanket-enabled.
+      const ivSendBtn = $("#ivSendSave"); if (ivSendBtn) ivSendBtn._syncValid = updateIvCost;
       updateIvCost();
       $("#ivSendForm").onsubmit = async (e) => {
         e.preventDefault();
+        // One parse shared with updateIvCost's quote above, so the price the user was shown
+        // and the count actually sent can never disagree.
         const n = Math.max(1, Math.min(20, parseInt($("#ivCount").value, 10) || 3));
-        const btn = $("#ivSendSave"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
-        try {
-          const r = await api(`/clients/${cl.id}/interview/invite`, { method: "POST", body: { allowed_count: n } });
-          iv.invite = r.invite; closeModal(); toast(r.message || "Interview link sent", r.email_sent ? "success" : "error"); drawIv();
-        } catch (ex) { const er = $("#ivSendErr"); er.textContent = ex.message; er.classList.remove("hidden"); btn.disabled = false; btn.innerHTML = "✉ Send link"; }
+        await withBusy($("#ivSendSave"), "Sending…", async () => {
+          try {
+            const r = await api(`/clients/${cl.id}/interview/invite`, { method: "POST", body: { allowed_count: n } });
+            iv.invite = r.invite; closeModal(); toast(r.message || "Interview link sent", r.email_sent ? "success" : "error"); drawIv();
+          } catch (ex) { const er = $("#ivSendErr"); er.textContent = ex.message; er.classList.remove("hidden"); }
+        });
       };
     }
     async function revokeInvite() {
@@ -4823,6 +5146,15 @@
       if (m.role === "user") return `<div class="ai-msg user"><div class="ai-bubble">${esc(m.content).replace(/\n/g, "<br>")}</div></div>`;
       return `<div class="ai-msg bot"><div class="ai-av">🧑‍✈️</div><div class="ai-bubble">${aiFormat(m.content)}</div></div>`;
     }
+    /* Send is live only while the officer isn't mid-reply AND there is an answer to send —
+       an empty Send used to land on a silent `if (!v) return`. The dictated path matters as
+       much as the typed one: SpeechRecognition assigns .value directly, which fires no input
+       event, so ivRecog.onresult calls this by hand. */
+    function ivSyncSend() {
+      const b = $("#ivSend"); if (!b) return;
+      const ta = $("#ivInput");
+      b.disabled = iv.busy || !((ta && ta.value) || "").trim();
+    }
     function drawIvChat(w) {
       const typing = iv.busy ? `<div class="ai-msg bot"><div class="ai-av">🧑‍✈️</div><div class="ai-bubble"><span class="ai-typing"><i></i><i></i><i></i></span></div></div>` : "";
       const fb = iv.feedback ? `<div class="cp-card iv-feedback"><div class="cp-sub-label">📋 Interview feedback</div>${feedbackFormat(iv.feedback)}</div>` : "";
@@ -4832,7 +5164,7 @@
             <div class="iv-ctitle">🧑‍✈️ ${esc(cl.destination_country_name)} visa officer · <span class="muted">mock interview</span></div>
             <div class="iv-cactions">
               <button class="btn btn-soft btn-sm" id="ivVoiceBtn">${iv.voiceOn ? "🔊 Voice on" : "🔈 Voice off"}</button>
-              ${iv.finished ? `<button class="btn btn-soft btn-sm" id="ivRestart">↻ New interview</button>` : `<button class="btn btn-ghost btn-sm" id="ivEnd" ${iv.busy ? "disabled" : ""}>End &amp; get feedback</button>`}
+              ${iv.finished ? `<button class="btn btn-soft btn-sm" id="ivRestart">↻ New interview</button>` : `<button class="btn btn-ghost btn-sm" id="ivEnd" ${iv.busy || !iv.history.some((m) => m.role === "user") ? "disabled" : ""} title="Answer at least one question first">End &amp; get feedback</button>`}
             </div>
           </div>
           <div class="iv-thread" id="ivThread">${iv.history.map(ivBubble).join("")}${typing}</div>
@@ -4840,7 +5172,7 @@
           <div class="iv-inrow">
             <textarea id="ivInput" placeholder="Type ${esc((cl.full_name || "the student").split(" ")[0])}'s answer…" rows="1" ${iv.busy ? "disabled" : ""}></textarea>
             ${micSupported ? `<button class="iv-mic" id="ivMic" title="Speak the answer" ${iv.busy ? "disabled" : ""}>🎙</button>` : ""}
-            <button class="btn btn-primary" id="ivSend" ${iv.busy ? "disabled" : ""}>Send</button>
+            <button class="btn btn-primary" id="ivSend" disabled>Send</button>
           </div>`}
         </div>${fb}`;
       const thread = $("#ivThread"); if (thread) thread.scrollTop = thread.scrollHeight;
@@ -4850,8 +5182,9 @@
 
       const inp = $("#ivInput");
       if (inp) { inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendIv(); } });
-        inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 140) + "px"; }); if (!iv.busy) inp.focus(); }
+        inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 140) + "px"; ivSyncSend(); }); if (!iv.busy) inp.focus(); }
       const sendBtn = $("#ivSend"); if (sendBtn) sendBtn.onclick = sendIv;
+      ivSyncSend();
       const endBtn = $("#ivEnd"); if (endBtn) endBtn.onclick = endIv;
       const rb = $("#ivRestart"); if (rb) rb.onclick = () => { ivStopSpeak(); iv.started = false; iv.history = []; iv.finished = false; iv.feedback = null; iv.spoken = 0; drawIv(); };
       const vb = $("#ivVoiceBtn"); if (vb) vb.onclick = () => { iv.voiceOn = !iv.voiceOn; if (!iv.voiceOn) ivStopSpeak(); else { const l = iv.history[iv.history.length - 1]; if (l && l.role === "officer") ivSpeak(l.content); } drawIvChat(w); };
@@ -4917,6 +5250,7 @@
         let interim = "";
         for (let i = e.resultIndex; i < e.results.length; i++) { const t = e.results[i][0].transcript; if (e.results[i].isFinal) finalText += t; else interim += t; }
         const inp = $("#ivInput"); if (inp) { inp.value = (finalText + interim).trim(); inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 140) + "px"; }
+        ivSyncSend();   // assigning .value fires no input event — Send would stay dead
       };
       ivRecog.onerror = () => { btn.classList.remove("rec"); ivRecog = null; };
       ivRecog.onend = () => { btn.classList.remove("rec"); ivRecog = null; };
@@ -5119,6 +5453,10 @@
       const MANUAL_METHODS = [["cash", "Cash"], ["bank_transfer", "Bank transfer"], ["upi", "UPI"], ["card", "Card / POS"], ["cheque", "Cheque"], ["other", "Other"]];
       const manualMethodLabel = (m) => (MANUAL_METHODS.find((x) => x[0] === m) || [m, m || "Payment"])[1];
       const todayISO = () => { const dt = new Date(); return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; };
+      // Mirrors EARLIEST_PAYMENT_DATE in enterprise_payments.py. The server is the one that
+      // enforces both ends — this pair only feeds the picker and the pre-flight check below,
+      // so drifting out of sync costs a worse message, never a bad row.
+      const MIN_PAY_DATE = "2000-01-01";
 
       const chipRow = `
         <div class="pay-chips">
@@ -5153,7 +5491,7 @@
             <div class="field"><label>Amount in INR (₹) *</label>
               <input id="payAmt" type="number" min="1" step="1" placeholder="e.g. 25000" autocomplete="off"></div>
             <div class="field"><label>Due date <span style="color:var(--muted);font-weight:500">(optional)</span></label>
-              <input id="payDue" type="date"></div>
+              <input id="payDue" type="date" min="${todayISO()}"></div>
           </div>
           <div class="field"><label>What is this payment for? *</label>
             <input id="payDesc" type="text" maxlength="300" placeholder="e.g. University application service fee" autocomplete="off"></div>
@@ -5184,7 +5522,7 @@
           </div>
           <div class="field-row">
             <div class="field"><label>Date received</label>
-              <input id="mpDate" type="date" value="${todayISO()}" max="${todayISO()}"></div>
+              <input id="mpDate" type="date" value="${todayISO()}" min="${MIN_PAY_DATE}" max="${todayISO()}"></div>
             <div class="field"><label>Reference <span style="color:var(--muted);font-weight:500">(optional)</span></label>
               <input id="mpRef" type="text" maxlength="80" placeholder="UTR / cheque no. / txn id" autocomplete="off"></div>
           </div>
@@ -5281,28 +5619,39 @@
       }
 
       const createBtn = $("#payCreateBtn");
+      // An amount and a description are both genuinely required; the due date is optional.
+      // The >= 3-character rule stays a toast rather than part of the predicate — a button
+      // that dies again on the second character of a real description reads as broken.
+      if (createBtn) bindValidity(createBtn, [$("#payAmt"), $("#payDesc")],
+        () => parseFloat($("#payAmt").value || "0") > 0 && $("#payDesc").value.trim() !== "",
+        "Enter an amount and what the payment is for");
       if (createBtn) createBtn.onclick = async () => {
         const rupees = parseFloat(($("#payAmt").value || "0"));
         const desc = ($("#payDesc").value || "").trim();
         const due = ($("#payDue").value || "").trim() || null;
         if (!rupees || rupees <= 0) { toast("Enter the amount to collect.", "error"); return; }
         if (desc.length < 3) { toast("Describe what this payment is for.", "error"); return; }
-        createBtn.disabled = true; createBtn.textContent = "Creating…";
-        try {
-          const res = await api(`/clients/${cl.id}/payments`, {
-            method: "POST",
-            body: { amount_paise: Math.round(rupees * 100), description: desc, due_date: due },
-          });
-          try { if (res.pay_url && navigator.clipboard) await navigator.clipboard.writeText(res.pay_url); } catch (e) { /* ignore */ }
-          toast(res.message + (res.pay_url ? " Link copied to your clipboard." : ""), "success");
-          renderPayments();
-        } catch (ex) {
-          toast(ex.message || "Could not create the payment request.", "error");
-          createBtn.disabled = false; createBtn.textContent = "Create & email secure link";
-        }
+        await withBusy(createBtn, "Creating…", async () => {
+          try {
+            const res = await api(`/clients/${cl.id}/payments`, {
+              method: "POST",
+              body: { amount_paise: Math.round(rupees * 100), description: desc, due_date: due },
+            });
+            try { if (res.pay_url && navigator.clipboard) await navigator.clipboard.writeText(res.pay_url); } catch (e) { /* ignore */ }
+            toast(res.message + (res.pay_url ? " Link copied to your clipboard." : ""), "success");
+            renderPayments();
+          } catch (ex) {
+            toast(ex.message || "Could not create the payment request.", "error");
+          }
+        });
       };
 
       const mpSave = $("#mpSaveBtn");
+      // Amount is the only unconditionally-required field: #mpMethod defaults to "cash" and
+      // #mpDate ships pre-filled with today, so neither belongs in the predicate — a bad date
+      // keeps its toast below, which can explain WHY, where a dead button cannot.
+      if (mpSave) bindValidity(mpSave, [$("#mpAmt")],
+        () => parseFloat($("#mpAmt").value || "0") > 0, "Enter the amount received");
       if (mpSave) mpSave.onclick = async () => {
         const rupees = parseFloat(($("#mpAmt").value || "0"));
         const method = $("#mpMethod").value;
@@ -5310,24 +5659,43 @@
         const ref = ($("#mpRef").value || "").trim();
         const desc = ($("#mpDesc").value || "").trim();
         if (!rupees || rupees <= 0) { toast("Enter the amount received.", "error"); return; }
-        mpSave.disabled = true; mpSave.textContent = "Saving…";
-        try {
-          const res = await api(`/clients/${cl.id}/payments/manual`, {
-            method: "POST",
-            body: { amount_paise: Math.round(rupees * 100), method, received_on: date, reference: ref || null, description: desc || null },
-          });
-          toast(res.message || "Payment recorded.", "success");
-          renderPayments();
-        } catch (ex) {
-          toast(ex.message || "Could not record the payment.", "error");
-          mpSave.disabled = false; mpSave.textContent = "Record payment";
-        }
+        // `min`/`max` on the input are constraint-validation hints, not clamps — a year typed
+        // straight into the field still lands in .value (the field just goes :invalid), and
+        // nothing here reads validity, so check it. String compare is safe: a date input's
+        // value is either "" or a valid date string, whose year is always four+ digits.
+        // The server re-checks against the ORG's calendar and is the actual guard.
+        if (date && date > todayISO()) { toast("The date received can't be in the future — check the date.", "error"); return; }
+        if (date && date < MIN_PAY_DATE) { toast("Check the date received — that year looks wrong.", "error"); return; }
+        await withBusy(mpSave, "Saving…", async () => {
+          try {
+            const res = await api(`/clients/${cl.id}/payments/manual`, {
+              method: "POST",
+              body: { amount_paise: Math.round(rupees * 100), method, received_on: date, reference: ref || null, description: desc || null },
+            });
+            toast(res.message || "Payment recorded.", "success");
+            renderPayments();
+          } catch (ex) {
+            toast(ex.message || "Could not record the payment.", "error");
+          }
+        });
       };
 
+      // One lock for the whole row-action set, not one per button. confirmModal closes the
+      // dialog BEFORE it resolves and these buttons live in #cpBody rather than the modal, so
+      // without this the row stays fully live from the moment the user presses "Refund" until
+      // the POST returns — long enough to fire a second refund, or to stack a second dialog.
+      // The flag is per-render because all four actions repaint #cpBody through
+      // renderPayments(); by then these nodes are detached and the release is a no-op.
+      let payBusy = false;
       body.querySelectorAll("[data-act]").forEach((btn) => {
         btn.onclick = async () => {
+          if (payBusy) return;
           const pid = btn.dataset.id;
           const act = btn.dataset.act;
+          // Claimed before the confirm, not after it — a second click must not open a second
+          // dialog for the same payment.
+          payBusy = true;
+          btn.disabled = true;
           try {
             if (act === "resend") {
               const res = await api(`/finance/payments/${pid}/resend-email`, { method: "POST" });
@@ -5362,6 +5730,9 @@
             }
           } catch (ex) {
             toast(ex.message || "Action failed.", "error");
+          } finally {
+            payBusy = false;
+            if (btn.isConnected) btn.disabled = false;
           }
         };
       });
@@ -5454,7 +5825,7 @@
       const opts = UNI_STATUSES.map((s) =>
         `<option value="${s.key}"${entry.status === s.key ? " selected" : ""}>${s.label}</option>`).join("");
       const color = (UNI_STATUSES.find((s) => s.key === entry.status) || UNI_STATUSES[0]).color;
-      return `<select class="uni-status" style="color:${color}" onchange="__ent.setUniStatus(${cl.id},${entry.id},this.value)">${opts}</select>`;
+      return `<select class="uni-status" style="color:${color}" onchange="__ent.setUniStatus(${cl.id},${entry.id},this.value,this)">${opts}</select>`;
     }
 
     function uniRow(e) {
@@ -5488,7 +5859,7 @@
         </div>
         <div class="uni-actions">
           ${canManageUnis ? uniStatusSelect(e) : `<span class="uni-status-ro">${esc((UNI_STATUSES.find((s) => s.key === e.status) || UNI_STATUSES[0]).label)}</span>`}
-          ${canManageUnis ? `<button class="uni-del" title="Remove" onclick="__ent.removeUni(${cl.id},${e.id})">&times;</button>` : ""}
+          ${canManageUnis ? `<button class="uni-del" title="Remove" onclick="__ent.removeUni(${cl.id},${e.id},this)">&times;</button>` : ""}
         </div>
       </div>`;
     }
@@ -5561,10 +5932,18 @@
 
       if (canManageUnis || canShortlistAi) {
         const rec = $("#uniRecBtn");
+        // Field of study is the one starred field; everything else on this form is optional.
+        if (rec) bindValidity(rec, [$("#uniField")],
+          () => ($("#uniField").value || "").trim() !== "", "Enter a field of study first");
         if (rec) rec.onclick = () => recommendUniversities();
         const addBtn = $("#uniAddBtn");
+        if (addBtn) bindValidity(addBtn, [$("#uniManual")],
+          () => ($("#uniManual").value || "").trim() !== "", "Enter a university name first");
         if (addBtn) addBtn.onclick = () => addManualUniversity();
         const save = $("#uniSavePicks");
+        // Delegated on the panel so every .uni-pick tick re-checks, however many there are.
+        if (save) bindValidity(save, $("#uniSuggPanel"),
+          () => !!document.querySelector(".uni-pick:checked"), "Tick at least one university");
         if (save) save.onclick = () => addSelectedUniSuggestions();
         const dismiss = $("#uniDismissSugg");
         if (dismiss) dismiss.onclick = () => dismissUniSuggestions();
@@ -5602,7 +5981,13 @@
               `<button type="button" class="uni-sugg" data-name="${esc(u.name)}">${esc(u.name)}${u.location ? `<span>${esc(u.location)}</span>` : ""}</button>`).join("");
             box.style.display = "block";
             box.querySelectorAll(".uni-sugg").forEach((b) => {
-              b.onclick = () => { input.value = b.dataset.name; hide(); const p = $("#uniManualProgram"); if (p && !p.value) p.focus(); };
+              // Assigning .value fires no input event, so nudge the Add button's validity
+              // check by hand — otherwise picking a suggestion leaves it dead.
+              b.onclick = () => {
+                input.value = b.dataset.name; hide();
+                const add = $("#uniAddBtn"); if (add && add._syncValid) add._syncValid();
+                const p = $("#uniManualProgram"); if (p && !p.value) p.focus();
+              };
             });
           } catch (e) { hide(); }
         }, 220);
@@ -5627,7 +6012,9 @@
         toast("Added to shortlist", "success");
         await loadUniversities();
       } catch (ex) { toast(ex.message, "error"); }
-      finally { const b = $("#uniAddBtn"); if (b) { b.disabled = false; b.textContent = "Add"; } }
+      // Re-queried because loadUniversities() has replaced the node by now; back through the
+      // validity gate rather than straight to enabled, since a successful add cleared the input.
+      finally { const b = $("#uniAddBtn"); if (b) { b.textContent = "Add"; if (b._syncValid) b._syncValid(); else b.disabled = false; } }
     }
 
     async function recommendUniversities() {
@@ -5664,7 +6051,7 @@
         else if (msg) msg.textContent = ex.message || "Could not generate recommendations.";
       } finally {
         const b = $("#uniRecBtn");
-        if (b) { b.disabled = false; b.textContent = "✨ Get AI recommendations"; }
+        if (b) { b.textContent = "✨ Get AI recommendations"; if (b._syncValid) b._syncValid(); else b.disabled = false; }
       }
     }
 
@@ -6426,8 +6813,21 @@
         const uEl = $("#wsUniversity", wrap), pEl = $("#wsProgram", wrap);
         if (uEl) { uEl.value = u.university_name || ""; wsField("university", uEl.value); }
         if (pEl) { pEl.value = u.program || ""; wsField("program", pEl.value); }
+        if (gen && gen._syncValid) gen._syncValid();   // .value assignments fire no event
       };
       const gen = $("#wsGenerateBtn", wrap);
+      // Adds the two checks the handler only made as post-click toasts — an LOR is written
+      // in the recommender's voice, so their name is required; an SOP needs a target, and
+      // either the university or the programme will do. The AI-availability and wallet terms
+      // are re-stated here because bindValidity owns .disabled from now on and would
+      // otherwise re-enable a button the markup had deliberately killed.
+      if (gen) bindValidity(gen, wrap, () => {
+        if (!ws.aiAvailable || ws.busy || writingInflight.has(cl.id)) return false;
+        if (ws.pricing && ws.pricing.can_afford === false) return false;
+        return ws.docType === "lor"
+          ? (ws.form.recommender_name || "").trim() !== ""
+          : ((ws.form.university || "").trim() !== "" || (ws.form.program || "").trim() !== "");
+      }, ws.docType === "lor" ? "Add the recommender's name first" : "Add the target university or program first");
       if (gen) gen.onclick = generateWritingNow;
       const close = $("#wsComposerClose", wrap);
       if (close) close.onclick = () => { ws.composerOpen = false; drawWriting(); };
@@ -6440,7 +6840,15 @@
       const dl = $("#wsDownloadBtn", wrap);
       if (dl && ws.active) dl.onclick = () => downloadWritingDocx(ws.active.id);
       const del = $("#wsDeleteBtn", wrap);
-      if (del && ws.active) del.onclick = () => deleteWritingDraft(ws.active.root_id);
+      // Locked from the first click rather than via withBusy: deleteWritingDraft opens its
+      // own confirm, and a spinner labelled "Deleting…" while the dialog still asks "are you
+      // sure?" would be a lie. Disabling alone stops a second click stacking a second dialog.
+      if (del && ws.active) del.onclick = async () => {
+        if (del.disabled) return;
+        del.disabled = true;
+        try { await deleteWritingDraft(ws.active.root_id); }
+        finally { if (del.isConnected) del.disabled = false; }
+      };
       const copy = $("#wsCopyBtn", wrap);
       if (copy && ws.active) copy.onclick = () => {
         const plain = String(ws.active.content_md || "").replace(/^#+\s*/gm, "").replace(/\*\*/g, "");
@@ -6453,13 +6861,18 @@
       const refCancel = $("#wsRefineCancel", wrap);
       if (refCancel) refCancel.onclick = () => { ws.refineOpen = false; ws.refineText = ""; drawWriting(); };
       const refText = $("#wsRefineText", wrap);
-      if (refText) refText.oninput = () => { ws.refineText = refText.value; };
       const refBtn = $("#wsRefineBtn", wrap);
+      if (refText) refText.oninput = () => { ws.refineText = refText.value; if (refBtn && refBtn._syncValid) refBtn._syncValid(); };
+      // Mirrors the handler's own "Describe the revision you want." check.
+      if (refBtn) bindValidity(refBtn, wrap,
+        () => !(ws.busy || writingInflight.has(cl.id)) && (ws.refineText || "").trim().length >= 3,
+        "Describe the revision you want");
       if (refBtn) refBtn.onclick = refineWritingNow;
       $$(".ws-chip", wrap).forEach((c) => c.onclick = () => {
         ws.refineText = c.dataset.chip;
         const t = $("#wsRefineText", wrap);
         if (t) { t.value = ws.refineText; t.focus(); }
+        if (refBtn && refBtn._syncValid) refBtn._syncValid();   // chip fills it in code, no event
       });
       $$(".ws-vbtn", wrap).forEach((b) => b.onclick = () => wsShowVersion(Number(b.dataset.version)));
       $$(".ws-hrow", wrap).forEach((r) => r.onclick = () => openWritingDraft(Number(r.dataset.root)));
@@ -6580,25 +6993,48 @@
   let _uniRefresh = null;
   let _uniStageSync = null;
 
-  async function setUniStatus(clientId, entryId, status) {
+  // One in-flight row action per shortlist entry. Both handlers below reach _uniStageSync,
+  // which can open its own confirm dialog and move the client's journey stage — so a status
+  // change racing a delete on the same row is not just a wasted request, it is two stage
+  // moves from one intent. Keyed by entry so unrelated rows stay independent.
+  const _uniBusy = new Set();
+
+  async function setUniStatus(clientId, entryId, status, el) {
+    if (_uniBusy.has(entryId)) return;
+    _uniBusy.add(entryId);
+    if (el) el.disabled = true;
     try {
       await api(`/clients/${clientId}/universities/${entryId}`, { method: "PATCH", body: { status } });
       if (_uniRefresh) await _uniRefresh();
       if (_uniStageSync) await _uniStageSync(clientId, status);
     } catch (ex) { toast(ex.message, "error"); }
+    finally {
+      _uniBusy.delete(entryId);
+      // _uniRefresh() repaints the row, so on the happy path this node is already detached.
+      if (el && el.isConnected) el.disabled = false;
+    }
   }
 
-  async function removeUni(clientId, entryId) {
-    const ok = await confirmModal("Remove this university from the shortlist?", {
-      title: "Remove university", okText: "Remove",
-    });
-    if (!ok) return;
+  async function removeUni(clientId, entryId, el) {
+    if (_uniBusy.has(entryId)) return;
+    // Claimed before the confirm: confirmModal closes before it resolves and this ✕ lives in
+    // the page, so otherwise a second click could open a second dialog for the same row.
+    _uniBusy.add(entryId);
+    if (el) el.disabled = true;
     try {
+      const ok = await confirmModal("Remove this university from the shortlist?", {
+        title: "Remove university", okText: "Remove",
+      });
+      if (!ok) return;
       await api(`/clients/${clientId}/universities/${entryId}`, { method: "DELETE" });
       toast("Removed from shortlist", "success");
       if (_uniRefresh) await _uniRefresh();
       if (_uniStageSync) await _uniStageSync(clientId, null);
     } catch (ex) { toast(ex.message, "error"); }
+    finally {
+      _uniBusy.delete(entryId);
+      if (el && el.isConnected) el.disabled = false;
+    }
   }
 
   async function setStatus(id, status) {
@@ -6651,6 +7087,14 @@
     { key: "log", ic: "📜", label: "Access log", cap: "audit.view" },
     { key: "myaccess", ic: "🪪", label: "My access", cap: null },
   ];
+  /* Row-menu actions lock on the (action, member) pair rather than on the button: the menu
+     is closed the instant it is clicked, but the user can reopen it and click again while
+     the request is still in flight, and the row is only re-rendered once it returns — so by
+     then the button is a different node and a per-element guard would have been thrown away.
+     Only mutating actions are held; the modal-openers are read-only and idempotent. */
+  const tmActionInflight = new Set();
+  const TM_MUTATING_ACTS = new Set(["resend", "deactivate", "reactivate", "remove"]);
+
   const teamUi = {
     tab: "members",
     meta: null, metaError: null,
@@ -7337,18 +7781,28 @@
       };
     });
     $$("[data-tmact]", root).forEach((b) => {
-      b.onclick = (e) => {
+      b.onclick = async (e) => {
         e.stopPropagation();
         tmCloseMenus();
         const uid = parseInt(b.dataset.uid, 10);
         const act = b.dataset.tmact;
-        if (act === "access") tmOpenAccessModal(uid);
-        else if (act === "profile") tmOpenProfileModal(uid);
-        else if (act === "resend") tmResendInvite(uid);
-        else if (act === "deactivate") tmDeactivate(uid);
-        else if (act === "reactivate") tmReactivate(uid);
-        else if (act === "remove") removeMember(uid);
-        else if (act === "transfer") tmOpenTransferOwnership(uid);
+        const key = act + ":" + uid;
+        const guarded = TM_MUTATING_ACTS.has(act);
+        if (guarded) {
+          if (tmActionInflight.has(key)) return;
+          tmActionInflight.add(key);
+        }
+        try {
+          if (act === "access") tmOpenAccessModal(uid);
+          else if (act === "profile") tmOpenProfileModal(uid);
+          else if (act === "resend") await tmResendInvite(uid);
+          else if (act === "deactivate") await tmDeactivate(uid);
+          else if (act === "reactivate") await tmReactivate(uid);
+          else if (act === "remove") await removeMember(uid);
+          else if (act === "transfer") tmOpenTransferOwnership(uid);
+        } finally {
+          if (guarded) tmActionInflight.delete(key);
+        }
       };
     });
   }
@@ -7415,6 +7869,21 @@
       </div></form>`, { wide: action === "set_role" || action === "set_scope" });
 
     const form = $("#tmBulkForm");
+    // Mirrors the inline errors the handler raises after the click. Delegated on the form so
+    // the office <select> that appears when scope flips to "branch" is covered as it arrives.
+    // "deactivate" has nothing to pick, so its predicate is simply true.
+    bindValidity($("#tmBulkSubmit"), form, () => {
+      if (action === "set_role") return !!$('input[name="bulk_role"]:checked', form);
+      if (action === "set_scope") {
+        const picked = $('input[name="bulk_scope"]:checked', form);
+        if (!picked) return false;
+        if (picked.value !== "branch") return true;
+        const sel = form.bulk_single_branch;
+        return !sel || !!sel.value;
+      }
+      if (action === "add_branch") return !!(form.bulk_single_branch && form.bulk_single_branch.value);
+      return true;
+    }, "Choose an option above first");
     if (action === "set_scope") tmWireRoleScope(form, "bulk_role", "bulk_scope");
     $$(".rl-row input", form).forEach((i) => i.onchange = () => {
       $$(".rl-row", form).forEach((r) => {
@@ -7736,8 +8205,12 @@
       .filter((x) => x.user_id !== userId && x.is_active !== false && (x.status || "active") === "active");
     const clients = Number(det.assigned_client_count || 0);
     const events = Number(det.open_event_count || 0);
+    // "— Leave them assigned to X —" used to be the default here, but the server refuses a
+    // deactivation that leaves records owned (enterprise_team.py re-raises the same 409), so
+    // that option promised an outcome it could never deliver. A disabled placeholder instead,
+    // with the submit held until every picker has a real target.
     const picker = (id, label, count) => `<div class="field"><label>${esc(label)}</label>
-      <select name="${id}"><option value="">— Leave them assigned to ${esc(name)} —</option>
+      <select name="${id}"><option value="" disabled selected>Choose someone…</option>
         ${others.map((o) => `<option value="${o.user_id}">${esc(o.full_name || o.email)}</option>`).join("")}
       </select><div class="tm-hint">${count} ${count === 1 ? "record" : "records"}</div></div>`;
     openModal(`<div class="modal-head"><h3>Reassign ${esc(name)}'s work</h3>
@@ -7750,9 +8223,13 @@
         <div class="field"><label>Reason (optional)</label><input name="reason" maxlength="200" placeholder="Left the company, on leave…"/></div>
         <div id="tmDeacError" class="auth-error hidden"></div>
       </div><div class="modal-foot">
-        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-danger" id="tmDeacSubmit">Deactivate</button>
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">${others.length ? "Cancel" : "Close"}</button>
+        ${others.length ? `<button type="submit" class="btn btn-danger" id="tmDeacSubmit">Deactivate</button>` : ""}
       </div></form>`);
+    // With nobody to reassign to there is no submit at all — the button above is omitted,
+    // because every click it could receive would fail. Otherwise it waits for a target.
+    bindValidity($("#tmDeacSubmit"), $("#tmDeacForm"),
+      () => $$("#tmDeacForm select").every((s) => !!s.value), "Choose who takes over their work first");
     $("#tmDeacForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#tmDeacSubmit"); const err = $("#tmDeacError");
@@ -7764,16 +8241,16 @@
       if (f.reassign_events_to_user_id && f.reassign_events_to_user_id.value) {
         body.reassign_events_to_user_id = parseInt(f.reassign_events_to_user_id.value, 10);
       }
-      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-      try {
-        await api(`/team/users/${userId}/deactivate`, { method: "POST", body: body });
-        toast("Member deactivated", "success");
-        closeModal();
-        await teamRefresh();
-      } catch (ex) {
-        err.textContent = errMessage(ex); err.classList.remove("hidden");
-        btn.disabled = false; btn.textContent = "Deactivate";
-      }
+      await withBusy(btn, "", async () => {
+        try {
+          await api(`/team/users/${userId}/deactivate`, { method: "POST", body: body });
+          toast("Member deactivated", "success");
+          closeModal();
+          await teamRefresh();
+        } catch (ex) {
+          err.textContent = errMessage(ex); err.classList.remove("hidden");
+        }
+      });
     };
   }
   async function tmReactivate(userId) {
@@ -7847,8 +8324,13 @@
           <div id="tmTransferError" class="auth-error hidden" style="margin-top:16px"></div>
         </div><div class="modal-foot">
           <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
-          <button type="submit" class="btn btn-danger" id="tmTransferSubmit">Email me a code</button>
+          <button type="submit" class="btn btn-danger" id="tmTransferSubmit" disabled>Email me a code</button>
         </div></form>`);
+      // Same shape as the delete-client confirmation: the button stays dead until the typed
+      // address actually matches. The handler's own re-check below remains authoritative.
+      bindValidity($("#tmTransferSubmit"), $("#tmTransferForm"),
+        () => ($("#tmTransferForm").confirm_email.value || "").trim().toLowerCase() === String(email).toLowerCase(),
+        "Type their email address exactly to confirm");
       $("#tmTransferForm").onsubmit = async (e) => {
         e.preventDefault();
         const f = e.target; const btn = $("#tmTransferSubmit"); const err = $("#tmTransferError");
@@ -7886,13 +8368,19 @@
           <div id="tmTransferError" class="auth-error hidden"></div>
         </div><div class="modal-foot">
           <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
-          <button type="submit" class="btn btn-danger" id="tmTransferSubmit">Transfer ownership</button>
+          <button type="submit" class="btn btn-danger" id="tmTransferSubmit" disabled>Transfer ownership</button>
         </div></form>`);
       const codeInput = $("#tmTransferCodeForm").code;
-      if (data.dev_code) codeInput.value = data.dev_code;   // local sandbox without an email provider
+      // Held until all six digits are in. Synced by hand after every programmatic fill
+      // (the sandbox dev_code, and the fresh one a resend returns) — those assign .value,
+      // which fires no input event, and would otherwise leave the button dead on a full box.
+      const transferSync = bindValidity($("#tmTransferSubmit"), [codeInput],
+        () => (codeInput.value || "").trim().length === 6, "Enter the 6-digit code we emailed you");
+      if (data.dev_code) { codeInput.value = data.dev_code; transferSync(); }   // local sandbox without an email provider
       codeInput.focus();
       codeInput.addEventListener("input", () => {
         codeInput.value = (codeInput.value || "").replace(/\D/g, "").slice(0, 6);
+        transferSync();
       });
       startResendCooldown(30);
 
@@ -7903,7 +8391,7 @@
         link.disabled = true; link.textContent = "Sending…";
         try {
           const again = await requestCode(typed);
-          if (again && again.dev_code) codeInput.value = again.dev_code;
+          if (again && again.dev_code) { codeInput.value = again.dev_code; transferSync(); }
           toast("New code sent", "success");
           startResendCooldown(30);
         } catch (ex) {
@@ -8507,8 +8995,11 @@
     const others = ((teamUi.meta || {}).branches || []).filter((x) => x.is_active !== false && x.id !== branchId);
     const clients = Number(det.client_count || 0);
     const members = Number(det.member_count || 0);
+    // Same false affordance as the deactivate modal: the server refuses to archive an office
+    // whose clients or members have nowhere to go, so "— Leave them where they are —" could
+    // never succeed. Placeholder instead, and the submit waits for a real destination.
     const pick = (nm, label, count) => `<div class="field"><label>${esc(label)}</label>
-      <select name="${nm}"><option value="">— Leave them where they are —</option>
+      <select name="${nm}"><option value="" disabled selected>Choose an office…</option>
         ${others.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}
       </select><div class="tm-hint">${count} ${count === 1 ? "record" : "records"}</div></div>`;
     openModal(`<div class="modal-head"><h3>Move ${esc(b.name || "this office")}'s work</h3>
@@ -8520,9 +9011,11 @@
         ${!others.length ? `<div class="br-picker-empty">There's no other active office to move them to. Add one first.</div>` : ""}
         <div id="tmBrArchError" class="auth-error hidden"></div>
       </div><div class="modal-foot">
-        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Cancel</button>
-        <button type="submit" class="btn btn-danger" id="tmBrArchSubmit">Move &amp; archive</button>
+        <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">${others.length ? "Cancel" : "Close"}</button>
+        ${others.length ? `<button type="submit" class="btn btn-danger" id="tmBrArchSubmit">Move &amp; archive</button>` : ""}
       </div></form>`);
+    bindValidity($("#tmBrArchSubmit"), $("#tmBrArchForm"),
+      () => $$("#tmBrArchForm select").every((s) => !!s.value), "Choose where the work moves to first");
     $("#tmBrArchForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#tmBrArchSubmit"); const err = $("#tmBrArchError");
@@ -8534,16 +9027,19 @@
       if (f.reassign_members_to_branch_id && f.reassign_members_to_branch_id.value) {
         body.reassign_members_to_branch_id = parseInt(f.reassign_members_to_branch_id.value, 10);
       }
-      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-      try {
-        await api(`/branches/${branchId}/archive`, { method: "POST", body: body });
-        toast("Office archived", "success");
-        closeModal();
-        await teamRefresh();
-      } catch (ex) {
-        err.textContent = errMessage(ex); err.classList.remove("hidden");
-        btn.disabled = false; btn.innerHTML = "Move &amp; archive";
-      }
+      // withBusy restores the button's original markup, which also retires the old
+      // `innerHTML = "Move &amp; archive"` restore — that double-escaped, so any failure
+      // left the button reading literally "Move &amp; archive".
+      await withBusy(btn, "", async () => {
+        try {
+          await api(`/branches/${branchId}/archive`, { method: "POST", body: body });
+          toast("Office archived", "success");
+          closeModal();
+          await teamRefresh();
+        } catch (ex) {
+          err.textContent = errMessage(ex); err.classList.remove("hidden");
+        }
+      });
     };
   }
 
@@ -8830,7 +9326,7 @@
         <ul>${p.features.map((f) => `<li>${esc(f)}</li>`).join("")}</ul>
         ${isCurrent ? `<div class="plan-current-tag">✓ Current plan</div>`
           : (isSandbox ? `<div class="plan-current-tag" style="color:var(--muted)">Where every workspace starts</div>`
-          : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}')">${sub.is_sandbox ? "Choose " + esc(p.label) : "Switch to " + esc(p.label)}</button>`
+          : (canManage ? `<button class="btn ${p.is_popular ? "btn-primary" : "btn-ghost"} btn-block" onclick="__ent.checkout('${p.key}',this)">${sub.is_sandbox ? "Choose " + esc(p.label) : "Switch to " + esc(p.label)}</button>`
             : `<div class="plan-current-tag" style="color:var(--muted)">Ask an admin to upgrade</div>`))}
       </div>`;
     };
@@ -8852,7 +9348,7 @@
             : sub.trial_ends_at ? "Sandbox ends " + fmtDate(sub.trial_ends_at) : ""
           }${sub.monthly_display && !sub.is_sandbox ? ` · ${esc(sub.monthly_display)}/mo${sub.tax_label ? " + " + esc(sub.tax_label) : ""}` : ""}</div>
           ${sub.mandate_status === "halted" ? `<div style="font-size:13px;color:var(--warning);margin-top:6px"><b>Your card was declined.</b> Update it and renew to keep your plan.</div>` : ""}
-          ${canManage && sub.auto_renews ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px;padding-left:0" onclick="__ent.cancelPlanRenewal()">Turn off auto-renewal</button>` : ""}
+          ${canManage && sub.auto_renews ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:8px;padding-left:0" onclick="__ent.cancelPlanRenewal(this)">Turn off auto-renewal</button>` : ""}
         </div>
         <div style="flex:1;min-width:240px">
           <div style="display:flex;justify-content:space-between;font-size:13px"><span style="color:var(--text-2)">Active clients</span><b>${sub.clients_used} / ${cap(sub.max_clients)}</b></div>
@@ -8884,17 +9380,26 @@
       </p>`}`;
   }
 
-  async function cancelPlanRenewal() {
+  async function cancelPlanRenewal(el) {
+    if (el && el.disabled) return;
     // Cancelling stops the NEXT charge only — the period already paid for is kept, so this
-    // is not destructive and does not need a scary confirmation.
-    if (!confirm("Turn off auto-renewal? Your plan stays active until the end of the period you've already paid for.")) return;
-    try {
-      const r = await api("/billing/cancel", { method: "POST", body: {} });
-      state.subscription = r.subscription;
-      updatePlanChip();
-      toast(r.message || "Auto-renewal is off.", "success");
-      renderBilling();
-    } catch (ex) { toast(ex.message, "error"); }
+    // is not destructive and does not need a scary confirmation. It does need an in-app
+    // dialog rather than the browser's: native confirm() shows the raw "acme.lvh.me says"
+    // chrome, and it froze the page instead of locking the button, so the click was live
+    // again the moment it closed.
+    const ok = await confirmModal(
+      "Your plan stays active until the end of the period you've already paid for.",
+      { title: "Turn off auto-renewal?", okText: "Turn it off", danger: false });
+    if (!ok) return;
+    await withBusy(el, "", async () => {
+      try {
+        const r = await api("/billing/cancel", { method: "POST", body: {} });
+        state.subscription = r.subscription;
+        updatePlanChip();
+        toast(r.message || "Auto-renewal is off.", "success");
+        renderBilling();
+      } catch (ex) { toast(ex.message, "error"); }
+    });
   }
 
   async function applyBillingCoupon() {
@@ -8903,22 +9408,41 @@
     if (!code) { toast("Enter a discount code.", "error"); return; }
     const paid = (state.billingPlans || []).filter((p) => !p.is_free && p.monthly_paise > 0);
     if (!paid.length) { toast("No paid plans available for discounts.", "error"); return; }
-    let res;
-    try {
-      res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: paid[0].key, billing_cycle: state.billingCycle } });
-    } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
-    state.billingCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
-    toast(res.percent_display + " discount applied.", "success");
-    renderBilling();
+    await withBusy($("#billingCouponInputApply"), "", async () => {
+      let res;
+      try {
+        res = await api("/coupons/validate", { method: "POST", body: { code, context: "billing", plan: paid[0].key, billing_cycle: state.billingCycle } });
+      } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
+      state.billingCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display };
+      toast(res.percent_display + " discount applied.", "success");
+      renderBilling();
+    });
   }
   function removeBillingCoupon() { state.billingCoupon = null; renderBilling(); }
 
-  async function checkout(plan) {
+  // A plan checkout stays "in flight" well past its first await: POST /billing/checkout
+  // creates a Razorpay order or mandate, and the attempt is only really over once the
+  // payment sheet closes. Left unguarded, a second click during that window opens a second
+  // order — and on the recurring path a second MANDATE — so the flag spans the whole thing
+  // and is released on every way out, including the user simply dismissing the sheet.
+  let checkoutBusy = false;
+  async function checkout(plan, el) {
+    if (checkoutBusy) return;
+    checkoutBusy = true;
+    if (el) el.disabled = true;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      checkoutBusy = false;
+      // renderBilling() swaps the card out on the success path; then this is a no-op.
+      if (el && el.isConnected) el.disabled = false;
+    };
     let res;
     const couponCode = state.billingCoupon ? state.billingCoupon.code : undefined;
     try { res = await api("/billing/checkout", { method: "POST", body: { plan, billing_cycle: state.billingCycle, coupon_code: couponCode } }); }
-    catch (ex) { toast(ex.message, "error"); return; }
-    if (res.action === "contact_sales") { toast(res.message || "Please contact sales.", "error"); return; }
+    catch (ex) { toast(ex.message, "error"); release(); return; }
+    if (res.action === "contact_sales") { toast(res.message || "Please contact sales.", "error"); release(); return; }
     // A 100%-off coupon covers the whole charge, so there is no Razorpay step — the server
     // has already activated the plan and granted the credits.
     if (res.action === "activated") {
@@ -8927,11 +9451,12 @@
       state.billingCoupon = null;
       updatePlanChip();
       toast(res.message || "Plan activated!", "success");
+      release();
       renderBilling();
       return;
     }
-    if (res.action !== "checkout") { toast("Checkout unavailable.", "error"); return; }
-    if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); return; }
+    if (res.action !== "checkout") { toast("Checkout unavailable.", "error"); release(); return; }
+    if (typeof Razorpay === "undefined") { toast("Payment library failed to load. Please refresh.", "error"); release(); return; }
 
     // The Razorpay modal opens on `res.amount`, which is the GST-INCLUSIVE total. The
     // subtotal shown on the plan card is deliberately smaller, so the description spells
@@ -8955,6 +9480,9 @@
       ...(isSub ? { subscription_id: res.subscription_id } : { order_id: res.order_id }),
       prefill: checkoutPrefill(res.prefill),
       theme: { color: "#6366f1" },
+      // Closing the sheet without paying ends the attempt — without this the plan button
+      // would stay dead until the page was reloaded.
+      modal: { ondismiss: release },
       handler: async function (resp) {
         try {
           const v = await api("/billing/verify", { method: "POST", body: {
@@ -8972,9 +9500,10 @@
           toast(v.message || "Plan activated!", "success");
           renderBilling();
         } catch (ex) { toast("Payment verification failed: " + ex.message, "error"); }
+        finally { release(); }
       },
     });
-    rzp.on("payment.failed", () => toast("Payment was not completed.", "error"));
+    rzp.on("payment.failed", () => { toast("Payment was not completed.", "error"); release(); });
     rzp.open();
   }
 
@@ -9989,7 +10518,7 @@
               ${clients.map((c) => `<option value="${c.client_id}" ${String(f.client_id) === String(c.client_id) ? "selected" : ""}>${esc(c.name)}</option>`).join("")}
             </select>
             ${filtered ? `<button class="btn btn-ghost btn-sm" id="crClear">Clear</button>` : ""}
-            <button class="btn btn-soft btn-sm" id="crExport" title="Download these entries as CSV — opens directly in Excel">⬇ Export</button>
+            <button class="btn btn-soft btn-sm" id="crExport" ${(!L.total || L.loading) ? 'disabled title="Nothing to export for these filters"' : 'title="Download these entries as CSV — opens directly in Excel"'}>⬇ Export</button>
           </div>
         </div>
         <div class="card-body" style="padding:0;overflow-x:auto">
@@ -10103,13 +10632,15 @@
     if (!code) { toast("Enter a discount code.", "error"); return; }
     const pkgs = state.creditPackages || [];
     if (!pkgs.length) { toast("No packages available.", "error"); return; }
-    let res;
-    try {
-      res = await api("/coupons/validate", { method: "POST", body: { code, context: "credits", package: pkgs[0].key } });
-    } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
-    state.creditCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display, free: !!res.free };
-    toast(res.free ? `${res.percent_display} off — this top-up is free.` : res.percent_display + " discount applied.", "success");
-    renderCredits();
+    await withBusy($("#creditCouponInputApply"), "", async () => {
+      let res;
+      try {
+        res = await api("/coupons/validate", { method: "POST", body: { code, context: "credits", package: pkgs[0].key } });
+      } catch (ex) { toast(ex.message || "Invalid discount code.", "error"); return; }
+      state.creditCoupon = { code: res.code, percent: res.percent_off, percent_display: res.percent_display, free: !!res.free };
+      toast(res.free ? `${res.percent_display} off — this top-up is free.` : res.percent_display + " discount applied.", "success");
+      renderCredits();
+    });
   }
   function removeCreditCoupon() { state.creditCoupon = null; renderCredits(); }
 
@@ -10264,7 +10795,7 @@
       </div>
 
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:6px">
-        <button class="btn btn-primary" onclick="__ent.saveBank()">Connect bank account</button>
+        <button class="btn btn-primary" id="acctSaveBtn" onclick="__ent.saveBank()" disabled>Connect bank account</button>
         <span style="font-size:12px;color:var(--muted)">🔒 Secured by Razorpay · funds are never held by Rilono</span>
       </div>
       <div style="font-size:12px;color:var(--muted);margin-top:10px;line-height:1.6">
@@ -11039,18 +11570,24 @@
     $$("[data-finact]", mount).forEach((btn) => btn.onclick = async () => {
       const id = Number(btn.dataset.finid);
       if (btn.dataset.finact === "edit") { finEditEntry(id); return; }
+      if (btn.disabled) return;
       const series = !!btn.dataset.finseries;
-      if (!(await confirmModal(
-        series
-          ? `This removes every month of the series, not just this one. ${btn.dataset.finlabel || ""}`.trim()
-          : `Delete this entry? ${btn.dataset.finlabel || ""}`.trim(),
-        { title: series ? "Delete the whole series?" : "Delete entry?", okText: "Delete" },
-      ))) return;
+      // Locked before the confirm: the row lives in the table, not the dialog, so it stays
+      // clickable the moment confirmModal closes — long enough to stack a second dialog and
+      // a second DELETE for the same ledger entry.
+      btn.disabled = true;
       try {
+        if (!(await confirmModal(
+          series
+            ? `This removes every month of the series, not just this one. ${btn.dataset.finlabel || ""}`.trim()
+            : `Delete this entry? ${btn.dataset.finlabel || ""}`.trim(),
+          { title: series ? "Delete the whole series?" : "Delete entry?", okText: "Delete" },
+        ))) return;
         await api(`/finance/entries/${id}`, { method: "DELETE" });
         toast("Entry deleted.", "success");
-        finAfterWrite();
+        finAfterWrite();   // repaints the table, so this node is gone by now
       } catch (ex) { toast(ex.message || "Couldn't delete that entry.", "error"); }
+      finally { if (btn.isConnected) btn.disabled = false; }
     });
   }
 
@@ -11212,7 +11749,7 @@
             </div>
             ${reqList}
           </div>
-          <button class="btn btn-ghost" onclick="__ent.refreshBank()">Refresh status</button>
+          <button class="btn btn-ghost" onclick="__ent.refreshBank(this)">Refresh status</button>
         </div></div></div>`;
       const next = ready
         ? `<div class="card"><div class="card-body" style="color:var(--text-2)">
@@ -11240,6 +11777,14 @@
       return;
     }
     panel.innerHTML = intro + notEnabledBanner + acctOnboardingForm(la);
+    // The same set the handler checks after the click — the six starred fields plus the two
+    // eligibility ticks. Delegated on the panel so the checkboxes' change events land too.
+    // PAN and GST are deliberately out: the handler doesn't require them either.
+    bindValidity($("#acctSaveBtn"), panel,
+      () => allFilled([$("#acctLegalName"), $("#acctContactName"), $("#acctContactEmail"),
+        $("#acctBankNum"), $("#acctIfsc"), $("#acctBeneficiary")])
+        && $("#acctAttestService").checked && $("#acctAttestTurnover").checked,
+      "Fill in the required (*) fields and confirm both eligibility checkboxes");
   }
 
   // The org's country from Settings. Unset counts as India: every org that predates the
@@ -11307,7 +11852,7 @@
             <input type="number" id="finAmt" min="1" step="0.01" inputmode="decimal"
               value="${v.amount_paise ? (Number(v.amount_paise) / 100) : ""}" placeholder="0.00"></div>
           <div class="field"><label>${isSeries ? "First month *" : "Date *"}</label>
-            <input type="date" id="finDate" value="${esc(v.occurred_on || today)}">
+            <input type="date" id="finDate" max="${today}" value="${esc(v.occurred_on || today)}">
             ${isSeries ? '<div class="hint">Every month from this date up to today is booked at this amount.</div>' : ""}</div>
         </div>
         <div class="field-row">
@@ -11582,26 +12127,27 @@
     if (!body.attested_service_delivery || !body.attested_turnover_ok) {
       toast("Please confirm the two eligibility checkboxes.", "error"); return;
     }
-    const btn = document.querySelector('[onclick="__ent.saveBank()"]');
-    if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
-    try {
-      const r = await api("/finance/linked-account", { method: "POST", body });
-      toast(r.message || "Bank account saved.", "success");
-      renderFinance();
-    } catch (ex) {
-      toast((ex && ex.message) || "Could not connect the bank account.", "error");
-      if (btn) { btn.disabled = false; btn.textContent = "Connect bank account"; }
-    }
+    await withBusy($("#acctSaveBtn"), "Connecting…", async () => {
+      try {
+        const r = await api("/finance/linked-account", { method: "POST", body });
+        toast(r.message || "Bank account saved.", "success");
+        renderFinance();
+      } catch (ex) {
+        toast((ex && ex.message) || "Could not connect the bank account.", "error");
+      }
+    });
   }
 
-  async function refreshLinkedAccount() {
-    try {
-      await api("/finance/linked-account/refresh", { method: "POST" });
-      toast("Status refreshed.", "success");
-      renderFinance();
-    } catch (ex) {
-      toast((ex && ex.message) || "Could not refresh status.", "error");
-    }
+  async function refreshLinkedAccount(btn) {
+    return withBusy(btn, "Refreshing…", async () => {
+      try {
+        await api("/finance/linked-account/refresh", { method: "POST" });
+        toast("Status refreshed.", "success");
+        renderFinance();
+      } catch (ex) {
+        toast((ex && ex.message) || "Could not refresh status.", "error");
+      }
+    });
   }
 
   function renderCheckout() {
@@ -11669,10 +12215,14 @@
   }
 
   async function coApplyCheckoutCoupon() {
+    // Reached from the Apply click AND from Enter on the input, so the lock is checked
+    // before anything else — otherwise the keyboard path walks straight past a button that
+    // the click path had already disabled.
+    const btn = $("#coApply"); if (btn && btn.disabled) return;
     const input = $("#coCouponInput");
     const code = ((input && input.value) || "").trim();
     if (!code) { toast("Enter a discount code.", "error"); return; }
-    const btn = $("#coApply"); if (btn) { btn.disabled = true; btn.textContent = "…"; }
+    if (btn) { btn.disabled = true; btn.textContent = "…"; }
     let res;
     try {
       res = await api("/coupons/validate", { method: "POST", body: { code, context: "credits", package: checkoutCtx.pkg.key } });
@@ -12004,24 +12554,38 @@
         catch (ex) { toast(ex.message, "error"); }
         finally { btn.disabled = false; btn.textContent = "Save name"; }
       };
+      /* Three controls — Regenerate, Upload logo, and the hero tile — write the SAME logo,
+         so each one guarding only itself is not enough: "Regenerate" while an upload is
+         in flight is a genuine race whose winner decides the org's logo. One flag gates all
+         three, and each writer disables the other two for its duration. */
+      let logoBusy = false;
+      const logoLock = (on) => {
+        logoBusy = on;
+        [$("#regenLogo"), $("#uploadLogoBtn"), $("#heroLogoBtn")].forEach((b) => { if (b) b.disabled = on; });
+        const tile = $("#heroLogoBtn"); if (tile) tile.classList.toggle("busy", on);
+      };
       $("#regenLogo").onclick = async () => {
+        if (logoBusy) return;
         // .spinner is white-on-transparent — on a white .btn-ghost it needs the dark variant.
-        const btn = $("#regenLogo"); btn.disabled = true; btn.innerHTML = '<span class="spinner dark"></span>';
-        const tile = $("#heroLogoBtn"); if (tile) tile.classList.add("busy");
+        const btn = $("#regenLogo"); btn.innerHTML = '<span class="spinner dark"></span>';
+        logoLock(true);
         try { const r = await api("/organization/branding", { method: "PATCH", body: { generate_random_logo: true } });
           const url = (r.organization || {}).logo_url; if (url) { $("#settingsLogo").src = url; $("#settingsLogo").style.visibility = "visible"; $("#brandLogo").src = url; $("#brandLogo").style.display = ""; state.me.organization.logo_url = url; }
           toast("New logo generated", "success"); }
         catch (ex) { toast(ex.message, "error"); }
-        finally { btn.disabled = false; btn.innerHTML = BTN_REGEN_HTML; if (tile) tile.classList.remove("busy"); }
+        finally { btn.innerHTML = BTN_REGEN_HTML; logoLock(false); }
       };
-      $("#uploadLogoBtn").onclick = () => $("#logoFile").click();
-      $("#heroLogoBtn").onclick = () => $("#logoFile").click();
+      // The pickers are gated too: without this the file dialog still opens mid-upload and
+      // the second file lands the moment the first finishes.
+      $("#uploadLogoBtn").onclick = () => { if (!logoBusy) $("#logoFile").click(); };
+      $("#heroLogoBtn").onclick = () => { if (!logoBusy) $("#logoFile").click(); };
       $("#logoFile").onchange = async () => {
+        if (logoBusy) return;
         const f = $("#logoFile").files && $("#logoFile").files[0];
         if (!f) return;
         if (f.size > 2 * 1024 * 1024) { toast("Logo must be under 2 MB", "error"); $("#logoFile").value = ""; return; }
-        const btn = $("#uploadLogoBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner dark"></span> Uploading…';
-        const tile = $("#heroLogoBtn"); if (tile) tile.classList.add("busy");
+        const btn = $("#uploadLogoBtn"); btn.innerHTML = '<span class="spinner dark"></span> Uploading…';
+        logoLock(true);
         try {
           const fd = new FormData();
           fd.append("file", f);
@@ -12036,7 +12600,7 @@
           }
           toast("Logo updated", "success");
         } catch (ex) { toast(ex.message, "error"); }
-        finally { btn.disabled = false; btn.innerHTML = BTN_UPLOAD_HTML; if (tile) tile.classList.remove("busy"); $("#logoFile").value = ""; }
+        finally { btn.innerHTML = BTN_UPLOAD_HTML; logoLock(false); $("#logoFile").value = ""; }
       };
       $("#saveLocation").onclick = async () => {
         const cc = $("#setCountry").value;
@@ -12085,7 +12649,9 @@
     ta.addEventListener("input", () => {
       ta.style.height = "auto";
       ta.style.height = Math.min(ta.scrollHeight, ta.dataset.aiMaxH ? Number(ta.dataset.aiMaxH) : 160) + "px";
+      syncAiSend();
     });
+    syncAiSend();
   }
 
   function renderAIAssistant() {
@@ -12239,8 +12805,18 @@
   // A send in flight (or a server without AI) locks the send buttons on both surfaces.
   function setAiBusy(on) {
     state.aiBusy = !!on;
+    syncAiSend();
+  }
+
+  /* The full-page composer and the dock share one send state, so this is computed once and
+     applied to every [data-ai-send]. The third term is the new one: the arrow used to be
+     live over an empty box, and the click landed on `if (!msg) return` in sendAi — a dead
+     click with no feedback at all. A draft in EITHER composer counts, because sendAi()
+     called from a form submit takes whichever one has text. */
+  function syncAiSend() {
     const off = !!(state.aiMeta && !state.aiMeta.enabled);
-    $$("[data-ai-send]").forEach((b) => { b.disabled = state.aiBusy || off; });
+    const hasDraft = $$("[data-ai-input]").some((ta) => (ta.value || "").trim() !== "");
+    $$("[data-ai-send]").forEach((b) => { b.disabled = state.aiBusy || off || !hasDraft; });
   }
 
   async function sendAi(text) {
@@ -13122,8 +13698,8 @@
         </div>` : ""}
       </div>
       <div class="modal-foot">
-        ${canManage ? `<button type="button" class="btn btn-danger btn-sm" onclick="__ent.calDelete(${ev.event_id})">Delete</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="__ent.calToggleDone(${ev.event_id}, ${ev.is_done ? "false" : "true"})">${ev.is_done ? "Mark not done" : "✓ Mark done"}</button>` : ""}
+        ${canManage ? `<button type="button" class="btn btn-danger btn-sm" onclick="__ent.calDelete(${ev.event_id},this)">Delete</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="__ent.calToggleDone(${ev.event_id}, ${ev.is_done ? "false" : "true"},this)">${ev.is_done ? "Mark not done" : "✓ Mark done"}</button>` : ""}
         <div class="spacer" style="flex:1"></div>
         <button type="button" class="btn btn-ghost" onclick="__ent.closeModal()">Close</button>
         ${canManage ? `<button type="button" class="btn btn-primary" onclick="__ent.calEditEvent('${esc(ev.id)}')">Edit</button>` : ""}
@@ -13185,11 +13761,11 @@
         <div id="calFormErr" class="auth-error hidden"></div>
       </div>
       <div class="modal-foot">
-        ${isEdit ? `<button type="button" class="btn btn-danger btn-sm" onclick="__ent.calDelete(${ev.event_id})">Delete</button>
-          <button type="button" class="btn btn-ghost btn-sm" onclick="__ent.calToggleDone(${ev.event_id}, ${ev.is_done ? "false" : "true"})">${ev.is_done ? "Mark not done" : "✓ Mark done"}</button>` : ""}
+        ${isEdit ? `<button type="button" class="btn btn-danger btn-sm" onclick="__ent.calDelete(${ev.event_id},this)">Delete</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="__ent.calToggleDone(${ev.event_id}, ${ev.is_done ? "false" : "true"},this)">${ev.is_done ? "Mark not done" : "✓ Mark done"}</button>` : ""}
         <div class="spacer" style="flex:1"></div>
         <button type="button" class="btn btn-ghost" id="calCancelBtn">Cancel</button>
-        <button type="submit" class="btn btn-primary" id="calSaveBtn">${isEdit ? "Save" : "Add"}</button>
+        <button type="submit" class="btn btn-primary" id="calSaveBtn" disabled>${isEdit ? "Save" : "Add"}</button>
       </div></form>`);
 
     // ---- @-mention: link a client + optionally notify them ----
@@ -13278,6 +13854,9 @@
       url: a.download_url, status: "done", pct: 100, xhr: null,
     }));
     let calAttSeq = calAtts.length;
+    // Assigned once the form is mounted, below; calDrawAtts runs before that on the first
+    // paint, hence the no-op default rather than a bare declaration.
+    let calSyncSave = () => {};
 
     function calAttUsed() { return calAtts.reduce((sum, a) => sum + (a.size || 0), 0); }
 
@@ -13308,6 +13887,9 @@
       }
       const drop = $("#calAttDrop");
       if (drop) drop.disabled = calAtts.length >= CAL_ATT_MAX_FILES;
+      // Runs on every upload start, progress tick, finish, failure and removal — which is
+      // exactly when Save's "no attachment still uploading" term changes.
+      calSyncSave();
     }
 
     async function calRemoveAtt(uid) {
@@ -13421,6 +14003,16 @@
         calAddAttFiles(e.dataTransfer && e.dataTransfer.files);
       });
     }
+    // Title and date are the two genuinely required fields — the submit handler used to just
+    // silently return without them. The third term is the attachment state: saving mid-upload
+    // would create the event before its files exist to bind, which the handler caught with an
+    // error message after the click. calDrawAtts() calls this on every upload tick, so the
+    // button follows the upload rather than waiting for the user to try.
+    calSyncSave = bindValidity($("#calSaveBtn"), $("#calForm"), () => {
+      const t = $("#calTitleInput"), d = $("#calForm").querySelector("[name=event_date]");
+      if (!t || !d || !t.value.trim() || !d.value) return false;
+      return !calAtts.some((a) => a.status === "uploading");
+    }, "Add a title and a date first");
     calDrawAtts();
 
     // Cancelling a brand-new reminder throws its uploads away now rather than leaving them
@@ -13491,14 +14083,22 @@
     };
   }
 
-  async function calToggleDone(eventId, done) {
-    try { await api(`/calendar/events/${eventId}`, { method: "PATCH", body: { is_done: done } }); closeModal(); toast(done ? "Marked done" : "Reopened", "success"); renderCalendar(); }
-    catch (ex) { toast(ex.message, "error"); }
+  // `el` is the button itself (passed as `this` from the inline onclick). Both the detail
+  // modal and the edit form render one of these and both land here, so locking the node
+  // covers both without either knowing about the other.
+  async function calToggleDone(eventId, done, el) {
+    await withBusy(el, "", async () => {
+      try { await api(`/calendar/events/${eventId}`, { method: "PATCH", body: { is_done: done } }); closeModal(); toast(done ? "Marked done" : "Reopened", "success"); renderCalendar(); }
+      catch (ex) { toast(ex.message, "error"); }
+    });
   }
-  async function calDelete(eventId) {
+  async function calDelete(eventId, el) {
+    if (el && el.disabled) return;
     if (!(await confirmModal("This reminder will be permanently deleted.", { title: "Delete event?", okText: "Delete" }))) return;
-    try { await api(`/calendar/events/${eventId}`, { method: "DELETE" }); closeModal(); toast("Event deleted", "success"); renderCalendar(); }
-    catch (ex) { toast(ex.message, "error"); }
+    await withBusy(el, "", async () => {
+      try { await api(`/calendar/events/${eventId}`, { method: "DELETE" }); closeModal(); toast("Event deleted", "success"); renderCalendar(); }
+      catch (ex) { toast(ex.message, "error"); }
+    });
   }
 
   /* ============================================================
@@ -13685,6 +14285,10 @@
     const myEmail = meUser.email || "";
 
     let kind = "support";
+    // Switching the support/feature tab re-mounts the whole composer, which would hand back
+    // a brand-new, enabled submit button while the previous send is still uploading its
+    // files. So the lock lives in the closure, and the markup reads it on every mount.
+    let supSending = false;
     const trays = { support: [], feature_request: [] };
     const drafts = { support: supLoadDraft("support"), feature_request: supLoadDraft("feature_request") };
     let traySeq = 0;
@@ -13776,7 +14380,7 @@
           <div class="sup-foot">
             <span class="sup-draft" id="supDraft"></span>
             <span class="sup-foot-note"><span class="sup-kbd">${supIsMac ? "⌘" : "Ctrl"}</span><span class="sup-kbd">↵</span> to send</span>
-            <button type="submit" class="btn btn-primary sup-send${isF ? " feature" : ""}">${isF ? "Send feature idea" : "Send to support"}</button>
+            <button type="submit" class="btn btn-primary sup-send${isF ? " feature" : ""}" ${supSending ? "disabled" : ""}>${supSending ? '<span class="spinner"></span> Sending…' : (isF ? "Send feature idea" : "Send to support")}</button>
           </div>
         </form>
       </div>`;
@@ -13996,6 +14600,7 @@
 
       form.onsubmit = async (e) => {
         e.preventDefault();
+        if (supSending) return;   // also covers the ⌘↵ path, which bypasses the button
         const subject = subj.value.trim(), message = msg.value.trim();
         let bad = null;
         if (subject.length < 3) {
@@ -14017,6 +14622,7 @@
 
         const btn = form.querySelector("button[type=submit]");
         const orig = btn.textContent;
+        supSending = true;
         btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending…';
         $("#supErr").classList.add("hidden");
         try {
@@ -14033,8 +14639,8 @@
         } catch (ex) {
           const er = $("#supErr");
           er.textContent = ex.message; er.classList.remove("hidden");
-          btn.disabled = false; btn.textContent = orig;
-        }
+          if (btn.isConnected) { btn.disabled = false; btn.textContent = orig; }
+        } finally { supSending = false; }
       };
 
       if (focus) subj.focus();
@@ -14751,7 +15357,7 @@
           </label>
         </div>
         <div class="cf-ai-actions">
-          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy) ? "disabled" : ""}>${cf.aiBusy ? '<span class="spinner"></span> Rilono AI is researching…' : `Generate shortlist · ${esc(String(cost))} cr`}</button>
+          <button class="btn btn-primary" id="cfAiRun" ${(!canEdit || !m.ai_available || cf.aiBusy || !cfAiHasTarget()) ? "disabled" : ""} title="${cfAiHasTarget() ? "" : "Enter a field of study or pick a discipline first"}">${cf.aiBusy ? '<span class="spinner"></span> Rilono AI is researching…' : `Generate shortlist · ${esc(String(cost))} cr`}</button>
           ${!canEdit ? '<span class="hint">Viewers can browse, but only editors can run AI actions.</span>' : ""}
         </div>
       </div></div>
@@ -14760,12 +15366,12 @@
 
     cfWireClientPicker();
     // Persist form state so tab switches / re-renders never wipe what was typed.
-    $("#cfAiField").oninput = (e) => { cf.aiField = e.target.value; };
+    $("#cfAiField").oninput = (e) => { cf.aiField = e.target.value; cfSyncAiRun(); };
     $("#cfAiBudget").oninput = (e) => { cf.aiBudget = e.target.value; };
     $("#cfAiNotes").oninput = (e) => { cf.aiNotes = e.target.value; };
     $("#cfAiCountry").onchange = (e) => { cf.country = e.target.value; };
     $("#cfAiLevel").onchange = (e) => { cf.level = e.target.value; };
-    $("#cfAiDiscipline").onchange = (e) => { cf.discipline = e.target.value; };
+    $("#cfAiDiscipline").onchange = (e) => { cf.discipline = e.target.value; cfSyncAiRun(); };
     $("#cfAiRun").onclick = cfRunRecommend;
     if (cf.activeRec) cfDrawActiveRec();
     cfLoadRecs();
@@ -14812,6 +15418,23 @@
     };
   }
 
+  /* A shortlist needs SOMETHING to search for. Either box will do — a free-text field of
+     study or a picked discipline — which is why this is one predicate over both rather than
+     a required-field check on each. */
+  function cfAiHasTarget() {
+    const f = $("#cfAiField"), d = $("#cfAiDiscipline");
+    const field = f ? f.value : (cf.aiField || "");
+    const disc = d ? d.value : (cf.discipline || "");
+    return String(field || "").trim() !== "" || String(disc || "") !== "";
+  }
+  function cfSyncAiRun() {
+    const b = $("#cfAiRun");
+    if (!b || cf.aiBusy) return;
+    const ok = cfAiHasTarget() && can("ai.coursefinder");
+    b.disabled = !ok;
+    b.title = cfAiHasTarget() ? "" : "Enter a field of study or pick a discipline first";
+  }
+
   async function cfRunRecommend() {
     if (cf.aiBusy) return;
     const btn = $("#cfAiRun");
@@ -14854,8 +15477,8 @@
       // busy state) by a tab switch mid-run, so a captured snapshot can't be trusted.
       const runBtn = $("#cfAiRun");
       if (runBtn) {
-        runBtn.disabled = !can("ai.coursefinder");
         runBtn.innerHTML = `Generate shortlist · ${esc(String(cfCost()))} cr`;
+        cfSyncAiRun();   // carries the "needs a target" term, not just the permission one
       }
     }
   }
@@ -15232,13 +15855,24 @@
     const oc = $("#ldOpenClientBtn");
     if (oc) oc.onclick = () => { closeDrawer(); openClient(lead.converted_client_id); };
     const sel = $("#ldStatusSel");
+    // A sequence guard rather than a disable: this is a <select>, and greying it out
+    // mid-change would fight the user's own next pick. Changing it three times quickly
+    // fires three PATCHes that can land out of order, so only the newest one is allowed to
+    // write back — an older reply arriving late would otherwise re-label the lead with a
+    // status the user has already moved on from.
+    ld.statusSeq = ld.statusSeq || 0;
     if (sel) sel.onchange = async () => {
+      const want = sel.value;
+      const seq = ++ld.statusSeq;
+      sel.setAttribute("aria-busy", "true");
       try {
-        const r = await api(`/leads/${lead.id}/status`, { method: "PATCH", body: { status: sel.value } });
-        lead.status = (r.lead && r.lead.status) || sel.value;
+        const r = await api(`/leads/${lead.id}/status`, { method: "PATCH", body: { status: want } });
+        if (seq !== ld.statusSeq) return;   // superseded by a newer pick
+        lead.status = (r.lead && r.lead.status) || want;
         toast("Lead updated", "success");
         ldLoadLeads(); ldRefreshFormCounters();
-      } catch (ex) { toast(ex.message, "error"); }
+      } catch (ex) { if (seq === ld.statusSeq) toast(ex.message, "error"); }
+      finally { if (seq === ld.statusSeq && sel.isConnected) sel.removeAttribute("aria-busy"); }
     };
     const del = $("#ldDeleteBtn");
     if (del) del.onclick = async () => {
@@ -15331,18 +15965,28 @@
     const nb = $("#ldNewForm"); if (nb) nb.onclick = () => ldOpenBuilder(null);
     const eb = $("#ldEmptyForm"); if (eb) eb.onclick = () => ldOpenBuilder(null);
     $$("[data-ldact]", panel).forEach((b) => {
-      b.onclick = (e) => {
+      b.onclick = async (e) => {
         e.stopPropagation();
+        if (b.disabled) return;
         const f = (ld.forms || [])[Number(b.dataset.ldfi)];
         if (!f) return;
         const act = b.dataset.ldact;
-        if (act === "copy") ldCopyLink(f);
-        else if (act === "open") window.open(f.link, "_blank", "noopener");
-        else if (act === "share") ldOpenShare(f);
-        else if (act === "edit") ldOpenBuilder(f);
-        else if (act === "pause") ldTogglePause(f);
-        else if (act === "rotate") ldRotate(f);
-        else if (act === "del") ldDeleteForm(f);
+        // pause/rotate/del write; the rest are copy, open, and modal-openers. Held for the
+        // duration because these mini-buttons are the same size as their icon and give no
+        // other feedback — a second Pause click just fires a second PATCH.
+        const writes = act === "pause" || act === "rotate" || act === "del";
+        if (writes) b.disabled = true;
+        try {
+          if (act === "copy") ldCopyLink(f);
+          else if (act === "open") window.open(f.link, "_blank", "noopener");
+          else if (act === "share") ldOpenShare(f);
+          else if (act === "edit") ldOpenBuilder(f);
+          else if (act === "pause") await ldTogglePause(f);
+          else if (act === "rotate") await ldRotate(f);
+          else if (act === "del") await ldDeleteForm(f);
+        } finally {
+          if (writes && b.isConnected) b.disabled = false;
+        }
       };
     });
   }
@@ -15610,7 +16254,7 @@
     // it backed would silently convert a branch manager or a custom role into "editor".
     // Role changes now go through Edit access (PATCH /team/users/{id}/access).
     teamTab: teamGoTab,
-    applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon,
+    applyCreditCoupon, removeCreditCoupon, applyBillingCoupon, removeBillingCoupon, syncCouponApply,
     cancelPlanRenewal,
     topup: openCreditCheckout,
     saveBank: saveLinkedAccount, refreshBank: refreshLinkedAccount,

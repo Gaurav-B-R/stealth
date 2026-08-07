@@ -93,6 +93,11 @@
     .jt-step.current .jt-node{background:#fff;border-color:var(--primary);color:var(--primary-600);box-shadow:0 0 0 5px rgba(99,102,241,.16)}
     .jt-step.current.approved .jt-node,.jt-step.done.approved .jt-node{background:#10b981;border-color:#10b981;color:#fff;box-shadow:0 0 0 5px rgba(16,185,129,.16)}
     .jt-step.current.paused .jt-node{border-color:#9ca3af;color:#6b7280;box-shadow:0 0 0 5px rgba(156,163,175,.18)}
+    /* Skipped: a stage this application went past without going through it. Hollow and
+       dashed, never a tick — the staff journey draws the same stage the same way, and the
+       two views must not tell the student contradictory stories. */
+    .jt-step.skipped .jt-node{background:#fff;border-style:dashed;border-color:#cbd0e0;color:var(--muted)}
+    .jt-step.skipped:not(:last-child)::after{background:repeating-linear-gradient(90deg,#cbd0e0 0 5px,transparent 5px 10px)}
     .jt-label{font-size:11.5px;font-weight:700;color:var(--muted);margin-top:8px;line-height:1.35;padding:0 4px;overflow-wrap:break-word}
     .jt-step.done .jt-label,.jt-step.current .jt-label{color:var(--text)}
     /* The track carries nine stages — it stops fitting one row well before the phone breakpoint.
@@ -114,6 +119,7 @@
     .st-dot{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:12.5px;font-weight:800;flex:none;
       background:#eef0f8;color:var(--muted)}
     .st.done .st-dot{background:var(--primary);color:#fff}
+    .st.skipped .st-dot{background:#fff;color:var(--muted);border:2px dashed #cbd0e0}
     .st.current .st-dot{background:#fff;color:var(--primary-600);border:2px solid var(--primary)}
     .st-ttl{font-weight:700;font-size:14px}
     .st-note{font-size:12px;color:var(--muted)}
@@ -209,7 +215,7 @@
             <label class="t2" style="font-size:13px;font-weight:600;display:block;margin-bottom:8px">Enter the 6-digit code</label>
             <input class="input code-input" id="codeInput" inputmode="numeric" maxlength="6" placeholder="••••••" />
             <div class="row" style="margin-top:14px">
-              <button class="btn btn-primary" id="verifyBtn">Verify &amp; view my portal</button>
+              <button class="btn btn-primary" id="verifyBtn" disabled>Verify &amp; view my portal</button>
               <button class="btn btn-ghost" id="resendBtn">Resend code</button>
             </div>
           </div>
@@ -298,15 +304,21 @@
           $("vMsg").textContent="We sent a 6-digit code to "+(d.masked_email||info.masked_email)+"."; $("vMsg").classList.remove("hidden"); $("codeInput").focus();
         }).catch(function(ex){ $("vError").textContent=safeError(ex); $("vError").classList.remove("hidden"); }).finally(function(){ b.disabled=false; b.textContent="Send verification code"; }); };
       $("resendBtn").onclick=function(){ $("vError").classList.add("hidden"); $("sendCodeBtn").click(); };
+      // The code is always exactly six digits, so `length<4` let a 4- or 5-digit entry
+      // through to burn one of the student's verify attempts on something that could not
+      // have been right. The button now waits for all six.
+      function syncVerifyBtn(){ $("verifyBtn").disabled = !/^\d{6}$/.test(($("codeInput").value||"").trim()); }
       $("verifyBtn").onclick=function(){ var code=($("codeInput").value||"").trim(); $("vError").classList.add("hidden");
-        if(code.length<4){ $("vError").textContent="Enter the 6-digit code."; $("vError").classList.remove("hidden"); return; }
+        if(!/^\d{6}$/.test(code)){ $("vError").textContent="Enter the 6-digit code."; $("vError").classList.remove("hidden"); return; }
         var b=this; b.disabled=true; b.innerHTML='<span class="spinner"></span> Verifying…';
         api("/"+encodeURIComponent(token)+"/verify",{code:code}).then(function(d){
           sessionToken=d.session_token;
           try { sessionStorage.setItem(SS_KEY, sessionToken); } catch (e) {}
           return fetchPortal();
         }).catch(function(ex){ $("vError").textContent=safeError(ex); $("vError").classList.remove("hidden"); })
-          .finally(function(){ b.disabled=false; b.innerHTML="Verify &amp; view my portal"; }); };
+          .finally(function(){ b.innerHTML="Verify &amp; view my portal"; syncVerifyBtn(); }); };
+      $("codeInput").addEventListener("input", syncVerifyBtn);
+      // A disabled button ignores .click(), so this Enter path inherits the same gate.
       $("codeInput").addEventListener("keydown",function(e){ if(e.key==="Enter") $("verifyBtn").click(); });
 
       function fetchPortal(){
@@ -334,6 +346,14 @@
       }
       function pathIndex(path){ var m={}; path.forEach(function(s,i){ m[s.key]=i; }); return m; }
 
+      // Behind the application, a step was either worked through or jumped straight over, and a
+      // tick on both would claim work that never happened. `stages_skipped` is the server's
+      // answer — the same list the consultancy's own journey view renders, so the two can never
+      // tell contradictory stories. It is empty unless a skip can actually be proved, in which
+      // case every earlier step reads as complete exactly as before.
+      function stageSkipped(key){ return (data.stages_skipped||[]).indexOf(key)>=0; }
+      function behindCls(key){ return stageSkipped(key)?"skipped":"done"; }
+
       function journeyHtml(){
         var path=journeyPath(), pos=pathIndex(path);
         var status=data.status, isRejected=status==="rejected", isOnHold=status==="on_hold";
@@ -345,13 +365,16 @@
         else if(!isRejected) curIdx=pos.hasOwnProperty(status)?pos[status]:-1;
         var nodes=path.map(function(s,i){
           var cls;
-          if(isRejected) cls=s.key==="approved"?"upcoming":"done";
-          else if(curIdx>=0&&i<curIdx) cls="done";
+          if(isRejected) cls=s.key==="approved"?"upcoming":behindCls(s.key);
+          else if(curIdx>=0&&i<curIdx) cls=behindCls(s.key);
           else if(i===curIdx) cls="current"+(isOnHold?" paused":"");
           else cls="upcoming";
-          if(s.key==="approved"&&cls!=="upcoming"&&!isOnHold) cls+=" approved";
-          var inner=cls.indexOf("done")===0?"✓":String(i+1);
-          if(s.key==="approved"&&cls.indexOf("upcoming")<0&&!isOnHold&&!isRejected) inner="🎉";
+          var isSkipped=cls==="skipped";
+          // The green celebration node is a WIN. A stage the case never went through cannot
+          // wear it, however the pipeline is sequenced.
+          if(s.key==="approved"&&cls!=="upcoming"&&!isSkipped&&!isOnHold) cls+=" approved";
+          var inner=isSkipped?"–":(cls.indexOf("done")===0?"✓":String(i+1));
+          if(s.key==="approved"&&cls.indexOf("upcoming")<0&&!isSkipped&&!isOnHold&&!isRejected) inner="🎉";
           return '<div class="jt-step '+cls+'"><div class="jt-node">'+inner+'</div><div class="jt-label">'+esc(s.label)+'</div></div>';
         }).join("");
         var banner="";
@@ -374,19 +397,24 @@
           var fields=records[s.key]||[];
           var onPath=pos.hasOwnProperty(s.key);
           var isCur=onPath&&s.key===curKey;
-          // Match the tracker's refused rendering (everything but Approved shown as done) so
-          // the accordion and the journey stepper never tell contradictory stories.
-          var done=onPath&&(isRejected?s.key!=="approved":(curIdx>=0&&pos[s.key]<curIdx));
-          var st=done?"done":(isCur?"current":"");
+          // Match the tracker's refused rendering (everything but Approved shown as done) and
+          // its skipped rendering, so the accordion and the journey stepper never tell
+          // contradictory stories.
+          var behind=onPath&&(isRejected?s.key!=="approved":(curIdx>=0&&pos[s.key]<curIdx));
+          var skipped=behind&&stageSkipped(s.key);
+          var done=behind&&!skipped;
+          var st=done?"done":(skipped?"skipped":(isCur?"current":""));
           var open=isCur||(isRejected&&s.key==="rejected");
-          var dot=done?"✓":(onPath?String(pos[s.key]+1):(s.key==="rejected"?"!":"⏸"));
+          var dot=done?"✓":(skipped?"–":(onPath?String(pos[s.key]+1):(s.key==="rejected"?"!":"⏸")));
           var note=fields.length?('<span class="n">'+fields.length+' detail'+(fields.length===1?"":"s")+'</span>'):"";
           var kv=fields.length
             ? '<div class="kv">'+fields.map(function(f){ return '<div class="it"><label>'+esc(f.label)+'</label><div>'+(f.type==="date"?esc(fmtDate(f.value)||f.value):esc(f.value))+'</div></div>'; }).join("")+'</div>'
-            : '<p class="st-desc" style="margin:0">No details recorded for this stage.</p>';
+            : '<p class="st-desc" style="margin:0">'+(skipped
+                ? 'This step was skipped — your application moved straight past it.'
+                : 'No details recorded for this stage.')+'</p>';
           return '<div class="st '+st+(open?" open":"")+'" data-sk="'+esc(s.key)+'">'+
             '<div class="st-head"><div class="st-dot">'+dot+'</div>'+
-              '<div><div class="st-ttl">'+esc(s.label)+(isCur?' <span class="badge mut" style="margin-left:6px">Current stage</span>':"")+'</div></div>'+
+              '<div><div class="st-ttl">'+esc(s.label)+(isCur?' <span class="badge mut" style="margin-left:6px">Current stage</span>':(skipped?' <span class="badge mut" style="margin-left:6px">Skipped</span>':""))+'</div></div>'+
               '<div class="st-flag">'+note+'<svg class="st-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>'+
             '</div>'+
             '<div class="st-body"><p class="st-desc">'+esc(s.description||"")+'</p>'+kv+'</div>'+

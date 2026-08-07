@@ -15,14 +15,14 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 import requests
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from app import models
+from app import enterprise_dates, models
 
 RAZORPAY_API_BASE = os.getenv("RAZORPAY_API_BASE", "https://api.razorpay.com/v1").rstrip("/")
 RAZORPAY_API_BASE_V2 = os.getenv("RAZORPAY_API_BASE_V2", "https://api.razorpay.com/v2").rstrip("/")
@@ -271,6 +271,24 @@ def refresh_linked_account_status(*, db: Session, linked_account: models.Enterpr
 # Sanity cap per payment request (env-tunable; Razorpay/bank instrument caps also apply).
 MAX_AMOUNT_PAISE = int(os.getenv("MARKETPLACE_MAX_AMOUNT_PAISE", str(5_00_000 * 100)))  # ₹5,00,000
 
+# --- Bounds on a manually-entered "Date received" -----------------------------------------
+# A typo'd year is not cosmetic: `paid_at` is what the money reports key on, and the two
+# surfaces bound it differently. The Finance period report filters BOTH ends
+# (`enterprise_finance.py`), so a 2099 row vanishes from it; the dashboard's
+# "Collected this month" filters `paid_at >= month_start` with no upper bound
+# (`routers/enterprise.py`), so the same row counts every month forever; and
+# `client_payment_totals` has no date filter at all, so it lands in the client's Collected
+# total too. One slipped digit, three numbers that no longer reconcile.
+#
+# A floor rather than a business rule: it exists to catch a mis-typed year (a leading-digit
+# slip renders as 0226 / 1026), NOT to stop legitimate backdating. Consultancies migrating
+# their existing books when they onboard must still be able to enter last year's collections,
+# so this stays deliberately generous — tighten it only with that migration case in mind.
+EARLIEST_PAYMENT_DATE = date(2000, 1, 1)
+
+# The bounds themselves, and the org-calendar reasoning behind "future", live in
+# `enterprise_dates` — shared with the client, calendar and finance date fields.
+
 # Monotonic progression guard so out-of-order webhooks never move a payment backwards.
 _STATUS_RANK = {"created": 0, "failed": 0, "paid": 1, "transferred": 2, "settled": 3}
 
@@ -352,6 +370,7 @@ def create_payment_request(
                 "still pay this invoice with an overseas card."
             ),
         )
+    due_date = validate_due_date(db=db, organization_id=organization.id, due_date=due_date)
     commission, payout = compute_commission(amount)
     assert commission + payout == amount and payout >= MIN_PAYOUT_PAISE
 
@@ -416,6 +435,46 @@ def normalize_manual_method(method: Optional[str]) -> Optional[str]:
     return key if key in MANUAL_PAYMENT_METHODS else None
 
 
+def validate_received_on(
+    *, db: Session, organization_id: int, received_on: Optional[date]
+) -> Optional[date]:
+    """Reject a staff-entered date that cannot be a date money was actually received.
+
+    Enforced here rather than in the request schema because "in the future" is only
+    answerable against the ORG's calendar, which needs a query (see `enterprise_time`).
+    `None` is valid and means "no date given" — the caller stamps now.
+    """
+    return enterprise_dates.validate_for_org(
+        db=db,
+        organization_id=organization_id,
+        value=received_on,
+        label="The date received",
+        direction=enterprise_dates.NOT_FUTURE,
+        earliest=EARLIEST_PAYMENT_DATE,
+        future_hint=" Record the payment once it has arrived.",
+    )
+
+
+def validate_due_date(
+    *, db: Session, organization_id: int, due_date: Optional[date]
+) -> Optional[date]:
+    """Bound the due date on a payment request. The mirror of `validate_received_on`:
+    money already collected can't arrive tomorrow, and an invoice can't fall due
+    yesterday. This one is emailed to the student the moment the request is created
+    (see the pay-link email), so a slipped digit is outward-facing, not just internal —
+    and the dashboard counts anything past due as overdue on day one.
+    """
+    return enterprise_dates.validate_for_org(
+        db=db,
+        organization_id=organization_id,
+        value=due_date,
+        label="The due date",
+        direction=enterprise_dates.NOT_PAST,
+        earliest=EARLIEST_PAYMENT_DATE,
+        past_hint=" Leave it empty if the payment has no deadline.",
+    )
+
+
 def record_manual_payment(
     *,
     db: Session,
@@ -447,6 +506,9 @@ def record_manual_payment(
     if not method_key:
         raise HTTPException(status_code=400, detail="Choose a valid payment method.")
 
+    received_on = validate_received_on(
+        db=db, organization_id=organization.id, received_on=received_on
+    )
     if received_on is not None:
         from datetime import time as _time
         paid_at = datetime.combine(received_on, _time.min)
