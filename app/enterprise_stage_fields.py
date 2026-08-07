@@ -5492,4 +5492,2730 @@ ENTERPRISE_STAGE_FIELD_CATALOG: dict[str, dict[str, list[dict]]] = {'US': {'new_
                                  'Passport expired or under 6 months validity',
                                  'Client unresponsive',
                                  'Consultancy fees pending',
-                                 'Other']}]}}
+                                 'Other']}]},
+ 'PL': {'new_lead': [{'key': 'visa_route',
+                      'label': 'Polish Visa / Permit Route',
+                      'type': 'select',
+                      'hint': 'Poland is visa-first, permit-second — the D visa is filed abroad, '
+                              'the residence permit only later, inside Poland; a sub-90-day course '
+                              'is a Schengen C that never converts.',
+                      'required': True,
+                      'options': ['National visa type D "studies" — €200, up to 1 year, '
+                                  'multi-entry',
+                                  'Schengen C — summer school / entrance exam under 90 days (€90)',
+                                  'Already in Poland — TRC for studies via MOS 2.0, no consular '
+                                  'step',
+                                  'Graduate job-search TRC — post-study, 9 months, granted once',
+                                  'To be confirmed']},
+                     {'key': 'consular_jurisdiction',
+                      'label': 'Consular Jurisdiction (India split)',
+                      'type': 'select',
+                      'hint': 'Missions only accept applicants legally residing in their '
+                              'jurisdiction — proof is the passport address page or place of '
+                              'issue; screen it before any booking.',
+                      'required': True,
+                      'options': ['Embassy of Poland, New Delhi — north / east India + AF, BD, BT, '
+                                  'MV, NP, LK',
+                                  'Consulate General, Mumbai — south / west India (MH, KA, TN, TS, '
+                                  'GJ, KL…)',
+                                  'Another Polish mission — applicant resides outside India',
+                                  'To be confirmed']},
+                     {'key': 'b2_language_evidence',
+                      'label': 'B2 Language-of-Instruction Evidence',
+                      'type': 'select',
+                      'hint': 'Since 1 Jun 2025 universities must verify B2 in the language of '
+                              'instruction against the Dz.U. 2025 poz. 1045 certificate list — '
+                              "confirm each university's accepted list (incl. Duolingo) before "
+                              'relying on anything but IELTS / TOEFL / CAE.',
+                      'required': True,
+                      'options': ['Not yet assessed',
+                                  'IELTS 6.5+ / TOEFL iBT 79+ / CAE 176+ held',
+                                  'Test booked',
+                                  'Other certificate — verify against the Dz.U. 2025 poz. 1045 '
+                                  'list',
+                                  'Polish-taught programme — Polish B2 certificate needed']},
+                     {'key': 'budget_readiness',
+                      'label': 'Budget Readiness',
+                      'type': 'select',
+                      'hint': 'Tuition is typically the full first year up-front (€2,000–6,000) '
+                              'before the admission certificate issues, plus liquid living funds — '
+                              'counselors commonly stage ₹6–10 lakh total.',
+                      'required': True,
+                      'options': ['Fully budgeted — tuition prepay plus PLN living funds',
+                                  'Loan / sponsor being arranged',
+                                  'Scholarship decision awaited',
+                                  'Budget short — counselling continues',
+                                  'Not yet assessed']}],
+        'shortlisting': [{'key': 'university_approval_check',
+                          'label': 'Ministry Approval & Cap Check',
+                          'type': 'select',
+                          'hint': 'Since 1 Jun 2025 each institution carries a 50% cap on its '
+                                  'foreign-student share, and since 1 Dec 2025 the student '
+                                  'work-permit exemption follows only Ministry-approved or exempt '
+                                  'institutions — a non-approved private school costs the client '
+                                  'their work rights.',
+                          'required': False,
+                          'options': ['Not yet checked',
+                                      'Approved or exempt (public academic university)',
+                                      'Approval to admit foreigners not confirmed',
+                                      'Cap risk — foreign-student share near 50%',
+                                      'Mixed shortlist — flag the unapproved entries']}],
+        'applications_sent': [{'key': 'entrance_exam_status',
+                               'label': 'Entrance Exam / Interview Status',
+                               'type': 'select',
+                               'hint': 'Since 2025 non-EU-credential candidates sit entrance '
+                                       'exams, essays or interviews — Wrocław passes at 10/20; '
+                                       'the IRK fee is 85 PLN, 100 PLN where an exam applies.',
+                               'required': False,
+                               'options': ['Not applicable — EU-comparable credentials',
+                                           'Exam / interview scheduled',
+                                           'Sat — awaiting result',
+                                           'Passed',
+                                           'Failed — programme choice lost',
+                                           'Not yet confirmed']}],
+        'offer_accepted': [{'key': 'tuition_prepayment_status',
+                            'label': 'Tuition Prepayment (certificate gate)',
+                            'type': 'select',
+                            'hint': 'The zaświadczenie o przyjęciu issues only after tuition — '
+                                    'usually the full first year — is prepaid; nothing consular '
+                                    'can start before it.',
+                            'required': False,
+                            'options': ['Invoice not yet issued',
+                                        'Invoice received — unpaid',
+                                        'Paid in full — receipt on file',
+                                        'Instalment plan agreed with the university',
+                                        'Covered by scholarship — confirmation held']},
+                           {'key': 'admission_certificate_status',
+                            'label': 'Zaświadczenie o Przyjęciu Status',
+                            'type': 'select',
+                            'hint': 'Must be the statutory format of the Regulation of 23 Sep '
+                                    '2019, signed by the rector or an authorised officer — the '
+                                    'consulate rejects informal offer letters.',
+                            'required': False,
+                            'options': ['Not yet requested',
+                                        'Requested from the admissions office',
+                                        'Issued — rector-signed original in hand',
+                                        'Wrong format — statutory version re-requested']}],
+        'documents': [{'key': 'course_start_date',
+                       'label': 'Programme Start Date (zaświadczenie)',
+                       'type': 'date',
+                       'hint': 'October (winter semester) is the real intake, February the '
+                               'limited one — the visa window opens 6 months and closes 15 days '
+                               'before travel, so this date drives every booking.',
+                       'required': True},
+                      {'key': 'admission_certificate_reference',
+                       'label': 'Zaświadczenie Reference & Issue Date',
+                       'type': 'text',
+                       'hint': 'Reference and date on the rector-signed original — start the '
+                               'e-Konsulat booking the day it lands; peak-season slots (Jun–Sep) '
+                               'run out weeks ahead.',
+                       'required': True},
+                      {'key': 'apostille_recognition_status',
+                       'label': 'Apostille & Syrena Recognition Status',
+                       'type': 'select',
+                       'hint': 'India chain: state RAC authentication → MEA apostille; the '
+                               'secondary certificate also needs NAWA Syrena confirmation (free) '
+                               'and, for first-cycle admits, the kurator oświaty decision.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'State RAC authentication in progress',
+                                   'MEA apostille affixed',
+                                   'Syrena confirmation obtained (free)',
+                                   'Kurator decision awaited — first-cycle admit',
+                                   'Complete — apostilles and recognition in hand']},
+                      {'key': 'funds_evidenced_amount',
+                       'label': 'Funds Evidenced (PLN)',
+                       'type': 'number',
+                       'hint': '1,010 PLN × months of stay (823 PLN each when family accompanies) '
+                               'plus 2,500 PLN return travel and the housing cost — the VFS '
+                               'checklist still prints the old 776 PLN figure, so budget to 1,010 '
+                               'to be refusal-proof.',
+                       'required': True},
+                      {'key': 'funds_evidence_status',
+                       'label': 'Funds Instrument (closed list)',
+                       'type': 'select',
+                       'hint': 'The India checklist is a closed list — "No other documents will '
+                               'be accepted": Polish-bank certificate, credit-card-limit '
+                               'certificate (any country), scholarship or traveller\'s cheques; '
+                               'an Indian savings balance alone fails.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Certificate of funds in a bank located in Poland obtained',
+                                   "Credit-card-limit certificate obtained (any country's bank)",
+                                   'Scholarship award letter held',
+                                   "Traveller's cheques held",
+                                   'Sponsor route — notarized letter + employment certificate',
+                                   'Wrong instrument — Indian savings balance alone',
+                                   'Complete and verified']},
+                      {'key': 'travel_insurance_policy',
+                       'label': 'Travel Medical Insurance (€30,000)',
+                       'type': 'text',
+                       'hint': 'Insurer and policy number — MFA-approved list only '
+                               '(gov.pl/web/diplomacy/visas), whole stay, repatriation of remains '
+                               "covered, insured's name in Latin script; handwritten certificates "
+                               'are rejected.',
+                       'required': True},
+                      {'key': 'accommodation_monthly_cost',
+                       'label': 'Accommodation Monthly Cost (PLN)',
+                       'type': 'number',
+                       'hint': 'The dorm allocation or lease must state the monthly fee, and the '
+                               'funds shown must cover it on top of the 1,010 PLN maintenance — '
+                               'proof without a cost is a cited refusal driver.',
+                       'required': True},
+                      {'key': 'return_travel_component',
+                       'label': 'Return-Travel Funds (2,500 PLN)',
+                       'type': 'select',
+                       'hint': 'Non-EU origin including India adds 2,500 PLN on top of '
+                               'maintenance — waived only where a return ticket is actually held; '
+                               'the outbound stays a reservation, never a purchase.',
+                       'required': False,
+                       'options': ['2,500 PLN evidenced within the funds',
+                                   'Return ticket held — component waived',
+                                   'Not yet arranged',
+                                   'To be confirmed']},
+                      {'key': 'cover_letter_status',
+                       'label': "Applicant's Cover Letter Status",
+                       'type': 'select',
+                       'hint': 'The decisive prose document of a Polish file — purpose, funding '
+                               'story and annex list, with every number matching the bank '
+                               'evidence; agent-template language is what consuls read for.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Drafted — figures reconciled to the funds file',
+                                   'Signed — annex list attached',
+                                   'Template language detected — rewrite']},
+                      {'key': 'tuition_deposit_paid',
+                       'label': 'Tuition Prepaid to the University (EUR / PLN as invoiced)',
+                       'type': 'number',
+                       'hint': 'The receipted prepayment in the currency the university '
+                               'invoiced — usually the full first year; it sits '
+                               'outside the 1,010 PLN maintenance math and never counts towards '
+                               'it.',
+                       'required': False},
+                      {'key': 'sworn_translation_status',
+                       'label': 'Translation Status (PL / EN)',
+                       'type': 'select',
+                       'hint': 'The consulate accepts Polish or English originals — but the '
+                               'in-Poland TRC stage later needs tłumacz przysięgły (sworn) '
+                               'versions of anything else, so plan them now.',
+                       'required': False,
+                       'options': ['Not required — all documents in Polish or English',
+                                   'Translations in progress',
+                                   'Complete — sworn versions planned for the TRC',
+                                   'To be confirmed']}],
+        'submitted': [{'key': 'application_submitted_date',
+                       'label': 'Lodged at the VAC / Consulate On',
+                       'type': 'date',
+                       'hint': 'The application exists only from this in-person lodgement at the '
+                               'booked appointment — earliest 6 months, latest 15 days before '
+                               'travel (under 30 days is accepted at the applicant\'s own risk); '
+                               "India's 30-day decision commitment runs from registration.",
+                       'required': True},
+                      {'key': 'e_konsulat_number',
+                       'label': 'e-Konsulat Registration Number',
+                       'type': 'text',
+                       'hint': 'Number from secure2.e-konsulat.gov.pl — the form it generates is '
+                               'printed and signed twice; slots are allocated in order of '
+                               'e-Konsulat registration, so it anchors the whole file.',
+                       'required': True},
+                      {'key': 'filed_by',
+                       'label': 'Lodged By',
+                       'type': 'select',
+                       'hint': 'Personal appearance is obligatory — missions accept nothing by '
+                               'fax, post or email; for a minor at least one parent attends the '
+                               'lodgement.',
+                       'required': True,
+                       'options': ['Applicant in person (mandatory)',
+                                   'Applicant with a parent — minor applicant',
+                                   'Not yet lodged']},
+                      {'key': 'passport_retained_at_lodgement',
+                       'label': 'Passport Retained at Lodgement?',
+                       'type': 'select',
+                       'hint': 'The passport is retained during processing — warn the client '
+                               'against booking travel or any other visa appointment until it '
+                               'comes back with the decision.',
+                       'required': True,
+                       'options': ['Yes — retained until the decision',
+                                   'Returned — resubmission requested later',
+                                   'Not yet lodged']},
+                      {'key': 'deficiency_cure_deadline',
+                       'label': 'Formal-Deficiency Cure Deadline',
+                       'type': 'date',
+                       'hint': '7 days from lodgement to cure formal deficiencies flagged at the '
+                               'counter — a hard diary date; miss it and the file is examined as '
+                               'it stands.',
+                       'required': False},
+                      {'key': 'visa_fee_receipt_number',
+                       'label': '',
+                       'type': 'text',
+                       'hint': 'VAC counter receipt for the €200 — paid in cash or by card in INR '
+                               'at lodgement; the VFS service fee has its own online receipt from '
+                               'booking.',
+                       'required': True},
+                      {'key': 'visa_fee_amount_paid',
+                       'label': 'Visa Fee Paid (EUR / INR)',
+                       'type': 'number',
+                       'hint': '€200 / ₹21,120 under the 1 Jan 2026 tariff — covers processing '
+                               'including any reprocessing, never refunded; VFS service fee '
+                               '₹1,026 incl. GST online at booking, optional courier ₹960.',
+                       'required': False}],
+        'appointment': [{'key': 'appointment_datetime',
+                         'label': 'e-Konsulat Appointment — Date & Time',
+                         'type': 'text',
+                         'hint': 'Slots go in order of e-Konsulat registration — Delhi lodges '
+                                 'Mon / Tue / Wed 10:00, Mumbai once every two weeks Wed 10:30 — '
+                                 "so book the day the zaświadczenie lands, e.g. '2026-08-17 "
+                                 "10:00' (a Monday).",
+                         'required': True},
+                        {'key': 'appointment_location',
+                         'label': 'Lodgement Venue (VFS VAC / Consulate)',
+                         'type': 'text',
+                         'hint': 'One of the VFS Global VACs in India feeding the jurisdiction '
+                                 'mission — the applicant must legally reside in that '
+                                 "jurisdiction, e.g. 'VFS Global, New Delhi'.",
+                         'required': True},
+                        {'key': 'appointment_reference',
+                         'label': '',
+                         'type': 'text',
+                         'hint': 'The e-Konsulat registration number doubles as the booking '
+                                 'reference — quote it on any reschedule or VFS query.',
+                         'required': False},
+                        {'key': 'e_konsulat_form_status',
+                         'label': 'e-Konsulat Form Status',
+                         'type': 'select',
+                         'hint': 'e-Konsulat files nothing by itself — the generated PDF must be '
+                                 'printed, signed twice with the passport signature, and handed '
+                                 'over at the appointment.',
+                         'required': True,
+                         'options': ['Not started',
+                                     'Account created on secure2.e-konsulat.gov.pl',
+                                     'Form completed — PDF generated',
+                                     'Printed and signed twice — matches the passport',
+                                     'Slot booked']},
+                        {'key': 'vfs_eform_status',
+                         'label': 'VFS eForm Status',
+                         'type': 'select',
+                         'hint': 'The supplementary eForm at eforms.vfsglobal.com/pol is '
+                                 'mandatory before visiting the VAC — separate from e-Konsulat '
+                                 'and easy to miss.',
+                         'required': True,
+                         'options': ['Not started',
+                                     'Completed on eforms.vfsglobal.com/pol',
+                                     'Confirmation printed for the VAC visit',
+                                     'Lodging direct at the consulate — confirm if still needed']},
+                        {'key': 'biometrics_status',
+                         'label': 'Biometrics at Lodgement',
+                         'type': 'select',
+                         'hint': 'Fingerprints and photo are taken at the same appointment where '
+                                 'the file is lodged and the fee paid — a missed slot means '
+                                 're-queueing in e-Konsulat, weeks in peak season.',
+                         'required': True,
+                         'options': ['Not yet booked',
+                                     'Booked — captured at lodgement',
+                                     'Attended — fingerprints and photo captured',
+                                     'Rescheduled',
+                                     'No-show — slot lost, rebook via e-Konsulat']},
+                        {'key': 'biometrics_completed_date',
+                         'label': '',
+                         'type': 'date',
+                         'hint': 'Same day as the lodgement — the 30-day India commitment runs '
+                                 'from registration of the file, not from booking.',
+                         'required': False}],
+        'decision': [{'key': 'case_status',
+                      'label': 'Consular File Status',
+                      'type': 'select',
+                      'hint': 'Statutory examination is 15 days, extendable to 30 in justified '
+                              'cases; Delhi and Mumbai commit to a decision within 30 calendar '
+                              'days of registration — track through VFS.',
+                      'required': True,
+                      'options': ['Lodged — inside the 30-day India commitment',
+                                  'Under examination by the consul',
+                                  'Summoned — credibility interview at the mission',
+                                  '7-day formal-deficiency cure running',
+                                  'Decision made — passport ready at VFS',
+                                  'No status available']},
+                     {'key': 'status_last_checked',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Last VFS tracking check or consulate enquiry — the passport is '
+                              'retained throughout, so the client cannot travel while this file '
+                              'sits.',
+                      'required': True},
+                     {'key': 'credibility_interview_status',
+                      'label': 'Credibility Interview (if summoned)',
+                      'type': 'select',
+                      'hint': 'Since the July 2024 guidelines Delhi and Mumbai summon '
+                              'South-Asian applicants frequently but not always — 10–15 minutes '
+                              'with the consul, in the language of instruction, testing the '
+                              'claimed B2.',
+                      'required': True,
+                      'options': ['Not summoned — standard written file',
+                                  'Summoned — interview being scheduled',
+                                  'Attended at the Embassy / Consulate General',
+                                  'Further documents demanded after the interview']},
+                     {'key': 'info_request_received_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Date the mission asked for extra documents or summoned the '
+                              'applicant — requests reach the client through VFS or the e-mail '
+                              'given on the form.',
+                      'required': False},
+                     {'key': 'info_request_due_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Deadline the mission set — the 7-day formal-deficiency window is '
+                              'the usual one; miss it and the consul decides on the file as it '
+                              'stands.',
+                      'required': False},
+                     {'key': 'decision_deadline_date',
+                      'label': 'India 30-Day Commitment Expires',
+                      'type': 'date',
+                      'hint': 'Lodgement date plus 30 calendar days — chase VFS the day after it '
+                              'passes; peak-season files do slip.',
+                      'required': False},
+                     {'key': 'passport_return_tracking',
+                      'label': '',
+                      'type': 'text',
+                      'hint': 'VFS courier reference (₹960) or collection at the VAC — the '
+                              'decision comes back inside the passport.',
+                      'required': False}],
+        'approved': [{'key': 'visa_decision_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Date the consul issued the visa — the refusal-appeal and TRC '
+                              'clocks all key off the documents that come back with the '
+                              'passport.',
+                      'required': True},
+                     {'key': 'visa_document_number',
+                      'label': 'Visa Sticker Number (symbol 09)',
+                      'type': 'text',
+                      'hint': 'National D sticker under Art. 60(1)(9) — purpose symbol "09" '
+                              '(studies); check the dates, entries and symbol at the counter '
+                              'before leaving the VAC.',
+                      'required': True},
+                     {'key': 'visa_valid_from',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Multi-entry, valid up to 1 year, with Schengen circulation rights '
+                              '— entry before this date is not covered.',
+                      'required': True},
+                     {'key': 'visa_valid_to',
+                      'label': 'Visa Valid To (TRC filing anchor)',
+                      'type': 'date',
+                      'hint': 'The MOS 2.0 residence-permit application must be filed before '
+                              'this date — diary it the day the passport comes back, not on '
+                              'arrival.',
+                      'required': True},
+                     {'key': 'passport_received_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Returned via the VFS courier or collected at the VAC — verify the '
+                              'sticker against the application before the client flies.',
+                      'required': False},
+                     {'key': 'address_registration_status',
+                      'label': 'Zameldowanie & PESEL Status',
+                      'type': 'select',
+                      'hint': 'Address registration (zameldowanie) at the gmina auto-assigns the '
+                              'PESEL number — everything downstream (bank, NFZ, MOS) keys off '
+                              'it, so do it in week one.',
+                      'required': True,
+                      'options': ['Not yet travelled',
+                                  'Arrived — zameldowanie pending',
+                                  'Address registered — PESEL auto-assigned',
+                                  'PESEL confirmed on the registration certificate']},
+                     {'key': 'nfz_insurance_status',
+                      'label': 'NFZ / Health Cover After Arrival',
+                      'type': 'select',
+                      'hint': 'Travel insurance only carries the entry — sign the NFZ voluntary '
+                              'agreement via the university (~55.80 PLN a month) or hold a '
+                              'private equivalent for the TRC file.',
+                      'required': False,
+                      'options': ['Not started',
+                                  'University NFZ agreement signed (~55.80 PLN/month)',
+                                  'Private equivalent policy held',
+                                  'To be confirmed']},
+                     {'key': 'trc_filing_status',
+                      'label': 'TRC via MOS 2.0 (before visa expiry)',
+                      'type': 'select',
+                      'hint': 'Since 27 Apr 2026 the study TRC is e-filed exclusively on '
+                              'mos.cudzoziemcy.gov.pl — none of the paper exceptions cover '
+                              'students; fingerprints follow at the urząd wojewódzki and the '
+                              'first karta pobytu runs 15 months.',
+                      'required': True,
+                      'options': ['Not yet due — student not in Poland',
+                                  'MOS 2.0 account created (mos.cudzoziemcy.gov.pl)',
+                                  'E-application filed — fee transfer PDFs attached',
+                                  'Fingerprints given at the urząd wojewódzki',
+                                  'Decision issued — karta pobytu in production',
+                                  'Karta pobytu collected (first card 15 months)',
+                                  'Overdue — visa expiring with no TRC filed']},
+                     {'key': 'trc_fee_transfer_reference',
+                      'label': 'TRC Fees Paid (340 + 100 PLN)',
+                      'type': 'text',
+                      'hint': 'Stamp duty 340 PLN and card fee 100 PLN go by bank transfer to '
+                              'two separate voivodeship-office accounts OUTSIDE MOS — attach '
+                              'both transfer PDFs to the e-application.',
+                      'required': False},
+                     {'key': 'work_rights_briefing',
+                      'label': 'Work-Rights Briefing (registry rule)',
+                      'type': 'select',
+                      'hint': 'Full-time students at Ministry-approved or exempt institutions '
+                              '(all public academic universities) work permit-free with no hour '
+                              'cap — students of non-approved schools lost the exemption on 30 '
+                              'June 2026 and need a work permit.',
+                      'required': False,
+                      'options': ['Briefed — institution approved or exempt, no permit needed',
+                                  'Institution not approved — work permit required',
+                                  'Not yet briefed',
+                                  'To be confirmed']}],
+        'rejected': [{'key': 'refusal_date',
+                      'label': 'Refusal Collected With Passport On',
+                      'type': 'date',
+                      'hint': 'The standard-form decision cites the statutory ground with no '
+                              'narrative and comes back with the passport — the 14-day '
+                              're-examination clock runs from collecting it.',
+                      'required': True},
+                     {'key': 'refusal_ground',
+                      'label': 'Primary Refusal Ground',
+                      'type': 'select',
+                      'hint': 'Form decision, ground number only — reconstruct the real cause '
+                              'from the file and any interview before choosing the rebuttal '
+                              'route.',
+                      'required': True,
+                      'options': ['Genuine study purpose / migration intent doubted',
+                                  'Funds — wrong instrument (Indian savings balance alone)',
+                                  'Funds — below 1,010 PLN/month or sudden large deposits',
+                                  'Language level uncredible for the instruction language',
+                                  'Educational documents inconsistent or not apostilled',
+                                  'Admission certificate not in the statutory format',
+                                  'Insurance not from the MFA-approved list',
+                                  'Accommodation proof without the monthly fee',
+                                  'Weak or template cover letter',
+                                  'Other / not stated']},
+                     {'key': 'refusal_notes',
+                      'label': '',
+                      'type': 'textarea',
+                      'hint': 'The form gives no reasoning — debrief the same day: interview '
+                              'questions if summoned, what the funds file actually showed, and '
+                              'the corrected-refile plan.',
+                      'required': True},
+                     {'key': 'appeal_deadline',
+                      'label': 'Ponowne Rozpatrzenie Deadline (14 days)',
+                      'type': 'date',
+                      'hint': 'Wniosek o ponowne rozpatrzenie sprawy goes to the SAME consul '
+                              'within 14 days of collecting the passport — and costs the full '
+                              '€200 / ₹21,120 again.',
+                      'required': False},
+                     {'key': 'appeal_status',
+                      'label': 'Re-examination Status',
+                      'type': 'select',
+                      'hint': 'The same consul re-reads the file — new evidence, not new '
+                              'arguments, is what changes outcomes; judicial review in Warsaw is '
+                              'slow and rare.',
+                      'required': True,
+                      'options': ['Not appealing — refiling corrected instead',
+                                  'Re-examination request in preparation',
+                                  'Filed with the same consul — €200 paid again',
+                                  'Re-examination successful — visa issued',
+                                  'Re-examination refused',
+                                  'Judicial review — Voivodeship Administrative Court, Warsaw',
+                                  'Closed']},
+                     {'key': 'next_step',
+                      'label': 'Agreed Next Step',
+                      'type': 'select',
+                      'hint': 'After a funds or credibility refusal the standard play is a '
+                              'fresh, corrected application for the next intake rather than '
+                              're-examination — reapplication is allowed immediately.',
+                      'required': True,
+                      'options': ['Refile corrected — same intake',
+                                  'Refile — next intake (October or February)',
+                                  'Request re-examination (€200 again)',
+                                  'Judicial review in Warsaw (slow, rare)',
+                                  'Switch destination country',
+                                  'Not reapplying / case closed',
+                                  'Undecided']},
+                     {'key': 'reapply_target_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Anchor to the recruitment calendar — IRK windows run roughly '
+                              'May–August for October entry, and e-Konsulat slots vanish '
+                              'June–September.',
+                      'required': False}],
+        'on_hold': [{'key': 'hold_reason',
+                     'label': 'Reason for Hold',
+                     'type': 'select',
+                     'hint': 'Polish files stall on the tuition-prepay gate, the apostille / '
+                             'Syrena chain and e-Konsulat slot scarcity — name the blocker '
+                             'precisely and chase it.',
+                     'required': True,
+                     'options': ['Awaiting zaświadczenie — tuition prepayment pending',
+                                 'Entrance exam / interview result awaited',
+                                 'Apostille (RAC → MEA) or Syrena recognition pending',
+                                 'Kurator oświaty decision awaited',
+                                 'No e-Konsulat slots — Delhi 3×/week, Mumbai fortnightly',
+                                 'Funds instrument wrong — Polish-bank certificate pending',
+                                 'B2 language certificate awaited',
+                                 'Insurance not on the MFA-approved list — being replaced',
+                                 'Client deferred intake (October / February)',
+                                 'Consultancy fees pending',
+                                 'Client unresponsive',
+                                 'Other']},
+                    {'key': 'hold_notes',
+                     'label': '',
+                     'type': 'textarea',
+                     'hint': 'Name the blocking item and its expected date — prepay invoice, MEA '
+                             'apostille, Syrena result, e-Konsulat slot — and who owns the next '
+                             'move.',
+                     'required': False}]},
+ 'NZ': {'new_lead': [{'key': 'visa_route',
+                      'label': 'NZ Student Visa Route',
+                      'type': 'select',
+                      'hint': 'Fee Paying is the workhorse (from NZ$850, 80% decided in 8.5 '
+                              'weeks); the Pathway visa covers up to 3 programmes on one visa and '
+                              'was liberalised 20 Jul 2026.',
+                      'required': True,
+                      'options': ['Fee Paying Student Visa',
+                                  'Pathway Student Visa — up to 3 programmes on one visa',
+                                  'Exchange Student Visa (80% decided in 4 weeks)',
+                                  'Foreign Government Supported Student Visa',
+                                  'Course of 3 months or less — visitor visa / NZeTA, no student '
+                                  'visa',
+                                  'To be confirmed']},
+                     {'key': 'course_duration_bracket',
+                      'label': 'Course Length Bracket',
+                      'type': 'select',
+                      'hint': 'Drives the medical and PCC load: X-ray over 6 months (high-TB '
+                              'countries incl. India), full medical over 12 months, police '
+                              'certificates at 24+ months and age 17+.',
+                      'required': True,
+                      'options': ['24 months or more — INZ 1007 + 1096 + PCC',
+                                  'Over 12 months, under 24 — INZ 1007 + 1096, no PCC',
+                                  'Over 6 months, up to 12 — X-ray (INZ 1096) only',
+                                  '6 months or less — no routine medicals',
+                                  '3 months or less in any 12 — visitor route, no student visa',
+                                  'Not yet confirmed']},
+                     {'key': 'study_gap_profile',
+                      'label': 'Study Gap / Course Logic Risk',
+                      'type': 'select',
+                      'hint': 'Study gaps and level downgrades (degree to PTE diploma) are the '
+                              'top decline themes on Indian files — roughly 1 in 4 were declined '
+                              'in 2025 (INZ data via RNZ).',
+                      'required': True,
+                      'options': ['No gap — course follows prior study',
+                                  'Gap under 6 months — explainable',
+                                  'Gap over 6 months — employment evidence needed',
+                                  'Course level drops from prior qualification — logic must be '
+                                  'argued',
+                                  'Not yet assessed']},
+                     {'key': 'funding_route',
+                      'label': 'Likely Funding Route',
+                      'type': 'select',
+                      'hint': 'NZ$20,000 a year living costs on top of first-year tuition '
+                              '(NZ$17,000 for school years); INZ probes the source of every '
+                              'recent deposit.',
+                      'required': False,
+                      'options': ['Family savings — 6 months of statements available',
+                                  'Education loan — sanction letter expected',
+                                  'Family sponsor — INZ 1014 undertaking',
+                                  'Scholarship (full or partial)',
+                                  'Funds Transfer Scheme likely (India is a scheme country)',
+                                  'Mixed / to be confirmed']}],
+        'shortlisting': [{'key': 'code_signatory_check',
+                          'label': 'Pastoral Care Code Signatory Check',
+                          'type': 'select',
+                          'hint': 'No Code signatory, no visa. Ten polytechnics stand alone again '
+                                  'since 1 Jan 2026; NorthTec, WITT, Whitireia & WelTec and Tai '
+                                  'Poutini sit with Te Pūkenga until mid-2026 decisions.',
+                          'required': False,
+                          'options': ['All shortlisted providers verified as Code signatories',
+                                      'Some providers not yet verified',
+                                      'Polytechnic on the list — legal name being re-checked',
+                                      'Not yet checked']}],
+        'offer_accepted': [{'key': 'tuition_payment_norm',
+                            'label': 'Tuition Payment Expectation',
+                            'type': 'select',
+                            'hint': 'INZ endorses paying tuition only after the Approval in '
+                                    'Principle — never let a client wire full tuition at '
+                                    'acceptance; some PTEs do ask a small offer deposit.',
+                            'required': False,
+                            'options': ['No payment before AIP — the INZ-endorsed norm',
+                                        'Small deposit asked to issue the offer',
+                                        'Provider wants prepayment — query it before paying',
+                                        'To be confirmed']}],
+        'documents': [{'key': 'course_start_date',
+                       'label': 'Course Start Date (per Offer of Place)',
+                       'type': 'date',
+                       'hint': 'INZ advises filing 3 months before travel — peak-season Indian '
+                               'files ran 3-4+ months in 2025, so a February intake means lodging '
+                               'by October.',
+                       'required': True},
+                      {'key': 'offer_of_place_status',
+                       'label': 'Offer of Place Status',
+                       'type': 'select',
+                       'hint': 'The visa needs the UNCONDITIONAL Offer of Place from a Pastoral '
+                               'Care Code signatory — check the exact legal provider name on 2026 '
+                               'offers.',
+                       'required': True,
+                       'options': ['Conditional offer only — cannot support the visa',
+                                   'Unconditional — Code signatory and legal name verified',
+                                   'Unconditional — provider name needs re-check (Te Pūkenga '
+                                   'unwind)',
+                                   'Not yet issued']},
+                      {'key': 'funds_evidence_status',
+                       'label': 'Financial Evidence Status',
+                       'type': 'select',
+                       'hint': 'INZ probes the SOURCE of funds hard — about 6 months of '
+                               'statements plus provenance (FD liquidation, sale deed, loan '
+                               'sanction) for every recent deposit.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Partially collected',
+                                   'Awaiting loan sanction / sponsor documents',
+                                   'FTS directed — ANZ transfer in flight',
+                                   'Complete — every lump sum source-documented']},
+                      {'key': 'funds_evidenced_amount',
+                       'label': 'Funds Evidenced (NZD)',
+                       'type': 'number',
+                       'hint': 'NZ$20,000 per year of study (NZ$1,667/month under a year) ON TOP '
+                               'of first-year tuition; NZ$17,000 for school years; prepaid '
+                               'accommodation is deducted.',
+                       'required': True},
+                      {'key': 'fts_direction_status',
+                       'label': 'Funds Transfer Scheme (FTS) Status',
+                       'type': 'select',
+                       'hint': 'FTS is run by ANZ for students from China, India, Nepal, the '
+                               'Philippines, Sri Lanka and Vietnam — funds release to the student '
+                               'monthly after arrival.',
+                       'required': False,
+                       'options': ['Not directed — standard evidence route',
+                                   'Likely — India is an FTS scheme country',
+                                   'Directed — ANZ account being opened',
+                                   'Directed — NZ$20,000 transferred, confirmation held',
+                                   'Not applicable']},
+                      {'key': 'emedical_status',
+                       'label': 'eMedical / Panel Physician Status',
+                       'type': 'select',
+                       'hint': 'eMedical at an INZ panel physician (India: Delhi, Mumbai, '
+                               'Bengaluru, Chennai, Hyderabad, Kolkata); certificates must be '
+                               'under 3 months old at lodgement — book late in this stage.',
+                       'required': True,
+                       'options': ['Not required — course 6 months or less',
+                                   'Panel physician booked',
+                                   'Completed — X-ray (INZ 1096) only',
+                                   'Completed — full medical (INZ 1007) + X-ray',
+                                   'Certificate over 3 months old — redo before lodgement',
+                                   'Prior acceptable-standard finding reused (36 months)']},
+                      {'key': 'police_certificate_status',
+                       'label': 'Police Certificate (PCC) Status',
+                       'type': 'select',
+                       'hint': 'Since Jul 2026 the PCC must be uploaded AT lodgement — a missing '
+                               'certificate risks decline or a shorter visa, so order it early, '
+                               'not on request.',
+                       'required': True,
+                       'options': ['Not required — under 17 or stay under 24 months',
+                                   'Ordered — Passport Seva in progress',
+                                   'In hand — under 6 months old',
+                                   'In hand — ageing past 6 months, re-order if lodgement slips',
+                                   'Not started — blocking lodgement']},
+                      {'key': 'insurance_policy_status',
+                       'label': 'Medical & Travel Insurance Status',
+                       'type': 'select',
+                       'hint': 'Mandatory by visa condition and the Pastoral Care Code — '
+                               'students are generally NOT eligible for public healthcare, and '
+                               'ACC covers accidents only.',
+                       'required': True,
+                       'options': ['To be bought at enrolment — provider plan (Studentsafe)',
+                                   'Policy purchased — whole visa period',
+                                   'PhD — exempt per INZ (provider may still require cover)',
+                                   'Not arranged']},
+                      {'key': 'bona_fide_review_status',
+                       'label': 'Bona Fide File Review',
+                       'type': 'select',
+                       'hint': 'Pre-lodgement bona fide check: course logic, gaps and funding '
+                               'coherence against the SOP — the file, not an interview, decides '
+                               'most NZ cases.',
+                       'required': False,
+                       'options': ['Not reviewed',
+                                   'Reviewed — no red flags',
+                                   'Red flags — gap or level-drop needs evidence',
+                                   'Red flags — funding story inconsistent',
+                                   'Reworked and cleared']},
+                      {'key': 'tuition_deposit_paid',
+                       'label': 'Deposit Paid to Provider (NZD)',
+                       'type': 'number',
+                       'hint': 'Usually zero — tuition is paid after the AIP; record any small '
+                               'PTE offer deposit here, and never count it towards the '
+                               'living-cost funds.',
+                       'required': False}],
+        'submitted': [{'key': 'application_submitted_date',
+                       'label': 'Lodged on Immigration Online',
+                       'type': 'date',
+                       'hint': 'Online only since 18 Sep 2025 — the 8.5-week (80%) Fee Paying '
+                               'clock starts here; the PCC and medicals must already be in the '
+                               'file.',
+                       'required': True},
+                      {'key': 'immigration_online_reference',
+                       'label': 'Immigration Online Application Number',
+                       'type': 'text',
+                       'hint': "INZ's reference in the enhanced Immigration Online portal — "
+                               'quote it on every enquiry, PPI response and fee query.',
+                       'required': True},
+                      {'key': 'visa_category_filed',
+                       'label': 'Student Visa Category Filed',
+                       'type': 'select',
+                       'hint': 'The six student categories in the enhanced portal since Aug 2025 '
+                               '— the category drives the evidence set and the clock (Exchange: '
+                               '80% in 4 weeks).',
+                       'required': True,
+                       'options': ['Fee Paying Student Visa',
+                                   'Pathway Student Visa',
+                                   'Exchange Student Visa',
+                                   'Foreign Government Supported Student Visa',
+                                   'English Language Student Visa',
+                                   'NZ Government Scholarship Student Visa']},
+                      {'key': 'filed_by',
+                       'label': 'Filed By',
+                       'type': 'select',
+                       'hint': 'NZ immigration advice is restricted to licensed advisers — '
+                               'offshore education agents work under the student-visa exemption; '
+                               'record who actually filed.',
+                       'required': True,
+                       'options': ['Applicant themselves',
+                                   'Licensed Immigration Adviser (LIA)',
+                                   'Education agent — offshore student-visa exemption',
+                                   'Parent / guardian (minor applicant)',
+                                   'Not yet filed']},
+                      {'key': 'visa_fee_receipt_number',
+                       'label': 'Fee Payment Reference (card receipt)',
+                       'type': 'text',
+                       'hint': 'Fee paid by card inside the portal at submission — keep the '
+                               'transaction reference with the application number.',
+                       'required': True},
+                      {'key': 'visa_fee_amount_paid',
+                       'label': 'Visa Fee Paid (NZD)',
+                       'type': 'number',
+                       'hint': 'From NZ$850 all-in: NZ$485 application + NZ$265 immigration levy '
+                               '+ NZ$100 IVL where applicable (dependent-child files and some '
+                               'nationalities are exempt).',
+                       'required': False},
+                      {'key': 'emedical_reference',
+                       'label': 'eMedical / NZER Reference',
+                       'type': 'text',
+                       'hint': 'Panel-physician eMedical case reference linked to the '
+                               'application — INZ matches the medicals to the file with it.',
+                       'required': False}],
+        'appointment': [{'key': 'appointment_datetime',
+                         'label': 'VFS Biometrics Slot — Date & Time',
+                         'type': 'text',
+                         'hint': "Booked only after INZ's biometrics request letter lands, e.g. "
+                                 "'2026-08-14 09:30' — blank until the letter arrives or if INZ "
+                                 'waives enrolment.',
+                         'required': False},
+                        {'key': 'appointment_location',
+                         'label': 'VFS Centre for Biometrics',
+                         'type': 'select',
+                         'hint': 'Collection only — nothing is lodged or decided at VFS; the '
+                                 'four Indian centres cover photo and fingerprints on INZ '
+                                 'request.',
+                         'required': True,
+                         'options': ['VFS Global, New Delhi',
+                                     'VFS Global, Mumbai',
+                                     'VFS Global, Bengaluru',
+                                     'VFS Global, Chennai',
+                                     'VFS centre outside India',
+                                     'Not applicable — INZ waived biometrics',
+                                     'Not yet booked']},
+                        {'key': 'appointment_reference',
+                         'label': 'VFS Booking Reference',
+                         'type': 'text',
+                         'hint': 'On the confirmation email; service fee about INR 1,700 since '
+                                 'the 1 Jan 2026 VAC increase — confirm the current amount on '
+                                 'the VFS NZ–India page.',
+                         'required': False},
+                        {'key': 'biometrics_status',
+                         'label': 'Biometrics Enrolment Status',
+                         'type': 'select',
+                         'hint': 'INZ decides who must enrol — most Indian and South Asian files '
+                                 'get the request after lodgement; treat the letter deadline as '
+                                 'hard.',
+                         'required': True,
+                         'options': ['Awaiting INZ biometrics request letter',
+                                     'Request received — not yet booked',
+                                     'Booked at VFS',
+                                     'Attended — photo and fingerprints enrolled',
+                                     'Waived — INZ did not request enrolment',
+                                     'Request-letter deadline missed']},
+                        {'key': 'biometrics_completed_date',
+                         'label': 'Biometrics Completed Date',
+                         'type': 'date',
+                         'hint': 'Enrolment date at VFS — assessment resumes once the prints '
+                                 'reach INZ, so chase the file again about a week after.',
+                         'required': False},
+                        {'key': 'emedical_timing',
+                         'label': 'Medicals Timing',
+                         'type': 'select',
+                         'hint': 'Panel-physician eMedical ideally sits pre-submission; done '
+                                 'here it adds weeks — certificates must have been under 3 '
+                                 'months old at lodgement.',
+                         'required': False,
+                         'options': ['Completed before lodgement — recommended',
+                                     'Being completed now on INZ request',
+                                     'Prior acceptable-standard finding on file (36 months)',
+                                     'Not required — course 6 months or less']}],
+        'decision': [{'key': 'case_status',
+                      'label': 'INZ Case Status',
+                      'type': 'select',
+                      'hint': 'Everything arrives by email through Immigration Online — '
+                              'verification calls to the student, sponsor, bank or employer can '
+                              'come unannounced at this stage.',
+                      'required': True,
+                      'options': ['Application received — awaiting allocation',
+                                  'Under assessment — bona fide and funds',
+                                  'PPI letter received — response due',
+                                  'AIP issued — tuition payment due',
+                                  'Tuition receipt (+ FTS confirmation) sent to INZ',
+                                  'Decision made',
+                                  'No status available']},
+                     {'key': 'status_last_checked',
+                      'label': 'Status Last Checked On',
+                      'type': 'date',
+                      'hint': 'Check the portal and the inbox (spam included) at least weekly — '
+                              'the AIP and PPI deadlines are short enough to miss inside a '
+                              'fortnight.',
+                      'required': True},
+                     {'key': 'aip_received_date',
+                      'label': 'AIP Letter Received On',
+                      'type': 'date',
+                      'hint': 'The Approval in Principle is the trigger to pay tuition — the '
+                              'deadline is stated IN the letter and the clock runs from here.',
+                      'required': False},
+                     {'key': 'aip_tuition_deadline',
+                      'label': 'AIP Tuition Deadline (per the letter)',
+                      'type': 'date',
+                      'hint': "Commonly about 10 calendar days, 15 when FTS is directed — the "
+                              "letter's own date is authoritative; ask the case officer for an "
+                              'extension the moment it looks tight. Missing it usually means '
+                              'decline.',
+                      'required': False},
+                     {'key': 'tuition_paid_date',
+                      'label': 'Tuition Paid & Receipt Uploaded On',
+                      'type': 'date',
+                      'hint': 'Pay the provider and upload the receipt (plus the ANZ '
+                              'confirmation on FTS files) — INZ grants the visa only after it '
+                              'holds this.',
+                      'required': False},
+                     {'key': 'info_request_received_date',
+                      'label': 'PPI Letter — Date Received',
+                      'type': 'date',
+                      'hint': 'Potentially Prejudicial Information — INZ states its concerns '
+                              'before declining; a red-alert task, answered with evidence, not '
+                              'assertions.',
+                      'required': False},
+                     {'key': 'info_request_due_date',
+                      'label': 'PPI Response Deadline',
+                      'type': 'date',
+                      'hint': 'Short deadline stated in the PPI letter — an unanswered PPI '
+                              'converts straight into a decline on the stated grounds.',
+                      'required': False},
+                     {'key': 'passport_return_tracking',
+                      'label': '',
+                      'type': 'text',
+                      'hint': 'The passport is never lodged — the file is fully digital and the '
+                              'decision arrives by email as an eVisa, so nothing is couriered '
+                              'back.',
+                      'required': False,
+                      'applicable': False}],
+        'approved': [{'key': 'visa_decision_date',
+                      'label': 'eVisa Grant Date',
+                      'type': 'date',
+                      'hint': 'Granted only after INZ held the tuition receipt — the eVisa '
+                              'arrives by email, electronically linked to the passport.',
+                      'required': True},
+                     {'key': 'visa_document_number',
+                      'label': 'eVisa / Grant Letter Reference',
+                      'type': 'text',
+                      'hint': 'Reference on the grant letter — there is no sticker or card; the '
+                              'student should carry a printed copy of the letter when '
+                              'travelling.',
+                      'required': True},
+                     {'key': 'visa_valid_from',
+                      'label': 'Visa Valid From',
+                      'type': 'date',
+                      'hint': 'First travel date per the grant letter — plan arrival against '
+                              'enrolment week, not the visa start.',
+                      'required': True},
+                     {'key': 'visa_valid_to',
+                      'label': 'Visa Expiry Date',
+                      'type': 'date',
+                      'hint': 'Student visas run up to 4 years — diary the Post Study Work Visa '
+                              'window: apply within 3 months of expiry (6 for PhD), NZ$1,670, '
+                              'NZ$5,000 funds.',
+                      'required': True},
+                     {'key': 'evisa_conditions_check',
+                      'label': 'eVisa Conditions Check',
+                      'type': 'select',
+                      'hint': 'Read the conditions line by line — provider-name errors happen in '
+                              'the Te Pūkenga transition, and the 25 hrs/week work limit applies '
+                              'to visas granted from 3 Nov 2025.',
+                      'required': True,
+                      'options': ['Not yet checked',
+                                  'Verified — provider name, work hours and expiry all correct',
+                                  'Error found — correction requested from INZ',
+                                  'Corrected eVisa reissued']},
+                     {'key': 'enrolment_completed_date',
+                      'label': 'In-Person Enrolment Completed',
+                      'type': 'date',
+                      'hint': 'Passport, eVisa letter and insurance shown at enrolment — the '
+                              'Pastoral Care Code checks happen here.',
+                      'required': False},
+                     {'key': 'bank_account_status',
+                      'label': 'NZ Bank Account',
+                      'type': 'select',
+                      'hint': 'Passport, visa and enrolment letter open it; FTS students already '
+                              'hold the ANZ account their living funds release into monthly.',
+                      'required': False,
+                      'options': ['Not started',
+                                  'Started online before arrival',
+                                  'Opened — awaiting in-branch ID verification',
+                                  'Active',
+                                  'FTS — ANZ account already in place']},
+                     {'key': 'ird_number_status',
+                      'label': 'IRD Number (tax ID)',
+                      'type': 'select',
+                      'hint': 'Needed before any paid work — apply online at ird.govt.nz (5-10 '
+                              'working days) once the bank account exists; in-study limit is 25 '
+                              'hrs/week, full-time in scheduled holidays.',
+                      'required': False,
+                      'options': ['Not applied',
+                                  'Applied online — 5-10 working days',
+                                  'IRD number issued',
+                                  'Not needed — no paid work planned']},
+                     {'key': 'passport_received_date',
+                      'label': '',
+                      'type': 'text',
+                      'hint': 'The passport never left the student — the eVisa is linked '
+                              'electronically and there is nothing to collect or courier.',
+                      'required': False,
+                      'applicable': False}],
+        'rejected': [{'key': 'refusal_date',
+                      'label': 'Decline Letter Date',
+                      'type': 'date',
+                      'hint': 'Emailed decline letter citing the immigration instructions not '
+                              'met — the 14-day onshore reconsideration clock runs from receipt.',
+                      'required': True},
+                     {'key': 'refusal_ground',
+                      'label': 'Primary Decline Ground',
+                      'type': 'select',
+                      'hint': "Take it from the decline letter, which cites the specific "
+                              "immigration instructions with the case officer's reasoning.",
+                      'required': True,
+                      'options': ['Bona fide student not established — course logic / gaps / '
+                                  'migration-first profile',
+                                  'Funds unverifiable or unsourced lump sums',
+                                  'Funds below NZ$20,000 a year plus tuition',
+                                  'Offer or provider issue — conditional, or not a Code '
+                                  'signatory',
+                                  'Health requirement not met',
+                                  'Character / false or unverifiable documents (5-year risk)',
+                                  'AIP tuition deadline missed',
+                                  'Inconsistency between SOP, verification calls and documents',
+                                  'Other / not stated']},
+                     {'key': 'refusal_notes',
+                      'label': 'Decline Reasons / Debrief Notes',
+                      'type': 'textarea',
+                      'hint': "Copy the exact instructions cited and the officer's reasoning; "
+                              'debrief the client the same day and decide reapply versus '
+                              'reconsideration fast.',
+                      'required': True},
+                     {'key': 'appeal_deadline',
+                      'label': 'Reconsideration Deadline (onshore, 14 days)',
+                      'type': 'date',
+                      'hint': 'Only an ONSHORE applicant still holding a valid visa may request '
+                              'reconsideration — 14 calendar days from the decline, NZ$220, one '
+                              'request, decision final.',
+                      'required': False},
+                     {'key': 'appeal_status',
+                      'label': 'Reconsideration / Challenge Status',
+                      'type': 'select',
+                      'hint': 'Offshore declines have NO appeal or reconsideration route — the '
+                              'remedy is a fresh, better-evidenced application; no tribunal '
+                              'hears temporary-visa declines.',
+                      'required': True,
+                      'options': ['Not applicable — declined offshore (no appeal right)',
+                                  'Reconsideration in preparation (onshore only)',
+                                  'Reconsideration filed — NZ$220 paid',
+                                  'Reconsideration successful — visa granted',
+                                  'Reconsideration declined — decision final',
+                                  'Process complaint with INZ / Ombudsman',
+                                  'Not challenging — refiling instead']},
+                     {'key': 'next_step',
+                      'label': 'Agreed Next Step',
+                      'type': 'select',
+                      'hint': 'Reapplication is allowed immediately (new fee from NZ$850) but '
+                              'must squarely answer the decline reasons — wait for the case '
+                              'notes before drafting.',
+                      'required': True,
+                      'options': ['Reapply — same intake, decline grounds answered',
+                                  'Reapply — later intake (February / July)',
+                                  'Reapply — different provider or course level',
+                                  'Onshore reconsideration',
+                                  'Switch destination country',
+                                  'Not reapplying / case closed',
+                                  'Undecided']},
+                     {'key': 'privacy_act_request_status',
+                      'label': 'Case Notes (Privacy Act) Request',
+                      'type': 'select',
+                      'hint': "Agents routinely request the INZ case notes under the Privacy Act "
+                              "before refiling — the officer's file notes say exactly what to "
+                              'fix.',
+                      'required': False,
+                      'options': ['Not requested',
+                                  'Requested from INZ — awaiting',
+                                  'Received — refile drafted against them',
+                                  'Not needed']}],
+        'on_hold': [{'key': 'hold_reason',
+                     'label': 'Reason for Hold',
+                     'type': 'select',
+                     'hint': 'NZ files stall on the PCC (upfront since Jul 2026), unsourced '
+                             'funds and the AIP tuition scramble — name the single blocker.',
+                     'required': True,
+                     'options': ['Awaiting unconditional Offer of Place',
+                                 'PCC not yet in hand — blocks lodgement since Jul 2026',
+                                 'Medical certificate aged past 3 months — rebooking',
+                                 'Funds source documentation incomplete',
+                                 'FTS — ANZ account or transfer pending',
+                                 'AIP received — tuition payment being arranged',
+                                 'Provider legal-name check (Te Pūkenga unwind)',
+                                 'Client deferred intake (February / July)',
+                                 'Consultancy fees pending',
+                                 'Client unresponsive',
+                                 'Other']},
+                    {'key': 'hold_notes',
+                     'label': 'Hold Notes',
+                     'type': 'textarea',
+                     'hint': 'What exactly is being waited on, who owns the next move, and the '
+                             'date it is expected — an AIP hold is measured in days, not weeks.',
+                     'required': False}]},
+ 'SG': {'new_lead': [{'key': 'institution_track',
+                      'label': 'Institution Track (IHL vs EduTrust PEI)',
+                      'type': 'select',
+                      'hint': 'The track decides everything — SOLAR vs SOLAR+, a one-week vs '
+                              'up-to-a-month decision, work rights and insurance. Screen it on '
+                              'the first call.',
+                      'required': True,
+                      'options': ['IHL — autonomous university (NUS, NTU, SMU, SUTD, SIT, SUSS)',
+                                  'IHL — polytechnic or ITE',
+                                  'IHL — approved offshore campus (INSEAD, ESSEC, TUM Asia)',
+                                  'Arts institution (LASALLE / NAFA)',
+                                  'EduTrust-certified PEI (SIM, Kaplan, MDIS, PSB...)',
+                                  'Government / government-aided school',
+                                  'Short course — STVP concession, no pass needed',
+                                  'To be confirmed']},
+                     {'key': 'full_time_course_check',
+                      'label': 'Full-Time Course Eligibility',
+                      'type': 'select',
+                      'hint': "A Student's Pass exists only for approved full-time courses — "
+                              'part-time, evening and weekend study is ineligible; a short '
+                              'stand-alone module can ride the STVP concession instead.',
+                      'required': True,
+                      'options': ['Full-time approved course — STP eligible',
+                                  'Part-time / evening / weekend — STP ineligible',
+                                  'Short course — within STVP validity or 30 days, whichever shorter',
+                                  'To be confirmed']},
+                     {'key': 'entry_visa_requirement',
+                      'label': 'Entry Visa Requirement (by nationality)',
+                      'type': 'select',
+                      'hint': 'Visa-required nationals — India included — get a single-journey '
+                              'visa embedded in the IPA itself: never book a separate visa '
+                              'appointment, budget the S$30 MJV instead.',
+                      'required': True,
+                      'options': ['Visa-required national — visa embedded in the IPA, S$30 MJV at issuance',
+                                  'Visa-exempt nationality — IPA alone is the entry document',
+                                  'Already in Singapore on DP / LTVP — may study without an STP',
+                                  'To be confirmed']},
+                     {'key': 'part_time_work_expectation',
+                      'label': 'Part-Time Work Expectation',
+                      'type': 'select',
+                      'hint': 'Term-time work (16 h/week) exists only for institutions on '
+                              "MOM's approved list — mainstream commercial PEIs are not on "
+                              'it. Kill the assumption on day one.',
+                      'required': False,
+                      'options': ['Not a factor for this client',
+                                  'IHL on the MOM list — 16 h/week term-time expected',
+                                  'PEI — no work rights unless on the MOM approved list',
+                                  'Not yet checked against the live MOM list']}],
+        'shortlisting': [{'key': 'edutrust_register_check',
+                          'label': 'EduTrust Register Check',
+                          'type': 'select',
+                          'hint': "Only an EduTrust-certified PEI can sponsor a Student's "
+                                  'Pass — verify every private institution on the SSG '
+                                  'register before the shortlist is agreed.',
+                          'required': False,
+                          'options': ['Not yet checked',
+                                      'All IHLs — EduTrust not needed',
+                                      'PEIs verified on the SSG EduTrust register',
+                                      'Uncertified PEI found — removed from the shortlist']}],
+        'documents': [{'key': 'course_start_date',
+                       'label': 'Course Start Date (per Letter of Offer)',
+                       'type': 'date',
+                       'hint': 'Drives the filing window — eForm 16 goes in at least 2 and at '
+                               'most 3 months before this date, on the IHL and PEI tracks '
+                               'alike. Programme name and date must match the offer exactly.',
+                       'required': True},
+                      {'key': 'registration_ack_status',
+                       'label': 'SOLAR / SOLAR+ Registration Status',
+                       'type': 'select',
+                       'hint': 'The institution registers the student before anything can be '
+                               'filed — the Registration Acknowledgement Letter, not the '
+                               'offer, is what triggers it. Chase the school, not ICA.',
+                       'required': True,
+                       'options': ['Offer accepted — acknowledgement not yet issued',
+                                   'Registration Acknowledgement Letter received',
+                                   'Registered in SOLAR by the IHL',
+                                   'Registered in SOLAR+ by the EduTrust PEI',
+                                   'SOLAR login with the student — ready to file']},
+                      {'key': 'funds_evidence_status',
+                       'label': 'Financial Evidence Status',
+                       'type': 'select',
+                       'hint': 'ICA lists no financial documents and sets no threshold — '
+                               'eForm 16 collects parent/sponsor occupation and income '
+                               'declarations instead, and the evidence must back them.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Partially collected',
+                                   'Awaiting loan / sponsor / bank',
+                                   'Sponsor occupation and income confirmed for eForm 16',
+                                   'Complete — evidence consistent with the declarations']},
+                      {'key': 'funds_evidenced_amount',
+                       'label': 'Funds Evidenced (SGD)',
+                       'type': 'number',
+                       'hint': 'No statutory ICA figure exists — the counselor bar is year-1 '
+                               'tuition plus S$12,000–15,000 living, a planning estimate, not '
+                               'a rule. Fresh large deposits invite eForm 16 queries.',
+                       'required': True},
+                      {'key': 'tuition_deposit_paid',
+                       'label': 'Acceptance Fee / Deposit Paid (SGD)',
+                       'type': 'number',
+                       'hint': 'Modest acceptance fee at the public universities; a PEI may '
+                               'collect fees only under the CPE standard student contract '
+                               'with the Fee Protection Scheme escrow.',
+                       'required': False},
+                      {'key': 'sponsor_income_declaration',
+                       'label': 'Sponsor Occupation & Income (for eForm 16)',
+                       'type': 'text',
+                       'hint': "e.g. 'Father — civil engineer, INR 24 lakh p.a.' — exactly "
+                               'what eForm 16 will declare. Payslips and ITRs must tell the '
+                               'same story; inconsistency here is a classic refusal trigger.',
+                       'required': False},
+                      {'key': 'medical_exam_planning',
+                       'label': 'ICA Medical (HIV + Chest X-Ray) Plan',
+                       'type': 'select',
+                       'hint': "ICA's Medical Examination Report needs HIV and chest X-ray "
+                               'lab reports under 3 months old at hand-in — doable at home or '
+                               'in Singapore; the IPA letter states whether it applies at all.',
+                       'required': False,
+                       'options': ['Not yet planned',
+                                   'Home-country exam booked — ICA form with the clinic',
+                                   'Will complete in Singapore before formalities',
+                                   'Done — lab reports under 3 months old',
+                                   'Exempt per the IPA letter']},
+                      {'key': 'study_gap_account_status',
+                       'label': 'Study / Career Gap Account',
+                       'type': 'select',
+                       'hint': 'The top refusal trigger on South-Asian files — every month of '
+                               'any gap over 6 months accounted for in writing before eForm '
+                               '16 is filed, never left for ICA to discover.',
+                       'required': False,
+                       'options': ['No gap over 6 months',
+                                   'Gap letter drafted — every month accounted for',
+                                   'Gap letter with the client for corrections',
+                                   'Gap not yet explained']},
+                      {'key': 'insurance_route',
+                       'label': 'Medical Insurance Route',
+                       'type': 'select',
+                       'hint': 'IHLs auto-enrol students in the university group scheme '
+                               'inside the fees; EduTrust obliges PEIs to cover S$20,000 a '
+                               'year minimum, B2 ward, 24-hour including school activities.',
+                       'required': False,
+                       'options': ['IHL — auto-enrolled in the university scheme',
+                                   'EduTrust PEI — compliant policy confirmed',
+                                   'Policy not yet confirmed']},
+                      {'key': 'translation_status',
+                       'label': 'Translation Status (approved source)',
+                       'type': 'select',
+                       'hint': 'No apostille is demanded anywhere on an STP file — '
+                               'non-English documents just need translations from an approved '
+                               'source: embassy, notary public or recognised translator.',
+                       'required': False,
+                       'options': ['All documents in English',
+                                   'Translations commissioned — approved source',
+                                   'Translations complete',
+                                   'Not yet checked']}],
+        'submitted': [{'key': 'application_submitted_date',
+                       'label': 'eForm 16 Submitted On',
+                       'type': 'date',
+                       'hint': 'Filed by the student inside SOLAR/SOLAR+ once the school has '
+                               'registered them — inside the ≥2/≤3-month window before course '
+                               'start. The S$45 payment clock starts now.',
+                       'required': True},
+                      {'key': 'solar_application_reference',
+                       'label': 'SOLAR / SOLAR+ Application Reference',
+                       'type': 'text',
+                       'hint': 'The eForm 16 application number — quote it in every ICA '
+                               'enquiry, on the medical form and on any appeal after a '
+                               'rejection.',
+                       'required': True},
+                      {'key': 'filing_track',
+                       'label': 'Filing Track',
+                       'type': 'select',
+                       'hint': 'Sets the advertised clock: about a week for IHLs (two if a '
+                               'visa is required), within two weeks for EduTrust-accredited '
+                               'PEIs, up to a month for the rest. Not a statutory limit.',
+                       'required': True,
+                       'options': ['SOLAR — IHL / government school',
+                                   'SOLAR+ — EduTrust PEI',
+                                   'Not yet filed']},
+                      {'key': 'visa_fee_receipt_number',
+                       'label': 'S$45 Processing Fee Receipt Number',
+                       'type': 'text',
+                       'hint': 'Non-refundable, payable at submission — SOLAR gives at most 7 '
+                               'days before the application lapses. Card or internet banking; '
+                               'SOLAR+ also takes PayNow.',
+                       'required': True},
+                      {'key': 'visa_fee_amount_paid',
+                       'label': 'Processing Fee Paid (SGD)',
+                       'type': 'number',
+                       'hint': 'S$45 in 2026 on every track — university PDFs still quoting '
+                               'S$30 are stale; trust the live ICA pages, not cached school '
+                               'guides.',
+                       'required': False},
+                      {'key': 'eform16_consistency_check',
+                       'label': 'eForm 16 Consistency Check',
+                       'type': 'select',
+                       'hint': 'Incomplete or inconsistent eForm 16 data is a named refusal '
+                               'ground and ICA never states reasons — check programme name, '
+                               'dates and sponsor data against the file before filing.',
+                       'required': False,
+                       'options': ['Not yet checked',
+                                   'Checked — matches the offer and sponsor evidence exactly',
+                                   'Mismatch found — correction filed in SOLAR']},
+                      {'key': 'processing_target_date',
+                       'label': 'Expected Decision By',
+                       'type': 'date',
+                       'hint': 'Diary the advertised time from submission — IHL one week (two '
+                               'with visa), EduTrust PEI two weeks, other PEIs a month — and '
+                               'add slack in the Jul–Aug peak.',
+                       'required': False}],
+        'appointment': [{'key': 'arrival_date_in_singapore',
+                         'label': 'Arrival Date in Singapore',
+                         'type': 'date',
+                         'hint': 'Entry on the IPA (with its embedded single-journey visa for '
+                                 'visa nationals); the checkpoint grants a Short-Term Visit '
+                                 'Pass that covers the wait — the stay runs on the STVP.',
+                         'required': True},
+                        {'key': 'appointment_datetime',
+                         'label': 'Formalities e-Appointment Date & Time',
+                         'type': 'text',
+                         'hint': 'Booked on the ICA e-appointment service only after the IPA '
+                                 "and arrival, e.g. '2026-08-14 09:30' — slots run days to "
+                                 'two weeks in the August peak.',
+                         'required': True},
+                        {'key': 'appointment_location',
+                         'label': 'Formalities Venue',
+                         'type': 'select',
+                         'hint': 'ICA Services Centre, 2 Crawford Street, Level 3 — strictly '
+                                 "by appointment — or the school's Offsite Enrolment window "
+                                 'on campus, expanded each August intake.',
+                         'required': True,
+                         'options': ['ICA Services Centre — 2 Crawford Street, Level 3',
+                                     'Campus Offsite Enrolment (OSE)',
+                                     'Not yet booked']},
+                        {'key': 'appointment_reference',
+                         'label': 'e-Appointment Booking Reference',
+                         'type': 'text',
+                         'hint': 'From the MyICA e-appointment confirmation — quote it to '
+                                 'reschedule, and carry it to Crawford Street with the '
+                                 'passport and the Terms & Conditions form.',
+                         'required': False},
+                        {'key': 'biometrics_status',
+                         'label': 'Formalities & Biometrics Status',
+                         'type': 'select',
+                         'hint': 'Biometrics are enrolled HERE, after the decision and after '
+                                 'arrival — no pre-decision biometric or consular step exists '
+                                 'anywhere on a Singapore file.',
+                         'required': True,
+                         'options': ['Not due — IPA or arrival pending',
+                                     'e-Appointment booked',
+                                     'Attended — biometrics enrolled, medical handed in',
+                                     'Terms & Conditions signed, fees paid',
+                                     'Rescheduled',
+                                     'No-show — rebooking']},
+                        {'key': 'biometrics_completed_date',
+                         'label': 'Biometrics Enrolled On',
+                         'type': 'date',
+                         'hint': 'Enrolment date at formalities — the digital pass follows '
+                                 'about 3 working days later via FileSG.',
+                         'required': False},
+                        {'key': 'medical_report_handed_in',
+                         'label': 'Medical Report Hand-In Status',
+                         'type': 'select',
+                         'hint': "ICA's Medical Examination Report with HIV and chest X-ray "
+                                 'lab reports under 3 months old is surrendered at '
+                                 'formalities — not uploaded, not posted.',
+                         'required': False,
+                         'options': ['Pending — exam not yet done',
+                                     'Report ready — done in the home country',
+                                     'Report ready — done in Singapore',
+                                     'Handed in at formalities',
+                                     'Not applicable per the IPA letter']},
+                        {'key': 'issuance_fee_payment',
+                         'label': 'Issuance Fee Payment (S$60 + S$30 MJV)',
+                         'type': 'select',
+                         'hint': 'S$60 issuance for every pass; the S$30 Multiple Journey '
+                                 'Visa on top for visa-required nationals — paid at '
+                                 'formalities, card or internet banking.',
+                         'required': False,
+                         'options': ['Not yet due',
+                                     'S$60 paid — visa-exempt national',
+                                     'S$90 paid — issuance plus Multiple Journey Visa',
+                                     'Payment issue — resolving with ICA']}],
+        'decision': [{'key': 'case_status',
+                      'label': 'SOLAR Application Status',
+                      'type': 'select',
+                      'hint': 'The outcome lands in SOLAR/SOLAR+ and by email — there is no '
+                              'other tracker. ICA occasionally emails for extra documents; '
+                              'being called in is exceptional.',
+                      'required': True,
+                      'options': ['Submitted — under ICA processing',
+                                  'Additional documents requested by email',
+                                  'In-Principle Approval issued',
+                                  'Rejected',
+                                  'No status change']},
+                     {'key': 'status_last_checked',
+                      'label': 'SOLAR Last Checked On',
+                      'type': 'date',
+                      'hint': 'IHL files clear in about a week — poll SOLAR daily past day 5; '
+                              'give PEI files a fortnight before chasing through the school.',
+                      'required': True},
+                     {'key': 'ipa_received_date',
+                      'label': 'IPA Letter Received On',
+                      'type': 'date',
+                      'hint': 'The In-Principle Approval is the decision AND the travel '
+                              'document — for visa-required nationals the single-journey visa '
+                              'is embedded in it; no separate visa ever issues.',
+                      'required': False},
+                     {'key': 'ipa_validity_expiry',
+                      'label': 'IPA Valid Until (entry deadline)',
+                      'type': 'date',
+                      'hint': 'Commonly aligned to the course start — the student must enter '
+                              'Singapore inside it, and the embedded visa dies with it. Hard '
+                              'diary date.',
+                      'required': False},
+                     {'key': 'info_request_received_date',
+                      'label': 'ICA Document Request Received',
+                      'type': 'date',
+                      'hint': "ICA's follow-up queries come by email against the SOLAR "
+                              'reference — usually sponsor income or study-gap questions; '
+                              'answer through the e-service, fast.',
+                      'required': False},
+                     {'key': 'info_request_due_date',
+                      'label': 'Document Request Response Due',
+                      'type': 'date',
+                      'hint': 'Deadline ICA set in the email — miss it and the file is '
+                              'decided as it stands. Hard diary date.',
+                      'required': False},
+                     {'key': 'passport_return_tracking',
+                      'label': '',
+                      'type': 'text',
+                      'hint': 'The passport never leaves the student on a Singapore file — '
+                              'the whole application is online and the IPA arrives as a PDF.',
+                      'required': False,
+                      'applicable': False}],
+        'approved': [{'key': 'visa_decision_date',
+                      'label': 'Digital Pass Issue Date',
+                      'type': 'date',
+                      'hint': "The digital Student's Pass issues about 3 working days after "
+                              'formalities — via FileSG, then visible in the Singpass app.',
+                      'required': True},
+                     {'key': 'visa_document_number',
+                      'label': 'FIN (Foreign Identification Number)',
+                      'type': 'text',
+                      'hint': "The student's identity number in Singapore — banking, SIM and "
+                              'address reporting all run on it; printed on the digital pass '
+                              'PDF.',
+                      'required': True},
+                     {'key': 'visa_valid_from',
+                      'label': 'Pass Valid From',
+                      'type': 'date',
+                      'hint': 'Start date on the digital pass — normally the formalities '
+                              'date, when the interim visit pass gives way to the STP.',
+                      'required': True},
+                     {'key': 'visa_valid_to',
+                      'label': "Student's Pass Valid Until",
+                      'type': 'date',
+                      'hint': 'Keep the passport valid at least as long as the pass — and '
+                              'diary the renewal in SOLAR about a month out; renewals run in '
+                              'about a week.',
+                      'required': True},
+                     {'key': 'filesg_retrieval_status',
+                      'label': 'FileSG / Singpass Retrieval',
+                      'type': 'select',
+                      'hint': 'Counsel the client that no card ever arrives — delivery is '
+                              'the FileSG download plus the Singpass app, roughly 3 working '
+                              'days after enrolment.',
+                      'required': False,
+                      'options': ['Not yet issued',
+                                  'FileSG email received — not yet downloaded',
+                                  'Pass PDF downloaded — FIN and validity verified',
+                                  'Visible in the Singpass app',
+                                  'Not retrievable — chasing ICA']},
+                     {'key': 'address_reporting_status',
+                      'label': 'Address Reporting (14-day rule)',
+                      'type': 'select',
+                      'hint': 'Any change of residential address must reach ICA within 14 '
+                              'days for the life of the pass — set the expectation before '
+                              'the client moves hostels.',
+                      'required': False,
+                      'options': ['Address registered at formalities — current',
+                                  'Moved — change reported within 14 days',
+                                  'Moved — not yet reported, clock running']},
+                     {'key': 'mom_work_eligibility',
+                      'label': 'Work-Pass-Exempt Eligibility',
+                      'type': 'select',
+                      'hint': "16 h/week in term and full-time in vacations only for MOM's "
+                              'approved lists — a few non-mainstream institutions (INSEAD, '
+                              'ESSEC, LASALLE) are on them, mainstream commercial PEIs are '
+                              'not. Check per institution.',
+                      'required': False,
+                      'options': ['On the MOM term-time list — 16 h/week',
+                                  'Vacation list only — vacations full-time',
+                                  'Not on the MOM lists — no work rights',
+                                  'Not checked against the live MOM list']},
+                     {'key': 'tuition_grant_bond_status',
+                      'label': 'MOE Tuition Grant / Bond Status',
+                      'type': 'select',
+                      'hint': 'The grant cuts public-uni tuition sharply against a 3-year '
+                              'bond with a Singapore-registered employer after graduation — '
+                              'flag it in every post-study conversation.',
+                      'required': False,
+                      'options': ['No Tuition Grant taken',
+                                  'Grant signed — 3-year bond active',
+                                  'Deciding — bond implications counselled']},
+                     {'key': 'passport_received_date',
+                      'label': '',
+                      'type': 'text',
+                      'hint': 'Never surrendered — the IPA is a PDF, the pass is digital and '
+                              'nothing is ever stuck into the passport.',
+                      'required': False,
+                      'applicable': False}],
+        'rejected': [{'key': 'refusal_date',
+                      'label': 'Rejection Shown in SOLAR On',
+                      'type': 'date',
+                      'hint': 'The outcome is a bare refusal in SOLAR or by letter — no '
+                              'reasons are ever stated, and no statutory appeal clock exists; '
+                              'move on evidence, not deadlines.',
+                      'required': True},
+                     {'key': 'refusal_ground',
+                      'label': 'Most Likely Refusal Ground',
+                      'type': 'select',
+                      'hint': 'ICA states nothing — reconstruct the probable ground with the '
+                              "school's liaison from the file's weak points before deciding "
+                              'the fix.',
+                      'required': True,
+                      'options': ['Study gap unexplained / age-course mismatch',
+                                  'Course suspected as a work backdoor (usually PEI files)',
+                                  'Weak academic progression',
+                                  'eForm 16 incomplete or inconsistent',
+                                  'Sponsor finances not credible',
+                                  'Prior overstay / adverse Singapore immigration history',
+                                  'Institution not EduTrust-certified',
+                                  'No reason inferable — bare refusal']},
+                     {'key': 'refusal_notes',
+                      'label': 'Debrief & Reconstruction Notes',
+                      'type': 'textarea',
+                      'hint': 'No counter, no reasons letter — record what SOLAR showed, '
+                              'what the school said, the weak points found on review and the '
+                              'fix agreed with the client.',
+                      'required': True},
+                     {'key': 'appeal_deadline',
+                      'label': 'Appeal Target Filing Date',
+                      'type': 'date',
+                      'hint': 'No statutory deadline exists — set your own and file within '
+                              'days; an appeal is only worth filing with genuinely new '
+                              'evidence.',
+                      'required': False},
+                     {'key': 'appeal_status',
+                      'label': 'Appeal Status (via school + SOLAR)',
+                      'type': 'select',
+                      'hint': 'Inform the school first, then appeal via the ICA enquiry form '
+                              'or SOLAR quoting the application reference, new evidence '
+                              'attached — outcome in about 4 weeks, on the merits.',
+                      'required': True,
+                      'options': ['Not appealing — refiling next intake instead',
+                                  'New evidence being assembled with the school',
+                                  'Appeal filed — ICA enquiry form / SOLAR',
+                                  'Appeal successful — IPA issued',
+                                  'Appeal rejected',
+                                  'Case closed']},
+                     {'key': 'next_step',
+                      'label': 'Agreed Next Step',
+                      'type': 'select',
+                      'hint': 'Reapplication is open any time on a fresh S$45 — the usual '
+                              'play is the next intake with the weakness fixed rather than '
+                              'an argument with ICA.',
+                      'required': True,
+                      'options': ['Reapply next intake — weakness fixed (fresh S$45)',
+                                  'Appeal with new evidence via the school',
+                                  'Switch institution — EduTrust PEI or IHL',
+                                  'Switch destination country',
+                                  'Not reapplying / case closed',
+                                  'Undecided']},
+                     {'key': 'reapply_target_date',
+                      'label': 'Target Reapplication Date',
+                      'type': 'date',
+                      'hint': 'Work back from the ≥2/≤3-month filing window against the next '
+                              'August (UG) or January (PG) start — miss it and the intake is '
+                              'gone.',
+                      'required': False}],
+        'on_hold': [{'key': 'hold_reason',
+                     'label': 'Reason for Hold',
+                     'type': 'select',
+                     'hint': 'Singapore files stall on the school-side SOLAR registration or '
+                             'the ≥2/≤3-month filing window far more often than on ICA — '
+                             'name which.',
+                     'required': True,
+                     'options': ['Awaiting Letter of Offer / acceptance',
+                                 'School has not yet registered the student in SOLAR / SOLAR+',
+                                 'Too early — outside the 3-month filing window',
+                                 'Awaiting medical exam or lab reports',
+                                 'Sponsor income evidence not ready',
+                                 'EduTrust status in doubt — institution re-verified',
+                                 'Client deferred to the next intake',
+                                 'Consultancy fees pending',
+                                 'Client unresponsive',
+                                 'Other']}]},
+ 'IT': {'new_lead': [{'key': 'study_route',
+                      'label': 'Italian Study Route',
+                      'type': 'select',
+                      'hint': 'Degree files carry Universitaly pre-enrolment and the 30 Nov '
+                              '2026 visa deadline; ITS Academy applicants skip both and apply '
+                              'to the academy direct.',
+                      'required': True,
+                      'options': ['Degree — Laurea / Laurea Magistrale / single-cycle '
+                                  '(Immatricolazione Università)',
+                                  'PhD (dottorato) / specialisation / university master '
+                                  '(1st-2nd level)',
+                                  'AFAM — art, music and dance institution',
+                                  'ITS Academy — no Universitaly pre-enrolment or quota',
+                                  'Foundation course / Italian language course',
+                                  'Short course 90 days or fewer — Schengen C route',
+                                  'To be confirmed']},
+                     {'key': 'twelve_year_schooling_check',
+                      'label': 'Minimum Schooling (12 Years) Check',
+                      'type': 'select',
+                      'hint': 'Bachelor access needs at least 12 years of schooling — where '
+                              'the home system awards fewer, a foundation year bridges; '
+                              'screen this before any shortlist.',
+                      'required': True,
+                      'options': ['Confirmed — 12+ years of schooling',
+                                  'Short — fewer than 12 years, foundation year needed',
+                                  "Master's file — bachelor degree held",
+                                  'Not yet verified']},
+                     {'key': 'teaching_language_level',
+                      'label': 'Teaching-Language Level (B2 Floor)',
+                      'type': 'select',
+                      'hint': 'The MUR circular sets a B2 CEFR floor in the teaching language '
+                              'unless the university attests its own assessment — an '
+                              'English-taught file still gets probed in English.',
+                      'required': True,
+                      'options': ['B2+ certified — English-taught programme',
+                                  'B2+ certified — Italian-taught (CILS / CELI)',
+                                  'University will attest its own assessment',
+                                  'Below B2 — test being planned',
+                                  'Not yet confirmed']},
+                     {'key': 'funds_baseline_check',
+                      'label': 'Funds Reality Check (EUR 10,179.85/yr)',
+                      'type': 'select',
+                      'hint': 'The 2026-28 circular demands €10,179.85 a year — up 46.5% on '
+                              "2025-26's €6,947.33 — from lawful, traceable, preferably "
+                              'personal or ≤4th-degree-kin sources.',
+                      'required': True,
+                      'options': ['Household funds clearly above the bar',
+                                  'Borderline — provenance work needed',
+                                  'Education loan planned',
+                                  'Scholarship expected — award certificate needed',
+                                  'Below the bar — counselling on options',
+                                  'Not yet discussed']}],
+        'shortlisting': [{'key': 'entrance_test_route',
+                          'label': 'Entrance Test / Ranking Route',
+                          'type': 'select',
+                          'hint': 'English-taught Medicine/Dentistry/Veterinary keep the IMAT '
+                                  '(2026 sitting 29 September — moved twice already, reconfirm '
+                                  'on Universitaly); Italian-taught medicine now '
+                                  'runs the open semestre filtro — the route sets the whole '
+                                  'calendar.',
+                          'required': False,
+                          'options': ['No entrance test — direct evaluation',
+                                      'IMAT — English-taught medicine',
+                                      'Semestre filtro — Italian-taught medicine',
+                                      'Architecture / other Universitaly-managed test',
+                                      "University's own test or interview",
+                                      'To be confirmed']},
+                         {'key': 'non_eu_quota_check',
+                          'label': 'Non-EU Seat Quota Check',
+                          'type': 'select',
+                          'hint': 'Each university fixes its non-EU contingent by 31 December '
+                                  '(Art. 46 DPR 394/1999) and Universitaly validations cap at '
+                                  'quota +20% — a late file can find the door shut.',
+                          'required': False,
+                          'options': ['Quota open at every shortlisted university',
+                                      'Some shortlisted programmes near their quota',
+                                      'Quota exhausted — programme swapped',
+                                      'Not yet checked']}],
+        'offer_accepted': [{'key': 'admission_condition_status',
+                            'label': 'Admission Type on Universitaly',
+                            'type': 'select',
+                            'hint': "Final-year students show as 'accepted with reservations' "
+                                    'on Universitaly until the diploma lands; many '
+                                    'universities also want the first tuition instalment to '
+                                    'lock the seat.',
+                            'required': False,
+                            'options': ['Unconditional — lettera di ammissione issued',
+                                        "Conditional — 'accepted with reservations'",
+                                        'Admission deposit / first instalment demanded',
+                                        'Not yet visible on Universitaly']}],
+        'documents': [{'key': 'course_start_date',
+                       'label': 'Course Start Date (per Lettera di Ammissione)',
+                       'type': 'date',
+                       'hint': 'Start date on the admission letter — degree-file visas must '
+                               'be lodged by 30 November 2026 for a.y. 2026-27 (31 October '
+                               '2027 for 2027-28), and universities may publish earlier '
+                               'dates.',
+                       'required': True},
+                      {'key': 'universitaly_validation_status',
+                       'label': 'Universitaly Preiscrizione Status',
+                       'type': 'select',
+                       'hint': 'The domanda di preiscrizione on universitaly.it, digitally '
+                               'validated by the university, is a hard visa prerequisite — '
+                               'validations cap at quota +20% under CINECA monitoring.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Domanda di preiscrizione filed — one programme chosen',
+                                   'With the university for digital validation',
+                                   'Validated — visa filing unlocked',
+                                   'Returned for correction',
+                                   'Blocked — university at its quota +20% cap']},
+                      {'key': 'universitaly_preenrolment_id',
+                       'label': 'Universitaly Pre-enrolment Reference',
+                       'type': 'text',
+                       'hint': 'Reference on the validated preiscrizione PDF — the consulate '
+                               'matches the visa file against it and logs the outcome back '
+                               'onto the portal.',
+                       'required': False},
+                      {'key': 'qualification_recognition_route',
+                       'label': 'CIMEA / DoV Recognition Route',
+                       'type': 'select',
+                       'hint': 'CIMEA statements via the DiploMe wallet are the practical '
+                               'default; the DoV survives as a free fallback — and the '
+                               'Questura may not demand one (Council of State 4613/2007).',
+                       'required': True,
+                       'options': ['Not started',
+                                   'CIMEA comparability ordered — €150, ~30 working days',
+                                   'CIMEA expedited — €250 total, ~15 working days',
+                                   'CIMEA comparability + verification in hand',
+                                   'Declaration of Value at the consulate — free but slow',
+                                   'ARDI download — Lisbon Convention country',
+                                   'University has not said which it wants']},
+                      {'key': 'apostille_translation_status',
+                       'label': 'Apostille & Sworn Translation Status',
+                       'type': 'select',
+                       'hint': 'Apostille BEFORE translation — India: MEA; a traduzione '
+                               'giurata only where the consulate or university requires it. '
+                               'This lead time slips more Italian files than anything else.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Sent for apostille (India: MEA)',
+                                   'Apostilled — traduzione giurata pending',
+                                   'Sworn translations in progress',
+                                   'Complete — originals plus copies ready']},
+                      {'key': 'funds_evidenced_amount',
+                       'label': 'Living Funds Evidenced (EUR)',
+                       'type': 'number',
+                       'hint': 'The 2026-28 bar is €10,179.85 per year — quoted annually, no '
+                               'monthly split — up 46.5% on 2025-26; re-baseline any funding '
+                               'plan drafted before May 2026.',
+                       'required': True},
+                      {'key': 'funds_evidence_status',
+                       'label': '',
+                       'type': 'select',
+                       'hint': 'Consulates check account movement against family income — '
+                               'sudden unexplained deposits are the classic kill, and DSU '
+                               'eligibility counts for nothing without the award '
+                               'certificate.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Bank movements being assembled (3-6 months norm)',
+                                   'Lump-sum deposits need provenance letters',
+                                   'Sponsor ITRs / kinship proof pending',
+                                   'Education-loan sanction letter awaited',
+                                   'Scholarship award certificate awaited',
+                                   'Complete — traceable and consistent with income']},
+                      {'key': 'accommodation_proof_status',
+                       'label': 'Accommodation Proof Status',
+                       'type': 'select',
+                       'hint': 'A mere university-housing application or eligibility letter '
+                               'is NOT valid proof — the circular demands accommodation '
+                               'actually secured for the stay.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Rental contract / residence booking obtained',
+                                   'Host declaration (dichiarazione di ospitalità) held',
+                                   'University housing awarded in writing',
+                                   'Only a housing application — not valid',
+                                   'Not yet arranged']},
+                      {'key': 'health_insurance_status',
+                       'label': 'Health Insurance for the Visa',
+                       'type': 'select',
+                       'hint': 'Cover must run the whole first period with no limits or '
+                               'exceptions on urgent hospitalisation; most students switch '
+                               'to voluntary SSN enrolment at €700 a calendar year once in '
+                               'Italy.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Foreign policy — no limits on urgent hospitalisation',
+                                   "Italian policy + insurer's declaration",
+                                   'Bilateral-agreement entitlement declared',
+                                   'Policy bought — duration falls short',
+                                   'SSN after arrival planned — bridge cover needed']},
+                      {'key': 'tuition_deposit_paid',
+                       'label': 'First Tuition Instalment Paid (EUR)',
+                       'type': 'number',
+                       'hint': 'Not a legal visa requirement, but several universities demand '
+                               'the first instalment pre-visa as commitment — public fees '
+                               'run €156-4,000 a year, ISEE-banded.',
+                       'required': False}],
+        'submitted': [{'key': 'application_submitted_date',
+                       'label': 'Lodgement Date (at the appointment)',
+                       'type': 'date',
+                       'hint': 'The file is lodged the day the VAC or consular appointment '
+                               'ends — on or before 30 November 2026 for an a.y. 2026-27 '
+                               'degree file; the 90-day term runs from here.',
+                       'required': True},
+                      {'key': 'consular_post',
+                       'label': 'Italian Mission / VAC of Lodgement',
+                       'type': 'select',
+                       'hint': 'Territorial competence is strict — the MAECI mission covering '
+                               "the applicant's residence decides; VFS and BLS are lodgement "
+                               'counters only.',
+                       'required': True,
+                       'options': ['VFS Global centre — India (11 cities)',
+                                   'BLS-Intiana centre — Pakistan',
+                                   'Italian Embassy / Consulate direct',
+                                   'Uni-Italia-assisted consular filing',
+                                   'Other Italian mission',
+                                   'Not yet lodged']},
+                      {'key': 'lodged_by',
+                       'label': 'Lodged By',
+                       'type': 'select',
+                       'hint': 'Since 11 January 2025 (D.L. 145/2024, conv. L. 187/2024) '
+                               'every national-visa applicant appears in person for '
+                               'fingerprints — agent-only lodgements are dead.',
+                       'required': True,
+                       'options': ['Applicant in person — fingerprints given',
+                                   'Minor — accompanied by parent / guardian',
+                                   'Not yet lodged']},
+                      {'key': 'visa_fee_receipt_number',
+                       'label': '',
+                       'type': 'text',
+                       'hint': 'Receipt for the €50 national D study fee paid at the counter '
+                               '— €50 is the study rate; never budget the €116 charged for '
+                               'other national D visas.',
+                       'required': True},
+                      {'key': 'visa_fee_amount_paid',
+                       'label': 'Visa Fee & VAC Charge Paid (EUR)',
+                       'type': 'number',
+                       'hint': '€50 consular fee plus the VAC service charge — ₹631 including '
+                               'taxes at VFS India (fees effective 1 Apr 2026); optional '
+                               'courier or SMS cost extra.',
+                       'required': False},
+                      {'key': 'form_d_status',
+                       'label': 'National Visa Form (Form D)',
+                       'type': 'select',
+                       'hint': 'No form number — the modulo di domanda per visto nazionale '
+                               'downloads from vistoperitalia.esteri.it or the consulate '
+                               'site, and goes in signed at the appointment.',
+                       'required': False,
+                       'options': ['Not started',
+                                   'Downloaded from vistoperitalia.esteri.it',
+                                   'Completed and signed',
+                                   'Handed over at lodgement']},
+                      {'key': 'passport_retained_at_lodgement',
+                       'label': 'Passport Retained at Lodgement?',
+                       'type': 'select',
+                       'hint': 'Most posts keep the passport for the sticker — warn the '
+                               'client off travel bookings and parallel visa plans while it '
+                               'sits with the consulate.',
+                       'required': True,
+                       'options': ['Yes — retained until the decision',
+                                   'No — returned the same day',
+                                   'Submitted later on request',
+                                   'Not yet lodged']},
+                      {'key': 'vac_tracking_reference',
+                       'label': 'VAC Acknowledgement / Tracking Reference',
+                       'type': 'text',
+                       'hint': 'VFS or BLS tracking number from the lodgement receipt — the '
+                               'only status signal until the passport is called back.',
+                       'required': False}],
+        'appointment': [{'key': 'appointment_datetime',
+                         'label': 'VAC Appointment — Date & Time (lodgement)',
+                         'type': 'text',
+                         'hint': 'Italy lodges AT this slot — documents, €50 fee and '
+                                 'fingerprints in one visit — so it sits before the '
+                                 "Submitted stage; e.g. '2026-09-14 09:30'.",
+                         'required': True},
+                        {'key': 'appointment_location',
+                         'label': 'VAC Centre / Consulate',
+                         'type': 'text',
+                         'hint': 'VFS Global runs 11 Indian cities (Delhi, Mumbai, Chennai, '
+                                 'Bengaluru…); BLS-Intiana covers Pakistan, where slots are '
+                                 'auto-assigned in order of Universitaly validation date.',
+                         'required': True},
+                        {'key': 'appointment_booked_on',
+                         'label': 'Slot Booked On',
+                         'type': 'date',
+                         'hint': 'The queue, not the decision, is the Italian bottleneck — '
+                                 'book 2-3 months ahead and well clear of the 30 November '
+                                 'degree deadline.',
+                         'required': False},
+                        {'key': 'appointment_reference',
+                         'label': '',
+                         'type': 'text',
+                         'hint': 'Booking confirmation reference — official channels only; '
+                                 'the Islamabad embassy warns explicitly against WhatsApp '
+                                 'appointment-selling fraud.',
+                         'required': False},
+                        {'key': 'biometrics_status',
+                         'label': 'Fingerprints at Lodgement',
+                         'type': 'select',
+                         'hint': 'Fingerprints are mandatory for national D visas since 11 '
+                                 'January 2025 — every applicant attends in person, no '
+                                 'agent-only lodgements.',
+                         'required': True,
+                         'options': ['Not yet booked',
+                                     'Booked — awaiting the appointment',
+                                     'Attended — fingerprints and file lodged together',
+                                     'Rescheduled',
+                                     'No-show — slot forfeited']},
+                        {'key': 'biometrics_completed_date',
+                         'label': '',
+                         'type': 'date',
+                         'hint': 'Same day as lodgement — the 90-day decision clock '
+                                 'effectively starts here.',
+                         'required': False},
+                        {'key': 'file_check_status',
+                         'label': 'File Check Against the Consulate Checklist',
+                         'type': 'select',
+                         'hint': 'One visit is all you get — a gap at the counter forfeits '
+                                 'the slot and re-queues the file weeks behind the deadline.',
+                         'required': False,
+                         'options': ['Not started',
+                                     'Checked against the consulate / VFS checklist',
+                                     'Gaps found — chasing documents',
+                                     'Complete — file sealed for the appointment']}],
+        'decision': [{'key': 'case_status',
+                      'label': 'Case Status at the Consulate',
+                      'type': 'select',
+                      'hint': 'No public tracker — status comes from the VAC reference or '
+                              'the consulate; every file runs the Art. 4(2) DM 850/2011 '
+                              'migration-risk assessment.',
+                      'required': True,
+                      'options': ['Lodged — with the consulate',
+                                  'Under migration-risk assessment (DM 850/2011)',
+                                  'Credibility interview summons issued',
+                                  'Further documents requested',
+                                  'Suspended — foreign-authority checks',
+                                  'Decision made — awaiting passport return',
+                                  'No status available']},
+                     {'key': 'decision_term_expiry',
+                      'label': '90-Day Term Expires On',
+                      'type': 'date',
+                      'hint': 'National visas carry a 90-day standard term from lodgement — '
+                              'suspendable for security or foreign-authority checks, so a '
+                              'planning date, not a guarantee.',
+                      'required': True},
+                     {'key': 'interview_summons_status',
+                      'label': 'Credibility Interview (Colloquio)',
+                      'type': 'select',
+                      'hint': 'DM 850/2011 Art. 4(2) builds a colloquio into the risk '
+                              'assessment — discretionary, commonest at South-Asian posts in '
+                              'peak season; prep funding provenance and progression logic.',
+                      'required': False,
+                      'options': ['Not summoned',
+                                  'Summoned — in-person interview scheduled',
+                                  'Summoned — video interview scheduled',
+                                  'Interview attended — awaiting outcome',
+                                  'Not applicable']},
+                     {'key': 'status_last_checked',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Date of the last VFS/BLS tracker check or consulate email — '
+                              'with no official tracker, this is the only status signal the '
+                              'file has.',
+                      'required': True},
+                     {'key': 'info_request_due_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': "Deadline on the consulate's request — miss it and the file is "
+                              'decided as it stands, with the 90-day term already '
+                              'suspended.',
+                      'required': False},
+                     {'key': 'universitaly_outcome_logged',
+                      'label': 'Outcome Logged on Universitaly',
+                      'type': 'select',
+                      'hint': 'Consulates must record every outcome on Universitaly — a '
+                              "refusal immediately frees the university's validation slot "
+                              'for a replacement candidate.',
+                      'required': False,
+                      'options': ['Not yet — decision pending',
+                                  'Approved — logged by the consulate',
+                                  'Refused — logged, validation slot freed',
+                                  'Withdrawn — logged']},
+                     {'key': 'passport_return_tracking',
+                      'label': '',
+                      'type': 'text',
+                      'hint': 'VAC courier reference for the passport run — at VFS India the '
+                              'optional courier VAS is billed separately from the ₹631 '
+                              'service charge.',
+                      'required': False}],
+        'approved': [{'key': 'visa_decision_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Date the consulate resolved the file — also the date it logs '
+                              'the approval on Universitaly.',
+                      'required': True},
+                     {'key': 'visa_document_number',
+                      'label': 'Visa Sticker Number (National D — Studio)',
+                      'type': 'text',
+                      'hint': "Serial on the D vignette — the subtype reads 'Studio – "
+                              "Immatricolazione Università'; check names and dates against "
+                              'the passport at collection.',
+                      'required': True},
+                     {'key': 'visa_valid_to',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'An entry document, not the stay — the permesso di soggiorno '
+                              'carries the real stay once issued in Italy.',
+                      'required': True},
+                     {'key': 'passport_received_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Date the passport with the D sticker came back from the VAC — '
+                              'check the sticker subtype and dates before the client flies.',
+                      'required': False},
+                     {'key': 'arrival_date_italy',
+                      'label': 'Arrival Date in Italy',
+                      'type': 'date',
+                      'hint': 'Starts the 8-working-day clock for the permesso application — '
+                              'set the kit-giallo diary date the day the flight is booked.',
+                      'required': False},
+                     {'key': 'permesso_kit_status',
+                      'label': 'Permesso Kit (Kit Giallo) at Poste',
+                      'type': 'select',
+                      'hint': 'Within 8 working days of arrival: lodge the kit at a Poste '
+                              'Sportello Amico, ≈€116.46 all-in (€70.46 bollettino + €16 '
+                              'marca da bollo + €30 kit fee); the ricevuta proves legal '
+                              'stay.',
+                      'required': True,
+                      'options': ['Not due — not yet arrived',
+                                  'Kit assembled — Modulo 1 completed',
+                                  'Lodged at Poste — ricevuta held',
+                                  '8-working-day window missed — lodge immediately',
+                                  'Questura appointment letter received']},
+                     {'key': 'questura_appointment_date',
+                      'label': 'Questura Fingerprint Appointment',
+                      'type': 'date',
+                      'hint': 'Second biometric event — photos and fingerprints at the '
+                              'provincial Questura on the date in the Poste letter; card '
+                              'production varies widely by province and the ricevuta covers '
+                              'the wait.',
+                      'required': False},
+                     {'key': 'permesso_card_status',
+                      'label': 'Permesso di Soggiorno Card Status',
+                      'type': 'select',
+                      'hint': 'Renewal (file ≥60 days before expiry) needs ≥1 exam passed in '
+                              'year 1, ≥2 later — credit equivalents count; withdrawal from '
+                              'studies auto-revokes the permit.',
+                      'required': False,
+                      'options': ['Not yet lodged',
+                                  'Ricevuta held — card in production',
+                                  'Questura fingerprints given',
+                                  'Card collected',
+                                  'Renewal due — file 60+ days before expiry']},
+                     {'key': 'codice_fiscale_status',
+                      'label': 'Codice Fiscale',
+                      'type': 'select',
+                      'hint': 'The Agenzia delle Entrate tax code unlocks contracts, SIM, '
+                              'banking and SSN enrolment — most universities facilitate it '
+                              'in week one.',
+                      'required': False,
+                      'options': ['Not yet requested',
+                                  'Requested via the university',
+                                  'Issued by Agenzia delle Entrate']},
+                     {'key': 'ssn_enrolment_status',
+                      'label': 'Health Cover After Arrival',
+                      'type': 'select',
+                      'hint': 'Voluntary SSN is a flat €700 a calendar year, indivisible and '
+                              'expiring 31 December regardless of payment date — pay in '
+                              'January, not November.',
+                      'required': False,
+                      'options': ['Visa policy still running',
+                                  'Voluntary SSN enrolment paid (€700/calendar year)',
+                                  'Bilateral-agreement entitlement',
+                                  'Gap in cover — fix now']}],
+        'rejected': [{'key': 'refusal_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Date the reasoned refusal was NOTIFIED via the VAC with the '
+                              'passport — the TAR and gerarchico clocks both run from '
+                              'notification.',
+                      'required': True},
+                     {'key': 'refusal_ground',
+                      'label': '',
+                      'type': 'select',
+                      'hint': 'Study-visa refusals must state reasons (Art. 4(2) TUI) — read '
+                              'the exact ground off the notice; the consulate also flags the '
+                              'refusal on Universitaly, freeing the seat.',
+                      'required': True,
+                      'options': ['Migration risk — intent or progression doubted (DM '
+                                  '850/2011)',
+                                  'Funds below €10,179.85/yr or not traceable',
+                                  'Sudden deposits without provenance',
+                                  'Qualification documents unverifiable or defective',
+                                  'Accommodation proof weak — housing application only',
+                                  'Universitaly validation missing or quota exhausted',
+                                  'Insurance non-compliant',
+                                  'Language level doubted',
+                                  'Schengen alert / security',
+                                  'Other / not stated']},
+                     {'key': 'refusal_notes',
+                      'label': '',
+                      'type': 'textarea',
+                      'hint': 'Verbatim grounds from the written notice plus what the VAC '
+                              'handed back — the rebuttal plan starts from the exact '
+                              'sentence the consulate wrote.',
+                      'required': True},
+                     {'key': 'appeal_deadline',
+                      'label': 'Ricorso al TAR Lazio Deadline',
+                      'type': 'date',
+                      'hint': '60 days from notification, plus 90 where the appellant '
+                              'resides outside Europe (Art. 41(5) c.p.a.) — 150 days for '
+                              'clients in India or Pakistan; an Italian-licensed lawyer must '
+                              'file.',
+                      'required': False},
+                     {'key': 'appeal_status',
+                      'label': '',
+                      'type': 'select',
+                      'hint': 'A corrected refile is almost always faster than the TAR — but '
+                              're-secure the Universitaly validation first if the cycle '
+                              'rolled over.',
+                      'required': False,
+                      'options': ['Not challenging — refiling instead',
+                                  'Ricorso gerarchico to MAECI in preparation (60 days)',
+                                  'Ricorso gerarchico filed',
+                                  'TAR Lazio ricorso filed via Italian counsel',
+                                  'TAR — suspension (sospensiva) granted',
+                                  'Appeal upheld — visa issued',
+                                  'Appeal dismissed',
+                                  'Silenzio-inadempimento action on an overdue decision']},
+                     {'key': 'next_step',
+                      'label': '',
+                      'type': 'select',
+                      'hint': 'For funds and provenance grounds a documented top-up and '
+                              'refile beats litigation; the freed validation slot may '
+                              'already be gone, so recheck quota before promising an '
+                              'intake.',
+                      'required': True},
+                     {'key': 'reapply_target_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Degree refiles must still land by 30 November 2026 for a.y. '
+                              '2026-27 — after that the target becomes the 2027-28 cycle '
+                              '(deadline 31 October 2027).',
+                      'required': False}],
+        'on_hold': [{'key': 'hold_reason',
+                     'label': 'Reason for Hold',
+                     'type': 'select',
+                     'hint': 'Italian files stall on two queues — the university validation '
+                             'on Universitaly and the VAC slot; both sit outside the '
+                             'consulate, so chase the owner, not the mission.',
+                     'required': True,
+                     'options': ['Awaiting lettera di ammissione',
+                                 'Universitaly validation pending with the university',
+                                 'University at its quota +20% validation cap',
+                                 'CIMEA statement in progress (~30 working days)',
+                                 'Apostille or traduzione giurata pending',
+                                 'Funds below €10,179.85/yr or provenance unexplained',
+                                 'No VAC appointment slots available',
+                                 'Client deferred intake',
+                                 'Consultancy fees pending',
+                                 'Client unresponsive',
+                                 'Other']},
+                    {'key': 'hold_notes',
+                     'label': '',
+                     'type': 'textarea',
+                     'hint': 'Name the queue and the date expected — CIMEA runs ~30 working '
+                             'days (15 expedited), and the 30 November degree deadline moves '
+                             'for nobody.',
+                     'required': False}]},
+ 'SE': {'new_lead': [{'key': 'permit_route',
+                      'label': 'Swedish Permit Route',
+                      'type': 'select',
+                      'hint': 'Over 3 months of study means the residence permit, filed online '
+                              'with Migrationsverket before travel; 90 days or fewer is a Schengen '
+                              'C via VFS — the only VFS touchpoint Sweden has.',
+                      'required': True,
+                      'options': ['Residence permit for studies at higher education — SEK 1,500',
+                                  'Residence permit for doctoral studies — up to 4 years at a time',
+                                  'Schengen C — course of 90 days or fewer (VFS, EUR 90)',
+                                  'Post-study job-seeking permit — filed from inside Sweden',
+                                  'To be confirmed']},
+                     {'key': 'target_intake_round',
+                      'label': 'Target Intake Round',
+                      'type': 'select',
+                      'hint': 'Autumn opens mid-October on Universityadmissions.se with documents '
+                              'and fee due 2 February; the spring 2027 round closes 17 August '
+                              '2026, documents and fee 1 September.',
+                      'required': True,
+                      'options': ['Autumn (late-August start) — the real intake, apply by 15 '
+                                  'January',
+                                  'Spring (mid-January start) — few English-taught programmes, '
+                                  'apply by 17 August',
+                                  'Summer / short course — Schengen C route',
+                                  'Not yet decided']},
+                     {'key': 'passport_expiry_date',
+                      'label': 'Passport Expiry Date',
+                      'type': 'date',
+                      'hint': 'The permit can never outrun the passport — established universities '
+                              'are often granted 2 years at a time, so renew first when less than '
+                              'about 2.5 years remain.',
+                      'required': False},
+                     {'key': 'funding_readiness',
+                      'label': 'Funding Readiness',
+                      'type': 'select',
+                      'hint': 'Tuition runs SEK 80,000-295,000 a year plus maintenance of SEK '
+                              '10,656 a month (2026); Migrationsverket rejects locked deposits, so '
+                              'Indian FDs frozen through the permit period fail.',
+                      'required': True,
+                      'options': ["Fully funded — liquid funds in the student's own account",
+                                  'Funds with parents / sponsor — transfer planned',
+                                  'Fixed deposits — must be unwound, locked funds fail',
+                                  'Education loan — sanction must be unconditional',
+                                  'Scholarship decision awaited',
+                                  'Budget short — counselling continues',
+                                  'Not yet assessed']}],
+        'shortlisting': [{'key': 'ranked_choices_status',
+                          'label': 'Ranked Programme Choices (max 4)',
+                          'type': 'select',
+                          'hint': 'One national application per round, up to four ranked '
+                                  'programmes — admitted to the highest eligible choice and the '
+                                  'lower ones are deleted; a scattered, unconnected list is an '
+                                  'intention-to-study red flag later.',
+                          'required': False,
+                          'options': ['Not started',
+                                      'Options being researched',
+                                      'Fewer than four choices agreed',
+                                      'All four ranked choices agreed',
+                                      'Includes an off-portal institution (e.g. SSE)',
+                                      'Reopened — ranking under revision']}],
+        'applications_sent': [{'key': 'ua_fee_status',
+                               'label': 'SEK 900 Application Fee Status',
+                               'type': 'select',
+                               'hint': 'SEK 900 once per round however many choices; deadlines '
+                                       'bite — 2 February for autumn, 1 September for spring — an '
+                                       'unpaid fee means the application is simply not processed.',
+                               'required': False,
+                               'options': ['Not yet paid',
+                                           'Paid — receipt on file',
+                                           'Exempt — fee-waiver category applies',
+                                           'Deadline missed — round lost']}],
+        'offer_accepted': [{'key': 'selection_results_status',
+                            'label': 'Notification of Selection Results',
+                            'type': 'select',
+                            'hint': "Autumn results 26 March (master's) / 31 March (bachelor's), "
+                                    'spring 30 September (bachelor\'s) / 7 October (master\'s) — your university will '
+                                    'contact you if you must reply, so never assume a universal '
+                                    'reply deadline.',
+                            'required': False,
+                            'options': ['Awaiting results',
+                                        'Admitted — checking whether a reply is required',
+                                        'Admitted — place confirmed',
+                                        'Reserve — waiting list',
+                                        'Deleted — admitted to a higher-ranked choice',
+                                        'Not admitted this round']},
+                           {'key': 'first_tuition_instalment_status',
+                            'label': 'First Tuition Instalment (permit gate)',
+                            'type': 'select',
+                            'hint': "Migrationsverket's own wording: the student is only finally "
+                                    'admitted once the tuition fee is paid — nothing can be filed '
+                                    'before this clears.',
+                            'required': False,
+                            'options': ['Invoice not yet issued',
+                                        'Invoice received — unpaid',
+                                        'Paid — receipt on file',
+                                        'Covered by scholarship — confirmation held']}],
+        'documents': [{'key': 'course_start_date',
+                       'label': 'Programme Start Date (admission letter)',
+                       'type': 'date',
+                       'hint': 'Autumn semester starts late August — the permit period, and '
+                               'therefore the funds calculation, derive from these programme '
+                               'dates, so record them exactly as the letter states.',
+                       'required': True},
+                      {'key': 'permit_period_months',
+                       'label': 'Permit Period Applied For (months)',
+                       'type': 'number',
+                       'hint': 'Granted 1 or 2 years at a time plus a 2-week buffer — maintenance '
+                               'is SEK 10,656 × THESE months, per month of the whole permit '
+                               'period; never assume a 10-month academic year.',
+                       'required': True},
+                      {'key': 'funds_evidenced_amount',
+                       'label': 'Maintenance Funds Evidenced (SEK)',
+                       'type': 'number',
+                       'hint': 'SEK 10,656 a month for 2026 applications (2025: SEK 10,584; '
+                               're-indexed each January) times every month of the permit period — '
+                               'plan roughly SEK 105,000-115,000 for a one-year permit.',
+                       'required': True},
+                      {'key': 'funds_evidence_status',
+                       'label': 'Financial Evidence Status',
+                       'type': 'select',
+                       'hint': 'Own liquid account only (joint only with an accompanying partner), '
+                               'statement issued no more than 4 months before the permit start — '
+                               'no seasoning rule, but unexplained lump sums invite intention '
+                               'scrutiny.',
+                       'required': True,
+                       'options': ['Not started',
+                                   'Funds still with sponsor / third party',
+                                   'Locked deposit being unwound — frozen funds fail',
+                                   "Consolidated in the student's own account",
+                                   'Statement issued — inside the 4-month window',
+                                   'Statement aged past 4 months — re-issue needed',
+                                   'Complete and verified']},
+                      {'key': 'bank_statement_issue_date',
+                       'label': 'Bank Statement Issue Date',
+                       'type': 'date',
+                       'hint': 'Must sit within 4 months of the desired permit start when '
+                               'Migrationsverket reads it — diarise a re-issue the moment a file '
+                               'slips.',
+                       'required': False},
+                      {'key': 'maintenance_reduction_basis',
+                       'label': 'Maintenance Reductions / Family Add-ons',
+                       'type': 'select',
+                       'hint': 'Deductions only where the scholarship or exchange letter states '
+                               'food or housing is provided free; family add-ons stack on top of '
+                               'the student figure for the same permit months.',
+                       'required': False,
+                       'options': ['None — full SEK 10,656 a month',
+                                   'Free food provided — minus SEK 2,960 a month',
+                                   'Free housing provided — minus SEK 4,736 a month',
+                                   'Free food and housing — both deductions',
+                                   'Partner accompanying — plus SEK 4,440 a month',
+                                   'Children accompanying — plus SEK 2,664 each a month',
+                                   'To be confirmed']},
+                      {'key': 'health_insurance_status',
+                       'label': 'Comprehensive Insurance (course < 1 year)',
+                       'type': 'select',
+                       'hint': 'Only sub-1-year courses need it — longer permits bring '
+                               'folkbokföring and public healthcare instead; most universities '
+                               'enrol fee-payers in Student IN anyway, so check before buying '
+                               'cover.',
+                       'required': True,
+                       'options': ['Not required — studies of 1 year or longer',
+                                   'Required — not yet arranged',
+                                   'Policy held — care, hospitalisation, repatriation covered',
+                                   "Covered by Kammarkollegiet 'Student IN' via the university",
+                                   'To be confirmed']},
+                      {'key': 'tuition_deposit_paid',
+                       'label': 'First Tuition Instalment Paid (SEK)',
+                       'type': 'number',
+                       'hint': 'The amount on the university receipt — the filing gate, since only '
+                               'a paid first instalment makes the student finally admitted; it '
+                               'does not count towards maintenance funds.',
+                       'required': False},
+                      {'key': 'translation_status',
+                       'label': 'Authorised Translation Status',
+                       'type': 'select',
+                       'hint': 'Only documents not in Swedish or English need an authorised '
+                               'translator, filed beside the original-language copy — '
+                               'Migrationsverket wants scans, never apostilles.',
+                       'required': False,
+                       'options': ['Not required — all documents in English or Swedish',
+                                   'Translator engaged',
+                                   'Translations complete — originals scanned alongside',
+                                   'To be confirmed']},
+                      {'key': 'family_application_plan',
+                       'label': 'Family Applying Alongside?',
+                       'type': 'select',
+                       'hint': 'Fees SEK 1,500 per adult, SEK 750 per child; family permits are '
+                               'derivative — from 11 June 2026 explicitly revocable when the '
+                               "student's permit falls or the ties end.",
+                       'required': False,
+                       'options': ['No accompanying family',
+                                   'Partner applying together',
+                                   'Partner and children applying together',
+                                   'Family will apply afterwards',
+                                   'To be confirmed']}],
+        'submitted': [{'key': 'application_submitted_date',
+                       'label': 'Filed in the E-service On',
+                       'type': 'date',
+                       'hint': "Filed online in Migrationsverket's e-service (My page) from the "
+                               'home country — the 90-day statutory clock (art 34(1), Directive '
+                               '(EU) 2016/801) runs from a COMPLETE application, not from filing.',
+                       'required': True},
+                      {'key': 'migrationsverket_case_number',
+                       'label': 'Migrationsverket Case Number',
+                       'type': 'text',
+                       'hint': 'On the e-service confirmation — quote it on every komplettering '
+                               'response and status enquiry, and keep it for the extension file '
+                               'later.',
+                       'required': True},
+                      {'key': 'visa_fee_receipt_number',
+                       'label': 'SEK 1,500 Card Payment Reference',
+                       'type': 'text',
+                       'hint': 'Paid by Visa or Mastercard inside the e-service at submission — '
+                               'non-refundable even on refusal, and an unpaid fee quietly stalls '
+                               'the whole file.',
+                       'required': True},
+                      {'key': 'visa_fee_amount_paid',
+                       'label': 'Permit Fee Paid (SEK)',
+                       'type': 'number',
+                       'hint': 'SEK 1,500 adult, SEK 750 under-18; exempt: World Maritime '
+                               'University students, Japanese citizens, and Sida / EU / Swedish '
+                               'Institute / Uppsala ISP scholarship holders.',
+                       'required': False},
+                      {'key': 'embassy_selected',
+                       'label': 'Mission Chosen in the Application',
+                       'type': 'select',
+                       'hint': 'The application names where biometrics and the card handover '
+                               'happen — for visa-required nationals the app path rarely fits, '
+                               'since the card is still needed to enter Sweden.',
+                       'required': True,
+                       'options': ['Embassy of Sweden, New Delhi',
+                                   'Embassy of Sweden, Islamabad',
+                                   'Embassy of Sweden, Dhaka',
+                                   'Other Swedish embassy / consulate-general',
+                                   'Digital passport check app — biometrics in Sweden',
+                                   'Not yet chosen']},
+                      {'key': 'komplettering_status',
+                       'label': 'Komplettering (Supplementation) Status',
+                       'type': 'select',
+                       'hint': 'Requests land in the e-service inbox, not by email — check My page '
+                               'weekly; each komplettering restarts effective completeness for the '
+                               '90-day clock.',
+                       'required': True,
+                       'options': ['None received',
+                                   'Received — response in preparation',
+                                   'Response uploaded in the e-service',
+                                   'Deadline missed — decided on the file as filed']},
+                      {'key': 'filing_channel',
+                       'label': 'Filing Channel',
+                       'type': 'select',
+                       'hint': 'Sweden has no consular lodgement and no VFS on this permit — paper '
+                               'at the mission is the rare fallback, mainly minors without '
+                               'e-service access, with the fee paid at hand-in.',
+                       'required': True,
+                       'options': ['E-service — online from the home country (standard)',
+                                   'Paper application at the embassy (e-service impossible)',
+                                   'Not yet filed']}],
+        'appointment': [{'key': 'appointment_datetime',
+                         'label': 'Planned Embassy Visit (walk-in)',
+                         'type': 'text',
+                         'hint': 'No appointment system — New Delhi takes walk-ins Mon-Fri '
+                                 '08:30-10:30 and registration closes 10:20 sharp, so plan the '
+                                 "morning, e.g. '2026-08-14 09:00'; verify hours on "
+                                 'swedenabroad.se first.',
+                         'required': True},
+                        {'key': 'appointment_location',
+                         'label': 'Swedish Mission for Biometrics',
+                         'type': 'text',
+                         'hint': 'The embassy or consulate-general named in the application — no '
+                                 'VFS on residence-permit files; carry the original passport and '
+                                 'the short embassy biometric form.',
+                         'required': True},
+                        {'key': 'appointment_reference',
+                         'label': '',
+                         'type': 'text',
+                         'hint': 'Nothing to book and nothing to reference — Swedish biometrics '
+                                 'are an embassy walk-in, not an appointment.',
+                         'required': False,
+                         'applicable': False},
+                        {'key': 'biometrics_timing',
+                         'label': 'Biometrics Timing Strategy',
+                         'type': 'select',
+                         'hint': 'Legal either side of the decision — the official wording is '
+                                 'before or after. Give them immediately after filing so the card '
+                                 'goes into production the moment the permit is granted.',
+                         'required': True,
+                         'options': ['Straight after online submission — recommended',
+                                     'After the decision — adds ~4 weeks of card production',
+                                     'Digital passport check app — biometrics after arrival',
+                                     'Not yet planned']},
+                        {'key': 'biometrics_status',
+                         'label': 'Biometrics / Attendance Status',
+                         'type': 'select',
+                         'hint': 'Photo and fingerprints only — nothing is adjudicated at the '
+                                 'embassy and the visit is free; the file itself stays with '
+                                 'Migrationsverket throughout.',
+                         'required': True,
+                         'options': ['Not yet given',
+                                     'Embassy visit planned — biometric form filled',
+                                     'Attended — photo and fingerprints captured',
+                                     'Deferred until after the decision',
+                                     'Digital passport check approved — captured in Sweden']},
+                        {'key': 'biometrics_completed_date',
+                         'label': '',
+                         'type': 'date',
+                         'hint': 'Date captured at the mission — card production (~4 weeks) starts '
+                                 'only once BOTH the grant and the biometrics exist.',
+                         'required': False},
+                        {'key': 'passport_verification_status',
+                         'label': 'Passport Verification Status',
+                         'type': 'select',
+                         'hint': 'Distinct from biometrics — the passport check is completed only '
+                                 'once Migrationsverket formally requests it, and the passport '
+                                 "never leaves the student's hands.",
+                         'required': False,
+                         'options': ['Not yet requested by Migrationsverket',
+                                     'Requested — original to be shown at the mission',
+                                     'Verified at the embassy',
+                                     'Completed via the digital passport check app']}],
+        'decision': [{'key': 'case_status',
+                      'label': 'E-service Case Status',
+                      'type': 'select',
+                      'hint': 'The beslut is delivered in the e-service, not by post — currently '
+                              '~75% of first-time study cases decide within 2 months, a live '
+                              'figure that shifts monthly; never quote it as a promise.',
+                      'required': True,
+                      'options': ['Submitted — confirmation in the e-service',
+                                  'Under processing',
+                                  'Komplettering requested',
+                                  'Embassy interview tasked — intention-to-study doubt',
+                                  'Decision made — beslut in the e-service',
+                                  'No status available']},
+                     {'key': 'status_last_checked',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Last look at My page — kompletteringar and the beslut both land '
+                              'there silently, so poll at least weekly.',
+                      'required': True},
+                     {'key': 'statutory_deadline_date',
+                      'label': 'Statutory 90-Day Deadline',
+                      'type': 'date',
+                      'hint': 'Art 34(1) of Directive (EU) 2016/801 — decision within 90 days of a '
+                              'COMPLETE application; recompute after every komplettering response, '
+                              'which resets effective completeness.',
+                      'required': False},
+                     {'key': 'info_request_received_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Date the komplettering appeared in the e-service inbox — Sweden '
+                              'probes the file in writing, not at a counter.',
+                      'required': False},
+                     {'key': 'info_request_due_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Deadline stated in the komplettering — miss it and Migrationsverket '
+                              'decides on the file as it stands. Hard diary date.',
+                      'required': False},
+                     {'key': 'embassy_interview_status',
+                      'label': 'Tasked Embassy Interview',
+                      'type': 'select',
+                      'hint': 'Rare and doubt-triggered — scattered course choices, unexplained '
+                              'gaps, prior refusals; the tone that works is factual and '
+                              'unemotional, and rehearsed marketing language hurts.',
+                      'required': False,
+                      'options': ['Not tasked — standard written file',
+                                  'Tasked — interview being scheduled',
+                                  'Attended at the mission',
+                                  'Follow-up documents demanded']},
+                     {'key': 'passport_return_tracking',
+                      'label': '',
+                      'type': 'text',
+                      'hint': 'The passport never leaves the student on a Swedish file — it is '
+                              'only shown at the embassy, so there is nothing to courier back.',
+                      'required': False,
+                      'applicable': False}],
+        'approved': [{'key': 'visa_decision_date',
+                      'label': 'Permit Grant Date (beslut)',
+                      'type': 'date',
+                      'hint': 'Date on the positive beslut in the e-service — the ~4-week '
+                              'card-production clock starts from grant plus biometrics, whichever '
+                              'lands later.',
+                      'required': True},
+                     {'key': 'visa_document_number',
+                      'label': 'Beslut / Permit Reference',
+                      'type': 'text',
+                      'hint': 'Reference on the decision — Sweden issues no visa sticker on this '
+                              'route; the permit itself is the residence permit card that follows.',
+                      'required': True},
+                     {'key': 'visa_valid_from',
+                      'label': 'Permit Valid From',
+                      'type': 'date',
+                      'hint': 'Usually the programme start less a 2-week buffer — entry before '
+                              'this date is not covered by the permit.',
+                      'required': True},
+                     {'key': 'visa_valid_to',
+                      'label': 'Permit Valid To',
+                      'type': 'date',
+                      'hint': 'One or 2 years at a time, never beyond the passport — the extension '
+                              'is filed from inside Sweden and, from 11 June 2026, is tested '
+                              'against study progress (37.5 credits in year 1, 45 a year after).',
+                      'required': True},
+                     {'key': 'card_production_status',
+                      'label': 'Residence Permit Card Status',
+                      'type': 'select',
+                      'hint': 'Couriered to the mission and collected in person — New Delhi hands '
+                              'over Mon-Fri 11:00-12:00, registration closes 11:50 strictly; the '
+                              'card is what boards the flight, so no card, no travel.',
+                      'required': True,
+                      'options': ['Granted — biometrics still outstanding',
+                                  'Card in production (~4 weeks)',
+                                  'Card at the embassy — awaiting collection',
+                                  'Collected in person',
+                                  'App path — card issued in Sweden after arrival']},
+                     {'key': 'passport_received_date',
+                      'label': 'Card Collected On',
+                      'type': 'date',
+                      'hint': 'Bring the original passport to the handover. A representative with a '
+                              'signed power of attorney may collect at the embassy, and the '
+                              'embassy can courier the card to Swedish consulates in India, '
+                              'Nepal, Sri Lanka, the Maldives or Bhutan (fee applies) — never '
+                              'to a home address.',
+                      'required': False},
+                     {'key': 'address_notification_status',
+                      'label': '30-Day Address Notification',
+                      'type': 'select',
+                      'hint': 'New duty since 11 June 2026 — notify Migrationsverket of the '
+                              'Swedish address within 30 days of the grant or of moving, unless '
+                              'already in the population register.',
+                      'required': True,
+                      'options': ['Not yet due — student not in Sweden',
+                                  'Due — inside the 30-day window',
+                                  'Address reported to Migrationsverket',
+                                  'Population-registered — duty satisfied automatically',
+                                  'Overdue']},
+                     {'key': 'folkbokforing_status',
+                      'label': 'Skatteverket / Personnummer Status',
+                      'type': 'select',
+                      'hint': 'Permits of 12 months or more unlock folkbokföring — the '
+                              'personnummer then opens healthcare, banking and BankID; without it '
+                              'everyday Sweden barely functions.',
+                      'required': True,
+                      'options': ['Not applicable — permit under 12 months',
+                                  'Not started',
+                                  'Skatteverket visit booked',
+                                  'Registered — personnummer awaited',
+                                  'Personnummer issued']},
+                     {'key': 'work_rights_briefing',
+                      'label': 'Work-Rights Briefing (15 h/week cap)',
+                      'type': 'select',
+                      'hint': 'Permits granted on or after 11 June 2026: 15 hours a week during '
+                              'semesters, unlimited June-August and for study-related work — '
+                              'breaching the cap can cost the permit itself.',
+                      'required': False,
+                      'options': ['Briefed — 15-hour semester cap acknowledged',
+                                  'Not yet briefed',
+                                  'Permit granted before 11 June 2026 — old rules until renewal']}],
+        'rejected': [{'key': 'refusal_date',
+                      'label': 'Beslut Notified On',
+                      'type': 'date',
+                      'hint': 'The appeal window runs from notification of the beslut in the '
+                              'e-service — record the day it was opened, not the date printed on '
+                              'it.',
+                      'required': True},
+                     {'key': 'refusal_ground',
+                      'label': 'Primary Refusal Ground',
+                      'type': 'select',
+                      'hint': 'Take it from the beslut, which must state the legal grounds and the '
+                              'appeal instructions — the SEK 1,500 fee is never refunded.',
+                      'required': True,
+                      'options': ['Funds short of SEK 10,656 × months of the permit period',
+                                  'Funds format — locked deposit, third-party or joint account',
+                                  'Bank statement older than 4 months at permit start',
+                                  'Not finally admitted — first tuition instalment unpaid',
+                                  'Intention to study not established',
+                                  'Comprehensive insurance missing (course under 1 year)',
+                                  'Passport validity too short for the permit',
+                                  'Komplettering missed — decided on the file as it stood',
+                                  'Other / not stated']},
+                     {'key': 'refusal_notes',
+                      'label': '',
+                      'type': 'textarea',
+                      'hint': 'Copy the legal grounds verbatim from the beslut and note what the '
+                              'komplettering history shows — most Swedish refusals are curable '
+                              'paperwork, not character findings.',
+                      'required': True},
+                     {'key': 'appeal_deadline',
+                      'label': 'Överklagande Deadline (per the beslut)',
+                      'type': 'date',
+                      'hint': 'Stated in the decision — typically three weeks from notification, '
+                              'but never assume: read it off the beslut and act immediately.',
+                      'required': False},
+                     {'key': 'appeal_status',
+                      'label': 'Överklagande Status',
+                      'type': 'select',
+                      'hint': 'Written appeal TO Migrationsverket, which reconsiders (omprövning) '
+                              'and, if the decision stands, forwards the case to '
+                              'migrationsdomstolen; the final tier needs leave to appeal.',
+                      'required': True,
+                      'options': ['Not appealing — refiling corrected instead',
+                                  'Överklagande in preparation',
+                                  'Filed with Migrationsverket — omprövning pending',
+                                  'Omprövning changed the decision — permit granted',
+                                  'Forwarded to the Migration Court',
+                                  'Migration Court rejected the appeal',
+                                  'Leave sought at the Migration Court of Appeal',
+                                  'Closed']},
+                     {'key': 'next_step',
+                      'label': 'Agreed Next Step',
+                      'type': 'select',
+                      'hint': 'Fresh applications are unlimited (new SEK 1,500 each) — for '
+                              'funds-format defects a corrected re-file usually beats the court '
+                              'route; appeal mainly where intention-to-study facts were misread.',
+                      'required': True,
+                      'options': ['Refile corrected — same intake',
+                                  'Refile — next round (autumn is the real intake)',
+                                  'Pursue överklagande',
+                                  'New round — different programmes / ranking',
+                                  'Switch destination country',
+                                  'Not reapplying — case closed',
+                                  'Undecided']},
+                     {'key': 'reapply_target_date',
+                      'label': '',
+                      'type': 'date',
+                      'hint': 'Anchor to the round calendar — autumn closes 15 January; spring '
+                              'closes 17 August with documents and fee due 1 September.',
+                      'required': False}],
+        'on_hold': [{'key': 'hold_reason',
+                     'label': 'Reason for Hold',
+                     'type': 'select',
+                     'hint': 'Swedish files stall on money mechanics — tuition unpaid or funds in '
+                             'the wrong shape; both are curable, so name the blocker precisely and '
+                             'chase it.',
+                     'required': True,
+                     'options': ['Awaiting Notification of Selection Results',
+                                 'Reply / place confirmation pending with the university',
+                                 'First tuition instalment unpaid — not finally admitted',
+                                 "Funds being consolidated into the student's own account",
+                                 'Locked deposit being unwound into liquid funds',
+                                 'Bank statement aged past 4 months — re-issue',
+                                 'Komplettering response being assembled',
+                                 'Client deferred to a later intake',
+                                 'Consultancy fees pending',
+                                 'Client unresponsive',
+                                 'Other']},
+                    {'key': 'hold_notes',
+                     'label': 'Hold Notes',
+                     'type': 'textarea',
+                     'hint': 'Name the blocking item and its expected date — tuition invoice, FD '
+                             'maturity, statement re-issue, selection results — and who owns the '
+                             'next move.',
+                     'required': False}]}}

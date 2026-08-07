@@ -77,6 +77,11 @@
     ES: { key: "es", code: "ES" },
     NL: { key: "nl", code: "NL" },
     AE: { key: "ae", code: "AE" },
+    PL: { key: "pl", code: "PL" },
+    NZ: { key: "nz", code: "NZ" },
+    SG: { key: "sg", code: "SG" },
+    IT: { key: "it", code: "IT" },
+    SE: { key: "se", code: "SE" },
   });
   function clientHeroTheme(client) {
     let code = String(client.destination_country_code || client.country?.code || "").trim().toUpperCase();
@@ -90,17 +95,27 @@
   //              pédagogique is compulsory for every Études en France applicant — academic
   //              rather than consular, but it always happens → push it ("Recommended", CTA).
   //   possible — UK: occasional credibility interview. AE: the decisive conversation is a
-  //              university admissions panel, not a visa officer → available, not badged.
+  //              university admissions panel, not a visa officer. PL: the consul may summon a
+  //              credibility interview — frequent from Delhi/Mumbai, never universal. NZ: no
+  //              interview step exists in the INZ process, but phone/video verification hits a
+  //              meaningful minority of South-Asian files. IT: the VAC visit is lodgement +
+  //              prints, but DM 850/2011 Art. 4(2) lets the consulate summon a credibility
+  //              colloquio → available, not badged.
   //   rare     — CA study permit (SOP is the "interview"), AU subclass 500 (Genuine Student is
   //              written), DE Type-D (embassy intake, not an adjudicating interview), IE,
   //              ES Type-D (consular, but the file decides), NL (the recognised sponsor files
-  //              with the IND and no one interviews the student) → shown as "Optional".
+  //              with the IND and no one interviews the student), SG (ICA decides the Student's
+  //              Pass on the written SOLAR file; admission panels exist only at a handful of
+  //              programmes, unlike AE where the panel is the universal gate), SE
+  //              (Migrationsverket decides on the written file — an
+  //              embassy interview is tasked only on doubted study intent) → shown as "Optional".
   // Unknown/blank codes default to "standard" (fail open — never hide the feature for a
   // destination we haven't classified). Mirrors the per-country gating already used for the
   // UK maintenance-funds card.
   const INTERVIEW_RELEVANCE = Object.freeze({
     US: "standard", UK: "possible", CA: "rare", AU: "rare", DE: "rare", IE: "rare",
     FR: "standard", ES: "rare", NL: "rare", AE: "possible",
+    PL: "possible", NZ: "possible", SG: "rare", IT: "possible", SE: "rare",
   });
   function interviewRelevance(client) {
     let code = String((client && client.destination_country_code) || "").trim().toUpperCase();

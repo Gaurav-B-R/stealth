@@ -355,6 +355,74 @@ ENTERPRISE_STUDY_DESTINATION_OPTIONS = [
             "Parent-Sponsored Student Residence": ["January", "May", "September"],
         },
     },
+    {
+        "code": "PL",
+        "name": "Poland",
+        "flag_emoji": "🇵🇱",
+        "iconic_place": "Wawel Royal Castle",
+        "visa_types": [
+            "National Visa (Type D) – Studies",
+            "Temporary Residence Permit for Studies (Karta Pobytu)",
+            "Schengen Visa (Type C) – Short Study",
+            "Temporary Residence Permit – Graduate Job Search",
+        ],
+        "intakes_by_visa": {
+            "National Visa (Type D) – Studies": ["October", "February"],
+            "Temporary Residence Permit for Studies (Karta Pobytu)": ["October", "February"],
+            "Schengen Visa (Type C) – Short Study": [],
+            "Temporary Residence Permit – Graduate Job Search": [],
+        },
+    },
+    {
+        "code": "SG",
+        "name": "Singapore",
+        "flag_emoji": "🇸🇬",
+        "iconic_place": "Marina Bay Sands",
+        "visa_types": [
+            "Student's Pass (IHL Track)",
+            "Student's Pass (PEI / EduTrust Track)",
+            "Short-Term Visit Pass – Short Course",
+        ],
+        "intakes_by_visa": {
+            "Student's Pass (IHL Track)": ["January", "August"],
+            "Student's Pass (PEI / EduTrust Track)": ["January", "April", "July", "October"],
+            "Short-Term Visit Pass – Short Course": [],
+        },
+    },
+    {
+        "code": "IT",
+        "name": "Italy",
+        "flag_emoji": "🇮🇹",
+        "iconic_place": "Colosseum",
+        "visa_types": [
+            "National Study Visa (Type D) – Immatricolazione Università",
+            "National Study Visa (Type D) – PhD / AFAM / Non-Degree",
+            "Short-Stay Study Visa (Schengen Type C)",
+        ],
+        "intakes_by_visa": {
+            "National Study Visa (Type D) – Immatricolazione Università": ["February", "September", "October"],
+            "National Study Visa (Type D) – PhD / AFAM / Non-Degree": ["February", "September", "October", "November"],
+            "Short-Stay Study Visa (Schengen Type C)": ["January", "June", "September"],
+        },
+    },
+    {
+        "code": "SE",
+        "name": "Sweden",
+        "flag_emoji": "🇸🇪",
+        "iconic_place": "Stockholm City Hall",
+        "visa_types": [
+            "Residence Permit for Studies at Higher Education",
+            "Residence Permit for Doctoral Studies",
+            "Post-Study Job-Seeking Residence Permit",
+            "Short-Stay Study Visa (Schengen Type C)",
+        ],
+        "intakes_by_visa": {
+            "Residence Permit for Studies at Higher Education": ["January", "August"],
+            "Residence Permit for Doctoral Studies": [],
+            "Post-Study Job-Seeking Residence Permit": [],
+            "Short-Stay Study Visa (Schengen Type C)": ["January", "August"],
+        },
+    },
 ]
 ENTERPRISE_STUDY_DESTINATION_MAP = {
     str(item["code"]).strip().upper(): item for item in ENTERPRISE_STUDY_DESTINATION_OPTIONS

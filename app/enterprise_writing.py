@@ -195,6 +195,60 @@ SOP_SPECS: dict[str, dict] = {
             "Ground the career section in the region's real economy — energy transition, aviation and logistics, fintech and banking, healthcare, hospitality, space and AI — and in employers the campus genuinely places into. Where the dossier lacks that, insert [PLACEHOLDER: name 2 UAE employers or sectors in <field>].",
         ],
     },
+    "PL": {
+        "doc_name": "Applicant's Cover Letter (to the Consul)",
+        "words": "one page (300-450 words)",
+        "conventions": [
+            "This is the consular file's decisive prose document, not an admissions essay: address the consul and state, in order, the purpose and duration of stay, the programme and why this university and city, the funding source, the accommodation, and a numbered list of annexes.",
+            "Every number must reconcile with the evidence exactly — tuition as prepaid on the receipt, maintenance against the 1,010 PLN-a-month rule, the sponsor named as in the notarized letter. Where the dossier lacks a figure insert [PLACEHOLDER: ...]; an inconsistent number is a cited refusal driver.",
+            "Migration-intent slips are fatal — no 'settle in Europe', no onward-Schengen plans, no work-first framing; since the July 2024 guidelines consuls read precisely for them. Link the prior study record to the chosen programme instead, with dates.",
+            "Write it so the student can defend every line orally: Delhi and Mumbai summon credibility interviews frequently, held in the language of instruction — agent-template phrasing the student cannot paraphrase is exactly what gets caught.",
+            "Where a university separately asks for a motivation letter (list motywacyjny, 400-600 words: why the programme → why this university → fit → goals), draft it as its own run — since 2025 entrance exams and interviews at the 10/20 pass mark partly replace it at many uczelnie.",
+        ],
+    },
+    "NZ": {
+        "doc_name": "Statement of Purpose (Genuine Intentions Letter)",
+        "words": "500-1,000 words (one to two pages)",
+        "conventions": [
+            "The reader is an INZ officer applying the bona fide test, not an admissions committee: first person, factual register, one fixed spine — academic history → why this course logically follows → why New Zealand and this named provider (real course features, not scenery) → the funding plan in exact figures → an honest career plan.",
+            "Every figure must reconcile with the bank statements and the Offer of Place to the dollar — NZ$20,000 a year living costs plus first-year tuition; where the dossier lacks the tuition figure insert [PLACEHOLDER: confirm first-year tuition from the Offer of Place].",
+            "Address study gaps and any course-level downgrade head-on with dates and evidence — a degree holder entering a diploma must argue the logic, because ignoring it is the top decline theme on Indian files.",
+            "No 'world-class New Zealand' filler and no agent-template prose recycled across files — INZ verification calls test whether the student can say all of this unscripted, and a contradiction with the letter is a decline trigger.",
+            "State post-study intentions honestly: naming the Post Study Work Visa (up to 3 years for a Level 7+ degree) is legitimate, but study — not work or settlement — must read as the purpose.",
+        ],
+    },
+    "SG": {
+        "doc_name": "Personal Statement / Admission Essay (UG) or Statement of Purpose (PG)",
+        "words": "UG essays 300-600 words inside hard portal limits; PG SOP 500-1,000 words",
+        "conventions": [
+            "Singapore reads Anglo-American conventions but rewards brevity and evidence: direct, concrete, outcome-oriented, and never over the portal's word cap — NUS and NTU limits are enforced by the form, not by goodwill.",
+            "Argue programme fit with named modules, labs or professors and a realistic career logic tied to Asia and Singapore's economy; where the dossier lacks them insert [PLACEHOLDER: name 2 modules or labs from the <programme> page].",
+            "SMU and the MBA programmes stress-test the essay in video or panel interviews — write nothing the student cannot defend aloud in two minutes.",
+            "The classic failure mode is the recycled US/UK essay with the wrong country named, and poetry over evidence — cut both on sight.",
+            "Account for every study gap here on the student's own terms, with dates consistent with what eForm 16 will declare — an unexplained gap left for ICA to discover is the top refusal trigger on South-Asian files.",
+        ],
+    },
+    "IT": {
+        "doc_name": "Lettera Motivazionale (Motivation Letter)",
+        "words": "400-800 words (one page; Bocconi-style caps run ~500 words)",
+        "conventions": [
+            "This is an admissions document — Italy has no UK-style single SOP gate. A shorter one-page cover letter/study plan is a smart optional add to the visa file, and both must tell the same story: the consulate's DM 850/2011 assessment tests the coherence of the study path against the very claims made here.",
+            "Formal but direct European register addressed to the admissions committee — less US-style storytelling, more evidence of programme fit. The classic failure is rankings-worship with no course specifics; name actual courses, labs or professors, and where the dossier lacks them insert [PLACEHOLDER: name 2 courses or labs from the <programme> page].",
+            "Build one chain: academic background and results → why this programme at this university → how it continues the prior study path → the career the degree unlocks. Any gap or stream change gets addressed factually with dates — unexplained, it is a visa refusal trigger as much as an admissions one.",
+            "Never promise to settle in Italy — poisonous for the migration-risk read; state the post-degree plan plainly instead, including the Art. 39-bis.1 job-search permit (9-12 months) only where the brief supports it.",
+            "Respect the stated word cap — a letter that exceeds a ~500-word limit reads as an applicant who cannot follow instructions, and generic letters reused across universities are spotted immediately.",
+        ],
+    },
+    "SE": {
+        "doc_name": "Motivation Letter",
+        "words": "400-700 words (about one page) — or exactly the programme's own template and word cap where one exists",
+        "conventions": [
+            "Programme-specific, never universal: many Swedish programmes select on grades alone, and those that read a letter (KTH, Chalmers, Lund, Uppsala master's) often issue their own summary sheet with fixed questions — answer that sheet, not a free essay, and never reuse one letter across the four ranked choices.",
+            "Lagom is the register: concrete, evidence-led, understated. Grand destiny narratives, flattery and emotional backstory read badly to a Swedish faculty committee — argue from the record.",
+            "Structure the committee expects: why this exact programme — name courses, tracks or labs, inserting [PLACEHOLDER: name 2 courses or tracks from the <programme> syllabus] where the dossier lacks them — then academic fit (projects, thesis, tools), relevant work, and what the degree is for afterwards.",
+            "Faculty read this, never a migration officer — but keep the course-choice logic coherent across the whole ranked list, because scattered, unconnected choices are themselves an intention-to-study red flag when Migrationsverket later reads the permit file.",
+        ],
+    },
 }
 
 # Per-country LOR conventions. The letter's *voice* is set by the recommender archetype;
@@ -286,6 +340,57 @@ LOR_SPECS: dict[str, dict] = {
             "Follow the campus's parent system: US-model institutions (AUS, AUD, Zayed, UAEU) expect an explicit comparative ranking against a named cohort plus commentary on GPA and course-level work; UK and Australian branch campuses expect the shorter factual reference — capacity, dates, standing against the cohort, then suitability for this course.",
             "Write on institutional letterhead with the institution's stamp and a verifiable institutional e-mail address. In the Gulf an unstamped letter, or one sent from a free e-mail account, is routinely queried and re-requested.",
             "Where the letter supports a Golden Residence – Outstanding Student nomination, state the exact GPA or percentage against the threshold (95% at secondary, 3.5 for a Class A university, 3.8 for Class B) and the graduation date — that route is decided on the number.",
+        ],
+    },
+    "PL": {
+        "doc_name": "Letter of Recommendation",
+        "words": "400-600 words (no standardized national format)",
+        "conventions": [
+            "Confirm the IRK document list actually asks before drafting: Polish Bachelor admission is credential- and entrance-exam-driven since 2025, so letters matter mainly for Master's, PhD and competitive English-taught programmes — usually two, both academic.",
+            "European factual register on institutional letterhead: the referee's title, department and institutional email, the exact relationship and dates, then the assessment — restrained and evidence-led, naming the course, project or thesis the referee actually supervised.",
+            "Rank with the denominator ('among the top three of a cohort of 120'); where the dossier lacks the cohort size, write [PLACEHOLDER: recommender to state cohort size and ranking basis].",
+            "Keep names, institutions and dates identical to the apostilled transcripts and diplomas — the same records reach the consulate, and an inconsistent education file is a listed Polish refusal ground.",
+        ],
+    },
+    "NZ": {
+        "doc_name": "Academic Reference",
+        "words": "400-600 words",
+        "conventions": [
+            "New Zealand references follow the UK convention, short and factual: relationship and dates first, standing against the cohort, then suitability for this programme — universities usually want two, mainly for postgraduate and limited-entry programmes.",
+            "A simple signed letter on institutional letterhead with a verifiable institutional e-mail — there is no sealed-envelope culture and no standard form; PhD applicants instead approach a named supervisor first, so their letter should back the research proposal.",
+            "Give grades in the original scale with the cohort denominator ('third in a cohort of 120'); if the dossier lacks the cohort size, write [PLACEHOLDER: recommender to state cohort size and ranking basis].",
+            "Keep every claim verifiable: INZ reads the visa file beside the academic record and can ring referees on a bona fide check, so nothing the transcripts and employment letters cannot back.",
+        ],
+    },
+    "SG": {
+        "doc_name": "Letter of Recommendation (Online Referee Report)",
+        "words": "450-650 words",
+        "conventions": [
+            "Usually two academic referees, submitted through the university's own online referee system — the referee gets an email link with a hard deadline, so have the letter ready to paste the day the link lands and chase referees from shortlist day.",
+            "Anglo-American structure with Singaporean restraint: relationship and dates first, cohort standing with the denominator ('among the top five of a cohort of 180'), then evidence of suitability for this programme — brevity reads as confidence here.",
+            "Verifiable institutional email and letterhead: NUS, NTU and SMU do verify referees, and a request answered from a free-mail account gets re-issued.",
+            "Keep the letter consistent with the transcripts — referee mismatch, where the praise contradicts the marks, is a named Singapore failure mode; if the cohort size is not in the dossier write [PLACEHOLDER: recommender to state cohort size and ranking basis].",
+            "PEIs rarely ask for references at all — confirm the requirement before commissioning letters nobody will read.",
+        ],
+    },
+    "IT": {
+        "doc_name": "Letter of Recommendation",
+        "words": "400-600 words (master's files typically carry 1-2 academic referees)",
+        "conventions": [
+            "On institutional letterhead, signed, with the referee's role, department and verifiable institutional contact details — uploaded as a scan at application; there is no national form and no referee portal at most universities.",
+            "Italian committees treat inflated superlatives skeptically — write a calibrated assessment that verifies academic standing and research or quantitative ability with named modules, projects or thesis work, not adjectives.",
+            "Every comparative claim carries its denominator ('among the strongest five of a cohort of 120'); where the dossier lacks the cohort size insert [PLACEHOLDER: recommender to state cohort size and ranking basis]. Give grades on the original scale with enough context to read them.",
+            "Where the programme is Italian-taught, the letter should say whether the referee has seen the student work in Italian; for English-taught programmes, corroborate working English at B2+ from direct observation.",
+        ],
+    },
+    "SE": {
+        "doc_name": "Letter of Recommendation",
+        "words": "300-500 words (short and factual)",
+        "conventions": [
+            "Confirm the programme actually asks before drafting — recommendation letters are frequently optional in Sweden, and the portal's own document list rules; Sweden weighs transcripts and grades over essays and letters, so this supports the file, never carries it.",
+            "One or two short academic letters on institutional letterhead with the referee's title and contact details — restrained and verifiable, no superlatives doing the work evidence should do.",
+            "Anchor every claim to the transcript the committee already holds from Universityadmissions.se: name the course, project or thesis the referee supervised and the grade or result it produced.",
+            "Rank with the denominator ('among the strongest three of a cohort of 120'); where the dossier lacks the cohort size, write [PLACEHOLDER: recommender to state cohort size and ranking basis].",
         ],
     },
 }

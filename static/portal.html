@@ -241,7 +241,7 @@
       var info = null, sessionToken = null, data = null;
 
       // Destination hero imagery — same assets the consultancy dashboard uses.
-      var HERO_CODES = { US: "us", CA: "ca", UK: "uk", GB: "uk", AU: "au", DE: "de", IE: "ie", FR: "fr", ES: "es", NL: "nl", AE: "ae" };
+      var HERO_CODES = { US: "us", CA: "ca", UK: "uk", GB: "uk", AU: "au", DE: "de", IE: "ie", FR: "fr", ES: "es", NL: "nl", AE: "ae", PL: "pl", NZ: "nz", SG: "sg", IT: "it", SE: "se" };
 
       function show(id) { ["loading","invalidView","verifyView"].forEach(function (v) { $(v).classList.toggle("hidden", v !== id); }); }
       function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
