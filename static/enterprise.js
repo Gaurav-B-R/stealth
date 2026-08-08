@@ -2494,6 +2494,24 @@
     const locked = !can("clients.assign");
     return `<select name="assigned_to_user_id"${locked ? " disabled" : ""}>${opts.join("")}</select>`;
   }
+
+  /* The roster is fetched lazily and the form is rendered synchronously, so a form opened
+     before anything has loaded it draws the picker with nothing but "Unassigned" — the
+     add-client entry points (topbar, list header, empty state) all reach the form that way.
+     Rather than making the modal wait on a network round trip, paint it immediately and
+     swap the picker in when the roster lands. Whatever is selected in the meantime is
+     carried over: the fetch usually resolves before anyone has touched the field, but a
+     choice already made must not be thrown away by the rebuild. */
+  async function hydrateAssigneeSelect(formId, c) {
+    const members = await ensureTeam();
+    if (!members.length) return;
+    const form = $("#" + formId);
+    const sel = form && form.querySelector('select[name="assigned_to_user_id"]');
+    if (!sel) return;  // form closed, or re-rendered under us, while the roster was in flight
+    const chosen = sel.value ? parseInt(sel.value, 10) : ((c && c.assigned_to_user_id) || null);
+    sel.outerHTML = clientAssigneeSelectHtml(
+      Object.assign({}, c, { assigned_to_user_id: chosen }), members);
+  }
   // What the "Source detail" box means changes with the source picked next to it.
   const LEAD_SOURCE_DETAIL_LABEL = {
     referral: "Referred by", repeat_client: "Referred by",
@@ -2810,6 +2828,9 @@
       </div></form>`, { wide: true });
 
     wireClientFormFields(c, opts);
+    // Nothing on the add-client path awaits the team, so the counsellor picker starts empty
+    // on a fresh session. editClient() pre-warms the cache, hence the "sometimes it works".
+    if (!teamMembersCache) hydrateAssigneeSelect(opts.formId, c);
 
     // Flipped by a duplicate 409 and never unset: the second press of the same button is
     // the acknowledgement the server is waiting for. Re-running the check after they have
@@ -3723,6 +3744,9 @@
 
       // Same builder/cascade as the Add-client modal — one source of truth for the fields.
       wireClientFormFields(cl, formOpts);
+      // openClient() pre-warms the roster, so this is only reached when that fetch failed;
+      // ensureTeam no longer caches a transient failure, so the retry can still succeed.
+      if (!teamMembersCache) hydrateAssigneeSelect(formOpts.formId, cl);
 
       $("#cpEditCancel").onclick = () => { overviewEditing = false; renderOverview(); };
       $("#cpEditForm").onsubmit = async (e) => {
@@ -3768,7 +3792,7 @@
       }
     }
 
-    // Destination-personalized document list for THIS client (each of the ten destinations
+    // Destination-personalized document list for THIS client (each of the fifteen destinations
     // get their own detailed catalog; unknown destinations fall back to the generic list).
     function clientDocTypes() {
       const map = state.catalog.document_types_by_country || {};
@@ -7083,10 +7107,17 @@
      TEAM
      ============================================================ */
   let teamMembersCache = null;
+  /* Backs the counsellor picker as well as the Team screen. A failure is deliberately NOT
+     cached unless it is a 403: `team.view` is a settled answer that will not change until
+     the role does, but a timeout or a dropped connection is not — and caching that one
+     left the workspace unable to assign anyone until the tab was reloaded. */
   async function ensureTeam() {
     if (teamMembersCache) return teamMembersCache;
     try { const d = await api("/team"); teamMembersCache = d.members; applyAccessPayload(d); return d.members; }
-    catch (e) { teamMembersCache = []; return []; }
+    catch (e) {
+      if (e && e.status === 403) teamMembersCache = [];
+      return teamMembersCache || [];
+    }
   }
 
   /* ---- Team is five jobs, so it is five sub-tabs -------------------------------------
@@ -7565,7 +7596,10 @@
         const d = await api("/team" + qs);
         applyAccessPayload(d);
         teamUi.team = d;
-        teamMembersCache = d.members;
+        // Only an active-only roster may seed the shared cache: it is what the counsellor
+        // picker reads, and a deactivated member must never become assignable just because
+        // someone browsed the team with "show deactivated" turned on.
+        if (!qs) teamMembersCache = d.members;
       } catch (ex) { teamUi.teamError = ex; }
       if (state.view !== "team" || teamUi.tab !== "members") return;
       teamDrawShell();

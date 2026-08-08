@@ -4303,7 +4303,7 @@ def _clean_stage_values(allowed: dict[str, dict], incoming) -> dict[str, str]:
     migrating: no existing value has to be interpreted for today's saves to come out clean.
 
     No direction is imposed. These fields are a mix of issue dates, appointment dates,
-    deadlines and expiries across ten destinations; only the sanity window is true of all
+    deadlines and expiries across fifteen destinations; only the sanity window is true of all
     of them (see `enterprise_dates`).
     """
     values = incoming if isinstance(incoming, dict) else {}

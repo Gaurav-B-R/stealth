@@ -47,11 +47,14 @@ CLIENT_PROFILE_OPTIONS: dict[str, list[dict]] = {
     # them when the case is moved to a university stage — see DERIVED_PROFILE_FIELDS below.
     # Destination-neutral wording on purpose — this field sits on the Add-client form, which
     # is filled in before (or while) the destination is chosen, and it is asked identically
-    # of all ten destinations. The artifact is an I-20 in the US, a CAS in the UK, an LOA in
-    # Canada, a CoE in Australia, a Zulassungsbescheid in Germany, an accord préalable in
-    # France, a Carta de Admisión in Spain, a Bewijs van Toelating in the Netherlands and an
-    # offer from a licensed institution in the UAE; naming only the first three read as a
-    # bug to everyone else. The per-destination detail is captured at the documents stage.
+    # of all fifteen destinations. The artifact is an I-20 in the US, a CAS in the UK, an LOA
+    # in Canada, a CoE in Australia, a Zulassungsbescheid in Germany, an accord préalable in
+    # France, a Carta de Admisión in Spain, a Bewijs van Toelating in the Netherlands, a
+    # zaświadczenie o przyjęciu in Poland, an Offer of Place in New Zealand, an IPA letter in
+    # Singapore, a lettera di ammissione in Italy, a universityadmissions.se admission in
+    # Sweden and an offer from a licensed institution in the UAE; naming only the first three
+    # read as a bug to everyone else. The per-destination detail is captured at the documents
+    # stage.
     "admission_stage": _opts(
         ("exploring", "Just exploring"),
         ("shortlisting", "Shortlisting universities"),
