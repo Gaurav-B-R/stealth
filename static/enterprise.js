@@ -1014,7 +1014,7 @@
   /* ---------------- landmark photo ---------------- */
   // Real bundled landmark photo per country. The parent .country-art carries a
   // gradient background, so if an image is ever missing it degrades gracefully.
-  const DESTINATION_PHOTO_CODES = new Set(["ae", "au", "ca", "de", "es", "fr", "ie", "nl", "uk", "us"]);
+  const DESTINATION_PHOTO_CODES = new Set(["ae", "au", "ca", "de", "es", "fr", "ie", "it", "nl", "nz", "pl", "se", "sg", "uk", "us"]);
   function landmarkArt(country) {
     const code = String(country.code || "").toLowerCase();
     const base = DESTINATION_PHOTO_CODES.has(code) ? "/static/destinations" : "/static/assets/enterprise/client-banners";
