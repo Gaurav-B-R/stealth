@@ -12,10 +12,12 @@ enforced by course_catalog_refresh_runs.run_date (UNIQUE) + IntegrityError skip,
 so concurrent workers can never double-run (the f1_news service predates this
 pattern and is explicitly NOT the template to copy).
 
-Cost model (defaults): ≤ ~1 discovery call + COURSE_CATALOG_DAILY_BATCH (12)
-enrichment calls per day ≈ $1-1.5/day while seeding, then the same budget rolls
+Cost model (defaults): ≤ 1 discovery call per country still below its ranked
+target (bounded by the zero-progress backoff below) + COURSE_CATALOG_DAILY_BATCH
+enrichment calls per day ≈ $1-2/day while seeding, then the same budget rolls
 through re-verification (COURSE_CATALOG_REVERIFY_DAYS, 30) so every university is
-re-checked roughly monthly at Top-50-per-country scale.
+re-checked roughly monthly at Top-50-per-country scale. The real re-verify cadence
+is roster_size / DAILY_BATCH days — raise the batch if that must stay ≤ 30.
 """
 from __future__ import annotations
 
@@ -93,9 +95,51 @@ def run_in_progress(existing_run: Optional[models.CourseCatalogRefreshRun]) -> b
 def _catalog_country_codes() -> list[str]:
     raw = os.getenv("COURSE_CATALOG_COUNTRIES", "").strip()
     if raw:
-        return [c.strip().upper() for c in raw.split(",") if c.strip()]
-    from app.visa_catalog import LAUNCH_COUNTRY_CODES
-    return list(LAUNCH_COUNTRY_CODES)
+        codes = [c.strip().upper() for c in raw.split(",") if c.strip()]
+        # Loud on purpose: with the override set, the agent seeds FEWER countries
+        # than the Course Finder UI advertises — that mismatch should be findable
+        # in the logs, not discovered via empty browse results.
+        logger.info("Course catalog refresh: COURSE_CATALOG_COUNTRIES override active (%s)", ",".join(codes))
+        return codes
+    from app import course_catalog
+    return [c["code"] for c in course_catalog.catalog_countries()]
+
+
+# Discovery backoff: once the model twice in a row finds nothing new for a country,
+# it has enumerated everything real it can (small countries top out far below the
+# 50-ranked target — New Zealand has 8 universities), so a daily grounded call would
+# burn spend forever for zero rows. Retry monthly to catch genuinely new entrants.
+DISCOVERY_BACKOFF_ZERO_RUNS = 2
+DISCOVERY_RETRY_DAYS = 30
+
+
+def _discovery_exhausted(db, code: str) -> bool:
+    """True when this country's last DISCOVERY_BACKOFF_ZERO_RUNS recorded discovery
+    attempts all added 0 universities and the newest is younger than
+    DISCOVERY_RETRY_DAYS. Skipped runs record no 'discovered' key, so a backoff
+    never extends itself — only real attempts count."""
+    rows = (
+        db.query(models.CourseCatalogRefreshRun)
+        .filter(models.CourseCatalogRefreshRun.status == "completed")
+        .order_by(models.CourseCatalogRefreshRun.run_date.desc())
+        .limit(45)
+        .all()
+    )
+    attempts: list[tuple] = []
+    for row in rows:
+        try:
+            countries = (json.loads(row.detail or "{}") or {}).get("countries") or {}
+        except Exception:
+            continue
+        entry = countries.get(code)
+        if isinstance(entry, dict) and "discovered" in entry:
+            attempts.append((row.run_date, int(entry.get("discovered") or 0)))
+            if len(attempts) >= DISCOVERY_BACKOFF_ZERO_RUNS:
+                break
+    if len(attempts) < DISCOVERY_BACKOFF_ZERO_RUNS or any(n > 0 for _d, n in attempts):
+        return False
+    newest = attempts[0][0]
+    return (datetime.now(timezone.utc).date() - newest).days < DISCOVERY_RETRY_DAYS
 
 
 def _is_due_for_today(now_utc: datetime) -> bool:
@@ -194,6 +238,14 @@ def run_course_catalog_refresh_job(
         discovered_total = 0
         refreshed_total = 0
         courses_total = 0
+        # The deadline clock starts BEFORE discovery: with 15 catalog countries a
+        # degraded Gemini day can spend 1-2h in discovery alone, and a run that
+        # outlives STALE_RUN_TAKEOVER gets seized by the poll loop and re-run
+        # concurrently — the double-spend the takeover window exists to prevent.
+        run_started = datetime.now(timezone.utc)
+        # An explicit admin `countries` burst overrides the discovery backoff —
+        # the operator is deliberately re-asking for those countries.
+        apply_backoff = countries is None
 
         # Phase 0 — registry seed: free, exact, no AI. Runs before discovery so the
         # model is never asked to re-enumerate universities we already hold, which is
@@ -213,6 +265,12 @@ def run_course_catalog_refresh_job(
 
         # Phase 1 — discovery: top-N stubs for any country still below target.
         for code in codes:
+            if datetime.now(timezone.utc) - run_started > RUN_SOFT_DEADLINE:
+                detail["errors"].append(f"deadline: discovery stopped before {code}")
+                break
+            if apply_backoff and _discovery_exhausted(db, code):
+                detail["countries"].setdefault(code, {})["discovery_skipped"] = "exhausted-backoff"
+                continue
             try:
                 added = course_catalog.discover_universities(
                     db, code, COURSE_CATALOG_TARGET_PER_COUNTRY, usage_source=USAGE_SOURCE
@@ -256,7 +314,6 @@ def run_course_catalog_refresh_job(
             or (u.last_verified_at.replace(tzinfo=timezone.utc) if u.last_verified_at.tzinfo is None else u.last_verified_at) < cutoff
         ][:batch]
 
-        run_started = datetime.now(timezone.utc)
         for uni in queue:
             # Stop starting new work past the soft deadline: a run that outlives the
             # stale-takeover window would be seized by the poll loop and re-run

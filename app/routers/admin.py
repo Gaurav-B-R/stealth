@@ -2894,7 +2894,8 @@ def delete_user_admin(
 def run_course_catalog_refresh_admin(
     request: Request,
     limit: int | None = Query(None, ge=1, le=100),
-    countries: str | None = Query(None, max_length=40),
+    # 15 comma-separated codes need 44 chars — sized with headroom for growth.
+    countries: str | None = Query(None, max_length=80),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_admin_user),
     _: None = Depends(require_admin_turnstile_proof),

@@ -1053,9 +1053,10 @@ def build_org_tools(db: Session, organization_id: int, ctx=None, viewer_user_id=
             logger.warning("catalog search failed", exc_info=True)
             return {"error": "The catalog search failed."}
         if not rows:
+            valid_codes = ", ".join(c["code"] for c in course_catalog.catalog_countries())
             return {"total_matching_universities": 0, "universities": [],
                     "note": f"No catalog universities matched in {code}. Check the country code "
-                            "(US, UK, CA, AU, DE, IE, FR, ES, NL, AE) or loosen the filters."}
+                            f"({valid_codes}) or loosen the filters."}
         return _slim_catalog_result(rows, total)
 
     def list_client_shortlist(name: Optional[str] = None, client_id: Optional[int] = None) -> dict:

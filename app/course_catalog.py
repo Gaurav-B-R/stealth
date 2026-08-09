@@ -38,22 +38,24 @@ from app.utils import gemini_service
 
 logger = logging.getLogger(__name__)
 
-# Destination countries the catalog covers (same launch set as the rest of the app).
+# Destination countries the catalog covers: every CRM destination. Deliberately
+# broader than visa_catalog.LAUNCH_COUNTRY_CODES (the B2C visa-journey launch set) —
+# a CRM client can be bound for any COUNTRIES entry, so the Course Finder must be too.
+# Adding a country to enterprise_catalog.COUNTRIES automatically brings it here, and
+# the nightly refresh agent starts seeding it on its next run (one discovery call,
+# then enrichment paced by COURSE_CATALOG_DAILY_BATCH).
 def catalog_countries() -> list[dict]:
     """[{code, name, flag_emoji, student_intakes}] for every catalog country."""
     from app import enterprise_catalog
-    from app.visa_catalog import LAUNCH_COUNTRY_CODES
-    out = []
-    for code in LAUNCH_COUNTRY_CODES:
-        meta = enterprise_catalog.COUNTRY_MAP.get(code)
-        if meta:
-            out.append({
-                "code": code,
-                "name": meta["name"],
-                "flag_emoji": meta.get("flag_emoji", ""),
-                "student_intakes": meta.get("student_intakes", []),
-            })
-    return out
+    return [
+        {
+            "code": meta["code"],
+            "name": meta["name"],
+            "flag_emoji": meta.get("flag_emoji", ""),
+            "student_intakes": meta.get("student_intakes", []),
+        }
+        for meta in enterprise_catalog.COUNTRIES
+    ]
 
 
 def country_name(code: str) -> Optional[str]:
@@ -274,12 +276,20 @@ def _extract_grounding_urls(response: Any, limit: int = 8) -> list[str]:
 # doesn't collapse "unimelb.edu.au" to "edu.au".
 _SECOND_LEVEL_SUFFIXES = {
     "ac.uk", "co.uk", "org.uk", "gov.uk", "ac.ie",
-    "edu.au", "com.au", "org.au", "ac.nz", "co.nz",
+    "edu.au", "com.au", "org.au", "ac.nz", "co.nz", "org.nz", "govt.nz",
     "edu.in", "ac.in", "co.in", "edu.pk", "edu.bd", "edu.np", "edu.lk",
-    "edu.sg", "com.sg", "edu.my", "edu.hk", "com.hk", "edu.cn", "com.cn",
+    "edu.sg", "com.sg", "org.sg", "gov.sg", "edu.my", "edu.hk", "com.hk", "edu.cn", "com.cn",
     "ac.jp", "co.jp", "ac.kr", "co.kr", "edu.tw",
     "ac.za", "co.za", "edu.br", "com.br", "edu.mx", "com.mx",
     "ac.at", "ac.ir", "edu.tr", "edu.sa", "edu.eg", "ac.ae",
+    # Poland: most universities live under edu.pl or a regional city suffix
+    # (sgh.waw.pl, put.poznan.pl, p.lodz.pl, ue.wroc.pl…) — without these, every
+    # such university collapses to the same registrable domain and the per-country
+    # unique domain_key index rejects the whole discovery batch.
+    "edu.pl", "com.pl", "org.pl", "net.pl", "gov.pl",
+    "waw.pl", "wroc.pl", "krakow.pl", "poznan.pl", "lodz.pl", "gda.pl",
+    "szczecin.pl", "lublin.pl", "katowice.pl", "torun.pl", "olsztyn.pl",
+    "rzeszow.pl", "bialystok.pl", "opole.pl",
 }
 
 
@@ -1142,6 +1152,12 @@ def discover_universities(db: Session, country_code: str, target: int, usage_sou
                 break
             continue
 
+        # A dkey already claimed this run (by an earlier insert or an in-place
+        # update) means this item is the same institution under another name —
+        # inserting it would violate the per-country unique domain_key index and
+        # roll back the entire discovery batch.
+        if dkey and dkey in existing_domains:
+            continue
         existing_keys.add(key)
         if dkey:
             existing_domains.add(dkey)
@@ -1366,8 +1382,10 @@ def refresh_university(db: Session, uni: models.CourseCatalogUniversity, usage_s
 
     # Prune drift: a course the model hasn't re-confirmed across ~2 re-verification
     # cycles is likely renamed/discontinued — deactivate it (the upsert path revives
-    # it automatically if it ever reappears).
-    prune_cutoff = now - timedelta(days=2 * _REVERIFY_DAYS + 7)
+    # it automatically if it ever reappears). 3× the nominal cadence, because the
+    # real cadence stretches past _REVERIFY_DAYS whenever the roster outgrows the
+    # daily batch — at 2× a single missed confirmation could prune a live course.
+    prune_cutoff = now - timedelta(days=3 * _REVERIFY_DAYS + 7)
     for stale in existing_courses.values():
         ts = stale.last_verified_at
         if ts is not None and ts.tzinfo is None:
