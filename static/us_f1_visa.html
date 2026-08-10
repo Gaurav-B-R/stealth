@@ -2699,6 +2699,13 @@
                                         <path d="M4 18h10"></path></svg></span>
                                 <span class="subnav-label">Shortlist &amp; Recommendations</span>
                             </a>
+                            <a href="#" class="visa-subnav-item" data-uni-subtab="courses"
+                                onclick="switchDashboardTab('courses'); return false;">
+                                <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <circle cx="11" cy="11" r="7"></circle>
+                                        <path d="M21 21l-4.35-4.35"></path></svg></span>
+                                <span class="subnav-label">Course Finder</span>
+                            </a>
                             <a href="#" class="visa-subnav-item" data-uni-subtab="sop"
                                 onclick="switchDashboardTab('sop'); return false;">
                                 <span class="subnav-icon"><svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3080,6 +3087,8 @@
                                 <button type="button" class="visa-mobile-subnav-btn active"
                                     onclick="switchDashboardTab('universities')">🎓 Shortlist</button>
                                 <button type="button" class="visa-mobile-subnav-btn"
+                                    onclick="switchDashboardTab('courses')">🔎 Course Finder</button>
+                                <button type="button" class="visa-mobile-subnav-btn"
                                     onclick="switchDashboardTab('sop')">✍️ SOP Studio</button>
                             </div>
                         </div>
@@ -3089,6 +3098,26 @@
                     </div>
 
                     <!-- SOP Studio Tab (Application Kit) -->
+                    <!-- Course Finder Tab (lives under the Universities parent, like SOP Studio) -->
+                    <div id="dashboardTab-courses" class="dashboard-tab">
+                        <div class="tab-header">
+                            <h2>🔎 Course Finder</h2>
+                            <p class="tab-subtitle">Browse verified courses for your destination — fees, deadlines,
+                                entry requirements — and get an AI shortlist personalized to your profile.</p>
+                            <div class="visa-mobile-subnav" aria-label="University modules">
+                                <button type="button" class="visa-mobile-subnav-btn"
+                                    onclick="switchDashboardTab('universities')">🎓 Shortlist</button>
+                                <button type="button" class="visa-mobile-subnav-btn active"
+                                    onclick="switchDashboardTab('courses')">🔎 Course Finder</button>
+                                <button type="button" class="visa-mobile-subnav-btn"
+                                    onclick="switchDashboardTab('sop')">✍️ SOP Studio</button>
+                            </div>
+                        </div>
+                        <div id="coursesContent" style="padding: 0 0 2rem;">
+                            <div style="padding:2rem;color:var(--text-secondary,#9a9cb0)">Loading…</div>
+                        </div>
+                    </div>
+
                     <div id="dashboardTab-sop" class="dashboard-tab">
                         <div class="tab-header">
                             <h2 id="sopTabTitle">✍️ SOP Studio</h2>
@@ -3097,6 +3126,8 @@
                             <div class="visa-mobile-subnav" aria-label="University modules">
                                 <button type="button" class="visa-mobile-subnav-btn"
                                     onclick="switchDashboardTab('universities')">🎓 Shortlist</button>
+                                <button type="button" class="visa-mobile-subnav-btn"
+                                    onclick="switchDashboardTab('courses')">🔎 Course Finder</button>
                                 <button type="button" class="visa-mobile-subnav-btn active"
                                     onclick="switchDashboardTab('sop')">✍️ SOP Studio</button>
                             </div>
@@ -6962,7 +6993,7 @@
              looks for #pricingCountrySelect (gone), so the currency selector stays empty,
              the pass price never renders, and the checkout modal has no currency control
              while the server now prices per currency. -->
-        <script src="/static/app.js?v=20260730a"></script>
+        <script src="/static/app.js?v=20260809a"></script>
         <script>
         (function() {
             var toggle = document.getElementById('dashSidebarToggle');

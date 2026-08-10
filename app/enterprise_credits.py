@@ -1015,6 +1015,10 @@ def copilot_precheck_or_402(db: Session, organization_id: int) -> None:
     (before any Gemini tokens are spent). No-op when enforcement is disabled."""
     if not ENFORCE:
         return
+    # Same rule as every other 402 gate: a renewal that landed since the last request
+    # must credit BEFORE we refuse the message, or a paid-up org hits a top-up wall on
+    # the day it renewed — and on this surface that wall is the Chrome extension.
+    _sync_plan_credits_quietly(db, organization_id)
     wallet = get_or_create_wallet(db, organization_id, commit=False)
     if _copilot_used_today(wallet) < COPILOT_FREE_DAILY:
         return  # still within the free daily allowance
@@ -1048,6 +1052,10 @@ def record_copilot_message(
     heavy multi-tool answer is metered as the several messages' worth of work it is.
     Omitting it meters the turn as exactly one message — the pre-cost-weighting behavior.
     """
+    # Grant any due renewal before the wallet is read, exactly as charge_action does:
+    # otherwise a bundle completing on renewal day debits against a stale balance and
+    # the clamp below writes off credits the org has already paid for.
+    _sync_plan_credits_quietly(db, organization_id)
     wallet = get_wallet_for_update(db, organization_id)
 
     # Roll the daily window if the date changed.
@@ -1075,8 +1083,14 @@ def record_copilot_message(
         wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs or 0) + billable
         bundles = int(wallet.copilot_unbilled_msgs) // COPILOT_MSGS_PER_CREDIT
         if bundles:
+            cost_each = action_cost(COPILOT_ACTION_KEY) or 1
+            # Only drain the bundles the wallet can actually pay for. Draining all of
+            # them and then clamping the debit at the balance forgave the shortfall
+            # permanently; the unpaid remainder stays accrued for the next top-up.
+            payable = min(bundles, int(wallet.balance_credits) // cost_each) if cost_each > 0 else bundles
+            bundles = payable
             wallet.copilot_unbilled_msgs = int(wallet.copilot_unbilled_msgs) - bundles * COPILOT_MSGS_PER_CREDIT
-            cost = (action_cost(COPILOT_ACTION_KEY) or 1) * bundles
+            cost = cost_each * bundles
             debit = min(cost, int(wallet.balance_credits))  # never overdraw below zero
             if debit > 0:
                 _spend_from_wallet(wallet, debit)

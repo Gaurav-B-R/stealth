@@ -1339,24 +1339,10 @@ def _list_organization_members(
         return [_serialize_team_member(member, user) for member, user in rows]
 
 
-def _active_admin_count(db: Session, organization_id: int) -> int:
-    """Active members with workspace-administration powers.
-
-    Counted from `role_key` rather than the legacy `role` mirror: the mirror is maintained, but
-    the guard that stops an org locking itself out should not depend on a denormalized column
-    being in step. Owner counts as an admin — there is always exactly one.
-    """
-    return int(
-        db.query(models.EnterpriseOrganizationMember)
-        .filter(
-            models.EnterpriseOrganizationMember.organization_id == int(organization_id),
-            models.EnterpriseOrganizationMember.is_active.is_(True),
-            models.EnterpriseOrganizationMember.role_key.in_(
-                (access.ROLE_OWNER, access.ROLE_ADMIN)
-            ),
-        )
-        .count()
-    )
+# _active_admin_count lived here. Its last caller was the legacy role endpoint, which now
+# delegates to team_svc.update_member_access and so inherits `assert_admin_remains`
+# (app/enterprise_team.py) — a stricter version of the same invariant that also counts rows
+# written before `role_key` existed.
 
 
 def _enterprise_student_options_payload() -> dict:
@@ -1647,12 +1633,17 @@ def backfill_enterprise_account_flag(db: Session) -> None:
 
 
 @router.post("/login")
-async def enterprise_login(
+def enterprise_login(
     payload: EnterpriseLoginRequest,
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
+    # Deliberately a plain `def`, not `async def`. This handler never awaits — it does a
+    # DB-backed rate-limit check, a blocking Turnstile HTTP call (up to 10s), a bcrypt verify
+    # (~170ms of pure CPU) and several sync DB queries. On the event loop those would freeze
+    # every other request the worker is serving; as a sync handler FastAPI runs the whole
+    # thing in its threadpool, so one person signing in can no longer stall everyone else.
     _enforce_rate_limit_or_429(
         request=request,
         scope="enterprise.login",
@@ -2125,12 +2116,16 @@ async def enterprise_upload_org_logo(
         raise HTTPException(status_code=400, detail="The file is empty.")
     if len(data) > ENTERPRISE_LOGO_MAX_BYTES:
         raise HTTPException(status_code=400, detail="Logo is too large. Maximum size is 2 MB.")
-    png_bytes = _normalize_logo_image_or_400(data)
+    # Pillow re-encode is CPU-bound; offload it and the R2 PUT below off the event loop so a
+    # logo upload can't stall other requests on this worker (this handler must stay async for
+    # `await file.read()` above).
+    png_bytes = await run_in_threadpool(_normalize_logo_image_or_400, data)
 
     filename = f"logo-{uuid.uuid4().hex}.png"
     try:
-        enterprise_storage.store_document(
-            f"enterprise/{organization.id}/branding/{filename}", png_bytes, content_type="image/png"
+        await run_in_threadpool(
+            enterprise_storage.store_document,
+            f"enterprise/{organization.id}/branding/{filename}", png_bytes, content_type="image/png",
         )
     except Exception:
         logger.exception("Failed to store org logo (org_id=%s)", organization.id)
@@ -2142,7 +2137,10 @@ async def enterprise_upload_org_logo(
         str(organization.logo_url or ""),
     )
     if old_match and int(old_match.group(1)) == organization.id:
-        enterprise_storage.delete_document(f"enterprise/{organization.id}/branding/{old_match.group(2)}")
+        await run_in_threadpool(
+            enterprise_storage.delete_document,
+            f"enterprise/{organization.id}/branding/{old_match.group(2)}",
+        )
 
     organization.logo_url = f"/api/enterprise/public/org-logo/{organization.id}/{filename}"
     db.commit()
@@ -2470,11 +2468,22 @@ def enterprise_team_update_role(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_active_user),
 ):
+    """LEGACY three-option role control. Retired from the SPA; kept for older clients.
+
+    SECURITY: this used to write `membership.role_key` directly on nothing but a
+    `team.manage` check, bypassing the whole escalation core in enterprise_team — so an
+    office coordinator holding only the delegable `team.manage` grant could promote
+    themselves to Admin in one request, with no audit row. It now requires `roles.manage`
+    (as the supported /access endpoint does) and delegates the write to
+    `team_svc.update_member_access`, inheriting assert_not_self, assert_owner_protected,
+    assert_can_grant, assert_scope_allowed and assert_admin_remains, plus the audit rows
+    and notifications. Nothing here may write a membership row on its own again.
+    """
     _, organization, role = _require_enterprise_membership(
         db=db,
         user=current_user,
         request=request,
-        require_capability="team.manage",
+        require_capability="roles.manage",
     )
 
     target_role = _parse_enterprise_role_or_400(payload.role)
@@ -2507,27 +2516,19 @@ def enterprise_team_update_role(
             ),
         )
 
-    current_target_role = _normalize_enterprise_role(membership.role)
-    if current_target_role == ENTERPRISE_ROLE_ADMIN and target_role != ENTERPRISE_ROLE_ADMIN:
-        if _active_admin_count(db, organization.id) <= 1:
-            raise HTTPException(
-                status_code=400,
-                detail="At least one active admin is required for the organization.",
-            )
-    if int(member_user_id) == current_user.id and target_role != ENTERPRISE_ROLE_ADMIN:
-        raise HTTPException(
-            status_code=400,
-            detail="You cannot demote your own account from admin.",
-        )
-
-    # Write role_key as well, not just the mirror. If only `role` moved, the gate — which reads
-    # role_key — would keep granting the OLD capabilities while every screen, the roster and the
-    # internal admin console all reported the new role. A demotion has to actually demote.
+    # Delegate the write. update_member_access runs the full guard chain (self-service,
+    # owner-protection, grant-escalation, scope clamp, last-admin-remains), recomputes the
+    # `role` mirror and role_key together, resets the scope override to the new role's own
+    # default, and writes the audit rows — none of which this endpoint used to do.
     new_role_key = access.LEGACY_ROLE_TO_ROLE_KEY.get(target_role, access.ROLE_VIEWER)
-    membership.role_key = new_role_key
-    membership.custom_role_id = None
-    membership.data_scope = None            # back to the new role's own default
-    membership.role = target_role
+    team_svc.update_member_access(
+        db,
+        organization=organization,
+        actor_user=current_user,
+        actor_ctx=role.ctx,
+        membership=membership,
+        data={"role_key": new_role_key},
+    )
     db.commit()
     return {
         "message": "Role updated successfully.",
@@ -2732,10 +2733,25 @@ class EnterpriseClientUpdateRequest(EnterpriseClientIntakeFields):
     # As on the create payload: proceed even though the edited identity now collides
     # with another file.
     allow_duplicate: bool = False
+    # Concurrency baseline. `expected_values` is {field: value-as-rendered} for the fields
+    # being written — the precise check, which lets two people edit different fields of the
+    # same client without colliding. `expected_version` is the coarse whole-row fallback for
+    # a caller that cannot produce a baseline. Both optional; see _assert_client_write_is_current.
+    expected_values: Optional[dict] = None
+    expected_version: Optional[int] = None
+    # Set once the user has seen the conflict banner and chosen to save regardless. Kept
+    # separate from `expected_version` so "I never sent a version" and "I saw the conflict
+    # and decided" stay distinguishable in the logs and in intent.
+    force_overwrite: bool = False
 
 
 class EnterpriseClientStatusRequest(BaseModel):
     status: str = Field(..., min_length=2, max_length=30)
+    # The stage the caller's screen was showing. A move is refused only when somebody else
+    # has ALREADY moved the case since — an unrelated edit to the same client is not a
+    # conflict with a stage move.
+    expected_status: Optional[str] = None
+    expected_version: Optional[int] = None
 
 
 class EnterpriseClientNoteRequest(BaseModel):
@@ -3329,11 +3345,187 @@ def _serialize_client_intake(client: models.EnterpriseClient) -> dict:
     return data
 
 
+# Friendly names for the fields a conflict banner is most likely to have to name. Anything
+# not listed falls back to a prettified key, so a new intake field needs no maintenance here.
+_CLIENT_FIELD_LABELS = {
+    "full_name": "Full name", "email": "Email", "phone": "Phone",
+    "whatsapp_number": "WhatsApp number", "current_city": "Current city",
+    "nationality": "Nationality", "date_of_birth": "Date of birth",
+    "passport_number": "Passport number", "passport_expiry": "Passport expiry",
+    "destination_country_code": "Destination country", "visa_type": "Visa type",
+    "intake": "Target intake", "status": "Pipeline stage", "priority": "Priority",
+    "target_date": "Key date", "assigned_to_user_id": "Assigned counselor",
+    "branch_id": "Branch / office", "admission_stage": "Admission stage",
+    "next_followup_date": "Next follow-up", "application_reference": "Application reference",
+}
+
+
+def _norm_for_compare(value):
+    """Collapse the several ways this API spells "empty" so they compare equal.
+
+    The form posts "" for a cleared field while the serializer emits None, and a cleared
+    multi-select is [] on one side and None on the other. Without this every such field
+    would read as a conflict on every save.
+    """
+    if value is None or value == "" or value == []:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (list, tuple)):
+        return sorted(str(v) for v in value)
+    return str(value)
+
+
+_OCC_CONTROL_KEYS = ("expected_version", "expected_values", "force_overwrite", "allow_duplicate")
+
+
+def _conflicting_fields(stored: dict, expected: dict, writing) -> list[str]:
+    """Fields this caller is about to write whose stored value has moved since they read it.
+
+    This — not the row version — is the real conflict test. `expected` holds the values the
+    caller's form was RENDERED from, so comparing it against what is stored now isolates
+    exactly the changes somebody else made, to the fields this save would overwrite.
+
+    Two things fall out of comparing against the caller's baseline rather than against their
+    new values. Concurrent edits to DIFFERENT fields stop colliding: they merge cleanly,
+    which is what makes a shared client file usable by two counsellors at once. And the
+    fields reported back are genuinely the other person's changes — comparing `stored` to
+    the caller's own new value would flag every key they typed and name their own work as
+    the colleague's, which is worse than saying nothing.
+    """
+    labels: list[str] = []
+    for key in writing:
+        if key in _OCC_CONTROL_KEYS or key not in expected or key not in stored:
+            continue
+        if _norm_for_compare(stored.get(key)) == _norm_for_compare(expected.get(key)):
+            continue
+        labels.append(_CLIENT_FIELD_LABELS.get(key, key.replace("_", " ").capitalize()))
+    return labels
+
+
+def _assert_client_write_is_current(client, data: dict, *, force: bool = False) -> None:
+    """Concurrency precondition for a client write.
+
+    Prefers the field-level check when the caller sent the baseline it rendered from, and
+    falls back to the whole-row version for a caller that only sent that (an older bundle,
+    a script). A caller that sent neither keeps the previous last-write-wins behaviour, so
+    this tightened the contract without a flag day.
+    """
+    if force:
+        return
+    # A save that writes nothing cannot overwrite anything. Opening the edit form, changing
+    # your mind and pressing Save still reaches here with only the control keys; answering
+    # that with "someone else changed this — save anyway?" would offer a destructive-sounding
+    # choice over an empty payload.
+    if not [k for k in data if k not in _OCC_CONTROL_KEYS]:
+        return
+    expected = data.get("expected_values")
+    if isinstance(expected, dict) and expected:
+        stored = _serialize_client(client, None, include_sensitive=True)
+        writing = [k for k in data if k not in _OCC_CONTROL_KEYS]
+        conflicts = _conflicting_fields(stored, expected, writing)
+        if conflicts:
+            _raise_stale_write(client, what="client", conflicts=conflicts)
+        # Every field being written must be COVERED by the baseline, or the field-level
+        # check silently passed on the ones it never looked at. The browser always sends a
+        # baseline entry per written key; anything else falls back to the whole-row version
+        # so a partial baseline cannot be used to slip an unchecked write past this.
+        if all(k in expected for k in writing):
+            return
+    _assert_fresh_write(client, data.get("expected_version"), what="client")
+
+
+def _raise_stale_write(row, *, what: str, conflicts=None):
+    """The one 409 shape for a concurrent-edit conflict.
+
+    `conflicts` names the other person's changes so the banner can be specific instead of
+    "something changed"; `current_version` lets the UI resync without a second round trip.
+    """
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "stale_write",
+            "message": (
+                f"Someone else saved changes to this {what} while you had it open. "
+                "Your edits were not applied."
+            ),
+            "current_version": int(getattr(row, "version", 0) or 0),
+            "conflicts": list(conflicts or []),
+        },
+    )
+
+
+def _assert_fresh_write(row, expected_version, *, what: str, conflicts=None) -> None:
+    """Whole-row optimistic-concurrency precondition.
+
+    HTTP If-Match semantics, carried in the payload rather than a header because the SPA
+    posts JSON through one `api()` helper. The client echoes back the `version` it rendered
+    from; if the stored row has moved on since, somebody else saved in between.
+
+    This is the COARSE check: it fires on any concurrent write, whether or not it touched
+    the same fields. Use it where the payload is whole-object and therefore cannot be
+    merged (a finance entry), or as the fallback for a caller that sent no baseline. Where
+    the caller does send one, `_assert_client_write_is_current` is strictly better.
+
+    `expected_version` is OPTIONAL on purpose: a caller that sends nothing keeps the
+    previous last-write-wins behaviour instead of breaking.
+    """
+    if expected_version in (None, 0):
+        return
+    if int(getattr(row, "version", 0) or 0) == int(expected_version):
+        return
+    _raise_stale_write(row, what=what, conflicts=conflicts)
+
+
+# The fields `clients.view_sensitive` governs. Kept as one tuple so the read path (what
+# _serialize_client omits) and the write path (what _strip_unwritable_sensitive refuses to
+# let a blind caller overwrite) can never drift apart.
+_CLIENT_SENSITIVE_FIELDS = ("passport_number",)
+# The same fields as the AI autofill record labels them. Needed because rows written before
+# the record carried `attr` can only be matched on their human label.
+_CLIENT_SENSITIVE_LABELS = frozenset({"Passport number"})
+
+
+def _strip_unwritable_sensitive(client, data: dict, ctx) -> None:
+    """Stop a caller who cannot READ a sensitive field from overwriting it. Mutates `data`.
+
+    Omitting the passport number from the payload (above) means a form rendered for someone
+    without `clients.view_sensitive` draws that input EMPTY. Left unguarded their next save
+    would post the empty string and clear an encrypted column they were never shown, turning
+    a read restriction into silent data loss.
+
+    An EMPTY submitted value is dropped rather than refused. It carries no intent — it is
+    just the blank input echoing back, which is exactly what an older cached bundle sends on
+    every save — so rejecting it would 403 an unrelated phone-number correction with a
+    permissions error naming a field the user cannot even see. Dropping the key leaves the
+    stored value untouched, which is what they would have wanted either way.
+
+    A NON-EMPTY value is a real attempt to set something they are not cleared to see, so it
+    is refused loudly. Create is deliberately not guarded: there is no stored value to
+    destroy, and blocking it would stop a restricted counsellor completing an ordinary intake.
+    """
+    if ctx is not None and ctx.has("clients.view_sensitive"):
+        return
+    for field in _CLIENT_SENSITIVE_FIELDS:
+        if field not in data:
+            continue
+        submitted = (data.get(field) or "").strip() or None
+        if submitted is None:
+            data.pop(field, None)
+            continue
+        if submitted != (getattr(client, field, None) or None):
+            raise HTTPException(
+                status_code=403,
+                detail=access.denied_detail("clients.view_sensitive"),
+            )
+        data.pop(field, None)   # unchanged echo — nothing to write
+
+
 def _serialize_client(
     client: models.EnterpriseClient,
     member_names: dict[int, str] | None = None,
     *,
-    include_sensitive: bool = True,
+    include_sensitive: bool = False,
 ) -> dict:
     """Serialize a client for the API.
 
@@ -3341,7 +3533,15 @@ def _serialize_client(
     matters: the client edit form round-trips every field it is given, so a masked placeholder
     would be written straight back over an encrypted column the next time anyone saved an
     unrelated change. Omitting the key is safe because a PATCH only applies the fields it receives.
-    Callers pass False on list-shaped payloads, where the number is never rendered anyway.
+
+    THE DEFAULT IS CLOSED. `clients.view_sensitive` is a `dangerous`-flagged capability
+    (passport number and other identity fields) that Viewer and Finance deliberately do not
+    hold — and Finance resolves to workspace scope, so a caller who can walk /clients/{id}
+    could otherwise collect every student's passport number. Hiding the field in the browser
+    is not enforcement: the value is on the wire and visible in devtools. Every caller must
+    therefore opt IN with `include_sensitive=role.ctx.has("clients.view_sensitive")`, and a
+    call site that forgets fails safe (the field is omitted) instead of leaking. Mirrors the
+    rule the AI surface already applies in enterprise_ai.py.
     """
     assigned_name = None
     if client.assigned_to_user_id and member_names is not None:
@@ -3387,9 +3587,13 @@ def _serialize_client(
         "branch_id": getattr(client, "branch_id", None),
         "created_at": _iso(client.created_at),
         "updated_at": _iso(client.updated_at),
+        # Optimistic-concurrency token. The edit form holds this and sends it back on save;
+        # see _assert_fresh_write.
+        "version": int(getattr(client, "version", 0) or 0),
     }
     if not include_sensitive:
-        payload.pop("passport_number", None)
+        for field in _CLIENT_SENSITIVE_FIELDS:
+            payload.pop(field, None)
         payload["passport_hidden"] = True
     return payload
 
@@ -4096,7 +4300,10 @@ def enterprise_create_client(
     return {
         "message": "Client added successfully.",
         "permissions": _enterprise_permissions_for_role(role),
-        "client": _serialize_client(client, member_names),
+        "client": _serialize_client(
+            client, member_names,
+            include_sensitive=role.ctx.has("clients.view_sensitive"),
+        ),
         "subscription": _serialize_subscription_state(billing.build_subscription_state(db, organization.id)),
     }
 
@@ -4132,10 +4339,16 @@ def enterprise_get_client(
     )
     return {
         "permissions": _enterprise_permissions_for_role(role),
-        "client": _serialize_client(client, member_names),
+        "client": _serialize_client(
+            client, member_names,
+            include_sensitive=role.ctx.has("clients.view_sensitive"),
+        ),
         "notes": [_serialize_note(n) for n in notes],
         "emails": [_serialize_client_email(e) for e in emails],
-        "documents": [_serialize_client_document(d) for d in documents],
+        "documents": [
+            _serialize_client_document(d, include_sensitive=role.ctx.has("clients.view_sensitive"))
+            for d in documents
+        ],
     }
 
 
@@ -4153,6 +4366,14 @@ def enterprise_update_client(
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
     data = payload.model_dump(exclude_unset=True)
+    # Before anything is applied: a caller who cannot READ the passport number may not
+    # blind-overwrite it either (the field is omitted from their payload, so their form
+    # renders it empty and would otherwise clear it on save).
+    _strip_unwritable_sensitive(client, data, role.ctx)
+    # ...and the fields they are writing must not have moved since their form was drawn.
+    # `force_overwrite` is the second press of the same button, after the conflict banner
+    # has shown them exactly which of their fields somebody else changed.
+    _assert_client_write_is_current(client, data, force=payload.force_overwrite)
     status_before_edit = client.status
     admission_stage_before_edit = client.admission_stage
     # Snapshot of the matchable identity, taken before anything is applied. The Edit form
@@ -4246,7 +4467,10 @@ def enterprise_update_client(
     return {
         "message": "Client updated.",
         "permissions": _enterprise_permissions_for_role(role),
-        "client": _serialize_client(client, member_names),
+        "client": _serialize_client(
+            client, member_names,
+            include_sensitive=role.ctx.has("clients.view_sensitive"),
+        ),
     }
 
 
@@ -4264,6 +4488,15 @@ def enterprise_update_client_status(
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
     new_status = _stage_key_or_400(payload.status)
     old_status = client.status
+    # A stage move from a stale board is the change that writes a false journey entry and
+    # announces a move that never happened. Conflict on the STAGE specifically: if the
+    # caller's screen agreed with the stored stage, their move is a valid continuation
+    # regardless of what else changed on the record meanwhile.
+    if payload.expected_status:
+        if _norm_for_compare(old_status) != _norm_for_compare(payload.expected_status):
+            _raise_stale_write(client, what="client", conflicts=[_CLIENT_FIELD_LABELS["status"]])
+    else:
+        _assert_fresh_write(client, payload.expected_version, what="client")
     _apply_status_change(client, new_status, db)
     db.commit()
     db.refresh(client)
@@ -4278,7 +4511,10 @@ def enterprise_update_client_status(
     return {
         "message": "Status updated.",
         "permissions": _enterprise_permissions_for_role(role),
-        "client": _serialize_client(client, member_names),
+        "client": _serialize_client(
+            client, member_names,
+            include_sensitive=role.ctx.has("clients.view_sensitive"),
+        ),
     }
 
 
@@ -4287,6 +4523,7 @@ class EnterpriseStageDataUpdateRequest(BaseModel):
     value clears that field. Unknown keys (e.g. after a catalog change) are ignored."""
     stage_key: str
     values: dict = {}
+    expected_version: Optional[int] = None
 
 
 def _clean_stage_values(allowed: dict[str, dict], incoming) -> dict[str, str]:
@@ -4336,6 +4573,10 @@ def enterprise_update_client_stage_data(
         db=db, user=current_user, request=request, require_capability="clients.edit"
     )
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
+    # The case record is merged key-by-key below, so a stale save only clobbers the fields
+    # it actually carries — but those are visa-critical (CAS number, SEVIS ID, funds shown),
+    # so a stale writer is still refused rather than merged over a colleague's correction.
+    _assert_fresh_write(client, payload.expected_version, what="client")
 
     stage_key = str(payload.stage_key or "").strip().lower()
     if stage_key not in catalog.CLIENT_STAGE_KEYS:
@@ -4382,7 +4623,10 @@ def enterprise_update_client_stage_data(
     return {
         "message": "Case record saved.",
         "permissions": _enterprise_permissions_for_role(role),
-        "client": _serialize_client(client, member_names),
+        "client": _serialize_client(
+            client, member_names,
+            include_sensitive=role.ctx.has("clients.view_sensitive"),
+        ),
     }
 
 
@@ -4398,11 +4642,13 @@ def enterprise_delete_client(
     )
     client = _get_org_client_or_404(db, organization.id, client_id, ctx=role.ctx)
 
-    # Purge the stored bytes BEFORE the rows go. The child rows cascade at the DB level
-    # (passive_deletes), so no Python-side hook ever runs for them — without this the R2
-    # objects would be orphaned forever while the DPA's deletion clause promises otherwise.
-    # delete_document is best-effort and never raises, so a missing blob cannot block the
-    # record deletion.
+    # Collect the storage keys BEFORE the rows go — the child rows cascade at the DB level
+    # (passive_deletes), so no Python-side hook ever runs for them and after the commit
+    # there is nothing left to ask. The blobs themselves are purged only AFTER the commit
+    # (below): rows first, bytes second, the same invariant every sibling delete handler
+    # documents. The old order destroyed the files first, so a commit that failed — dropped
+    # connection, timeout, deadlock — left the client alive and still listing passports and
+    # bank statements whose bytes were already unrecoverable.
     storage_keys = [
         key
         for (key,) in db.query(models.EnterpriseClientDocument.storage_key)
@@ -4428,8 +4674,6 @@ def enterprise_delete_client(
     storage_keys += cal_files.keys_for_client(
         db, organization_id=organization.id, client_id=client.id
     )
-    for key in storage_keys:
-        enterprise_storage.delete_document(key)
 
     # Leads that became this client outlive it (an enquiry is its own record), so detach
     # them explicitly rather than trusting ON DELETE SET NULL — the sqlite sandbox never
@@ -4441,6 +4685,14 @@ def enterprise_delete_client(
 
     db.delete(client)
     db.commit()
+
+    # Only now, with the rows durably gone, purge the bytes. The DPA's deletion promise is
+    # kept by delete_document being best-effort-but-attempted for every key; a blob that
+    # fails to delete here is an orphan costing storage, never a live row pointing at
+    # nothing — the unrecoverable direction.
+    for key in storage_keys:
+        enterprise_storage.delete_document(key)
+
     return {
         "message": "Client deleted.",
         "permissions": _enterprise_permissions_for_role(role),
@@ -4933,7 +5185,7 @@ async def enterprise_upload_email_attachment(
 
     storage_key = f"enterprise/{organization.id}/clients/{client.id}/email/{uuid.uuid4().hex}{ext}"
     try:
-        enterprise_storage.store_document(storage_key, data, content_type=file.content_type)
+        await run_in_threadpool(enterprise_storage.store_document, storage_key, data, content_type=file.content_type)
     except Exception:
         logger.exception("Failed to store email attachment (org_id=%s, client_id=%s)", organization.id, client.id)
         raise HTTPException(status_code=502, detail="Could not upload that file right now. Please try again.")
@@ -6145,7 +6397,11 @@ async def enterprise_upload_calendar_attachment(
         raise HTTPException(status_code=400, detail=str(exc))
 
     try:
-        row = cal_files.store(
+        # cal_files.store does a blocking R2 PUT (and a DB write); offload it so this async
+        # handler — async only for `await file.read()` — doesn't run it on the event loop.
+        # The await suspends until it returns, so `db` is never touched from two threads at once.
+        row = await run_in_threadpool(
+            cal_files.store,
             db,
             organization_id=organization.id,
             event_id=(ev.id if ev else None),
@@ -6457,9 +6713,12 @@ async def enterprise_support_create(
     db.commit()
     db.refresh(row)
 
-    # Notify the support inbox (best-effort — never fail the request on email error).
+    # Notify the support inbox (best-effort — never fail the request on email error). The
+    # Resend call is a blocking HTTPS round trip; offload it so it doesn't sit on the event
+    # loop (this handler is async for `await request.json()` / reading the uploads).
     try:
-        send_enterprise_support_request_email(
+        await run_in_threadpool(
+            send_enterprise_support_request_email,
             request_type=request_type,
             subject=subject,
             message=message,
@@ -6475,7 +6734,8 @@ async def enterprise_support_create(
     # confirmation-email failure must never fail the request, mirroring the block above).
     if request_type == "feature_request" and (current_user.email or "").strip():
         try:
-            send_feature_request_confirmation(
+            await run_in_threadpool(
+                send_feature_request_confirmation,
                 to_email=current_user.email,
                 full_name=requester_name,
                 request_summary=subject,
@@ -7093,6 +7353,11 @@ class EnterpriseFinanceEntryRequest(BaseModel):
     client_id: int | None = None
     repeat_monthly: bool = False
     repeat_until: Optional[date] = None
+    # Optimistic-concurrency token on edit (ignored on create). This payload is whole-object
+    # by design — "an empty client_id means detach" — so without it the later of two saves
+    # silently rewrites every field of the earlier one, including the amount.
+    expected_version: Optional[int] = None
+    force_overwrite: bool = False
 
 
 class EnterpriseFinanceSettingsRequest(BaseModel):
@@ -7345,6 +7610,8 @@ def enterprise_finance_update_entry(
         )
     _validate_finance_entry_dates(db, organization.id, payload)
     entry = _get_org_finance_entry_or_404(db, organization.id, entry_id)
+    if not payload.force_overwrite:
+        _assert_fresh_write(entry, payload.expected_version, what="entry")
     client = _finance_client_for_entry(db, organization.id, payload.client_id, ctx=role.ctx)
     # The form always submits every field, so an empty client_id means "detach".
     finance.apply_entry_fields(entry, payload, client=client, clear_client=(client is None))
@@ -9892,12 +10159,15 @@ def _verify_signup_otp_or_400(db: Session, email: str, code: Optional[str]) -> m
 
 
 @router.post("/signup")
-async def enterprise_signup(
+def enterprise_signup(
     payload: EnterpriseSignupRequest,
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
 ):
+    # Plain `def` for the same reason as enterprise_login: it never awaits, but it runs a
+    # bcrypt hash (~170ms CPU), Turnstile verification and sync DB writes. Sync handlers run
+    # in FastAPI's threadpool, keeping this off the shared event loop.
     _enforce_rate_limit_or_429(
         request=request,
         scope="enterprise.signup",
@@ -10615,6 +10885,10 @@ def enterprise_copilot_extension_chat(
             message=payload.message,
             conversation_history=payload.conversation_history,
             session_attachments=payload.session_attachments,
+            # Record scope picked the client; capabilities decide what the prompt may
+            # disclose about them — the extension must not be a way around the
+            # clients.view_sensitive / documents.* gates the dashboard enforces.
+            ctx=role.ctx,
         )
         answer = copilot_turn.answer
     except Exception:
@@ -10688,7 +10962,53 @@ def _document_scan_pricing(db: Session, organization_id: int) -> dict:
     }
 
 
-def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
+def _scrub_sensitive_autofill(extracted, include_sensitive: bool):
+    """Mask sensitive identity values inside a document's stored autofill record.
+
+    `_ent_autofill_profile` records what it wrote and what disagreed, and that block is
+    persisted into `extracted_fields` and served back on the client-detail and documents
+    responses. Left alone it hands the passport number to precisely the roles
+    `_serialize_client` withholds it from — Viewer holds `clients.view` and `documents.view`
+    but not `clients.view_sensitive` — so the masking has to happen HERE, on the read path,
+    not only where the note is composed. Read-path masking is also what covers the rows
+    written before any of this existed.
+
+    Matched on `attr` where present and on the human label otherwise, because rows stored
+    before `attr` was recorded carry only the label.
+    """
+    if include_sensitive or not isinstance(extracted, dict):
+        return extracted
+    autofill = extracted.get("autofill")
+    if not isinstance(autofill, dict):
+        return extracted
+
+    def _is_sensitive(entry):
+        if not isinstance(entry, dict):
+            return False
+        attr = entry.get("attr")
+        if attr:
+            return attr in _CLIENT_SENSITIVE_FIELDS
+        return str(entry.get("field") or "") in _CLIENT_SENSITIVE_LABELS
+
+    def _mask(entries, keys):
+        out = []
+        for entry in (entries or []):
+            if _is_sensitive(entry):
+                entry = {**entry, **{k: "••••••••" for k in keys if k in entry}}
+            out.append(entry)
+        return out
+
+    scrubbed = {**autofill}
+    if isinstance(autofill.get("filled"), list):
+        scrubbed["filled"] = _mask(autofill["filled"], ("value",))
+    if isinstance(autofill.get("conflicts"), list):
+        scrubbed["conflicts"] = _mask(autofill["conflicts"], ("existing", "document"))
+    return {**extracted, "autofill": scrubbed}
+
+
+def _serialize_client_document(
+    doc: models.EnterpriseClientDocument, *, include_sensitive: bool = False
+) -> dict:
     extracted = None
     if doc.extracted_fields:
         try:
@@ -10696,6 +11016,7 @@ def _serialize_client_document(doc: models.EnterpriseClientDocument) -> dict:
             extracted = json.loads(doc.extracted_fields)
         except Exception:
             extracted = None
+    extracted = _scrub_sensitive_autofill(extracted, include_sensitive)
     # A staff override reads as "valid" everywhere downstream, but it was NOT the AI that
     # cleared it — surface the provenance so the UI can label it "Manually approved".
     # Rows accepted before these columns existed fall back to the audit keys the accept
@@ -10753,7 +11074,10 @@ def enterprise_list_client_documents(
     return {
         "permissions": _enterprise_permissions_for_role(role),
         "document_types": list(catalog.STUDENT_DOCUMENT_TYPES),
-        "documents": [_serialize_client_document(d) for d in rows],
+        "documents": [
+            _serialize_client_document(d, include_sensitive=role.ctx.has("clients.view_sensitive"))
+            for d in rows
+        ],
         # So the upload card and every Scan button can price themselves without a second call.
         "scan_pricing": _document_scan_pricing(db, organization.id),
         # A scan is debited by the background worker, AFTER the upload/scan response has
@@ -10830,7 +11154,7 @@ async def enterprise_upload_client_document(
 
     storage_key = f"enterprise/{organization.id}/clients/{client.id}/{uuid.uuid4().hex}{ext}"
     try:
-        enterprise_storage.store_document(storage_key, data, content_type=file.content_type)
+        await run_in_threadpool(enterprise_storage.store_document, storage_key, data, content_type=file.content_type)
     except Exception:
         logger.exception("Failed to store client document (org_id=%s, client_id=%s)", organization.id, client.id)
         raise HTTPException(status_code=502, detail="Could not store the document right now. Please try again.")
@@ -10860,7 +11184,9 @@ async def enterprise_upload_client_document(
     return {
         "message": "Document uploaded." + (" Rilono AI is scanning it." if want_scan else ""),
         "permissions": _enterprise_permissions_for_role(role),
-        "document": _serialize_client_document(doc),
+        "document": _serialize_client_document(
+            doc, include_sensitive=role.ctx.has("clients.view_sensitive")
+        ),
         "scan_requested": want_scan,
         "scan_pricing": _document_scan_pricing(db, organization.id),
     }
@@ -11082,14 +11408,19 @@ def _ent_autofill_profile(db: Session, client: models.EnterpriseClient, document
         current_empty = current is None or (isinstance(current, str) and not current.strip())
         if current_empty:
             setattr(client, attr, new_value)
-            filled.append({"field": label, "value": _disp(new_value)})
+            # `attr` travels with the record so the read path can tell which entries hold a
+            # value governed by `clients.view_sensitive` (see _scrub_sensitive_autofill).
+            filled.append({"field": label, "attr": attr, "value": _disp(new_value)})
         else:
             if is_date_kind(kind):
                 same = (current == new_value)
             else:
                 same = (str(current).strip().lower() == new_value.strip().lower())
             if not same:
-                conflicts.append({"field": label, "existing": _disp(current), "document": _disp(new_value)})
+                conflicts.append({
+                    "field": label, "attr": attr,
+                    "existing": _disp(current), "document": _disp(new_value),
+                })
 
     if filled or conflicts:
         lines = []
@@ -11097,9 +11428,17 @@ def _ent_autofill_profile(db: Session, client: models.EnterpriseClient, document
             lines.append("Auto-filled from validated " + str(document_type) + ": "
                          + ", ".join(f["field"] for f in filled) + ".")
         if conflicts:
+            # The note is readable by anyone with `notes.view` — which Viewer holds and
+            # `clients.view_sensitive` is separate from. Spelling a mismatched passport
+            # number out here would hand it to exactly the roles the serializer withholds
+            # it from, so a sensitive field's note says only THAT it differs.
+            def _conflict_phrase(c):
+                if c.get("attr") in _CLIENT_SENSITIVE_FIELDS:
+                    return f'{c["field"]} (differs from the profile — open the document to compare)'
+                return f'{c["field"]} (profile "{c["existing"]}" vs document "{c["document"]}")'
+
             lines.append("Needs review — document differs from existing profile: "
-                         + "; ".join(f'{c["field"]} (profile "{c["existing"]}" vs document "{c["document"]}")'
-                                     for c in conflicts) + ".")
+                         + "; ".join(_conflict_phrase(c) for c in conflicts) + ".")
         try:
             db.add(models.EnterpriseClientNote(
                 organization_id=client.organization_id,
@@ -11339,9 +11678,15 @@ def enterprise_scan_client_document(
 
     try:
         data = enterprise_storage.fetch_document(doc.storage_key)
+    except enterprise_storage.DocumentNotFound:
+        logger.warning("Document blob missing for scan (document_id=%s)", doc.id)
+        raise HTTPException(
+            status_code=410,
+            detail="This document's file is no longer available and can't be scanned. Please re-upload it.",
+        )
     except Exception:
         logger.exception("Failed to fetch document for scan (document_id=%s)", doc.id)
-        raise HTTPException(status_code=502, detail="Could not retrieve the document right now.")
+        raise HTTPException(status_code=502, detail="Could not retrieve the document right now. Please try again.")
 
     # Hand the worker a clean slate: a re-scan that fails must not leave the previous
     # verdict on screen looking like the new one. NULL marks the scan as in flight.
@@ -11358,7 +11703,9 @@ def enterprise_scan_client_document(
     return {
         "message": "Rilono AI is scanning this document.",
         "permissions": _enterprise_permissions_for_role(role),
-        "document": _serialize_client_document(doc),
+        "document": _serialize_client_document(
+            doc, include_sensitive=role.ctx.has("clients.view_sensitive")
+        ),
         "scan_pricing": _document_scan_pricing(db, organization.id),
     }
 
@@ -11393,9 +11740,15 @@ def enterprise_download_client_document(
 
     try:
         data = enterprise_storage.fetch_document(doc.storage_key)
+    except enterprise_storage.DocumentNotFound:
+        logger.warning("Document blob missing on download (document_id=%s)", doc.id)
+        raise HTTPException(
+            status_code=410,
+            detail="This file is no longer available. It may have been removed; please re-upload it.",
+        )
     except Exception:
         logger.exception("Failed to fetch client document id=%s", doc.id)
-        raise HTTPException(status_code=502, detail="Could not retrieve the document right now.")
+        raise HTTPException(status_code=502, detail="Could not retrieve the document right now. Please try again.")
 
     ext = os.path.splitext(doc.original_filename)[1].lower()
     # Serve a Content-Type derived from the validated extension — NEVER the uploader-supplied
@@ -11526,7 +11879,9 @@ def enterprise_accept_client_document(
         logger.exception("Failed to add accept audit note (document_id=%s)", document_id)
     db.commit()
     return {
-        "document": _serialize_client_document(doc),
+        "document": _serialize_client_document(
+            doc, include_sensitive=role.ctx.has("clients.view_sensitive")
+        ),
         "permissions": _enterprise_permissions_for_role(role),
     }
 
@@ -13285,7 +13640,7 @@ async def public_document_request_upload(
 
     storage_key = f"enterprise/{org.id}/clients/{client.id}/{uuid.uuid4().hex}{ext}"
     try:
-        enterprise_storage.store_document(storage_key, data, content_type=file.content_type)
+        await run_in_threadpool(enterprise_storage.store_document, storage_key, data, content_type=file.content_type)
     except Exception:
         logger.exception("Failed to store client-uploaded document (org_id=%s, client_id=%s)", org.id, client.id)
         raise HTTPException(status_code=502, detail="Could not store the document right now. Please try again.")
@@ -14204,6 +14559,12 @@ def public_portal_data(payload: PublicPortalDataRequest, request: Request, db: S
 ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS = int(os.getenv("ENTERPRISE_COPILOT_INVITE_EXPIRES_DAYS", "30"))
 ENTERPRISE_COPILOT_SESSION_HOURS = int(os.getenv("ENTERPRISE_COPILOT_SESSION_HOURS", "24"))
 ENTERPRISE_COPILOT_INVITE_MESSAGES = int(os.getenv("ENTERPRISE_COPILOT_INVITE_MESSAGES", "100"))
+# Wrong guesses allowed across the WHOLE life of one link, however many codes are
+# sent. The per-code cap resets on every resend and the rate limits key on the
+# caller's IP, so without this a leaked link is a 30-day brute-force budget that
+# only grows with the attacker's address pool. 30 guesses against a 900k code
+# space is a ~0.003% chance; a client who genuinely fumbles asks staff to resend.
+ENTERPRISE_COPILOT_MAX_TOTAL_CODE_ATTEMPTS = int(os.getenv("ENTERPRISE_COPILOT_MAX_TOTAL_CODE_ATTEMPTS", "30"))
 COPILOT_CLIENT_ACTION_KEY = "copilot_client"
 
 
@@ -14226,7 +14587,10 @@ class PublicCopilotTurn(BaseModel):
 class PublicCopilotChatRequest(BaseModel):
     session_token: str = Field(..., min_length=10, max_length=4000)
     message: str = Field(..., min_length=1, max_length=8000)
-    history: Optional[List[PublicCopilotTurn]] = None
+    # Capped at the same 200 turns the page keeps and the engine budgets. Without a
+    # bound, an unauthenticated caller could post a huge array: validation runs
+    # before the endpoint body, so it lands before the session check or rate limit.
+    history: Optional[List[PublicCopilotTurn]] = Field(None, max_length=200)
 
 
 def _build_copilot_invite_url(subdomain_slug, token: str, request: Request | None) -> str:
@@ -14332,7 +14696,10 @@ def _public_load_copilot_context(db: Session, session_token: str):
     invite_id = _decode_copilot_session_token(session_token)
     invite = db.query(models.EnterpriseCopilotInvite).filter(models.EnterpriseCopilotInvite.id == invite_id).first()
     if not invite or not _copilot_invite_is_live(invite):
-        raise HTTPException(status_code=401, detail="This copilot link is no longer active.")
+        # 410, not 401: the session token is fine — the LINK is dead (staff revoked
+        # it, or it passed its expiry). Answering 401 made the page offer a re-verify
+        # that could never succeed; the client needs to be told to ask for a new link.
+        raise HTTPException(status_code=410, detail="This copilot link is no longer active.")
     client = db.query(models.EnterpriseClient).filter(models.EnterpriseClient.id == invite.client_id).first()
     org = db.query(models.EnterpriseOrganization).filter(models.EnterpriseOrganization.id == invite.organization_id).first()
     if not client or not org:
@@ -14356,6 +14723,24 @@ def enterprise_create_copilot_invite(
     email = (client.email or "").strip().lower()
     if not email:
         raise HTTPException(status_code=400, detail="Add an email to this client before sharing their copilot.")
+
+    # Serialize sends for this client before reading anything. Two of them at once
+    # (a double-click, or two staff on the same case) each read "no live invite",
+    # each revoke the other's row and each insert — leaving TWO live links, both
+    # chargeable at verify. The client row is the only row that always exists to
+    # lock, so it is the gate; locking the invite rows alone can't help when there
+    # are none yet. (No-op on SQLite, which serializes writes anyway.)
+    db.query(models.EnterpriseClient).filter(
+        models.EnterpriseClient.id == client.id
+    ).with_for_update().first()
+    # Then lock this client's live invites, which orders us against a client's
+    # in-flight FIRST verify: its unlock UPDATE waits on these locks, so carry_over
+    # below is decided on a settled row instead of a stale "not yet paid" read that
+    # would revoke the just-paid invite and charge the org a second time.
+    db.query(models.EnterpriseCopilotInvite).filter(
+        models.EnterpriseCopilotInvite.client_id == client.id,
+        models.EnterpriseCopilotInvite.revoked.is_(False),
+    ).with_for_update().all()
 
     # "Charged once per client" is the promise (price-list copy + send modal):
     # a resend while a PAID window is still live must carry the entitlement
@@ -14409,8 +14794,10 @@ def enterprise_create_copilot_invite(
     return {
         "message": message,
         "email_sent": sent,
-        # Returned once for copy/WhatsApp convenience. Opening it still requires the
-        # OTP sent to the client's own email, so the link alone grants nothing.
+        # Returned once for copy/WhatsApp convenience. Chatting still requires the OTP
+        # sent to the client's own email, so the link alone grants no case access — it
+        # does render the greeting card (consultancy, first name, destination), which
+        # is why it goes to the client and nobody else.
         "link": link,
         "invite": _serialize_copilot_invite_status(invite),
         "config": _copilot_invite_config(),
@@ -14492,6 +14879,15 @@ def public_copilot_send_code(token: str, request: Request, db: Session = Depends
     if not org or not client:
         raise HTTPException(status_code=404, detail="This copilot link is no longer available.")
 
+    # The lifetime budget is checked HERE too, not just at verify: once it's spent
+    # there is no code worth emailing, and refusing at send tells the client (and
+    # the consultancy) to reissue the link rather than silently mailing dead codes.
+    if int(invite.code_attempts_total or 0) >= ENTERPRISE_COPILOT_MAX_TOTAL_CODE_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many verification attempts on this link. Please ask your consultancy to send you a new one.",
+        )
+
     code = f"{_secrets.randbelow(900000) + 100000:06d}"
     invite.code_hash = hash_token(code)
     invite.code_expires_at = datetime.utcnow() + timedelta(minutes=ENTERPRISE_INTERVIEW_CODE_EXPIRES_MIN)
@@ -14522,12 +14918,37 @@ def public_copilot_verify(token: str, payload: PublicCopilotVerifyRequest, reque
     code_exp = invite.code_expires_at.replace(tzinfo=None) if getattr(invite.code_expires_at, "tzinfo", None) else invite.code_expires_at
     if code_exp < datetime.utcnow():
         raise HTTPException(status_code=400, detail="That code has expired. Please request a new one.")
-    if int(invite.code_attempts or 0) >= ENTERPRISE_INTERVIEW_CODE_MAX_ATTEMPTS:
+    # Burn the attempt ATOMICALLY, and only while budget remains. Read-then-write let
+    # a parallel burst all read the same count, all pass the cap and each take a free
+    # guess (the rate limits key on the caller's IP, so an address pool multiplies
+    # it). The conditional UPDATE is the real cap — same shape as the message
+    # reservation below. Both counters move together: the per-code one, and the
+    # lifetime one a resend cannot reset.
+    attempts_col = models.EnterpriseCopilotInvite.code_attempts
+    total_col = models.EnterpriseCopilotInvite.code_attempts_total
+    bumped = db.query(models.EnterpriseCopilotInvite).filter(
+        models.EnterpriseCopilotInvite.id == invite.id,
+        func.coalesce(attempts_col, 0) < ENTERPRISE_INTERVIEW_CODE_MAX_ATTEMPTS,
+        func.coalesce(total_col, 0) < ENTERPRISE_COPILOT_MAX_TOTAL_CODE_ATTEMPTS,
+    ).update(
+        {
+            "code_attempts": func.coalesce(attempts_col, 0) + 1,
+            "code_attempts_total": func.coalesce(total_col, 0) + 1,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+    if not bumped:
+        db.expire(invite)
+        if int(invite.code_attempts_total or 0) >= ENTERPRISE_COPILOT_MAX_TOTAL_CODE_ATTEMPTS:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many verification attempts on this link. Please ask your consultancy to send you a new one.",
+            )
         raise HTTPException(status_code=429, detail="Too many attempts. Please request a new code.")
 
-    invite.code_attempts = int(invite.code_attempts or 0) + 1
-    if hash_token((payload.code or "").strip()) != invite.code_hash:
-        db.commit()
+    # Constant-time compare via the project's helper, not `!=` on the digests.
+    if not token_matches((payload.code or "").strip(), invite.code_hash):
         raise HTTPException(status_code=400, detail="That code is incorrect. Please try again.")
 
     # First successful verify = activation: charge the flat unlock. The code is
@@ -14535,7 +14956,7 @@ def public_copilot_verify(token: str, payload: PublicCopilotVerifyRequest, reque
     # retry the same code once the consultancy tops up. Client-safe wording —
     # never mention credits or the org's wallet to the client.
     if not invite.unlocked_at and not credits.can_afford(db, invite.organization_id, COPILOT_CLIENT_ACTION_KEY):
-        db.commit()  # persist the attempt increment
+        # The attempt is already committed above; nothing else to persist here.
         raise HTTPException(status_code=402, detail="Your copilot isn't available right now. Please contact your consultancy.")
 
     # Verified — consume the code (single-use) and issue the session token.
@@ -17232,7 +17653,7 @@ async def public_lead_form_upload(
 
     storage_key = f"enterprise/{form.organization_id}/leads/{uuid.uuid4().hex}{ext}"
     try:
-        enterprise_storage.store_document(storage_key, data, content_type=file.content_type)
+        await run_in_threadpool(enterprise_storage.store_document, storage_key, data, content_type=file.content_type)
     except Exception:
         logger.exception("Failed to store lead-form upload (org_id=%s, form_id=%s)", form.organization_id, form.id)
         raise HTTPException(status_code=502, detail="Could not upload that file right now. Please try again.")

@@ -617,6 +617,8 @@ def serialize_entry(entry: models.EnterpriseFinanceEntry) -> dict:
         "repeat_until": _iso(getattr(entry, "repeat_until", None)),
         "created_by": entry.created_by_name,
         "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        # Optimistic-concurrency token — the edit form holds this and sends it back on save.
+        "version": int(getattr(entry, "version", 0) or 0),
     }
 
 
@@ -670,7 +672,7 @@ def _row(
     tax_paise: int = 0, entry_id: int | None = None, editable: bool = False,
     locked_reason: str | None = None, recurring: bool = False, created_by: str | None = None,
     link: dict | None = None, series_start: date | None = None, repeat_until: date | None = None,
-    notes: str | None = None,
+    notes: str | None = None, version: int | None = None,
 ) -> dict:
     return {
         "id": row_id,
@@ -702,6 +704,10 @@ def _row(
         "notes": notes,
         "created_by": created_by,
         "link": link,
+        # Optimistic-concurrency token, present only on hand-recorded rows (the ones that can
+        # be edited). The edit form opens from this cached row rather than re-reading the
+        # entry, so without it the form would have no version to send back.
+        "version": version,
     }
 
 
@@ -809,6 +815,7 @@ def _manual_rows(db: Session, org_id: int, start: Optional[date], end: date,
                 repeat_until=_as_date(getattr(entry, "repeat_until", None)),
                 notes=entry.notes,
                 created_by=entry.created_by_name,
+                version=int(getattr(entry, "version", 0) or 0),
             ))
     return rows, truncated
 

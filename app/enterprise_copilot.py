@@ -15,6 +15,7 @@ the caller in routers/enterprise.py, mirroring the dashboard copilot.
 """
 
 import logging
+import re
 from typing import List, Optional
 
 from sqlalchemy.orm import Session
@@ -70,17 +71,27 @@ def _iso(value) -> Optional[str]:
         return None
 
 
+def _humanize_stage(status) -> str:
+    """'offer_accepted' -> 'Offer accepted'. The fallback when the catalog has no
+    brief for a stage: the raw key must never reach the prompt (see below)."""
+    text = str(status or "").strip()
+    if not text:
+        return "—"
+    return text.replace("_", " ").replace("-", " ").strip().capitalize()
+
+
 def _case_status_text(client: models.EnterpriseClient) -> str:
     """The stage as a human reads it, worded for the destination.
 
     The raw key ('offer_accepted') is an internal identifier, and this block also feeds
     the invite-link chat where the client reads the answer with no staff review — so the
-    label and its meaning go in, never the key.
+    label and its meaning go in, never the key. Both fallbacks humanize for the same
+    reason: an unknown destination or a newly added stage must not leak the identifier.
     """
     brief = catalog.stage_brief(client.destination_country_code, client.status)
     if not brief:
-        return _fmt(client.status)
-    label = str(brief.get("label") or "").strip() or _fmt(client.status)
+        return _humanize_stage(client.status)
+    label = str(brief.get("label") or "").strip() or _humanize_stage(client.status)
     description = str(brief.get("description") or "").strip()
     return f"{label} — {description}" if description else label
 
@@ -98,21 +109,41 @@ def _mask_passport(value) -> Optional[str]:
     return f"•••• {p[-3:]}"
 
 
-def build_client_profile_block(client: models.EnterpriseClient, *, for_client: bool = False) -> str:
+def build_client_profile_block(
+    client: models.EnterpriseClient,
+    *,
+    for_client: bool = False,
+    allow_sensitive: bool = True,
+) -> str:
     """The client's CRM profile as prompt context (same field set the staff can
     already see in the dashboard; deep scan sends the same fields to the model).
 
     for_client=True is the invite-link surface: the passport number is masked
     (portal precedent — inbox-anchored auth must not yield the full number) and
-    the org's internal priority triage is omitted."""
+    the org's internal priority triage is omitted.
+
+    allow_sensitive=False is a staff member without `clients.view_sensitive`: the
+    passport is OMITTED, never masked — same rule as _serialize_client and the
+    dashboard assistant. Asking the Copilot must not disclose what the CRM screen
+    itself withholds from this role."""
+    if for_client:
+        passport_line = (
+            f"Passport number (masked for security): {_fmt(_mask_passport(client.passport_number))}"
+        )
+    elif allow_sensitive:
+        passport_line = f"Passport number: {_fmt(client.passport_number)}"
+    else:
+        passport_line = (
+            "Passport number: (withheld — this staff member's role cannot view sensitive "
+            "client identifiers; do not guess or infer it from any other source)"
+        )
     lines = [
         f"Full name: {_fmt(client.full_name)}",
         f"Email: {_fmt(client.email)}",
         f"Phone: {_fmt(client.phone)}",
         f"Nationality: {_fmt(client.nationality)}",
         f"Date of birth: {_fmt(_iso(client.date_of_birth))}",
-        (f"Passport number (masked for security): {_fmt(_mask_passport(client.passport_number))}"
-         if for_client else f"Passport number: {_fmt(client.passport_number)}"),
+        passport_line,
         f"Passport expiry: {_fmt(_iso(client.passport_expiry))}",
         f"Visa category: {_fmt(client.visa_category)}",
         f"Destination: {_fmt(client.destination_country_name or client.destination_country_code)}",
@@ -127,7 +158,63 @@ def build_client_profile_block(client: models.EnterpriseClient, *, for_client: b
     return "\n".join(lines)
 
 
-def build_client_documents_block(db: Session, organization_id: int, client_id: int) -> str:
+# Documents whose extracted text IS an identity kit on its own. The invite-link
+# surface lists these as on file but never reads their contents back: masking the
+# CRM passport field while reciting the scanned passport page would be theatre,
+# and that surface is anchored only to the client's inbox.
+IDENTITY_DOC_MARKERS = (
+    "passport", "national id", "aadhaar", "aadhar", "identity card",
+    "id card", "birth certificate", "residence permit",
+)
+
+
+def _is_identity_document(document_type, filename) -> bool:
+    haystack = f"{document_type or ''} {filename or ''}".lower()
+    if "passport-size" in haystack or "passport size" in haystack:
+        return False  # a photograph, not the identity page
+    return any(marker in haystack for marker in IDENTITY_DOC_MARKERS)
+
+
+def _redact_client_identifiers(text: str, client: models.EnterpriseClient) -> str:
+    """Strike the client's own passport number out of document text.
+
+    Identity documents are withheld wholesale on the client surface, but the same
+    number turns up quoted inside other uploads (bank letters, visa forms), which
+    would reopen exactly what the masking closes."""
+    number = str(getattr(client, "passport_number", "") or "").strip()
+    if len(number) < 5:
+        return text
+    return re.sub(re.escape(number), "•••• (redacted)", text, flags=re.IGNORECASE)
+
+
+def build_client_documents_block(
+    db: Session,
+    organization_id: int,
+    client_id: int,
+    *,
+    client: Optional[models.EnterpriseClient] = None,
+    for_client: bool = False,
+    allow_list: bool = True,
+    allow_text: bool = True,
+) -> str:
+    """Uploaded client documents as prompt context.
+
+    Disclosure is gated the same way the dashboard assistant gates its document
+    tools, because putting the text in the prompt is the same disclosure as
+    handing it back through a tool:
+      * allow_list=False   (no `documents.view`)     — nothing about the documents.
+      * allow_text=False   (no `documents.download`) — names and types only.
+      * for_client=True    (invite link)             — identity documents are listed
+        but never quoted, and the client's passport number is redacted from the rest.
+    """
+    if not allow_list:
+        return (
+            "=== CLIENT DOCUMENTS ===\n"
+            "(Withheld — this staff member's role cannot view client documents. Do not "
+            "speculate about their contents; tell them to ask a colleague with document access.)\n"
+            "=== END CLIENT DOCUMENTS ==="
+        )
+
     docs = (
         db.query(models.EnterpriseClientDocument)
         .filter(
@@ -148,12 +235,19 @@ def build_client_documents_block(db: Session, organization_id: int, client_id: i
     remaining = DOC_TEXT_CAP_TOTAL
     omitted = 0
     for index, doc in enumerate(docs, 1):
+        header = f"--- DOCUMENT {index}: {doc.document_type or 'Other'} ({doc.original_filename}) ---"
+        if not allow_text:
+            sections.append(f"{header}\n(On file. Contents withheld — this role cannot read document text.)")
+            continue
+        if for_client and _is_identity_document(doc.document_type, doc.original_filename):
+            sections.append(
+                f"{header}\n(On file and verified by your consultancy. For your security the contents "
+                "of identity documents aren't read out here — contact your consultancy if you need them.)"
+            )
+            continue
         text = (doc.extracted_text or "").strip()
         if not text:
-            sections.append(
-                f"--- DOCUMENT {index}: {doc.document_type or 'Other'} ({doc.original_filename}) ---\n"
-                "(No text has been extracted from this document.)"
-            )
+            sections.append(f"{header}\n(No text has been extracted from this document.)")
             continue
         if remaining <= 0:
             omitted += 1
@@ -161,10 +255,9 @@ def build_client_documents_block(db: Session, organization_id: int, client_id: i
         clipped = text[: min(DOC_TEXT_CAP_PER_DOC, remaining)]
         remaining -= len(clipped)
         suffix = "\n[...document text truncated...]" if len(clipped) < len(text) else ""
-        sections.append(
-            f"--- DOCUMENT {index}: {doc.document_type or 'Other'} ({doc.original_filename}) ---\n"
-            f"{clipped}{suffix}"
-        )
+        if for_client and client is not None:
+            clipped = _redact_client_identifiers(clipped, client)
+        sections.append(f"{header}\n{clipped}{suffix}")
     if omitted:
         sections.append(f"({omitted} more document(s) omitted to keep context bounded.)")
     body = "\n\n".join(sections)
@@ -262,6 +355,7 @@ def run_enterprise_copilot_chat(
     message: str,
     conversation_history: Optional[List[dict]] = None,
     session_attachments=None,
+    ctx=None,
 ) -> "ChatTurnResult":
     """Generate one staff-mode Copilot reply.
 
@@ -271,6 +365,12 @@ def run_enterprise_copilot_chat(
     text plus HISTORY_CAP_TOTAL of history plus inline attachments — so billing it as a
     flat "one message" was the one remaining way to buy a large turn at a small price.
 
+    `ctx` is the caller's AccessContext. Record scope decides WHICH client the staff
+    member may pick; capabilities decide WHAT this prompt may say about them — the same
+    split the dashboard assistant enforces on its tools. Without it, a member deliberately
+    denied `clients.view_sensitive` or `documents.download` could read passport numbers
+    and raw document text just by asking the Copilot instead of opening the record.
+
     Raises on provider failure — the caller maps that to a 502 and only meters after
     success.
     """
@@ -278,8 +378,16 @@ def run_enterprise_copilot_chat(
     # inline-attachment handling. Imported lazily to keep module import light.
     from app.routers import ai_chat as b2c_chat
 
-    profile_block = build_client_profile_block(client)
-    documents_block = build_client_documents_block(db, organization.id, client.id)
+    profile_block = build_client_profile_block(
+        client, allow_sensitive=(ctx is None or ctx.has("clients.view_sensitive"))
+    )
+    documents_block = build_client_documents_block(
+        db, organization.id, client.id,
+        client=client,
+        allow_list=(ctx is None or ctx.has("documents.view")),
+        # Reading a document's extracted text is the same disclosure as downloading it.
+        allow_text=(ctx is None or ctx.has("documents.download")),
+    )
     journey_block = build_journey_block(client)
 
     system_prompt = build_system_prompt(
@@ -439,10 +547,14 @@ def run_enterprise_copilot_client_chat(
     """
     from app.routers import ai_chat as b2c_chat
 
-    # for_client: masked passport, no internal priority — portal-parity data
-    # minimization for the inbox-anchored surface.
+    # for_client: masked passport, no internal priority, identity documents listed
+    # but never quoted — portal-parity data minimization for the inbox-anchored
+    # surface. The documents block has to honour it too: masking the CRM field
+    # while reading the passport scan aloud would defeat the whole measure.
     profile_block = build_client_profile_block(client, for_client=True)
-    documents_block = build_client_documents_block(db, organization.id, client.id)
+    documents_block = build_client_documents_block(
+        db, organization.id, client.id, client=client, for_client=True,
+    )
     journey_block = build_journey_block(client)
 
     system_prompt = build_client_system_prompt(

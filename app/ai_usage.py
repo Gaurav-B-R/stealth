@@ -406,6 +406,9 @@ SOURCE_LABELS = {
     "daily_ai_notifier": "Daily AI notifications",
     "course_catalog_refresh": "Course catalog agent — discovery & refresh (scheduled, grounded)",
     "enterprise_course_finder": "Course Finder — AI shortlist (enterprise)",
+    "course_finder": "Course Finder — AI shortlist (Visa Success Pass)",
+    "university_shortlist": "AI University Shortlist (Visa Success Pass)",
+    "enterprise_university_shortlist": "University shortlist — AI recommend (enterprise)",
 }
 
 

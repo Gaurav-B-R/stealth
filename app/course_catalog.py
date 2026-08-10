@@ -503,9 +503,13 @@ def _clean_text(value, limit: int) -> Optional[str]:
 
 def _clean_url(value) -> Optional[str]:
     """Only absolute http(s) URLs survive — model output is rendered as hrefs, so a
-    javascript:/data: value must never persist (stored-XSS vector)."""
+    javascript:/data: value must never persist (stored-XSS vector). Quotes/angle-
+    brackets/backticks are rejected too: a quote inside a double-quoted href breaks
+    out of the attribute even when the scheme is a legitimate https."""
     s = str(value or "").strip()
     if not s or s.lower() in {"n/a", "na", "none", "null", "unknown", "-"}:
+        return None
+    if any(c in s for c in "\"'<>`"):
         return None
     if not re.match(r"^https?://[^\s/$.?#].[^\s]*$", s, re.I):
         return None
@@ -1816,6 +1820,9 @@ def recommend_courses(
     destination_country: str,
     catalog_rows: list,
     client=None,
+    for_student: bool = False,
+    student_profile: Optional[str] = None,
+    student_history: Optional[str] = None,
     field_of_study: Optional[str] = None,
     degree_level: Optional[str] = None,
     discipline: Optional[str] = None,
@@ -1830,6 +1837,14 @@ def recommend_courses(
     (cheap — no live search). Thin catalog → grounded live search so the feature
     still delivers while the background agent seeds. Returns
     {available, summary, recommendations, grounded, catalog_based, model}.
+
+    Personalization comes from exactly one of two callers: the enterprise router
+    passes `client` (profile + shortlist read from the CRM tables here), while the
+    B2C router passes pre-built `student_profile` / `student_history` text blocks
+    (its data lives on User/UniversityShortlistEntry, which this module doesn't
+    know about). `student_history` must follow the same "- Name — Program [outcome]"
+    line format as _client_shortlist_block, because the never-re-suggest prompt
+    rule reads those outcome tags.
     """
     max_results = max(1, min(int(max_results or 6), RECOMMEND_MAX_RESULTS))
     if not ai_available():
@@ -1848,12 +1863,27 @@ def recommend_courses(
                 "UNIVERSITIES ALREADY ON THIS STUDENT'S SHORTLIST (with their outcomes):\n"
                 + shortlist_block
             )
+    else:
+        if (student_profile or "").strip():
+            profile_lines.append("STUDENT PROFILE:\n" + student_profile.strip())
+        shortlist_block = (student_history or "").strip()
+        if shortlist_block:
+            profile_lines.append(
+                "UNIVERSITIES ALREADY ON THIS STUDENT'S SHORTLIST (with their outcomes):\n"
+                + shortlist_block
+            )
+    # The audience changes the voice, not the data: consultants read the enterprise
+    # answer to a client, students read the B2C answer about themselves. Keyed on the
+    # explicit for_student flag (set only by the B2C router) rather than `client is
+    # None` — enterprise runs a legitimate client-less flow that must keep the
+    # consultancy persona.
+    notes_label = "Student notes/preferences" if for_student else "Consultant notes/preferences"
     request_lines = [
         f"- Destination country: {destination_country}",
         f"- Field of study: {field_of_study or discipline or 'Not specified'}",
         f"- Degree level: {degree_level or 'Not specified'}",
         f"- Approximate annual budget: {budget or 'Not specified'}",
-        f"- Consultant notes/preferences: {notes or 'None'}",
+        f"- {notes_label}: {notes or 'None'}",
     ]
 
     schema = (
@@ -1899,9 +1929,14 @@ def recommend_courses(
     # students, and an unanchored "deadline" comes from whatever admissions cycle the
     # model remembers.
     rec_today = datetime.now(timezone.utc).date()
-    prompt = (
+    persona = (
+        "You are Rilono AI, a study-abroad admissions strategist advising this student directly. "
+        if for_student else
         "You are Rilono AI, a study-abroad admissions strategist working for a study-abroad consultancy. "
-        f"Build the best-fit course shortlist for this request.\n\n"
+    )
+    prompt = (
+        persona
+        + "Build the best-fit course shortlist for this request.\n\n"
         f"Today's date is {rec_today.strftime('%B %d, %Y')}.\n\n"
         + ("\n".join(profile_lines) + "\n\n" if profile_lines else "")
         + "REQUEST:\n" + "\n".join(request_lines) + "\n\n"

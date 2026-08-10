@@ -2611,7 +2611,12 @@
           <div class="field"><label>Nationality</label><input name="nationality" value="${esc(c.nationality || "")}"/></div>
           <div class="field"><label>Gender</label>${profileSelect("gender", c.gender)}</div>
           <div class="field"><label>Date of birth</label><input type="date" name="date_of_birth" max="${isoToday()}" value="${dval(c.date_of_birth)}"/></div>
-          <div class="field"><label>Passport number</label><input name="passport_number" value="${esc(c.passport_number || "")}"/></div>
+          ${c.passport_hidden
+            /* The server omits the number for a role without clients.view_sensitive. Render a
+               disabled placeholder rather than an empty input: an empty one looks like a blank
+               field the counsellor should fill, and the server refuses a blind overwrite anyway. */
+            ? `<div class="field"><label>Passport number</label><input value="••••••••" disabled title="You don't have permission to view or edit passport numbers."/></div>`
+            : `<div class="field"><label>Passport number</label><input name="passport_number" value="${esc(c.passport_number || "")}"/></div>`}
           <div class="field"><label>Passport expiry</label><input type="date" name="passport_expiry" value="${dval(c.passport_expiry)}"/></div>
           <div class="field"><label>Application reference</label><input name="application_reference" value="${esc(c.application_reference || "")}"/></div>
           <div class="field"><label>Parent / guardian name</label><input name="guardian_name" value="${esc(c.guardian_name || "")}"/></div>
@@ -2718,33 +2723,78 @@
 
   /* Reads the whole intake record off a form. Empty values ARE sent (so a field can be
      cleared on edit) except for the handful the server requires. */
-  function collectClientFormBody(f) {
-    const body = {};
+  /* Normalizes the several ways a field can be "empty" so a comparison against the record
+     the form was rendered from doesn't report a change that isn't one. Mirrors
+     _norm_for_compare on the server; the two must agree or the client will send a field the
+     server then reports as conflicting. */
+  function sameValue(a, b) {
+    const norm = (v) => {
+      if (v === null || v === undefined || v === "") return null;
+      if (typeof v === "boolean") return v;
+      if (Array.isArray(v)) return v.map(String).slice().sort().join(",");
+      return String(v);
+    };
+    return norm(a) === norm(b);
+  }
+
+  /* Builds the PATCH/POST body for the client form.
+
+     `baseline` is the client record the form was rendered from. When it is supplied (every
+     EDIT path) only fields whose value actually CHANGED are emitted. That is the fix for the
+     silent lost update: the form has ~45 inputs and used to post all of them on every save,
+     so a tab opened before a colleague's edit would carry their stale values back over the
+     top — including `status` and `assigned_to_user_id`, dragging the case backwards through
+     the pipeline, announcing a stage move that never happened and writing a false entry into
+     the journey history. Sending only what the user touched means two people editing
+     different fields of the same client no longer collide at all, and the version check
+     (expected_version, below) catches the case where they touched the same one.
+
+     With no baseline (the ADD path) everything is emitted, exactly as before. */
+  function collectClientFormBody(f, baseline) {
+    const all = {};
     CLIENT_FORM_FIELD_KEYS.forEach((k) => {
       const el = f[k]; if (!el) return;
       const v = (el.value || "").trim();
       if (v === "" && CLIENT_FORM_REQUIRED_KEYS.indexOf(k) !== -1) return;
       // Email is validated as an email address server-side, so "cleared" must be null.
-      body[k] = (k === "email" && v === "") ? null : v;
+      all[k] = (k === "email" && v === "") ? null : v;
     });
     const phoneLocal = (f.phone.value || "").trim();
     const dial = (f.phone_cc && f.phone_cc.value) || DEFAULT_DIAL;
-    body.phone = phoneLocal ? (phoneLocal[0] === "+" ? phoneLocal : dial + " " + phoneLocal) : "";
+    all.phone = phoneLocal ? (phoneLocal[0] === "+" ? phoneLocal : dial + " " + phoneLocal) : "";
     const assign = f.assigned_to_user_id ? f.assigned_to_user_id.value : "";
-    body.assigned_to_user_id = assign ? parseInt(assign, 10) : null;
+    all.assigned_to_user_id = assign ? parseInt(assign, 10) : null;
     // Office. Sent as an int, like assigned_to_user_id. An empty pick is only forwarded as
     // an explicit null when the client HAD an office (a deliberate clear) — on a brand-new
     // client we leave the key out entirely so the server can apply its own default rather
     // than us pinning the record to "no office".
     if (f.branch_id) {
       const bid = (f.branch_id.value || "").trim();
-      if (bid) body.branch_id = parseInt(bid, 10);
-      else if (f.branch_id.dataset.hadBranch === "1") body.branch_id = null;
+      if (bid) all.branch_id = parseInt(bid, 10);
+      else if (f.branch_id.dataset.hadBranch === "1") all.branch_id = null;
     } else if (f.branch_name) {
-      body.branch_name = (f.branch_name.value || "").trim();   // pre-offices server
+      all.branch_name = (f.branch_name.value || "").trim();   // pre-offices server
     }
-    body.marketing_consent_channels = $$('input[name="marketing_consent_channels"]:checked', f).map((el) => el.value);
-    body.institution_share_consent = !!(f.institution_share_consent && f.institution_share_consent.checked);
+    all.marketing_consent_channels = $$('input[name="marketing_consent_channels"]:checked', f).map((el) => el.value);
+    all.institution_share_consent = !!(f.institution_share_consent && f.institution_share_consent.checked);
+
+    if (!baseline) return all;
+
+    const body = {};
+    // The values these fields held when the form was drawn. The server compares THESE
+    // against what is stored to decide whether somebody else moved the same field —
+    // which is what lets two counsellors edit different parts of one client at once.
+    const expected = {};
+    Object.keys(all).forEach((k) => {
+      // branch_name is always sent when the legacy free-text input is in play: the server
+      // derives it from branch_id on an offices-enabled workspace, so a diff against the
+      // stored snapshot would suppress the only signal a pre-offices workspace has.
+      if (k === "branch_name" || !sameValue(all[k], baseline[k])) {
+        body[k] = all[k];
+        if (k in baseline) expected[k] = baseline[k];
+      }
+    });
+    if (Object.keys(expected).length) body.expected_values = expected;
     return body;
   }
 
@@ -2800,6 +2850,40 @@
     box.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
+  /* ---------------- stale-write (concurrent edit) warning ----------------
+     Rendered when the server answers 409 stale_write: somebody else saved this record
+     between the moment this form was drawn and the moment it was submitted. Shown in the
+     same place, and with the same shape, as the duplicate warning — the form is long and a
+     modal would throw away everything typed.
+
+     Two ways out, both explicit. Discard reloads the record so the user edits the current
+     version. Save anyway re-sends with force_overwrite, which is a decision they have now
+     actually been given the chance to make — previously the overwrite happened silently and
+     nobody, including the person whose work was destroyed, ever knew. */
+  function renderStaleWarning(box, detail, onDiscard) {
+    const fields = (detail && detail.conflicts) || [];
+    box.innerHTML = `
+      <div class="dupw-head">
+        <span class="dupw-icon">⚠️</span>
+        <div>
+          <div class="dupw-title">Someone else changed this file while you were editing</div>
+          <div class="dupw-sub">${esc(detail && detail.message || "")} ${
+            fields.length
+              ? "They changed: " + esc(fields.join(", ")) + "."
+              : ""} Press <b>Save anyway</b> to replace their version with yours, or discard to start from the current one.</div>
+        </div>
+      </div>
+      <div class="dupw-list"><div class="dupw-row"><div class="dupw-row-main">
+        <div class="dupw-meta">Your unsaved changes are still in the form below.</div>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="staleDiscard">Discard mine &amp; reload</button>
+      </div></div>`;
+    box.classList.remove("hidden");
+    const discard = $("#staleDiscard", box);
+    if (discard && onDiscard) discard.onclick = onDiscard;
+    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
   /* ---------------- add / edit client form ---------------- */
   // opts2 (all optional): { forceCreate, heading, onCreated } — the Leads convert flow
   // reuses this whole form as a prefilled "Add client" (forceCreate keeps a truthy
@@ -2820,6 +2904,7 @@
       <div class="modal-body">
         ${clientFormFieldsHtml(c, opts)}
         <div id="clientDupWarn" class="dupw hidden"></div>
+        <div id="clientStaleWarn" class="dupw hidden"></div>
         <div id="clientFormError" class="auth-error hidden"></div>
       </div>
       <div class="modal-foot">
@@ -2836,15 +2921,24 @@
     // the acknowledgement the server is waiting for. Re-running the check after they have
     // read it would only stop them saying yes.
     let dupAcknowledged = false;
+    // Same contract as dupAcknowledged, for the concurrent-edit conflict: flipped by a 409
+    // stale_write and never unset, so the second press of the button is the user's decision
+    // to overwrite the colleague's version they were just shown.
+    let staleAcknowledged = false;
     const saveLabel = () => (isEdit
-      ? (dupAcknowledged ? "Save anyway" : "Save changes")
+      ? ((dupAcknowledged || staleAcknowledged) ? "Save anyway" : "Save changes")
       : (dupAcknowledged ? "Add anyway" : "Add client"));
 
     $("#clientForm").onsubmit = async (e) => {
       e.preventDefault();
       const f = e.target; const btn = $("#clientSaveBtn"); const err = $("#clientFormError");
       err.classList.add("hidden");
-      const body = collectClientFormBody(f);
+      // On edit, diff against the record this form was drawn from so only real changes go up.
+      const body = collectClientFormBody(f, isEdit ? c : null);
+      if (isEdit) {
+        body.expected_version = c.version;
+        if (staleAcknowledged) body.force_overwrite = true;
+      }
       if (dupAcknowledged) body.allow_duplicate = true;
       if (!isEdit) body.visa_category = "student";
       if (!isEdit && f.initial_note && f.initial_note.value.trim()) body.initial_note = f.initial_note.value.trim();
@@ -2884,6 +2978,15 @@
         if (detail && detail.code === "duplicate_client") {
           dupAcknowledged = true;
           renderDuplicateWarning($("#clientDupWarn"), detail, isEdit);
+          return;
+        }
+        if (detail && detail.code === "stale_write") {
+          staleAcknowledged = true;
+          renderStaleWarning($("#clientStaleWarn"), detail, () => {
+            closeModal();
+            if (state.view === "clientPage" && state.activeClient === client.id) openClient(client.id);
+            else if (state.view === "clients") loadAndRenderClientList();
+          });
           return;
         }
         err.textContent = ex.message; err.classList.remove("hidden");
@@ -3652,11 +3755,22 @@
         $$("#stagePanel [data-fkey]").forEach((el) => { values[el.dataset.fkey] = el.value; });
         saveBtn.disabled = true; saveBtn.innerHTML = '<span class="spinner"></span> Saving…';
         try {
-          const r = await api(`/clients/${cl.id}/stage-data`, { method: "PATCH", body: { stage_key: stageKey, values } });
+          const r = await api(`/clients/${cl.id}/stage-data`, {
+            method: "PATCH",
+            body: { stage_key: stageKey, values, expected_version: cl.version },
+          });
           if (r && r.client) Object.assign(cl, r.client);
           toast("Case record saved", "success");
           renderOverview();
         } catch (ex) {
+          const detail = ex.status === 409 && ex.data ? ex.data.detail : null;
+          if (detail && detail.code === "stale_write") {
+            // Visa-critical values (CAS number, SEVIS ID, funds shown). Don't offer a
+            // blind overwrite here — reload so the counsellor types onto the current record.
+            toast("Someone else updated this client. Reloading the latest case record.", "error");
+            openClient(cl.id);
+            return;
+          }
           toast(ex.message, "error");
           saveBtn.disabled = false; saveBtn.textContent = "Save record";
         }
@@ -3696,7 +3810,7 @@
           okText: isReject ? "Mark rejected" : isHold ? "Put on hold" : "Move stage",
           danger: isReject,
         });
-        if (ok) { openStageKey = null; setStatus(cl.id, key); }
+        if (ok) { openStageKey = null; setStatus(cl.id, key, cl.status); }
       };
     }
 
@@ -3714,6 +3828,7 @@
           <div class="cp-card-head"><h3>Edit client details</h3></div>
           <form id="cpEditForm" class="cp-edit-form">
             ${clientFormFieldsHtml(cl, formOpts)}
+            <div id="cpeStaleWarn" class="dupw hidden"></div>
             <div id="cpEditError" class="auth-error hidden" style="margin-top:2px"></div>
             <div class="cp-edit-actions">
               <button type="button" class="btn btn-ghost btn-sm" id="cpEditCancel">Cancel</button>
@@ -3749,13 +3864,23 @@
       if (!teamMembersCache) hydrateAssigneeSelect(formOpts.formId, cl);
 
       $("#cpEditCancel").onclick = () => { overviewEditing = false; renderOverview(); };
+      // Flipped by a 409 stale_write; the second press then carries force_overwrite.
+      let staleAcknowledged = false;
       $("#cpEditForm").onsubmit = async (e) => {
         e.preventDefault();
         const f = e.target, btn = $("#cpEditSave"), err = $("#cpEditError");
         err.classList.add("hidden");
-        const patch = collectClientFormBody(f);
-        // Visa status + counselor save with the form (no live auto-save on click).
-        patch.status = pending;
+        // Diff against the record this pane was rendered from — only real edits go up.
+        const patch = collectClientFormBody(f, cl);
+        // Visa status + counselor save with the form (no live auto-save on click). Only
+        // sent when the counsellor actually picked a different stage: echoing the current
+        // one back is what let a stale pane re-announce a move and re-stamp the journey.
+        if (!sameValue(pending, cl.status)) {
+          patch.status = pending;
+          patch.expected_values = Object.assign({}, patch.expected_values, { status: cl.status });
+        }
+        patch.expected_version = cl.version;
+        if (staleAcknowledged) patch.force_overwrite = true;
         btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
         try {
           await api("/clients/" + cl.id, { method: "PATCH", body: patch });
@@ -3764,6 +3889,24 @@
           openClient(cl.id);  // in-pane refresh — updates hero + details, exits edit mode
         } catch (ex) {
           if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); return; }
+          const detail = ex.status === 409 && ex.data ? ex.data.detail : null;
+          if (detail && detail.code === "stale_write") {
+            staleAcknowledged = true;
+            renderStaleWarning($("#cpeStaleWarn"), detail, () => {
+              overviewEditing = false;
+              openClient(cl.id);
+            });
+            btn.disabled = false; btn.innerHTML = "Save anyway";
+            return;
+          }
+          // The duplicate 409 carries an object detail, which the generic error funnel
+          // renders as "we couldn't complete that request" — say what actually happened.
+          if (detail && detail.code === "duplicate_client") {
+            err.textContent = detail.message || "Another client already has these details.";
+            err.classList.remove("hidden");
+            btn.disabled = false; btn.innerHTML = "Save changes";
+            return;
+          }
           err.textContent = ex.message; err.classList.remove("hidden");
           btn.disabled = false; btn.innerHTML = "Save changes";
         }
@@ -5334,7 +5477,15 @@
     // copilot config from the GET, then a safe default.
     function copilotCost() {
       const cr = state.credits || {};
-      return ((cr.actions || []).find((a) => a.key === "copilot_client") || {}).credits || (cp.config && cp.config.cost_credits) || 20;
+      // Explicit null checks, not `||`: the price is env-tunable and 0 is a real
+      // setting (free unlock). A falsy chain skipped straight past it to the 20
+      // default, which then priced the modal wrong and could block a send the
+      // backend would have allowed.
+      const listed = ((cr.actions || []).find((a) => a.key === "copilot_client") || {}).credits;
+      if (Number.isFinite(listed)) return listed;
+      const configured = cp.config && cp.config.cost_credits;
+      if (Number.isFinite(configured)) return configured;
+      return 20;
     }
     function drawCopilot() {
       const w = $("#cpilWrap"); if (!w) return;
@@ -5850,12 +6001,25 @@
       // back on Overview, mid-shortlist. Patch, re-read the client into this closure so every
       // tab renders the new stage, and redraw only the journey.
       try {
-        await api(`/clients/${cl.id}/status`, { method: "PATCH", body: { status: target.key } });
+        await api(`/clients/${cl.id}/status`, {
+          method: "PATCH",
+          body: { status: target.key, expected_status: cl.status },
+        });
         const fresh = await api("/clients/" + cl.id);
         if (fresh && fresh.client) Object.assign(cl, fresh.client);
         toast("Status updated", "success");
         refreshStageUi();
       } catch (ex) {
+        const detail = ex.status === 409 && ex.data ? ex.data.detail : null;
+        if (detail && detail.code === "stale_write") {
+          // A stage move is the change that notifies the whole org and stamps the journey
+          // history, so a stale one is never silently applied — re-read and let them retry.
+          toast("Someone else moved this client. Showing the current stage.", "error");
+          const fresh = await api("/clients/" + cl.id);
+          if (fresh && fresh.client) Object.assign(cl, fresh.client);
+          refreshStageUi();
+          return;
+        }
         toast(ex.message, "error");
       }
     }
@@ -7076,19 +7240,37 @@
     }
   }
 
-  async function setStatus(id, status) {
+  /* `expectedStatus` is the stage the caller's screen was showing when the move was chosen.
+     Passing it turns a move made from a stale board into a 409 the user is told about,
+     instead of a silent stage change that notifies the whole org and stamps the journey
+     history with a transition that never really happened. It is deliberately the STAGE and
+     not the row version: an unrelated edit to the same client is not a reason to refuse a
+     stage move. Omitting it keeps the old last-write-wins behaviour. */
+  async function setStatus(id, status, expectedStatus) {
     try {
-      await api(`/clients/${id}/status`, { method: "PATCH", body: { status } });
+      const body = { status };
+      if (expectedStatus) body.expected_status = expectedStatus;
+      await api(`/clients/${id}/status`, { method: "PATCH", body });
       toast("Status updated", "success");
       if (state.view === "clientPage" && state.activeClient === id) {
         const data = await api("/clients/" + id); renderClientPage(data);
       } else if (state.view === "clients") loadAndRenderClientList();
-    } catch (ex) { toast(ex.message, "error"); }
+    } catch (ex) {
+      const detail = ex.status === 409 && ex.data ? ex.data.detail : null;
+      if (detail && detail.code === "stale_write") {
+        toast("Someone else moved this client. Showing the current stage.", "error");
+        if (state.view === "clientPage" && state.activeClient === id) {
+          const data = await api("/clients/" + id); renderClientPage(data);
+        } else if (state.view === "clients") loadAndRenderClientList();
+        return;
+      }
+      toast(ex.message, "error");
+    }
   }
   async function editClient(id) {
-    // Always refetch: state.clients is only refreshed by the list view, and the form now
-    // submits every field — so prefilling from a stale snapshot would blank whatever was
-    // written since (an in-pane edit, or the AI's passport auto-fill).
+    // Always refetch: state.clients is only refreshed by the list view, so prefilling from a
+    // stale snapshot would show values that have since moved on — and, more importantly, would
+    // carry a stale `version` that makes the very first save look like a conflict.
     const cl = (await api("/clients/" + id)).client;
     await ensureTeam();
     openClientForm(cl);
@@ -11948,6 +12130,8 @@
     const untilWrap = $("#finUntilWrap");
     if (repeat && untilWrap) repeat.onchange = () => untilWrap.classList.toggle("hidden", !repeat.checked);
 
+    // Flipped by a 409 stale_write; the second press then carries force_overwrite.
+    let staleAcknowledged = false;
     $("#finEntryForm").onsubmit = async (e) => {
       e.preventDefault();
       const err = $("#finEntryErr");
@@ -11974,6 +12158,13 @@
         repeat_monthly: !!($("#finRepeat") || {}).checked,
         repeat_until: (($("#finUntil") || {}).value || "") || null,
       };
+      // This payload is whole-object by design ("an empty client_id means detach"), so it
+      // cannot be diffed the way the client form is — the version check is what stops the
+      // later of two bookkeepers silently rewriting the earlier one's amount.
+      if (entry) {
+        body.expected_version = entry.version;
+        if (staleAcknowledged) body.force_overwrite = true;
+      }
       const btn = $("#finEntrySave");
       btn.disabled = true;
       btn.innerHTML = '<span class="spinner"></span>';
@@ -11986,6 +12177,15 @@
         finAfterWrite();
       } catch (ex) {
         btn.disabled = false;
+        const detail = ex.status === 409 && ex.data ? ex.data.detail : null;
+        if (detail && detail.code === "stale_write") {
+          staleAcknowledged = true;
+          btn.textContent = "Save anyway";
+          fail((detail.message || "Someone else changed this entry.") +
+               " Check the amount, then press Save anyway to replace their version.");
+          finAfterWrite();   // refresh the ledger behind the modal so the new figure is visible
+          return;
+        }
         btn.textContent = editing ? "Save changes" : (isIncome ? "Record income" : "Record cost");
         fail(ex.message || "Couldn't save that entry.");
       }
@@ -12013,6 +12213,8 @@
       client_id: row.client_id,
       repeat_monthly: row.recurring,
       repeat_until: row.repeat_until || "",
+      // Carried so the save can prove it was built on the current row (see _assert_fresh_write).
+      version: row.version,
     }, row.kind);
   }
 

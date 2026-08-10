@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from sqlalchemy.orm import Session
 from urllib.parse import urlparse
 import os
@@ -6,7 +6,12 @@ import logging
 from app.database import get_db
 from app import models, schemas, visa_catalog
 from app.auth import (
+    ACCESS_TOKEN_EXPIRE_MINUTES,
+    ACCESS_TOKEN_REFRESH_HEADER,
+    AUTH_COOKIE_NAME,
+    create_access_token,
     get_current_active_user,
+    set_auth_cookie,
     verify_password,
     get_password_hash,
     validate_password_strength,
@@ -335,6 +340,7 @@ def _rewrap_encrypted_documents_on_password_change(
 def change_password(
     payload: schemas.PasswordChangeRequest,
     request: Request,
+    response: Response,
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -391,10 +397,32 @@ def change_password(
     # Invalidate any pending reset token after successful password change.
     current_user.password_reset_token = None
     current_user.password_reset_token_expires = None
+
+    # Revoke every OTHER signed-in session. Sessions renew themselves on each authenticated
+    # request, so a session opened on a shared or stolen device would otherwise outlive the
+    # password it was created under — leaving the old password's holder with access forever.
+    # This used to be delegated to the user ("please log in again on any other devices"),
+    # which is advice, not enforcement.
+    invalidated_at = datetime.utcnow()
+    current_user.session_invalidated_at = invalidated_at
     db.commit()
 
+    # ...but not the browser making this request. get_current_active_user already refreshed
+    # the cookie DURING dependency resolution — that token was minted before the line above,
+    # so if the request straddles a second boundary it would now be rejected and the user
+    # would be logged out for changing their own password. Mint a replacement AFTER the
+    # invalidation instant and re-issue it on the same channel the caller authenticated on.
+    fresh_token = create_access_token(
+        data={"sub": current_user.email},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    if request.cookies.get(AUTH_COOKIE_NAME):
+        set_auth_cookie(request, response, fresh_token)
+    else:
+        response.headers[ACCESS_TOKEN_REFRESH_HEADER] = fresh_token
+
     return {
-        "message": "Password changed successfully. Please log in again on any other devices for security."
+        "message": "Password changed successfully. You've been signed out on all other devices."
     }
 
 @router.get("/documentation-preferences")
@@ -566,6 +594,19 @@ def delete_account(
             ).delete(synchronize_session=False)
     except Exception:
         logger.exception("delete_account: failed to purge enterprise AI threads for user_id=%s", current_user.id)
+
+    # B2C shortlist + Course Finder rows have no ORM cascade (no User relationship) and
+    # their tables are created by schema_patch without FK constraints, so the users-table
+    # cascade never reaches them — delete explicitly or they orphan (right-to-erasure).
+    try:
+        db.query(models.UserCourseFinderRec).filter(
+            models.UserCourseFinderRec.user_id == current_user.id
+        ).delete(synchronize_session=False)
+        db.query(models.UniversityShortlistEntry).filter(
+            models.UniversityShortlistEntry.user_id == current_user.id
+        ).delete(synchronize_session=False)
+    except Exception:
+        logger.exception("delete_account: failed to purge shortlist/course-finder rows for user_id=%s", current_user.id)
 
     # Verified — delete the user explicitly; other related data is removed by cascade.
     db.delete(current_user)

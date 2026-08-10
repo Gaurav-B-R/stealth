@@ -1328,7 +1328,10 @@ def update_branch(
                 models.EnterpriseClient.organization_id == org_id,
                 models.EnterpriseClient.branch_id == branch.id,
             )
-            .update({"branch_name": renamed_to}, synchronize_session="fetch")
+            .update(
+                {"branch_name": renamed_to, "version": models.EnterpriseClient.version + 1},
+                synchronize_session="fetch",
+            )
         )
 
     db.flush()
@@ -1483,7 +1486,8 @@ def archive_branch(
                 models.EnterpriseClient.branch_id == branch.id,
             )
             .update(
-                {"branch_id": client_target.id, "branch_name": client_target.name},
+                {"branch_id": client_target.id, "branch_name": client_target.name,
+                 "version": models.EnterpriseClient.version + 1},
                 synchronize_session="fetch",
             )
         ) or 0
@@ -1660,7 +1664,8 @@ def reassign_branch_clients(
                 models.EnterpriseClient.id.in_(chunk),
             )
             .update(
-                {"branch_id": target_branch.id, "branch_name": target_branch.name},
+                {"branch_id": target_branch.id, "branch_name": target_branch.name,
+                 "version": models.EnterpriseClient.version + 1},
                 synchronize_session="fetch",
             )
         ) or 0
@@ -2690,7 +2695,10 @@ def deactivate_member(
                 models.EnterpriseClient.organization_id == org_id,
                 models.EnterpriseClient.assigned_to_user_id == int(membership.user_id),
             )
-            .update({"assigned_to_user_id": int(target.user_id)}, synchronize_session="fetch")
+            .update(
+                {"assigned_to_user_id": int(target.user_id), "version": models.EnterpriseClient.version + 1},
+                synchronize_session="fetch",
+            )
         ) or 0
 
     moved_events = 0

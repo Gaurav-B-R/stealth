@@ -216,10 +216,15 @@ def _clean_url(value) -> Optional[str]:
 
     These are rendered as clickable links, so anything else (javascript:, data:, a bare
     hostname, or the model's "N/A") must be dropped rather than trusted — a model-authored
-    `javascript:` href would otherwise be a stored-XSS vector.
+    `javascript:` href would otherwise be a stored-XSS vector. Quotes/angle-brackets/
+    backticks are rejected too: they are never needed in a real URL, and a quote inside
+    an href attribute breaks out of it (`.../x"onmouseover="...`) even when the scheme
+    is a legitimate https.
     """
     s = str(value or "").strip()
     if not s or s.lower() in {"n/a", "na", "none", "null", "unknown", "-"}:
+        return None
+    if any(c in s for c in "\"'<>`"):
         return None
     if not re.match(r"^https?://[^\s/$.?#].[^\s]*$", s, re.I):
         return None
@@ -296,6 +301,12 @@ def recommend_universities(
 
 
 def serialize_entry(entry) -> dict:
+    try:
+        requirements = json.loads(entry.key_requirements) if getattr(entry, "key_requirements", None) else []
+        if not isinstance(requirements, list):
+            requirements = []
+    except Exception:
+        requirements = []
     return {
         "id": int(entry.id),
         "university_name": entry.university_name,
@@ -307,6 +318,13 @@ def serialize_entry(entry) -> dict:
         "est_tuition": entry.est_tuition,
         "rationale": entry.rationale,
         "notes": entry.notes,
+        "qs_world_rank": getattr(entry, "qs_world_rank", None),
+        "country_rank": getattr(entry, "country_rank", None),
+        "admission_difficulty": getattr(entry, "admission_difficulty", None),
+        "key_requirements": [str(r)[:140] for r in requirements][:6],
+        "application_fee": getattr(entry, "application_fee", None),
+        "website_url": getattr(entry, "website_url", None),
+        "admissions_url": getattr(entry, "admissions_url", None),
         "created_at": entry.created_at.isoformat() if entry.created_at else None,
     }
 

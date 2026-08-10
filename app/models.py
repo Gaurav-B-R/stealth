@@ -1,5 +1,5 @@
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Float, Index, UniqueConstraint
-from sqlalchemy.orm import relationship
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Date, ForeignKey, Text, Boolean, Numeric, Float, Index, UniqueConstraint, event
+from sqlalchemy.orm import relationship, Session
 from sqlalchemy.sql import func
 from app.database import Base
 from app.utils.field_encryption import EncryptedString
@@ -505,6 +505,13 @@ class EnterpriseClient(Base):
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Optimistic-concurrency token. Bumped on EVERY committed change to the row (see
+    # `_bump_row_versions` at the foot of this module) and echoed to the browser, which
+    # sends it back on the next save. A save carrying a stale version is refused with 409
+    # instead of silently overwriting whatever changed in between. `updated_at` cannot do
+    # this job: it is NULL until the first update and only second-granular, so two saves
+    # inside the same second are indistinguishable.
+    version = Column(Integer, nullable=False, default=1, server_default="1")
 
     notes = relationship(
         "EnterpriseClientNote",
@@ -1031,6 +1038,11 @@ class EnterpriseCopilotInvite(Base):
     code_hash = Column(String, nullable=True)
     code_expires_at = Column(DateTime(timezone=True), nullable=True)
     code_attempts = Column(Integer, nullable=False, default=0)
+    # Lifetime wrong-guess budget for this link. code_attempts resets on every
+    # resend, so on its own it caps a single CODE, not the invite: whoever holds a
+    # leaked link could loop send-code → a fresh 6 guesses for the link's whole
+    # 30-day life. This one never resets, so the budget is finite.
+    code_attempts_total = Column(Integer, nullable=False, default=0)
     expires_at = Column(DateTime(timezone=True), nullable=True)
     revoked = Column(Boolean, nullable=False, default=False)
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
@@ -1795,6 +1807,10 @@ class EnterpriseFinanceEntry(Base):
     created_by_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Optimistic-concurrency token — same contract as EnterpriseClient.version. This row
+    # holds money, and the edit form submits every field on every save, so two bookkeepers
+    # with the same entry open would otherwise clobber each other's amount silently.
+    version = Column(Integer, nullable=False, default=1, server_default="1")
 
     # Retention: default cascade only (no delete-orphan, no passive_deletes) so a client
     # delete issues UPDATE … SET client_id = NULL instead of deleting the money row.
@@ -1928,6 +1944,7 @@ class Subscription(Base):
     pass_voice_interviews_used = Column(Integer, nullable=False, default=0)
     university_recommendations_used = Column(Integer, nullable=False, default=0)
     sop_generations_used = Column(Integer, nullable=False, default=0)
+    course_finder_runs_used = Column(Integer, nullable=False, default=0)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     ends_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -2001,6 +2018,15 @@ class UniversityShortlistEntry(Base):
     est_tuition = Column(String, nullable=True)       # free-text estimate (from AI)
     rationale = Column(Text, nullable=True)           # why recommended (from AI)
     notes = Column(Text, nullable=True)
+    # AI metadata persisted on save (parity with EnterpriseClientUniversity) — before
+    # these existed, saving an AI recommendation dropped its ranks/URLs/requirements.
+    qs_world_rank = Column(String, nullable=True)
+    country_rank = Column(String, nullable=True)
+    admission_difficulty = Column(String, nullable=True)  # reach | match | safety
+    key_requirements = Column(Text, nullable=True)        # JSON list of short strings
+    application_fee = Column(String, nullable=True)
+    website_url = Column(String, nullable=True)
+    admissions_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -2314,6 +2340,34 @@ class EnterpriseCourseFinderRec(Base):
     )
 
 
+class UserCourseFinderRec(Base):
+    """A stored Course Finder AI shortlist for an individual student (B2C).
+
+    Sibling of EnterpriseCourseFinderRec, keyed on user_id instead of the org/client
+    pair (same split as UniversityShortlistEntry vs EnterpriseClientUniversity). A
+    metered run is persisted so the result survives reloads and tab switches — the
+    student paid quota for it, it must never live only in client-side JS state.
+    """
+    __tablename__ = "user_course_finder_recs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    country_code = Column(String, nullable=True)
+    degree_level = Column(String, nullable=True)
+    discipline = Column(String, nullable=True)
+    query = Column(Text, nullable=True)                # JSON of the full request (field, budget, notes…)
+    summary = Column(Text, nullable=True)              # AI overview paragraph
+    recommendations = Column(Text, nullable=True)      # JSON list of recommendation objects
+    catalog_based = Column(Boolean, nullable=False, default=True)   # built from our verified catalog rows
+    grounded = Column(Boolean, nullable=False, default=False)       # live web search supplemented
+    model_used = Column(String, nullable=True)         # internal only — never sent to the frontend
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_user_course_finder_recs_user_created", "user_id", "created_at"),
+    )
+
+
 class EnterpriseLeadForm(Base):
     """An org-branded public lead-collection form (shared as a link / by email).
 
@@ -2417,3 +2471,35 @@ class EnterpriseLeadUpload(Base):
         # The sweep's own lookup: this form's still-unclaimed staged rows, oldest first.
         Index("ix_ent_lead_uploads_staged", "form_id", "lead_id", "created_at"),
     )
+
+
+# ===========================================================================
+# OPTIMISTIC CONCURRENCY
+# ===========================================================================
+
+# Tables carrying a `version` column (see EnterpriseClient.version). Anything listed here
+# gets its version bumped automatically on every committed change.
+_VERSIONED_MODELS = (EnterpriseClient, EnterpriseFinanceEntry)
+
+
+@event.listens_for(Session, "before_flush")
+def _bump_row_versions(session, flush_context, instances):
+    """Increment `version` on every dirty versioned row, just before it is written.
+
+    Doing this in a flush hook rather than at each call site is the whole point: an
+    enterprise client is mutated from ~18 places (the edit form, stage moves, the AI tool
+    surface, document scans, the client portal, lead conversion…), and a version that
+    only some of them remembered to bump would be worse than none — a stale form would
+    pass its precondition and overwrite a change the version never recorded.
+
+    `session.is_modified(..., include_collections=False)` is deliberate: loading or
+    touching a relationship is not a change to THIS row, and counting it would burn a
+    version on every read-through and make conflicts fire where nothing was edited.
+    """
+    for obj in session.dirty:
+        if not isinstance(obj, _VERSIONED_MODELS):
+            continue
+        if not session.is_modified(obj, include_collections=False):
+            continue
+        # A row written before this column existed can still be NULL/0 on old data.
+        obj.version = int(getattr(obj, "version", 0) or 0) + 1

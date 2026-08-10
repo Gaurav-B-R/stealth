@@ -21,6 +21,30 @@ def _get_table_columns(conn, table_name: str):
     return {row[0] for row in result}
 
 
+def ensure_optimistic_concurrency_columns():
+    """Add the `version` optimistic-concurrency token to the rows two people edit at once.
+
+    Additive and idempotent. Existing rows are backfilled to 1 rather than 0 so a value is
+    never falsy — the precondition check treats a missing/zero version as "client didn't
+    send one" and a stored 0 would make every legacy row look unversioned.
+
+    NOT NULL with a server default so a row inserted by any path (including raw SQL that
+    predates this column) still lands with a usable version.
+    """
+    with engine.begin() as conn:
+        for table in ("enterprise_clients", "enterprise_finance_entries"):
+            if not _table_exists(conn, table):
+                continue
+            if "version" in _get_table_columns(conn, table):
+                continue
+            conn.execute(text(
+                f"ALTER TABLE {table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1"
+            ))
+            conn.execute(text(
+                f"UPDATE {table} SET version = 1 WHERE version IS NULL OR version < 1"
+            ))
+
+
 def ensure_subscription_payments_user_id_nullable():
     """Allow subscription_payments.user_id to be NULL so payment (financial) records can be
     RETAINED and de-identified on account deletion instead of hard-deleted.
@@ -2019,6 +2043,7 @@ def ensure_enterprise_copilot_invites_table():
                     code_hash VARCHAR,
                     code_expires_at {ts},
                     code_attempts INTEGER NOT NULL DEFAULT 0,
+                    code_attempts_total INTEGER NOT NULL DEFAULT 0,
                     expires_at {ts},
                     revoked BOOLEAN NOT NULL DEFAULT {bool_false},
                     created_by_user_id INTEGER,
@@ -2027,13 +2052,23 @@ def ensure_enterprise_copilot_invites_table():
                     updated_at {ts}
                 )
             """))
-            for stmt in (
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_copilot_invites_token ON enterprise_copilot_invites(token_hash)",
-                "CREATE INDEX IF NOT EXISTS ix_enterprise_copilot_invites_organization_id ON enterprise_copilot_invites(organization_id)",
-                "CREATE INDEX IF NOT EXISTS ix_enterprise_copilot_invites_client_id ON enterprise_copilot_invites(client_id)",
-                "CREATE INDEX IF NOT EXISTS ix_ent_copilot_invites_client_created ON enterprise_copilot_invites(client_id, created_at)",
-            ):
-                conn.execute(text(stmt))
+        else:
+            # Existing installs: the lifetime OTP budget is additive. Defaulting to 0
+            # gives every live invite a full fresh budget, which is the intent — no
+            # in-flight client is locked out by the deploy.
+            if "code_attempts_total" not in _get_table_columns(conn, "enterprise_copilot_invites"):
+                conn.execute(text(
+                    "ALTER TABLE enterprise_copilot_invites ADD COLUMN code_attempts_total INTEGER NOT NULL DEFAULT 0"
+                ))
+        for stmt in (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_enterprise_copilot_invites_token ON enterprise_copilot_invites(token_hash)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_copilot_invites_organization_id ON enterprise_copilot_invites(organization_id)",
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_copilot_invites_client_id ON enterprise_copilot_invites(client_id)",
+            "CREATE INDEX IF NOT EXISTS ix_ent_copilot_invites_client_created ON enterprise_copilot_invites(client_id, created_at)",
+            # Declared on the model but never created here — the staff "sent by" lookup.
+            "CREATE INDEX IF NOT EXISTS ix_enterprise_copilot_invites_created_by_user_id ON enterprise_copilot_invites(created_by_user_id)",
+        ):
+            conn.execute(text(stmt))
 
 
 def ensure_enterprise_deep_scan_table():
@@ -3569,6 +3604,67 @@ def ensure_course_catalog_tables():
                 conn.execute(text(stmt))
 
         _backfill_course_catalog_derived_filters(conn)
+
+
+def ensure_course_finder_b2c_schema():
+    """B2C Course Finder (individual accounts): pass counter, richer shortlist columns,
+    and the per-user stored-recommendations table. Additive and idempotent.
+
+    Must run AFTER ensure_university_shortlist_table (it patches that table).
+    """
+    is_sqlite = engine.dialect.name == "sqlite"
+    ts = "TIMESTAMP" if is_sqlite else "TIMESTAMPTZ"
+    now_default = "CURRENT_TIMESTAMP" if is_sqlite else "NOW()"
+    pk = "INTEGER PRIMARY KEY AUTOINCREMENT" if is_sqlite else "SERIAL PRIMARY KEY"
+    bool_true = "1" if is_sqlite else "TRUE"
+    bool_false = "0" if is_sqlite else "FALSE"
+    with engine.begin() as conn:
+        sub_columns = _get_table_columns(conn, "subscriptions")
+        if "course_finder_runs_used" not in sub_columns:
+            conn.execute(text(
+                "ALTER TABLE subscriptions ADD COLUMN course_finder_runs_used INTEGER NOT NULL DEFAULT 0"
+            ))
+
+        # AI metadata parity with enterprise_client_universities: before these columns,
+        # saving an AI recommendation dropped its ranks/fees/URLs/requirements.
+        entry_columns = _get_table_columns(conn, "university_shortlist_entries")
+        for col, ddl_type in (
+            ("qs_world_rank", "VARCHAR"),
+            ("country_rank", "VARCHAR"),
+            ("admission_difficulty", "VARCHAR"),
+            ("key_requirements", "TEXT"),
+            ("application_fee", "VARCHAR"),
+            ("website_url", "VARCHAR"),
+            ("admissions_url", "VARCHAR"),
+        ):
+            if col not in entry_columns:
+                conn.execute(text(
+                    f"ALTER TABLE university_shortlist_entries ADD COLUMN {col} {ddl_type}"
+                ))
+
+        if not _table_exists(conn, "user_course_finder_recs"):
+            conn.execute(text(f"""
+                CREATE TABLE user_course_finder_recs (
+                    id {pk},
+                    user_id INTEGER NOT NULL,
+                    country_code VARCHAR,
+                    degree_level VARCHAR,
+                    discipline VARCHAR,
+                    query TEXT,
+                    summary TEXT,
+                    recommendations TEXT,
+                    catalog_based BOOLEAN NOT NULL DEFAULT {bool_true},
+                    grounded BOOLEAN NOT NULL DEFAULT {bool_false},
+                    model_used VARCHAR,
+                    created_at {ts} DEFAULT {now_default} NOT NULL
+                )
+            """))
+            for stmt in (
+                "CREATE INDEX IF NOT EXISTS ix_user_course_finder_recs_user_id ON user_course_finder_recs(user_id)",
+                "CREATE INDEX IF NOT EXISTS ix_user_course_finder_recs_created_at ON user_course_finder_recs(created_at)",
+                "CREATE INDEX IF NOT EXISTS ix_user_course_finder_recs_user_created ON user_course_finder_recs(user_id, created_at)",
+            ):
+                conn.execute(text(stmt))
 
 
 def _backfill_course_catalog_derived_filters(conn):

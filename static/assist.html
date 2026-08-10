@@ -205,8 +205,10 @@
           }).catch(function(ex){
             // Only an auth-shaped answer means the session is really dead. A
             // transient failure (offline, 429, 5xx) must NOT discard a valid
-            // 24h session — a refresh retries with the same token.
-            if(ex && (ex.status===401||ex.status===403||ex.status===404)){ clearSession(); boot(); return; }
+            // 24h session — a refresh retries with the same token. 410 is the
+            // link itself being revoked or expired; boot() then lands on the
+            // "invalid or expired" view, which is the honest end state.
+            if(ex && (ex.status===401||ex.status===403||ex.status===404||ex.status===410)){ clearSession(); boot(); return; }
             var t=$("invalidTitle"); if(t) t.textContent="Connection problem";
             $("invalidMsg").textContent="We couldn't reach your copilot just now. Check your connection and refresh this page to try again.";
             show("invalidView");
@@ -300,6 +302,13 @@
           if(remaining!==null&&remaining<=0) applyCap();
         }).catch(function(ex){
           history.pop(); saveHistory(); // message not consumed — drop the unanswered turn
+          if(ex.status===410){ // the LINK was revoked or expired — re-verifying can't fix it
+            clearSession();
+            var t410=$("invalidTitle"); if(t410) t410.textContent="This copilot link is no longer active";
+            $("invalidMsg").textContent=safeError(ex,"Your consultancy has ended access on this link. Please contact them for a new one.");
+            show("invalidView");
+            return;
+          }
           if(ex.status===401){ // session expired: back through the OTP gate, keep their draft
             clearSession();
             a.value=v; autosize(a);

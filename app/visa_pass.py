@@ -61,6 +61,13 @@ FREE_UNIVERSITY_RECOMMENDATIONS = int(os.getenv("VISA_PASS_FREE_UNIVERSITY_RECS"
 # SOP generator (Application Kit): generate + each refinement share one counter, so the
 # free tier tastes the iterative loop (1 draft + 2 edits) before hitting the paywall.
 FREE_SOP_GENERATIONS = int(os.getenv("VISA_PASS_FREE_SOP", "3") or "3")
+# Course Finder AI shortlist. Deliberately NOT unlimited on the pass: unlike the other
+# AI features, a thin-catalog run falls back to Google-Search-grounded generation whose
+# per-request search fee (not just tokens) would break the ≤MAX_SERVE_COST_PAISE
+# serve-cost assumption under unlimited use. Browsing the catalog is always free —
+# only the AI generation action is metered (same boundary as enterprise).
+FREE_COURSE_FINDER_RUNS = int(os.getenv("VISA_PASS_FREE_COURSE_FINDER", "1") or "1")
+PASS_COURSE_FINDER_RUNS = int(os.getenv("VISA_PASS_COURSE_FINDER_RUNS", "15") or "15")
 
 # Hard-paywall when the free quota is exhausted (the whole point of the model).
 ENFORCE = os.getenv("VISA_PASS_ENFORCE", "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -101,6 +108,13 @@ FEATURES = {
         "free_limit": FREE_SOP_GENERATIONS,
         "pass_limit": UNLIMITED,
     },
+    "course_finder": {
+        "key": "course_finder",
+        "label": "AI Course Finder shortlist",
+        "counter": "course_finder_runs_used",
+        "free_limit": FREE_COURSE_FINDER_RUNS,
+        "pass_limit": PASS_COURSE_FINDER_RUNS,
+    },
 }
 
 # Gemini cost-tracker sources that are EXCLUSIVELY B2C-student features (used for the
@@ -110,7 +124,7 @@ FEATURES = {
 #  [never recorded — voice runs through the chat endpoint as student_ai_chat].)
 # `student_ai_chat_copilot` is the Chrome-extension Copilot chat (split out of
 # student_ai_chat so the admin AI-cost view can show extension spend separately).
-B2C_COST_SOURCES = ["student_ai_chat", "student_ai_chat_copilot", "red_flag_scan", "university_shortlist"]
+B2C_COST_SOURCES = ["student_ai_chat", "student_ai_chat_copilot", "red_flag_scan", "university_shortlist", "course_finder"]
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +223,8 @@ def pass_benefits() -> list[str]:
         "Unlimited AI university shortlists — QS + national rank, reach/match/safety, "
         "estimated tuition and application fees",
         "Unlimited AI SOP / motivation-letter drafts and refinements",
+        f"{PASS_COURSE_FINDER_RUNS} AI Course Finder shortlists — verified courses, fees, "
+        "deadlines and entry requirements for your destination",
         f"{PASS_VOICE_INTERVIEWS} full AI voice mock interviews",
         "Full red-flag reveal — no blur",
         f"{PASS_DURATION_DAYS}-day validity",
@@ -277,10 +293,16 @@ def _paywall_detail(feature: dict, ent: dict) -> str:
             f"{feature['label']}s are part of the Visa Success Pass "
             f"({PASS_DURATION_DAYS} days). Unlock the pass to continue."
         )
+    # A finite pass allowance (voice interviews, Course Finder) must not be sold as
+    # "unlimited" in the very message that asks for money.
+    pass_grant = (
+        "for unlimited access" if feature["pass_limit"] == UNLIMITED
+        else f"for {feature['pass_limit']} more"
+    )
     return (
         f"You've used your {feature['free_limit']} free {feature['label'].lower()}"
         f"{'s' if feature['free_limit'] != 1 else ''}. Unlock the Visa Success Pass "
-        f"({PASS_DURATION_DAYS} days) for unlimited access."
+        f"({PASS_DURATION_DAYS} days) {pass_grant}."
     )
 
 
@@ -315,6 +337,60 @@ def consume_feature(
     return current + 1
 
 
+def reserve_feature_or_402(db: Session, subscription: models.Subscription, feature_key: str) -> bool:
+    """Atomically claim one unit of a metered feature BEFORE the AI call.
+
+    enforce→generate→consume has a multi-second Gemini call between check and
+    increment, so N parallel requests could each pass the check at used=0 and then
+    lost-update the counter — unbounded real spend against a finite quota. This
+    issues a single conditional UPDATE (`counter = counter + 1 WHERE counter < limit`),
+    which is atomic on both SQLite and Postgres: exactly `limit` reservations can
+    ever succeed. Callers MUST refund_feature() on any failure path so a run that
+    produced nothing usable is never charged (the house never-charge-on-empty rule).
+    Raises 402 (when enforced) if no unit could be claimed. Commits.
+    """
+    feature = get_feature(feature_key)
+    if not feature:
+        raise HTTPException(status_code=400, detail="Unknown feature.")
+    ent = feature_entitlement(subscription, feature_key)
+    if ent["unlimited"]:
+        # No cap to defend — plain increment (the counter is bookkeeping only).
+        consume_feature(db, subscription, feature_key, commit=True)
+        return True
+    counter_col = getattr(models.Subscription, feature["counter"])
+    claimed = (
+        db.query(models.Subscription)
+        .filter(models.Subscription.id == subscription.id, counter_col < int(ent["limit"]))
+        .update({counter_col: counter_col + 1}, synchronize_session=False)
+    )
+    db.commit()
+    db.refresh(subscription)
+    if claimed:
+        return True
+    if ENFORCE:
+        raise HTTPException(status_code=402, detail=_paywall_detail(feature, feature_entitlement(subscription, feature_key)))
+    # Kill switch off: let the call through without a reservation (mirrors
+    # enforce_feature_or_402's behavior when ENFORCE is false).
+    return False
+
+
+def refund_feature(db: Session, subscription: models.Subscription, feature_key: str) -> None:
+    """Return a reserved unit after a failed run (empty result, AI down, exception).
+    Atomic decrement, floored at zero; commits. Safe to call only once per failed
+    reservation — callers pair it with exactly one reserve_feature_or_402."""
+    feature = get_feature(feature_key)
+    if not feature:
+        return
+    counter_col = getattr(models.Subscription, feature["counter"])
+    (
+        db.query(models.Subscription)
+        .filter(models.Subscription.id == subscription.id, counter_col > 0)
+        .update({counter_col: counter_col - 1}, synchronize_session=False)
+    )
+    db.commit()
+    db.refresh(subscription)
+
+
 def grant_pass(db: Session, user_id: int, *, commit: bool = True) -> models.Subscription:
     """Grant a fresh 30-day Visa Success Pass: extend Pro access and reset the
     pass-scoped voice-interview allowance to a fresh allotment."""
@@ -322,6 +398,7 @@ def grant_pass(db: Session, user_id: int, *, commit: bool = True) -> models.Subs
         db, user_id, days=PASS_DURATION_DAYS, commit=False
     )
     subscription.pass_voice_interviews_used = 0  # fresh 3 interviews per pass
+    subscription.course_finder_runs_used = 0     # fresh Course Finder allotment per pass
     if commit:
         db.commit()
         db.refresh(subscription)

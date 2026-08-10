@@ -888,6 +888,16 @@ def _finalize_verified_payment(
             razorpay_subscription_data=provider_subscription_data,
             commit=False,
         )
+    elif (payment_row.pricing_model or "").strip().lower() == "visa_pass":
+        # Visa Success Pass orders reach this shared webhook too (the lookup is by
+        # order id, not pricing model). The pass grant is MORE than a Pro grant: it
+        # also resets the pass-scoped counters (voice interviews, Course Finder runs)
+        # and uses the pass's own duration. Without this branch, a webhook-first
+        # verification (buyer closed the tab before /api/pass/verify ran) activated
+        # the pass with stale counters — a repeat buyer whose last pass ended at
+        # 15/15 Course Finder runs paid ₹999 and got zero.
+        from app import visa_pass as visa_pass_module
+        subscription = visa_pass_module.grant_pass(db, user_id, commit=False)
     else:
         duration_days = _pricing_model_duration_days(_pricing_model_from_payment_row(payment_row))
         subscription = grant_pro_access_for_days(

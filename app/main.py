@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base, SessionLocal
-from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, e2e, outcomes, sop, careers
+from app.routers import auth, upload, profile, documents, ai_chat, pricing, subscription, news, notifications, admin, enterprise, visa_pass, onboarding, shortlist, courses, e2e, outcomes, sop, careers
 from app import careers_catalog
 from app.subscriptions import backfill_missing_subscriptions
 from app.referrals import backfill_missing_referral_codes
@@ -60,6 +60,7 @@ from app.schema_patch import (
     ensure_enterprise_refunds_table,
     ensure_enterprise_payments_tables,
     ensure_enterprise_finance_tables,
+    ensure_optimistic_concurrency_columns,
     ensure_international_payment_columns,
     ensure_enterprise_organization_columns,
     ensure_enterprise_students_table,
@@ -72,6 +73,7 @@ from app.schema_patch import (
     ensure_subscription_usage_columns,
     ensure_student_journey_country_columns,
     ensure_university_shortlist_table,
+    ensure_course_finder_b2c_schema,
     ensure_enterprise_client_university_table,
     ensure_sop_feature_schema,
     ensure_user_legal_consent_column,
@@ -267,6 +269,7 @@ app.include_router(upload.router)
 app.include_router(profile.router)
 app.include_router(onboarding.router)
 app.include_router(shortlist.router)
+app.include_router(courses.router)
 app.include_router(documents.router)
 app.include_router(ai_chat.router)
 app.include_router(pricing.router)
@@ -300,6 +303,9 @@ def startup_backfill_subscriptions():
     ensure_document_catalog_columns()
     ensure_student_journey_country_columns()
     ensure_university_shortlist_table()
+    # Must run AFTER ensure_university_shortlist_table — it patches that table (adds
+    # the AI-metadata columns) plus the pass counter and user_course_finder_recs.
+    ensure_course_finder_b2c_schema()
     ensure_sop_feature_schema()
     ensure_enterprise_organization_columns()
     ensure_enterprise_students_table()
@@ -318,6 +324,8 @@ def startup_backfill_subscriptions():
     ensure_enterprise_refunds_table()
     ensure_enterprise_payments_tables()
     ensure_enterprise_finance_tables()
+    # Must run AFTER enterprise_clients and enterprise_finance_entries exist.
+    ensure_optimistic_concurrency_columns()
     # Must run AFTER the tables above exist — it patches subscription_payments,
     # enterprise_credit_payments and enterprise_student_payments, and backfills
     # base_amount_paise while every historical row is still guaranteed INR.
@@ -588,6 +596,10 @@ _SPA_ROUTE_META = {
         "title": "University Shortlist · Rilono", "description": "Manage your university shortlist.",
         "canonical": f"{SITE_ORIGIN}/universities", "noindex": True,
     },
+    "/courses": {
+        "title": "Course Finder · Rilono", "description": "Browse verified courses and get AI course shortlists for your destination.",
+        "canonical": f"{SITE_ORIGIN}/courses", "noindex": True,
+    },
     "/news": {
         "title": "Visa News · Rilono", "description": "Review visa news relevant to your journey.",
         "canonical": f"{SITE_ORIGIN}/news", "noindex": True,
@@ -846,6 +858,7 @@ async def read_country_visa(request: Request):
 @app.get("/documents")
 @app.get("/interviews")
 @app.get("/universities")
+@app.get("/courses")
 @app.get("/news")
 @app.get("/copilot")
 @app.get("/sop")

@@ -1267,6 +1267,13 @@ def reset_password(
     user.hashed_password = hashed_password
     user.password_reset_token = None
     user.password_reset_token_expires = None
+    # Revoke every session that is already signed in. A reset is what someone reaches for
+    # when they believe their account is compromised, and sessions here renew themselves on
+    # every authenticated request — so without this the intruder's existing cookie survives
+    # the reset indefinitely and the new password locks out only the legitimate owner.
+    # get_current_user rejects any token whose `iat` predates this instant (app/auth.py);
+    # the comparison is second-granular, so the user's own next sign-in is unaffected.
+    user.session_invalidated_at = datetime.utcnow()
     enterprise_credential = (
         db.query(models.EnterpriseCredential)
         .filter(models.EnterpriseCredential.email == user.email)

@@ -17,6 +17,14 @@ from typing import Optional
 
 from app.utils.secure_artifacts import encrypt_artifact_bytes, decrypt_artifact_bytes
 
+
+class DocumentNotFound(Exception):
+    """The object is not in storage — a PERMANENT condition, not a transient outage.
+
+    Raised so a caller can tell "the bytes are gone" (nothing to retry, tell the user the
+    file is unavailable) apart from a network/credential blip (retriable). Any other
+    exception from the storage backend keeps its original type and means "try again"."""
+
 LOCAL_DIR = os.getenv("ENTERPRISE_DOCS_DIR", "").strip()
 
 # R2 / S3 config (same credentials the image uploader uses).
@@ -77,12 +85,56 @@ def store_document(key: str, data: bytes, content_type: Optional[str] = None) ->
 
 def fetch_document(key: str) -> bytes:
     if LOCAL_DIR:
-        raw = _local_path(key).read_bytes()
+        try:
+            raw = _local_path(key).read_bytes()
+        except FileNotFoundError as exc:
+            raise DocumentNotFound(key) from exc
     else:
-        resp = _client().get_object(Bucket=R2_BUCKET_NAME, Key=key)
+        client = _client()
+        try:
+            resp = client.get_object(Bucket=R2_BUCKET_NAME, Key=key)
+        except Exception as exc:
+            # boto3 raises ClientError for a missing key (NoSuchKey / 404). Treat only that
+            # as permanent; anything else (throttling, network, auth) is transient and
+            # keeps its original type so the caller answers "try again".
+            if _is_missing_object_error(exc):
+                raise DocumentNotFound(key) from exc
+            raise
         raw = resp["Body"].read()
     # decrypt_artifact_bytes transparently returns legacy plaintext unchanged.
     return decrypt_artifact_bytes(raw)
+
+
+def _is_missing_object_error(exc: Exception) -> bool:
+    """True ONLY when a boto3 error means this specific object does not exist.
+
+    Everything else — timeouts, dropped connections, throttling, auth, a missing/renamed
+    bucket — is transient or infrastructural and must be treated as retriable ("try again"),
+    never as a permanent per-file 410 that tells the user to re-upload an intact file.
+
+    Defensive on shape: several botocore transient exceptions (ReadTimeoutError,
+    ConnectionClosedError, HTTPClientError) HAVE a `.response` attribute whose value is
+    `None`, so a naive `getattr(exc, "response", {})` returns None and `.get()` would crash.
+    NoSuchBucket is deliberately NOT here — a missing bucket is a config/infra failure, not
+    a deleted document.
+    """
+    response = getattr(exc, "response", None)
+    if not isinstance(response, dict):
+        # No usable error metadata. Fall back to the class name so a real NoSuchKey
+        # (should always carry a dict, but be safe) is still caught; anything else is transient.
+        return exc.__class__.__name__ == "NoSuchKey"
+    # The error CODE is the only reliable discriminator: get_object on a missing key raises
+    # code "NoSuchKey", while a missing/renamed bucket raises "NoSuchBucket" — and BOTH carry
+    # HTTP 404, so keying off the status alone would tell every user to re-upload intact files
+    # whenever the bucket is misconfigured. Any other named code (NoSuchBucket, SlowDown,
+    # AccessDenied, InternalError, …) is infra/transient, not a deleted document.
+    code = (response.get("Error") or {}).get("Code")
+    if code == "NoSuchKey":
+        return True
+    if code:
+        return False
+    # No error code at all — some S3-compatible stores answer a bare 404. Trust the status only here.
+    return (response.get("ResponseMetadata") or {}).get("HTTPStatusCode") == 404
 
 
 def delete_document(key: str) -> None:

@@ -815,6 +815,7 @@ const APP_ROUTE_TITLES = Object.freeze({
     '/documents': 'Your Documents · Rilono',
     '/interviews': 'Visa Interview Prep · Rilono',
     '/universities': 'University Shortlist · Rilono',
+    '/courses': 'Course Finder · Rilono',
     '/news': 'Visa News · Rilono',
     '/copilot': 'AI Copilot · Rilono',
     '/sop': 'SOP Studio · Rilono',
@@ -1018,6 +1019,7 @@ const DASHBOARD_PATH_TO_TAB = {
     '/documents': 'documents',
     '/interviews': 'visa',
     '/universities': 'universities',
+    '/courses': 'courses',
     '/news': 'news',
     '/copilot': 'copilot',
     '/sop': 'sop',
@@ -3925,13 +3927,22 @@ function renderUniversitiesUI() {
 
     const statusColors = { considering: '#64748b', applied: '#1d4ed8', admitted: '#065f46', rejected: '#be123c' };
     const statusOpts = ['considering', 'applied', 'admitted', 'rejected'];
+    const diffBadgeColors = { reach: '#be123c', match: '#1d4ed8', safety: '#065f46' };
     const savedRows = (d.entries || []).map((e) => {
         const sel = statusOpts.map((s) => `<option value="${s}"${e.status === s ? ' selected' : ''}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`).join('');
         const meta = [e.program, e.location].filter(Boolean).join(' · ');
+        const extras = [];
+        if (e.admission_difficulty) extras.push(`<span style="font-size:10px;font-weight:700;text-transform:uppercase;color:${diffBadgeColors[e.admission_difficulty] || '#64748b'}">${escapeHtml(e.admission_difficulty)}</span>`);
+        if (e.qs_world_rank) extras.push(`<span style="font-size:11px;color:#b45309;font-weight:600">QS ${escapeHtml(e.qs_world_rank)}</span>`);
+        if (e.application_fee) extras.push(`<span style="font-size:11px;color:#64748b">Fee: ${escapeHtml(e.application_fee)}</span>`);
+        const isHttp = (u) => typeof u === 'string' && /^https?:\/\//i.test(u) && !/["'<>`]/.test(u);
+        if (isHttp(e.website_url)) extras.push(`<a href="${escapeAttr(e.website_url)}" target="_blank" rel="noopener" style="font-size:11px;color:#4f46e5;font-weight:600">Website ↗</a>`);
+        if (isHttp(e.admissions_url)) extras.push(`<a href="${escapeAttr(e.admissions_url)}" target="_blank" rel="noopener" style="font-size:11px;color:#4f46e5;font-weight:600">Admissions ↗</a>`);
         return `<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid #f1f5f9">
             <div style="flex:1;min-width:0">
               <div style="font-weight:700;color:#0f172a">${escapeHtml(e.university_name)}${e.source === 'ai' ? ' <span style="font-size:10px;background:rgba(124,58,237,.12);color:#6d28d9;padding:2px 6px;border-radius:6px;margin-left:6px">AI</span>' : ''}</div>
               <div style="font-size:12.5px;color:#64748b">${escapeHtml(meta) || '—'}${e.est_tuition ? ' · ' + escapeHtml(e.est_tuition) : ''}</div>
+              ${extras.length ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:3px;align-items:center">${extras.join('')}</div>` : ''}
             </div>
             <select onchange="setShortlistStatus(${e.id}, this.value)" style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;color:${statusColors[e.status] || '#0f172a'};font-size:12.5px;padding:6px 8px">${sel}</select>
             <button onclick="deleteShortlistUniversity(${e.id})" title="Remove" style="background:none;border:none;color:#be123c;cursor:pointer;font-size:18px;line-height:1">&times;</button>
@@ -4020,6 +4031,12 @@ async function saveRecommendedUniversity(idx) {
         await shortlistFetch('', { method: 'POST', body: {
             university_name: u.name, program: u.program, location: u.location,
             est_tuition: u.estimated_annual_tuition, rationale: u.why_recommended, source: 'ai',
+            // Persist the AI metadata too — before these fields, saving dropped the
+            // ranks/difficulty/URLs the recommendation was chosen on.
+            qs_world_rank: u.qs_world_rank, country_rank: u.country_rank,
+            admission_difficulty: u.admission_difficulty, key_requirements: u.key_requirements,
+            application_fee: u.application_fee, website_url: u.official_website,
+            admissions_url: u.admissions_url,
         }});
         showMessage('Added to your shortlist.', 'success');
         await loadUniversityShortlist();
@@ -4050,6 +4067,646 @@ async function deleteShortlistUniversity(id) {
         await shortlistFetch(`/${id}`, { method: 'DELETE' });
         await loadUniversityShortlist();
     } catch (e) { showMessage(e.message || 'Could not remove university.', 'error'); }
+}
+
+// ===========================================================================
+// Course Finder (B2C) — browse the shared verified course catalog with advanced
+// filters, and run Visa-Pass-metered AI course shortlists personalized to the
+// student's destination + profile. Same catalog and contracts as the enterprise
+// Course Finder; only the auth (individual account) and metering (pass) differ.
+// ===========================================================================
+let _cfMeta = null;
+let _cf = {
+    tab: 'browse',
+    country: '', level: '', discipline: '', q: '', maxTuition: '',
+    adv: {}, advOpen: false,
+    offset: 0, total: 0, universities: [], expanded: {}, seq: 0,
+    ai: { field: '', level: '', discipline: '', budget: '', gpa: '', scores: '', notes: '' },
+    activeRec: null, recs: [], savedIdx: {},
+};
+// A completed AI run consumes quota even if we stop waiting, so wait longer than
+// usual before declaring a timeout (and refetch history after errors — see below).
+const CF_AI_TIMEOUT_MS = 150000;
+
+async function coursesFetch(path, opts) {
+    opts = opts || {};
+    const headers = opts.body ? { 'Content-Type': 'application/json' } : {};
+    if (authToken && authToken !== COOKIE_AUTH_SENTINEL) headers['Authorization'] = `Bearer ${authToken}`;
+    const res = await aiFetch(`${API_BASE}/api/courses${path}`, {
+        method: opts.method || 'GET',
+        headers,
+        credentials: 'include',
+        body: opts.body ? JSON.stringify(opts.body) : undefined,
+    }, opts.timeoutMs);
+    if (res.status === 401) {
+        showMessage('Session expired. Please login again.', 'error');
+        logout();
+        const err = new Error('Session expired. Please login again.');
+        err.status = 401; throw err;
+    }
+    let data = null; try { data = await res.json(); } catch (e) { /* no body */ }
+    if (!res.ok) {
+        const detail = data && (data.detail || data.message);
+        const err = new Error(typeof detail === 'string' ? detail : 'Request failed');
+        err.status = res.status; throw err;
+    }
+    return data;
+}
+
+const CF_INP = 'width:100%;box-sizing:border-box;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;color:#0f172a;font-size:13.5px;padding:9px 11px';
+const CF_LBL = (t) => `<div style="font-size:11.5px;font-weight:700;color:#64748b;margin:0 0 5px">${t}</div>`;
+const CF_CARD = (inner, extra) => `<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;padding:18px 20px;${extra || ''}">${inner}</div>`;
+const CF_FIT = { reach: { label: 'Reach', color: '#be123c' }, match: { label: 'Match', color: '#1d4ed8' }, safety: { label: 'Safety', color: '#065f46' } };
+// Advanced-filter keys mirrored to the query string — one place, so chips, inputs
+// and the request can never drift.
+const CF_ADV_KEYS = ['min_tuition', 'require_tuition', 'no_app_fee', 'scholarships_only', 'max_ielts', 'max_toefl',
+    'tests_include_unknown', 'gre', 'intake', 'max_duration', 'has_deadline', 'max_qs_rank', 'uni_type', 'city', 'verified_only'];
+const CF_ADV_LABELS = {
+    min_tuition: 'Min tuition', require_tuition: 'Published fee only', no_app_fee: 'No application fee',
+    scholarships_only: 'Scholarships listed', max_ielts: 'IELTS ≤', max_toefl: 'TOEFL ≤',
+    tests_include_unknown: 'Include unpublished scores', gre: 'GRE/GMAT', intake: 'Intake',
+    max_duration: 'Finishes within', has_deadline: 'Deadline published', max_qs_rank: 'QS top',
+    uni_type: 'Type', city: 'City', verified_only: 'Verified data only',
+};
+
+// escapeHtml (textContent-based) encodes & < > but NOT quotes — fine for text nodes,
+// not for attribute values: a stored URL like `https://a.test/"onmouseover="...` would
+// break out of href="…". Everything interpolated into an attribute goes through this.
+function escapeAttr(value) {
+    return escapeHtml(String(value == null ? '' : value)).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function cfSafeUrl(u) {
+    return (typeof u === 'string' && /^https?:\/\//i.test(u) && !/["'<>`]/.test(u)) ? u : '';
+}
+
+function cfDaysAgo(iso) {
+    if (!iso) return null;
+    const days = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 86400000));
+    return days;
+}
+
+function cfEntitlementText(ent) {
+    if (!ent) return '';
+    if (ent.unlimited) return 'Unlimited';
+    if (ent.tier === 'pass') return `${ent.remaining} left on your Visa Pass`;
+    return `${ent.remaining} free ${ent.remaining === 1 ? 'run' : 'runs'} left`;
+}
+
+function cfCountry(code) {
+    return ((_cfMeta && _cfMeta.countries) || []).find((c) => c.code === code) || null;
+}
+
+function cfLevelLabel(key) {
+    const l = ((_cfMeta && _cfMeta.degree_levels) || []).find((x) => x.key === key);
+    return l ? l.label : (key || '');
+}
+
+async function loadCourseFinder() {
+    const c = document.getElementById('coursesContent');
+    if (!c) return;
+    c.innerHTML = '<div style="padding:2rem;color:#64748b">Loading…</div>';
+    try {
+        _cfMeta = await coursesFetch('/meta');
+    } catch (e) {
+        c.innerHTML = `<div style="padding:2rem;color:#be123c">Could not load Course Finder: ${escapeHtml(e.message)}</div>`;
+        return;
+    }
+    if (!_cf.country) {
+        // Country-specific by default: open on the student's own destination.
+        _cf.country = _cfMeta.destination_country_code
+            || ((_cfMeta.countries || []).find((x) => x.universities > 0) || (_cfMeta.countries || [])[0] || {}).code || 'US';
+    }
+    cfRenderShell();
+}
+
+function cfRenderShell() {
+    const c = document.getElementById('coursesContent');
+    if (!c) return;
+    const countries = (_cfMeta && _cfMeta.countries) || [];
+    const dest = cfCountry(_cfMeta.destination_country_code);
+    const chips = countries.map((x) => `
+        <button onclick="cfPickCountry('${escapeHtml(x.code)}')" style="border:1px solid ${x.code === _cf.country ? '#6366f1' : '#e2e8f0'};background:${x.code === _cf.country ? 'rgba(99,102,241,.08)' : '#fff'};border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600;color:#0f172a;cursor:pointer">
+          ${escapeHtml(x.flag_emoji || '')} ${escapeHtml(x.code)} · ${x.universities}</button>`).join(' ');
+    const selected = cfCountry(_cf.country) || {};
+    const freshness = cfDaysAgo(selected.last_verified_at);
+    const tabBtn = (key, label) => `
+        <button onclick="cfSetTab('${key}')" style="border:none;cursor:pointer;font-weight:700;font-size:13.5px;padding:9px 16px;border-radius:10px;background:${_cf.tab === key ? 'linear-gradient(135deg,#6366f1,#a855f7)' : '#f1f5f9'};color:${_cf.tab === key ? '#fff' : '#334155'}">${label}</button>`;
+    c.innerHTML = `
+      ${CF_CARD(`
+        <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
+          <div>
+            <div style="font-weight:800;font-size:16px;color:#0f172a">Verified course catalog</div>
+            <div style="font-size:12.5px;color:#64748b">
+              ${dest ? `Your destination: ${escapeHtml(dest.flag_emoji || '')} ${escapeHtml(dest.name)} · ` : ''}
+              ${selected.universities || 0} universities · ${selected.courses || 0} courses in ${escapeHtml(selected.name || _cf.country)}
+              ${freshness !== null ? ` · <span style="color:#065f46;font-weight:600">✓ data refreshed ${freshness}d ago</span>` : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div>
+        </div>`)}
+      <div style="display:flex;gap:8px;margin:14px 0">${tabBtn('browse', '🔎 Browse catalog')}${tabBtn('ai', '✨ AI shortlist')}</div>
+      <div id="cfPanel"></div>`;
+    if (_cf.tab === 'browse') { cfRenderBrowse(); cfLoadBrowse(false); }
+    else { cfRenderAI(); cfLoadHistory(); }
+}
+
+function cfSetTab(tab) {
+    _cf.tab = tab === 'ai' ? 'ai' : 'browse';
+    cfRenderShell();
+}
+
+function cfPickCountry(code) {
+    _cf.country = code;
+    _cf.offset = 0; _cf.universities = []; _cf.expanded = {};
+    cfRenderShell();
+}
+
+function cfActiveAdvCount() {
+    return CF_ADV_KEYS.filter((k) => _cf.adv[k] !== undefined && _cf.adv[k] !== '' && _cf.adv[k] !== false).length;
+}
+
+function cfRenderBrowse() {
+    const p = document.getElementById('cfPanel');
+    if (!p) return;
+    const m = _cfMeta || {};
+    const opt = (v, label, cur) => `<option value="${escapeHtml(String(v))}"${String(cur) === String(v) ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+    const levelOpts = ['<option value="">Any level</option>'].concat((m.degree_levels || []).map((l) => opt(l.key, l.label, _cf.level))).join('');
+    const discOpts = ['<option value="">Any discipline</option>'].concat((m.disciplines || []).map((d) => opt(d, d, _cf.discipline))).join('');
+    const adv = _cf.adv;
+    const ieltsOpts = ['<option value="">Any</option>'].concat([5, 5.5, 6, 6.5, 7, 7.5, 8].map((b) => opt(b, `Band ${b.toFixed(1)}`, adv.max_ielts))).join('');
+    const greOpts = ['<option value="">Any</option>'].concat((m.gre_filters || []).map((g) => opt(g.key, g.label, adv.gre))).join('');
+    const intakeOpts = ['<option value="">Any intake</option>'].concat((m.intakes || []).map((i) => opt(i.key, i.label, adv.intake))).join('');
+    const durOpts = ['<option value="">Any duration</option>'].concat([12, 18, 24, 36].map((d) => opt(d, `${d} months`, adv.max_duration))).join('');
+    const qsOpts = ['<option value="">Any rank</option>'].concat([50, 100, 200, 300, 500, 1000].map((r) => opt(r, `Top ${r}`, adv.max_qs_rank))).join('');
+    const typeOpts = ['<option value="">Any type</option>'].concat((m.university_types || []).map((t) => opt(t.key, t.label, adv.uni_type))).join('');
+    const sortOpts = (m.sorts || []).map((s) => opt(s.key, s.label, adv.sort || 'rank')).join('');
+    const advCount = cfActiveAdvCount();
+    const check = (id, key, label) => `
+        <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#334155;cursor:pointer">
+          <input type="checkbox" id="${id}"${adv[key] ? ' checked' : ''}> ${label}</label>`;
+
+    p.innerHTML = `
+      ${CF_CARD(`
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+          <div>${CF_LBL('Level')}<select id="cfLevel" style="${CF_INP}" onchange="cfSelectApply()">${levelOpts}</select></div>
+          <div>${CF_LBL('Discipline')}<select id="cfDiscipline" style="${CF_INP}" onchange="cfSelectApply()">${discOpts}</select></div>
+          <div>${CF_LBL('Search course or university')}<input id="cfQ" maxlength="80" value="${escapeAttr(_cf.q)}" placeholder="e.g. Data Science or Melbourne" style="${CF_INP}" onkeydown="if(event.key==='Enter')cfApply()"></div>
+          <div>${CF_LBL('Max tuition / year')}<input id="cfMaxTuition" type="number" min="0" value="${escapeAttr(_cf.maxTuition)}" placeholder="Local currency" style="${CF_INP}" onkeydown="if(event.key==='Enter')cfApply()"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap">
+          <button onclick="cfApply()" style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;border:none;border-radius:10px;padding:9px 18px;font-weight:700;cursor:pointer">Search</button>
+          <button onclick="cfToggleAdv()" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:9px 14px;font-weight:600;color:#334155;cursor:pointer">
+            Advanced filters${advCount ? ` <span style="background:#6366f1;color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;margin-left:4px">${advCount}</span>` : ''} ${_cf.advOpen ? '▴' : '▾'}</button>
+          <span id="cfChips" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${cfChipsHtml()}</span>
+        </div>
+        <div id="cfAdvPanel" style="display:${_cf.advOpen ? 'block' : 'none'};margin-top:14px;border-top:1px solid #f1f5f9;padding-top:14px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px">
+            <div>
+              <div style="font-weight:700;font-size:12.5px;color:#0f172a;margin-bottom:8px">Fees &amp; funding</div>
+              ${CF_LBL('Min tuition / year')}<input id="cfMinTuition" type="number" min="0" value="${escapeAttr(adv.min_tuition || '')}" placeholder="Local currency" style="${CF_INP};margin-bottom:8px">
+              <div style="display:grid;gap:6px">
+                ${check('cfRequireTuition', 'require_tuition', 'Published fee only')}
+                ${check('cfNoAppFee', 'no_app_fee', 'No application fee')}
+                ${check('cfScholarships', 'scholarships_only', 'University lists scholarships')}
+              </div>
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:12.5px;color:#0f172a;margin-bottom:8px">Tests &amp; entry</div>
+              ${CF_LBL('My IELTS band (≤)')}<select id="cfIelts" style="${CF_INP};margin-bottom:8px">${ieltsOpts}</select>
+              ${CF_LBL('My TOEFL iBT (≤)')}<input id="cfToefl" type="number" min="40" max="120" value="${escapeAttr(adv.max_toefl || '')}" placeholder="e.g. 95" style="${CF_INP};margin-bottom:8px">
+              ${CF_LBL('GRE / GMAT')}<select id="cfGre" style="${CF_INP};margin-bottom:8px">${greOpts}</select>
+              ${check('cfTestsUnknown', 'tests_include_unknown', 'Also show programs with no published score')}
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:12.5px;color:#0f172a;margin-bottom:8px">Program</div>
+              ${CF_LBL('Intake')}<select id="cfIntake" style="${CF_INP};margin-bottom:8px">${intakeOpts}</select>
+              ${CF_LBL('Finishes within')}<select id="cfDuration" style="${CF_INP};margin-bottom:8px">${durOpts}</select>
+              ${check('cfHasDeadline', 'has_deadline', 'Application deadline published')}
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:12.5px;color:#0f172a;margin-bottom:8px">University</div>
+              ${CF_LBL('QS world rank')}<select id="cfQsRank" style="${CF_INP};margin-bottom:8px">${qsOpts}</select>
+              ${CF_LBL('Type')}<select id="cfUniType" style="${CF_INP};margin-bottom:8px">${typeOpts}</select>
+              ${CF_LBL('City')}<input id="cfCity" maxlength="60" value="${escapeAttr(adv.city || '')}" placeholder="e.g. Toronto" style="${CF_INP};margin-bottom:8px">
+              ${check('cfVerifiedOnly', 'verified_only', 'Verified data only')}
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap">
+            <button onclick="cfApplyAdv()" style="background:#0f172a;color:#fff;border:none;border-radius:10px;padding:9px 18px;font-weight:700;cursor:pointer">Apply filters</button>
+            <button onclick="cfClearAdv()" style="background:none;border:none;color:#64748b;font-weight:600;cursor:pointer">Clear all</button>
+            <span style="margin-left:auto;display:flex;align-items:center;gap:8px">${CF_LBL('Sort')}<select id="cfSort" style="${CF_INP};width:auto" onchange="cfApplyAdv()">${sortOpts}</select></span>
+          </div>
+        </div>`)}
+      <div id="cfResults" style="margin-top:14px"></div>`;
+}
+
+function cfChipsHtml() {
+    const chips = [];
+    for (const k of CF_ADV_KEYS) {
+        const v = _cf.adv[k];
+        if (v === undefined || v === '' || v === false) continue;
+        const label = CF_ADV_LABELS[k] || k;
+        const text = (v === true) ? label : `${label}: ${v}`;
+        chips.push(`<span style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.3);color:#4338ca;border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:600">${escapeHtml(text)}
+            <button onclick="cfRemoveFilter('${k}')" style="background:none;border:none;color:#4338ca;cursor:pointer;font-size:12px;padding:0 0 0 4px">×</button></span>`);
+    }
+    if (chips.length) chips.push(`<button onclick="cfClearAdv()" style="background:none;border:none;color:#64748b;font-size:11.5px;font-weight:600;cursor:pointer">Clear all</button>`);
+    return chips.join('');
+}
+
+function cfToggleAdv() {
+    _cf.advOpen = !_cf.advOpen;
+    cfReadBasicInputs();
+    cfRenderBrowse();
+}
+
+function cfReadBasicInputs() {
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+    _cf.level = val('cfLevel'); _cf.discipline = val('cfDiscipline');
+    _cf.q = val('cfQ'); _cf.maxTuition = val('cfMaxTuition');
+}
+
+function cfReadAdvInputs() {
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+    const chk = (id) => Boolean((document.getElementById(id) || {}).checked);
+    // Only read the panel when it is rendered — collapsing it must not wipe filters.
+    if (!document.getElementById('cfAdvPanel') || !_cf.advOpen) return;
+    const adv = {};
+    if (val('cfMinTuition')) adv.min_tuition = val('cfMinTuition');
+    if (chk('cfRequireTuition')) adv.require_tuition = true;
+    if (chk('cfNoAppFee')) adv.no_app_fee = true;
+    if (chk('cfScholarships')) adv.scholarships_only = true;
+    if (val('cfIelts')) adv.max_ielts = val('cfIelts');
+    if (val('cfToefl')) adv.max_toefl = val('cfToefl');
+    if (val('cfGre')) adv.gre = val('cfGre');
+    if (chk('cfTestsUnknown')) adv.tests_include_unknown = true;
+    if (val('cfIntake')) adv.intake = val('cfIntake');
+    if (val('cfDuration')) adv.max_duration = val('cfDuration');
+    if (chk('cfHasDeadline')) adv.has_deadline = true;
+    if (val('cfQsRank')) adv.max_qs_rank = val('cfQsRank');
+    if (val('cfUniType')) adv.uni_type = val('cfUniType');
+    if (val('cfCity')) adv.city = val('cfCity');
+    if (chk('cfVerifiedOnly')) adv.verified_only = true;
+    const sortSel = val('cfSort');
+    if (sortSel && sortSel !== 'rank') adv.sort = sortSel;
+    _cf.adv = adv;
+}
+
+function cfSelectApply() { cfApply(); }
+function cfApplyAdv() { cfApply(); }
+
+function cfApply() {
+    cfReadBasicInputs();
+    cfReadAdvInputs();
+    _cf.offset = 0; _cf.universities = []; _cf.expanded = {};
+    // Re-render the whole browse shell (from the state just read) so the chips row
+    // AND the Advanced-filters count badge both reflect what was applied.
+    cfRenderBrowse();
+    cfLoadBrowse(false);
+}
+
+function cfRemoveFilter(key) {
+    // Capture typed-but-unapplied inputs first — removing one chip must not silently
+    // discard the search text the user was about to apply.
+    cfReadBasicInputs();
+    cfReadAdvInputs();
+    delete _cf.adv[key];
+    _cf.offset = 0; _cf.universities = []; _cf.expanded = {};
+    cfRenderBrowse();
+    cfLoadBrowse(false);
+}
+
+function cfClearAdv() {
+    cfReadBasicInputs();
+    _cf.adv = {};
+    _cf.offset = 0; _cf.universities = []; _cf.expanded = {};
+    cfRenderBrowse();
+    cfLoadBrowse(false);
+}
+
+async function cfLoadBrowse(append) {
+    const box = document.getElementById('cfResults');
+    if (!box) return;
+    if (!append) box.innerHTML = '<div style="padding:1.5rem;color:#64748b">Searching the catalog…</div>';
+    const seq = ++_cf.seq;  // stale-response guard: a slow older request must not clobber a newer one
+    const params = new URLSearchParams();
+    params.set('country', _cf.country);
+    if (_cf.level) params.set('level', _cf.level);
+    if (_cf.discipline) params.set('discipline', _cf.discipline);
+    if (_cf.q) params.set('q', _cf.q);
+    if (_cf.maxTuition) params.set('max_tuition', _cf.maxTuition);
+    for (const k of CF_ADV_KEYS) {
+        const v = _cf.adv[k];
+        if (v === undefined || v === '' || v === false) continue;
+        params.set(k, v === true ? '1' : String(v));
+    }
+    if (_cf.adv.sort) params.set('sort', _cf.adv.sort);
+    if (append) params.set('offset', String(_cf.offset));
+    let data;
+    try {
+        data = await coursesFetch(`/catalog?${params.toString()}`);
+    } catch (e) {
+        if (seq === _cf.seq && box) box.innerHTML = `<div style="padding:1.5rem;color:#be123c">${escapeHtml(e.message || 'Could not search the catalog.')}</div>`;
+        return;
+    }
+    if (seq !== _cf.seq) return;
+    _cf.total = data.total_universities || 0;
+    _cf.hasMore = Boolean(data.has_more);
+    _cf.universities = append ? _cf.universities.concat(data.universities || []) : (data.universities || []);
+    _cf.offset = (data.offset || 0) + (data.universities || []).length;
+    cfRenderResults();
+}
+
+function cfRenderResults() {
+    const box = document.getElementById('cfResults');
+    if (!box) return;
+    const unis = _cf.universities;
+    if (!unis.length) {
+        const filtered = cfActiveAdvCount() > 0 || _cf.q || _cf.level || _cf.discipline || _cf.maxTuition;
+        box.innerHTML = CF_CARD(filtered
+            ? `<div style="color:#64748b;font-size:13.5px">No matches for these filters. <button onclick="cfClearAdv()" style="background:none;border:none;color:#4f46e5;font-weight:700;cursor:pointer">Clear all filters</button></div>`
+            : `<div style="color:#64748b;font-size:13.5px">Nothing here yet — our research agent is still enriching this destination. Check back soon or try the AI shortlist tab.</div>`);
+        return;
+    }
+    const cards = unis.map((u, i) => cfUniCardHtml(u, i)).join('');
+    box.innerHTML = `
+      <div style="font-size:12.5px;color:#64748b;margin:0 0 10px">Showing ${unis.length} of ${_cf.total} universities</div>
+      ${cards}
+      ${_cf.hasMore ? `<div style="text-align:center;margin-top:14px"><button onclick="cfLoadBrowse(true)" style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:10px;padding:10px 22px;font-weight:700;color:#334155;cursor:pointer">Load more</button></div>` : ''}`;
+}
+
+function cfUniCardHtml(u, idx) {
+    const expanded = _cf.expanded[idx] !== undefined ? _cf.expanded[idx] : idx < 3;
+    const fresh = cfDaysAgo(u.last_verified_at);
+    const badge = u.last_verified_at
+        ? `<span style="font-size:11px;font-weight:700;color:#065f46;background:rgba(6,95,70,.08);border-radius:999px;padding:2px 9px">✓ Verified ${fresh}d ago</span>`
+        : `<span style="font-size:11px;font-weight:700;color:#b45309;background:rgba(180,83,9,.08);border-radius:999px;padding:2px 9px">⏳ Enriching soon</span>`;
+    const site = cfSafeUrl(u.website_url);
+    const ranks = [];
+    if (u.qs_world_rank) ranks.push(`QS ${escapeHtml(u.qs_world_rank)}`);
+    if (u.national_rank) ranks.push(`#${escapeHtml(u.national_rank)} national`);
+    const courses = u.courses || [];
+    const rows = courses.map((c) => {
+        const scores = [c.ielts_requirement ? `IELTS ${c.ielts_requirement}` : '', c.toefl_requirement ? `TOEFL ${c.toefl_requirement}` : ''].filter(Boolean).join(' / ');
+        const url = cfSafeUrl(c.course_url);
+        return `<tr style="border-top:1px solid #f1f5f9">
+            <td style="padding:7px 10px 7px 0;min-width:180px"><div style="font-weight:600;color:#0f172a;font-size:12.5px">${escapeHtml(c.course_name || '')}</div>
+              <div style="font-size:11px;color:#94a3b8">${escapeHtml([c.discipline, c.duration].filter(Boolean).join(' · '))}</div></td>
+            <td style="padding:7px 10px 7px 0;font-size:12px;color:#334155;white-space:nowrap">${escapeHtml(cfLevelLabel(c.degree_level))}</td>
+            <td style="padding:7px 10px 7px 0;font-size:12px;color:#334155">${escapeHtml(c.annual_tuition || '—')}</td>
+            <td style="padding:7px 10px 7px 0;font-size:12px;color:#334155">${escapeHtml((c.intakes || []).join(', ') || '—')}</td>
+            <td style="padding:7px 10px 7px 0;font-size:12px;color:#334155">${escapeHtml(scores || '—')}</td>
+            <td style="padding:7px 10px 7px 0;font-size:12px;color:#334155">${escapeHtml(c.application_deadline || '—')}</td>
+            <td style="padding:7px 10px 7px 0;font-size:12px;color:#334155">${escapeHtml(c.application_fee || '—')}</td>
+            <td style="padding:7px 0;font-size:12px;white-space:nowrap">${url ? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener" style="color:#4f46e5;font-weight:600">Page ↗</a>` : ''}</td>
+          </tr>`;
+    }).join('');
+    return CF_CARD(`
+        <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
+          <div style="min-width:0">
+            <div style="font-weight:800;color:#0f172a;font-size:15px">${escapeHtml(u.name || '')}</div>
+            <div style="font-size:12px;color:#64748b">${escapeHtml([u.city, u.university_type].filter(Boolean).join(' · '))}</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            ${ranks.map((r) => `<span style="font-size:11px;font-weight:700;color:#b45309;background:rgba(180,83,9,.08);border-radius:999px;padding:2px 9px">🏆 ${r}</span>`).join('')}
+            ${badge}
+          </div>
+        </div>
+        ${u.summary ? `<div style="font-size:12.5px;color:#334155;margin-top:8px">${escapeHtml(u.summary)}</div>` : ''}
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;font-size:12px;color:#64748b">
+          ${u.tuition_note ? `<span>💰 ${escapeHtml(u.tuition_note)}</span>` : ''}
+          ${u.scholarships_note ? `<span>🎓 ${escapeHtml(u.scholarships_note)}</span>` : ''}
+          ${site ? `<a href="${escapeAttr(site)}" target="_blank" rel="noopener" style="color:#4f46e5;font-weight:600">Official website ↗</a>` : ''}
+        </div>
+        ${courses.length ? `
+          <button onclick="cfToggleUni(${idx})" style="margin-top:10px;background:none;border:none;color:#4f46e5;font-weight:700;font-size:12.5px;cursor:pointer;padding:0">
+            ${expanded ? '▾ Hide' : '▸ Show'} ${courses.length} matching course${courses.length === 1 ? '' : 's'}</button>
+          <div style="display:${expanded ? 'block' : 'none'};overflow-x:auto;margin-top:6px">
+            <table style="width:100%;border-collapse:collapse;min-width:760px">
+              <thead><tr style="font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:#94a3b8;text-align:left">
+                <th style="padding:0 10px 4px 0">Course</th><th style="padding:0 10px 4px 0">Level</th><th style="padding:0 10px 4px 0">Tuition/yr</th>
+                <th style="padding:0 10px 4px 0">Intakes</th><th style="padding:0 10px 4px 0">Scores</th><th style="padding:0 10px 4px 0">Deadline</th>
+                <th style="padding:0 10px 4px 0">App. fee</th><th></th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>` : '<div style="margin-top:10px;font-size:12px;color:#94a3b8">Courses for this university are still being researched.</div>'}
+    `, 'margin-bottom:12px');
+}
+
+function cfToggleUni(idx) {
+    _cf.expanded[idx] = !(_cf.expanded[idx] !== undefined ? _cf.expanded[idx] : idx < 3);
+    cfRenderResults();
+}
+
+// --------------------------- AI shortlist tab ------------------------------
+
+function cfRenderAI() {
+    const p = document.getElementById('cfPanel');
+    if (!p) return;
+    const m = _cfMeta || {};
+    const ent = m.entitlement || {};
+    const locked = Boolean(ent.locked);
+    const aiAvailable = m.ai_available !== false;
+    const opt = (v, label, cur) => `<option value="${escapeHtml(String(v))}"${String(cur) === String(v) ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+    const levelOpts = ['<option value="">Any level</option>'].concat((m.degree_levels || []).map((l) => opt(l.key, l.label, _cf.ai.level))).join('');
+    const discOpts = ['<option value="">Any discipline</option>'].concat((m.disciplines || []).map((d) => opt(d, d, _cf.ai.discipline))).join('');
+    const selected = cfCountry(_cf.country) || {};
+    const code = _cf.country || 'US';
+    const budgetHint = ({ US: 'e.g. $30,000', UK: 'e.g. £22,000', CA: 'e.g. C$25,000', AU: 'e.g. A$35,000', DE: 'e.g. €12,000' })[code] || 'e.g. your annual budget (local currency)';
+    const scoresHint = ({ US: 'e.g. IELTS 7.5, GRE 320', UK: 'e.g. IELTS 7.0', CA: 'e.g. IELTS 7.0', AU: 'e.g. IELTS 7.0, PTE 65', DE: 'e.g. IELTS 6.5, TestDaF 4' })[code] || 'e.g. IELTS 7.0';
+    const gpaHint = ({ US: 'e.g. 3.6/4.0', UK: 'e.g. 2:1 or AAB', CA: 'e.g. 3.6/4.0 or 85%', AU: 'e.g. 75% or GPA 5.5/7', DE: 'e.g. 1.7 (German scale)' })[code] || 'e.g. your GPA or grade average';
+
+    p.innerHTML = `
+      ${CF_CARD(`
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          <div>
+            <div style="font-weight:800;font-size:16px;color:#0f172a">Rilono AI Course Shortlist</div>
+            <div style="font-size:12.5px;color:#64748b">Personalized to your profile and shortlist history — built from verified catalog data for ${escapeHtml(selected.name || code)}.</div>
+          </div>
+          <span style="font-size:12px;font-weight:700;color:${locked ? '#b45309' : '#065f46'}">${escapeHtml(cfEntitlementText(ent))}</span>
+        </div>
+        ${!aiAvailable ? '<div style="color:#b45309;font-size:13px">Rilono AI recommendations are not available right now.</div>' : `
+        <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px">
+          <div style="grid-column:1/-1">${CF_LBL('Field of study <span style="color:#be123c">*</span>')}<input id="cfAiField" maxlength="120" value="${escapeAttr(_cf.ai.field)}" placeholder="e.g. Data Science" style="${CF_INP}"></div>
+          <div>${CF_LBL('Study level')}<select id="cfAiLevel" style="${CF_INP}">${levelOpts}</select></div>
+          <div>${CF_LBL('Discipline (optional)')}<select id="cfAiDiscipline" style="${CF_INP}">${discOpts}</select></div>
+          <div>${CF_LBL('Annual budget')}<input id="cfAiBudget" maxlength="60" value="${escapeAttr(_cf.ai.budget)}" placeholder="${budgetHint}" style="${CF_INP}"></div>
+          <div>${CF_LBL('GPA / grades')}<input id="cfAiGpa" maxlength="60" value="${escapeAttr(_cf.ai.gpa)}" placeholder="${gpaHint}" style="${CF_INP}"></div>
+          <div>${CF_LBL('Test scores')}<input id="cfAiScores" maxlength="160" value="${escapeAttr(_cf.ai.scores)}" placeholder="${scoresHint}" style="${CF_INP}"></div>
+          <div>${CF_LBL('Notes / preferences')}<input id="cfAiNotes" maxlength="300" value="${escapeAttr(_cf.ai.notes)}" placeholder="e.g. co-op, scholarships, big city" style="${CF_INP}"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap">
+          <button id="cfAiRunBtn" onclick="cfRunRecommend()" style="background:linear-gradient(135deg,#6366f1,#a855f7);color:#fff;border:none;border-radius:10px;padding:10px 18px;font-weight:700;cursor:pointer">Generate shortlist</button>
+          <span id="cfAiMsg" style="font-size:13px;color:#be123c"></span>
+        </div>
+        ${locked ? `<div style="margin-top:10px;font-size:12.5px;color:#64748b">${ent.tier === 'pass' ? 'You have used all your Course Finder runs on this pass.' : 'You have used your free Course Finder run.'} <a href="/visa-pass" style="color:#9aa0ff;font-weight:600">Get the Visa Pass</a>.</div>` : ''}
+        `}
+      `)}
+      <div id="cfActiveRec" style="margin-top:14px">${_cf.activeRec ? cfActiveRecHtml(_cf.activeRec) : ''}</div>
+      <div id="cfHistory" style="margin-top:14px"></div>`;
+}
+
+function cfReadAiInputs() {
+    const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+    _cf.ai = {
+        field: val('cfAiField'), level: val('cfAiLevel'), discipline: val('cfAiDiscipline'),
+        budget: val('cfAiBudget'), gpa: val('cfAiGpa'), scores: val('cfAiScores'), notes: val('cfAiNotes'),
+    };
+}
+
+async function cfRunRecommend() {
+    cfReadAiInputs();
+    const btn = document.getElementById('cfAiRunBtn');
+    const msg = document.getElementById('cfAiMsg');
+    if (!_cf.ai.field && !_cf.ai.discipline) {
+        if (msg) msg.textContent = 'Enter your field of study (or pick a discipline).';
+        return;
+    }
+    if (msg) msg.textContent = '';
+    if (btn) btn.disabled = true;
+    const progress = startAiProgress((t) => { if (btn) btn.textContent = t; }, 'Building your shortlist…');
+    try {
+        const res = await coursesFetch('/recommend', {
+            method: 'POST',
+            timeoutMs: CF_AI_TIMEOUT_MS,
+            body: {
+                country_code: _cf.country,
+                degree_level: _cf.ai.level || null,
+                discipline: _cf.ai.discipline || null,
+                field_of_study: _cf.ai.field || null,
+                budget: _cf.ai.budget || null,
+                gpa: _cf.ai.gpa || null,
+                test_scores: _cf.ai.scores || null,
+                notes: _cf.ai.notes || null,
+                max_results: 6,
+            },
+        });
+        _cf.activeRec = res.rec || null;
+        _cf.savedIdx = {};
+        if (res.entitlement && _cfMeta) _cfMeta.entitlement = res.entitlement;
+        // The run takes 30-150s and the user may have switched to Browse (both tabs
+        // share #cfPanel) — only repaint when the AI tab is still the active one;
+        // the updated state renders on the next cfSetTab('ai') either way.
+        if (_cf.tab === 'ai') { cfRenderAI(); cfLoadHistory(); }
+        else showMessage('Your Course Finder shortlist is ready — open the AI shortlist tab.', 'success');
+    } catch (e) {
+        if (e.status === 402) {
+            // The banner said "N left" — refresh the entitlement so it and the
+            // upsell note agree with the 402 the server just returned.
+            try { _cfMeta = await coursesFetch('/meta'); } catch (ignored) { /* keep stale meta */ }
+            if (_cf.tab === 'ai') cfRenderAI();
+        }
+        const text = e.status === 402
+            ? 'Limit reached — get the Visa Pass for more Course Finder runs.'
+            : (e.message || 'Could not generate a shortlist.');
+        // Re-query the message node: cfRenderAI() above (or a tab switch mid-run)
+        // detaches the one captured at click time. Off-tab errors go to the global
+        // toast so a 402/timeout is never silent.
+        const liveMsg = document.getElementById('cfAiMsg');
+        if (_cf.tab === 'ai' && liveMsg) liveMsg.textContent = text;
+        else if (_cf.tab !== 'ai') showMessage(text, 'error');
+        // A timed-out run may still have completed (and consumed quota) server-side —
+        // refresh history so a metered result is never invisible.
+        if (_cf.tab === 'ai') cfLoadHistory();
+    } finally {
+        progress.stop();
+        const liveBtn = document.getElementById('cfAiRunBtn');
+        if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = 'Generate shortlist'; }
+    }
+}
+
+function cfActiveRecHtml(rec) {
+    const items = rec.recommendations || [];
+    const srcBadge = rec.catalog_based
+        ? '<span style="font-size:11px;font-weight:700;color:#065f46;background:rgba(6,95,70,.08);border-radius:999px;padding:2px 9px">✓ Catalog data</span>'
+        : '<span style="font-size:11px;font-weight:700;color:#1d4ed8;background:rgba(29,78,216,.08);border-radius:999px;padding:2px 9px">🌐 Live research</span>';
+    const cards = items.map((it, i) => {
+        const fit = CF_FIT[it.fit_level] || CF_FIT.match;
+        const site = cfSafeUrl(it.website_url);
+        const page = cfSafeUrl(it.course_url);
+        const facts = [it.annual_tuition, it.intakes ? `Intakes: ${it.intakes}` : '', it.application_deadline ? `Deadline: ${it.application_deadline}` : '', it.application_fee ? `Fee: ${it.application_fee}` : '']
+            .filter(Boolean).map((f) => `<span>${escapeHtml(f)}</span>`).join(' · ');
+        const saved = Boolean(_cf.savedIdx[i]);
+        return `<div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:14px;padding:14px 16px">
+            <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                <span style="font-size:10.5px;font-weight:800;text-transform:uppercase;color:#fff;background:${fit.color};border-radius:999px;padding:2px 9px">${fit.label}</span>
+                ${it.in_catalog ? '<span style="font-size:10.5px;font-weight:700;color:#065f46">✓ Verified</span>' : '<span style="font-size:10.5px;font-weight:700;color:#b45309" title="Double-check details on the official page">Verify on official page</span>'}
+                ${it.qs_world_rank ? `<span style="font-size:10.5px;color:#b45309;font-weight:700">🏆 QS ${escapeHtml(it.qs_world_rank)}</span>` : ''}
+              </div>
+            </div>
+            <div style="font-weight:700;color:#0f172a;margin-top:6px">${escapeHtml(it.course_name || '')}</div>
+            <div style="font-size:12.5px;color:#64748b">${escapeHtml([it.university_name, it.location].filter(Boolean).join(' · '))}</div>
+            ${it.why_recommended ? `<div style="font-size:12.5px;color:#334155;margin-top:6px">${escapeHtml(it.why_recommended)}</div>` : ''}
+            ${facts ? `<div style="font-size:12px;color:#64748b;margin-top:6px">${facts}</div>` : ''}
+            ${(it.key_requirements && it.key_requirements.length) ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${it.key_requirements.map((r) => `<span style="font-size:11px;background:#f1f5f9;color:#334155;border-radius:999px;padding:2px 9px">${escapeHtml(r)}</span>`).join('')}</div>` : ''}
+            <div style="display:flex;gap:12px;align-items:center;margin-top:10px;flex-wrap:wrap">
+              ${page ? `<a href="${escapeAttr(page)}" target="_blank" rel="noopener" style="font-size:12px;color:#4f46e5;font-weight:700">Course page ↗</a>` : ''}
+              ${site ? `<a href="${escapeAttr(site)}" target="_blank" rel="noopener" style="font-size:12px;color:#4f46e5;font-weight:700">Website ↗</a>` : ''}
+              <button onclick="cfSaveRecItem(${i})" ${saved ? 'disabled' : ''} style="margin-left:auto;background:${saved ? '#dcfce7' : '#f1f5f9'};color:${saved ? '#065f46' : '#0f172a'};border:1px solid #e2e8f0;border-radius:9px;padding:7px 14px;font-weight:700;font-size:12px;cursor:${saved ? 'default' : 'pointer'}">${saved ? '✓ Added' : '+ Add to my shortlist'}</button>
+            </div>
+          </div>`;
+    }).join('');
+    return CF_CARD(`
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <div style="font-weight:800;font-size:15px;color:#0f172a">Your shortlist${rec.query && rec.query.field_of_study ? ` — ${escapeHtml(rec.query.field_of_study)}` : ''}</div>
+          ${srcBadge}
+        </div>
+        ${rec.summary ? `<div style="font-size:13px;color:#334155;margin-bottom:12px">${escapeHtml(rec.summary)}</div>` : ''}
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:12px">${cards}</div>`);
+}
+
+async function cfSaveRecItem(index) {
+    const rec = _cf.activeRec;
+    if (!rec) return;
+    try {
+        const res = await coursesFetch(`/recs/${rec.id}/save`, { method: 'POST', body: { index } });
+        _cf.savedIdx[index] = true;
+        const el = document.getElementById('cfActiveRec');
+        if (el) el.innerHTML = cfActiveRecHtml(rec);
+        showMessage(res.already_saved ? 'Already on your shortlist.' : 'Added to your shortlist.', 'success');
+    } catch (e) { showMessage(e.message || 'Could not save to your shortlist.', 'error'); }
+}
+
+async function cfLoadHistory() {
+    const el = document.getElementById('cfHistory');
+    if (!el) return;
+    let data;
+    try {
+        data = await coursesFetch('/recs?limit=20');
+    } catch (e) { return; }
+    _cf.recs = data.recs || [];
+    if (!_cf.recs.length) { el.innerHTML = ''; return; }
+    const rows = _cf.recs.map((r) => {
+        const when = r.created_at ? new Date(r.created_at).toLocaleDateString() : '';
+        const bits = [r.country_code, cfLevelLabel(r.degree_level), r.discipline, (r.query || {}).field_of_study]
+            .filter(Boolean).map((b) => escapeHtml(String(b))).join(' · ');
+        return `<div onclick="cfOpenRec(${r.id})" style="display:flex;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #f1f5f9;cursor:pointer">
+            <div style="min-width:0">
+              <div style="font-weight:600;color:#0f172a;font-size:13px">${bits || 'Course shortlist'}</div>
+              <div style="font-size:11.5px;color:#94a3b8">${r.count} picks · ${r.catalog_based ? 'catalog data' : 'live research'}</div>
+            </div>
+            <span style="font-size:11.5px;color:#94a3b8;white-space:nowrap">${escapeHtml(when)}</span>
+          </div>`;
+    }).join('');
+    el.innerHTML = CF_CARD(`
+        <div style="font-weight:800;font-size:14px;color:#0f172a;margin-bottom:4px">Your past shortlists</div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:6px">Every run is saved — a metered shortlist is never lost.</div>
+        ${rows}`);
+}
+
+async function cfOpenRec(recId) {
+    try {
+        const data = await coursesFetch(`/recs/${recId}`);
+        _cf.activeRec = data.rec || null;
+        _cf.savedIdx = {};
+        const el = document.getElementById('cfActiveRec');
+        if (el) {
+            el.innerHTML = _cf.activeRec ? cfActiveRecHtml(_cf.activeRec) : '';
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    } catch (e) { showMessage(e.message || 'Could not open that shortlist.', 'error'); }
 }
 
 // Per-destination heading for the dashboard journey tracker.
@@ -8838,14 +9495,14 @@ function switchDashboardTab(tabName) {
     if (navItem) {
         navItem.classList.add('active');
     }
-    // SOP Studio lives under the Universities parent (no nav item of its own).
-    if (tabName === 'sop') {
+    // SOP Studio and Course Finder live under the Universities parent (no nav item of their own).
+    if (tabName === 'sop' || tabName === 'courses') {
         const uniNav = document.querySelector('.nav-item[data-tab="universities"]');
         if (uniNav) uniNav.classList.add('active');
     }
 
     setVisaSubNavVisibility(tabName === 'visa');
-    setUniSubNavVisibility(tabName === 'universities' || tabName === 'sop');
+    setUniSubNavVisibility(tabName === 'universities' || tabName === 'sop' || tabName === 'courses');
     document.querySelectorAll('#uniSubNav .visa-subnav-item').forEach((item) => {
         item.classList.toggle('active', item.dataset.uniSubtab === tabName);
     });
@@ -8872,6 +9529,8 @@ function switchDashboardTab(tabName) {
         initializeRilonoAiChat();
     } else if (tabName === 'universities') {
         loadUniversityShortlist();
+    } else if (tabName === 'courses') {
+        loadCourseFinder();
     } else if (tabName === 'sop') {
         loadSopStudio();
     } else if (tabName === 'news') {

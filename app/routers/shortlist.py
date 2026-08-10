@@ -6,6 +6,7 @@
 - DELETE /api/shortlist/{id}       remove a university
 - POST   /api/shortlist/recommend  AI university recommendations (Visa-Pass gated)
 """
+import json
 import os
 from typing import Optional
 
@@ -39,6 +40,14 @@ class ShortlistEntryCreate(BaseModel):
     est_tuition: Optional[str] = Field(default=None, max_length=80)
     rationale: Optional[str] = Field(default=None, max_length=600)
     notes: Optional[str] = Field(default=None, max_length=1000)
+    # AI metadata (present when saving from a recommendation; parity with enterprise).
+    qs_world_rank: Optional[str] = Field(default=None, max_length=20)
+    country_rank: Optional[str] = Field(default=None, max_length=20)
+    admission_difficulty: Optional[str] = Field(default=None, max_length=20)  # reach|match|safety
+    key_requirements: Optional[list[str]] = None
+    application_fee: Optional[str] = Field(default=None, max_length=60)
+    website_url: Optional[str] = Field(default=None, max_length=400)
+    admissions_url: Optional[str] = Field(default=None, max_length=400)
 
 
 class ShortlistEntryUpdate(BaseModel):
@@ -156,6 +165,10 @@ def add_shortlist_entry(
         raise HTTPException(status_code=400, detail="University name is required.")
     code, _ = _destination(current_user)
     source = "ai" if (payload.source or "").strip().lower() == "ai" else "manual"
+    difficulty = (payload.admission_difficulty or "").strip().lower()
+    requirements = [
+        str(r).strip()[:140] for r in (payload.key_requirements or []) if str(r).strip()
+    ][:6]
     entry = models.UniversityShortlistEntry(
         user_id=current_user.id,
         country_code=code,
@@ -167,6 +180,15 @@ def add_shortlist_entry(
         est_tuition=(payload.est_tuition or "").strip()[:80] or None,
         rationale=(payload.rationale or "").strip()[:600] or None,
         notes=(payload.notes or "").strip()[:1000] or None,
+        # AI metadata is model output relayed by the client — ranks re-cleaned and URLs
+        # re-checked server-side (stored-XSS guard), never trusted from the request.
+        qs_world_rank=university_shortlist._clean_rank(payload.qs_world_rank),
+        country_rank=university_shortlist._clean_rank(payload.country_rank),
+        admission_difficulty=difficulty if difficulty in {"reach", "match", "safety"} else None,
+        key_requirements=json.dumps(requirements) if requirements else None,
+        application_fee=(payload.application_fee or "").strip()[:60] or None,
+        website_url=university_shortlist._clean_url(payload.website_url),
+        admissions_url=university_shortlist._clean_url(payload.admissions_url),
     )
     db.add(entry)
     db.commit()
