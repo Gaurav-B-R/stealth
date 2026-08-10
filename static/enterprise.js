@@ -3248,17 +3248,21 @@
           </div>
           <div class="cp-hstatus">${statusPill(cl.stage)}</div>
         </div>
+        <!-- Tab order follows the case journey (CLIENT_STAGES), not the order these
+             features shipped: shortlisting → essays → documents (+ the scan that checks
+             them) → interview. Copilot spans the whole case, so it closes the work group;
+             comms and money sit last because they're referenced, not worked through. -->
         <div class="cp-tabs" id="cpTabs">
           <button class="cp-tab active" data-tab="overview">Overview</button>
-          <button class="cp-tab" data-tab="documents">Documents${docs.length ? ` (${docs.length})` : ""}</button>
-          <button class="cp-tab" data-tab="notes">Notes${data.notes.length ? ` (${data.notes.length})` : ""}</button>
-          <button class="cp-tab" data-tab="emails">Emails${data.emails.length ? ` (${data.emails.length})` : ""}</button>
-          <button class="cp-tab" data-tab="payments">💳 Payments</button>
           <button class="cp-tab" data-tab="universities">🎓 Universities</button>
+          <button class="cp-tab" data-tab="writing">✍️ SOP &amp; LOR</button>
+          <button class="cp-tab" data-tab="documents">Documents${docs.length ? ` (${docs.length})` : ""}</button>
+          <button class="cp-tab" data-tab="deepscan">🛡️ Deep Scan</button>
           <button class="cp-tab" data-tab="interview">🎤 Interview</button>
           <button class="cp-tab" data-tab="copilot">✨ Copilot</button>
-          <button class="cp-tab" data-tab="writing">✍️ SOP &amp; LOR</button>
-          <button class="cp-tab" data-tab="deepscan">🛡️ Deep Scan</button>
+          <button class="cp-tab" data-tab="emails">Emails${data.emails.length ? ` (${data.emails.length})` : ""}</button>
+          <button class="cp-tab" data-tab="notes">Notes${data.notes.length ? ` (${data.notes.length})` : ""}</button>
+          <button class="cp-tab" data-tab="payments">💳 Payments</button>
         </div>
         <div class="cp-body" id="cpBody"></div>
       </div>`;
@@ -7105,15 +7109,15 @@
       $$(".cp-tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tab));
       if (tab !== "interview") ivStopSpeak();
       if (tab === "overview") renderOverview();
-      else if (tab === "documents") renderDocs();
-      else if (tab === "notes") renderNotes();
-      else if (tab === "emails") renderEmails();
-      else if (tab === "payments") renderPayments();
       else if (tab === "universities") renderUniversities();
+      else if (tab === "writing") renderWriting();
+      else if (tab === "documents") renderDocs();
+      else if (tab === "deepscan") renderDeepScan();
       else if (tab === "interview") renderInterview();
       else if (tab === "copilot") renderCopilot();
-      else if (tab === "writing") renderWriting();
-      else if (tab === "deepscan") renderDeepScan();
+      else if (tab === "emails") renderEmails();
+      else if (tab === "notes") renderNotes();
+      else if (tab === "payments") renderPayments();
     }
     $$(".cp-tab").forEach((t) => t.onclick = () => showTab(t.dataset.tab));
     showTab("overview");
