@@ -847,6 +847,25 @@
   /* ---------------- in-app confirm / prompt (replace native window.confirm/prompt) ----------------
      Promise-based styled dialogs so we never show the ugly "acme.lvh.me says" browser popup.
      confirmModal(msg, opts) -> Promise<boolean>;  promptModal(msg, opts) -> Promise<string|null>. */
+
+  /* Optional callout under a confirm's body copy, for a confirm that still goes through
+     but leaves something incomplete. Everything here is escaped exactly like the message —
+     callers pass data (a line, a list of names, a footnote), never markup.
+     opts.warning: string | { title, items: [], note, tone: "warning" | "danger" } */
+  function confirmWarnHtml(w) {
+    if (!w) return "";
+    if (typeof w === "string") w = { title: w };
+    var items = (w.items || []).filter(Boolean);
+    return '<div class="cfm-warn' + (w.tone === "danger" ? " danger" : "") + '" role="alert">' +
+      '<span class="cfm-warn-ic" aria-hidden="true">⚠</span>' +
+      '<div class="cfm-warn-main">' +
+      (w.title ? '<div class="cfm-warn-title">' + esc(w.title) + "</div>" : "") +
+      (items.length ? '<div class="cfm-warn-items">' + items.map(function (t) {
+        return '<span class="cfm-warn-chip">' + esc(t) + "</span>";
+      }).join("") + "</div>" : "") +
+      (w.note ? '<div class="cfm-warn-note">' + esc(w.note) + "</div>" : "") +
+      "</div></div>";
+  }
   function confirmModal(message, opts) {
     opts = opts || {};
     var title = opts.title || "Please confirm";
@@ -866,7 +885,8 @@
       function onOverlay(e) { if (e.target === $("#overlay")) finish(false); }
       openModal(
         '<div class="modal-head"><h3>' + esc(title) + '</h3><button class="x" id="cfmClose" aria-label="Close">×</button></div>' +
-        '<div class="modal-body"><p style="margin:0;color:var(--text-2);font-size:14px;line-height:1.65">' + esc(message).replace(/\n/g, "<br>") + '</p></div>' +
+        '<div class="modal-body"><p style="margin:0;color:var(--text-2);font-size:14px;line-height:1.65">' + esc(message).replace(/\n/g, "<br>") + '</p>' +
+        confirmWarnHtml(opts.warning) + '</div>' +
         '<div class="modal-foot"><button type="button" class="btn btn-ghost" id="cfmCancel">' + esc(cancelText) + '</button>' +
         '<button type="button" class="btn ' + (danger ? "btn-danger" : "btn-primary") + '" id="cfmOk">' + esc(okText) + '</button></div>'
       );
@@ -3180,7 +3200,7 @@
     const canInviteCopilot = can("copilot.invite");
     const canRunInterview = can("interviews.run");
     const canManageUnis = can("universities.manage");
-    const canShortlistAi = can("ai.shortlist");
+    const canCourseFinderAi = can("ai.coursefinder");
     const canWritingAi = can("ai.writing");
     const canDeepScan = can("ai.deepscan");
     const canSeeSensitive = can("clients.view_sensitive");
@@ -3205,7 +3225,17 @@
       subject: "", html: "", attachments: [], busy: false,
       draftsLoaded: false, filter: "all", query: "", expanded: {}, seq: 0,
     };
-    const uni = { data: null, suggestions: [] };  // university shortlist state (lazy-loaded)
+    // University shortlist state (lazy-loaded). The AI side is the same engine as the
+    // side-panel Course Finder (/course-finder/*), pinned to this client's destination:
+    // `form` survives repaints, `activeRec`/`recs` are the stored (paid) shortlists,
+    // `saved` marks rec items already copied onto the shortlist, `suggestions` only
+    // restores legacy pre-Course-Finder AI matches still parked in sessionStorage.
+    const uni = {
+      data: null, suggestions: [],
+      recs: undefined, activeRec: null, aiBusy: false, saveBusy: false, saved: {},
+      metaFailed: false, scrollToRec: false,
+      form: { field: "", level: "", discipline: "", budget: "", notes: "" },
+    };
     // Deep Scan tab state (lazy-loaded): stored scan history + the currently open report.
     const ds = { scans: null, active: null, pricing: null, aiAvailable: true, loading: false, error: null, busy: false };
     // Writing Studio tab state (lazy-loaded). `form` is the composer's live values, held
@@ -3546,6 +3576,16 @@
       const vals = stageValuesFor(stageKey);
       return stageFieldsFor(stageKey).filter((f) => f.required && !String(vals[f.key] || "").trim());
     }
+    // The confirmModal callout for "you are moving on with this stage's required fields
+    // still empty". Amber, matching the gap dot on the tracker — the move is allowed, and
+    // both prompts that can trigger it say so identically.
+    function missingFieldsWarning(stageLabel, missing) {
+      return {
+        title: `“${stageLabel}” is still missing ${missing.length} required field${missing.length === 1 ? "" : "s"}:`,
+        items: missing.map((f) => f.label),
+        note: "You can continue and fill this in later.",
+      };
+    }
     function stagePanelHtml() {
       if (!openStageKey) return "";
       const stages = stagesForClient(cl);
@@ -3795,24 +3835,24 @@
         const isReject = key === "rejected", isHold = key === "on_hold";
 
         // Warn — but never block — when advancing while the stage being LEFT is still
-        // missing required record fields.
-        let warn = "";
+        // missing required record fields. It rides in as a callout rather than another
+        // sentence of body copy: the counsellor has to see what they are skipping past.
+        let warning = null;
         if (!isReject && !isHold && orderOf(key) > orderOf(cl.status)) {
           const missing = stageMissingRequired(cl.status);
-          if (missing.length) {
-            warn = `\n\n⚠ “${fromLabel}” is still missing: ${missing.map((f) => f.label).join(", ")}.\nYou can continue and fill this in later.`;
-          }
+          if (missing.length) warning = missingFieldsWarning(fromLabel, missing);
         }
         const title = isReject ? "Mark case as rejected?" : isHold ? "Put case on hold?" : `Move to “${toLabel}”?`;
-        const message = (isReject
+        const message = isReject
           ? `${first}'s case will be closed as “${toLabel}”. You can reopen it later by clicking any stage.`
           : isHold
             ? `${first}'s case will be paused at “${fromLabel}”. You can resume it anytime.`
-            : `${first} will move from “${fromLabel}” to “${toLabel}”.`) + warn;
+            : `${first} will move from “${fromLabel}” to “${toLabel}”.`;
         const ok = await confirmModal(message, {
           title,
           okText: isReject ? "Mark rejected" : isHold ? "Put on hold" : "Move stage",
           danger: isReject,
+          warning,
         });
         if (ok) { openStageKey = null; setStatus(cl.id, key, cl.status); }
       };
@@ -5960,6 +6000,11 @@
       // Bring back any paid-for AI matches the user hasn't actioned yet.
       restoreUniSuggestions();
       loadUniversities();
+      // Course Finder context loads in parallel: the option vocabularies + cost (shared
+      // cf.meta cache) and this client's stored shortlist history. Each repaints or
+      // patches the tab when it lands; the shortlist never waits on either.
+      uniEnsureCfMeta();
+      uniLoadRecs();
     }
 
     async function loadUniversities() {
@@ -5967,11 +6012,13 @@
         uni.data = await api(`/clients/${cl.id}/universities`);
       } catch (ex) {
         uni.data = null;
-        const w = $("#uniWrap");
+        // #uniWrap is a global id and another client's page may own it by the time this
+        // resolves — only this client's page may paint here.
+        const w = state.activeClient === cl.id ? $("#uniWrap") : null;
         if (w) w.innerHTML = `<div class="cp-card"><div class="muted">Could not load the shortlist: ${esc(ex.message)}</div></div>`;
         return;
       }
-      if ($("#uniWrap")) drawUniversities();
+      if (state.activeClient === cl.id && $("#uniWrap")) drawUniversities();
     }
 
     // Keeps the journey stepper in step with the shortlist, and OFFERS the matching pipeline
@@ -5993,12 +6040,15 @@
       // and a counsellor should not have to work out whether two differently-phrased prompts
       // do the same thing. The extra line is the only part specific to this trigger.
       const missing = stageMissingRequired(cl.status);
-      const warn = missing.length
-        ? `\n\n⚠ “${from.label}” is still missing: ${missing.map((f) => f.label).join(", ")}.\nYou can continue and fill this in later.`
-        : "";
       const ok = await confirmModal(
-        `${first} will move from “${from.label}” to “${target.label}”.\n\nThe shortlist row is saved either way.` + warn,
-        { title: "Move to “" + target.label + "”?", okText: "Move stage", cancelText: "Leave the stage as is", danger: false }
+        `${first} will move from “${from.label}” to “${target.label}”.\n\nThe shortlist row is saved either way.`,
+        {
+          title: "Move to “" + target.label + "”?",
+          okText: "Move stage",
+          cancelText: "Leave the stage as is",
+          danger: false,
+          warning: missing.length ? missingFieldsWarning(from.label, missing) : null,
+        }
       );
       if (!ok) return;
       // Deliberately not setStatus(): that rebuilds the client page and drops the counsellor
@@ -6077,34 +6127,7 @@
       const d = uni.data;
       const entries = d.entries || [];
       const dest = d.destination_country || "their destination";
-      const cost = d.recommend_cost || 0;
       const first = (cl.full_name || "this client").split(" ")[0];
-
-      const aiCard = !canShortlistAi ? "" : `
-        <div class="cp-card uni-ai-card">
-          <div class="uni-ai-head">
-            <div>
-              <div class="cp-card-head" style="margin:0"><h3>🎓 Find universities in ${esc(dest)}</h3></div>
-              <p class="muted" style="margin:4px 0 0;font-size:13px">Rilono AI matches real ${esc(dest)} universities to ${esc(first)}'s profile, budget and grades — with rankings and entry requirements.</p>
-            </div>
-            <span class="uni-cost">${cost} credits</span>
-          </div>
-          ${d.recommend_available === false
-            ? `<div class="muted" style="margin-top:10px">AI recommendations are not available right now.</div>`
-            : `<div class="uni-form">
-                 <div class="field"><label>Field of study <span style="color:#dc2626">*</span></label><input id="uniField" placeholder="e.g. Computer Science" maxlength="120"></div>
-                 <div class="field"><label>Study level</label>
-                   <select id="uniLevel"><option value="">Any</option><option>Bachelors</option><option>Masters</option><option>PhD</option><option>Diploma</option></select></div>
-                 <div class="field"><label>Annual budget</label><input id="uniBudget" placeholder="${esc(uniBudgetHint(d.destination_country_code))}" maxlength="60"></div>
-                 <div class="field"><label>Grades / GPA</label><input id="uniGpa" placeholder="${esc(uniGpaHint(d.destination_country_code))}" maxlength="60"></div>
-                 <div class="field"><label>Test scores</label><input id="uniScores" placeholder="${esc(uniScoreHint(d.destination_country_code))}" maxlength="160"></div>
-                 <div class="field"><label>Other preferences</label><input id="uniPrefs" placeholder="e.g. scholarships, near a major city" maxlength="300"></div>
-               </div>
-               <div class="uni-ai-foot">
-                 <button class="btn btn-primary" id="uniRecBtn">✨ Get AI recommendations</button>
-                 <span class="muted" id="uniRecMsg"></span>
-               </div>`}
-        </div>`;
 
       const addCard = !canManageUnis ? "" : `
         <div class="cp-card">
@@ -6118,7 +6141,8 @@
         </div>`;
 
       w.innerHTML = `
-        ${aiCard}
+        ${uniAiCardHtml(d, dest, first)}
+        ${uniActiveRecHtml()}
         ${canManageUnis ? uniSuggestionsPanel() : ""}
         ${addCard}
         <div class="cp-card">
@@ -6130,19 +6154,37 @@
           </div>
           ${entries.length
             ? `<div class="uni-list">${entries.map(uniRow).join("")}</div>`
-            : `<div class="uni-empty">No universities shortlisted yet${canManageUnis ? ` — run an AI match for ${esc(dest)} or add one manually.` : "."}</div>`}
-        </div>`;
+            : `<div class="uni-empty">No universities shortlisted yet${canManageUnis ? ` — generate an AI shortlist for ${esc(dest)} or add one manually.` : "."}</div>`}
+        </div>
+        ${uniHistoryHtml(first)}`;
 
       // Export is available to viewers too — reading the shortlist doesn't require edit rights.
       const exportBtn = $("#uniExportBtn");
       if (exportBtn) exportBtn.onclick = () => exportUniversitiesCsv();
 
-      if (canManageUnis || canShortlistAi) {
-        const rec = $("#uniRecBtn");
-        // Field of study is the one starred field; everything else on this form is optional.
-        if (rec) bindValidity(rec, [$("#uniField")],
-          () => ($("#uniField").value || "").trim() !== "", "Enter a field of study first");
-        if (rec) rec.onclick = () => recommendUniversities();
+      if (canCourseFinderAi) {
+        // Form values live on uni.form so redraws (item saves, history loads) keep a
+        // half-typed brief. Same unlock rule as the side panel: a free-text field of
+        // study OR a picked discipline.
+        const fld = $("#uniCfField"), lvl = $("#uniCfLevel"), dsc = $("#uniCfDiscipline"),
+          bud = $("#uniCfBudget"), nts = $("#uniCfNotes");
+        if (fld) fld.oninput = () => { uni.form.field = fld.value; };
+        if (lvl) lvl.onchange = () => { uni.form.level = lvl.value; };
+        if (dsc) dsc.onchange = () => { uni.form.discipline = dsc.value; };
+        if (bud) bud.oninput = () => { uni.form.budget = bud.value; };
+        if (nts) nts.oninput = () => { uni.form.notes = nts.value; };
+        const run = $("#uniCfRun");
+        // While a run is in flight the button is painted disabled+busy; binding validity
+        // then would re-enable it mid-run (this flow doesn't go through withBusy).
+        if (run && !uni.aiBusy) bindValidity(run, [fld, dsc],
+          () => ((fld && fld.value) || "").trim() !== "" || !!(dsc && dsc.value),
+          "Enter a field of study or pick a discipline first");
+        if (run) run.onclick = () => uniRunCourseFinder();
+      }
+      $$(".uni-rec-save", w).forEach((b) => { b.onclick = () => uniSaveRecItem(Number(b.dataset.i)); });
+      $$(".cf-hist-row", w).forEach((b) => { b.onclick = () => uniOpenRec(Number(b.dataset.recid)); });
+
+      if (canManageUnis) {
         const addBtn = $("#uniAddBtn");
         if (addBtn) bindValidity(addBtn, [$("#uniManual")],
           () => ($("#uniManual").value || "").trim() !== "", "Enter a university name first");
@@ -6154,19 +6196,18 @@
         if (save) save.onclick = () => addSelectedUniSuggestions();
         const dismiss = $("#uniDismissSugg");
         if (dismiss) dismiss.onclick = () => dismissUniSuggestions();
-        if (canManageUnis) wireUniAutocomplete();
+        wireUniAutocomplete();
+      }
+      if (uni.scrollToRec) {
+        uni.scrollToRec = false;
+        const rec = $("#uniActiveRec");
+        if (rec) rec.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     }
 
-    // Country-aware placeholders so a UK client never sees "$" / "GRE" hints.
+    // Country-aware placeholder so a UK client never sees "$" hints.
     function uniBudgetHint(code) {
       return ({ US: "e.g. $30,000", UK: "e.g. £22,000", CA: "e.g. C$25,000", AU: "e.g. A$35,000", DE: "e.g. €12,000", IE: "e.g. €18,000", FR: "e.g. €13,000", ES: "e.g. €14,000", NL: "e.g. €22,000", AE: "e.g. AED 80,000" })[code] || "e.g. annual budget";
-    }
-    function uniGpaHint(code) {
-      return ({ US: "e.g. 3.6/4.0", UK: "e.g. 2:1 or AAB", CA: "e.g. 3.6/4.0 or 85%", AU: "e.g. 75% or GPA 5.5/7", DE: "e.g. 1.7 (German scale)", IE: "e.g. 2:1 (Honours)", FR: "e.g. 14/20 (mention bien)", ES: "e.g. 7.5/10 (notable)", NL: "e.g. 7.5/10", AE: "e.g. 3.4/4.0" })[code] || "e.g. GPA or grade average";
-    }
-    function uniScoreHint(code) {
-      return ({ US: "e.g. IELTS 7.5, GRE 320", UK: "e.g. IELTS 7.0", CA: "e.g. IELTS 7.0", AU: "e.g. IELTS 7.0, PTE 65", DE: "e.g. IELTS 6.5, TestDaF 4", IE: "e.g. IELTS 6.5", FR: "e.g. IELTS 6.5, DELF B2", ES: "e.g. IELTS 6.5, DELE B2", NL: "e.g. IELTS 6.5, TOEFL 90", AE: "e.g. IELTS 6.5, TOEFL 79" })[code] || "e.g. IELTS 7.0";
     }
 
     function wireUniAutocomplete() {
@@ -6224,41 +6265,273 @@
       finally { const b = $("#uniAddBtn"); if (b) { b.textContent = "Add"; if (b._syncValid) b._syncValid(); else b.disabled = false; } }
     }
 
-    async function recommendUniversities() {
-      const field = ($("#uniField") && $("#uniField").value || "").trim();
-      const msg = $("#uniRecMsg");
-      if (!field) { if (msg) msg.textContent = "Enter a field of study first."; return; }
-      const btn = $("#uniRecBtn");
-      if (btn) { btn.disabled = true; btn.textContent = "Matching universities…"; }
-      if (msg) msg.textContent = "Rilono AI is researching current rankings — this can take ~20s.";
+    /* ---- Course Finder AI, embedded per-client ----
+       The SAME billed engine as the side-panel Course Finder (/course-finder/*), pinned
+       to this client's destination. The free filtered Browse deliberately stays in the
+       side-panel view only — this tab embeds just the AI shortlisting + stored history.
+       Sharing the endpoints (and the cf.meta cache) means cost, vocabularies, dedupe and
+       billing choreography can never drift between the two entry points. */
+
+    // Option vocabularies (levels, disciplines), catalog coverage, cost and the
+    // ai_available flag — one workspace-wide payload, cached on the shared `cf` state so
+    // whichever view loads first pays the fetch.
+    async function uniEnsureCfMeta() {
+      // metaFailed caches a failure for this page's lifetime — without it a role that
+      // can run AI but can't read meta (403) would re-issue a doomed request on every
+      // tab entry. Re-opening the client page retries naturally.
+      if (cf.meta || uni.metaFailed || !canCourseFinderAi) return;
       try {
-        const r = await api(`/clients/${cl.id}/universities/recommend`, {
+        cf.meta = await api("/course-catalog/meta");
+      } catch (ex) {
+        // Degraded form: fallback levels, no discipline vocabulary. The server still
+        // enforces everything on the run itself.
+        uni.metaFailed = true;
+        return;
+      }
+      if (state.activeClient !== cl.id || !$("#uniWrap") || !uni.data) return;
+      // The vocabularies land a beat after first paint; skip the repaint if the
+      // counselor is already typing in this tab — innerHTML keeps values (uni.form)
+      // but would drop the caret mid-word. The options arrive on the next redraw.
+      const ae = document.activeElement;
+      if (ae && $("#uniWrap").contains(ae) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)) return;
+      drawUniversities();
+    }
+
+    async function uniLoadRecs() {
+      // History reads need only coursefinder.view (matching the endpoint), so a viewer
+      // sees this client's stored shortlists here exactly as they would in the side
+      // panel. Roles with neither capability skip the guaranteed-403 round-trip.
+      if (!can("coursefinder.view")) { uni.recs = null; return; }
+      try {
+        const r = await api(`/course-finder/recs?client_id=${cl.id}&limit=20`);
+        uni.recs = r.recs || [];
+      } catch (ex) {
+        // 403 = this role can't read Course Finder history — hide the card entirely.
+        // Anything else renders as empty; the next tab entry re-fetches.
+        uni.recs = ex && ex.status === 403 ? null : [];
+      }
+      if (state.activeClient === cl.id && body.isConnected) uniPaintHistory();
+    }
+
+    // Patch just the history card in place — a full redraw here would steal focus from
+    // a brief the counselor is mid-typing when the list lands a beat after first paint.
+    function uniPaintHistory() {
+      const card = $("#uniRecHistCard");
+      if (!card) return;
+      const first = (cl.full_name || "this client").split(" ")[0];
+      const html = uniHistoryHtml(first);
+      if (!html) { card.remove(); return; }
+      card.outerHTML = html;
+      $$("#uniRecHistCard .cf-hist-row").forEach((b) => { b.onclick = () => uniOpenRec(Number(b.dataset.recid)); });
+    }
+
+    function uniAiCardHtml(d, dest, first) {
+      if (!canCourseFinderAi) return "";
+      const m = cf.meta || {};
+      const code = (d.destination_country_code || cl.destination_country_code || "").toUpperCase();
+      const cost = cfCost();
+      const f = uni.form;
+      const levels = (m.degree_levels && m.degree_levels.length)
+        ? m.degree_levels
+        : Object.entries(CF_LEVEL_LABELS).map(([key, label]) => ({ key, label }));
+      const disciplines = m.disciplines || [];
+      // meta.countries is the catalog's coverage list; a destination outside it would
+      // only 400 on the run, so say so up front instead of offering a dead form.
+      const covered = !m.countries || !code || m.countries.some((x) => x.code === code);
+      let cardBody;
+      if (m.ai_available === false) {
+        cardBody = `<div class="muted" style="margin-top:10px">AI is not configured on this server right now.</div>`;
+      } else if (!code) {
+        cardBody = `<div class="muted" style="margin-top:10px">Set ${esc(first)}'s destination country first — the shortlist is built for their destination.</div>`;
+      } else if (!covered) {
+        cardBody = `<div class="muted" style="margin-top:10px">Course Finder doesn't cover ${esc(dest)} yet.</div>`;
+      } else {
+        cardBody = `
+          <div class="uni-form">
+            <div class="field"><label>Destination</label><input value="${esc(((cl.country && cl.country.flag_emoji) ? cl.country.flag_emoji + " " : "") + dest)}" disabled title="Pinned to ${esc(first)}'s destination"></div>
+            <div class="field"><label>Field of study</label><input id="uniCfField" placeholder="e.g. Machine Learning, MBA…" maxlength="120" value="${esc(f.field)}"></div>
+            <div class="field"><label>Level</label>
+              <select id="uniCfLevel"><option value="">Any</option>${levels.map((l) => `<option value="${esc(l.key)}" ${l.key === f.level ? "selected" : ""}>${esc(l.label)}</option>`).join("")}</select></div>
+            <div class="field"><label>Discipline</label>
+              <select id="uniCfDiscipline" ${disciplines.length ? "" : "disabled"}><option value="">Any</option>${disciplines.map((x) => `<option value="${esc(x)}" ${x === f.discipline ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></div>
+            <div class="field"><label>Annual budget</label><input id="uniCfBudget" placeholder="${esc(uniBudgetHint(code))}" maxlength="60" value="${esc(f.budget)}"></div>
+            <div class="field"><label>Notes for Rilono AI</label><input id="uniCfNotes" placeholder="e.g. prefers co-op programs, needs scholarships" maxlength="300" value="${esc(f.notes)}"></div>
+          </div>
+          <div class="uni-ai-foot">
+            <button class="btn btn-primary" id="uniCfRun" ${uni.aiBusy ? "disabled" : ""}>${uni.aiBusy ? '<span class="spinner"></span> Rilono AI is researching…' : `✨ Generate shortlist · ${esc(String(cost))} cr`}</button>
+            <span class="muted" id="uniCfMsg"></span>
+          </div>`;
+      }
+      return `
+        <div class="cp-card uni-ai-card">
+          <div class="uni-ai-head">
+            <div>
+              <div class="cp-card-head" style="margin:0"><h3>✨ AI course shortlist · ${esc(dest)}</h3></div>
+              <p class="muted" style="margin:4px 0 0;font-size:13px">The Course Finder engine, pinned to ${esc(first)}'s case: Rilono AI picks real ${esc(dest)} programs from the verified catalog — fees, intakes, deadlines, entry requirements — matched to their dossier, and never re-suggests a university already on the shortlist.</p>
+            </div>
+            <span class="uni-cost">${esc(String(cost))} credits</span>
+          </div>
+          ${cardBody}
+        </div>`;
+    }
+
+    // The generated (or re-opened stored) shortlist. Items save individually onto the
+    // client's shortlist through the same save-to-client endpoint the side panel uses,
+    // so dedupe and idempotency rules can never differ between the two views.
+    function uniActiveRecHtml() {
+      const rec = uni.activeRec;
+      if (!rec) return "";
+      const items = rec.recommendations || [];
+      return `
+        <div class="cp-card cf-rec-card" id="uniActiveRec">
+          <div class="cp-card-head">
+            <h3>🎯 Shortlist <span class="cf-td-sub">${esc(fmtDateTime(rec.created_at))}${rec.created_by_name ? ` · ${esc(rec.created_by_name)}` : ""}</span></h3>
+            ${rec.catalog_based ? '<span class="cf-verified" title="Built from Rilono\'s verified catalog">✓ Catalog data</span>' : '<span class="cf-verified cf-pending" title="Generated with live search while this destination is still being seeded">🌐 Live research</span>'}
+          </div>
+          ${rec.summary ? `<p class="cf-rec-summary">${esc(rec.summary)}</p>` : ""}
+          <div class="cf-rec-grid">${items.map((it, i) => uniRecItemHtml(it, i, rec)).join("")}</div>
+        </div>`;
+    }
+
+    function uniRecItemHtml(it, i, rec) {
+      const fit = CF_FIT_META[it.fit_level] || CF_FIT_META.match;
+      const site = cfSafeUrl(it.website_url);
+      const page = cfSafeUrl(it.course_url);
+      const savedAlready = !!uni.saved[`${rec.id}:${i}`];
+      return `
+      <div class="cf-rec-item">
+        <div class="cf-rec-top">
+          <span class="status-pill" style="background:${fit.color}1a;color:${fit.color}"><span class="sd" style="background:${fit.color}"></span>${fit.label}</span>
+          ${it.qs_world_rank ? `<span class="cf-rank">QS #${esc(it.qs_world_rank)}</span>` : ""}
+          ${it.in_catalog ? '<span class="cf-verified" title="From Rilono\'s verified catalog">✓ Verified</span>' : '<span class="cf-verified cf-pending" title="Not yet in our catalog — double-check on the official page">Verify</span>'}
+        </div>
+        <h4>${esc(it.course_name)}</h4>
+        <div class="cf-rec-uni">${esc(it.university_name)}${it.location ? ` · ${esc(it.location)}` : ""}</div>
+        ${it.why_recommended ? `<p>${esc(it.why_recommended)}</p>` : ""}
+        <div class="cf-rec-facts">
+          ${it.annual_tuition ? `<span>💰 ${esc(it.annual_tuition)}</span>` : ""}
+          ${it.intakes ? `<span>📅 ${esc(it.intakes)}</span>` : ""}
+          ${it.application_deadline ? `<span>⏰ ${esc(it.application_deadline)}</span>` : ""}
+          ${it.application_fee ? `<span>🧾 ${esc(it.application_fee)}</span>` : ""}
+        </div>
+        ${(it.key_requirements || []).length ? `<div class="cf-rec-reqs">${it.key_requirements.map((r) => `<span>${esc(r)}</span>`).join("")}</div>` : ""}
+        <div class="cf-rec-actions">
+          ${page ? `<a class="btn btn-ghost btn-sm" href="${esc(page)}" target="_blank" rel="noopener noreferrer">Course page ↗</a>` : (site ? `<a class="btn btn-ghost btn-sm" href="${esc(site)}" target="_blank" rel="noopener noreferrer">Website ↗</a>` : "")}
+          ${canManageUnis ? (savedAlready
+            ? '<button class="btn btn-soft btn-sm" disabled>✓ Added</button>'
+            : `<button class="btn btn-soft btn-sm uni-rec-save" data-i="${i}">➕ Add to shortlist</button>`) : ""}
+        </div>
+      </div>`;
+    }
+
+    /* Stored shortlists for THIS client — results persist server-side (they're billing
+       artifacts), so reopening one here is free. uni.recs: undefined = loading,
+       null = role can't read Course Finder history (no card), [] = none yet. */
+    function uniHistoryHtml(first) {
+      if (uni.recs === null) return "";
+      let inner;
+      if (uni.recs === undefined) inner = '<div class="muted">Loading…</div>';
+      else if (!uni.recs.length) inner = `<div class="hint">No AI shortlists for ${esc(first)} yet. Results are stored, so a paid shortlist is never lost.</div>`;
+      else inner = uni.recs.map((r) => {
+        const title = (r.query && r.query.field_of_study) || r.discipline || "Shortlist";
+        const sub = [r.country_code, r.degree_level ? (CF_LEVEL_LABELS[r.degree_level] || r.degree_level) : "", r.discipline]
+          .filter(Boolean).join(" · ");
+        return `
+        <button class="cf-hist-row" data-recid="${r.id}">
+          <div class="cf-hist-main">
+            <b>${esc(title)}</b>
+            <span>${esc(sub)}${r.created_by_name ? ` · ${esc(r.created_by_name)}` : ""}</span>
+          </div>
+          <div class="cf-hist-side">
+            <span>${r.count} picks</span>
+            <span>${r.credits_charged ? `${r.credits_charged} cr` : "—"}</span>
+            <span>${esc(fmtDateTime(r.created_at))}</span>
+          </div>
+        </button>`;
+      }).join("");
+      return `<div class="cp-card" id="uniRecHistCard"><div class="cp-card-head"><h3>Past AI shortlists</h3></div><div id="uniRecHist">${inner}</div></div>`;
+    }
+
+    /* Billed run — the same request the side panel sends, with client + destination
+       pinned. Mirrors cfRunRecommend's failure choreography: 402 → credits page; any
+       other failure still re-pulls history, because a client-side timeout doesn't
+       guarantee the server didn't complete AND bill. */
+    async function uniRunCourseFinder() {
+      if (uni.aiBusy) return;
+      const f = uni.form;
+      if (!(f.field || "").trim() && !f.discipline) { toast("Add a field of study (or pick a discipline) first.", "error"); return; }
+      uni.aiBusy = true;
+      const btn = $("#uniCfRun");
+      // dataset.busy stands bindValidity's sync down (its input listeners stay live
+      // through the run), so mid-run edits can't re-enable a button showing a spinner.
+      if (btn) { btn.dataset.busy = "1"; btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Rilono AI is researching…'; }
+      const msg = $("#uniCfMsg");
+      if (msg) msg.textContent = "Matching verified programs to the dossier — this can take a while.";
+      try {
+        const r = await api("/course-finder/recommend", {
           method: "POST",
-          timeout: AI_API_TIMEOUT_MS,
+          timeout: CF_AI_TIMEOUT_MS,
           body: {
-            field_of_study: field,
-            level: ($("#uniLevel") && $("#uniLevel").value) || null,
-            budget: ($("#uniBudget") && $("#uniBudget").value || "").trim() || null,
-            gpa: ($("#uniGpa") && $("#uniGpa").value || "").trim() || null,
-            test_scores: ($("#uniScores") && $("#uniScores").value || "").trim() || null,
-            preferences: ($("#uniPrefs") && $("#uniPrefs").value || "").trim() || null,
+            client_id: cl.id,
+            country_code: (uni.data && uni.data.destination_country_code) || cl.destination_country_code || null,
+            degree_level: f.level || null,
+            discipline: f.discipline || null,
+            field_of_study: (f.field || "").trim() || null,
+            budget: (f.budget || "").trim() || null,
+            notes: (f.notes || "").trim() || null,
             max_results: 6,
           },
         });
         if (r.wallet) { state.credits = r.wallet; updatePlanChip(); }
-        uni.suggestions = r.universities || [];
-        uni.grounded = !!r.grounded;
-        // These cost credits — persist immediately so a refresh, tab switch or stray
-        // click can never destroy results the consultancy already paid for.
-        persistUniSuggestions();
-        drawUniversities();
-        if (r.credits_charged) toast(`${r.universities.length} matches · ${r.credits_charged} credits used`, "success");
+        uni.activeRec = r.rec;
+        uni.scrollToRec = true;
+        toast(r.credits_charged ? `Shortlist ready — ${r.credits_charged} credits used` : "Shortlist ready", "success");
       } catch (ex) {
-        if (ex.status === 402) { toast(ex.message, "error"); navigate("credits"); }
-        else if (msg) msg.textContent = ex.message || "Could not generate recommendations.";
+        if (ex && ex.status === 402) { uni.aiBusy = false; toast(ex.message, "error"); navigate("credits"); return; }
+        toast(ex.message || "Couldn't generate the shortlist.", "error");
       } finally {
-        const b = $("#uniRecBtn");
-        if (b) { b.textContent = "✨ Get AI recommendations"; if (b._syncValid) b._syncValid(); else b.disabled = false; }
+        uni.aiBusy = false;
+        uni.recs = undefined;   // refresh below — a stored (billed) result must never stay invisible
+        uniLoadRecs();
+        if (state.activeClient === cl.id && $("#uniWrap") && uni.data) drawUniversities();
+      }
+    }
+
+    async function uniSaveRecItem(index) {
+      if (uni.saveBusy || !uni.activeRec) return;
+      uni.saveBusy = true;
+      const btn = document.querySelector(`.uni-rec-save[data-i="${index}"]`);
+      if (btn) { btn.disabled = true; btn.textContent = "Adding…"; }
+      try {
+        const r = await api(`/course-finder/recs/${uni.activeRec.id}/save-to-client`, {
+          method: "POST", body: { index, client_id: cl.id },
+        });
+        uni.saved[`${uni.activeRec.id}:${index}`] = true;
+        toast(r.already_saved ? "Already on the shortlist" : "Added to shortlist", "success");
+        await loadUniversities();   // repaints: ✓ Added + the new shortlist row
+      } catch (ex) {
+        toast(ex.message || "Couldn't save.", "error");
+        if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = "➕ Add to shortlist"; }
+      } finally {
+        uni.saveBusy = false;
+      }
+    }
+
+    async function uniOpenRec(id) {
+      if (uni.activeRec && uni.activeRec.id === id) {
+        const el = $("#uniActiveRec");
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      try {
+        const detail = await api(`/course-finder/recs/${id}`);
+        uni.activeRec = detail.rec;
+        uni.scrollToRec = true;
+        // Same stale-closure guard as every async repaint here: by the time the fetch
+        // lands the counselor may be on another client's page, which owns #uniWrap now.
+        if (state.activeClient === cl.id && body.isConnected) drawUniversities();
+      } catch (ex) {
+        toast(ex.message || "Couldn't open that shortlist.", "error");
       }
     }
 

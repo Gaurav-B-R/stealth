@@ -477,6 +477,34 @@ details.mw-fold[open] > summary { margin-bottom: 14px; }
 .modal-body { padding: 22px 24px; }
 .modal-foot { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; gap: 10px; justify-content: flex-end; position: sticky; bottom: 0; background: var(--surface); }
 
+/* ---------------- confirm-dialog warning callout ----------------
+   For a confirm that is allowed to go through but leaves something incomplete —
+   moving a stage on with required case-record fields still empty. Run as another
+   sentence in the body copy it reads as blank prose and gets clicked past, so it
+   gets a bordered block, a coloured glyph and one chip per gap. Amber and not red on
+   purpose — it is the same tone as the .jtrack-gap dot the tracker already puts on a
+   stage with empty required fields, and nothing here has failed: the move still goes
+   through. .danger is the red tone, for a confirm that is about to lose something. */
+.cfm-warn {
+  display: flex; gap: 11px; align-items: flex-start; margin-top: 16px;
+  padding: 12px 14px; border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 158, 11, .45); border-left: 3px solid var(--warning, #f59e0b);
+  background: rgba(245, 158, 11, .09);
+}
+.cfm-warn-ic { font-size: 17px; line-height: 1.25; color: var(--warning, #f59e0b); flex-shrink: 0; }
+.cfm-warn-main { min-width: 0; }
+.cfm-warn-title { font-size: 13.5px; font-weight: 700; color: #92400e; line-height: 1.5; }
+.cfm-warn-items { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.cfm-warn-chip {
+  font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+  background: rgba(245, 158, 11, .15); color: #92400e; border: 1px solid rgba(245, 158, 11, .34);
+}
+.cfm-warn-note { font-size: 12.5px; color: var(--text-2); line-height: 1.55; margin-top: 8px; }
+.cfm-warn.danger { border-color: rgba(239, 68, 68, .45); border-left-color: var(--danger, #ef4444); background: rgba(239, 68, 68, .08); }
+.cfm-warn.danger .cfm-warn-ic { color: var(--danger, #ef4444); }
+.cfm-warn.danger .cfm-warn-title { color: #991b1b; }
+.cfm-warn.danger .cfm-warn-chip { background: rgba(239, 68, 68, .13); color: #991b1b; border-color: rgba(239, 68, 68, .3); }
+
 /* drawer for client detail */
 .drawer {
   position: fixed; z-index: 90; top: 0; right: 0; height: 100vh; width: min(620px, 96vw);

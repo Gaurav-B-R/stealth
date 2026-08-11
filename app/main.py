@@ -84,6 +84,7 @@ from app.schema_patch import (
     ensure_university_country_column,
     ensure_e2e_encryption_columns,
     ensure_subscription_payments_user_id_nullable,
+    ensure_users_username_nullable,
     ensure_course_catalog_tables,
     ensure_enterprise_lead_tables,
 )
@@ -295,6 +296,9 @@ def startup_backfill_subscriptions():
     ensure_university_country_column()
     ensure_e2e_encryption_columns()
     ensure_subscription_payments_user_id_nullable()
+    # Must run BEFORE enterprise.seed_enterprise_user() below — that seeder, like every other
+    # enterprise account path, inserts users with username=None.
+    ensure_users_username_nullable()
     ensure_referral_columns()
     ensure_visa_outcome_columns()
     ensure_user_acquisition_columns()

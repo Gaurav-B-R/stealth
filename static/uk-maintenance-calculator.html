@@ -71,8 +71,8 @@
             {
                 "@type": "FAQPage",
                 "mainEntity": [
-                    { "@type": "Question", "name": "How much money do I need for a UK Student visa?", "acceptedAnswer": { "@type": "Answer", "text": "You must show your unpaid first-year tuition plus living costs of currently £1,529/month if studying in London or £1,171/month outside London, for up to 9 months. You can offset up to £1,334 of accommodation already paid to your university. Always confirm the current amounts on GOV.UK." } },
-                    { "@type": "Question", "name": "What is the 28-day rule for UK maintenance funds?", "acceptedAnswer": { "@type": "Answer", "text": "The required amount must be held in your account for 28 consecutive days without dropping below it, and your bank statement's closing date must be no more than 31 days before you submit your visa application." } },
+                    { "@type": "Question", "name": "How much money do I need for a UK Student visa?", "acceptedAnswer": { "@type": "Answer", "text": "You must show your unpaid first-year tuition plus living costs of currently £1,529/month if studying in London or £1,171/month outside London, for up to 9 months. You can offset up to £1,529 of accommodation already paid to your university. Always confirm the current amounts on GOV.UK." } },
+                    { "@type": "Question", "name": "What is the 28-day rule for UK maintenance funds?", "acceptedAnswer": { "@type": "Answer", "text": "The required amount must be held in your account for 28 consecutive days without dropping below it. The 28-day period ends on the closing date of the bank statement you submit, and that closing date must be within 31 days of the date you apply." } },
                     { "@type": "Question", "name": "Does this calculator submit anything to UKVI?", "acceptedAnswer": { "@type": "Answer", "text": "No. It is a free planning tool that runs entirely in your browser. It does not store or submit your figures. Always confirm requirements on GOV.UK." } }
                 ]
             }
@@ -106,10 +106,10 @@
         <div class="how">
             <h2>How UK maintenance funds work</h2>
             <ul>
-                <li><b>Living costs.</b> Currently <code data-ukm="london">£1,529</code>/month in London and <code data-ukm="outside">£1,171</code>/month outside London, for up to <b><span data-ukm="maxMonths">9</span> months</b>.</li>
+                <li><b>Living costs.</b> Currently <code data-ukm="london">£1,529</code>/month in London and <code data-ukm="outside">£1,171</code>/month outside London, for up to <b><span data-ukm="maxMonths">9</span> months</b> — the rates published on <a href="https://www.gov.uk/student-visa/money" target="_blank" rel="noopener noreferrer">GOV.UK: Student visa, money you need</a>.</li>
                 <li><b>Tuition.</b> Add your first-year (or full course, if under a year) tuition, minus anything you've already paid.</li>
-                <li><b>Accommodation offset.</b> Up to <code data-ukm="accomCap">£1,334</code> of accommodation paid to your university reduces the amount you must show.</li>
-                <li><b>The 28-day rule.</b> The total must sit in your account for <b>28 consecutive days</b> without dipping below it, and your statement's closing date must be within <b>31 days</b> of your application.</li>
+                <li><b>Accommodation offset.</b> Up to <code data-ukm="accomCap">£1,529</code> of accommodation paid to your university reduces the amount you must show — the cap set by <a href="https://www.gov.uk/guidance/immigration-rules/immigration-rules-appendix-student" target="_blank" rel="noopener noreferrer">Immigration Rules Appendix Student</a> (ST 12.4), in force since 11 November 2025.</li>
+                <li><b>The 28-day rule.</b> The total must sit in your account for <b>28 consecutive days</b> without dipping below it. Those 28 days <b>end on the closing date of the statement you submit</b>, and that closing date must be within <b>31 days</b> of the date you apply — so you do not have to wait for the window to reach your application date.</li>
             </ul>
         </div>
 
@@ -124,7 +124,7 @@
 
     <!--@partial:blog-footer-->
 
-    <script src="/static/uk-maintenance-calc.js?v=20260712b"></script>
+    <script src="/static/uk-maintenance-calc.js?v=20260807a"></script>
     <script>
         document.getElementById("yr").textContent = new Date().getFullYear();
         if (window.RilonoUkMaintenanceCalc) {

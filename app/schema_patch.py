@@ -62,6 +62,32 @@ def ensure_subscription_payments_user_id_nullable():
             pass
 
 
+def ensure_users_username_nullable():
+    """Allow users.username to be NULL, matching `nullable=True` on the model.
+
+    Every enterprise-origin account is created with username=None on purpose — the owner
+    signs in with their email and the column is a legacy B2C artifact. models.py already
+    declares it nullable, but create_all() only ever creates new TABLES; it never alters an
+    existing COLUMN, so databases predating that change still carry the original NOT NULL and
+    reject all four enterprise user-creation paths (workspace signup, invite acceptance,
+    admin grant, startup seeding) with a NotNullViolation surfaced to the client as a 500.
+
+    Postgres-only ALTER (idempotent); new SQLite DBs already get this from the model via
+    create_all, and existing dev SQLite DBs are throwaway so no rebuild is attempted.
+
+    The UNIQUE index on the column stays intact — Postgres treats NULLs as distinct, so any
+    number of enterprise accounts can hold a NULL username without colliding.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        try:
+            conn.execute(text("ALTER TABLE users ALTER COLUMN username DROP NOT NULL"))
+        except Exception:
+            # Already nullable, or the table doesn't exist yet — safe to ignore.
+            pass
+
+
 def ensure_e2e_encryption_columns():
     """
     Add client-side end-to-end encryption (E2E v2) columns to users + documents.
