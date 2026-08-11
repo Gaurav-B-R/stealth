@@ -1950,6 +1950,9 @@ def enterprise_onboarding(
     membership = models.EnterpriseOrganizationMember(
         organization_id=organization.id,
         user_id=current_user.id,
+        # See the matching note in enterprise_signup: role_key must be set explicitly or
+        # the column default ("viewer") makes the workspace creator a viewer of it.
+        role_key=access.ROLE_OWNER,
         role=ENTERPRISE_ROLE_ADMIN,
         is_active=True,
         invited_by_user_id=current_user.id,
@@ -10271,6 +10274,13 @@ def enterprise_signup(
     db.add(models.EnterpriseOrganizationMember(
         organization_id=organization.id,
         user_id=user.id,
+        # role_key is the source of truth — `role` below is only its legacy mirror
+        # (legacy_role_for(owner) == "admin"). It MUST be set explicitly: the column
+        # defaults to "viewer", and normalize_role_key() trusts a present role_key over
+        # the mirror, so omitting it makes the person who just created the workspace a
+        # viewer of it — locked out of settings, billing and invites. Owner (not admin)
+        # because access.resolve_access_context derives is_owner from this exact value.
+        role_key=access.ROLE_OWNER,
         role=ENTERPRISE_ROLE_ADMIN,
         is_active=True,
         invited_by_user_id=user.id,
