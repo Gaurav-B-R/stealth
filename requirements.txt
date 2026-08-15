@@ -17,7 +17,13 @@ resend>=2.22.0
 cryptography>=41.0.0
 google-generativeai>=0.3.0
 google-genai>=1.4.0
-google-cloud-aiplatform>=1.38.0
+# google-cloud-aiplatform REMOVED 2026-08-15: the Vertex AI path only activates when a
+# service_account.json exists, and no Render boot has ever taken it (every boot logs
+# "Using Gemini API key for authentication"). The import tree cost ~135 MB of resident
+# memory on a 512 MB instance and was the main driver of the daily OOM restarts.
+# gemini_service.py now imports it conditionally and degrades to the API-key path with
+# a warning if the file exists but the package is absent. To re-enable Vertex: restore
+# google-cloud-aiplatform>=1.38.0 here AND add the service account secret file.
 pillow>=10.0.0
 requests>=2.31.0
 # Admin console → Investment Analytics "Export to Excel" (.xlsx). The export falls

@@ -15,14 +15,31 @@ from app.auth import get_current_active_user
 from app.database import get_db
 from app.utils import gemini_service as gemini_utils
 
-try:
-    from google import genai as latest_genai
-    from google.genai import types as latest_genai_types
-    LATEST_GENAI_AVAILABLE = True
-except Exception:
-    latest_genai = None
-    latest_genai_types = None
-    LATEST_GENAI_AVAILABLE = False
+# google.genai costs ~150 MB of resident memory once imported, and this router is
+# imported by app.main at boot — so the SDK is loaded lazily on first use instead
+# of eagerly. Every call path goes through _build_latest_genai_client(), which
+# triggers the import; when the SDK is missing the behavior is identical to the
+# old module-level try/except (clients get the same clean 503 fallback).
+latest_genai = None
+latest_genai_types = None
+_latest_genai_import_attempted = False
+
+
+def _load_latest_genai() -> bool:
+    """Import google.genai on first use, caching the outcome (success or failure).
+    Returns True when the SDK is available."""
+    global latest_genai, latest_genai_types, _latest_genai_import_attempted
+    if _latest_genai_import_attempted:
+        return latest_genai is not None
+    _latest_genai_import_attempted = True
+    try:
+        from google import genai as _genai
+        from google.genai import types as _types
+    except Exception:
+        return False
+    latest_genai = _genai
+    latest_genai_types = _types
+    return True
 
 router = APIRouter(prefix="/api/news", tags=["news"])
 
@@ -499,7 +516,7 @@ def _resolve_vertex_project_id() -> str:
 
 
 def _build_latest_genai_client() -> Tuple[Any, str]:
-    if not LATEST_GENAI_AVAILABLE or not latest_genai:
+    if not _load_latest_genai():
         raise HTTPException(status_code=503, detail=PUBLIC_NEWS_GENERATION_ERROR_DETAIL)
 
     api_key = str(gemini_utils.GEMINI_API_KEY or "").strip()

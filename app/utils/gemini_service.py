@@ -9,14 +9,31 @@ from PIL import Image
 from pathlib import Path
 from datetime import datetime
 
-# Try to import Vertex AI libraries
-try:
-    from google.cloud import aiplatform
-    from vertexai.generative_models import GenerativeModel, Part
-    VERTEX_AI_AVAILABLE = True
-except ImportError:
-    VERTEX_AI_AVAILABLE = False
-    print("⚠ Warning: google-cloud-aiplatform not installed. Install with: pip install google-cloud-aiplatform")
+# Configure authentication - Check for service account first
+SERVICE_ACCOUNT_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+USE_VERTEX_AI = False
+VERTEX_AI_AVAILABLE = False
+
+# Check if service account file exists in current directory
+if not os.path.exists(SERVICE_ACCOUNT_PATH):
+    # Try project root directory
+    current_dir_service_account = Path(__file__).parent.parent.parent / "service_account.json"
+    if current_dir_service_account.exists():
+        SERVICE_ACCOUNT_PATH = str(current_dir_service_account)
+
+# Import the Vertex AI stack ONLY when a service account file is actually present.
+# The aiplatform/vertexai import tree costs ~135 MB of resident memory, and every
+# use of GenerativeModel/Part in this module is gated on USE_VERTEX_AI — so when
+# the file is absent (every Render boot logs "Using Gemini API key"), importing it
+# eagerly was pure dead weight that pushed the 512 MB Starter instance into OOM.
+if os.path.exists(SERVICE_ACCOUNT_PATH):
+    try:
+        from google.cloud import aiplatform
+        from vertexai.generative_models import GenerativeModel, Part
+        VERTEX_AI_AVAILABLE = True
+    except ImportError:
+        print("⚠ Warning: google-cloud-aiplatform not installed. Install with: pip install google-cloud-aiplatform")
 
 # Also import standard Gemini API as fallback
 GENAI_AVAILABLE = False
@@ -27,18 +44,6 @@ try:
 except ImportError:
     GENAI_AVAILABLE = False
     print("⚠ Warning: google-generativeai not installed. Install with: pip install google-generativeai")
-
-# Configure authentication - Check for service account first
-SERVICE_ACCOUNT_PATH = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "service_account.json")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-USE_VERTEX_AI = False
-
-# Check if service account file exists in current directory
-if not os.path.exists(SERVICE_ACCOUNT_PATH):
-    # Try project root directory
-    current_dir_service_account = Path(__file__).parent.parent.parent / "service_account.json"
-    if current_dir_service_account.exists():
-        SERVICE_ACCOUNT_PATH = str(current_dir_service_account)
 
 # Configure authentication
 if os.path.exists(SERVICE_ACCOUNT_PATH) and VERTEX_AI_AVAILABLE:
